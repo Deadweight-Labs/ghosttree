@@ -268,7 +268,7 @@ func mdBlocksOpt(blocks []bodyBlock, o mdOptions) template.HTML {
 		b.WriteString(` data-md-anchors`)
 	}
 	b.WriteString(`>`)
-	used := map[string]bool{}
+	used := anchorSet{}
 	for _, bl := range blocks {
 		switch bl.Kind {
 		case "code":
@@ -468,13 +468,34 @@ func anchorSlug(text string) string {
 
 // uniqueAnchor is "h-" and the slug; when the address is taken, a number after it
 // counts up until one is free. ui-md.js does the same in the browser.
-func uniqueAnchor(text string, used map[string]bool) string {
+// anchorSet remembers the anchors given out on a page and, per base, the next
+// number to try, so a page of many equal headings stays linear.
+type anchorSet map[string]int
+
+func uniqueAnchor(text string, used anchorSet) string {
 	base := "h-" + anchorSlug(text)
 	id := base
-	for n := 2; used[id]; n++ {
-		id = base + "-" + strconv.Itoa(n)
+	n, seen := used[base]
+	if seen {
+		if n < 2 {
+			n = 2
+		}
+		for {
+			id = base + "-" + strconv.Itoa(n)
+			n++
+			if _, taken := used[id]; !taken {
+				break
+			}
+		}
+		used[base] = n
+	} else {
+		used[base] = 2
 	}
-	used[id] = true
+	if id != base {
+		if _, ok := used[id]; !ok {
+			used[id] = 2
+		}
+	}
 	return id
 }
 
