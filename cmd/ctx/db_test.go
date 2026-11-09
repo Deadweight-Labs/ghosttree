@@ -362,3 +362,18 @@ func TestStripImagesHintPointsToCtxDBVacuum(t *testing.T) {
 		t.Errorf("strip-images output:\n%s", out.String())
 	}
 }
+
+func TestDBChunkStatsPrintsLineTypes(t *testing.T) {
+	path := seedDBMaint(t)
+	var out bytes.Buffer
+	if code := cmdDB([]string{"chunk-stats", "--db", path, "--sample", "20"}, &out); code != 0 {
+		t.Fatalf("code %d:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "slim rule version") {
+		t.Errorf("output:\n%s", out.String())
+	}
+	out.Reset()
+	if code := cmdDB([]string{"chunk-stats", "--db", path, "--sample", "0"}, &out); code != 2 {
+		t.Errorf("sample 0: code %d", code)
+	}
+}
