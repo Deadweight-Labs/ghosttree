@@ -496,7 +496,7 @@ func (a *app) searchDocs(l lang, st *store.Store, pa *store.ProjectAccess, sl se
 			break
 		}
 		o := originOf(l, now, d.UpdatedAt, store.ObjectFacts{})
-		hit := searchHit{Title: d.Title, Sub: lastSegment(d.Project) + " · " + docKindLabel(l, d.Kind) + " · " + d.Slug,
+		hit := searchHit{Title: d.Title, Sub: docKindLabel(l, d.Kind) + " · " + d.Slug, Project: lastSegment(d.Project),
 			Href: docHref(d.Project, d.Slug), Date: o.Date, Stamp: o.Stamp}
 		if rev, err := st.DocumentRevision(d.ID, d.HeadRevision); err == nil {
 			hit.Snip = docSnippet(rev.Body, words)

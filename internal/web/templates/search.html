@@ -16,7 +16,7 @@
 {{end}}</div>{{template "foot" .}}{{end}}
 {{define "searchkind"}}<a class="frow{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Mark}}<span class="nm">{{.Label}}</span><span class="counter">{{.Shown}}</span></a>{{end}}
 {{define "searchgroup"}}{{$g := .}}<div class="box-h"><h2 class="t">{{.Label}}</h2>{{if .All}}<span class="sp"></span><a href="{{.All}}">{{t "search.all"}}</a>{{end}}</div>
-{{range .Hits}}<div class="hit"><span class="hm">{{mi $g.Mark}}</span><div><a class="ht" href="{{.Href}}">{{.Title}}</a>{{if or .Sub .Date .Area}}<div class="hs">{{.Sub}}{{if .Date}}{{if .Sub}} · {{end}}<span class="hd" title="{{.Stamp}}">{{.Date}}</span>{{end}}{{if .Area}} <span class="chip ar">{{mi "folder"}}{{.Area}}</span>{{end}}</div>{{end}}{{if .Snip}}<div class="hx">{{.Snip}}</div>{{end}}</div></div>
+{{range .Hits}}<div class="hit"><span class="hm">{{mi $g.Mark}}</span><div><div class="hl">{{if .RefN}}{{refPill .RefKind .RefN ""}}{{end}}<a class="ht rl" href="{{.Href}}">{{.Marked}}</a></div>{{if or .Lead .Date .Area}}<div class="hs">{{.Lead}}{{if .Date}}{{if .Lead}} · {{end}}<span class="hd" title="{{.Stamp}}">{{.Date}}</span>{{end}}{{if .Area}} <span class="chip ar">{{mi "folder"}}{{.Area}}</span>{{end}}</div>{{end}}{{if .SnipHTML}}<div class="hx">{{.SnipHTML}}</div>{{end}}</div></div>
 {{end}}{{end}}
 {{define "searchlive"}}{{with .Live}}<noscript><meta http-equiv="refresh" content="0;url={{.Sync}}"></noscript>
 <div class="sprog" data-search-live="{{.Stream}}" data-sync="{{.Sync}}" data-total="{{.Total}}"><span class="bar" aria-hidden="true"><span></span></span><span class="tx" role="status" data-fmt="{{t "search.progress"}}"></span><button type="button" class="gbtn sm" data-search-stop>{{t "search.stop"}}</button></div>{{end}}

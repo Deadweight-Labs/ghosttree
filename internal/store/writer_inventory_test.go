@@ -250,6 +250,7 @@ var writerMethodClasses = map[string]string{
 	"SessionForeignTo":              "read",
 	"SessionExternalByID":           "read",
 	"OriginFor":                     "read",
+	"SessionAreas":                  "read",
 	"BackfillOrigins":               "write",
 	"RecordActor":                   "write",
 	"BackfillActors":                "write",

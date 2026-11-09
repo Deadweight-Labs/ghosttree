@@ -28,12 +28,27 @@
 
   var filter = $("#ct-filter");
   if (filter) {
-    filter.addEventListener("input", function () {
+    // The head of the table stays; a filter that leaves nothing says so, with a
+    // button that empties the field.
+    var none = $("#ct-table [data-list-none]");
+    var apply = function () {
       var q = filter.value.trim().toLowerCase();
-      $$("#ct-table .ct-row, #ct-nav a").forEach(function (row) {
+      var left = 0;
+      $$("#ct-table .ct-row:not(.ct-head), #ct-nav a").forEach(function (row) {
         row.hidden = q !== "" && (row.getAttribute("data-name") || "").toLowerCase().indexOf(q) < 0;
+        if (!row.hidden && row.closest("#ct-table")) left++;
       });
-    });
+      if (none) {
+        none.hidden = !(q !== "" && left === 0);
+        var text = $("[data-list-none-text]", none);
+        if (text && !none.hidden) text.textContent = (none.getAttribute("data-fmt") || "").replace("{q}", filter.value.trim());
+      }
+    };
+    filter.addEventListener("input", apply);
+    if (none) {
+      var clear = $("[data-list-clear]", none);
+      if (clear) clear.addEventListener("click", function () { filter.value = ""; filter.focus(); apply(); });
+    }
   }
 
   var branches = $("[data-ct-branches]");

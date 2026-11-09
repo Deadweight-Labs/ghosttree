@@ -50,11 +50,11 @@ func TestSearchHitsShowTheDateAndTheMainAreaOfTheirOrigin(t *testing.T) {
 	}
 	// Every kind shows a date, the ones without an origin context the one of their creation.
 	for _, group := range []string{"Needle request", "Needle idea", "Needle pain"} {
-		i := strings.Index(page, group)
+		i := strings.Index(page, strings.Replace(group, "Needle", "<mark>Needle</mark>", 1))
 		if i < 0 {
 			t.Fatalf("no hit %q", group)
 		}
-		if !strings.Contains(page[i:min(i+700, len(page))], `class="hd"`) {
+		if !strings.Contains(page[i:min(i+1200, len(page))], `class="hd"`) {
 			t.Errorf("the hit %q shows no date", group)
 		}
 	}

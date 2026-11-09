@@ -28,7 +28,9 @@ import (
 // diese Datei bildet keine zweite Zählung.
 
 const (
-	pageSize      = 50
+	pageSize = 50
+	// listAreas is how many folder pills a session row shows.
+	listAreas     = 3
 	resultLines   = 12
 	liveWindow    = 3 * time.Minute
 	promptsShown  = 30
@@ -82,6 +84,8 @@ type listRow struct {
 	Owner string
 	// MachineHref is the machine page, empty when the viewer cannot reach it.
 	MachineHref string
+	// Areas are the folders the session worked in ("internal/web"), heaviest first.
+	Areas []string
 }
 
 type dayGroup struct {
@@ -604,10 +608,18 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		links, _ := a.store.SessionLinks(pa, readableIDs)
+		var readable []store.Session
+		for _, row := range page.Rows {
+			if row.Readable {
+				readable = append(readable, row.Session)
+			}
+		}
+		areas := a.store.SessionAreas(readable, listAreas)
 		machineLink := a.machineLinker(r)
 		var lastDay string
 		for _, row := range page.Rows {
 			lr := a.listRow(l, row, links[row.Session.ID], now)
+			lr.Areas = areas[row.Session.ID]
 			lr.MachineHref = machineLink(lr.Machine)
 			v.HasLinked = v.HasLinked || len(lr.Linked) > 0
 			label := dayLabel(l, parseStamp(row.Session.LastSeenAt), now)

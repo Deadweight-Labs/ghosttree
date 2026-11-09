@@ -24,7 +24,10 @@
   & .hits .box-h:first-child { border-top: 0; }
   & .hit { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
   & .hit + .hit { border-top: 1px solid var(--border-muted); }
-  & .hit .hm { color: var(--fg-muted); padding-top: 2px; }
+  & .hit .hm { display: inline-flex; align-items: center; height: 24px; color: var(--fg-muted); }
+  & .hit .hl { line-height: 24px; }
+  & .hit .hl .pill { margin-right: 8px; vertical-align: middle; }
+  & .hit mark { background: var(--attention-muted); color: inherit; border-radius: 2px; }
   & .hit .ht { font-size: 16px; font-weight: 600; color: var(--fg-default); overflow-wrap: anywhere; }
   & .hit .ht:hover { color: var(--accent-fg); }
   & .hit .hs { margin-top: 2px; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; }
@@ -67,4 +70,4 @@
 @media (prefers-reduced-motion: reduce) {
   :is(.g2.sr) .sprog .bar > span { transition: none; }
 }
-:is(.g2) .hit .hx { margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--fg-default); overflow-wrap: anywhere; }
+:is(.g2) .hit .hx { margin-top: 4px; font-size: 12px; line-height: 18px; color: var(--fg-muted); overflow-wrap: anywhere; }

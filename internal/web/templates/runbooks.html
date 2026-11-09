@@ -2,10 +2,10 @@
 {{with .RunbooksV}}
 {{if .Empty}}<div class="box"><div class="box-empty"><span>{{t "runbooks.empty"}}</span>{{with .NewHref}}<a class="gbtn pri" href="{{.}}">{{mi "plus"}}{{t "runbooks.new_first"}}</a>{{end}}</div></div>
 {{else}}<div class="sbar"><label class="gfield mono-in">{{mi "search"}}<input type="search" data-list-filter=".rbrow" placeholder="{{t "runbooks.search"}}" aria-label="{{t "runbooks.search"}}" autocomplete="off" spellcheck="false"></label>{{with .NewHref}}<a class="gbtn pri" href="{{.}}">{{mi "plus"}}{{t "runbooks.new"}}</a>{{end}}</div>
-<div class="box"><div class="box-h lh"><span class="t">{{t "runbooks.n" (len .Rows)}}</span><span class="sp"></span><span class="muted fw4">{{t "runbooks.last_ok"}}</span></div>
-{{range .Rows}}<div class="row rbrow"><span class="st open">{{mi "play"}}</span><div class="rbmain"><a class="rbname mono" href="{{.Href}}">{{.Name}}</a>{{if .Machine}}<span class="lb out mono">{{.Machine}}</span>{{end}}<div class="rbpurpose">{{.Purpose}}</div></div>
-<div class="rbmeta">{{if .LastAge}}<span class="rbrun">{{mi "done"}}{{t "runbooks.last_run" .LastAge}}</span>{{end}}{{if .Approved}}<span class="lb ok">{{t "runbooks.approved"}}</span>{{else}}<span class="lb warn">{{t "runbooks.needs_approval"}}</span>{{end}}<span class="rbsha">{{if .Sha}}{{shaPill .Sha ""}}{{end}}</span></div></div>
-{{end}}</div>{{end}}
+<div class="box"><div class="box-h lh"><span class="t" data-list-n data-one="{{t "runbooks.n_one"}}" data-many="{{t "runbooks.n" 0}}">{{if eq (len .Rows) 1}}{{t "runbooks.n_one"}}{{else}}{{t "runbooks.n" (len .Rows)}}{{end}}</span><span class="sp"></span><span class="muted fw4">{{t "runbooks.last_ok"}}</span></div>
+{{range .Rows}}<div class="row rbrow"><span class="st open" aria-hidden="true">{{mi "play"}}</span><div class="rbmain"><a class="rbname rl mono" href="{{.Href}}">{{.Name}}</a>{{if .Machine}}<span class="lb out mono">{{.Machine}}</span>{{end}}<div class="rbpurpose">{{.Purpose}}</div></div>
+<div class="rbmeta">{{if .LastAge}}<span class="rbrun">{{mi "done"}}{{t "runbooks.last_run" .LastAge}}</span>{{end}}{{if .Approved}}<span class="lb ok">{{t "runbooks.approved"}}</span>{{else}}<span class="lb warn">{{t "runbooks.needs_approval"}}</span>{{end}}{{if .Sha}}<span class="rbsha">{{shaPill .Sha ""}}</span>{{end}}</div></div>
+{{end}}{{template "listnone"}}</div>{{end}}
 {{end}}</div><script src="/static/ui-list.js" defer></script>
 {{template "foot" .}}{{end}}
 

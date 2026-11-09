@@ -66,7 +66,7 @@ func TestKnowledgeListShowsKindStatusExcerptAndFilters(t *testing.T) {
 	knInsert(t, e.St, store.Knowledge{Type: "note", Title: "Staged idea", Confidence: "staged"})
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/knowledge")
 	for _, want := range []string{"WAL grows unbounded", "Use SQLite", "Staged idea", "Pitfall", "Decision", "Verified", "Trusted", "Staged",
-		"First paragraph about the WAL.", `<div class="tt"><a href="/ui/x/shell/knowledge/`, `/static/ui-knowledge.css`, `aria-current="page"`} {
+		"First paragraph about the WAL.", `<div class="tt"><a class="rl" href="/ui/x/shell/knowledge/`, `/static/ui-knowledge.css`, `aria-current="page"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("member list lacks %q", want)
 		}
