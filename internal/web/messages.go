@@ -843,6 +843,8 @@ var messages = map[string]string{
 	"adm.notice.source_added":    "GitHub connected.",
 	"adm.notice.source_removed":  "Source disconnected.",
 	"adm.notice.source_failed":   "GitHub could not confirm that. Try connecting again.",
+	"adm.notice.source_proved":   "GitHub confirmed it. Choose the organization to connect.",
+	"adm.service":                "Service",
 	"adm.notice.imported":        "Projects created.",
 	"adm.err.not_project_owner":  "Only a project owner can change who a project is shared with.",
 	"adm.err.prefix_unproven":    "That prefix needs a connected GitHub organization you administer.",

@@ -260,6 +260,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/profile/github/link", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileGitHubLink))))))
 	a.handle(mux, "POST /ui/profile/github/unlink", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileGitHubUnlink))))))
 	a.handle(mux, "GET /ui/orgs", a.requirePerson(http.HandlerFunc(a.orgsPage)))
+	a.handle(mux, "GET /ui/orgs/new", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.orgNewPage))))
 	a.handle(mux, "GET /ui/orgs/source/callback", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.orgSourceCallback))))
 	// Verwaltung nur aus einer interaktiven Sitzung, nicht aus eingefügtem Token.
 	for path, h := range map[string]http.HandlerFunc{
@@ -564,6 +565,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/profile/github/link":          webAdmin,
 	"POST /ui/profile/github/unlink":        webAdmin,
 	"GET /ui/orgs":                          webAccount,
+	"GET /ui/orgs/new":                      webAccount,
 	"POST /ui/orgs/invite":                  webAdmin,
 	"POST /ui/orgs/invite/revoke":           webAdmin,
 	"POST /ui/orgs/member/role":             webAdmin,

@@ -227,7 +227,7 @@ func (a *app) orgSourceCallback(w http.ResponseWriter, r *http.Request) {
 	me := browserPrincipal(r).ID
 	fl, ok := a.sourceFlows.take(r.URL.Query().Get("state"), me)
 	if !ok {
-		http.Redirect(w, r, "/ui/orgs?notice=source_failed", http.StatusSeeOther)
+		http.Redirect(w, r, "/ui/orgs?notice=source_failed"+noticeAnchor("source_failed"), http.StatusSeeOther)
 		return
 	}
 	if fl.purpose == flowLink {
@@ -265,7 +265,7 @@ func (a *app) orgSourceCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	fl.accounts, fl.until = accounts, a.sourceFlows.now().Add(sourceFlowTTL)
 	a.sourceFlows.put(pick, fl)
-	http.Redirect(w, r, "/ui/orgs?org="+url.QueryEscape(fl.org)+"&pick="+pick, http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/orgs?org="+url.QueryEscape(fl.org)+"&notice=source_proved&pick="+pick+noticeAnchor("source_proved"), http.StatusSeeOther)
 }
 
 // orgSourceAdd verbindet eine der nachgewiesenen GitHub-Organisationen und

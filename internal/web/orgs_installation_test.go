@@ -64,7 +64,7 @@ func TestInstallationFromTheCallbackIsCheckedAndStoredOnTheSource(t *testing.T) 
 	if !strings.Contains(pickLoc, "pick=") || len(prover.installs) != 2 || prover.installs[1] != 5 {
 		t.Fatalf("callback: %q %v", pickLoc, prover.installs)
 	}
-	pick := pickLoc[strings.Index(pickLoc, "pick=")+5:]
+	pick := pickToken(pickLoc)
 	if r := postOrg(t, alice, base, "/ui/orgs/source/add", url.Values{"org": {"alpha"}, "pick": {pick}, "login": {"deadweight-labs"}, "visibility": {"shared"}}); !strings.Contains(r.Header.Get("Location"), "source_added") {
 		t.Fatalf("add: %q", r.Header.Get("Location"))
 	}

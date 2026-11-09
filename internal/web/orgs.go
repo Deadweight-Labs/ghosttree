@@ -20,6 +20,9 @@ type orgMemberRow struct {
 	// down nor leave. NoProject: a member without a role in any project of the
 	// organization, shown to owners with a way to add one.
 	SoleOwner, NoProject bool
+	// Service: the account the gardener runs as. It is no person, so the list
+	// says so.
+	Service bool
 }
 
 // inviteRow is an invitation with, for its creator while it is open, the link.
@@ -76,6 +79,10 @@ type orgsView struct {
 	SourceReady bool
 	Pick        *sourcePick
 	Notice      string
+	// NoticeBad: the notice reports a failure and is shown as one.
+	NoticeBad bool
+	// NewOrg: the page shows only the form for a new organization.
+	NewOrg bool
 	// Explain is the administrator's block on "Kurz erklärt"; nil for anyone else.
 	Explain *explainAdminView
 	// Garden is the same for the gardener; nil for anyone else.
@@ -95,7 +102,15 @@ func (v orgsView) Guests() []orgMemberRow {
 func (a *app) orgsPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
-	a.renderOrgs(w, r, http.StatusOK, orgsView{Notice: orgNotice(l, r.URL.Query().Get("notice"))}, r.URL.Query().Get("org"), "")
+	key := r.URL.Query().Get("notice")
+	a.renderOrgs(w, r, http.StatusOK, orgsView{Notice: orgNotice(l, key), NoticeBad: key == "source_failed"}, r.URL.Query().Get("org"), "")
+}
+
+// orgNewPage is the form for a new organization. The "+" menu and the
+// organization menu of the header lead here; the settings of an organization
+// do not offer it.
+func (a *app) orgNewPage(w http.ResponseWriter, r *http.Request) {
+	a.renderOrgs(w, r, http.StatusOK, orgsView{NewOrg: true}, "", "")
 }
 
 func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v orgsView, ref, errMsg string) {
@@ -129,10 +144,14 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				owners++
 			}
 		}
+		gardener := ""
+		if id := a.store.GardenerAccountID(); id > 0 {
+			gardener = "person:" + strconv.FormatInt(id, 10)
+		}
 		for _, m := range members {
 			m.Account = store.NormalizeAccountName(m.Account)
 			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me, Initial: initialOf(m.Account),
-				SoleOwner: m.Role == store.OrgOwner && owners == 1})
+				SoleOwner: m.Role == store.OrgOwner && owners == 1, Service: gardener != "" && m.AccountID == gardener})
 		}
 		var orgAll []store.OrgMemberInfo
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
@@ -203,7 +222,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		w.WriteHeader(status)
 	}
 	data := pageData{Title: l.msg("adm.org.title"), Error: errMsg, Orgs: v}
-	if v.Selected.ID != 0 {
+	if v.Selected.ID != 0 && !v.NewOrg {
 		data.OrgBand, data.OrgName = a.orgBandFor(r, v.Selected, "settings"), v.Selected.Name
 	}
 	a.renderBrowser(w, r, "orgs", data)
@@ -312,6 +331,8 @@ func orgNotice(l lang, key string) string {
 		return l.msg("adm.notice.source_removed")
 	case "source_failed":
 		return l.msg("adm.notice.source_failed")
+	case "source_proved":
+		return l.msg("adm.notice.source_proved")
 	case "imported":
 		return l.msg("adm.notice.imported")
 	}
@@ -323,7 +344,17 @@ func orgRedirect(w http.ResponseWriter, r *http.Request, slug, notice string) {
 	if notice != "" {
 		q.Set("notice", notice)
 	}
-	http.Redirect(w, r, "/ui/orgs?"+q.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/orgs?"+q.Encode()+noticeAnchor(notice), http.StatusSeeOther)
+}
+
+// noticeAnchor names the section of the settings a notice belongs to, so that
+// the page opens there and not on "Allgemein".
+func noticeAnchor(notice string) string {
+	switch notice {
+	case "source_added", "source_removed", "source_failed", "source_proved", "imported":
+		return "#sources"
+	}
+	return ""
 }
 
 // fillInvites lists the organization's invitations with the links their
@@ -562,7 +593,8 @@ func initialOf(name string) string {
 func (a *app) orgCreate(w http.ResponseWriter, r *http.Request) {
 	o, err := a.store.CreateOrg(browserPrincipal(r).ID, r.FormValue("name"), "")
 	if err != nil {
-		a.orgFailure(w, r, err)
+		status, msg := orgError(a.langFor(r), err)
+		a.renderOrgs(w, r, status, orgsView{NewOrg: true}, "", msg)
 		return
 	}
 	http.Redirect(w, r, "/ui/orgs?org="+o.Slug+"&notice=created", http.StatusSeeOther)
