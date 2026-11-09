@@ -487,8 +487,9 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 	who := a.viewerOf(r, pa)
 	guest := who.kind == viewerGuest
 	filter, keep := sessionFilterFromQuery(r, guest)
-	// Das Projekt kommt aus der Auswahl im Kopf, nicht aus einem eigenen Filter.
-	filter.Project = selectedProject(a.shellFor(r, "sessions"))
+	// Das Projekt kommt aus dem Repo der Seite oder der Auswahl im Kopf, nicht aus
+	// einem eigenen Filter (projectParam; auf Repo-Seiten ist die Auswahl leer).
+	filter.Project = a.projectParam(r)
 	r = a.repoScoped(r, filter.Project, "sessions")
 	keep.Del("project")
 	query := strings.TrimSpace(r.URL.Query().Get("q"))

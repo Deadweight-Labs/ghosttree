@@ -37,5 +37,12 @@ func TestGuestWritesAndUnreviewedApprovalsAreRefusedByTheAPI(t *testing.T) {
 		if code, out := f.call(t, "gus", "POST", "/api/runbooks", rbBody("member-rollout", "vom Gast", false, nil)); code != 403 && code != 404 {
 			t.Errorf("enforce=%v: guest writes a runbook version: %d %s", enforce, code, out)
 		}
+		// Einen Lauf meldet ein Gast nicht, ein Mitglied schon (Prüfbefund A2).
+		rb := writeRunbookAPI(t, f, "robin", 201, rbBody("run-me", "x", true, nil))
+		run := map[string]any{"mode": "checklist", "result": "ok"}
+		if code, out := f.call(t, "gus", "POST", idPath("/api/runbooks/%d/runs", rb.ID), run); code != 403 && code != 404 {
+			t.Errorf("enforce=%v: guest reports a run: %d %s", enforce, code, out)
+		}
+		f.expect(t, "mia", 201, "POST", idPath("/api/runbooks/%d/runs", rb.ID), run)
 	}
 }

@@ -189,3 +189,35 @@ func approveEnabled(page string, id int64) bool {
 		}
 	}
 }
+
+// Die Sitzungsseite eines Repos zeigt nur Sitzungen dieses Projekts, auch für
+// Gast und Mitglied und auch im Log-Modus (Prüfbefund A1).
+func TestSessionsOfARepositoryStayInItsProject(t *testing.T) {
+	e := newProjectOnlyEnv(t)
+	e.St.SetAccessMode(store.AccessMode{Enforce: false})
+	for _, s := range []struct{ ext, project, text string }{
+		{"s-own", shellProject, "zebra in shell"},
+		{"s-hidden", shellHiddenProject, "zebra in hidden"},
+	} {
+		id, err := e.St.UpsertSession(store.Session{Harness: "claude-code", ExternalID: s.ext, AccountID: 1, Scope: scope.Axes{Project: s.project}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.St.SetSessionShared(id, "person:1", true); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.St.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: s.text,
+			Raw: `{"type":"user","message":{"role":"user","content":"` + s.text + `"}}`}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, c := range map[string]*http.Client{"member": e.Member, "owner": e.Owner} {
+		_, page := fetchPage(t, c, e.Base+"/ui/x/shell/sessions")
+		if strings.Contains(page, "zebra in hidden") {
+			t.Errorf("%s sees a session of another project on the repository page", name)
+		}
+		if !strings.Contains(page, "zebra in shell") {
+			t.Errorf("%s misses the project's own session", name)
+		}
+	}
+}

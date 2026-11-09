@@ -258,7 +258,8 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 		}
 	case ResRunbook:
 		switch act {
-		case ActRead, ActCreate:
+		case ActRead, ActCreate, ActWork:
+			// ActWork: einen Lauf melden.
 			return rank >= 2
 		case ActEdit:
 			// Wie bei Wissen (#1444): wer es besser weiß, schreibt eine neue
