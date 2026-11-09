@@ -28,13 +28,7 @@
 {{if and .CanManage .PersonOwned .OwnerOrgs}}<details class="box-r mowner"><summary class="gbtn sm">{{mi "people"}}{{t "machine.to_org"}}</summary><form method="post" action="{{.Base}}/owner"><input type="hidden" name="csrf_token" value="{{.Token}}"><select class="gfield" name="org" aria-label="{{t "machine.org"}}">{{range .OwnerOrgs}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select><button class="gbtn">{{t "machine.to_org_do"}}</button></form></details>{{end}}</div>{{end}}
 {{if .Items}}<div class="sec"><h2>{{t "machine.log"}}</h2></div>{{template "uitimeline" .Items}}{{end}}
 </div>
-<aside class="side" aria-label="{{t "machine.side"}}">
-<div class="sblk"><h3>{{t "machine.side.relation"}}</h3><div class="v"><span class="lb {{.RelationTone}}">{{.RelationLabel}}</span></div></div>
-{{if .Owner}}<div class="sblk"><h3>{{t "machine.side.owner"}}</h3><div class="v"><span class="person">{{avatarOf .Owner}}<span>{{.Owner}}</span></span></div></div>{{end}}
-{{if .OwnerOrg}}<div class="sblk"><h3>{{t "machine.side.org"}}</h3><div class="v"><a class="chip" href="{{.OwnerOrgHref}}">{{mi "people"}}{{.OwnerOrg}}</a></div></div>{{end}}
-{{if .Shares}}<div class="sblk"><h3>{{t "machine.side.shared"}}</h3><div class="v">{{range .Shares}}<a class="chip" href="{{.OrgHref}}">{{mi "people"}}{{.Org}}</a>{{end}}</div></div>{{end}}
-<div class="sblk"><h3>{{t "machine.side.seen"}}</h3><div class="v"><span class="muted">{{.LastSeen}}</span></div></div>
-</aside></div>
+</div>
 {{end}}</div>{{template "foot" .}}{{end}}
 
 {{define "orgmachines"}}{{template "head" .}}{{template "nav" .}}<main class="g2 mh"><div class="wrap">

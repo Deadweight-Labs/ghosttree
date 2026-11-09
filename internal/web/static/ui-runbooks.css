@@ -45,7 +45,12 @@
   & .rbset legend { padding: 0 6px; font-weight: 600; font-size: 13px; }
   & .rbfrow { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(200px, 2fr) minmax(120px, 1fr); gap: 8px; }
   & .rbprow { grid-template-columns: minmax(90px, 1fr) 100px minmax(120px, 2fr) 100px minmax(80px, 1fr) minmax(80px, 1fr); }
-  & .rbfrow .gfield { min-width: 0; width: 100%; font-size: 13px; }
+  /* All fields of a row: one size and one line. Typed code is mono; the placeholders are all in the
+     interface font, so they stand on one line across the row (a mono face sits 1.5 px higher). */
+  & .rbfrow .gfield { min-width: 0; width: 100%; font-size: 13px; line-height: 20px; }
+  & .rbfrow .selx > .gbtn { font-size: 13px; }
+  & .rbfrow .gfield.mono { font: 13px/20px var(--ui-mono); }
+  & .rbfrow .gfield.mono::placeholder { font-family: var(--ui-font); }
   & .rbhint { margin: 0; font-size: 12px; color: var(--fg-muted); }
   & .rbtargets { background: var(--canvas-subtle); }
   & .rbtarget { font-size: 13px; }

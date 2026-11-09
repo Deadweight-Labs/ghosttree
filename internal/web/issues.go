@@ -200,7 +200,7 @@ type issueStateTab struct {
 type presetLink struct{ Name, Href, Query string }
 
 // newItem is one entry of the "New" menu.
-type newItem struct{ Label, Href string }
+type newItem struct{ Label, Href, Icon string }
 
 type issuesView struct {
 	Q, Base, Segment string
@@ -325,15 +325,15 @@ func (a *app) issuesPage(w http.ResponseWriter, r *http.Request) {
 // issueNewMenu is the button for the segment on show and the other two in the
 // menu behind it: "New issue", "New idea", "New pain".
 func issueNewMenu(base, segment string) (newItem, []newItem) {
-	all := []struct{ seg, label, href string }{
-		{segIssue, "issues.new_issue", base + "/new"},
-		{segIdea, "issues.new_idea", base + "/new?kind=idea"},
-		{segPain, "issues.new_pain", base + "/new?kind=pain"},
+	all := []struct{ seg, label, href, icon string }{
+		{segIssue, "issues.new_issue", base + "/new", "issue"},
+		{segIdea, "issues.new_idea", base + "/new?kind=idea", "idea"},
+		{segPain, "issues.new_pain", base + "/new?kind=pain", "pain"},
 	}
 	var main newItem
 	var menu []newItem
 	for _, n := range all {
-		it := newItem{Label: n.label, Href: n.href}
+		it := newItem{Label: n.label, Href: n.href, Icon: n.icon}
 		if n.seg == segment {
 			main = it
 		}

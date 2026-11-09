@@ -1,4 +1,4 @@
-// Settings pages: copyable invitation links, the length of an invitation that
+// Settings pages: invitation links that select themselves, the length of an invitation that
 // follows the role, and the navigation that marks the section in view.
 // No inline script, no inline style.
 (() => {
@@ -11,20 +11,6 @@
   };
   for (const link of document.querySelectorAll("[data-select]")) {
     link.addEventListener("focus", () => selectAll(link));
-  }
-  for (const button of document.querySelectorAll("[data-copy]")) {
-    const link = button.parentElement.querySelector("[data-select]");
-    const label = button.textContent;
-    button.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(link.textContent.trim());
-      } catch (_) {
-        selectAll(link);
-        document.execCommand("copy");
-      }
-      button.textContent = button.dataset.done || label;
-      setTimeout(() => { button.textContent = label; }, 1800);
-    });
   }
   // The default length of an invitation depends on the role: a guest link
   // lives shorter. The first option names the length the server will use.

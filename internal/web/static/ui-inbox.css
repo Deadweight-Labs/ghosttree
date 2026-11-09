@@ -10,6 +10,7 @@
   & .nrow .lnk::after { content: ""; position: absolute; inset: 0; }
   & .nrow:has(.lnk:hover) .t, & .nrow:has(.lnk:hover) .q { color: var(--accent-fg); }
   & .nrow .t .lnk { color: var(--fg-default); }
+  & .nrow .inreply:has(.dd.open, details[open]) { z-index: 60; }
   & .nrow .top2 a, & .nrow .ref, & .nrow .acts, & .nrow .inreply, & .nrow .rquote { position: relative; z-index: 1; }
   & .nrow .acts { align-self: center; }
   & .nrow .q { margin-top: 4px; padding: 0 12px; color: var(--fg-default); border-left: 3px solid var(--border-default); font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }

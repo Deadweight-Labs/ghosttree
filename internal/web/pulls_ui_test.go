@@ -218,7 +218,7 @@ func TestCommitListGroupsByDayFiltersByBranchAndPages(t *testing.T) {
 		t.Fatalf("commit list = %d", code)
 	}
 	mustContain(t, "commit list", page, "Commits on 8 Nov 2026", "feat(web): list of pull requests", "feat(web): page of a pull request", `href="/ui/x/shell/commits/`+pullShaA+`"`, "aaaaaaa", "bbbbbbb", "ccccccc",
-		`data-copy-sha="`+pullShaA+`"`, "Copy SHA", `href="/ui/x/shell/pulls/12"`, "#12", "committed", "about this commit", "All branches", "feat/x",
+		`data-copy-text="`+pullShaA+`"`, "Copy SHA", `href="/ui/x/shell/pulls/12"`, "#12", "committed", "about this commit", "All branches", "feat/x",
 		`href="https://github.com/x/shell/commits"`, `aria-label="Open on GitHub: commits"`, `class="pager"`, "Commit ccccccc")
 	mustNotContain(t, "commit list", page, "SECRET")
 	_, byBranch := fetchPage(t, e.Owner, base+"?branch="+url.QueryEscape("feat/x"))

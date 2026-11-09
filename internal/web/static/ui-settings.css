@@ -40,8 +40,14 @@
   & .mrow .acts, & .ghrow .acts { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   & .mrow .acts form { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; max-width: 100%; }
   & .mrow .acts select.gfield { max-width: 100%; }
+  /* The role menus of all rows are equally wide, and the field, the tick and the button stay on one line */
+  & .mrow .acts .selx { flex: none; width: 176px; }
   & .ghrow .gav.org, & .mrow .gav.org { border-radius: 6px; background: var(--canvas-default); color: var(--fg-default); }
   & .invite { display: flex; gap: 8px; align-items: center; padding: 12px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); border-radius: 6px 6px 0 0; }
+  /* The name field grows to a sensible width and the role pill sits right behind it, not at the far edge */
+  & .prow.pname { grid-template-columns: 120px minmax(0, 28rem) auto; justify-content: start; }
+  & .prow.pname .inline-form { display: flex; min-width: 0; }
+  & .inline-form .grow { flex: 1; }
   & .invite .gfield:first-child, & .invite .grow { flex: 1; }
   & .invite select.gfield { width: auto; }
   & .lnew { display: flex; gap: 8px; align-items: center; padding: 12px 16px; background: var(--canvas-subtle); }
@@ -61,7 +67,10 @@
   & .fl .gfield, & .fl select.gfield { width: 100%; background: var(--canvas-default); }
   & .box-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
   & .box-body p { margin: 0; }
-  & .box > details > summary { cursor: pointer; padding: 12px 16px; font-weight: 600; }
+  & .box > details > summary { display: flex; align-items: center; gap: 8px; list-style: none; cursor: pointer; padding: 12px 16px; font-weight: 600; }
+  & .box > details > summary::-webkit-details-marker { display: none; }
+  & .box > details > summary::before { content: ""; flex: none; width: 6px; height: 6px; margin: 0 4px 2px 2px; border-right: 1.5px solid var(--fg-muted); border-bottom: 1.5px solid var(--fg-muted); transform: rotate(-45deg); transition: transform .12s; }
+  & .box > details[open] > summary::before { transform: rotate(45deg); margin-bottom: 4px; }
   & .box > details[open] > summary { border-bottom: 1px solid var(--border-muted); }
   & .inline-form { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
   & .copyline { display: flex; align-items: center; gap: 8px; }
@@ -224,7 +233,7 @@
   & .pedit { margin-bottom: 16px; }
   & .pedit > summary { list-style: none; justify-content: center; cursor: pointer; }
   & .pedit > summary::-webkit-details-marker { display: none; }
-  & .pedit .dform { margin-top: 8px; }
+  & .pedit .dform { margin-top: 8px; padding: 0; }
   & .ph3 { margin: 16px 0 8px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
   & .pgh { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
   & .pghl { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }

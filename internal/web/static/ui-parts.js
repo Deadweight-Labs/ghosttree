@@ -1,17 +1,81 @@
-// Behaviour of the components in components.html: menus with a button
-// (data-dd), composer (write/preview, mode with fields and button label),
-// copyable command blocks with OS tabs. No inline script, no inline style.
+// Behaviour of the components in components.html: menus (div.dd with a button,
+// details.dd), composer (write/preview, mode with fields and button label), the
+// copy button, command blocks with OS tabs. No inline script, no inline style.
 (() => {
   const $ = (s, c) => (c || document).querySelector(s);
   const $$ = (s, c) => [...(c || document).querySelectorAll(s)];
 
-  // Menus that open with a button: Escape or a click outside closes them.
+  // Menus: a div.dd opens with its button (data-dd), a details.dd by itself. Both
+  // close with Escape (focus goes back to the button) and with a click outside,
+  // and both are moved back into the window when they would stick out of it.
+  // details.rvk is the confirmation popover of the tokens page; it closes the same way.
+  const OPEN = ".dd.open, details.dd[open], details.rvk[open]";
+  const trigger = (dd) => $(":scope > [data-dd], :scope > summary", dd);
   const closeMenus = (except) => {
-    for (const dd of $$(".dd.open")) {
-      if (dd === except) continue;
-      dd.classList.remove("open");
-      const b = $("[data-dd]", dd);
-      if (b) b.setAttribute("aria-expanded", "false");
+    for (const dd of $$(OPEN)) {
+      if (dd === except || (except && dd.contains(except))) continue;
+      if (dd.tagName === "DETAILS") {
+        dd.open = false;
+      } else {
+        dd.classList.remove("open");
+        const b = $("[data-dd]", dd);
+        if (b) b.setAttribute("aria-expanded", "false");
+      }
+    }
+  };
+  const resetPop = (dd) => {
+    const pop = $(":scope > .pop, :scope > .rvp", dd);
+    if (!pop) return null;
+    pop.style.transform = "";
+    pop.style.top = "";
+    pop.style.bottom = "";
+    pop.style.maxHeight = "";
+    return pop;
+  };
+  // A menu of more than ten entries gets a filter field at its top (the head line, when
+  // there is one, stays above it). Typing hides the entries that do not contain the text.
+  const filterable = (dd) => {
+    const pop = $(":scope > .pop", dd);
+    if (!pop || $(".pf", pop)) return;
+    const opts = $$(".opt", pop);
+    if (opts.length <= 10) return;
+    const find = document.createElement("input");
+    find.type = "search";
+    find.className = "pf";
+    find.autocomplete = "off";
+    find.placeholder = "Filter …";
+    find.setAttribute("aria-label", "Filter");
+    find.addEventListener("input", () => {
+      const q = find.value.trim().toLowerCase();
+      for (const opt of opts) opt.hidden = q !== "" && !opt.textContent.toLowerCase().includes(q);
+    });
+    find.addEventListener("keydown", (event) => { if (event.key === "Enter") event.preventDefault(); });
+    const head = $(":scope > .ph", pop);
+    if (head) head.after(find); else pop.prepend(find);
+  };
+  // 8 px of air to the edge of the window; opens above the button when there is
+  // more room there than below.
+  const place = (dd) => {
+    const pop = resetPop(dd);
+    if (!pop) return;
+    const box = pop.getBoundingClientRect();
+    const width = document.documentElement.clientWidth;
+    let shift = 0;
+    if (box.right > width - 8) shift = width - 8 - box.right;
+    if (box.left + shift < 8) shift = 8 - box.left;
+    if (shift) pop.style.transform = "translateX(" + Math.round(shift) + "px)";
+    const room = window.innerHeight - 8;
+    if (box.bottom > room) {
+      const at = dd.getBoundingClientRect();
+      const above = at.top - 12;
+      const below = room - at.bottom - 4;
+      if (above > below) {
+        pop.style.top = "auto";
+        pop.style.bottom = "calc(100% + 4px)";
+        pop.style.maxHeight = Math.max(160, Math.min(above, 420)) + "px";
+      } else {
+        pop.style.maxHeight = Math.max(160, Math.min(below, 420)) + "px";
+      }
     }
   };
   document.addEventListener("click", (event) => {
@@ -22,11 +86,44 @@
       closeMenus(dd);
       dd.classList.toggle("open", open);
       button.setAttribute("aria-expanded", String(open));
+      if (open) {
+        filterable(dd);
+        place(dd);
+        const find = $(".pf", dd);
+        if (find) {
+          find.value = "";
+          find.dispatchEvent(new Event("input"));
+          find.focus();
+        }
+      } else {
+        resetPop(dd);
+      }
       return;
     }
-    if (!event.target.closest(".dd .pop")) closeMenus();
+    if (!event.target.closest(".dd .pop")) closeMenus(event.target.closest("details.dd, details.rvk"));
   });
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeMenus(); });
+  document.addEventListener("toggle", (event) => {
+    const d = event.target;
+    if (!d.matches || !d.matches("details.dd, details.rvk")) return;
+    if (d.open) {
+      closeMenus(d);
+      filterable(d);
+      place(d);
+    } else {
+      resetPop(d);
+    }
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const open = $$(OPEN);
+    if (!open.length) return;
+    const last = open[open.length - 1];
+    closeMenus();
+    // One Escape closes one thing: the menu, not the field or dialog it stands in
+    event.stopImmediatePropagation();
+    const t = trigger(last);
+    if (t) t.focus();
+  });
 
   // Composer: write/preview. The preview renders the Markdown (ui-md.js) into
   // nodes and takes the height of the text field while that is visible.
@@ -165,30 +262,88 @@
     }
   });
 
-  // Copy: text of the target into the clipboard, the button says "Copied" for a moment.
-  for (const b of $$("[data-ui-copy]")) {
-    const caption = $(".cl", b) || b;
-    const original = caption.textContent;
-    b.addEventListener("click", () => {
-      const target = $(b.dataset.uiCopy);
-      if (!target) return;
-      try { if (navigator.clipboard) navigator.clipboard.writeText(target.innerText.trim()).catch(() => {}); } catch (_) {}
-      caption.textContent = b.dataset.copied || original;
-      setTimeout(() => { caption.textContent = original; }, 1600);
-    });
+  // Copy: the one button of the interface (template "uicopy"). The text comes from
+  // data-copy-text, from the element data-copy-from names, from the command block
+  // around the button (data-copy-here) or is the address of the page
+  // (data-copy-page). The tick shows only after the browser took the text. Over
+  // plain HTTP the clipboard API is missing: then a hidden field and execCommand
+  // do it, and when that fails too the text is selected, so Ctrl+C is one key away.
+  const copyText = async (text) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (_) { /* fall through to the older way */ }
+    const keep = document.activeElement;
+    const field = document.createElement("textarea");
+    field.value = text;
+    field.setAttribute("readonly", "");
+    field.setAttribute("aria-hidden", "true");
+    field.style.position = "fixed";
+    field.style.top = "0";
+    field.style.opacity = "0";
+    document.body.appendChild(field);
+    field.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+    field.parentNode.removeChild(field);
+    if (keep && keep.focus) keep.focus();
+    return ok;
+  };
+  const copySource = (b) => {
+    if (b.hasAttribute("data-copy-page")) return null;
+    if (b.dataset.copyFrom) return $(b.dataset.copyFrom);
+    const here = b.closest(".cmdc, .g-cmd, .copyline");
+    return here ? $(".cmd, code", here) : null;
+  };
+  document.addEventListener("click", async (event) => {
+    const b = event.target.closest("button.copy");
+    if (!b) return;
+    const source = copySource(b);
+    let text = "";
+    if (b.hasAttribute("data-copy-page")) text = location.origin + location.pathname;
+    else if (b.dataset.copyText) text = b.dataset.copyText;
+    else if (source) text = (source.innerText || source.textContent).trim();
+    if (!text) return;
+    if (await copyText(text)) {
+      b.classList.add("done");
+      clearTimeout(b.copyTimer);
+      b.copyTimer = setTimeout(() => b.classList.remove("done"), 1600);
+    } else if (source) {
+      const range = document.createRange();
+      range.selectNodeContents(source);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  });
+
+  // A colour dot in front of a hex field shows the colour that stands in it.
+  for (const dot of $$("[data-swatch]")) {
+    const field = $("input", dot.parentNode);
+    if (!field) continue;
+    const paint = () => {
+      const value = "#" + field.value.trim().replace(/^#/, "");
+      dot.style.background = /^#[0-9a-f]{6}$/i.test(value) ? value : "";
+    };
+    field.addEventListener("input", paint);
+    paint();
   }
 
   // OS tabs: macOS or Linux by platform, a click switches.
   const platform = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "").toLowerCase();
   const preferred = /mac|iphone|ipad/.test(platform) ? "mac" : "lin";
-  for (const w of $$("[data-ostabs]")) {
-    const tabs = $$('[role="tab"]', w);
-    const panels = $$('[role="tabpanel"]', w);
-    const pick = (os) => {
-      for (const t of tabs) t.setAttribute("aria-selected", t.dataset.os === os ? "true" : "false");
-      for (const p of panels) p.hidden = p.dataset.os !== os;
-    };
-    for (const t of tabs) t.addEventListener("click", () => pick(t.dataset.os));
-    pick(preferred);
+  // The choice counts for every command block of the page.
+  const groups = $$("[data-ostabs]");
+  const pickAll = (os) => {
+    for (const w of groups) {
+      for (const t of $$('[role="tab"]', w)) t.setAttribute("aria-selected", t.dataset.os === os ? "true" : "false");
+      for (const p of $$('[role="tabpanel"]', w)) p.hidden = p.dataset.os !== os;
+    }
+  };
+  for (const w of groups) {
+    for (const t of $$('[role="tab"]', w)) t.addEventListener("click", () => pickAll(t.dataset.os));
   }
+  pickAll(preferred);
 })();

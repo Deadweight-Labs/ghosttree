@@ -2,7 +2,11 @@
 // of its options next to it; the select stays the form control (value, required,
 // change event, auto-submit) and is only moved out of sight once the menu exists.
 // Without this script the native select works as it is. A select can opt out with
-// data-native. No inline script, no inline style.
+// data-native. A select that is 28 px high (class "sm", or a rule of its page) gets
+// the small button, so it is as high as the buttons and fields beside it. A first
+// option with an empty value is the placeholder: it is shown muted, and a button
+// marked data-needs-pick stays disabled until something else is chosen. (The filter
+// field of a long menu comes from ui-parts.js.) No inline script, no inline style.
 (() => {
   const NS = "http://www.w3.org/2000/svg";
   const svg = (paths) => {
@@ -31,8 +35,10 @@
 
   const enhance = (select) => {
     const quiet = select.classList.contains("quiet");
-    const dd = node("div", "dd selx" + (quiet ? " is-quiet" : ""));
-    const button = node("button", "gbtn" + (quiet ? " sm quiet" : ""));
+    // As high as the field it replaces: a select that a page's CSS made 28 px (next to small buttons) gets the small button
+    const small = select.classList.contains("sm") || parseFloat(getComputedStyle(select).height) <= 28;
+    const dd = node("div", "dd selx" + (quiet ? " is-quiet" : "") + (small ? " sm" : ""));
+    const button = node("button", "gbtn" + (quiet ? " sm quiet" : small ? " sm" : ""));
     button.type = "button";
     button.setAttribute("data-dd", "");
     button.setAttribute("aria-expanded", "false");
@@ -44,6 +50,7 @@
     const pop = node("div", "pop");
     pop.setAttribute("role", "listbox");
     const items = [];
+    const gate = select.form ? select.form.querySelector("[data-needs-pick]") : null;
     for (const option of select.options) {
       if (option.hidden) continue;
       const item = node("button", "opt");
@@ -66,6 +73,10 @@
     }
     const sync = () => {
       shown.textContent = labelOf(select);
+      // Only a disabled option with no value is a placeholder; an empty value can also be "the default"
+      const chosen = select.selectedOptions[0];
+      shown.classList.toggle("ph", !!chosen && chosen.value === "" && chosen.disabled);
+      if (gate) gate.disabled = !select.value;
       for (const [option, item] of items) {
         item.querySelector(".chk").classList.toggle("off", !option.selected);
         item.setAttribute("aria-selected", String(option.selected));

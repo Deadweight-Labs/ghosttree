@@ -1,12 +1,8 @@
 {{define "issue"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id"{{with .IssueV}} data-live-ids="{{.ID}}"{{end}}><div class="wrap">
 {{with .IssueV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n" title="{{.Human}}">#{{.ID}}</span></h1>
-{{if .CanEdit}}<div class="gacts"><a class="gbtn sm hide-m" href="{{.Base}}/{{.ID}}?panel=edit#edit">{{mi "pencil"}}{{t "issue.action.edit"}}</a>
-<a class="gbtn sm pri hide-m" href="{{.Base}}/new">{{mi "plus"}}{{t "issues.new_issue"}}</a>
-<details class="dd top-menu"><summary class="gbtn sm icon" aria-label="{{t "issue.more"}}" title="{{t "issue.more"}}">{{mi "kebab"}}</summary><div class="pop r">
-<a class="opt" href="{{.Base}}/{{.ID}}?panel=edit#edit">{{mi "pencil"}}{{t "issue.action.edit"}}</a>
-{{if .MoveProjects}}<a class="opt" href="{{.Base}}/{{.ID}}?panel=move#move">{{mi "folder"}}{{t "issue.action.move"}}</a>{{end}}
-{{if .Open}}{{if .CanComplete}}<a class="opt" href="{{.Base}}/{{.ID}}?panel=complete#complete">{{mi "done"}}{{t "issue.action.complete"}}</a>{{end}}<hr><a class="opt" href="{{.Base}}/{{.ID}}?panel=drop#drop">{{mi "drop"}}{{t "issue.action.drop"}}</a>{{end}}
-</div></details></div>{{end}}</div>
+{{if .CanEdit}}<div class="gacts"><a class="gbtn sm" href="{{.Base}}/{{.ID}}?panel=edit#edit">{{mi "pencil"}}{{t "issue.action.edit"}}</a>
+{{if .MoveProjects}}<a class="gbtn sm" href="{{.Base}}/{{.ID}}?panel=move#move">{{mi "folder"}}{{t "issue.action.move"}}</a>{{end}}
+<a class="gbtn sm pri hide-m" href="{{.Base}}/new">{{mi "plus"}}{{t "issues.new_issue"}}</a></div>{{end}}</div>
 <div class="dmeta"><span class="state {{if eq .State "open"}}open{{else if eq .State "done"}}done{{else}}gray{{end}}">{{template "issuestate" .State}}{{.StateLabel}}</span>{{if .Person}}<span>{{actor .Actor .Person}} {{.Opened}}</span>{{end}}<span>· {{.TypeLabel}}</span>{{if .Priority}}<span class="lb out">{{.Priority}}</span>{{end}}{{if .Total}}<span class="prog" title="{{t "requests.progress"}}"><span class="bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{t "issue.met_of" .Progress}}</span>{{end}}</div>
 <div class="livebar" data-live-head="{{.ID}}" aria-live="polite">{{range .Live}}{{liveBox .}}{{end}}</div></div>
 

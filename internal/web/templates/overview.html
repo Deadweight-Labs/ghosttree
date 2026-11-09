@@ -1,13 +1,13 @@
 {{define "setup"}}{{template "head" .}}{{template "nav" .}}<main class="g2 set"><div class="wrap"><div class="narrow wide">{{with .Overview.Setup}}
 {{if eq .State "connected"}}<div class="done"><div class="ico ok big">{{mi "check"}}</div><h1>{{t "setup.done"}}</h1><p class="lead"><b class="mono m">{{.Machine}}</b> {{t "setup.done_lead"}}</p></div>
 <div class="box qs"><div class="box-h"><span class="agents2">{{avatar "claude" ""}}{{avatar "codex" ""}}</span><span class="t">{{t "setup.check_title"}}</span></div>
-<div class="box-r"><div class="cmdc prose"><pre class="cmd" id="ov-prompt">{{t "setup.check_prompt"}}</pre><button type="button" class="gbtn sm js-only" data-ui-copy="#ov-prompt" data-copied="{{t "setup.copied"}}"><span class="cl">{{t "setup.copy"}}</span></button></div></div></div>
+<div class="box-r"><div class="cmdc prose"><pre class="cmd" id="ov-prompt">{{t "setup.check_prompt"}}</pre>{{template "uicopy" (copyFrom "#ov-prompt")}}</div></div></div>
 {{else}}<h1>{{if .Guided}}{{t "setup.h1_install"}}{{else}}{{t "setup.h1_login"}}{{end}}</h1>
 <div class="box qs"><div class="box-h">{{mi "term"}}<span class="t">{{if .Guided}}{{t "setup.box_install"}}{{else}}{{t "setup.box_login"}}{{end}}</span></div>
 {{if .Guided}}{{if .PairCommand}}<div class="box-r">{{template "uicmd" (cmdBlock "ov-command" .PairCommand .PairCommand)}}<a class="lnk" href="/join/pair">{{t "setup.pair_open"}}{{mi "chevr"}}</a></div>
 {{else if .PairOpen}}<div class="box-r"><a class="gbtn pri" href="/join/pair">{{t "setup.pair_open"}}</a></div>
 {{else}}<div class="box-r"><form class="stack" method="post" action="/join/pair"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><label class="chk-l"><input type="checkbox" name="confirm_account" value="{{.Person}}" required><span>{{t "join.confirm_me" .Person}}</span></label><p class="muted" role="status">{{t "join.confirm_first"}}</p><div><button class="gbtn pri">{{t "setup.get_command"}}</button></div></form></div>{{end}}
-{{else}}<div class="box-r"><div class="cmdc one"><pre class="cmd" id="ov-command">{{.Command}}</pre><button type="button" class="gbtn sm js-only" data-ui-copy="#ov-command" data-copied="{{t "setup.copied"}}"><span class="cl">{{t "setup.copy"}}</span></button></div></div>{{end}}
+{{else}}<div class="box-r"><div class="cmdc one"><pre class="cmd" id="ov-command">{{cmdText .Command}}</pre>{{template "uicopy" (copyFrom "#ov-command")}}</div></div>{{end}}
 {{if or .Guided .Code}}<div class="box-r"><form class="qform" method="post" action="/ui/device"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><label class="gfield"><input name="user_code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="32" required placeholder="{{t "ov.code"}}" aria-label="{{t "ov.code"}}"></label><button class="gbtn">{{t "ov.approve"}}</button></form></div>{{end}}
 <div class="waitrow"><span class="pulse"></span>{{t "setup.waiting"}}</div></div>{{end}}
 {{end}}</div></div>{{template "foot" .}}{{end}}

@@ -39,8 +39,7 @@
 <aside class="side" aria-label="{{t "agent.side.state"}}">
 {{if .Owner}}<div class="sblk"><h3>{{t "agent.side.owner"}}</h3><div class="v"><span>{{avatarOf .Owner}}<span>{{.Owner}}</span></span></div></div>{{end}}
 {{if .Machine}}<div class="sblk"><h3>{{t "agent.side.machine"}}</h3><div class="v">{{if .MachineHref}}<a class="mono" href="{{.MachineHref}}">{{.Machine}}</a>{{else}}<span class="mono">{{.Machine}}</span>{{end}}</div></div>{{end}}
-<div class="sblk"><h3>{{t "agent.side.state"}}</h3><div class="v"><span><i class="dot{{if eq .Presence "work"}} pulse{{else}} idle{{end}}"></i>{{.PresenceText}}</span></div></div>
-<div class="sblk"><h3>{{t "agent.side.rooms"}}</h3><div class="v"><a href="{{.RoomHref}}">{{mi "chat"}}{{t "agents.room"}}</a></div></div>
+<div class="sblk"><h3>{{t "agent.side.rooms"}}</h3><div class="v"><a href="{{.RoomHref}}">{{mi "chat"}}{{with .RoomName}}{{.}}{{else}}{{t "agents.room"}}{{end}}</a></div></div>
 {{if .SessionHref}}<div class="sblk"><h3>{{t "agent.side.sessions"}}</h3><div class="v"><a href="{{.SessionHref}}">{{mi "term"}}{{t "agents.session"}}</a></div></div>{{end}}
 </aside></div>
 {{end}}{{end}}</div>

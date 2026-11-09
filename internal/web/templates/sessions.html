@@ -45,7 +45,7 @@
 {{else}}
 <div class="dhead"><div class="dtitle"><h1>{{.Title}}{{if .Machine}}{{if .MachineHref}}<a class="n" href="{{.MachineHref}}">{{.Kind}}@{{.Machine}}</a>{{else}}<span class="n">{{.Kind}}@{{.Machine}}</span>{{end}}{{end}}</h1>
 <div class="gacts">{{with .Share}}<form class="share" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><span class="muted">{{t "sessions.sharing"}}</span><nav class="seg" aria-label="{{t "sessions.sharing"}}">{{range .Levels}}<button name="level" value="{{.Value}}" title="{{.Title}}"{{if .Current}} class="on" aria-pressed="true"{{end}}>{{.Label}}</button>{{end}}</nav></form>{{end}}
-<button type="button" class="gbtn sm js-only" data-copy-link>{{mi "link"}}{{t "sessions.copy_link"}}</button></div></div>
+{{template "uicopy" copyPage}}</div></div>
 <div class="dmeta"><span class="state {{if .Live}}open{{else}}done{{end}}">{{if .Live}}{{mi "play"}}{{t "sessions.live"}}{{else}}{{mi "done"}}{{t "sessions.state.done"}}{{end}}</span>{{avatarX "lg" .Kind "" .Owner false}}{{if .Duration}}<span class="dur">{{mi "clock"}}{{.Duration}}</span>{{end}}{{if .Branch}}<a class="chip br" href="?">{{mi "branch"}}{{.Branch}}</a>{{end}}{{if .Meta}}<span class="muted">{{.Meta}}</span>{{end}}</div></div>
 {{if .BackResults.Href}}<a class="back-results" href="{{.BackResults.Href}}">{{t "sessions.back"}} · {{.BackResults.Text}}</a>{{end}}
 <div class="dgrid"><div class="dmain">

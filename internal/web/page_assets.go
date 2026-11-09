@@ -23,7 +23,7 @@ var pageAssets = map[string]struct{ CSS, JS []string }{
 	"repoblob":     {CSS: []string{"ui-code.css"}},
 	"pulls":        {CSS: []string{"ui-issues.css", "ui-pulls.css"}},
 	"pull":         {CSS: []string{"ui-pulls.css"}},
-	"commits":      {CSS: []string{"ui-pulls.css"}, JS: []string{"ui-pulls.js"}},
+	"commits":      {CSS: []string{"ui-pulls.css"}},
 	"commit":       {CSS: []string{"ui-pulls.css"}},
 	"search":       {CSS: []string{"ui-search.css"}},
 	"docs":         {CSS: []string{"ui-docs.css"}},

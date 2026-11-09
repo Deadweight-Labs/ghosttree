@@ -8,7 +8,7 @@
   <div class="coord-shell">
     <aside class="coord-sidebar rsb box" id="coord-rooms" aria-label="{{t "coord.rooms"}}">
       <div class="box-h"><span class="t">{{t "coord.rooms"}}</span><span class="sp"></span>{{if .Coord.Recipients}}<details class="dd top-menu rstart"><summary class="gbtn sm icon quiet" aria-label="{{t "coord.new"}}" title="{{t "coord.new"}}">{{mi "plus"}}</summary>
-        <div class="pop r rstart-pop">
+        <div class="pop rstart-pop">
           <form method="post" action="/ui/coord/direct/start" class="pform">
             <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
             <label class="pfield"><span>{{t "coord.direct"}}</span><select class="gfield" name="principal_id" required>{{range .Coord.Recipients}}<option value="{{.ID}}">{{.Option}}</option>{{end}}</select></label>

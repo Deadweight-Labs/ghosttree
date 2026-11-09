@@ -4,8 +4,7 @@
 :is(.g2.sr) {
   & .sform { display: flex; gap: 8px; margin-bottom: 16px; }
   & .sform .gfield { flex: 1; min-width: 0; }
-  & .sform .mono-in input { font-family: var(--ui-mono); font-size: 14px; }
-  & .sform .mono-in input::placeholder { font-family: var(--ui-font); }
+  & .sform .mono-in input, & .sform .mono-in input::placeholder { font-size: 14px; }
   & details.save-s { margin: -4px 0 16px; }
   & details.save-s > summary { list-style: none; display: inline-flex; cursor: pointer; }
   & details.save-s > summary::-webkit-details-marker { display: none; }

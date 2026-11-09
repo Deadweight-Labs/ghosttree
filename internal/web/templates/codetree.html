@@ -11,11 +11,11 @@
 {{if .GitHub}}<a class="gbtn ct-ghb" href="{{.GitHub}}" rel="noopener noreferrer">{{template "cticon" "ext"}}{{t "repo.on_github"}}</a>{{end}}
 </div>{{end}}
 
-{{define "ctpath"}}{{if .Crumbs}}<nav class="ct-path" aria-label="{{t "code.path"}}">{{range $i, $c := .Crumbs}}{{if $i}}<span class="ct-sep" aria-hidden="true">/</span>{{end}}{{if $c.Last}}<b>{{$c.Label}}</b>{{else}}<a href="{{$c.Href}}">{{$c.Label}}</a>{{end}}{{end}}</nav>{{end}}{{end}}
+{{define "ctpath"}}{{if .Crumbs}}<nav class="ct-path" aria-label="{{t "code.path"}}">{{range $i, $c := .Crumbs}}{{if $i}}<span class="ct-sep" aria-hidden="true">/</span>{{end}}{{if $c.Last}}<b>{{$c.Label}}</b>{{else}}<a href="{{$c.Href}}">{{$c.Label}}</a>{{end}}{{end}}{{if and .Blob .Current}}{{template "uicopy" (copyPath .Current)}}{{end}}</nav>{{end}}{{end}}
 
 {{define "ctdesc"}}<section class="ct-box{{if .Page}} ct-readme{{end}}" aria-label="{{t "code.desc"}}">
 <div class="ct-bh">{{template "cticon" "ghost"}}<span class="ct-t">{{t "code.desc"}}</span>{{if and .By (not .Page)}}<span class="ct-by">{{t "code.by" .By}}{{if .Updated}}, {{ago .Updated}}{{end}}</span>{{else}}<span class="ct-pl ct-mono">{{.Label}}</span>{{end}}<span class="ct-sp"></span>{{if .Area}}<span class="ct-chip ct-nw">{{t "code.area" .Area}}</span>{{end}}
-{{if .Empty}}</div><div class="ct-empty">{{template "gcmd" .Cmd}}</div>{{else}}<details class="ct-edit" id="ct-edit"><summary class="gbtn{{if .Page}} ct-icon ct-quiet{{end}}"{{if .Page}} aria-label="{{t "code.edit"}}" title="{{t "code.edit"}}"{{end}}>{{template "cticon" "pencil"}}{{if not .Page}}{{t "code.edit"}}{{end}}</summary><div class="ct-edit-b">{{template "gcmd" .Cmd}}</div></details></div>{{end}}
+{{if .Empty}}</div><div class="ct-empty">{{template "gcmd" .Cmd}}</div>{{else}}<details class="ct-edit" id="ct-edit"><summary class="gbtn sm{{if .Page}} ct-icon ct-quiet{{end}}"{{if .Page}} aria-label="{{t "code.edit"}}" title="{{t "code.edit"}}"{{end}}>{{template "cticon" "pencil"}}{{if not .Page}}{{t "code.edit"}}{{end}}</summary><div class="ct-edit-b">{{template "gcmd" .Cmd}}</div></details></div>{{end}}
 {{if not .Empty}}<div class="ct-gb ct-prose">{{.HTML}}</div>{{end}}</section>{{end}}
 
 {{define "repocode"}}{{template "head" .}}{{template "nav" .}}<main class="g2 rc ct"><div class="wrap">

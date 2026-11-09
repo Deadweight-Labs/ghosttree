@@ -40,6 +40,6 @@
 
 {{define "explain"}}{{with .}}{{if .Pending}}<div class="ex-wait" id="{{.DOMID}}" data-explain-pending hidden></div><script src="/static/explain.js" defer></script>{{else}}<section class="ex" id="{{.DOMID}}" aria-labelledby="{{.DOMID}}-t"><header class="ex-head"><h3 class="ex-title" id="{{.DOMID}}-t">{{.Title}}</h3><span class="ex-mark{{if .Generated}} is-generated{{end}}" title="{{.MarkTitle}}">{{.Mark}}</span></header><p class="ex-text">{{.Text}}</p></section>{{end}}{{end}}{{end}}
 
-{{define "gcmd"}}{{with .}}<div class="g-cmd">{{template "icon" .Icon}}<code tabindex="0">{{.Text}}</code><button class="g-copy js-only" type="button" data-g-copy aria-label="{{t "cards.copy"}}" data-done="{{t "cards.copied"}}">{{template "icon" "copy"}}</button></div>{{end}}{{end}}
+{{define "gcmd"}}{{with .}}<div class="g-cmd">{{template "icon" .Icon}}<code tabindex="0">{{.Text}}</code>{{template "uicopy" (copyIcon "")}}</div>{{end}}{{end}}
 
 {{define "gexplain"}}{{with .}}{{if .Pending}}{{template "explain" .}}{{else}}<details class="g-fold g-fold-ex"><summary><span class="g-fold-t">{{.Title}}</span><span class="g-fold-p">{{lead .Text}}</span></summary><div class="g-fold-b">{{template "explain" .}}</div></details>{{end}}{{end}}{{end}}

@@ -5,7 +5,9 @@ import (
 	"html"
 	"html/template"
 	"net/url"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -355,6 +357,33 @@ type hoverChip struct {
 // visitor's platform is open at the start. Only macOS and Linux exist.
 type cmdBlock struct {
 	ID, Mac, Linux string
+}
+
+// copyBtn is the one copy button of the interface ("uicopy"). From is a CSS
+// selector of the element whose text is copied, Text is a literal. With Tip the
+// button is a bare icon (SHA, path); without it the button says "Copy" and,
+// for a moment after a success, "Copied", in the same width.
+type copyBtn struct {
+	From, Text, Tip string
+	Label           string // the word on the button when it is not "Copy"
+	Page            bool   // copies the address of the page itself
+}
+
+// cmdURLRE finds an address in a command.
+var cmdURLRE = regexp.MustCompile(`https?://[^\s"'<>]+`)
+
+// cmdText writes a command as HTML: the text is escaped, an address in it stands in the
+// accent colour (span.u). The copied text is the plain text of the block, unchanged.
+func cmdText(s string) template.HTML {
+	var b strings.Builder
+	last := 0
+	for _, m := range cmdURLRE.FindAllStringIndex(s, -1) {
+		b.WriteString(template.HTMLEscapeString(s[last:m[0]]))
+		b.WriteString(`<span class="u">` + template.HTMLEscapeString(s[m[0]:m[1]]) + `</span>`)
+		last = m[1]
+	}
+	b.WriteString(template.HTMLEscapeString(s[last:]))
+	return template.HTML(b.String())
 }
 
 // ---- Template functions ---------------------------------------------------------

@@ -244,3 +244,13 @@ func (a *app) agentSeenBack(r *http.Request, back string) string {
 	}
 	return all
 }
+
+// RoomName is the name of the project room the agent works in ("gemeinsam"), taken from
+// the room key "project:host/org/name"; it is empty for any other kind of room.
+func (c agentCard) RoomName() string {
+	key, ok := strings.CutPrefix(c.RoomKey, "project:")
+	if !ok {
+		return ""
+	}
+	return key[strings.LastIndex(key, "/")+1:]
+}

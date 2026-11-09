@@ -91,11 +91,7 @@
   & .said span { display: inline-flex; align-items: center; gap: 3px; }
   & .said .i { width: 12px; height: 12px; }
   & .said:hover { color: var(--accent-fg); border-color: var(--accent-muted); text-decoration: none; }
-  & .shag { display: inline-flex; align-items: center; }
-  & [data-copy-sha][hidden] { display: none; }
-  & [data-copy-sha] .i + .i { display: none; }
-  & [data-copy-sha].done .i:first-child { display: none; }
-  & [data-copy-sha].done .i + .i { display: inline-block; color: var(--success-fg); }
+  & .shag { display: inline-flex; align-items: center; gap: 4px; }
   & .pager { display: flex; justify-content: center; gap: 8px; margin-top: 24px; }
 }
 

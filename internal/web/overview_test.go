@@ -341,7 +341,7 @@ func TestOwnerWithoutAMachineSeesTheSameGuidedInstallCommandAsAnInvitedPerson(t 
 		t.Fatalf("POST /join/pair = %d", resp.StatusCode)
 	}
 	_, page = fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	for _, want := range []string{"curl -fsSL", "/install.sh | sh -s -- --pair ", "data-ui-copy", "Waiting for your machine"} {
+	for _, want := range []string{"curl -fsSL", "/install.sh</span> | sh -s -- --pair ", "data-copy-from", "Waiting for your machine"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("overview lacks %q:\n%s", want, page)
 		}
