@@ -75,6 +75,14 @@ func (f *fakeBackend) inFolder(kind string) *fakeBackend {
 	return f
 }
 
+// park is a WaitLogin that waits for the browser forever: it tells the
+// driver so and blocks until the model cancels it.
+func (f *fakeBackend) park(ctx context.Context) (LoginResult, error) {
+	parked <- struct{}{}
+	<-ctx.Done()
+	return LoginResult{}, ctx.Err()
+}
+
 func (f *fakeBackend) CheckProject(ctx context.Context, project string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -268,13 +276,12 @@ func (f *fakeBackend) StartLogin(ctx context.Context, server, machine string) (L
 	if f.loginErr != nil {
 		return LoginStart{}, f.loginErr
 	}
-	return LoginStart{Server: server, Machine: machine, URL: server + "/device", CompleteURL: server + "/device?code=WDJB-MJHT", Code: "WDJB-MJHT", Expires: time.Now().Add(15 * time.Minute)}, nil
+	return LoginStart{Server: server, Machine: machine, URL: server + "/device", CompleteURL: server + "/device?code=WDJB-MJHT", Code: "WDJB-MJHT", Expires: testNow.Add(15 * time.Minute)}, nil
 }
 
 func (f *fakeBackend) WaitLogin(ctx context.Context, start LoginStart) (LoginResult, error) {
 	if f.waitBlock {
-		<-ctx.Done()
-		return LoginResult{}, ctx.Err()
+		return f.park(ctx)
 	}
 	if f.waitErr != nil {
 		return LoginResult{}, f.waitErr
@@ -291,6 +298,25 @@ func drive(m Model, msg tea.Msg) Model {
 	return runCmd(m, cmd, 0)
 }
 
+// testNow is the fixed clock of every test model.
+var testNow = time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+
+// skippedTick is what a timer becomes in tests: an answer at once that the
+// driver drops, so no test waits for real time.
+type skippedTick struct{ msg tea.Msg }
+
+func testTick(d time.Duration, msg tea.Msg) tea.Cmd {
+	return func() tea.Msg { return skippedTick{msg} }
+}
+
+// parked receives a signal when the fake's WaitLogin starts to block: the
+// driver stops waiting for that command, which only ends with its context.
+var parked = make(chan struct{}, 64)
+
+// stuckAfter is a safety net: a command that neither answers nor parks
+// within it is a bug in the test or the model, not slowness.
+const stuckAfter = 20 * time.Second
+
 func runCmd(m Model, cmd tea.Cmd, depth int) Model {
 	if cmd == nil || depth > 8 {
 		return m
@@ -300,18 +326,18 @@ func runCmd(m Model, cmd tea.Cmd, depth int) Model {
 	var msg tea.Msg
 	select {
 	case msg = <-done:
-	case <-time.After(150 * time.Millisecond):
-		return m // a tick: leave it
+	case <-parked:
+		return m
+	case <-time.After(stuckAfter):
+		panic("runCmd: a command neither answered nor parked")
 	}
 	switch v := msg.(type) {
-	case nil:
+	case nil, skippedTick:
 		return m
 	case tea.BatchMsg:
 		for _, c := range v {
 			m = runCmd(m, c, depth+1)
 		}
-		return m
-	case logoTickMsg, spinTickMsg, flashDoneMsg, loginQuitMsg:
 		return m
 	}
 	if strings.HasPrefix(typeName(msg), "tea.") {
@@ -359,6 +385,7 @@ var lightBG = tea.BackgroundColorMsg{Color: color.RGBA{0xff, 0xff, 0xff, 0xff}}
 // and the logo at rest.
 func ready(f *fakeBackend, opt Options, w, h int, bg tea.BackgroundColorMsg) Model {
 	opt.Still = true
+	opt.tick, opt.now = testTick, func() time.Time { return testNow }
 	if opt.Getenv == nil {
 		opt.Getenv = func(k string) string {
 			if k == "LANG" {

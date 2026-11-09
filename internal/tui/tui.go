@@ -51,6 +51,16 @@ type Options struct {
 	LoginDirect  bool
 	// Getenv is os.Getenv unless a test replaces it.
 	Getenv func(string) string
+
+	// tick and now are the clock: timers for animation, spinner and flash
+	// messages, and the current time. Tests replace both so that nothing
+	// waits for real time.
+	tick func(d time.Duration, msg tea.Msg) tea.Cmd
+	now  func() time.Time
+}
+
+func realTick(d time.Duration, msg tea.Msg) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return msg })
 }
 
 const (
@@ -133,6 +143,12 @@ func New(be Backend, opt Options) Model {
 	if opt.Getenv == nil {
 		opt.Getenv = os.Getenv
 	}
+	if opt.tick == nil {
+		opt.tick = realTick
+	}
+	if opt.now == nil {
+		opt.now = time.Now
+	}
 	m := Model{be: be, opt: opt, w: 100, h: 34}
 	if opt.Lang == "de" {
 		m.lang = langDE
@@ -197,7 +213,7 @@ func (m *Model) applyInputStyles() {
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{tea.RequestBackgroundColor}
 	if !m.logo.done() {
-		cmds = append(cmds, logoTick())
+		cmds = append(cmds, m.logoTick())
 	}
 	if m.screen == ScreenLogin {
 		cmds = append(cmds, m.initCmd)
@@ -230,13 +246,9 @@ type (
 	wheelMsg struct{ up bool }
 )
 
-func logoTick() tea.Cmd {
-	return tea.Tick(time.Second/logoFPS, func(time.Time) tea.Msg { return logoTickMsg{} })
-}
+func (m Model) logoTick() tea.Cmd { return m.opt.tick(time.Second/logoFPS, logoTickMsg{}) }
 
-func spinTick() tea.Cmd {
-	return tea.Tick(90*time.Millisecond, func(time.Time) tea.Msg { return spinTickMsg{} })
-}
+func (m Model) spinTick() tea.Cmd { return m.opt.tick(90*time.Millisecond, spinTickMsg{}) }
 
 // call runs f with a timeout in a command.
 func call(d time.Duration, f func(ctx context.Context) tea.Msg) tea.Cmd {
@@ -261,7 +273,7 @@ func (m *Model) ensureSpin() tea.Cmd {
 		return nil
 	}
 	m.spinOn = true
-	return spinTick()
+	return m.spinTick()
 }
 
 // homeCmds are the loads of the home screen, without touching the model;
@@ -317,7 +329,7 @@ func (m *Model) setFlash(s string, bad bool) tea.Cmd {
 	m.flash, m.flashBad = s, bad
 	m.flashID++
 	id := m.flashID
-	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return flashDoneMsg{id} })
+	return m.opt.tick(4*time.Second, flashDoneMsg{id})
 }
 
 func (m *Model) go_(s Screen) {
@@ -371,14 +383,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.logo.frame++
-		return m, logoTick()
+		return m, m.logoTick()
 	case spinTickMsg:
 		if !m.spinning() {
 			m.spinOn = false
 			return m, nil
 		}
 		m.spin++
-		return m, spinTick()
+		return m, m.spinTick()
 	case flashDoneMsg:
 		if msg.id == m.flashID {
 			m.flash = ""

@@ -108,8 +108,7 @@ func (h hostileBackend) StartLogin(ctx context.Context, server, machine string) 
 
 func (h hostileBackend) WaitLogin(ctx context.Context, start LoginStart) (LoginResult, error) {
 	if h.waitBlock {
-		<-ctx.Done()
-		return LoginResult{}, ctx.Err()
+		return h.park(ctx)
 	}
 	if h.waitErr != nil {
 		return LoginResult{}, h.waitErr

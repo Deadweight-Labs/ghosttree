@@ -211,11 +211,11 @@ func TestLogoAnimatesForAboutASecondThenStandsStill(t *testing.T) {
 	if logoFrames*1000/logoFPS > 1300 {
 		t.Fatalf("animation runs %d ms", logoFrames*1000/logoFPS)
 	}
-	m := New(newFake(), Options{Still: true, Getenv: func(string) string { return "" }})
+	m := New(newFake(), Options{Still: true, tick: testTick, Getenv: func(string) string { return "" }})
 	if !m.logo.done() {
 		t.Fatal("Still should start at rest")
 	}
-	m = New(newFake(), Options{Getenv: func(string) string { return "" }})
+	m = New(newFake(), Options{tick: testTick, Getenv: func(string) string { return "" }})
 	for i := 0; i < logoFrames+5; i++ {
 		next, _ := m.Update(logoTickMsg{})
 		m = next.(Model)
@@ -437,7 +437,7 @@ func TestNotConfiguredInvitesToSignIn(t *testing.T) {
 }
 
 func TestHomeShowsLoadingBeforeTheListsArrive(t *testing.T) {
-	m := New(newFake(), Options{Still: true, Getenv: func(string) string { return "LANG=de" }})
+	m := New(newFake(), Options{Still: true, tick: testTick, Getenv: func(string) string { return "LANG=de" }})
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
 	if v := plainView(next.(Model)); !strings.Contains(v, "lädt") && !strings.Contains(v, "loading") {
 		t.Fatalf("view:\n%s", v)
