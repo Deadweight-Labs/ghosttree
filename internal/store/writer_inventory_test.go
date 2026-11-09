@@ -13,6 +13,9 @@ import (
 )
 
 var writerMethodClasses = map[string]string{
+	"AddRawDict":                    "write",
+	"RawDictSample":                 "read",
+	"TranscriptStats":               "read",
 	"ShareMachine":                  "write",
 	"ShareMachineAsOperator":        "write",
 	"UnshareMachine":                "write",

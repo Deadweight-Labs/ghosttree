@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -88,8 +90,8 @@ func readLiteralState(t *testing.T, path string) (dump string, hits map[string]i
 	}
 	defer db.Close()
 	var sb strings.Builder
+	sb.WriteString(chunkTextRaw(t, db))
 	for _, q := range []string{
-		`SELECT text || '|' || raw FROM session_chunks ORDER BY id`,
 		`SELECT text || '|' || thinking || '|' || tool_input || '|' || tool_output FROM chunk_index ORDER BY chunk_id`,
 		`SELECT title FROM sessions ORDER BY id`,
 	} {
@@ -306,4 +308,31 @@ func TestRedactSessionsLiteralsRefusesBadLists(t *testing.T) {
 	if st, _ := readLiteralState(t, path); st != before {
 		t.Fatal("a refused list changed the database")
 	}
+}
+
+// chunkTextRaw lists text|raw of every chunk, raw unpacked.
+func chunkTextRaw(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	rows, err := db.Query(`SELECT text, raw FROM session_chunks ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var sb strings.Builder
+	for rows.Next() {
+		var text string
+		var v rawcodec.Value
+		if err := rows.Scan(&text, &v); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := store.DecodeRaw(context.Background(), db, v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sb.WriteString(text + "|" + raw + "\n")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return sb.String()
 }

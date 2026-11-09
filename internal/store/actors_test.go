@@ -457,7 +457,7 @@ func TestModelBackfillDoesNotReplaceAfterANewLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	obs, err := sessionObservations(st.db, sid, top)
+	obs, err := sessionObservations(st, sid, top)
 	if err != nil {
 		t.Fatal(err)
 	}

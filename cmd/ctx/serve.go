@@ -72,6 +72,10 @@ const (
 // that follow a start.
 var indexGapDelay = 2 * time.Minute
 
+// rawDictDelay is how long after the start the server looks whether the
+// database has a dictionary for packing transcript lines.
+var rawDictDelay = 90 * time.Second
+
 type snapshotRootValues []string
 
 func (v *snapshotRootValues) String() string { return strings.Join(*v, ",") }
@@ -357,6 +361,27 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		}
 		logger.Info("session_index_gaps", "checked", rep.Checked, "missing", rep.Missing, "sessions", rep.Sessions, "repaired", rep.Repaired, "seconds", int(time.Since(started).Seconds()))
 	}()
+	// Transcript lines are packed with a dictionary learned from the database
+	// itself (REQ-622). A database without one learns it once, a little after
+	// the start; until then lines are packed without one. The sample is read
+	// through the reader, the writer only stores the one row.
+	dictDone := make(chan struct{})
+	go func() {
+		defer close(dictDone)
+		select {
+		case <-indexCtx.Done():
+			return
+		case <-time.After(rawDictDelay):
+		}
+		info, trained, err := store.EnsureRawDict(indexCtx, st)
+		logger := slog.New(slog.NewJSONHandler(stderr, nil))
+		switch {
+		case err != nil && indexCtx.Err() == nil:
+			logger.Error("raw_dictionary", "error", err.Error())
+		case trained:
+			logger.Info("raw_dictionary", "version", info.Version, "bytes", info.Bytes, "sample_lines", info.SampleLines)
+		}
+	}()
 	// Hybrid search and the background job that feeds it are only started with an
 	// embedding server configured. The job begins late and works in small, paused
 	// steps in a goroutine of its own, so serving does not wait for it either.
@@ -367,6 +392,7 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	waitEmbed()
 	stopIndex()
 	<-indexDone
+	<-dictDone
 	if err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)
 		return 1

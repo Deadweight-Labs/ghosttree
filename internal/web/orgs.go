@@ -87,6 +87,8 @@ type orgsView struct {
 	Explain *explainAdminView
 	// Garden is the same for the gardener; nil for anyone else.
 	Garden *gardenAdminView
+	// Transcripts is the same for the stored transcripts; nil for anyone else.
+	Transcripts *transcriptsAdminView
 }
 
 // People are the members that are no guests, Guests the others.
@@ -125,6 +127,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	v.Orgs = orgs
 	v.Explain = a.explainAdminFor(r)
 	v.Garden = a.gardenAdminFor(r)
+	v.Transcripts = a.transcriptsAdminFor(r)
 	for _, o := range orgs {
 		if o.Slug == ref || (v.Selected.ID == 0 && o.Default && ref == "") {
 			v.Selected = o

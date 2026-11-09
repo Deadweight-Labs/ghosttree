@@ -54,6 +54,8 @@ type app struct {
 	searchSlots   searchLimiter
 	searchStreams searchStreams
 	logger        *slog.Logger // http_request lines and search failures; nil = slog.Default
+	// What the stored transcript lines take, for administrators.
+	transcripts transcriptStatsCache
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string

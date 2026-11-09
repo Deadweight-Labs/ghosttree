@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 )
 
 // Alle Werte in diesen Tests sind erfunden.
@@ -202,6 +204,15 @@ func dumpTable(t *testing.T, db *sql.DB, query string) string {
 		if err := rows.Scan(ptrs...); err != nil {
 			t.Fatal(err)
 		}
+		for i, v := range vals {
+			if b, ok := v.([]byte); ok && cols[i] == "raw" {
+				line, err := DecodeRaw(context.Background(), db, rawcodec.Value{Frame: b, Packed: true})
+				if err != nil {
+					t.Fatalf("%s: column %d: %v", query, i, err)
+				}
+				vals[i] = line
+			}
+		}
 		fmt.Fprintln(&sb, vals...)
 	}
 	if err := rows.Err(); err != nil {
@@ -379,7 +390,7 @@ func TestRedactSessionsCleansEveryCopy(t *testing.T) {
 			}
 			// text, raw, Titel und Zitate sind geschwärzt, nicht geleert.
 			var text, raw, title string
-			if err := read.QueryRow(`SELECT text, raw FROM session_chunks WHERE session_id=? AND seq=0`, sessions[0]).Scan(&text, &raw); err != nil {
+			if err := read.QueryRow(`SELECT text, raw FROM session_chunks WHERE session_id=? AND seq=0`, sessions[0]).Scan(&text, rawText(t, read, &raw)); err != nil {
 				t.Fatal(err)
 			}
 			if text != "Merk dir das Passwort [REDACTED:labeled] für das Mailkonto bitte" || !json.Valid([]byte(raw)) || raw != redactUserLine(text) {
@@ -646,4 +657,26 @@ func TestRedactSessionsReportHoldsNoValue(t *testing.T) {
 			t.Fatalf("the report holds %q: %s", secret, dump)
 		}
 	}
+}
+
+// rawText scans session_chunks.raw and stores it unpacked in dst.
+func rawText(t *testing.T, db *sql.DB, dst *string) sql.Scanner {
+	t.Helper()
+	return rawScanner{t: t, db: db, dst: dst}
+}
+
+type rawScanner struct {
+	t   *testing.T
+	db  *sql.DB
+	dst *string
+}
+
+func (r rawScanner) Scan(src any) error {
+	var v rawcodec.Value
+	if err := v.Scan(src); err != nil {
+		return err
+	}
+	line, err := DecodeRaw(context.Background(), r.db, v)
+	*r.dst = line
+	return err
 }

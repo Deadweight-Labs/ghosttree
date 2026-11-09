@@ -17,7 +17,7 @@
 {{if .Orgs.NewURL}}<div class="box" role="status"><div class="box-body"><b>{{t "adm.invite.ready"}}</b>{{template "orgs_copy" .Orgs.NewURL}}<div class="mt muted"><span>{{t "adm.invite.expires" ""}}{{ago .Orgs.NewExpiry}}</span><span>{{t "adm.invite.single_use"}}</span><span>{{t "adm.invite.kept"}}</span></div></div></div>{{end}}
 {{if .Orgs.NewOrg}}{{template "orgs_new" .}}
 {{else if .Orgs.Orgs}}
-<div class="setlayout"><nav class="box snav" aria-label="{{t "adm.settings"}}"><a class="on" href="#general">{{mi "gear"}}<span>{{t "adm.general"}}</span></a><a href="#members">{{mi "people"}}<span>{{t "adm.members"}}</span></a><a href="#projects">{{mi "repo"}}<span>{{t "adm.projects"}}</span></a><a href="#sources">{{mi "ext"}}<span>{{t "adm.sources"}}</span></a>{{if and .Orgs.Owner .Interactive .Orgs.GuestLinks .Orgs.InviteProjects}}<a href="#guests">{{mi "lock"}}<span>{{t "adm.guests"}}</span></a>{{end}}{{with .Orgs.Explain}}<a href="#explain">{{mi "book"}}<span>{{t "explain.admin.title"}}</span></a>{{end}}{{with .Orgs.Garden}}<a href="#garden">{{mi "sprout"}}<span>{{t "garden.admin.title"}}</span></a>{{end}}<a href="#joincode">{{mi "link"}}<span>{{t "adm.join"}}</span></a></nav>
+<div class="setlayout"><nav class="box snav" aria-label="{{t "adm.settings"}}"><a class="on" href="#general">{{mi "gear"}}<span>{{t "adm.general"}}</span></a><a href="#members">{{mi "people"}}<span>{{t "adm.members"}}</span></a><a href="#projects">{{mi "repo"}}<span>{{t "adm.projects"}}</span></a><a href="#sources">{{mi "ext"}}<span>{{t "adm.sources"}}</span></a>{{if and .Orgs.Owner .Interactive .Orgs.GuestLinks .Orgs.InviteProjects}}<a href="#guests">{{mi "lock"}}<span>{{t "adm.guests"}}</span></a>{{end}}{{with .Orgs.Explain}}<a href="#explain">{{mi "book"}}<span>{{t "explain.admin.title"}}</span></a>{{end}}{{with .Orgs.Garden}}<a href="#garden">{{mi "sprout"}}<span>{{t "garden.admin.title"}}</span></a>{{end}}{{with .Orgs.Transcripts}}<a href="#transcripts">{{mi "term"}}<span>{{t "adm.transcripts.title"}}</span></a>{{end}}<a href="#joincode">{{mi "link"}}<span>{{t "adm.join"}}</span></a></nav>
 <div>
 <div class="sh2" id="general"><h2>{{t "adm.general"}}</h2></div>
 <div class="box">
@@ -65,6 +65,9 @@
 {{if .Days}}<table class="days"><caption class="muted">{{t "explain.admin.days"}}</caption><thead><tr><th>{{t "explain.admin.day"}}</th><th>{{t "explain.admin.col_calls"}}</th><th>{{t "explain.admin.col_tokens"}}</th></tr></thead><tbody>{{range .Days}}<tr><td>{{.Day}}</td><td>{{.Calls}}</td><td>{{.Tokens}}</td></tr>{{end}}</tbody></table>{{end}}</div></div>{{end}}
 {{with .Orgs.Garden}}<div class="sh2" id="garden"><h2>{{t "garden.admin.title"}}</h2></div>
 <div class="box"><div class="box-body"><p>{{.Usage}}</p>{{if .Limit}}<div class="flash err" role="status">{{mi "tri"}}<div>{{.Limit}}</div></div>{{end}}{{if .Checked}}<p class="muted">{{.Checked}}</p>{{end}}</div></div>{{end}}
+{{with .Orgs.Transcripts}}<div class="sh2" id="transcripts"><h2>{{t "adm.transcripts.title"}}</h2></div>
+<div class="box"><div class="box-body"><p class="muted">{{.Summary}}</p>
+<table class="days"><thead><tr><th>{{t "adm.transcripts.kind"}}</th><th>{{t "adm.transcripts.lines"}}</th><th>{{t "adm.transcripts.share"}}</th><th>{{t "adm.transcripts.stored"}}</th></tr></thead><tbody>{{range .Rows}}<tr><td><code>{{.Kind}}</code></td><td>{{.Lines}}</td><td>{{.Share}}</td><td>{{.Stored}}</td></tr>{{end}}</tbody></table></div></div>{{end}}
 
 {{template "orgs_join" .}}
 </div></div>
