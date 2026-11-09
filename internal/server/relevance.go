@@ -18,6 +18,19 @@ const maxRelevantEntries = 3
 // text that still says where to look.
 const maxHintTitle = 70
 
+// maxHintSources is how many requests, and separately how many sessions, may
+// name a word before it stops being a codename. A codename that never became an
+// entry came up in a session or two; a word that the reader's sessions or the
+// project's requests use again and again is vocabulary, whatever the knowledge
+// says, and pointing at one of its many places says nothing. Only what the
+// reader may read is counted, so the verdict tells them nothing about the rest.
+const maxHintSources = 3
+
+// hintSessionScan is how many matching chunks are read to count the sessions
+// behind them. Hits are chunks, several from one session; the scan is what lets
+// a word said often in one session still count as one session.
+const hintSessionScan = 40
+
 // relevant answers with knowledge the text gives a reason to deliver, or with
 // nothing at all — which is the usual case, and is an empty body rather than an
 // error.
@@ -167,20 +180,28 @@ func answered(pa *store.ProjectAccess, known []store.Knowledge) bool {
 }
 
 func (a *api) hintLine(r *http.Request, pa *store.ProjectAccess, term string, where scope.Axes, session string) (string, error) {
-	page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{Query: term, Scope: where, Limit: 1}))
+	page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{Query: term, Scope: where, Limit: maxHintSources + 1}))
 	if err != nil {
 		return "", err
+	}
+	if len(page.Results) > maxHintSources {
+		return "", nil
+	}
+	// The session the prompt is in is left out: it contains the word because it
+	// was just typed, which says nothing. Sessions are counted even when a
+	// request names the word, so that a word of everyday language that one
+	// request happens to contain is still recognised as one.
+	hits, err := a.searchSessions(a.st, pa, term, where, session, hintSessionScan, a.overfetch(hintSessionScan), store.SearchFullTextOnly)
+	if err != nil {
+		return "", err
+	}
+	if distinctSessions(hits) > maxHintSources {
+		return "", nil
 	}
 	if len(page.Results) > 0 {
 		h := pa.RequestHitView(page.Results[0])
 		return fmt.Sprintf("- [hint] %q also came up in REQ-%d %q (%s). context_search finds more.\n",
 			term, h.Request.ID, truncate(oneLine(h.Request.Title), maxHintTitle), h.Request.State), nil
-	}
-	// The session the prompt is in is left out: it contains the word because it
-	// was just typed, which says nothing.
-	hits, err := a.searchSessions(pa, term, where, session, 1, a.overfetch(1), store.SearchFullTextOnly)
-	if err != nil {
-		return "", err
 	}
 	if len(hits) == 0 {
 		return "", nil
@@ -195,6 +216,16 @@ func (a *api) hintLine(r *http.Request, pa *store.ProjectAccess, term string, wh
 		date = date[:len("2006-01-02")]
 	}
 	return fmt.Sprintf("- [hint] %q also came up in session %s on %s. context_search finds more.\n", term, label, date), nil
+}
+
+// distinctSessions counts the sessions behind a list of hits, by the label a
+// reader addresses them with (a guest's view carries no number).
+func distinctSessions(hits []store.SessionHit) int {
+	seen := map[string]bool{}
+	for _, h := range hits {
+		seen[sessionLabel(h.Session)] = true
+	}
+	return len(seen)
 }
 
 // sessionLabel names a session the way a reader can address it again: members by

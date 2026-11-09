@@ -33,6 +33,9 @@ names the word that brought it (`(triggered by "word")`). Unconfirmed (staged)
 entries and the gardener's notes are never sent this way. For a very rare word
 that no entry covers, one hint line may point at a request or session you can read
 (`context_search` finds more); it follows the same visibility rules as search.
+Everyday German and English words never get a hint, and neither does a word that
+more than three of the requests or sessions you can read contain: that is
+vocabulary, not a codename.
 `ctx usage --relevance --db <path>` replays archived prompts through the rule.
 
 ## Descriptions for removed paths

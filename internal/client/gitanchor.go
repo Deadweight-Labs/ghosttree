@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -131,6 +132,11 @@ func (c *Client) SearchAnchored(q, kind string, ax scope.Axes, limit int, union 
 
 // SearchGhostsAnchored ist SearchGhosts mit Lesefilter nach Git-Anker.
 func (c *Client) SearchGhostsAnchored(q, project string, limit int, f AnchorFilter) ([]store.GhostFile, error) {
+	return c.SearchGhostsContext(context.Background(), q, project, limit, f)
+}
+
+// SearchGhostsContext is SearchGhostsAnchored that ends with ctx.
+func (c *Client) SearchGhostsContext(ctx context.Context, q, project string, limit int, f AnchorFilter) ([]store.GhostFile, error) {
 	v := url.Values{}
 	v.Set("q", q)
 	v.Set("project", project)
@@ -139,6 +145,6 @@ func (c *Client) SearchGhostsAnchored(q, project string, limit int, f AnchorFilt
 	}
 	f.apply(v)
 	var out []store.GhostFile
-	err := c.do("GET", "/api/ghosts/search", v, nil, &out)
+	err := c.doContext(ctx, "GET", "/api/ghosts/search", v, nil, &out)
 	return out, err
 }
