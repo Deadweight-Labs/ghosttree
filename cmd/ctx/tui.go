@@ -49,6 +49,8 @@ questions and approvals, unread messages, suggestions to review).
 --look (or GHOSTTREE_TUI_LOOK) picks the start logo, f2 cycles it;
 --switch (or GHOSTTREE_TUI_SWITCH) draws the mode switch as a rail on the left
 or in the header line, f3 cycles it.
+ctrl+k opens the command palette (jump to an object, project or folder, run
+an action, search); ctrl+f jumps into the search line.
 
 Every setting it changes has a command of its own:
   sign in               ctx login [--server URL] [--machine NAME]

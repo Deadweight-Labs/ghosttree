@@ -523,6 +523,7 @@ type projectsState struct {
 	list    listState
 	cursor  int
 	preview map[string]previewMsg
+	want    string // select this project once the list is there
 }
 
 func (m *Model) openProjects() tea.Cmd {
@@ -573,8 +574,12 @@ func (m Model) updateProjects(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.projects.list = listState{items: items, err: msg.err, loaded: true}
 		m.projects.cursor = 0
+		want := m.projects.want
+		if want == "" {
+			want = m.local.Project
+		}
 		for i, it := range items {
-			if it.Ref == m.local.Project {
+			if it.Ref == want {
 				m.projects.cursor = i
 			}
 		}

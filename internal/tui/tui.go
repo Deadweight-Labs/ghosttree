@@ -117,6 +117,7 @@ type Model struct {
 	claim    claimState
 	dirs     dirsState
 	projects projectsState
+	pal      paletteState
 
 	flash    string
 	flashBad bool
@@ -166,7 +167,6 @@ func New(be Backend, opt Options) Model {
 	m.search.Prompt = "› "
 	m.search.Placeholder = m.lang.t("search.placeholder")
 	m.search.CharLimit = 400
-	m.search.Focus()
 	m.applyInputStyles()
 	m.screen = opt.Start
 	m.login = newLoginState(m.lang, opt.LoginServer, opt.LoginMachine, m.local)
@@ -203,6 +203,7 @@ func (m *Model) applyInputStyles() {
 	m.search.SetStyles(st)
 	m.login.applyStyles(st)
 	m.dirs.input.SetStyles(st)
+	m.pal.input.SetStyles(st)
 }
 
 // Init asks for the background colour, starts the logo and the first loads.
@@ -341,9 +342,6 @@ func (m *Model) goBack() tea.Cmd {
 	m.screen = m.back[len(m.back)-1]
 	m.back = m.back[:len(m.back)-1]
 	m.flash = ""
-	if m.screen == ScreenHome {
-		return m.search.Focus()
-	}
 	return nil
 }
 
@@ -422,6 +420,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateDirs(msg)
 	case projectsMsg, previewMsg:
 		return m.updateProjects(msg)
+	case palProjectsMsg, palDirsMsg:
+		return m.updatePalette(msg)
 	case cardMsg:
 		m.cardLoading = false
 		m.card, m.cardErr = msg.card.Sanitized(), msg.err
@@ -433,10 +433,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case wheelMsg:
+		if m.pal.open {
+			return m.updatePalette(tea.KeyPressMsg{Code: map[bool]rune{true: tea.KeyUp, false: tea.KeyDown}[msg.up]})
+		}
 		return m.move(map[bool]int{true: -1, false: 1}[msg.up])
 	case clickMsg:
 		return m.click(msg.act)
 	case tea.PasteMsg:
+		if m.pal.open {
+			return m.updatePalette(msg)
+		}
 		if m.screen == ScreenHome {
 			var cmd tea.Cmd
 			m.search, cmd = m.search.Update(msg)
@@ -457,7 +463,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A key ends the start picture and then counts as usual.
 			m.splash = false
 		}
+		if m.pal.open {
+			return m.updatePalette(msg)
+		}
 		switch msg.String() {
+		case "ctrl+k":
+			if m.screen != ScreenLogin {
+				return m, m.openPalette()
+			}
+		case "ctrl+f":
+			return m.focusSearch()
 		case "f2":
 			m.opt.Look = (m.opt.Look + 1) % 3
 			m.logo.style = m.opt.Look
@@ -573,8 +588,10 @@ func (m Model) keyHome(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		return m, nil
 	case "esc":
-		if m.search.Value() != "" {
+		// Esc leaves the search line first (and empties it), then quits.
+		if m.search.Focused() || m.search.Value() != "" {
 			m.search.SetValue("")
+			m.search.Blur()
 			return m, nil
 		}
 		m.quitting = true
@@ -608,9 +625,14 @@ func (m Model) keyHome(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.local = m.be.Local()
 		return m, tea.Batch(m.reloadHome()...)
 	}
+	// Typing starts the search wherever the focus was.
+	var focus tea.Cmd
+	if !m.search.Focused() && msg.Text != "" && msg.Mod&(tea.ModCtrl|tea.ModAlt) == 0 {
+		focus = m.search.Focus()
+	}
 	var cmd tea.Cmd
 	m.search, cmd = m.search.Update(msg)
-	return m, cmd
+	return m, tea.Batch(focus, cmd)
 }
 
 func (m Model) move(d int) (tea.Model, tea.Cmd) {
@@ -717,6 +739,8 @@ func (m Model) click(a action) (tea.Model, tea.Cmd) {
 	case "project":
 		m.projects.cursor = a.a
 		return m, m.loadPreview()
+	case "pal":
+		return m.palRun(a.a)
 	}
 	return m, nil
 }
@@ -744,6 +768,9 @@ func (m Model) View() tea.View {
 	}
 	if m.quitting {
 		return tea.NewView("")
+	}
+	if m.pal.open {
+		b = m.overlayPalette(b)
 	}
 	v := tea.NewView(b.String())
 	v.AltScreen = true

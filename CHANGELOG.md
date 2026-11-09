@@ -125,6 +125,16 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   header line. Room messages are read through the search where this
   terminal never joined the room, so reading never writes.
 
+- Command palette in the terminal interface: ctrl+k opens it over the
+  current screen (dimmed behind it where the terminal has colours, framed
+  always). Fuzzy search over jump targets (REQ-n, PAIN-n, TASK-n, #id, pr:n,
+  projects, recent folders), actions (switch mode, settings, update channel,
+  doctor and repair, restart collector, sign out with its confirmation,
+  create project from this folder, open in browser, copy link) and a search
+  in the search language; each action shows its key or command, the
+  recently used ones come first. ctrl+f jumps into the search line from any
+  screen but forms; esc leaves it. The footer names ctrl+k.
+
 #### Short ways between agent and human
 
 - Every answer about one object (issue, requirement, task, pain, idea, knowledge
