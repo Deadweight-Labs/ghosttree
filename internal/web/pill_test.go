@@ -87,6 +87,10 @@ func TestURLPillReadsHostAndEndOfPath(t *testing.T) {
 	if !strings.Contains(pr, "k-pr") || !strings.Contains(pr, "#163") {
 		t.Errorf("a GitHub pull request is a pull request pill: %s", pr)
 	}
+	// Nobody here has read its state, so it is not "open"; it leaves ghosttree.
+	if !strings.Contains(pr, "s-unknown") || strings.Contains(pr, "s-open") || !strings.Contains(pr, `rel="noopener noreferrer"`) {
+		t.Errorf("a GitHub link claims a state or does not leave ghosttree: %s", pr)
+	}
 }
 
 // A title with a reference in parentheses reads with the pill instead of the bare key.

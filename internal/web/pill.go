@@ -169,6 +169,12 @@ var prStates = map[string]struct{ Extra, Key, Tone string }{
 // prPill is a pull request as one pill: its icon takes the colour of its state,
 // so a merged one is no longer green. title, who and brief fill the card.
 func prPill(l lang, n int64, href, state, title, brief string) template.HTML {
+	return prPillOf(l, n, href, state, title, brief, false)
+}
+
+// prPillOf is prPill; external marks an address outside ghosttree (a GitHub link
+// in a text), whose state nobody here has read.
+func prPillOf(l lang, n int64, href, state, title, brief string, external bool) template.HTML {
 	card := pillCard{Label: l.msg("ref.kind.pull") + " #" + strconv.FormatInt(n, 10), Title: title, Brief: brief}
 	st, ok := prStates[state]
 	if ok {
@@ -177,7 +183,7 @@ func prPill(l lang, n int64, href, state, title, brief string) template.HTML {
 		st.Extra = "s-unknown"
 	}
 	k := pillKinds["pr"]
-	return pillHTML(pillSpec{Class: k.Class, Icon: mockIconBody(k.Icon), Text: "#" + strconv.FormatInt(n, 10), Href: href, Card: card, Extra: st.Extra})
+	return pillHTML(pillSpec{Class: k.Class, Icon: mockIconBody(k.Icon), Text: "#" + strconv.FormatInt(n, 10), Href: href, Card: card, Extra: st.Extra, External: external})
 }
 
 // pullPillFor reads a pull request as the viewer and writes its pill: the colour
@@ -249,7 +255,7 @@ func githubPull(raw string) (int64, bool) {
 // request it is, any other address by host and the end of its path.
 func urlPill(l lang, raw string) template.HTML {
 	if n, ok := githubPull(raw); ok {
-		return prPill(l, n, raw, "open", "", urlLabel(raw))
+		return prPillOf(l, n, raw, "", "", urlLabel(raw), true)
 	}
 	return kindPill(l, "url", urlLabel(raw), raw, pillCard{Title: urlLabel(raw), Brief: raw})
 }
