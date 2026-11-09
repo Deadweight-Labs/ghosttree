@@ -38,6 +38,9 @@ const (
 	Message     = "message"
 	Vote        = "vote"
 	Feature     = "feature"
+	// DocRevision is one revision of a document, keyed by the row id of
+	// document_revisions: every revision has its own writer.
+	DocRevision = "doc_revision"
 )
 
 // Replaces says whether a later stamp of this kind replaces the earlier one,
@@ -48,7 +51,7 @@ func Replaces(kind string) bool { return kind == Criterion || kind == RequestDon
 // ValidKind says whether kind is one of the kinds above.
 func ValidKind(kind string) bool {
 	switch kind {
-	case Request, Criterion, RequestDone, Pain, Idea, Knowledge, Task, Comment, Reaction, Message, Vote, Feature:
+	case Request, Criterion, RequestDone, Pain, Idea, Knowledge, Task, Comment, Reaction, Message, Vote, Feature, DocRevision:
 		return true
 	}
 	return false

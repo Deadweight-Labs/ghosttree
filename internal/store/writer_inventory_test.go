@@ -293,6 +293,8 @@ var writerMethodClasses = map[string]string{
 	"DocumentBySlug":                "read",
 	"DocumentRevision":              "read",
 	"DocumentRevisions":             "read",
+	"DocumentHeads":                 "read",
+	"DocumentMovedFrom":             "read",
 	"Documents":                     "read",
 	"DropRequest":                   "write",
 	"EndStandingInstruction":        "write",

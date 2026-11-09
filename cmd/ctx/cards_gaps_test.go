@@ -130,7 +130,7 @@ func TestDocCommandsPrintTheCard(t *testing.T) {
 	project := "github.com/x/y"
 	card := "link: " + srv.URL + "/ui/x/y/docs/design"
 	root := t.TempDir()
-	if code := docNew(root, []string{"spec", "design"}, &bytes.Buffer{}); code != 0 {
+	if code := docNew(root, "", []string{"spec", "design"}, &bytes.Buffer{}); code != 0 {
 		t.Fatal("new failed")
 	}
 	state, _ := docwork.LoadState(root)

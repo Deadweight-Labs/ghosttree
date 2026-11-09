@@ -42,6 +42,10 @@ func seedSearchAll(t *testing.T) sessEnv {
 			humantask.Actor{AccountID: 1, Person: "alice"}); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := e.St.CreateDocument(store.Document{Project: p, Slug: "zebrafish-" + strings.ToLower(tag), Kind: "report", Title: "zebrafish document " + tag, Person: "alice"},
+			"about the zebrafish\n", "m"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return e
 }
@@ -135,9 +139,9 @@ func TestSearchStreamShowsEachViewerWhatThePageShows(t *testing.T) {
 				byKey[ev.Key] = ev
 				keys = append(keys, ev.Key)
 			}
-			wantKeys := []string{"requests", "ideas", "knowledge", "sessions", "tasks", "pains"}
+			wantKeys := []string{"requests", "ideas", "knowledge", "docs", "sessions", "tasks", "pains"}
 			if v.name == "guest" {
-				wantKeys = wantKeys[:3]
+				wantKeys = wantKeys[:4]
 			}
 			slices.Sort(keys)
 			sorted := slices.Clone(wantKeys)
@@ -198,8 +202,8 @@ func TestSearchStreamGivesUpAKindAfterItsBudget(t *testing.T) {
 			t.Errorf("%s: %+v, want given up without hits", ev.Key, ev.searchEvent)
 		}
 	}
-	if n != 6 {
-		t.Fatalf("%d kinds said, want 6", n)
+	if n != 7 {
+		t.Fatalf("%d kinds said, want 7", n)
 	}
 	events = readSearchStream(t, e.Owner, e.Base+"/ui/search/stream?q=zebrafish&only=sessions")
 	if len(events) != 2 || events[0].Key != "sessions" || events[0].Slow || !strings.Contains(events[0].Body, `class="ht"`) {
@@ -253,7 +257,7 @@ func TestSearchLivePageIsTheFrame(t *testing.T) {
 	if !strings.Contains(page, `<meta http-equiv="refresh" content="0;url=/ui/search?q=zebrafish">`) {
 		t.Errorf("no way back without the page script:\n%s", page)
 	}
-	for _, k := range []string{"requests", "ideas", "knowledge", "sessions", "tasks", "pains"} {
+	for _, k := range []string{"requests", "ideas", "knowledge", "docs", "sessions", "tasks", "pains"} {
 		if !strings.Contains(page, `data-kind-side="`+k+`"`) || !strings.Contains(page, `data-kind-body="`+k+`"`) {
 			t.Errorf("no place for %s", k)
 		}
@@ -262,7 +266,7 @@ func TestSearchLivePageIsTheFrame(t *testing.T) {
 		t.Error("the page script is not loaded")
 	}
 	_, guest := e.get(t, e.Guest, "/ui/search?q=zebrafish&live=1")
-	if strings.Contains(guest, `data-kind-side="sessions"`) || !strings.Contains(guest, `data-total="3"`) {
+	if strings.Contains(guest, `data-kind-side="sessions"`) || !strings.Contains(guest, `data-total="4"`) {
 		t.Errorf("the guest's frame has a place for sessions or the wrong count")
 	}
 	_, narrowed := e.get(t, e.Owner, "/ui/search?q=zebrafish&live=1&kind=pains")

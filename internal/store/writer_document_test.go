@@ -43,7 +43,7 @@ func TestRuntimeDocumentAndMigrationWritesUseAdmission(t *testing.T) {
 				case "document_proof":
 					return s.InsertDocumentMigration(run, "docs/import.md", digest, doc.ID, 1)
 				case "import":
-					_, err := s.ImportDocument(MigratedDocument{Document: Document{Project: "p", Slug: "imported", Kind: "spec", Title: "imported"}, RunID: run, Source: "docs/import.md", Digest: digest, Body: body})
+					_, _, err := s.ImportDocument(MigratedDocument{Document: Document{Project: "p", Slug: "imported", Kind: "spec", Title: "imported"}, RunID: run, Source: "docs/import.md", Digest: digest, Body: body})
 					return err
 				case "migrated":
 					_, err := s.InsertMigrated(MigratedEntry{Knowledge: Knowledge{Type: "instruction", Title: "migrated", Body: "body", Scope: scope.Axes{Project: "p"}, SessionRef: "docs/import.md"}, RunID: run, Digest: digest, ItemKey: "one"})
