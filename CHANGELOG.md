@@ -267,6 +267,11 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- Runbooks triggered by a command reach Claude Code: the pre-tool-use hook's
+  matcher now includes `Bash` (it covered Read, Edit, Write and NotebookEdit
+  only, so command triggers never fired). `ctx install claude` updates the
+  existing hook.
+
 - `ctx update` on the stable channel finds the release archives, which
   goreleaser names `ghosttree_<version>_<os>_<arch>.tar.gz`; it looked for
   `ctx_…` and found nothing. It restarts the collector service only when the
