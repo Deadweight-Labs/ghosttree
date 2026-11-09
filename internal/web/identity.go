@@ -118,13 +118,29 @@ func harnessKind(harness string) string {
 	return avSystem
 }
 
-// actorKind guesses what stands behind the name of an actor in a history.
+// splitAgentLabel takes the readable name of an agent apart: "Claude · Lena
+// Berger · lena-laptop" is the agent "Claude" of the owner "Lena Berger" (tool
+// or own name, owner, then machine and branch). A name without the separator is
+// the whole name and has no owner.
+func splitAgentLabel(label string) (name, owner string) {
+	parts := strings.Split(label, agentLabelSep)
+	name = strings.TrimSpace(parts[0])
+	if len(parts) > 1 {
+		owner = strings.TrimSpace(parts[1])
+	}
+	return name, owner
+}
+
+// actorKind guesses what stands behind the name of an actor in a history. For
+// the label of an agent ("Claude · Lena Berger · lena-laptop") the first part
+// decides.
 func actorKind(name string) string {
-	n := strings.ToLower(strings.TrimSpace(name))
+	first, _ := splitAgentLabel(name)
+	n := strings.ToLower(first)
 	switch {
 	case n == "gardener" || n == "gärtner" || strings.HasPrefix(n, "gardener-"):
 		return avGardener
-	case n == "ghosttree" || n == "system" || n == "":
+	case n == "ghosttree" || n == "system" || n == "agent" || n == "":
 		return avSystem
 	case n == "claude" || strings.HasPrefix(n, "claude-") || strings.HasPrefix(n, "claude@") || strings.HasPrefix(n, "claude:"):
 		return avClaude
@@ -163,12 +179,25 @@ func humanBadge(cls, name string) string {
 	if ini == "" {
 		ini = "?"
 	}
+	if cls == "own" {
+		// The owner's corner badge carries the tint of its person, like the
+		// initials avatar does: an opaque disc that reads on any logo.
+		cls += " hc-" + strconv.Itoa(humanTint(name))
+	}
 	return `<span class="` + cls + `" data-av="` + html.EscapeString(name) + `" title="` + html.EscapeString(name) + `">` + html.EscapeString(ini) + `</span>`
 }
 
 func avatarMarkup(l lang, o avatarSpec) template.HTML {
 	if o.Kind == "" {
 		o.Kind = actorKind(o.Name)
+	}
+	if o.Kind == avClaude || o.Kind == avCodex {
+		// An agent called by its label brings its owner along.
+		name, owner := splitAgentLabel(o.Name)
+		o.Name = name
+		if o.Owner == "" {
+			o.Owner = owner
+		}
 	}
 	size := ""
 	if o.Size != "" {

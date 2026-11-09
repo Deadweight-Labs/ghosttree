@@ -1412,4 +1412,9 @@ var messagesDE = map[string]string{
 	"ui.cx.task_open":                       "Offen",
 	"pains.cx.why_accepted":                 "Warum leben wir damit?",
 	"pains.why":                             "Warum",
+
+	// Sections of the agent list.
+	"agents.section.active":   "Aktiv",
+	"agents.section.inactive": "Inaktiv",
+	"agents.seen":             "Gesehen: nicht mehr warten, ohne zu antworten",
 }

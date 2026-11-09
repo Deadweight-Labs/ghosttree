@@ -358,7 +358,7 @@ func (c *avatarCache) accountOf(name string) int64 {
 }
 
 // avatarSpan is the mark the avatar functions write for a person (identity.go).
-var avatarSpan = regexp.MustCompile(`<span class="(gav [^"]*|own)" data-av="([^"]*)" title="([^"]*)">[^<]*</span>`)
+var avatarSpan = regexp.MustCompile(`<span class="(gav [^"]*|own[^"]*)" data-av="([^"]*)" title="([^"]*)">[^<]*</span>`)
 
 // withPhotos replaces the initials of the people who have a picture by the
 // picture, which comes from this server. Everything else stays as written.
@@ -373,15 +373,15 @@ func (c *avatarCache) withPhotos(page []byte) []byte {
 		if id == 0 || !c.ready(id) {
 			return m
 		}
-		class := string(sub[1])
-		if class != "own" {
-			var keep []string
-			for _, f := range strings.Fields(class) {
-				if !strings.HasPrefix(f, "hc-") {
-					keep = append(keep, f)
-				}
+		var keep []string
+		for _, f := range strings.Fields(string(sub[1])) {
+			if !strings.HasPrefix(f, "hc-") {
+				keep = append(keep, f)
 			}
-			class = strings.Join(append(keep, "ph"), " ")
+		}
+		class := strings.Join(keep, " ")
+		if class != "own" {
+			class += " ph"
 		}
 		return []byte(`<img class="` + class + `" src="/ui/avatar/` + strconv.FormatInt(id, 10) + `" alt="" title="` + string(sub[3]) + `">`)
 	})

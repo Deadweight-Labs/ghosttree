@@ -38,7 +38,9 @@ type orgPageView struct {
 	People []orgPersonRow
 	Rooms  []orgRoomRow
 	Groups []agentGroup
-	Cmd    cmdBlock
+	// Sections is the same list by state: waiting on the viewer, active, inactive.
+	Sections agentSections
+	Cmd      cmdBlock
 	// The agent tab: the values of the filter menus and the number at work.
 	Active                                 int
 	AgentOwners, AgentMachines, AgentRepos []string
@@ -85,6 +87,16 @@ func (a *app) orgBandFor(r *http.Request, org store.Org, current string) *bandVi
 
 // orgAgentGroups are the agents at the projects of the organisation, by machine.
 func (a *app) orgAgentGroups(r *http.Request, org store.Org) ([]agentGroup, error) {
+	cards, err := a.orgAgentCards(r, org)
+	if err != nil {
+		return nil, err
+	}
+	return groupAgents(cards, nil), nil
+}
+
+// orgAgentCards are the agents at the projects of the organisation, in the order
+// of the agent list.
+func (a *app) orgAgentCards(r *http.Request, org store.Org) ([]agentCard, error) {
 	pa := a.access(r)
 	now := overviewNow().UTC()
 	rows, err := a.listAgents(r, pa, "", now, agentsMax*4)
@@ -101,11 +113,7 @@ func (a *app) orgAgentGroups(r *http.Request, org store.Org) ([]agentGroup, erro
 			keep = append(keep, row)
 		}
 	}
-	cards, err := a.agentCards(r, pa, keep, now)
-	if err != nil {
-		return nil, err
-	}
-	return groupAgents(cards, nil), nil
+	return a.agentCards(r, pa, keep, now)
 }
 
 // orgPage renders one tab of an organisation.
@@ -137,7 +145,9 @@ func (a *app) orgPage(w http.ResponseWriter, r *http.Request, org store.Org, tab
 			v.Rooms = append(v.Rooms, orgRoomRow{Name: l.msg("coord.general"), Repo: name, Href: pathWith("/ui/coord", "room", store.RoomKeyForProject(p.Remote))})
 		}
 	case "agents":
-		v.Groups, _ = a.orgAgentGroups(r, org)
+		cards, _ := a.orgAgentCards(r, org)
+		v.Groups = groupAgents(cards, nil)
+		v.Sections = sectionAgents(cards, csrfOf(r), r.URL.RequestURI())
 		v.fillAgentFilters(a.viewerOf(r, a.access(r)).kind != viewerGuest)
 	}
 	a.renderBrowser(w, r, "org", pageData{Title: org.Name, OrgName: org.Name, OrgBand: a.orgBandFor(r, org, tab), OrgV: v})

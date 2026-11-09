@@ -12,7 +12,7 @@
 {{if .Groups}}<div class="sbar"><label class="gfield">{{mi "search"}}<input type="search" data-list-filter=".arow" placeholder="{{t "agents.search_org"}}" aria-label="{{t "agents.search_org"}}" autocomplete="off" spellcheck="false"></label>{{if .Connect}}<a class="gbtn" href="{{.Connect}}">{{mi "plus"}}{{t "agents.connect_machine"}}</a>{{end}}</div>
 <div class="box"><div class="box-h lh"><span class="t">{{mi "play"}} {{t "agents.filter.active" .Active}}</span><span class="sp"></span><div class="gfilters">
 {{template "agentpick" (dict "Key" "owner" "Values" .AgentOwners)}}{{template "agentpick" (dict "Key" "machine" "Values" .AgentMachines)}}{{template "agentpick" (dict "Key" "repo" "Values" .AgentRepos)}}</div></div></div>
-<div class="agroups">{{template "agentgroups" .Groups}}</div>{{else}}<div class="box"><div class="box-empty">{{t "org.no_agents"}}</div></div>{{end}}
+<div class="agroups">{{template "agentsections" .Sections}}</div>{{else}}<div class="box"><div class="box-empty">{{t "org.no_agents"}}</div></div>{{end}}
 {{else if eq .Tab "people"}}
 <div class="box"><div class="box-h"><span class="t">{{if eq (len .People) 1}}{{t "org.n_people_one"}}{{else}}{{t "org.n_people" (len .People)}}{{end}}</span></div>
 {{range .People}}<div class="row prow">{{avatarX "lg" "" .Name "" false}}<div><b>{{.Name}}</b>{{if .Self}} <span class="muted">{{t "adm.you"}}</span>{{end}}</div><span class="lb out">{{if .Guest}}{{t "role.guest"}}{{else}}{{t (printf "role.%s" .Role)}}{{end}}</span></div>{{end}}</div>

@@ -59,9 +59,16 @@
   & .gav.a-codex { background: #000; }
   & .gav.a-gardener { background: #1a7f37; }
   & .gav.a-system { background: var(--accent-emphasis); }
-  & .gav.agent .own { position: absolute; right: -5px; bottom: -5px; width: 15px; height: 15px; border-radius: 50%; font-size: 7px; font-weight: 700; display: flex; align-items: center; justify-content: center; background: var(--accent-subtle); color: var(--accent-fg); box-shadow: 0 0 0 2px var(--canvas-default); object-fit: cover; padding: 0; }
-  & .gav.agent.lg .own { width: 15px; height: 15px; }
-  & .gav.agent.xl .own { width: 18px; height: 18px; }
+  /* Owner badge in the corner of an agent's logo: an opaque disc in the owner's tint, a ring in the card colour, 20 px instead of 15 so two letters read at 1x and 2x. A picture replaces the letters. */
+  & .gav.agent .own { position: absolute; right: -7px; bottom: -7px; width: 20px; height: 20px; border-radius: 50%; font-size: 10px; font-weight: 700; letter-spacing: -.02em; line-height: 1; display: flex; align-items: center; justify-content: center; background: var(--canvas-default); color: var(--fg-muted); border: 1px solid var(--border-default); box-shadow: 0 0 0 2px var(--canvas-default); object-fit: cover; padding: 0; box-sizing: border-box; }
+  & .gav.agent.lg .own { width: 20px; height: 20px; }
+  & .gav.agent.xl .own { width: 22px; height: 22px; font-size: 11px; right: -8px; bottom: -8px; }
+  & .gav.agent img.own { border: none; }
+  & .gav.agent .own.hc-0 { background: linear-gradient(var(--accent-subtle), var(--accent-subtle)), var(--canvas-default); border-color: var(--accent-muted); color: var(--accent-fg); }
+  & .gav.agent .own.hc-1 { background: linear-gradient(var(--done-subtle), var(--done-subtle)), var(--canvas-default); border-color: var(--done-muted); color: var(--done-fg); }
+  & .gav.agent .own.hc-2 { background: linear-gradient(var(--success-subtle), var(--success-subtle)), var(--canvas-default); border-color: var(--success-muted); color: var(--success-fg); }
+  & .gav.agent .own.hc-3 { background: linear-gradient(var(--attention-subtle), var(--attention-subtle)), var(--canvas-default); border-color: var(--attention-muted); color: var(--attention-fg); }
+  & .gav.agent .own.hc-4 { background: linear-gradient(var(--danger-subtle), var(--danger-subtle)), var(--canvas-default); border-color: var(--danger-muted); color: var(--danger-fg); }
   & .gav.agent .live { position: absolute; left: -3px; top: -3px; width: 9px; height: 9px; border-radius: 50%; background: var(--success-emphasis); box-shadow: 0 0 0 2px var(--canvas-default); animation: gpulse 1.8s ease-out infinite; }
   & .gav.lg.agent .live, & .gav.xl.agent .live { width: 11px; height: 11px; left: -4px; top: -4px; }
 

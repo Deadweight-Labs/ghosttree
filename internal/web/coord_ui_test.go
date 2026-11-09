@@ -38,7 +38,7 @@ func TestSidebarSplitsTeamsAndDirectsAndBadgePrefersWhatNeedsYou(t *testing.T) {
 func TestMessageAvatarShowsTheHarnessOfAnAgentWithItsOwner(t *testing.T) {
 	l := langEN
 	agent := string(msgAvatar(l, coordMessageView{AuthorKind: "agent", Name: "Claude · Robin"}, "xl"))
-	if !strings.Contains(agent, "a-claude") || !strings.Contains(agent, `class="own"`) {
+	if !strings.Contains(agent, "a-claude") || !strings.Contains(agent, `class="own hc-`) {
 		t.Errorf("agent avatar: %s", agent)
 	}
 	person := string(msgAvatar(l, coordMessageView{AuthorKind: "human", Name: "Lena Berger"}, "xl"))

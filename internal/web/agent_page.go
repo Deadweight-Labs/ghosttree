@@ -245,17 +245,8 @@ func (a *app) agentSignal(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ActiveCount is how many of the listed agents are at work or waiting.
-func (v agentsView) ActiveCount() int {
-	n := 0
-	for _, g := range v.Groups {
-		n += g.Active
-	}
-	return n
-}
-
 // ShortName is the name an agent goes by: "Claude · Robin · laptop" is Claude.
 func (r agentRow) ShortName() string {
-	name, _, _ := strings.Cut(r.BareName, " · ")
+	name, _ := splitAgentLabel(r.BareName)
 	return name
 }
