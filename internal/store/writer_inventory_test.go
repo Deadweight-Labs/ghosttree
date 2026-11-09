@@ -257,7 +257,6 @@ var writerMethodClasses = map[string]string{
 	"SessionModels":                 "read",
 	"OwnSessionByExternal":          "read",
 	"ReactionRowID":                 "read",
-	"VoteRowID":                     "read",
 	"AgentForSession":               "read",
 	"AgentSessionID":                "read",
 	"OwnerAccountID":                "read",

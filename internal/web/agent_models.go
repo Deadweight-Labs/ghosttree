@@ -37,6 +37,12 @@ func (a *app) agentModelsPage(w http.ResponseWriter, r *http.Request) {
 			Requests: st.RequestsDone, Features: st.FeaturesDone}
 		if st.Actor == actor.Human {
 			row.Human, row.Kind, row.Name = true, avHuman, l.msg("agents.models_people")
+			switch st.Via {
+			case actor.ViaWeb:
+				row.Name = l.msg("agents.models_people_web")
+			case actor.ViaTerminal:
+				row.Name = l.msg("agents.models_people_terminal")
+			}
 		} else {
 			row.Kind, row.Name = harnessKind(st.Harness), st.Family
 		}

@@ -98,3 +98,15 @@ func TestReplacesAndValidKind(t *testing.T) {
 		t.Error("ValidKind")
 	}
 }
+
+func TestVoteEntryIDIsStableAndDistinct(t *testing.T) {
+	a := VoteEntryID(5, "person:1")
+	if a <= 0 || a != VoteEntryID(5, "person:1") {
+		t.Fatalf("not stable or not positive: %d", a)
+	}
+	for _, other := range []int64{VoteEntryID(5, "person:1:agent"), VoteEntryID(6, "person:1"), VoteEntryID(51, ":person:1")} {
+		if other == a {
+			t.Errorf("collision with %d", other)
+		}
+	}
+}
