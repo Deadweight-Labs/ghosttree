@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	stdhtml "html"
 	"html/template"
 	"os"
 	"path/filepath"
@@ -231,7 +232,7 @@ func TestCommandBlockOffersMacOSAndLinuxOnly(t *testing.T) {
 	if strings.Count(page, `role="tab"`) != 2 || !strings.Contains(page, `data-os="mac"`) || !strings.Contains(page, `data-os="lin"`) || strings.Contains(strings.ToLower(page), "windows") {
 		t.Errorf("only macOS and Linux: %s", page)
 	}
-	for _, want := range []string{`id="ov-mac"`, `id="ov-lin"`, `data-ui-copy="#ov-lin"`, `data-copied="Kopiert"`, `curl -fsSL y | sh`} {
+	for _, want := range []string{`id="ov-mac"`, `id="ov-lin"`, `data-copy-from="#ov-lin"`, `>Kopiert<`, `curl -fsSL y | sh`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("command block lacks %q", want)
 		}
@@ -299,6 +300,63 @@ func TestComponentGalleryRenders(t *testing.T) {
 		doc := `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="` + os.Getenv("GT_STATIC") + `/ui-tokens.css"><link rel="stylesheet" href="` + os.Getenv("GT_STATIC") + `/ui-base.css"><link rel="stylesheet" href="` + os.Getenv("GT_STATIC") + `/ui-shell.css"><link rel="stylesheet" href="` + os.Getenv("GT_STATIC") + `/ui-parts.css"><link rel="stylesheet" href="` + os.Getenv("GT_STATIC") + `/ui-pages.css"><style>.gal{margin:0 0 32px}.gal-h{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--fg-muted);text-transform:uppercase;letter-spacing:.04em}.gal-row{display:flex;align-items:center;flex-wrap:wrap;gap:16px}.gal-p{font-size:14px}.gal-hc{padding-bottom:110px;justify-content:flex-end}.gal .rband{margin:0 -20px}</style></head><body class="ui gt"><main class="g2"><div class="wrap">` + b.String() + `</div></main><script src="` + os.Getenv("GT_STATIC") + `/ui-tabs.js"></script><script src="` + os.Getenv("GT_STATIC") + `/ui-parts.js"></script></body></html>`
 		if err := os.WriteFile(filepath.Join(dir, "gallery.html"), []byte(doc), 0o644); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestCommandBlockWithOneCommandHasNoTabs(t *testing.T) {
+	page := renderPart(t, langDE, "uicmd", cmdBlock{ID: "rb", Mac: "ctx run x", Linux: "ctx run x"})
+	if strings.Contains(page, `role="tab"`) || strings.Count(page, `<pre class="cmd"`) != 1 || !strings.Contains(page, `data-copy-from="#rb-lin"`) {
+		t.Errorf("one command is one block with one copy button: %s", page)
+	}
+}
+
+func TestCommandTextMarksTheAddressAndEscapesTheRest(t *testing.T) {
+	got := string(cmdText(`curl -fsSL https://x.test/install.sh?a=1&b=2 | sh -s -- --note "<b>"`))
+	for _, want := range []string{`<span class="u">https://x.test/install.sh?a=1&amp;b=2</span>`, ` | sh -s -- --note &#34;&lt;b&gt;&#34;`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("cmdText lacks %q: %s", want, got)
+		}
+	}
+	if plain := stdhtml.UnescapeString(partText(got)); !strings.Contains(plain, `https://x.test/install.sh?a=1&b=2 | sh -s -- --note "<b>"`) {
+		t.Errorf("the copied text stays the plain command: %q", plain)
+	}
+}
+
+func TestCopyButtonVariants(t *testing.T) {
+	for name, tc := range map[string]struct {
+		btn  copyBtn
+		want []string
+		not  []string
+	}{
+		"from":  {copyBtn{From: "#a"}, []string{`data-copy-from="#a"`, `class="clb"`, `>Kopieren<`, `>Kopiert<`}, []string{`icon`}},
+		"text":  {copyBtn{Text: "abc", Tip: "SHA kopieren"}, []string{`data-copy-text="abc"`, `aria-label="SHA kopieren"`, `icon quiet`}, []string{`class="clb"`}},
+		"here":  {copyBtn{}, []string{`data-copy-here`}, nil},
+		"page":  {copyBtn{Page: true, Label: "Link kopieren"}, []string{`data-copy-page`, `>Link kopieren<`}, nil},
+		"label": {copyBtn{Text: "a/b", Label: "Pfad kopieren"}, []string{`data-copy-text="a/b"`, `>Pfad kopieren<`}, nil},
+	} {
+		page := renderPart(t, langDE, "uicopy", tc.btn)
+		for _, want := range tc.want {
+			if !strings.Contains(page, want) {
+				t.Errorf("%s: copy button lacks %q: %s", name, want, page)
+			}
+		}
+		for _, not := range tc.not {
+			if strings.Contains(page, not) {
+				t.Errorf("%s: copy button has %q: %s", name, not, page)
+			}
+		}
+		if !strings.Contains(page, "copy js-only") {
+			t.Errorf("%s: every copy button carries the class copy: %s", name, page)
+		}
+	}
+}
+
+func TestLabelPickerStartsEmptyAndTheButtonWaitsForAChoice(t *testing.T) {
+	page := renderPart(t, langDE, "uilabelbox", &labelBoxView{CanEdit: true, Kind: "request", ID: 3, Options: []string{"git", "ui"}})
+	for _, want := range []string{`class="sblk lbbox stk"`, `<option value="" selected disabled hidden>Label wählen …</option>`, `data-needs-pick`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("label picker lacks %q: %s", want, page)
 		}
 	}
 }

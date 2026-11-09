@@ -61,6 +61,9 @@
   & .dmeta b, & .dmeta .person { color: var(--fg-default); font-weight: 600; }
   & .dgrid { display: grid; grid-template-columns: minmax(0, 1fr) 256px; gap: 24px; align-items: start; }
   & .dmain, & .side { min-width: 0; }
+  /* A page without facts does not keep the column: no aside, or one with nothing in it */
+  & .dgrid:not(:has(> .side *)) { grid-template-columns: minmax(0, 1fr); }
+  & .side:not(:has(*)) { display: none; }
   & .side { font-size: 12px; }
   & .sblk { padding: 16px 0; border-bottom: 1px solid var(--border-muted); }
   & .sblk:first-child { padding-top: 0; }
@@ -110,6 +113,8 @@
   & .resolve-form input.gfield { flex: 1 1 14rem; }
   & .lnew { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px; background: var(--canvas-subtle); border-top: 1px solid var(--border-muted); }
   & .lnew .gfield { flex: 1; }
+  /* The colour is a short hex value: a fixed width, with a dot that shows the colour */
+  & .lnew .gfield.color { flex: 0 0 168px; }
   & .lnew label.gfield { margin: 0; }
 
   /* ---- Forms in panels (edit, move, complete, drop) ---- */

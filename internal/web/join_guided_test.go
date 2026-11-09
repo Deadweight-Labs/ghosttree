@@ -23,7 +23,7 @@ func TestJoinGuidedPairPageStatesAndNewCodeEverywhere(t *testing.T) {
 	pair := pairRE.FindString(e.pairPage(t, b))
 
 	resp, text := e.get(t, b, "/join/pair")
-	for _, want := range []string{"Open a terminal on your computer", "Copy this command and run it", "Confirm here", "Waiting for your computer", "Send this to your computer", `data-join-state="waiting"`, `data-ui-copy="#join-cmd-lin"`, "mailto:?subject=", "| sh -s -- --pair " + pair, "New code"} {
+	for _, want := range []string{"Open a terminal on your computer", "Copy this command and run it", "Confirm here", "Waiting for your computer", "Send this to your computer", `data-join-state="waiting"`, `data-copy-from="#join-cmd-lin"`, "mailto:?subject=", "| sh -s -- --pair " + pair, "New code"} {
 		if !strings.Contains(text, want) && !strings.Contains(plainText(text), want) {
 			t.Errorf("waiting page lacks %q", want)
 		}

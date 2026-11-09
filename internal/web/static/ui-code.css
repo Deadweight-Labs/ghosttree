@@ -41,6 +41,11 @@
   & .ct-blank-act { padding-top: 0; }
   & .ct-path { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; font-size: 16px; }
   & .ct-sep { color: var(--fg-muted); }
+  & .ct-path .copy { margin-left: 6px; }
+  /* A command or path with its copy button: one block, the text wraps, the button stays at the right */
+  & .g-cmd { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 4px 4px 12px; background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; }
+  & .g-cmd > .i { color: var(--fg-muted); }
+  & .g-cmd code { flex: 1; min-width: 0; font: 13px/1.5 var(--ui-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
   & .ct-path b { font-weight: 600; }
   & .ct-last { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); color: var(--fg-muted); font-size: 14px; }
   & .ct-last b { color: var(--fg-default); font-weight: 600; }
@@ -128,7 +133,7 @@
   & .ct-kt small { display: block; margin-top: 2px; color: var(--fg-muted); font-size: 12px; }
   & .ct-work { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 16px; }
   & .ct-wm { min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
-  & .ct-icon { width: 28px; min-height: 28px; padding: 0; }
+  & .ct-icon { width: 28px; height: 28px; min-height: 28px; padding: 0; }
 }
 
 @media (max-width: 1011px) {

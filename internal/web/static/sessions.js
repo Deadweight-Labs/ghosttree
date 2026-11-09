@@ -18,16 +18,4 @@
       el.textContent = stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
     }
   }
-  const copy = document.querySelector("[data-copy-link]");
-  if (copy) {
-    copy.addEventListener("click", async () => {
-      const url = location.origin + location.pathname;
-      try {
-        await navigator.clipboard.writeText(url);
-        const label = copy.textContent;
-        copy.textContent = "✓";
-        setTimeout(() => { copy.textContent = label; }, 1200);
-      } catch (_) { /* clipboard not available: the address bar has the link */ }
-    });
-  }
 })();

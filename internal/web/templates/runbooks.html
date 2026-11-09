@@ -9,7 +9,7 @@
 {{end}}</div><script src="/static/ui-list.js" defer></script>
 {{template "foot" .}}{{end}}
 
-{{define "rbsteps"}}{{range .}}<div class="rbstep"><span class="rbn">{{.N}}</span><div><b>{{.Title}}</b>{{if .Command}}<pre class="cmd">{{.Command}}</pre>{{end}}{{if .Check}}<div class="rbcheck">{{mi "check"}}<span>{{t "runbooks.check"}}</span><code>{{.Check}}</code></div>{{end}}</div></div>{{end}}{{end}}
+{{define "rbsteps"}}{{range .}}<div class="rbstep"><span class="rbn">{{.N}}</span><div><b>{{.Title}}</b>{{if .Command}}<div class="cmdc"><pre class="cmd">{{.Command}}</pre>{{template "uicopy" copyHere}}</div>{{end}}{{if .Check}}<div class="rbcheck">{{mi "check"}}<span>{{t "runbooks.check"}}</span><code>{{.Check}}</code></div>{{end}}</div></div>{{end}}{{end}}
 
 {{define "runbook"}}{{template "head" .}}{{template "nav" .}}<main class="g2 rb"><link rel="stylesheet" href="/static/ui-runbooks.css"><div class="wrap">
 {{with .RunbookV}}<div class="dhead"><div class="dtitle"><h1 class="mono">{{.Name}}</h1><div class="gacts">{{if .EditHref}}<a class="gbtn sm" href="{{.EditHref}}">{{mi "pencil"}}{{t "runbooks.edit"}}</a>{{end}}{{if .GiveHref}}<a class="gbtn sm" href="{{.GiveHref}}">{{mi "chat"}}{{t "runbooks.give"}}</a>{{end}}</div></div>

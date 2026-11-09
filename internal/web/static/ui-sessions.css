@@ -60,7 +60,7 @@
   & .find-nav .gbtn .i { transform: rotate(0); }
   & .back-results { display: inline-block; margin-bottom: 8px; font-size: 14px; }
   & .wlink { border: 1px solid var(--border-default); border-radius: 6px; margin: 8px 0; }
-  & .side .v .gav { width: 28px; height: 28px; border-radius: 6px; }
+  & .side .v .gav.agent { width: 28px; height: 28px; border-radius: 6px; }
   & .side .v > span { display: flex; align-items: center; gap: 8px; }
   & .prompts ol { margin: 0; padding: 0; list-style: none; }
   & .pr a { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 0 8px; padding: 4px 0; color: var(--fg-default); font-size: 13px; }

@@ -17,13 +17,16 @@
   & .saved summary.srow { list-style: none; cursor: pointer; color: var(--accent-fg); }
   & .saved summary.srow::-webkit-details-marker { display: none; }
   & .saved summary.srow .i { color: inherit; }
-  & .saved .save-f { display: flex; gap: 8px; padding: 0 16px 8px; }
-  & .saved .save-f .gfield { flex: 1; min-width: 0; }
+  /* The name takes the whole width, scope and button share the line below it */
+  & .saved .save-f { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 16px 8px; }
+  & .saved .save-f .gfield { flex: 1 1 100%; min-width: 0; height: 28px; padding: 0 8px; font-size: 13px; }
+  & .saved .save-f select.gfield { flex: none; }
+  & .saved .save-f .selx { flex: 1 1 0; width: auto; min-width: 0; }
+  & .saved .save-f .gbtn { flex: none; margin-left: auto; }
 
   & .sbarrow { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
   & .sbarrow .sbar { flex: 1; margin-bottom: 0; min-width: 0; }
-  & .sbarrow .sbar .mono-in input { font-family: var(--ui-mono); font-size: 14px; }
-  & .sbarrow .sbar .mono-in input::placeholder { font-family: var(--ui-font); }
+  & .sbarrow .sbar .mono-in input, & .sbarrow .sbar .mono-in input::placeholder { font-size: 14px; }
   & .dd.split { display: inline-flex; position: relative; flex: none; }
   & .dd.split > .gbtn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
   & .dd.split > .gbtn.caret { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255, 255, 255, .35); padding: 0 8px; }

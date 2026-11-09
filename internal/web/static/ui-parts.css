@@ -173,8 +173,19 @@
   & .ostl button[aria-selected="true"] { color: var(--fg-default); font-weight: 600; background: var(--canvas-default); border-color: var(--border-default); }
   & .ostl button:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 1px; }
   & .cmdc { position: relative; }
+  & .cmd .u { color: var(--accent-fg); }
   & .cmd { display: block; min-height: 40px; margin: 0; padding: 9px 96px 9px 12px; overflow-x: auto; font: 13px/1.5 var(--ui-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg-default); background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; }
   & .cmdc .gbtn { position: absolute; top: 50%; transform: translateY(-50%); right: 6px; }
+  /* One copy button everywhere (template uicopy): icon, then the label; the tick and "Copied" take the
+     place of both for a moment and never change the width of the button. */
+  & .copy .i + .i { display: none; }
+  & .copy.done .i:first-of-type { display: none; }
+  & .copy.done .i + .i { display: inline-block; color: var(--success-fg); }
+  & .copy .clb { display: inline-grid; justify-items: center; }
+  & .copy .clb > span { grid-area: 1 / 1; }
+  & .copy .clb > span + span { visibility: hidden; }
+  & .copy.done .clb > span:first-child { visibility: hidden; }
+  & .copy.done .clb > span + span { visibility: visible; }
 
   /* ---- Composer: write/preview, toolbar, text field, footer with hint left and buttons right ---- */
   & .cx { position: relative; min-width: 0; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; }
@@ -201,11 +212,17 @@
   & .cx-fl.wide { grid-column: 1 / -1; }
   & .cx-fl .gfield { font-weight: 400; color: var(--fg-default); }
   /* Menu that ui-select.js puts in place of a native select */
-  & select.selx-native { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-  & .selx { display: flex; width: 100%; }
+  /* The hidden native select stays a form control but takes no room: width and height are capped,
+     because a rule like ".fl select.gfield { width: 100% }" would otherwise stretch it past the window. */
+  & select.gfield.selx-native { position: absolute; width: 1px; height: 1px; max-width: 1px; max-height: 1px; min-width: 0; margin: 0; padding: 0; border: 0; opacity: 0; pointer-events: none; }
+  & .selx { display: flex; width: 100%; min-width: 0; }
   & .selx > .gbtn { flex: 1; justify-content: space-between; min-width: 0; font-size: 14px; font-weight: 400; }
+  & .selx.sm > .gbtn { font-size: 13px; }
   & .selx > .gbtn .ddv { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  & .selx > .pop { min-width: 100%; width: max-content; max-width: min(360px, calc(100vw - 32px)); max-height: 320px; overflow-y: auto; }
+  & .selx > .gbtn .ddv.ph { color: var(--fg-muted); }
+  & .selx > .pop { min-width: 100%; width: max-content; max-width: min(360px, calc(100vw - 32px)); }
+  & .pop .pf { display: block; width: calc(100% - 16px); height: 28px; margin: 0 8px 4px; padding: 0 8px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; font: 13px/20px var(--ui-font); }
+  & .pop .pf:focus { outline: 0; border-color: var(--accent-emphasis); box-shadow: inset 0 0 0 1px var(--accent-emphasis); }
   & .selx.is-quiet, & .invite .selx, & .lnew .selx, & .resolve-form .selx, & .save-f .selx, & .sbarrow .selx, & .ntools .selx { display: inline-flex; width: auto; flex: none; }
   & .invite .selx { min-width: 120px; }
   & .selx.is-quiet > .gbtn { flex: none; }

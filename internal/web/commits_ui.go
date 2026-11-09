@@ -116,10 +116,10 @@ func (a *app) commitsPage(w http.ResponseWriter, r *http.Request) {
 	a.renderBrowser(w, r, "commits", pageData{Title: l.msg("repo.tab.commits"), Project: project, CommitsV: v})
 }
 
+// commitSide is what the side column adds to the head: pull requests and branches
+// are in the head already, so only the requests the commit spoke for stand here.
 type commitSide struct {
 	Requests []sideRef
-	PRs      []commitPR
-	Branches []commitBranch
 }
 
 type commitView struct {
@@ -227,7 +227,6 @@ func (a *app) commitDetail(w http.ResponseWriter, r *http.Request, remote, sha s
 			v.Side.Requests = append(v.Side.Requests, sideRef{N: e.ID, Title: e.Title, Href: href})
 		}
 	}
-	v.Side.PRs, v.Side.Branches = v.PRs, v.Branches
 	v.Empty = len(d.Said) == 0
 	a.renderBrowser(w, r2, "commit", pageData{Title: v.Title, Project: remote, CommitV: v})
 }

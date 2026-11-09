@@ -32,18 +32,21 @@
   & .tlx { margin-top: 24px; }
 
   /* the column of facts: name left, chips right */
-  & .side .sblk:not(.live-side) { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 4px 8px; padding: 10px 0; }
+  & .side .sblk:not(.live-side) { display: grid; grid-template-columns: 108px minmax(0, 1fr); align-items: start; gap: 4px 8px; padding: 10px 0; }
   & .side .sblk:not(.live-side) { border-bottom: 1px solid var(--border-muted); }
   & .side .sblk:first-child:not(.live-side) { padding-top: 10px; }
   & .side > .gbtn.blk { margin-bottom: 16px; }
-  & .side .sblk h3 { margin: 0; color: var(--fg-default); }
+  /* Name in the muted tone, the value carries the weight; the name stands at the first line of a value of many lines */
+  & .side .sblk h3 { display: flex; align-items: center; min-height: 24px; margin: 0; color: var(--fg-muted); }
   & .side .sblk .v { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
   & .side .sblk .v > * { display: inline-flex; }
   & .side .sblk .v > .sub { flex-basis: 100%; }
   /* The label picker shrinks with the column instead of pushing its button out of it */
-  & .side .sblk .v > .lbadd { gap: 6px; min-width: 0; max-width: 100%; }
+  & .side .sblk .v > .lbadd { gap: 8px; min-width: 0; max-width: 100%; }
   & .side .sblk .lbadd .selx { flex: 1 1 auto; min-width: 0; }
   & .side .sblk .v > .none { color: var(--fg-muted); }
+  /* A pill or chip that is longer than the column breaks into lines and stays inside it */
+  & .side .sblk .v :is(.lb, .chip) { max-width: 100%; height: auto; min-height: 20px; white-space: normal; overflow-wrap: anywhere; border-radius: 12px; }
   /* A block with a form puts its heading above it: the value column is too narrow for a field and a button */
   & .side .sblk.stk:not(.live-side) { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   & .side .sblk.stk .v > .pform { display: flex; flex: 1 1 100%; align-items: stretch; gap: 8px; min-width: 0; }
@@ -55,5 +58,5 @@
 @media (max-width: 767px) {
   :is(.g2.id) .cbox .reqs .rh { flex-wrap: wrap; }
   :is(.g2.id) .cbox .reqs .rh .prog.wide .bar { width: 96px; }
-  :is(.g2.id) .side .sblk:not(.live-side) { grid-template-columns: 96px minmax(0, 1fr); }
+  :is(.g2.id) .side .sblk:not(.live-side) { grid-template-columns: 108px minmax(0, 1fr); }
 }
