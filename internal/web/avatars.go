@@ -37,8 +37,12 @@ const (
 	avatarHost      = "avatars.githubusercontent.com"
 	avatarTTL       = 24 * time.Hour
 	avatarRetryWait = 15 * time.Minute
-	avatarMaxBytes  = 256 << 10
-	avatarTimeout   = 5 * time.Second
+	avatarMaxBytes  = 1 << 20
+	// avatarPxText is the edge the picture is fetched at: the largest avatar (160 px
+	// on the profile) at twice the pixel density. It is part of the file name on
+	// disk, so a change of size does not serve the old, smaller pictures.
+	avatarPxText  = "320"
+	avatarTimeout = 5 * time.Second
 )
 
 // avatarTypes are the image types that are served. SVG is not one of them: it
@@ -100,10 +104,10 @@ func avatarClient(rt http.RoundTripper) *http.Client {
 // avatarURL is the address the picture of a linked account comes from.
 func avatarURL(l store.GitHubLink) (string, bool) {
 	if l.ID > 0 {
-		return "https://" + avatarHost + "/u/" + strconv.FormatInt(l.ID, 10) + "?s=96&v=4", true
+		return "https://" + avatarHost + "/u/" + strconv.FormatInt(l.ID, 10) + "?s=" + avatarPxText + "&v=4", true
 	}
 	if store.ValidGitHubLogin(l.Login) {
-		return "https://github.com/" + url.PathEscape(l.Login) + ".png?size=96", true
+		return "https://github.com/" + url.PathEscape(l.Login) + ".png?size=" + avatarPxText, true
 	}
 	return "", false
 }
@@ -151,7 +155,7 @@ func (c *avatarCache) fetch(link store.GitHubLink) (avatarEntry, error) {
 }
 
 func (c *avatarCache) path(id int64, ext string) string {
-	return filepath.Join(c.dir, strconv.FormatInt(id, 10)+ext)
+	return filepath.Join(c.dir, strconv.FormatInt(id, 10)+"-"+avatarPxText+ext)
 }
 
 type avatarMeta struct {

@@ -3,7 +3,7 @@
 {{define "orgs_hidden"}}<input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="org" value="{{.Orgs.Selected.Slug}}">{{end}}
 {{define "orgs_mrow"}}{{$ := .Page}}{{with .Row}}<div class="row mrow">{{avatarX "lg" "human" .Account "" false}}
 <div><b>{{.Account}}</b>{{if .Self}} <span class="muted">{{t "adm.you"}}</span>{{end}}<div class="muted">{{t "adm.joined" ""}}{{ago .JoinedAt}}</div></div>
-<div class="acts"><span class="lb {{if eq .Role "owner"}}ok{{else}}out{{end}}">{{if .Guest}}{{t "role.guest"}}{{else}}{{t (print "role." .Role)}}{{end}}</span>
+<div class="acts">{{if .Service}}<span class="lb neu">{{t "adm.service"}}</span>{{end}}<span class="lb {{if eq .Role "owner"}}ok{{else}}out{{end}}">{{if .Guest}}{{t "role.guest"}}{{else}}{{t (print "role." .Role)}}{{end}}</span>
 {{if and .NoProject $.Interactive $.Orgs.Owner}}<span class="lb neu">{{t "adm.member.no_project"}}</span><form method="post" action="/ui/orgs/project/role"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="org" value="{{$.Orgs.Selected.Slug}}"><input type="hidden" name="account" value="{{.AccountID}}"><input type="hidden" name="role" value="member">{{if gt (len $.Orgs.Projects) 1}}<select class="gfield" name="remote" aria-label="{{t "adm.invite.project"}}">{{range $.Orgs.Projects}}<option value="{{.Remote}}">{{.Remote}}</option>{{end}}</select>{{else}}{{range $.Orgs.Projects}}<input type="hidden" name="remote" value="{{.Remote}}">{{end}}{{end}}<button class="gbtn sm pri">{{t "adm.member.add_project"}}</button></form>{{end}}
 {{if and $.Interactive $.Orgs.Owner (not .SoleOwner)}}<form method="post" action="/ui/orgs/member/role"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="org" value="{{$.Orgs.Selected.Slug}}"><input type="hidden" name="account" value="{{.AccountID}}"><input type="hidden" name="role" value="{{if eq .Role "owner"}}member{{else}}owner{{end}}"><button class="gbtn sm">{{if eq .Role "owner"}}{{t "adm.make_member"}}{{else}}{{t "adm.make_owner"}}{{end}}</button></form>{{end}}
 {{if and $.Interactive (or $.Orgs.Owner .Self) (not .SoleOwner)}}<form method="post" action="/ui/orgs/member/remove"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="org" value="{{$.Orgs.Selected.Slug}}"><input type="hidden" name="account" value="{{.AccountID}}"><button class="gbtn sm danger">{{if .Self}}{{t "adm.leave"}}{{else}}{{t "adm.remove"}}{{end}}</button></form>{{end}}</div></div>{{end}}{{end}}
@@ -12,11 +12,12 @@
 {{define "orgs_join"}}<div class="sh2" id="joincode"><h2>{{t "adm.join"}}</h2></div>
 <div class="box"><form class="lnew" method="post" action="/ui/orgs/accept"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><label class="gfield grow"><input name="code" type="password" maxlength="128" autocomplete="off" required aria-label="{{t "adm.join.code"}}" placeholder="{{t "adm.join.code"}}"></label><button class="gbtn pri">{{t "adm.join.button"}}</button></form></div>{{end}}
 {{define "orgs"}}{{template "head" .}}{{template "nav" .}}<main class="g2 set"><div class="wrap">
-{{if .Error}}<div class="flash err" role="alert">{{mi "tri"}}<div>{{.Error}}</div></div>{{end}}{{if .Orgs.Notice}}<div class="flash" role="status">{{mi "check"}}<div>{{.Orgs.Notice}}</div></div>{{end}}
+{{if .Error}}<div class="flash err" role="alert">{{mi "tri"}}<div>{{.Error}}</div></div>{{end}}{{if .Orgs.Notice}}<div class="flash{{if .Orgs.NoticeBad}} err{{end}}" role="status">{{if .Orgs.NoticeBad}}{{mi "tri"}}{{else}}{{mi "check"}}{{end}}<div>{{.Orgs.Notice}}</div></div>{{end}}
 {{if not .Interactive}}<div class="flash info" role="status">{{mi "lock"}}<div>{{t "adm.readonly"}}</div></div>{{end}}
 {{if .Orgs.NewURL}}<div class="box" role="status"><div class="box-body"><b>{{t "adm.invite.ready"}}</b>{{template "orgs_copy" .Orgs.NewURL}}<div class="mt muted"><span>{{t "adm.invite.expires" ""}}{{ago .Orgs.NewExpiry}}</span><span>{{t "adm.invite.single_use"}}</span><span>{{t "adm.invite.kept"}}</span></div></div></div>{{end}}
-{{if .Orgs.Orgs}}
-<div class="setlayout"><nav class="box snav" aria-label="{{t "adm.settings"}}"><a class="on" href="#general">{{mi "gear"}}<span>{{t "adm.general"}}</span></a><a href="#members">{{mi "people"}}<span>{{t "adm.members"}}</span></a><a href="#projects">{{mi "repo"}}<span>{{t "adm.projects"}}</span></a><a href="#sources">{{mi "ext"}}<span>{{t "adm.sources"}}</span></a>{{if and .Orgs.Owner .Interactive .Orgs.GuestLinks .Orgs.InviteProjects}}<a href="#guests">{{mi "lock"}}<span>{{t "adm.guests"}}</span></a>{{end}}{{with .Orgs.Explain}}<a href="#explain">{{mi "book"}}<span>{{t "explain.admin.title"}}</span></a>{{end}}{{with .Orgs.Garden}}<a href="#garden">{{mi "sprout"}}<span>{{t "garden.admin.title"}}</span></a>{{end}}{{if .Interactive}}<a href="#neworg">{{mi "plus"}}<span>{{t "adm.org.new"}}</span></a>{{end}}<a href="#joincode">{{mi "link"}}<span>{{t "adm.join"}}</span></a></nav>
+{{if .Orgs.NewOrg}}{{template "orgs_new" .}}
+{{else if .Orgs.Orgs}}
+<div class="setlayout"><nav class="box snav" aria-label="{{t "adm.settings"}}"><a class="on" href="#general">{{mi "gear"}}<span>{{t "adm.general"}}</span></a><a href="#members">{{mi "people"}}<span>{{t "adm.members"}}</span></a><a href="#projects">{{mi "repo"}}<span>{{t "adm.projects"}}</span></a><a href="#sources">{{mi "ext"}}<span>{{t "adm.sources"}}</span></a>{{if and .Orgs.Owner .Interactive .Orgs.GuestLinks .Orgs.InviteProjects}}<a href="#guests">{{mi "lock"}}<span>{{t "adm.guests"}}</span></a>{{end}}{{with .Orgs.Explain}}<a href="#explain">{{mi "book"}}<span>{{t "explain.admin.title"}}</span></a>{{end}}{{with .Orgs.Garden}}<a href="#garden">{{mi "sprout"}}<span>{{t "garden.admin.title"}}</span></a>{{end}}<a href="#joincode">{{mi "link"}}<span>{{t "adm.join"}}</span></a></nav>
 <div>
 <div class="sh2" id="general"><h2>{{t "adm.general"}}</h2></div>
 <div class="box">
@@ -65,7 +66,6 @@
 {{with .Orgs.Garden}}<div class="sh2" id="garden"><h2>{{t "garden.admin.title"}}</h2></div>
 <div class="box"><div class="box-body"><p>{{.Usage}}</p>{{if .Limit}}<div class="flash err" role="status">{{mi "tri"}}<div>{{.Limit}}</div></div>{{end}}{{if .Checked}}<p class="muted">{{.Checked}}</p>{{end}}</div></div>{{end}}
 
-{{template "orgs_new" .}}
 {{template "orgs_join" .}}
 </div></div>
 {{else}}<div class="box"><div class="row"><span class="muted">{{t "adm.no_org"}}</span></div></div>{{template "orgs_new" .}}{{template "orgs_join" .}}{{end}}

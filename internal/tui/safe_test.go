@@ -49,19 +49,20 @@ func evilItems(items []Item) []Item {
 	return items
 }
 
-func (h hostileBackend) MyTasks(ctx context.Context) ([]Item, error) {
-	items, err := h.fakeBackend.MyTasks(ctx)
+// List puts bad into every row of every list, gives message rows a hostile
+// card of their own, and lets the project tasks fail with a hostile error.
+func (h hostileBackend) List(ctx context.Context, kind ListKind) ([]Item, error) {
+	switch kind {
+	case ListRoom, ListUnread:
+		c := links.Card{Kind: evil("Message"), Ref: evil("#1"), Title: evil("t"), Status: evil("s"), Next: evil("n"), Who: evil("w"), URL: evil("https://ghosttree.example.com/ui/room")}
+		return []Item{{Ref: evil("#1"), Title: evil("hallo"), Meta: evil("orchestrator"), Card: &c}}, nil
+	case ListProjectTasks:
+		return nil, errors.New(bad)
+	case ListSuggestions:
+		return evilItems([]Item{{Ref: "#9", Title: "s"}}), nil
+	}
+	items, err := h.fakeBackend.List(ctx, kind)
 	return evilItems(items), err
-}
-
-func (h hostileBackend) OpenRequests(ctx context.Context) ([]Item, error) {
-	items, err := h.fakeBackend.OpenRequests(ctx)
-	return evilItems(items), err
-}
-
-func (h hostileBackend) Messages(ctx context.Context) ([]Item, error) {
-	c := links.Card{Kind: evil("Message"), Ref: evil("#1"), Title: evil("t"), Status: evil("s"), Next: evil("n"), Who: evil("w"), URL: evil("https://ghosttree.example.com/ui/room")}
-	return []Item{{Ref: evil("#1"), Title: evil("hallo"), Meta: evil("orchestrator"), Card: &c}}, errors.New(bad)
 }
 
 func (h hostileBackend) Search(ctx context.Context, line string) ([]Item, error) {
@@ -108,8 +109,7 @@ func (h hostileBackend) StartLogin(ctx context.Context, server, machine string) 
 
 func (h hostileBackend) WaitLogin(ctx context.Context, start LoginStart) (LoginResult, error) {
 	if h.waitBlock {
-		<-ctx.Done()
-		return LoginResult{}, ctx.Err()
+		return h.park(ctx)
 	}
 	if h.waitErr != nil {
 		return LoginResult{}, h.waitErr
@@ -147,10 +147,14 @@ func TestNoServerStringReachesTheTerminalUnfiltered(t *testing.T) {
 		m.be = h
 		m.local = h.Local()
 		m = runCmd(m, tea.Batch(m.loadHome()...), 0)
-		for i := 0; i < listCount; i++ {
-			m.section = i
-			noForeignControls(t, "home "+look.String(), m.View().Content)
+		for _, mode := range []int{modeProject, modeInbox} {
+			m.setMode(mode)
+			for i := range m.tabs() {
+				m.tab[mode] = i
+				noForeignControls(t, "home "+look.String(), m.View().Content)
+			}
 		}
+		m.setMode(modeProject)
 	}
 
 	m := ready(f, Options{}, 110, 44, darkBG)
@@ -159,13 +163,14 @@ func TestNoServerStringReachesTheTerminalUnfiltered(t *testing.T) {
 	m = runCmd(m, tea.Batch(m.loadHome()...), 0)
 
 	// a row with its own card, a resolved card, results
-	m.section = listMessages
+	m.setMode(modeProject)
+	m.tab[modeProject] = 3 // room messages
 	m = drive(m, key("enter"))
 	noForeignControls(t, "message card", m.View().Content)
 	m = drive(m, key("enter"))
 	noForeignControls(t, "flash after open", m.View().Content)
 	m = drive(m, key("esc"))
-	m.section = listTasks
+	m.tab[modeProject] = 0 // requests
 	m = drive(m, key("enter"))
 	noForeignControls(t, "card", m.View().Content)
 	m = drive(m, key("esc"))
@@ -303,4 +308,65 @@ func TestSignOutAsksFirst(t *testing.T) {
 	if len(f.loggedOut) != 1 {
 		t.Fatalf("y: loggedOut %v", f.loggedOut)
 	}
+}
+
+// hostileFolder adds bad to every string of the project and folder calls.
+type hostileFolder struct{ hostileBackend }
+
+func (h hostileFolder) Local() Local {
+	l := h.hostileBackend.Local()
+	l.Dir, l.Remote = evil(l.Dir), l.Remote+bad
+	return l
+}
+
+func (h hostileFolder) Projects(ctx context.Context) ([]ProjectInfo, error) {
+	return []ProjectInfo{{ID: evil("github.com/x/a"), Org: evil("org")}, {ID: evil("github.com/x/b")}}, nil
+}
+
+func (h hostileFolder) ProjectPreview(ctx context.Context, project string) ([]Item, []Item, error) {
+	return evilItems([]Item{{Ref: "REQ-1", Title: "t"}}), evilItems([]Item{{Ref: "TASK-1", Title: "t"}}), nil
+}
+
+func (h hostileFolder) ClaimPlan(ctx context.Context) (ClaimPlan, error) {
+	return ClaimPlan{Remote: evil("github.com/someone/side"), Orgs: []OrgChoice{{Slug: evil("dwl"), Name: evil("Deadweight"), Role: evil("member"), Default: true}}}, nil
+}
+
+func (h hostileFolder) Claim(ctx context.Context, remote, org string) (ProjectInfo, error) {
+	return ProjectInfo{}, &ClaimError{Code: evil("weird")}
+}
+
+func (h hostileFolder) RecentDirs(ctx context.Context) ([]string, error) {
+	return []string{evil("/home/robin/a"), evil("/home/robin/b")}, nil
+}
+
+func (h hostileFolder) CompleteDir(input string) []string {
+	return []string{evil("/home/robin/a") + "/", evil("/home/robin/ab") + "/"}
+}
+
+func TestProjectAndFolderScreensFilterServerText(t *testing.T) {
+	f := newFake().inFolder("unknown")
+	h := hostileFolder{hostileBackend{fakeBackend: f}}
+	m := ready(f, Options{}, 110, 44, darkBG)
+	m.be = h
+	m.local = h.Local()
+	m = runCmd(m, tea.Batch(m.reloadHome()...), 0)
+	noForeignControls(t, "no-project panel", m.View().Content)
+
+	m = runCmd(m, m.activateButton(btnClaim), 0)
+	noForeignControls(t, "claim", m.View().Content)
+	m = drive(m, key("enter"))
+	noForeignControls(t, "claim refused", m.View().Content)
+	m = drive(m, key("esc"))
+
+	m = runCmd(m, m.openDirs(), 0)
+	noForeignControls(t, "dirs", m.View().Content)
+	m = typeText(m, "/home")
+	m = drive(m, key("tab"))
+	noForeignControls(t, "dirs completion", m.View().Content)
+	m = drive(m, key("esc"))
+
+	m = runCmd(m, m.openProjects(), 0)
+	noForeignControls(t, "projects", m.View().Content)
+	m = drive(m, key("down"))
+	noForeignControls(t, "projects preview", m.View().Content)
 }

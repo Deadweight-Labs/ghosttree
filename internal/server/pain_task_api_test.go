@@ -86,7 +86,7 @@ func TestHumanTaskAPIGuestSeesOnlyAssignedAndGetsNotFound(t *testing.T) {
 	mine := f.newTask(t, "mia", map[string]any{"kind": "input", "title": "für Gus", "request_id": rid, "assignee": "gus"})
 	f.expect(t, "gus", 404, "GET", idPath("/api/tasks/%d", open.ID), nil)
 	f.expect(t, "gus", 200, "GET", idPath("/api/tasks/%d", mine.ID), nil)
-	f.expect(t, "gus", 404, "POST", "/api/tasks/done", map[string]any{"ids": []int64{mine.ID, open.ID}})
+	f.expect(t, "gus", 404, "POST", "/api/tasks/done", map[string]any{"ids": []int64{open.ID, mine.ID}})
 	list := decode[[]humantask.Task](t, f.expect(t, "gus", 200, "GET", "/api/tasks?project="+accProject+"&state=all", nil))
 	if len(list) != 1 || list[0].ID != mine.ID {
 		t.Errorf("guest list: %+v", list)
@@ -99,7 +99,8 @@ func TestHumanTaskAPIGuestSeesOnlyAssignedAndGetsNotFound(t *testing.T) {
 	if !strings.Contains(body, "für Gus") {
 		t.Errorf("guest does not see the assigned task: %s", body)
 	}
-	f.expect(t, "gus", 200, "POST", "/api/tasks/done", map[string]any{"ids": []int64{mine.ID}, "note": "ok"})
+	// Ein Gast liest nur, auch die ihm zugewiesene Aufgabe meldet er nicht (Robin, 2026-11-09).
+	f.expect(t, "gus", 403, "POST", "/api/tasks/done", map[string]any{"ids": []int64{mine.ID}, "note": "ok"})
 	f.expect(t, "gus", 403, "POST", idPath("/api/tasks/%d/confirm", mine.ID), nil)
 	f.expect(t, "nora", 404, "GET", "/api/tasks?project="+accProject, nil)
 	// Zuweisung an ein Nichtmitglied.

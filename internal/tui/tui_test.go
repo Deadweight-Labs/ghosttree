@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -96,29 +97,79 @@ func TestFreeTextAndPresetsGoThroughTheSearchLanguage(t *testing.T) {
 	}
 }
 
-func TestListsSwitchWithTabAndOpenTheSelectedRow(t *testing.T) {
+func TestProjectModeShowsOneListAndTabSwitchesIt(t *testing.T) {
 	f := newFake()
 	m := ready(f, Options{}, 100, 32, darkBG)
+	if m.mode != modeProject {
+		t.Fatalf("start mode %d", m.mode)
+	}
 	v := plainView(m)
-	for _, want := range []string{"Meine Tasks 3", "Offene Requests 5", "Nachrichten 2", "TASK-133"} {
+	for _, want := range []string{"Projekt", "Inbox 5", "deadweight-labs/ghosttree", "Requests 5", "Pains 2", "Tasks 2", "Nachrichten 2", "REQ-619"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("home misses %q:\n%s", want, v)
 		}
 	}
-	m = drive(m, key("tab"))
-	m = drive(m, key("down"))
-	if m.section != listRequests || m.cursor != 1 {
-		t.Fatalf("section %d cursor %d", m.section, m.cursor)
+	if strings.Contains(v, "PAIN-66") || strings.Contains(v, "Fragen") {
+		t.Fatalf("more than one list, or inbox content, on the project mode:\n%s", v)
 	}
+	m = drive(m, key("down"))
 	m = drive(m, key("enter"))
 	if f.resolved[len(f.resolved)-1] != "REQ-610" {
 		t.Fatalf("resolved %v", f.resolved)
 	}
 	m = drive(m, key("esc"))
 	m = drive(m, key("tab"))
+	if m.currentKind() != ListPains || !strings.Contains(plainView(m), "PAIN-66") {
+		t.Fatalf("tab: kind %v view %s", m.currentKind(), plainView(m))
+	}
+	m = drive(m, key("tab"))
+	m = drive(m, key("tab"))
 	m = drive(m, key("enter"))
 	if m.screen != ScreenCard || f.resolved[len(f.resolved)-1] != "room:12" {
-		t.Fatalf("message row: screen %v resolved %v", m.screen, f.resolved)
+		t.Fatalf("room row: screen %v resolved %v", m.screen, f.resolved)
+	}
+}
+
+func TestShiftTabSwitchesToTheInbox(t *testing.T) {
+	f := newFake()
+	m := ready(f, Options{}, 100, 32, darkBG)
+	m = drive(m, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if m.mode != modeInbox {
+		t.Fatalf("mode %d", m.mode)
+	}
+	v := plainView(m)
+	for _, want := range []string{"Tasks 2", "Fragen 2", "Nachrichten 1", "TASK-12", "design-system", "shift+tab Projekt"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("inbox misses %q:\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, "Vorschläge") || strings.Contains(v, "REQ-619") {
+		t.Fatalf("empty suggestions tab or project content in the inbox:\n%s", v)
+	}
+	m = drive(m, key("tab"))
+	if m.currentKind() != ListQuestions || !strings.Contains(plainView(m), "Rollout von #200 freigeben?") {
+		t.Fatalf("questions: %v %s", m.currentKind(), plainView(m))
+	}
+	m = drive(m, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if m.mode != modeProject || m.currentKind() != ListRequests {
+		t.Fatalf("back: mode %d kind %v", m.mode, m.currentKind())
+	}
+}
+
+func TestInboxNumberOnlyWhenSomethingWaits(t *testing.T) {
+	f := newFake()
+	f.inboxEmpty = true
+	m := ready(f, Options{}, 100, 32, darkBG)
+	v := plainView(m)
+	if !strings.Contains(v, "Inbox") || strings.Contains(v, "Inbox 0") {
+		t.Fatalf("view:\n%s", v)
+	}
+	f2 := newFake()
+	f2.suggestions = []Item{{Ref: "#4400", Title: "Neue Notiz zum Rollout"}}
+	m = ready(f2, Options{}, 100, 32, darkBG)
+	m.setMode(modeInbox)
+	if v := plainView(m); !strings.Contains(v, "Vorschläge 1") || !strings.Contains(v, "Inbox 5") {
+		t.Fatalf("suggestions tab, or count includes them:\n%s", v)
 	}
 }
 
@@ -126,8 +177,8 @@ func TestMessageRowsShowTheirOwnCard(t *testing.T) {
 	f := newFake()
 	m := ready(f, Options{}, 100, 32, darkBG)
 	card := links.Card{Kind: "Message", Ref: "#9", Title: "hallo", URL: "https://ghosttree.example.com/ui/room"}
-	m.lists[listMessages] = listState{items: []Item{{Ref: "#9", Title: "hallo", Card: &card}}, loaded: true}
-	m.section = listMessages
+	m.lists[ListRoom] = listState{items: []Item{{Ref: "#9", Title: "hallo", Card: &card}}, loaded: true}
+	m.tab[modeProject] = 3
 	before := len(f.resolved)
 	m = drive(m, key("enter"))
 	if m.screen != ScreenCard || m.card.Ref != "#9" || len(f.resolved) != before {
@@ -142,20 +193,20 @@ func TestMouseClickOnARowOpensIt(t *testing.T) {
 	lines := strings.Split(ansi.Strip(v.Content), "\n")
 	row := -1
 	for i, l := range lines {
-		if strings.Contains(l, "TASK-124") {
+		if strings.Contains(l, "REQ-610") {
 			row = i
 		}
 	}
 	if row < 0 {
 		t.Fatal("row not found")
 	}
-	x := strings.Index(lines[row], "TASK-124")
+	x := len([]rune(lines[row][:strings.Index(lines[row], "REQ-610")]))
 	cmd := v.OnMouse(tea.MouseClickMsg{X: x, Y: row, Button: tea.MouseLeft})
 	if cmd == nil {
 		t.Fatal("click hit nothing")
 	}
 	m = runCmd(m, cmd, 0)
-	if f.resolved[len(f.resolved)-1] != "TASK-124" {
+	if f.resolved[len(f.resolved)-1] != "REQ-610" {
 		t.Fatalf("resolved %v", f.resolved)
 	}
 }
@@ -211,20 +262,87 @@ func TestLogoAnimatesForAboutASecondThenStandsStill(t *testing.T) {
 	if logoFrames*1000/logoFPS > 1300 {
 		t.Fatalf("animation runs %d ms", logoFrames*1000/logoFPS)
 	}
-	m := New(newFake(), Options{Still: true, Getenv: func(string) string { return "" }})
+	m := New(newFake(), Options{Still: true, tick: testTick, Getenv: func(string) string { return "" }})
 	if !m.logo.done() {
 		t.Fatal("Still should start at rest")
 	}
-	m = New(newFake(), Options{Getenv: func(string) string { return "" }})
-	for i := 0; i < logoFrames+5; i++ {
+	m = New(newFake(), Options{tick: testTick, Getenv: func(string) string { return "" }})
+	if !m.splash {
+		t.Fatal("no start picture")
+	}
+	for i := 0; i < logoFrames+splashHold+2; i++ {
 		next, _ := m.Update(logoTickMsg{})
 		m = next.(Model)
 	}
-	if !m.logo.done() {
-		t.Fatal("logo never came to rest")
+	if !m.logo.done() || m.splash {
+		t.Fatalf("logo done %v, splash %v", m.logo.done(), m.splash)
 	}
 	if _, cmd := m.Update(logoTickMsg{}); cmd != nil {
-		t.Fatal("ticks continue after the animation")
+		t.Fatal("ticks continue after the start picture")
+	}
+}
+
+func TestStartPictureThenCompactHome(t *testing.T) {
+	f := newFake()
+	m := New(f, Options{tick: testTick, now: func() time.Time { return testNow }, Getenv: func(string) string { return "" }})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m = next.(Model)
+	m = runCmd(m, tea.Batch(m.loadHome()...), 0)
+	if v := plainView(m); strings.Contains(v, "Requests") || !strings.Contains(v, "ghosttree") {
+		t.Fatalf("start picture shows lists:\n%s", v)
+	}
+	// A key ends the picture at once and still counts.
+	m = drive(m, key("R"))
+	if m.splash || m.search.Value() != "R" {
+		t.Fatalf("splash %v search %q", m.splash, m.search.Value())
+	}
+	v := plainView(m)
+	if !strings.Contains(v, "Requests") {
+		t.Fatalf("home after the picture:\n%s", v)
+	}
+	// Compact: the big logo is gone, the name stands in the header line.
+	if strings.Contains(v, "▀▀▀") || strings.Count(v, "\n") > 32 {
+		t.Fatalf("big logo after the start:\n%s", v)
+	}
+}
+
+func TestSwitchStyles(t *testing.T) {
+	for in, want := range map[string]SwitchStyle{"": SwitchRail, "rail": SwitchRail, "bar": SwitchBar} {
+		if got, ok := ParseSwitchStyle(in); !ok || got != want {
+			t.Errorf("%q: %v %v", in, got, ok)
+		}
+	}
+	if _, ok := ParseSwitchStyle("tabs"); ok {
+		t.Error("tabs accepted")
+	}
+	m := ready(newFake(), Options{}, 100, 32, darkBG)
+	rail := plainView(m)
+	m = drive(m, tea.KeyPressMsg{Code: tea.KeyF3})
+	if m.opt.Switch != SwitchBar {
+		t.Fatalf("f3: %v", m.opt.Switch)
+	}
+	bar := plainView(m)
+	// Rail: the modes stand below each other; bar: in the header line.
+	firstLine := func(v string) string { return strings.Split(strings.TrimLeft(v, "\n"), "\n")[0] }
+	if strings.Contains(firstLine(rail), "Projekt") || !strings.Contains(firstLine(bar), "Projekt") {
+		t.Fatalf("rail header %q, bar header %q", firstLine(rail), firstLine(bar))
+	}
+	// Clicking a mode switches to it, in both styles.
+	for _, sw := range []SwitchStyle{SwitchRail, SwitchBar} {
+		m := ready(newFake(), Options{Switch: sw}, 100, 32, darkBG)
+		v := m.View()
+		lines := strings.Split(ansi.Strip(v.Content), "\n")
+		for y, l := range lines {
+			if x := strings.Index(l, "Inbox"); x >= 0 {
+				if cmd := v.OnMouse(tea.MouseClickMsg{X: len([]rune(l[:x])), Y: y, Button: tea.MouseLeft}); cmd != nil {
+					m = runCmd(m, cmd, 0)
+				}
+				break
+			}
+		}
+		if m.mode != modeInbox {
+			t.Fatalf("%v: click on Inbox did not switch", sw)
+		}
 	}
 }
 
@@ -256,7 +374,7 @@ func TestEnglishWithoutGermanLocale(t *testing.T) {
 		}
 		return ""
 	}}, 100, 32, darkBG)
-	if v := plainView(m); !strings.Contains(v, "My tasks") || !strings.Contains(v, "settings") {
+	if v := plainView(m); !strings.Contains(v, "Project") || !strings.Contains(v, "Inbox") || !strings.Contains(v, "settings") || !strings.Contains(v, "Messages") {
 		t.Fatalf("english view:\n%s", v)
 	}
 }
@@ -437,7 +555,7 @@ func TestNotConfiguredInvitesToSignIn(t *testing.T) {
 }
 
 func TestHomeShowsLoadingBeforeTheListsArrive(t *testing.T) {
-	m := New(newFake(), Options{Still: true, Getenv: func(string) string { return "LANG=de" }})
+	m := New(newFake(), Options{Still: true, tick: testTick, Getenv: func(string) string { return "LANG=de" }})
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
 	if v := plainView(next.(Model)); !strings.Contains(v, "lädt") && !strings.Contains(v, "loading") {
 		t.Fatalf("view:\n%s", v)
