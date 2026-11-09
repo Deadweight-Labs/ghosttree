@@ -90,7 +90,7 @@ func readSearchStream(t *testing.T, c *http.Client, u string) []streamEvent {
 }
 
 var (
-	hitHrefRE  = regexp.MustCompile(`<a class="ht" href="([^"]*)"`)
+	hitHrefRE  = regexp.MustCompile(`<a class="ht rl" href="([^"]*)"`)
 	kindRowRE  = regexp.MustCompile(`<a class="frow[^"]*" href="[^"]*">.*?<span class="nm">([^<]*)</span><span class="counter">([^<]*)</span></a>`)
 	groupHeadR = regexp.MustCompile(`<div class="box-h"><h2 class="t">([^<]*)</h2>(?:<span class="sp"></span><a href="([^"]*)">)?`)
 )
@@ -206,7 +206,7 @@ func TestSearchStreamGivesUpAKindAfterItsBudget(t *testing.T) {
 		t.Fatalf("%d kinds said, want 7", n)
 	}
 	events = readSearchStream(t, e.Owner, e.Base+"/ui/search/stream?q=zebrafish&only=sessions")
-	if len(events) != 2 || events[0].Key != "sessions" || events[0].Slow || !strings.Contains(events[0].Body, `class="ht"`) {
+	if len(events) != 2 || events[0].Key != "sessions" || events[0].Slow || !strings.Contains(events[0].Body, `class="ht rl"`) {
 		t.Fatalf("only sessions: %+v", events)
 	}
 	_, page := e.get(t, e.Owner, "/ui/search?q=zebrafish&kind=sessions")
@@ -251,7 +251,7 @@ func TestSearchLivePageIsTheFrame(t *testing.T) {
 	e := seedSearchAll(t)
 	start := time.Now()
 	_, page := e.get(t, e.Owner, "/ui/search?q=zebrafish&live=1")
-	if !strings.Contains(page, `data-search-live="/ui/search/stream?q=zebrafish"`) || strings.Contains(page, `class="ht"`) {
+	if !strings.Contains(page, `data-search-live="/ui/search/stream?q=zebrafish"`) || strings.Contains(page, `class="ht rl"`) {
 		t.Fatalf("not the frame:\n%s", page)
 	}
 	if !strings.Contains(page, `<meta http-equiv="refresh" content="0;url=/ui/search?q=zebrafish">`) {
@@ -291,7 +291,7 @@ func TestSearchPresetWithABrokenLineShowsNothing(t *testing.T) {
 	}
 	base := "/ui/search?preset=mixed&project=" + url.QueryEscape(shellProject)
 	_, page := e.get(t, e.Owner, base)
-	if strings.Contains(page, `class="ht"`) || !strings.Contains(page, "nosuchtopic") {
+	if strings.Contains(page, `class="ht rl"`) || !strings.Contains(page, "nosuchtopic") {
 		t.Errorf("the page shows hits or no notice:\n%s", page)
 	}
 	if _, frame := e.get(t, e.Owner, base+"&live=1"); strings.Contains(frame, "data-search-live") {

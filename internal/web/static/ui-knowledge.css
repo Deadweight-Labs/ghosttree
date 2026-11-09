@@ -20,14 +20,15 @@
   /* ---- Entry list ---- */
   & .krow { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 12px; padding: 12px 16px; align-items: start; }
   & .krow .lb { justify-self: start; margin-top: 2px; }
-  & .krow .tt a { font-size: 16px; font-weight: 600; color: var(--fg-default); }
+  /* whole pixels: 24 + 20 + 6 + 20 = 70, so no row is a half pixel higher than the next */
+  & .krow .tt a { font-size: 16px; line-height: 24px; font-weight: 600; color: var(--fg-default); }
   & .krow .tt a:hover { color: var(--accent-fg); }
-  & .krow .ks { margin-top: 2px; color: var(--fg-muted); }
-  & .krow .hm { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 12px; color: var(--fg-muted); }
+  & .krow .ks { margin-top: 2px; line-height: 20px; color: var(--fg-muted); }
+  & .krow .hm { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; min-height: 20px; margin-top: 6px; font-size: 12px; line-height: 20px; color: var(--fg-muted); }
   & .krow .hm a { color: var(--fg-muted); }
   & .krow .hm a:hover { color: var(--accent-fg); }
   & .krow .hm a.ref .num { color: var(--fg-muted); }
-  & .krow .kw { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 2px; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+  & .krow .kw { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 24px; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
   & .chip.ar { color: var(--fg-muted); background: var(--neutral-muted); }
   & span.chip.sha, & .chip.br { color: var(--accent-fg); background: var(--neutral-muted); }
   & .chip.br { background: var(--accent-subtle); }
@@ -50,18 +51,18 @@
   & details.rvd .car { display: inline-flex; color: var(--fg-muted); transition: transform .12s; }
   & details.rvd[open] > summary .car { transform: rotate(90deg); }
   & .rvrow2 .rvk .lb { display: inline-block; min-width: 0; }
-  & .rvrow2 .rvt a.title { font-size: 15px; font-weight: 600; color: var(--fg-default); }
+  & .rvrow2 .rvt a.title { font-size: 15px; line-height: 22px; font-weight: 600; color: var(--fg-default); }
   & .rvrow2 .rvt a.title:hover { color: var(--accent-fg); }
-  & .rvrow2 .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 10px; min-width: 0; margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
+  & .rvrow2 .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 10px; min-width: 0; margin-top: 2px; font-size: 12px; line-height: 18px; color: var(--fg-muted); }
   & .rvrow2 .meta a { color: var(--fg-muted); }
   & .rvrow2 .meta .by { display: inline-flex; align-items: center; gap: 4px; }
   & .rvrow2 .meta .by .gav { width: 16px; height: 16px; font-size: 7px; }
   & .rvrow2 .meta .by .gav .i { width: 10px; height: 10px; }
-  & .rvrow2 .meta .why { flex: 1 1 200px; color: var(--fg-default); }
+  & .rvrow2 .why { margin-top: 2px; line-height: 20px; font-size: 14px; color: var(--fg-muted); }
   & .rvrow2 .meta .ref .num { color: var(--fg-muted); }
   & .rvrow2 .rva { display: flex; align-items: center; gap: 8px; }
   & .rvrow2 .rva form { display: inline-flex; margin: 0; }
-  & .rvx { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 24px; padding: 4px 16px 16px 160px; background: var(--canvas-subtle); }
+  & .rvx { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 24px; padding: 4px 16px 16px 176px; background: var(--canvas-subtle); }
   & .rvx h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
   & .rvx h4.sub { margin-top: 12px; }
   & .rvx p { margin: 0 0 8px; font-size: 14px; line-height: 1.5; }
@@ -77,8 +78,9 @@
   & .quote { margin: 0; padding: 0 12px; color: var(--fg-muted); border-left: 3px solid var(--border-default); }
 
   /* ---- Entry page ---- */
-  & .rev { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 8px 16px; }
+  & .rev { display: grid; grid-template-columns: 20px minmax(0, 1fr) 72px 72px; gap: 12px; align-items: center; padding: 8px 16px; }
   & .rev .rs { font-size: 12px; }
+  & .rev > :nth-child(3), & .rev > :nth-child(4) { justify-self: end; }
   & details.rev-d > summary { list-style: none; cursor: pointer; }
   & details.rev-d > summary::-webkit-details-marker { display: none; }
   & details.rev-d > summary:hover { background: var(--row-hover); }

@@ -186,7 +186,7 @@ func TestSearchFindsDocumentsWithSnippet(t *testing.T) {
 	e := newDocsEnv(t)
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
 		_, page := fetchPage(t, c, e.Base+"/ui/search?q="+url.QueryEscape("stripes"))
-		if !strings.Contains(page, `href="/ui/x/shell/docs/zebra-report"`) || !strings.Contains(page, "Ship the stripes.") {
+		if !strings.Contains(page, `href="/ui/x/shell/docs/zebra-report"`) || !strings.Contains(page, "Ship the <mark>stripes</mark>.") {
 			t.Errorf("%s: document not found by its text", name)
 		}
 		_, page = fetchPage(t, c, e.Base+"/ui/search?q="+url.QueryEscape("zebra"))

@@ -11,20 +11,20 @@
   & .sday { padding: 8px 16px; font-size: 12px; font-weight: 600; color: var(--fg-muted); background: var(--canvas-subtle); border-top: 1px solid var(--border-muted); }
   & .box > .sday:first-of-type { border-top: 0; }
 
-  /* List row: state icon, logo 28 px, title, line two, time at the right; the icon sits centred beside the title */
-  & .srow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 16px; }
-  & .srow .st { display: inline-flex; align-items: center; }
-  & .srow .sbody { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
-  & .srow .gav.lg { width: 28px; height: 28px; border-radius: 6px; margin-top: 2px; }
+  /* List row: state icon, logo 28 px and title on one line of 28 px, so their middles are one; line two starts under the logo; the time stands in the first line at the right */
+  & .srow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 0 12px; align-items: start; padding: 8px 16px; }
+  & .srow .st { display: inline-flex; align-items: center; height: 28px; }
+  & .srow .stt { display: flex; align-items: center; gap: 12px; min-height: 28px; min-width: 0; }
+  & .srow .gav.lg { flex: none; width: 28px; height: 28px; border-radius: 6px; }
   & .srow .gav.lg .i { width: 16px; height: 16px; }
   & .sinfo { min-width: 0; }
-  & .stt .title { font-size: 16px; font-weight: 600; color: var(--fg-default); overflow-wrap: anywhere; }
+  & .stt .title { min-width: 0; font-size: 16px; line-height: 24px; font-weight: 600; color: var(--fg-default); overflow-wrap: anywhere; }
   & .stt a.title:hover { color: var(--accent-fg); }
   & .srow.is-private .title { color: var(--fg-muted); font-weight: 400; font-style: italic; }
-  & .srow .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 12px; margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
+  & .srow .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-size: 12px; color: var(--fg-muted); }
   & .srow .meta .bn, & .srow .meta .dur { display: inline-flex; align-items: center; gap: 4px; }
   & .srow .meta .i { width: 14px; height: 14px; }
-  & .srow .stime { font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+  & .srow .stime { display: flex; align-items: center; height: 28px; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
   & .st.open { color: var(--success-fg); }
   & .st.closed { color: var(--done-fg); }
 

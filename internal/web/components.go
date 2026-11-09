@@ -163,6 +163,12 @@ type uiRow struct {
 	LiveID string
 }
 
+// HasRight says whether the row has anything for its right column; a row without
+// one has no column, so no empty slot pushes the others.
+func (r uiRow) HasRight() bool {
+	return r.Chip != "" || r.Pill != "" || len(r.Waiting) > 0 || r.Progress != nil || r.Live != "" || r.LiveID != ""
+}
+
 // ---- Timeline ----------------------------------------------------------------
 
 // tlItem is one entry of the timeline. With Who the avatar sits on the line and

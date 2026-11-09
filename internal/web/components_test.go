@@ -148,7 +148,7 @@ func TestListRowHasTheIconOnceTheMutedNumberAndFixedColumns(t *testing.T) {
 	row := uiRow{Icon: "issue", Tone: "open", StateLabel: "Issue, offen", Num: "#602", Title: "Git-natives ghosttree", Href: "/i/602",
 		Kind: "Feature", Age: "4 T.", AgeTitle: "geöffnet vor 4 Tagen", Person: "Robin", Waiting: []string{"Robin"}, Progress: &rowProgress{Done: 3, Total: 5, Title: "3 von 5"}}
 	page := renderPart(t, langDE, "uirow", row)
-	for _, want := range []string{`<span class="st open" role="img" aria-label="Issue, offen">`, `<span class="rn">#602</span>`, `<a class="title" href="/i/602">`, `<span class="art">Feature</span>`,
+	for _, want := range []string{`<span class="st open" role="img" aria-label="Issue, offen">`, `<span class="rn">#602</span>`, `<a class="title rl" href="/i/602">`, `<span class="art">Feature</span>`,
 		`<span class="age" title="geöffnet vor 4 Tagen">4 T.</span>`, `<span class="rw"><span class="waits"`, `<span class="rp"><span class="prog lead"`, `<span class="pt">3/5</span>`, `data-pct="60"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("row lacks %q: %s", want, page)
@@ -165,8 +165,9 @@ func TestListRowHasTheIconOnceTheMutedNumberAndFixedColumns(t *testing.T) {
 		t.Error("a missing proof paints the progress amber")
 	}
 	row.Waiting, row.Progress = nil, nil
-	if page := renderPart(t, langDE, "uirow", row); !strings.Contains(page, `<span class="rw"></span><span class="rp"></span>`) {
-		t.Errorf("the columns stay in place without content: %s", page)
+	// A row without anything for its right side has no column, so no empty slot pushes the others.
+	if page := renderPart(t, langDE, "uirow", row); strings.Contains(page, `class="rt"`) || strings.Contains(page, `class="rw"`) || strings.Contains(page, `class="rp"`) {
+		t.Errorf("an empty right column is left out: %s", page)
 	}
 }
 

@@ -609,7 +609,10 @@ func (a *app) issueIdeaRows(l lang, pa *store.ProjectAccess, project string, iq 
 			Person: i.Person, Age: shortAge(l, now, parseTime(i.UpdatedAt)), Icon: "idea", Tone: "idea", Labels: rowLabels(labels, v.Base), Excerpt: firstLineCut(i.Body, 160)}
 		switch i.State {
 		case idea.Open:
-			row.Pill, row.PillTone = row.StateLabel, "p-ok"
+			// The "open" tab already says it; only a mixed list needs the word on each row.
+			if iq.State != "open" {
+				row.Pill, row.PillTone = row.StateLabel, "p-ok"
+			}
 		case idea.Accepted:
 			row.Pill, row.PillTone, row.Tone = row.StateLabel, "p-done", "closed"
 		case idea.Dismissed:
