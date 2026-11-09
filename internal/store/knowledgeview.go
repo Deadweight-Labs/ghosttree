@@ -78,7 +78,13 @@ func (a *ProjectAccess) BranchView(project, branch string) string {
 // keine Pakete. Die Suchsprache prüft branch: und package: gegen diese Sicht, nicht
 // gegen die Wahrheit; sonst ließen sich Namen und Nummern erraten. Die Rolle zählt
 // im Projekt des Objekts, nicht die höchste über alle.
+//
+// Das Modell eines Agenten gehört zu seiner Session (REQ-620): model: trifft nur,
+// wenn der Betrachter deren Metadaten sehen darf (ActorView).
 func (a *ProjectAccess) FactsView(project string, of ObjectFacts) ObjectFacts {
+	if of.Model != "" && !a.actorModelVisible(of.ActorSession) {
+		of.Model = ""
+	}
 	if a.SeesAllBranches(project) {
 		return of
 	}

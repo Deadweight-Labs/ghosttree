@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 	"strings"
@@ -274,6 +275,10 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	// Die Zuschreibung kommt aus dem Token und ist danach unveränderlich.
 	k.Person, k.ConfirmedBy = personOf(r), ""
+	// Ein Token-Aufruf ist nie ein Mensch (REQ-620).
+	if k.Origin == "human" && principalOf(r).TokenKind != store.WebSessionKind {
+		k.Origin = "agent"
+	}
 	k.AuthorID = authorIDOf(r)
 	k.GitAnchor = anchorFromRequest(r)
 	a.dropForeignPlainSessionRef(r, &k.SessionRef)
@@ -316,6 +321,7 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.saveExplanation(explain.KindKnowledge, id, explanation)
+	a.stampActor(r, actor.Knowledge, id, 0)
 	saved, err := a.st.KnowledgeByID(id)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)

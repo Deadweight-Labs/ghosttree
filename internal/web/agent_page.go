@@ -1,6 +1,7 @@
 package web
 
 import (
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
 	"net/http"
@@ -225,10 +226,12 @@ func (a *app) agentSignal(w http.ResponseWriter, r *http.Request) {
 		if mode == "request" {
 			msg.Intent = store.IntentQuestion
 		}
-		if _, err := a.browserCoord(r).Send(msg); err != nil {
+		mid, err := a.browserCoord(r).Send(msg)
+		if err != nil {
 			coordHTTPError(l, w, err)
 			return
 		}
+		a.stampActor(r, actor.Message, mid)
 		http.Redirect(w, r, back, http.StatusSeeOther)
 	case store.ControlPause, store.ControlInterrupt:
 		r.Form.Set("agent", id)

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,11 +33,12 @@ func (a *app) inboxReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	access := a.browserCoord(r)
-	_, err = access.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: newFormClientID(r), Body: body, ReplyTo: replyTo})
+	mid, err := access.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: newFormClientID(r), Body: body, ReplyTo: replyTo})
 	if err != nil {
 		coordHTTPError(l, w, err)
 		return
 	}
+	a.stampActor(r, actor.Message, mid)
 	// Answering is reading: the conversation falls out of the inbox. A failed
 	// read mark only costs that; the answer is stored.
 	if summaries, err := access.RoomSummaries(); err == nil {

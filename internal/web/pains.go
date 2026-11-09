@@ -3,6 +3,7 @@ package web
 import (
 	"database/sql"
 	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -34,6 +35,7 @@ type painLinkLine struct {
 type painView struct {
 	ID                                int64
 	Human, Title, Project, Person     string
+	Actor                             actorView
 	State, StateLabel, Remaining, Age string
 	// Accepted is why one lives with the pain (state accepted).
 	Accepted  string
@@ -91,6 +93,7 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 	v := &painView{ID: p.ID, Human: p.HumanID(), Title: p.Title, Project: lastSegment(p.Project), Person: p.Person,
 		State: p.State, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining, Accepted: p.AcceptedReason, Age: shortAgo(l, overviewNow().UTC(), parseTime(p.CreatedAt)),
 		Blocks: bodyBlocks(p.Body, 0), Token: csrfOf(r), Back: "/ui/pains?project=" + url.QueryEscape(p.Project)}
+	v.Actor = a.actorViewOf(l, pa, actor.Pain, p.ID, p.Person, true)
 	v.CanWork = pa.CheckPain(p, store.ActWork) == nil
 	v.CanIdea = v.CanWork && interactive(r) && pa.Allow(p.Project, store.ResIdea, store.ActCreate, store.Object{Own: true})
 	v.Explain = a.explainFor(l, explain.KindPain, p.ID)
@@ -183,6 +186,7 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 			a.commentFail(w, r, a.objectPage(pa, store.CommentOnPain, id), err)
 			return
 		}
+		a.stampActor(r, actor.Comment, c.ID)
 		http.Redirect(w, r, commentPage(c)+"?comment=added#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
 		return
 	}
@@ -197,12 +201,12 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	accountID, _ := store.AccountNumericID(browserPrincipal(r).ID)
-	actor := pain.Actor{AccountID: accountID, Person: personOf(r), GitAnchor: gitanchor.Web()}
+	by := pain.Actor{AccountID: accountID, Person: personOf(r), GitAnchor: gitanchor.Web()}
 	ev := pain.Evidence{Kind: r.FormValue("evidence_kind"), Ref: r.FormValue("evidence_ref")}
 	if strings.TrimSpace(ev.Ref) == "" {
 		ev = pain.Evidence{}
 	}
-	if _, err := a.access(r).SetPainState(id, to, r.FormValue("remaining"), ev, painStateNote(to, r.FormValue("why"), r.FormValue("note")), actor); err != nil {
+	if _, err := a.access(r).SetPainState(id, to, r.FormValue("remaining"), ev, painStateNote(to, r.FormValue("why"), r.FormValue("note")), by); err != nil {
 		if code := requestdomain.Code(err); code != "" {
 			http.Redirect(w, r, a.painHref(r, id)+"?fail="+url.QueryEscape(code), http.StatusSeeOther)
 			return
@@ -212,8 +216,10 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 	}
 	q := "?done=state"
 	if text := strings.TrimSpace(r.FormValue("note")); text != "" {
-		if _, err := a.access(r).AddComment(store.CommentOnPain, id, text, a.commentActor(r)); err != nil {
+		if c, err := a.access(r).AddComment(store.CommentOnPain, id, text, a.commentActor(r)); err != nil {
 			q = "?comment=failed"
+		} else {
+			a.stampActor(r, actor.Comment, c.ID)
 		}
 	}
 	http.Redirect(w, r, a.painHref(r, id)+q, http.StatusSeeOther)

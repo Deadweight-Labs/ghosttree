@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 	"strings"
@@ -103,6 +104,9 @@ func (a *app) reactionToggle(w http.ResponseWriter, r *http.Request) {
 		}
 		if set {
 			now, err = pa.React(kind, id, key)
+			if err == nil {
+				a.stampActor(r, actor.Reaction, a.store.ReactionRowID(kind, id, key, store.AccountIDOf(browserPrincipal(r).ID)))
+			}
 		} else {
 			now, err = pa.Unreact(kind, id, key)
 		}

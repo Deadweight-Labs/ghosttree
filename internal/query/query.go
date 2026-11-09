@@ -34,6 +34,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 )
 
@@ -167,6 +168,11 @@ const (
 	KeyUpdated = "updated"
 	KeySince   = "since"
 	KeyUntil   = "until"
+	// by: sagt, wer schrieb (agent oder human), harness: und model: welcher
+	// Agent (REQ-620). Unbekannte Urheber treffen keinen positiven Wert.
+	KeyBy      = "by"
+	KeyHarness = "harness"
+	KeyModel   = "model"
 )
 
 var keyAlias = map[string]string{
@@ -178,6 +184,7 @@ var keyAlias = map[string]string{
 	"author": KeyAuthor, "for": KeyFor, "assignee": KeyFor,
 	"label": KeyLabel, "area": KeyArea, "topic": KeyTopic,
 	"created": KeyCreated, "updated": KeyUpdated, "since": KeySince, "until": KeyUntil,
+	"by": KeyBy, "harness": KeyHarness, "model": KeyModel,
 }
 
 // KnownKeys für die Fehlermeldung, sortiert.
@@ -431,7 +438,18 @@ func parseTerm(key string, neg bool, value, word string, now time.Time) (Term, e
 				return Term{}, fail(word, "%v", err)
 			}
 			t.Values = append(t.Values, a)
-		case KeyLabel, KeyTopic, KeyType, KeyAuthor, KeyFor, KeyRepo, KeyBranch:
+		case KeyBy:
+			v := strings.ToLower(unquote(alt))
+			switch v {
+			case "agent", "agents":
+				v = "agent"
+			case "human", "humans", "person", "mensch":
+				v = "human"
+			default:
+				return Term{}, fail(word, "by:%s is not known; use by:agent or by:human", alt)
+			}
+			t.Values = append(t.Values, v)
+		case KeyLabel, KeyTopic, KeyType, KeyAuthor, KeyFor, KeyRepo, KeyBranch, KeyHarness, KeyModel:
 			v := unquote(alt)
 			if bad := controlOrLine(v); bad {
 				return Term{}, fail(word, "%s: no control characters", key)
@@ -901,6 +919,9 @@ type Facts struct {
 	// Created und Updated sind RFC3339; OriginAt der Zeitpunkt des
 	// Entstehungskontexts (sonst Created).
 	Created, Updated, OriginAt string
+	// Actor ist human oder agent, leer wenn unbekannt; Harness (claude-code,
+	// codex) und Model (claude-opus-5-5) nur bei einem Agenten (REQ-620).
+	Actor, Harness, Model string
 }
 
 func lowerAll(s []string) []string {
@@ -915,6 +936,25 @@ func lowerAll(s []string) []string {
 func areaMatch(have, want string) bool {
 	have, want = path.Clean(have), path.Clean(want)
 	return have == want || strings.HasPrefix(have, want+"/") || strings.HasPrefix(want, have+"/")
+}
+
+// harnessMatch: claude trifft claude-code, sonst der Name selbst.
+func harnessMatch(have, want string) bool {
+	have = strings.ToLower(strings.TrimSpace(have))
+	if have == "" {
+		return false
+	}
+	return have == want || strings.HasPrefix(have, want+"-") || actor.HarnessKey(have) == want
+}
+
+// modelMatch: der Bezeichner oder sein Name, auch als Teil (model:opus trifft
+// claude-opus-5-5, model:"opus 5.5" den Namen „Opus 5.5“).
+func modelMatch(have, want string) bool {
+	if strings.TrimSpace(have) == "" {
+		return false
+	}
+	id, name := strings.ToLower(have), strings.ToLower(actor.ModelLabel(have))
+	return strings.Contains(id, want) || strings.Contains(name, want)
 }
 
 func repoMatch(have, want string) bool {
@@ -1068,6 +1108,22 @@ func matchTerm(t Term, f Facts) bool {
 		return anyNum([]int64{f.Number}, t.Nums)
 	case KeyAuthor:
 		return f.Author != "" && contains(t.Values, strings.ToLower(f.Author))
+	case KeyBy:
+		return f.Actor != "" && contains(t.Values, f.Actor)
+	case KeyHarness:
+		for _, v := range t.Values {
+			if harnessMatch(f.Harness, v) {
+				return true
+			}
+		}
+		return false
+	case KeyModel:
+		for _, v := range t.Values {
+			if modelMatch(f.Model, v) {
+				return true
+			}
+		}
+		return false
 	case KeyFor:
 		return f.Assignee != "" && contains(t.Values, strings.ToLower(f.Assignee))
 	case KeyLabel:

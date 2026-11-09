@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"net/http"
 	"strconv"
@@ -267,6 +268,9 @@ func (a *api) createIssuesFromIdea(w http.ResponseWriter, r *http.Request) {
 		writeIdeaError(w, err)
 		return
 	}
+	for _, rid := range res.Requests {
+		a.stampActor(r, actor.Request, rid, body.SessionID)
+	}
 	writeJSON(w, http.StatusCreated, res)
 }
 
@@ -415,11 +419,13 @@ func (a *api) voteDecision(w http.ResponseWriter, r *http.Request) {
 	if !readLimitedJSON(w, r, &body, maxWorkshopSmall) {
 		return
 	}
-	d, err := a.access(r).VoteDecision(id, body.Variant, body.Reason, a.workshopActor(r, body.SessionID))
+	voter := a.workshopActor(r, body.SessionID)
+	d, err := a.access(r).VoteDecision(id, body.Variant, body.Reason, voter)
 	if err != nil {
 		writeIdeaError(w, err)
 		return
 	}
+	a.stampActor(r, actor.Vote, a.st.VoteRowID(id, store.VoterKey(voter)), body.SessionID)
 	writeJSON(w, http.StatusOK, d)
 }
 

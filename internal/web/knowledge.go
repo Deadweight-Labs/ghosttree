@@ -2,6 +2,7 @@ package web
 
 import (
 	"database/sql"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"net/url"
 	"path"
@@ -194,7 +195,9 @@ type reviewView struct {
 }
 
 type knowledgeItemView struct {
-	Card    knowledgeCard
+	Card knowledgeCard
+	// Actor is who wrote the entry (REQ-620).
+	Actor   actorView
 	History []historyRow
 	Result  *resultLine
 	Types   []filterOption
@@ -701,6 +704,7 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	v.Result = a.resultFor(r, pa, "item", "")
 	v.Panel = r.URL.Query().Get("panel")
 	a.fillKnowledgeItem(l, pa.KnowledgeView(k), v)
+	v.Actor = a.actorViewOf(l, pa, actor.Knowledge, k.ID, v.Card.Person, true)
 	a.renderBrowser(w, r, "knowledgeitem", pageData{Title: k.Title, KnowledgeItemV: v})
 }
 

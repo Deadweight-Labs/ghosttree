@@ -25,6 +25,13 @@ type ObjectFacts struct {
 	OriginAt string
 	// RequestID ist bei einem Kriterium und einer Aufgabe der Request dahinter.
 	RequestID int64
+	// Actor ist human oder agent, leer wenn unbekannt (REQ-620); Harness und
+	// Model nur bei einem Agenten, soweit bekannt. Bei einem Kriterium ist es,
+	// wer es erfüllt hat.
+	Actor, Harness, Model string
+	// ActorSession ist die Session des Stempels; FactsView lässt Model nur
+	// stehen, wenn der Betrachter sie sehen darf.
+	ActorSession int64
 }
 
 func (f *ObjectFacts) addBranch(b string) {
@@ -90,10 +97,34 @@ func (s *Store) ObjectFacts(kind string, ids []int64) (map[int64]ObjectFacts, er
 	if s.reader != nil {
 		return s.reader.ObjectFacts(kind, ids)
 	}
-	out := map[int64]ObjectFacts{}
 	if len(ids) == 0 {
-		return out, nil
+		return map[int64]ObjectFacts{}, nil
 	}
+	out, err := s.objectFacts(kind, ids)
+	if err != nil {
+		return nil, err
+	}
+	return out, s.applyActors(kind, ids, out)
+}
+
+// applyActors trägt den Akteur in die Eigenschaften ein (by:, harness:, model:).
+func (s *Store) applyActors(kind string, ids []int64, out map[int64]ObjectFacts) error {
+	actors, err := s.ActorsOf(kind, ids)
+	if err != nil {
+		return err
+	}
+	for id, ea := range actors {
+		f := out[id]
+		f.Actor = ea.Kind
+		if ea.IsAgent() {
+			f.Harness, f.Model, f.ActorSession = ea.Harness, ea.Model, ea.SessionID
+		}
+		out[id] = f
+	}
+	return nil
+}
+
+func (s *Store) objectFacts(kind string, ids []int64) (map[int64]ObjectFacts, error) {
 	switch kind {
 	case "request":
 		return s.withFeatureLinks(kind, ids)(s.requestFacts(ids))

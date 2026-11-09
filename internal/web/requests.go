@@ -3,6 +3,7 @@ package web
 import (
 	"database/sql"
 	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"net/url"
 	"path"
@@ -175,6 +176,8 @@ type requestView struct {
 	Panel    string
 	// Opened is "opened this 3 d ago", the line under the title.
 	Opened string
+	// Actor is who opened it (REQ-620).
+	Actor actorView
 	// Live is who works on the issue right now (live.go).
 	Live []liveAgent
 	// LabelBox is the block "Labels" of the sidebar (issue page only).
@@ -347,6 +350,7 @@ func (a *app) buildRequestView(w http.ResponseWriter, r *http.Request) (*request
 		RawTitle: req.Title, RawDescription: req.Description,
 		Types: requestTypeOptions(l, req.Type), Kinds: evidenceKindOptions(l),
 	}
+	v.Actor = a.actorViewOf(l, pa, actor.Request, req.ID, req.Person, true)
 	if project != "" {
 		v.Project = path.Base(project)
 		v.Back += "?project=" + url.QueryEscape(project)
@@ -804,6 +808,9 @@ func (a *app) requestResolve(w http.ResponseWriter, r *http.Request) {
 		a.requestFail(w, r, detail.Request.ID, err)
 		return
 	}
+	if state == "met" {
+		a.stampActor(r, actor.Criterion, cid)
+	}
 	a.requestDone(w, r, detail.Request.ID, state, url.Values{"c": {strconv.FormatInt(cid, 10)}})
 }
 
@@ -878,6 +885,7 @@ func (a *app) requestComplete(w http.ResponseWriter, r *http.Request) {
 		a.requestFail(w, r, detail.Request.ID, err)
 		return
 	}
+	a.stampActor(r, actor.RequestDone, detail.Request.ID)
 	a.requestDone(w, r, detail.Request.ID, "completed", a.alsoComment(r, detail.Request.ID))
 }
 

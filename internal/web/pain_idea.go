@@ -1,6 +1,7 @@
 package web
 
 import (
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -46,6 +47,7 @@ func (a *app) painIdea(w http.ResponseWriter, r *http.Request) {
 		a.painFail(w, r, err)
 		return
 	}
+	a.stampActor(r, actor.Idea, i.ID)
 	accountID, _ := store.AccountNumericID(browserPrincipal(r).ID)
 	actor := pain.Actor{AccountID: accountID, Person: personOf(r), GitAnchor: gitanchor.Web()}
 	if _, err := pa.AddPainLink(id, pain.Target{IdeaID: i.ID}, actor); err != nil {

@@ -184,8 +184,11 @@ func (s *Store) commitPain(in CreatePainInput, targets []resolvedTarget) (int64,
 	}
 	defer tx.Rollback()
 	ts := now()
-	res, err := tx.Exec(`INSERT INTO pains(project,title,body,state,remaining,person,created_at,updated_at) VALUES(?,?,?,'active','',?,?,?)`,
-		in.Project, strings.TrimSpace(in.Title), in.Body, in.Actor.Person, ts, ts)
+	// session_ref ist die Kennung der Session des Schreibers; der Server setzt die
+	// Session-Id nur für eine eigene Session (REQ-620: vorher blieb sie leer).
+	res, err := tx.Exec(`INSERT INTO pains(project,title,body,state,remaining,person,session_ref,created_at,updated_at)
+		VALUES(?,?,?,'active','',?,COALESCE((SELECT external_id FROM sessions WHERE id=?),''),?,?)`,
+		in.Project, strings.TrimSpace(in.Title), in.Body, in.Actor.Person, in.Actor.SessionID, ts, ts)
 	if err != nil {
 		return 0, err
 	}

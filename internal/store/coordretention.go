@@ -75,6 +75,11 @@ func (s *Store) ApplyCoordRetention(before, activityBefore string) (RetentionRes
 	if err != nil {
 		return RetentionResult{}, err
 	}
+	// Der Akteur einer gelöschten Nachricht (REQ-620) geht mit ihr.
+	if _, err := tx.Exec(`DELETE FROM entry_actors WHERE kind='message'
+		AND NOT EXISTS(SELECT 1 FROM coord_messages m WHERE m.id=entry_actors.entry_id)`); err != nil {
+		return RetentionResult{}, err
+	}
 	if n, err := res.RowsAffected(); err == nil {
 		out.MessagesDeleted = int(n)
 	}

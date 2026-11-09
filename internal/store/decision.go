@@ -586,6 +586,16 @@ func (a *ProjectAccess) VoteDecision(decisionID int64, variant, reason string, a
 	if vid == 0 {
 		return idea.Decision{}, requestdomain.NewRuleError("variant_not_found", fmt.Sprintf("%s has no variant %q", d.HumanID(), variant), "choose one of the letters of its variants", nil)
 	}
+	key := VoterKey(actor)
+	if err := a.st.commitVote(decisionID, key, actor, vid, reason); err != nil {
+		return idea.Decision{}, err
+	}
+	return a.DecisionView(decisionID)
+}
+
+// VoterKey is the key of a vote: one vote per account, as a person and as an
+// agent separately; without account by name.
+func VoterKey(actor idea.Actor) string {
 	key := "person:" + strconv.FormatInt(actor.AccountID, 10)
 	if actor.AccountID == 0 {
 		key = "name:" + actor.Person
@@ -593,10 +603,7 @@ func (a *ProjectAccess) VoteDecision(decisionID int64, variant, reason string, a
 	if actor.Agent {
 		key += ":agent"
 	}
-	if err := a.st.commitVote(decisionID, key, actor, vid, reason); err != nil {
-		return idea.Decision{}, err
-	}
-	return a.DecisionView(decisionID)
+	return key
 }
 
 func (s *Store) commitVote(decisionID int64, key string, actor idea.Actor, variantID int64, reason string) error {

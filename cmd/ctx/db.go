@@ -17,6 +17,7 @@ import (
 
 const dbUsage = `usage: ctx db vacuum --db <path> [--tmpdir <dir>] [--fts-optimize] [--yes]
        ctx db check --db <path> [--full]
+       ctx db backfill-actors --db <path> [--dry-run] [--batch N] [--kind k,...] [--no-models] [--json]
 
 Maintenance of the database file with the SQL functions of the schema. The
 sqlite3 CLI cannot do this: the CHECK constraints of the snapshot tables call
@@ -24,7 +25,8 @@ ghosttree_valid_utf8, which only ctx registers, so "sqlite3 <db> VACUUM" and
 "sqlite3 <db> 'PRAGMA quick_check'" stop with "no such function".
 
   vacuum  give the free pages back to the filesystem (server stopped)
-  check   quick_check or integrity_check, writes nothing (may run beside the server)`
+  check   quick_check or integrity_check, writes nothing (may run beside the server)
+  backfill-actors  who wrote existing entries (agent or person), only where proven`
 
 const dbVacuumUsage = `usage: ctx db vacuum --db <path> [--tmpdir <dir>] [--fts-optimize] [--yes]
 
@@ -92,6 +94,8 @@ func cmdDB(args []string, stdout io.Writer) int {
 		return cmdDBVacuum(args[1:], stdout)
 	case "check":
 		return cmdDBCheck(args[1:], stdout)
+	case "backfill-actors":
+		return cmdDBBackfillActors(args[1:], stdout)
 	case "help", "--help", "-h":
 		fmt.Fprintln(stdout, dbUsage)
 		return 0

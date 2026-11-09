@@ -142,6 +142,8 @@ type uiRow struct {
 	// Age is the short time ("4 d"), AgeTitle the long one for the tooltip.
 	Age, AgeTitle string
 	Person        string
+	// Actor is the agent behind Person, if one wrote it (REQ-620).
+	Actor actorView
 	// Meta are further pieces of line two (branch, PR, sub-issues), ready as HTML.
 	Meta     []template.HTML
 	Waiting  []string
@@ -371,7 +373,7 @@ func waitStack(l lang, names []string) template.HTML {
 // branch as a further piece, the waiting person left of the progress.
 func issueUIRow(l lang, r issueRow) uiRow {
 	row := uiRow{Icon: r.Icon, Tone: r.Tone, StateLabel: r.StateLabel, Num: "#" + strconv.FormatInt(r.N, 10), Title: r.Title, Href: r.Href,
-		Kind: r.TypeLabel, Age: r.Age, AgeTitle: r.Opened, Person: r.Person, Labels: r.Labels,
+		Kind: r.TypeLabel, Age: r.Age, AgeTitle: r.Opened, Person: r.Person, Actor: r.Actor, Labels: r.Labels,
 		Excerpt: r.Excerpt, ExLead: r.ExLead, Pill: r.Pill, PillTone: r.PillTone}
 	if r.Branch != "" {
 		b := html.EscapeString(r.Branch)

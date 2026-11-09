@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -39,6 +40,7 @@ func (a *api) putReaction(w http.ResponseWriter, r *http.Request) {
 		writePainError(w, err)
 		return
 	}
+	a.stampActor(r, actor.Reaction, a.st.ReactionRowID(commentKind(body.Kind), body.ID, body.Content, authorIDOf(r)), 0)
 	writeJSON(w, http.StatusOK, s)
 }
 

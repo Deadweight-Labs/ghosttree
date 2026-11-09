@@ -43,9 +43,16 @@ func TestFeatureWritesCarryTheAnchorAndTheSession(t *testing.T) {
 			t.Errorf("%s carries anchor %q session %q", route, s.anchor, s.session)
 		}
 	}
+	// Der Anker bleibt auf den Routen, die ihn speichern. Die Session geht bei
+	// jedem Schreibzugriff mit, damit der Server den Akteur kennt (REQ-620), nie
+	// bei einem Lesezugriff.
 	for _, route := range []string{"GET /api/features/7", "POST /api/features/pr-paths", "POST /api/features/7/state", "POST /api/features/7/links", "POST /api/features/7/checks"} {
-		if s := got[route]; s.anchor != "" || s.session != "" {
+		s := got[route]
+		if s.anchor != "" {
 			t.Errorf("%s carries an anchor: %+v", route, s)
+		}
+		if wantSession := route != "GET /api/features/7"; (s.session != "") != wantSession {
+			t.Errorf("%s session %q", route, s.session)
 		}
 	}
 }

@@ -122,7 +122,13 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrSessionCollision
 	}
-	return id, err
+	if err != nil {
+		return 0, err
+	}
+	// Stempel, die vor dem ersten Upload geschrieben wurden (REQ-620), bekommen
+	// jetzt ihre Session. Ein Fehler hier lässt sie offen, der Upload gilt.
+	_ = bindPendingActorsTx(s.db, id, account, sess.ExternalID, sess.Harness, sess.Scope.Machine)
+	return id, nil
 }
 
 // sanitizeChunks ersetzt base64-Nutzlasten in Raw durch Platzhalter
@@ -247,6 +253,9 @@ func (s *Store) appendChunkBatches(batches []ChunkBatch) error {
 		}
 	}
 	if err := indexChunks(tx, fresh); err != nil {
+		return err
+	}
+	if err := recordChunkModelsTx(tx, fresh); err != nil {
 		return err
 	}
 	return tx.Commit()

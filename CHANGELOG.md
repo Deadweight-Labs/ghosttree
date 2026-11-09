@@ -153,6 +153,37 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   next to the person's own; only a person in a web session can pick one, a token
   never can.
 
+#### Who wrote it: agents as authors
+
+- The server records for every new request, met criterion, finished request,
+  pain, idea, knowledge entry, task, comment, reaction, room message, feature
+  and vote whether a person or an agent wrote it, and for an agent its harness,
+  session and machine. It decides this itself: a person is only a web session,
+  every token call (MCP, hooks, CLI) is an agent, and the session counts only
+  when it belongs to the calling account. No tool parameter sets or overrides it;
+  a token can no longer store `origin: human` on a request or knowledge entry.
+  This includes `ctx` typed by hand in a terminal: it writes with a token and
+  counts as an agent (without harness when no agent session runs).
+- The model of a session is read from its uploaded transcript (Claude Code
+  `message.model`, Codex `turn_context`), with every switch and its time; an
+  entry gets the model that was active when it was written.
+- The web interface shows agent entries as "Robin's Claude" with a quiet agent
+  mark, in lists and on detail pages; model, machine and the session link appear
+  only on the detail page, and only for viewers who may see that session (a
+  private session only its owner). Search by `model:` and the statistics follow
+  the same rule.
+- Statistics per harness and model (entries created, criteria met, issues and
+  features finished) at `GET /api/stats/actors` and on the new Models tab under
+  Agents, over the projects the viewer sees in full.
+- Search language: `by:agent`, `by:human`, `harness:` and `model:`
+  (`model:opus` matches `claude-opus-5-5`).
+- `ctx db backfill-actors --db PATH [--dry-run]` fills in the authors of
+  existing entries where it can be proven and reports the numbers; everything
+  else stays unknown. A person needs a web origin; a pain or idea without a
+  session gets one only if that session called `pain_record`/`idea_record` (or
+  the CLI) within two minutes. It runs in batches, skips entries younger than
+  five minutes, and never runs at start-up; a live stamp replaces a backfilled one.
+
 #### Coordination
 
 - Coordination rooms with delivery states, direct messages and groups, durable
@@ -283,6 +314,9 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- Pains, ideas, tasks and comments written through MCP now carry their
+  session: the server takes the session the client names in its header when the
+  body has no numeric id. Before, a pain never had a session.
 - Runbooks triggered by a command reach Claude Code: the pre-tool-use hook's
   matcher now includes `Bash` (it covered Read, Edit, Write and NotebookEdit
   only, so command triggers never fired). `ctx install claude` updates the

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -273,6 +274,7 @@ func (a *app) requestClose(w http.ResponseWriter, r *http.Request) {
 			a.commentFail(w, r, a.objectPage(pa, store.CommentOnRequest, id), err)
 			return
 		}
+		a.stampActor(r, actor.Comment, c.ID)
 		http.Redirect(w, r, commentPage(c)+"?comment=added#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
 	case "complete":
 		if strings.TrimSpace(r.Form.Get("evidence_ref")) == "" {
@@ -296,8 +298,10 @@ func (a *app) alsoComment(r *http.Request, id int64) url.Values {
 	if text == "" {
 		return nil
 	}
-	if _, err := a.access(r).AddComment(store.CommentOnRequest, id, text, a.commentActor(r)); err != nil {
+	c, err := a.access(r).AddComment(store.CommentOnRequest, id, text, a.commentActor(r))
+	if err != nil {
 		return url.Values{"comment": {"failed"}}
 	}
+	a.stampActor(r, actor.Comment, c.ID)
 	return nil
 }

@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
 	"net/http"
@@ -444,10 +445,12 @@ func (a *app) workshopVote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
-	if _, err := a.access(r).VoteDecision(d.ID, r.FormValue("variant"), reason, store.IdeaActorFor(browserPrincipal(r), "")); err != nil {
+	voter := store.IdeaActorFor(browserPrincipal(r), "")
+	if _, err := a.access(r).VoteDecision(d.ID, r.FormValue("variant"), reason, voter); err != nil {
 		a.workshopFail(w, r, err, i.Project, i.ID)
 		return
 	}
+	a.stampActor(r, actor.Vote, a.store.VoteRowID(d.ID, store.VoterKey(voter)))
 	http.Redirect(w, r, workshopBack(i.Project, i.ID, "wdone", "vote")+"", http.StatusSeeOther)
 }
 

@@ -281,9 +281,10 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 		return navItem{Key: key, Label: label, Href: href, Current: on}
 	}
 	switch name {
-	case "agents", "sessions":
+	case "agents", "sessions", "agentmodels":
 		if kind != viewerGuest {
-			v.Tabs = []navItem{tab("agents", "nav.tab_agents", "/ui/agents", name == "agents"), tab("sessions", "nav.sessions", "/ui/sessions", name == "sessions")}
+			v.Tabs = []navItem{tab("agents", "nav.tab_agents", "/ui/agents", name == "agents"), tab("sessions", "nav.sessions", "/ui/sessions", name == "sessions"),
+				tab("models", "nav.tab_models", "/ui/agents/models", name == "agentmodels")}
 			v.TabsLabel = "nav.agents"
 		}
 	case "knowledge", "review", "context":

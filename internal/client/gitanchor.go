@@ -53,17 +53,22 @@ func (c *Client) anchorHeader(method, path string) string {
 	return gitanchor.Encode(c.anchor())
 }
 
-// SetOriginSession schaltet den Entstehungskontext (REQ-600) für schreibende
-// Aufrufe ein: die Session geht im Header originctx.SessionHeader auf denselben
-// Routen mit wie der Git-Anker. Mehr sendet der Client nicht; Pfade und Bereiche
-// ermittelt der Server aus path_activity. Leer lässt den Header weg.
+// SetOriginSession schaltet den Entstehungskontext (REQ-600) und den Akteur
+// (REQ-620) für schreibende Aufrufe ein: die Session geht im Header
+// originctx.SessionHeader bei jedem Schreibzugriff mit. Mehr sendet der Client
+// nicht; Pfade und Bereiche ermittelt der Server aus path_activity. Leer lässt
+// den Header weg.
 func (c *Client) SetOriginSession(ref string) { c.originSession = ref }
 
 func (c *Client) setAnchor(req *http.Request, method, path string) {
 	if v := c.anchorHeader(method, path); v != "" {
 		req.Header.Set(gitanchor.Header, v)
 	}
-	if c.originSession != "" && originctx.ValidSession(c.originSession) && anchoredWrites.MatchString(method+" "+path) {
+	// Die Session geht bei jedem Schreibzugriff mit, nicht nur auf den
+	// verankerten Routen: der Server bestimmt daraus den Akteur (REQ-620) auch für
+	// Aufgaben, Kommentare, Reaktionen und Stimmen. Den Kontext baut er weiter nur
+	// auf den Routen, deren Handler ihn speichern.
+	if c.originSession != "" && originctx.ValidSession(c.originSession) && method != http.MethodGet && method != http.MethodHead {
 		req.Header.Set(originctx.SessionHeader, c.originSession)
 	}
 }

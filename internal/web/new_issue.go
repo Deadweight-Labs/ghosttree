@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"net/url"
 	"slices"
@@ -212,6 +213,7 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		id = i.ID
+		a.stampActor(r, actor.Idea, id)
 	case newKindPain:
 		kind, object = "pain", "pains"
 		d, err := pa.CreatePain(store.CreatePainInput{Project: remote, Title: v.Title, Body: v.Body, Actor: pain.Actor{AccountID: accountID, Person: person}, AuthorID: accountID})
@@ -220,6 +222,7 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		id = d.Pain.ID
+		a.stampActor(r, actor.Pain, id)
 	default:
 		kind, object = "request", "issues"
 		typ := chosenType
@@ -240,6 +243,7 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		id = d.Request.ID
+		a.stampActor(r, actor.Request, id)
 		if errKey := a.newIssuePackage(pa, v, id, person); errKey != "" {
 			// The issue exists; only the package failed. Lead to the issue and say so.
 			http.Redirect(w, r, v.Base+"/issues/"+strconv.FormatInt(id, 10)+"?fail=package", http.StatusSeeOther)

@@ -68,6 +68,9 @@
   & .person { display: inline-flex; align-items: baseline; gap: 6px; color: var(--fg-default); font-weight: 600; }
   & .person:hover { color: var(--accent-fg); text-decoration: none; }
   & .person > .gav, & .person > img, & .person > svg { align-self: center; }
+  & .person.actor > a { color: inherit; }
+  & .person .botmark { align-self: center; padding: 0 5px; font-size: 11px; line-height: 16px; }
+  & .person .actor-d { color: var(--fg-muted); font-weight: 400; }
 
   /* Buttons */
   & .gbtn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; font: 500 14px/20px var(--ui-font); color: var(--fg-default); background: var(--btn-bg); border: 1px solid var(--btn-border); border-radius: 6px; cursor: pointer; white-space: nowrap; text-decoration: none; box-shadow: 0 1px 0 #1f23280a; }
