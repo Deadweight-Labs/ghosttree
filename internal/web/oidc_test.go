@@ -606,7 +606,7 @@ func TestLoginLinkIsConfirmedByPostAndSingleUse(t *testing.T) {
 	b2 := newBrowser(t)
 	resp = sameOriginPostForm(t, b2, srv.URL+"/ui/login/code", url.Values{"code": {code}})
 	text := body(t, resp)
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(text, "That code isn&#39;t valid.") {
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(text, "That code does not work.") {
 		t.Fatalf("reuse status=%d body=%s", resp.StatusCode, text)
 	}
 	// Ohne Same-Origin-Nachweis wird nichts eingelöst.

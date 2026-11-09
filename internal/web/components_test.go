@@ -260,7 +260,7 @@ func TestCommandBlockOffersMacOSAndLinuxOnly(t *testing.T) {
 
 func TestFooterHasPrivacyHelpAndServerVersion(t *testing.T) {
 	page := renderPart(t, langDE, "uifoot", pageData{ServerVersion: "v0.1.0"})
-	if !strings.Contains(partText(page), "Datenschutz · Hilfe · Serverversion v0.1.0") {
+	if !strings.Contains(partText(page), "Datenschutz · Hilfe · ghosttree v0.1.0") {
 		t.Errorf("footer: %s", partText(page))
 	}
 	if page := renderPart(t, langEN, "uifoot", pageData{}); strings.Contains(partText(page), "version") {

@@ -147,7 +147,7 @@ func TestDeviceApprovalIsACodeFieldWithoutMachineIPOrAge(t *testing.T) {
 func TestOwnerOnAnEmptyInstanceSeesGettingStartedThatSwitches(t *testing.T) {
 	e := shellWebAll(t)
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	for _, want := range []string{"Set up ghosttree", "Get the install command", `action="/join/pair"`, `name="confirm_account"`, "Waiting for your machine", `http-equiv="refresh"`} {
+	for _, want := range []string{"Set up ghosttree", ">Install</button>", `action="/join/pair"`, `name="confirm_account"`, "Waiting for your machine", `http-equiv="refresh"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("setup lacks %q", want)
 		}
@@ -155,8 +155,9 @@ func TestOwnerOnAnEmptyInstanceSeesGettingStartedThatSwitches(t *testing.T) {
 	if regexp.MustCompile(`name="confirm_account"[^>]*\bchecked\b`).MatchString(page) {
 		t.Error("the confirmation box comes ticked: the protective question is gone")
 	}
-	if !strings.Contains(page, "Confirm first that this is your account.") {
-		t.Error("the button gives no reason while the box is open")
+	// The box is required, so the browser says what is missing; no permanent sentence.
+	if !regexp.MustCompile(`name="confirm_account"[^>]*\brequired\b`).MatchString(page) || strings.Contains(page, "Confirm first that this is your account.") {
+		t.Error("the box is not required, or a permanent hint stands next to the button")
 	}
 	if strings.Contains(page, "Agents</h2>") || strings.Contains(page, "ov-cols") {
 		t.Error("setup still shows the normal overview")
@@ -200,7 +201,7 @@ func TestGettingStartedIsForOwnersAndAConnectedMachineDoesNotTrapThem(t *testing
 		}
 	}
 	_, forced := fetchPage(t, e.Member, e.Base+"/ui/overview?connect=1")
-	if !strings.Contains(forced, "Get the install command") || strings.Contains(forced, `http-equiv="refresh"`) {
+	if !strings.Contains(forced, ">Install</button>") || strings.Contains(forced, `http-equiv="refresh"`) {
 		t.Error("the connect view is missing for a member or reloads by itself")
 	}
 	_, guestForced := fetchPage(t, e.Guest, e.Base+"/ui/overview?connect=1")

@@ -167,3 +167,19 @@ func accountNameTakenByOtherTx(q queryer, name string, self int64) (bool, error)
 	err = q.QueryRow(`SELECT EXISTS(SELECT 1 FROM person_name_history WHERE old_key=? AND person_id<>?)`, key, self).Scan(&retired)
 	return retired, err
 }
+
+// InviteNameFree sagt, ob der gewünschte Anzeigename als Kontoname so übernommen
+// würde, wie er ist: nicht leer, nicht aus gemischten Schriften und nicht vergeben.
+// Die Einladungsseite fragt vor dem Anlegen, damit niemand unbemerkt als "robin-2"
+// oder "user" endet (inviteName würde beides ohne Rückfrage tun).
+func (s *Store) InviteNameFree(wanted string) bool {
+	if s.reader != nil {
+		return s.reader.InviteNameFree(wanted)
+	}
+	name := NormalizeAccountName(wanted)
+	if name == "" || MixedScriptName(name) {
+		return false
+	}
+	taken, err := accountNameTakenByOtherTx(s.db, name, 0)
+	return err == nil && !taken
+}

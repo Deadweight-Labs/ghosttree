@@ -3,10 +3,11 @@ package web
 import (
 	"bytes"
 	"errors"
+	"math"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -187,15 +188,55 @@ func (a *app) joinPreview(code string) (store.InvitePreview, bool) {
 
 type joinView struct {
 	Inviter, Target, Org, RoleText, ExpiresAt string
-	Code, CSRFToken, Person                   string
-	Initial, Email                            string
-	SignedIn, OIDC, Signup                    bool
+	// Short ist der Name des Projekts ohne Pfad (letztes Segment), ExpiresIn der
+	// Ablauf in Worten ("Läuft ab in 3 Tagen").
+	Short, ExpiresIn string
+	// OrgMark ist der Anfangsbuchstabe der Organisation für ihr Zeichen im Kopf, Tab
+	// der Titel des Browser-Tabs.
+	OrgMark, Tab            string
+	Code, CSRFToken, Person string
+	Initial, Email          string
+	SignedIn, OIDC, Signup  bool
+	// NameError ist die Meldung am Namensfeld, NameValue, was die Person getippt hat.
+	NameError, NameValue string
 	// Provider is the display name of the identity provider ("GitHub"), empty when unnamed.
 	Provider string
 	// Guest wählt den Satz, der sagt, was die Rolle sieht; Project ist der Name
 	// des Projekts darin.
 	Guest   bool
 	Project string
+}
+
+// shortName ist das letzte Segment eines Pfads: aus "github.com/acme/app" wird "app".
+func shortName(path string) string {
+	path = strings.TrimRight(path, "/")
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
+// expiresIn sagt in Worten, wie lange eine Einladung noch gilt. Es wird
+// aufgerundet: eine Einladung für drei Tage zeigt am ersten Tag "3 Tagen".
+func expiresIn(l lang, stamp string) string {
+	t := parseTime(stamp)
+	if t.IsZero() {
+		return ""
+	}
+	d := t.Sub(overviewNow().UTC())
+	switch hours := int(math.Ceil(d.Hours())); {
+	case d < time.Hour:
+		return l.msg("join.expires_soon")
+	case hours < 24 && hours == 1:
+		return l.msg("join.expires_hour")
+	case hours < 24:
+		return l.msg("join.expires_hours", hours)
+	default:
+		if days := int(math.Ceil(d.Hours() / 24)); days > 1 {
+			return l.msg("join.expires_days", days)
+		}
+		return l.msg("join.expires_day")
+	}
 }
 
 func roleLabel(l lang, role string) string {
@@ -218,6 +259,24 @@ func (a *app) joinSession(r *http.Request) (browserSession, bool) {
 	return session, true
 }
 
+// joinViewFor baut die Sicht der Einladungsseite aus der Vorschau.
+func (a *app) joinViewFor(r *http.Request, l lang, code string, preview store.InvitePreview) joinView {
+	view := joinView{Inviter: preview.Inviter, Target: preview.Project, Org: preview.Org, RoleText: roleLabel(l, preview.Role),
+		ExpiresAt: preview.ExpiresAt, ExpiresIn: expiresIn(l, preview.ExpiresAt), Short: shortName(preview.Project),
+		Guest: preview.Role == store.RoleGuest, Project: firstNonEmpty(shortName(preview.Project), l.msg("join.shares.project")),
+		Code: code, OIDC: a.oidc != nil, Provider: a.oidcName, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context())}
+	view.OrgMark = initialOf(firstNonEmpty(preview.Org, view.Short))
+	view.Tab = l.msg("join.invite_tab")
+	if session, ok := a.joinSession(r); ok {
+		view.SignedIn, view.Person, view.CSRFToken = true, session.principal.Label, session.csrf
+		view.Initial = initialOf(view.Person)
+		if acct, err := a.store.AccountByPrincipalID(session.principal.ID); err == nil {
+			view.Email = acct.Email
+		}
+	}
+	return view
+}
+
 func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	if !a.joinGate(w, r) {
@@ -232,21 +291,37 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 	// Die Seite zeigt nur Name der einladenden Person, Projekt, Organisation,
 	// Rolle und Ablauf. Eine Paarungssitzung legt erst die Annahme an (joinAccepted),
 	// ein bloßes Öffnen oder Neuladen erzeugt keinen Code.
-	view := joinView{Inviter: preview.Inviter, Target: preview.Project, Org: preview.Org, RoleText: roleLabel(l, preview.Role),
-		ExpiresAt: preview.ExpiresAt, Guest: preview.Role == store.RoleGuest, Project: firstNonEmpty(preview.Project, l.msg("join.shares.project")),
-		Code: code, OIDC: a.oidc != nil, Provider: a.oidcName, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context())}
-	if session, ok := a.joinSession(r); ok {
-		view.SignedIn, view.Person, view.CSRFToken = true, session.principal.Label, session.csrf
-		view.Initial = initialOf(view.Person)
-		if acct, err := a.store.AccountByPrincipalID(session.principal.ID); err == nil {
-			view.Email = acct.Email
-		}
-		if a.store.InvitationCovered(session.principal.ID, code) {
-			a.joinAlreadyMember(l, w, preview)
-			return
-		}
+	view := a.joinViewFor(r, l, code, preview)
+	if session, ok := a.joinSession(r); ok && a.store.InvitationCovered(session.principal.ID, code) {
+		a.joinAlreadyMember(l, w, preview)
+		return
 	}
 	a.joinHeaders(w)
+	a.joinWrite(l, w, "join", view)
+}
+
+// joinLogin ist der Weg "Ich habe schon ein Konto": die Anmeldeseite merkt sich die
+// Einladung als Ziel und führt danach hierher zurück. Der Code steht so in keiner
+// Adresse der Anmeldeseite.
+func (a *app) joinLogin(w http.ResponseWriter, r *http.Request) {
+	if code := r.PathValue("code"); wellFormedJoinCode(code) {
+		a.setNext(w, r, "/join/"+code)
+	}
+	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+}
+
+// joinNameRejected zeigt die Einladungsseite wieder, mit der Meldung am Namensfeld
+// und dem getippten Namen; es wurde nichts angelegt.
+func (a *app) joinNameRejected(l lang, w http.ResponseWriter, r *http.Request, code, name string) {
+	preview, ok := a.joinPreview(code)
+	if !ok {
+		a.joinNotFound(l, w)
+		return
+	}
+	view := a.joinViewFor(r, l, code, preview)
+	view.NameError, view.NameValue = l.msg("join.error_name"), name
+	a.joinHeaders(w)
+	w.WriteHeader(http.StatusUnprocessableEntity)
 	a.joinWrite(l, w, "join", view)
 }
 
@@ -256,10 +331,10 @@ func (a *app) joinAlreadyMember(l lang, w http.ResponseWriter, p store.InvitePre
 	a.joinHeaders(w)
 	target := "/ui/inbox"
 	if p.Remote != "" {
-		target = "/ui/knowledge?project=" + url.QueryEscape(p.Remote)
+		target = repoHref(p.Remote)
 	}
-	a.joinWrite(l, w, "joinmember", struct{ Title, URL string }{
-		l.msg("join.member_title", firstNonEmpty(p.Project, p.Org)), target})
+	a.joinWrite(l, w, "joinmember", struct{ Title, URL, Tab string }{
+		l.msg("join.member_title", shortName(firstNonEmpty(p.Project, p.Org))), target, l.msg("join.member_tab")})
 }
 
 // joinAccept löst die Einladung für das angemeldete Konto ein. Aufgerufen wird

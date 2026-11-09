@@ -190,7 +190,7 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d: %s", resp.StatusCode, page)
 	}
-	for _, want := range []string{"Alpha", joinProject, "Guest", "alice invited you to " + joinProject, "Your coding agents share what they learn with your team.", "<time "} {
+	for _, want := range []string{"Alpha", joinProject, "Guest", "alice invited you to app", "<time "} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q: %s", want, page)
 		}
@@ -288,7 +288,7 @@ func TestJoinAcceptNeedsInteractiveLoginAndCSRFAndHappensOnce(t *testing.T) {
 	// Die Seite für ein angemeldetes Konto bietet den Beitritt an.
 	page, _ := anna.Get(srv.URL + "/join/" + code)
 	text := body(t, page)
-	if !strings.Contains(text, "This is me, anna") || !strings.Contains(text, `action="/join/`+code+`/accept"`) {
+	if !strings.Contains(plainText(text), "This is me, anna") || !strings.Contains(text, `action="/join/`+code+`/accept"`) {
 		t.Fatalf("signed-in page: %s", text)
 	}
 	csrf := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)[1]
@@ -540,7 +540,7 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 	code := projectInvite(t, st, org, store.RoleMember)
 	page, _ := anna.Get(srv.URL + "/join/" + code)
 	text := body(t, page)
-	for _, want := range []string{"<strong>anna</strong>", "This is me, anna", `name="confirm_account"`, "Not you?", `action="/join/` + code + `/signout"`} {
+	for _, want := range []string{"<b>anna</b>", "This is me,", `name="confirm_account"`, "Not you?", `action="/join/` + code + `/signout"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("page lacks %q: %s", want, text)
 		}
@@ -548,14 +548,15 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 	if strings.Contains(text, "person:") {
 		t.Fatal("the page shows an internal id")
 	}
-	// The protective question stays: the box is not ticked for the person. Until it
-	// is, the reason stands next to the button and the page shows the box as open
-	// (acceptance finding 7, security review of PR #101).
+	// The protective question stays: the box is not ticked for the person and the
+	// form cannot be sent until it is (acceptance finding 7, security review of PR #101).
 	if regexp.MustCompile(`<input type="checkbox" name="confirm_account"[^>]*\bchecked\b`).MatchString(text) {
 		t.Fatalf("the confirmation is ticked for the person: %s", text)
 	}
-	if !strings.Contains(text, `class="join-confirm-hint"`) || !strings.Contains(text, "Confirm first that this is your account.") {
-		t.Fatalf("no visible reason next to the button: %s", text)
+	// Without script the browser itself refuses the form until the box is ticked and says
+	// why next to the box; a sentence under it that never goes away would say it twice.
+	if !regexp.MustCompile(`<input type="checkbox" name="confirm_account"[^>]*\brequired\b`).MatchString(text) || strings.Contains(text, "Confirm first that this is your account.") {
+		t.Fatalf("the box is not required, or a permanent hint stands next to the button: %s", text)
 	}
 	csrf := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)[1]
 	// Ohne Bestätigung des Kontonamens wird nichts verbraucht.

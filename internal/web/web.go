@@ -87,6 +87,7 @@ type pageData struct {
 	Invite                                                     bool
 	InviteV                                                    *joinView
 	ProviderName                                               string
+	Auth                                                       authView
 	Bootstrap, TokenOpen                                       bool
 	Shell                                                      shellView
 	Overview                                                   overviewView
@@ -177,6 +178,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /install.sh", a.installSh)
 	a.handle(mux, "GET /dist/{name}", a.distFile)
 	a.handle(mux, "GET /join/{code}", a.joinPage)
+	a.handle(mux, "GET /join/{code}/login", a.joinLogin)
 	a.handle(mux, "GET /join/", func(w http.ResponseWriter, r *http.Request) {
 		if a.joinGate(w, r) {
 			a.joinNotFound(a.langFor(r), w)
@@ -480,6 +482,7 @@ var webRoutes = map[string]webClass{
 	"GET /install.sh":                       webPublic,
 	"GET /dist/{name}":                      webPublic,
 	"GET /join/{code}":                      webPublic,
+	"GET /join/{code}/login":                webPublic,
 	"GET /join/":                            webPublic,
 	"GET /join/pair":                        webAccount,
 	"GET /join/pair/state":                  webAccount,

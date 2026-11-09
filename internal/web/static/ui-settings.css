@@ -61,6 +61,7 @@
   & .row .mt > span + span::before { content: "·"; margin-right: 12px; color: var(--fg-subtle); }
   & .chk-l { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--fg-muted); white-space: nowrap; }
   & .chk-l input { width: 16px; height: 16px; accent-color: var(--accent-emphasis); }
+  & .qs .chk-l { font-size: 14px; color: var(--fg-default); }
   & .fl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
   & .fl > span:first-child { font-size: 14px; font-weight: 600; color: var(--fg-default); }
   & .fl small { font-size: 12px; color: var(--fg-muted); }
@@ -149,7 +150,10 @@
   & .dl dt { color: var(--fg-muted); }
   & .dl dd { margin: 0; line-height: 21px; overflow-wrap: anywhere; }
   & .box .asks { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-muted); }
-  & .box .callout { margin: 0; border-radius: 0; border-width: 1px 0 0; }
+  & .box .callout { margin: 0 16px 16px; }
+  & .lnbox { margin: 16px 0; }
+  & .lnbox .cmdc { margin-top: 0; }
+  & .narrow > .lead { margin: 0 0 16px; }
   & .acts2 { display: flex; gap: 8px; margin-top: 16px; }
   & .acts2 .gbtn { flex: 1; }
   & .box .acts2 { margin: 0; padding: 16px; border-top: 1px solid var(--border-default); background: var(--canvas-subtle); border-radius: 0 0 6px 6px; }
@@ -166,7 +170,7 @@
   & .qform .gfield { flex: 1; max-width: 280px; }
   & .qform .gfield input { font-family: var(--ui-mono); letter-spacing: .08em; text-transform: uppercase; }
   & .qform .gfield input::placeholder { font-family: var(--ui-font); letter-spacing: 0; text-transform: none; }
-  & .waitrow { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-default); background: var(--canvas-subtle); border-radius: 0 0 6px 6px; color: var(--fg-muted); font-size: 14px; }
+  & .waitrow { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border-default); background: var(--canvas-subtle); border-radius: 0 0 6px 6px; color: var(--fg-muted); font-size: 14px; }
   & .pulse { position: relative; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--attention-fg); flex: none; }
   & .pulse::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; background: var(--attention-fg); opacity: 0; animation: setuppulse 1.8s ease-out infinite; }
   & .agents2 { display: inline-flex; gap: 4px; margin-left: 4px; }
@@ -175,7 +179,7 @@
   & .done .lead b { color: var(--fg-default); }
   & .cmdc.one .cmd { display: block; min-height: 40px; padding: 9px 96px 9px 12px; white-space: pre-wrap; }
   & .cmdc.one .gbtn { top: 50%; transform: translateY(-50%); right: 6px; }
-  & .cmdc.prose .cmd { display: block; font: 14px/1.5 var(--ui-font); padding: 12px 104px 12px 12px; }
+  & .cmdc.prose .cmd { margin: 0; display: block; font: 14px/1.5 var(--ui-font); padding: 12px 104px 12px 12px; }
   & .cmdc.prose .gbtn { top: 50%; transform: translateY(-50%); }
 
   /* Setup: numbered steps */
