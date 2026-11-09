@@ -82,8 +82,11 @@ func (s *Store) machineAccessIndex(account int64) *machineIndex {
 		}
 		rows.Close()
 	}
+	// A service reads no machine through an organization: it works only where
+	// a project names it (REQ-623, security review 7).
 	if rows, err := s.db.Query(`SELECT om.org_id, om.role FROM org_members om WHERE om.account_id=?
-		AND NOT EXISTS(SELECT 1 FROM org_guests g WHERE g.org_id=om.org_id AND g.account_id=om.account_id)`, account); err == nil {
+		AND NOT EXISTS(SELECT 1 FROM org_guests g WHERE g.org_id=om.org_id AND g.account_id=om.account_id)
+		AND NOT EXISTS(SELECT 1 FROM persons ps WHERE ps.id=om.account_id AND ps.kind='service')`, account); err == nil {
 		for rows.Next() {
 			var org int64
 			var role string
@@ -421,7 +424,9 @@ func (s *Store) machinesFor(account int64, only string) ([]Machine, error) {
 		return nil, err
 	}
 	slugs := s.orgSlugs()
-	rows, err := s.db.Query(`SELECT hostname, first_seen, last_seen FROM machines ORDER BY hostname`)
+	// Archived machines (test laptops, retired hosts) leave the lists; the page
+	// of a single one stays reachable for those who may see it.
+	rows, err := s.db.Query(`SELECT hostname, first_seen, last_seen FROM machines WHERE archived_at='' OR ?<>'' ORDER BY hostname`, only)
 	if err != nil {
 		return nil, err
 	}

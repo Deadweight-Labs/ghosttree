@@ -60,12 +60,15 @@ type ProjectInfo struct {
 	Named bool
 }
 
-// OrgChoice is an organization a project could be put into.
+// OrgChoice is an owner a project could be put into: an organization, or with
+// Own the person's own namespace (Slug is its handle when it exists already;
+// claiming passes no organization, and the server applies the owner rule).
 type OrgChoice struct {
 	Slug    string
 	Name    string
 	Role    string
 	Default bool
+	Own     bool
 }
 
 // ClaimPlan is what "create project from this folder" would do.

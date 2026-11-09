@@ -166,19 +166,14 @@ func tokenKindLabel(kind string) string {
 	return kind
 }
 
-// tokensPage listet die Tokens des Kontos; Administratoren sehen alle.
+// tokensPage listet die Tokens des Kontos. Auch ein Administrator sieht nur
+// seine eigenen: die Tokens fremder Maschinen gehen ihn im Browser nichts an
+// (14 A, #4376); wer den Server-Host hat, sieht sie mit ctx account tokens --db.
 func (a *app) tokensPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	principal := browserPrincipal(r)
-	admin := a.isAdmin(principal)
-	var tokens []store.TokenInfo
-	var err error
-	if admin {
-		tokens, err = a.store.ListAllTokens()
-	} else {
-		tokens, err = a.store.ListTokens(principal.Label)
-	}
+	tokens, err := a.store.ListTokens(principal.Label)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -204,7 +199,7 @@ func (a *app) tokensPage(w http.ResponseWriter, r *http.Request) {
 			Revocable: status == "active", Tracked: tokenTracked(t, now, since), Unused: tokenIsUnused(t, now, principal.TokenID, since)})
 	}
 	sortTokenRows(rows)
-	data := pageData{Title: l.msg("adm.tokens.title"), Tokens: rows, Admin: admin}
+	data := pageData{Title: l.msg("adm.tokens.title"), Tokens: rows}
 	for _, row := range rows {
 		if row.Unused {
 			data.UnusedTokens++
@@ -248,14 +243,7 @@ func sortTokenRows(rows []tokenRow) {
 // other accounts only from an interactive session, like a single revoke.
 func (a *app) tokensRevokeUnused(w http.ResponseWriter, r *http.Request) {
 	principal := browserPrincipal(r)
-	admin := a.isAdmin(principal)
-	var tokens []store.TokenInfo
-	var err error
-	if admin {
-		tokens, err = a.store.ListAllTokens()
-	} else {
-		tokens, err = a.store.ListTokens(principal.Label)
-	}
+	tokens, err := a.store.ListTokens(principal.Label)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

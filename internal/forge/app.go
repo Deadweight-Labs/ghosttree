@@ -334,6 +334,48 @@ func (g *GitHubApp) InstallationRepos(ctx context.Context, installationID int64)
 	return out, nil
 }
 
+// OrgProfile is what an organization shows of itself on GitHub: the login (the
+// address), the display name and the number of its picture.
+type OrgProfile struct {
+	Login string
+	Name  string
+	ID    int64
+}
+
+// OrgProfiler reads the profile of a connected organization (GitHub App).
+type OrgProfiler interface {
+	OrgProfile(ctx context.Context, installationID int64, login string) (OrgProfile, error)
+}
+
+// OrgProfile reads GET /orgs/{login} with the installation's token and only
+// the metadata right. The login comes back as GitHub spells it; a login that
+// is not a GitHub login is refused before it goes into an address.
+func (g *GitHubApp) OrgProfile(ctx context.Context, installationID int64, login string) (OrgProfile, error) {
+	if !loginSyntax.MatchString(login) {
+		return OrgProfile{}, ErrBadIdentity
+	}
+	tok, err := g.installationToken(ctx, installationID, map[string]string{"metadata": "read"})
+	if err != nil {
+		return OrgProfile{}, err
+	}
+	var resp struct {
+		Login string `json:"login"`
+		Name  string `json:"name"`
+		ID    int64  `json:"id"`
+	}
+	if err := g.getAs(ctx, tok, "/orgs/"+url.PathEscape(login), &resp); err != nil {
+		return OrgProfile{}, err
+	}
+	if !loginSyntax.MatchString(resp.Login) || !strings.EqualFold(resp.Login, login) {
+		return OrgProfile{}, ErrBadIdentity
+	}
+	name := strings.TrimSpace(resp.Name)
+	if len(name) > 100 {
+		name = ""
+	}
+	return OrgProfile{Login: resp.Login, Name: name, ID: resp.ID}, nil
+}
+
 // PullRequest ist der Stand eines PR für die Zuordnung von Branch und PR.
 type PullRequest struct {
 	Number    int       `json:"number"`

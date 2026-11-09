@@ -28,21 +28,28 @@ const orgUsage = `usage: ctx org <command>
                                           (web UI, or --db on the server host)
   invitations <org> [revoke <id>]         list or revoke invitations
   accept <code>                           join an organization with a code
-  rename <org> <name> [--slug S]          rename an organization (owner)
-  default <org>                           organization for your new projects ("none" clears)`
+  rename <org> <name> [--slug S]          rename an organization (owner)`
 
 const projectUsage = `usage: ctx project <command>
 
-  list [--org O]                          projects of your organizations
-  create <name> [--org O]                 new project without git, id <org>/<name>
-                                          (name such as infra); you become its owner
+  list [--org O]                          projects of your organizations and your own
+  create <name> [--org O]                 new project without git, id <owner>/<name>
+                                          (name such as infra); you become its owner;
+                                          without --org it goes to your own namespace
   link <name>                             this folder and everything below it belongs to
                                           the project; recorded on this machine only
   unlink [--missing]                      remove this folder's link (--missing: all
                                           links to folders that are gone)
   links                                   the folders linked on this machine
-  claim [remote] [--org O]                assign a project to an organization
-                                          (default remote: the current repository)
+  claim [remote] [--org O]                make the remote a project: in the organization
+                                          O, without --org in your own namespace; refused
+                                          as contested when other accounts have entries
+                                          under it (default remote: the current repository)
+  claim --force <remote> --org O --db P   admin on the server: decide a contested remote
+                                          (or in the web UI, Organizations page)
+  reassign <remote> --to N --db P         admin on the server: give a known project to
+                                          the organization or person's namespace N
+                                          (or in the web UI; logged on both sides)
   move <remote> --org O                   web UI only (organizations page)
   move --force <remote> --org O --db P    admin: move without permission checks
                                           (database access, logged in org_events)
@@ -165,11 +172,11 @@ func cmdOrg(args []string, stdout io.Writer) int {
 		}
 		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 		for _, o := range orgs {
-			def := ""
-			if o.Default {
-				def = "default"
+			kind := "organization"
+			if o.Kind == store.OrgKindUser {
+				kind = "your own namespace"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", o.Slug, o.Name, o.Role, def)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", o.Slug, o.Name, o.Role, kind)
 		}
 		tw.Flush()
 	case "create":
@@ -265,17 +272,8 @@ func cmdOrg(args []string, stdout io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "you joined %s\n", o.Slug)
 	case "default":
-		if len(pos) != 1 {
-			return usage()
-		}
-		ref := pos[0]
-		if ref == "none" {
-			ref = "0"
-		}
-		if _, err := c.SetDefaultOrg(ref); err != nil {
-			return orgFail(stdout, "set default organization", err)
-		}
-		fmt.Fprintf(stdout, "default organization: %s\n", pos[0])
+		fmt.Fprintln(stdout, "ctx org default is gone: a new project belongs to the organization that connected its GitHub account, else to your own namespace")
+		return 2
 	}
 	return 0
 }
@@ -290,12 +288,13 @@ func cmdProject(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("project "+sub, flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	org := fs.String("org", "", "organization (slug or id)")
+	to := fs.String("to", "", "reassign: the new owner (organization or person's namespace)")
 	db := fs.String("db", "ghosttree.db", "database path (with --force)")
 	review := fs.Bool("review", false, "role set: also grant can_review")
 	missing := fs.Bool("missing", false, "unlink: remove all links to folders that no longer exist")
 	dbSet := false
 	switch sub {
-	case "list", "claim", "move", "roles", "role", "create", "link", "unlink", "links":
+	case "list", "claim", "move", "roles", "role", "create", "link", "unlink", "links", "reassign":
 	default:
 		fmt.Fprintln(stdout, projectUsage)
 		return 2
@@ -315,6 +314,22 @@ func cmdProject(args []string, stdout io.Writer) int {
 		if len(pos) > 1 {
 			return usage()
 		}
+	case "reassign":
+		if len(pos) != 1 || *to == "" || !dbSet {
+			return usage()
+		}
+		st, ok := openAccountStore(*db, stdout)
+		if !ok {
+			return 1
+		}
+		defer st.Close()
+		p, err := st.ReassignProjectAsOperator(pos[0], *to)
+		if err != nil {
+			fmt.Fprintf(stdout, "reassign project: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s now belongs to %s\n", p.Remote, p.Org)
+		return 0
 	case "create", "link":
 		if len(pos) != 1 {
 			return usage()
@@ -345,7 +360,25 @@ func cmdProject(args []string, stdout io.Writer) int {
 			return projectRoleViaDB(pos, *db, *review, stdout)
 		}
 	}
-	if force {
+	if force && sub == "claim" {
+		if *org == "" || !dbSet || len(pos) != 1 {
+			fmt.Fprintln(stdout, "claim --force decides a contested remote on the server: ctx project claim --force <remote> --org O --db P (or in the web UI, Organizations page)")
+			return 2
+		}
+		st, ok := openAccountStore(*db, stdout)
+		if !ok {
+			return 1
+		}
+		defer st.Close()
+		p, err := st.ClaimContestedAsOperator(pos[0], *org)
+		if err != nil {
+			fmt.Fprintf(stdout, "claim project: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s now belongs to %s\n", p.Remote, p.Org)
+		return 0
+	}
+	if force && sub != "claim" {
 		if sub != "move" {
 			return usage()
 		}

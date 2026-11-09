@@ -362,7 +362,12 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	// steps in a goroutine of its own, so serving does not wait for it either.
 	embedCtx, stopEmbed := context.WithCancel(ctx)
 	waitEmbed := startEmbedding(embedCtx, st, cfg.Embed, slog.New(slog.NewJSONHandler(stderr, nil)))
+	mirrorCtx, stopMirror := context.WithCancel(ctx)
+	mirrorApp := forge.NewGitHubApp(forge.AppConfigFromOS())
+	waitMirror := startOrgMirror(mirrorCtx, st, mirrorApp, mirrorApp.Configured(), slog.New(slog.NewJSONHandler(stderr, nil)))
 	err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)))
+	stopMirror()
+	waitMirror()
 	stopEmbed()
 	waitEmbed()
 	stopIndex()
@@ -413,6 +418,10 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	explainCfg.Language = cfg.Language
 	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))
 	webOptions = append(webOptions, web.WithGardenLimits(cfg.GardenLimits))
+	// Automatic approvals of the gardener (REQ-624), for the namespaces whose
+	// owners switched rules on. They run in the server because they act through
+	// the same plans as the review page; the loop lives as long as the process.
+	webOptions = append(webOptions, web.WithGardenAuto(context.Background(), 10*time.Minute, slog.New(slog.NewJSONHandler(stderr, nil))))
 	// Die GitHub-App hat Vorrang, sobald sie eingerichtet ist; ohne sie bleibt die
 	// OAuth-App der Rückfall. Der Webhook der App antwortet nur mit gültiger Signatur.
 	ghApp := forge.NewGitHubApp(forge.AppConfigFromOS())

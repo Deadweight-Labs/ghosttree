@@ -303,7 +303,7 @@ func TestRunbookOperatorAllowsWithTheDatabase(t *testing.T) {
 	if _, err := st.CreateOrg("person:1", "Acme", "acme"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.EnsureProject("person:1", cliHere); err != nil {
+	if _, err := claimInOrg(st, "person:1", cliHere); err != nil {
 		t.Fatal(err)
 	}
 	spec, _ := runbook.ParseSpec([]byte(rbCLISpec))
@@ -355,7 +355,7 @@ func TestRunbookCLIImportsTheExampleFile(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "rollout-prod: valid") || !strings.Contains(out, "prod-ssh-zugang: valid") {
 		t.Fatalf("dry run: %d\n%s", code, out)
 	}
-	if _, err := st.EnsureProject("person:1", "github.com/example/app"); err != nil {
+	if _, err := claimInOrg(st, "person:1", "github.com/example/app"); err != nil {
 		t.Fatal(err)
 	}
 	code, out = rb(t, "runbook", "import", seed)

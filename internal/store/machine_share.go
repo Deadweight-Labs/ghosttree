@@ -623,7 +623,7 @@ func insertEntryShareTx(tx txExec, kind string, id int64, machine string, orgs [
 			if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM machine_shares WHERE hostname=? AND org_id=? AND role=?)`, host, org, ShareWrite).Scan(&write); err != nil {
 				return err
 			}
-			if !write || orgMemberRoleTx(tx, org, by) == "" {
+			if !write || orgMemberRoleTx(tx, org, by) == "" || isServiceTx(tx, by) {
 				return ErrAccessForbidden
 			}
 		}

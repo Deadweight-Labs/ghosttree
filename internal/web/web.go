@@ -82,6 +82,7 @@ type pageData struct {
 	KnowledgeItemV                                             *knowledgeItemView
 	AgentModels                                                *agentModelsView
 	ReviewV                                                    *reviewView
+	HeldV                                                      *heldRow
 	ContextV                                                   *contextView
 	Sessions                                                   []store.Session
 	Chunks                                                     []store.Chunk
@@ -119,6 +120,7 @@ type pageData struct {
 	FeatureV                                                   *featureView
 	MachineV                                                   *machinePageView
 	OrgMachinesV                                               *orgMachinesView
+	GardenTabV                                                 *gardenTabView
 	TasksV                                                     *tasksView
 	TaskV                                                      *taskPageView
 	PackagesV                                                  *packagesView
@@ -241,6 +243,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
 	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
 	a.handle(mux, "POST /ui/review/bulk", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewBulk))))))
+	a.handle(mux, "GET /ui/review/held/{kind}/{id}", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.reviewHeldPreview))))
+	a.handle(mux, "POST /ui/review/held", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewHeld))))))
 	a.handle(mux, "POST /ui/review/{id}/{verdict}", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDecide))))))
 	a.handle(mux, "POST /ui/review/{id}/merge", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewMerge))))))
 	a.handle(mux, "POST /ui/review/{id}/criterion", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewCriterion))))))
@@ -254,6 +258,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/coord/events", a.requirePerson(http.HandlerFunc(a.coordEvents)))
 	a.handle(mux, "GET /ui/live", a.requirePerson(http.HandlerFunc(a.liveEvents)))
 	a.handle(mux, "GET /ui/avatar/{id}", a.requirePerson(http.HandlerFunc(a.avatarImage)))
+	a.handle(mux, "GET /ui/avatar/org/{id}", a.requirePerson(http.HandlerFunc(a.orgAvatarImage)))
 	a.handle(mux, "GET /ui/coord/thread/{id}", a.requirePerson(http.HandlerFunc(a.coordThreadPage)))
 	a.handle(mux, "POST /ui/coord/send", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordSend)))))
 	a.handle(mux, "POST /ui/coord/thread/create", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordCreateThread)))))
@@ -291,12 +296,15 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		"/ui/orgs/project/create": a.orgProjectCreate, "/ui/orgs/project/visibility": a.orgProjectVisibility,
 		"/ui/orgs/source/connect": a.orgSourceConnect, "/ui/orgs/source/add": a.orgSourceAdd,
 		"/ui/orgs/source/remove": a.orgSourceRemove, "/ui/orgs/source/import": a.orgSourceImport,
-		"/ui/orgs/prefix/visibility": a.orgPrefixVisibility,
+		"/ui/orgs/prefix/visibility": a.orgPrefixVisibility, "/ui/orgs/follow": a.orgFollowGitHub,
+		"/ui/orgs/garden": a.orgGardenSave, "/ui/gardener/undo": a.gardenAutoUndo,
+		"/ui/handover": a.handoverConsent, "/ui/orgs/takeover": a.handoverTakeOver,
+		"/ui/orgs/assign": a.orgAssign,
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
 	for path, h := range map[string]http.HandlerFunc{
-		"/ui/orgs/accept": a.orgAccept, "/ui/orgs/default": a.orgDefault,
+		"/ui/orgs/accept": a.orgAccept,
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(limitBody(a.requireCSRF(h))))
 	}
@@ -582,9 +590,11 @@ var webRoutes = map[string]webClass{
 	"POST /ui/knowledge/{id}/edit":          webAdmin,
 	"POST /ui/knowledge/{id}/move":          webAdmin,
 	"GET /ui/review":                        webProject,
+	"GET /ui/review/held/{kind}/{id}":       webProject,
 	"GET /ui/search":                        webProject,
 	"GET /ui/search/stream":                 webProject,
 	"POST /ui/review/bulk":                  webAdmin,
+	"POST /ui/review/held":                  webAdmin,
 	"POST /ui/review/{id}/{verdict}":        webAdmin,
 	"POST /ui/review/{id}/merge":            webAdmin,
 	"POST /ui/review/{id}/criterion":        webAdmin,
@@ -598,6 +608,7 @@ var webRoutes = map[string]webClass{
 	"GET /ui/coord/events":                  webCoord,
 	"GET /ui/live":                          webAccount,
 	"GET /ui/avatar/{id}":                   webAccount,
+	"GET /ui/avatar/org/{id}":               webAccount,
 	"GET /ui/coord/thread/{id}":             webCoord,
 	"POST /ui/coord/send":                   webCoord,
 	"POST /ui/coord/thread/create":          webCoord,
@@ -638,11 +649,16 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/source/remove":           webAdmin,
 	"POST /ui/orgs/source/import":           webAdmin,
 	"POST /ui/orgs/prefix/visibility":       webAdmin,
+	"POST /ui/orgs/follow":                  webAdmin,
+	"POST /ui/orgs/assign":                  webAdmin,
+	"POST /ui/orgs/garden":                  webAdmin,
+	"POST /ui/gardener/undo":                webAdmin,
+	"POST /ui/handover":                     webAdmin,
+	"POST /ui/orgs/takeover":                webAdmin,
 	"GET /ui/orgs/source/callback":          webAccount,
 	"POST /ui/orgs/create":                  webAdmin,
 	"POST /ui/orgs/rename":                  webAdmin,
 	"POST /ui/orgs/accept":                  webAccount,
-	"POST /ui/orgs/default":                 webAccount,
 
 	"GET /ui/tasks":             webProject,
 	"POST /ui/tasks/done":       webAdmin,

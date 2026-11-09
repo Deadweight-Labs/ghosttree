@@ -20,6 +20,7 @@ const dbUsage = `usage: ctx db vacuum --db <path> [--tmpdir <dir>] [--fts-optimi
        ctx db check --db <path> [--full]
        ctx db backfill-actors --db <path> [--dry-run] [--batch N] [--kind k,...] [--no-models] [--json]
        ctx db chunk-stats --db <path> [--sample N] [--json]
+       ctx db migrate-owners --db <path> --dry-run|--apply --backup <file> [--plan <file>]
 
 Maintenance of the database file with the SQL functions of the schema. The
 sqlite3 CLI cannot do this: the CHECK constraints of the snapshot tables call
@@ -29,7 +30,8 @@ ghosttree_valid_utf8, which only ctx registers, so "sqlite3 <db> VACUUM" and
   vacuum  give the free pages back to the filesystem (server stopped)
   check   quick_check or integrity_check, writes nothing (may run beside the server)
   backfill-actors  who wrote existing entries (agent or person), only where proven
-  chunk-stats  bytes of stored transcript lines per line type, from a sample`
+  chunk-stats  bytes of stored transcript lines per line type, from a sample
+  migrate-owners   projects to their owners (organization or person), REQ-623`
 
 const dbChunkStatsUsage = `usage: ctx db chunk-stats --db <path> [--sample N] [--json]
 
@@ -113,6 +115,8 @@ func cmdDB(args []string, stdout io.Writer) int {
 		return cmdDBBackfillActors(args[1:], stdout)
 	case "chunk-stats":
 		return cmdDBChunkStats(args[1:], stdout)
+	case "migrate-owners":
+		return cmdDBMigrateOwners(args[1:], stdout)
 	case "help", "--help", "-h":
 		fmt.Fprintln(stdout, dbUsage)
 		return 0

@@ -117,6 +117,9 @@ type Object struct {
 	// verantworten darf (keine Schreib-Freigabe für genau diese Org). Sie geben
 	// dem Betrachter keinen Zugang.
 	Unentitled []int64
+	// HeldAuthor: the entry is held since its project came into existence and
+	// the viewer wrote it; the author keeps reading it without a role there.
+	HeldAuthor bool
 	// OriginOwner: der Betrachter besitzt die private Session, aus der ein noch
 	// nicht freigegebener, distillierter Eintrag stammt; er darf ihn freigeben
 	// oder verwerfen, nie verifizieren.
@@ -440,6 +443,9 @@ type ProjectAccess struct {
 	unclaimed map[string]bool
 	writers   map[string]map[string]bool
 
+	heldOnce sync.Once
+	held     map[string]map[int64]int64
+
 	ownersOnce     sync.Once
 	ownerIDs       map[string]int64
 	ownerDefault   int64
@@ -632,6 +638,9 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	if (res == ResTranscript || res == ResSessionMeta) && act == ActRead && obj.Own {
 		return Decision{Allowed: true}
 	}
+	if obj.HeldAuthor && act == ActRead {
+		return Decision{Allowed: true, Reason: "own entry, held in the project"}
+	}
 	d := Decision{Hidden: rank == 0 || act == ActRead, Strict: strictDenial(rank, act)}
 	if rank == 0 {
 		d.Reason = "not a member"
@@ -714,7 +723,7 @@ func (a *ProjectAccess) Check(project string, res Resource, act Action, obj Obje
 // -------- Hilfen je Ressource
 
 func knowledgeObject(a *ProjectAccess, k Knowledge) Object {
-	obj := Object{Own: a.ownsKnowledge(k), Confidence: k.Confidence, EntryID: k.ID}
+	obj := Object{Own: a.ownsKnowledge(k), Confidence: k.Confidence, EntryID: k.ID, HeldAuthor: a.heldAuthor(HeldKnowledge, k.ID)}
 	// Die Maschinen-Achse gibt es nur ohne Projekt; mit Projekt ist die Maschine
 	// Zuordnung und lässt Besitz und Freigaben der Maschine außen vor.
 	if k.Scope.Machine != "" && k.Scope.Project == "" {
@@ -751,9 +760,29 @@ func (a *ProjectAccess) knowledgeHeld(k Knowledge) bool {
 	return held
 }
 
+// heldAuthor: the entry is held back and the viewer is its author.
+func (a *ProjectAccess) heldAuthor(kind string, id int64) bool {
+	a.heldOnce.Do(func() { a.held = a.st.heldIndex() })
+	author, ok := a.held[kind][id]
+	return ok && a.valid && a.account != 0 && author == a.account
+}
+
+// heldBack: the entry is held back since its project came into existence
+// (held_entries) and the viewer is not its author. Like every read rule it
+// refuses only with enforcement; without, it logs what it would refuse.
+func (a *ProjectAccess) heldBack(kind string, id int64, project string, res Resource) bool {
+	a.heldOnce.Do(func() { a.held = a.st.heldIndex() })
+	author, ok := a.held[kind][id]
+	if !ok || (a.valid && a.account != 0 && author == a.account) {
+		return false
+	}
+	d := Decision{Hidden: true, Reason: "held until a reviewer of the project releases it"}
+	return !a.st.accessCfg().apply(a.principal.ID, project, res, ActRead, d)
+}
+
 // CanSeeKnowledge: Lesefilter für Listen, Suche und Bootstrap.
 func (a *ProjectAccess) CanSeeKnowledge(k Knowledge) bool {
-	if a.knowledgeHeld(k) {
+	if a.knowledgeHeld(k) || a.heldBack(HeldKnowledge, k.ID, k.Scope.Project, ResKnowledge) {
 		return false
 	}
 	return a.Allow(k.Scope.Project, ResKnowledge, ActRead, knowledgeObject(a, k))
@@ -763,7 +792,7 @@ func (a *ProjectAccess) CanSeeKnowledge(k Knowledge) bool {
 // Vertrauensstufe, darunter vielleicht nie freigegebene. Er gilt deshalb wie ein
 // Eintrag der untersten Stufe: ab member, nicht für Gäste.
 func (a *ProjectAccess) CanSeeKnowledgeHistory(k Knowledge) bool {
-	if a.knowledgeHeld(k) {
+	if a.knowledgeHeld(k) || a.heldBack(HeldKnowledge, k.ID, k.Scope.Project, ResKnowledge) {
 		return false
 	}
 	obj := knowledgeObject(a, k)
@@ -773,7 +802,7 @@ func (a *ProjectAccess) CanSeeKnowledgeHistory(k Knowledge) bool {
 
 // CheckKnowledge prüft eine Aktion auf einen vorhandenen Eintrag.
 func (a *ProjectAccess) CheckKnowledge(k Knowledge, act Action) error {
-	if a.knowledgeHeld(k) {
+	if a.knowledgeHeld(k) || a.heldBack(HeldKnowledge, k.ID, k.Scope.Project, ResKnowledge) {
 		return ErrAccessNotFound
 	}
 	return a.Check(k.Scope.Project, ResKnowledge, act, knowledgeObject(a, k))
@@ -850,6 +879,8 @@ func (a *ProjectAccess) RequestFilter(f requestdomain.SearchFilter) requestdomai
 	// bleiben dem Besitzer dieser Session vorbehalten.
 	a.loadMachines()
 	f.HideHeld, f.HeldViewer, f.HeldInstanceOwner = true, a.account, a.owner
+	// Entries held since the project came into existence: only their author.
+	f.HideHeldEntries = true
 	return f
 }
 
@@ -861,6 +892,8 @@ func (a *ProjectAccess) NoteRequestHits(hits []requestdomain.SearchHit) {
 	}
 	for _, h := range hits {
 		a.Allow(h.Request.Scope.Project, ResRequest, ActRead, Object{})
+		// Held requests: logged like heldBack, as the filter would leave them out.
+		a.heldBack(HeldRequest, h.Request.ID, h.Request.Scope.Project, ResRequest)
 	}
 }
 
@@ -918,6 +951,9 @@ func (a *ProjectAccess) CanDeliverKnowledge(k Knowledge) bool {
 		}
 		return true
 	}
+	if a.heldBack(HeldKnowledge, k.ID, k.Scope.Project, ResDelivery) {
+		return false
+	}
 	// Mit Projekt gilt allein die Auslieferungssperre des Projekts (der Autor ist
 	// dort jetzt Schreiber, #2581), auch wenn eine Maschine am Eintrag steht: sie
 	// ist Zuordnung, nicht Berechtigung.
@@ -949,7 +985,18 @@ func (a *ProjectAccess) CanSeeGhost(g GhostFile) bool {
 
 // CanSeeDocument: Lesefilter für Dokumentlisten.
 func (a *ProjectAccess) CanSeeDocument(d Document) bool {
-	return a.Allow(d.Project, ResDocument, ActRead, Object{Own: a.IsAuthor(d.Person)})
+	if a.heldBack(HeldDocument, d.ID, d.Project, ResDocument) {
+		return false
+	}
+	return a.Allow(d.Project, ResDocument, ActRead, Object{Own: a.IsAuthor(d.Person), HeldAuthor: a.heldAuthor(HeldDocument, d.ID)})
+}
+
+// CheckDocument prüft eine Aktion auf ein vorhandenes Dokument.
+func (a *ProjectAccess) CheckDocument(d Document, act Action) error {
+	if a.heldBack(HeldDocument, d.ID, d.Project, ResDocument) {
+		return ErrAccessNotFound
+	}
+	return a.Check(d.Project, ResDocument, act, Object{Own: a.IsAuthor(d.Person), HeldAuthor: a.heldAuthor(HeldDocument, d.ID)})
 }
 
 // globalListResource: nur Wissen und Aufträge haben globale Einträge, die sich

@@ -29,7 +29,7 @@ func accessFixture(t *testing.T) *Store {
 			t.Fatal(err)
 		}
 	}
-	if _, err := st.EnsureProject("person:1", roleProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", roleProject); err != nil {
 		t.Fatal(err)
 	}
 	for who, r := range map[string]struct {
@@ -141,7 +141,7 @@ func TestMatrixPerRoleResourceAction(t *testing.T) {
 // übereinstimmen, auch für den impliziten Org-Owner und Konten ohne Rolle.
 func TestAccountRolesMatchesProjectRole(t *testing.T) {
 	st := accessFixture(t)
-	if _, err := st.EnsureProject("person:1", "github.com/dw/q"); err != nil {
+	if _, err := claimInOrg(st, "person:1", "github.com/dw/q"); err != nil {
 		t.Fatal(err)
 	}
 	for _, who := range []string{"person:1", "person:2", "person:3", "person:4", "person:5", "person:6"} {
@@ -473,12 +473,12 @@ func sameSet(got []string, want ...string) bool {
 func TestVisibleProjectsByRoleEnforced(t *testing.T) {
 	st := accessFixture(t) // alpha: roleProject; person:6 (nora) ohne Org
 	const alpha2, beta1 = "github.com/dw/alpha2", "github.com/dw/beta1"
-	if _, err := st.EnsureProject("person:1", alpha2); err != nil {
+	if _, err := claimInOrg(st, "person:1", alpha2); err != nil {
 		t.Fatal(err)
 	}
 	// nora (person:6) ist Owner von beta und nur Member in alpha.
 	mustOrg(t, st, "person:6", "Beta", "beta")
-	if _, err := st.ClaimProject("person:6", beta1, "beta"); err != nil {
+	if _, err := claimOrPlace(st, "person:6", beta1, "beta"); err != nil {
 		t.Fatal(err)
 	}
 	code, _, err := st.CreateInvitation("person:1", 1, "", OrgMember, 0)
