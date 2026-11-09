@@ -147,3 +147,11 @@ func TestSearchMoreHitsAtTheLastStepLeadsToTheIssueListOrNowhere(t *testing.T) {
 		t.Errorf("a line with is:open links to %q", got)
 	}
 }
+
+// The page reads as many hits as the count needs in one long page of the request
+// search: what the qualified search fetches must fit into it.
+func TestSearchFetchFitsTheLargestLongPage(t *testing.T) {
+	if searchFetch > store.RequestLongPageMax || searchCountCap+1 > store.RequestLongPageMax {
+		t.Errorf("a search reads %d (qualified) or %d hits of requests, a long page holds %d", searchFetch, searchCountCap+1, store.RequestLongPageMax)
+	}
+}

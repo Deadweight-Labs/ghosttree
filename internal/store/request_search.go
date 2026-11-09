@@ -45,9 +45,17 @@ func ValidRequestCursor(cursor string) bool {
 	return err == nil
 }
 
-func requestLimit(limit int) int {
+// RequestLongPageMax is the largest page of a request search that asks for a long
+// page (SearchFilter.LongPage); other pages stop at 25.
+const RequestLongPageMax = 200
+
+func requestLimit(f requestdomain.SearchFilter) int {
+	limit := f.Limit
 	if limit <= 0 {
 		limit = 10
+	}
+	if f.LongPage {
+		return min(limit, RequestLongPageMax)
 	}
 	return min(limit, 25)
 }
@@ -187,7 +195,7 @@ func (s *Store) scanRequestHits(ctx context.Context, rows *sql.Rows) ([]requestd
 // by id, a query a filter on the full-text index, the cursor the last id of a
 // page (or, when a ranked search has fallen back to it, ~N: skip that many).
 func (s *Store) requestsByList(ctx context.Context, filter requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
-	limit := requestLimit(filter.Limit)
+	limit := requestLimit(filter)
 	query := requestHitSelect(filter)
 	var where []string
 	var args []any
@@ -256,7 +264,7 @@ var requestPool = keepScanCap
 // not depend on the cursor, only on the query, the filter and the page size (the
 // room for hits of meaning alone is a share of one page).
 func (s *Store) fuseRequests(ctx context.Context, filter requestdomain.SearchFilter, mode SearchMode, qvec []float32, cfg *EmbedSearchConfig) (fused []fusedHit, truncated bool, err error) {
-	limit := requestLimit(filter.Limit)
+	limit := requestLimit(filter)
 	pool := requestPool
 	where, args := requestAttrWhere(filter)
 	cond := strings.Join(where, " AND ")
@@ -313,7 +321,7 @@ func (s *Store) fuseRequests(ctx context.Context, filter requestdomain.SearchFil
 // hybridRequests answers a query with the page of its fusion that the cursor
 // names.
 func (s *Store) hybridRequests(ctx context.Context, filter requestdomain.SearchFilter, mode SearchMode, qvec []float32, cfg *EmbedSearchConfig) (requestdomain.SearchPage, error) {
-	limit := requestLimit(filter.Limit)
+	limit := requestLimit(filter)
 	offset, _ := parseHybridCursor(filter.Cursor)
 	fused, truncated, err := s.fuseRequests(ctx, filter, mode, qvec, cfg)
 	if err != nil {

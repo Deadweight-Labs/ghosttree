@@ -495,7 +495,7 @@ func (a *app) searchRequests(ctx context.Context, l lang, st *store.Store, pa *s
 	} else if n, err := st.CountRequestMatches(pa.RequestFilter(filter)); err == nil {
 		g.Total, g.Exact = n, true
 	}
-	hits, more, err := requestPages(ctx, st, pa, filter, want)
+	hits, more, err := requestWindow(ctx, st, pa, filter, want)
 	if err != nil {
 		return g
 	}
@@ -839,36 +839,22 @@ func markWords(text string, words []string) template.HTML {
 	return template.HTML(b.String())
 }
 
-// requestPages reads the requests of a search page by page (a page holds at
-// most 25) until want are read or the search ends, and says to the log mode
-// what the rights would have hidden. more says that the search has more hits
-// than the want that came back: a page was left with a cursor, or the ranked
-// search ended cut at its depth (Truncated). It reads through ctx, so the time
-// budget of a live search ends the pages too.
-func requestPages(ctx context.Context, st *store.Store, pa *store.ProjectAccess, filter requestdomain.SearchFilter, want int) (hits []requestdomain.SearchHit, more bool, err error) {
-	cursor := ""
-	for len(hits) < want {
-		f := filter
-		// The size of a page is the same for every page: a ranked search fuses
-		// differently for another size, and its pages would no longer add up.
-		f.Limit, f.Cursor = requestPageSize, cursor
-		page, err := st.SearchRequestsWithContext(ctx, pa.RequestFilter(f), store.SearchAuto)
-		if err != nil {
-			return nil, false, err
-		}
-		pa.NoteRequestHits(page.Results)
-		hits = append(hits, page.Results...)
-		more = page.NextCursor != "" || page.Truncated
-		if page.NextCursor == "" || len(page.Results) == 0 {
-			break
-		}
-		cursor = page.NextCursor
+// requestWindow reads the first want requests of a search in one query (a long
+// page: every further page of a search costs the whole query again, and a count
+// of 200 would be eight of them) and says to the log mode what the rights would
+// have hidden. more says that the search has more hits than the want that came
+// back: the page ended with a cursor, or the ranked search ended cut at its
+// depth (Truncated). It reads through ctx, so the time budget of a live search
+// ends the query too.
+func requestWindow(ctx context.Context, st *store.Store, pa *store.ProjectAccess, filter requestdomain.SearchFilter, want int) (hits []requestdomain.SearchHit, more bool, err error) {
+	filter.Limit, filter.Cursor, filter.LongPage = min(want, store.RequestLongPageMax), "", true
+	page, err := st.SearchRequestsWithContext(ctx, pa.RequestFilter(filter), store.SearchAuto)
+	if err != nil {
+		return nil, false, err
 	}
-	return hits[:min(len(hits), want)], more || len(hits) > want, nil
+	pa.NoteRequestHits(page.Results)
+	return page.Results, page.NextCursor != "" || page.Truncated, nil
 }
-
-// requestPageSize is the largest page a request search gives.
-const requestPageSize = 25
 
 // sessionPageMax is the largest page the search of transcripts gives; it turns a
 // larger Limit into 50 (store.SearchTranscripts).
