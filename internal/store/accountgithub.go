@@ -13,10 +13,12 @@ import (
 // interface shows; it grants no right and is no login.
 //
 // Who may set it: the account's owner after a proven GitHub login (the callback
-// of the GitHub connection, REQ-596, will call SetAccountGitHub), or an instance
-// admin with database access (ctx account link-github). Never an organization
-// member for somebody else. The store does not know who calls; the callers above
-// are the only ones, and the writer inventory lists the method as a write.
+// of the GitHub connection, REQ-596, calls SetAccountGitHub with the login GitHub
+// itself reported), or an instance admin with database access (ctx account
+// link-github). Never an organization member for somebody else. The owner can
+// also take the link away again (ClearAccountGitHub). The store does not know who
+// calls; the callers above are the only ones, and the writer inventory lists both
+// methods as writes.
 
 // ErrInvalidGitHubLogin is returned for a login that is not in GitHub's syntax.
 var ErrInvalidGitHubLogin = errors.New("not a GitHub login: letters, digits and single hyphens, at most 39 characters")
@@ -64,6 +66,22 @@ func (s *Store) SetAccountGitHub(accountID, login string, githubID int64) error 
 	_, err := s.db.Exec(`INSERT INTO account_github(account_id, login, github_id, linked_at) VALUES(?,?,?,?)
 		ON CONFLICT(account_id) DO UPDATE SET login=excluded.login, github_id=excluded.github_id, linked_at=excluded.linked_at`,
 		id, login, githubID, time.Now().UTC().Format(time.RFC3339))
+	return err
+}
+
+// ClearAccountGitHub removes the GitHub link of an account, so its avatar is the
+// initials again. Unlinking an account that has none is not an error.
+func (s *Store) ClearAccountGitHub(accountID string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{accountID}, func(d *Store, p []any) error {
+			return d.ClearAccountGitHub(p[0].(string))
+		})
+	}
+	id, ok := accountNumericID(accountID)
+	if !ok {
+		return errAccountNotFound
+	}
+	_, err := s.db.Exec(`DELETE FROM account_github WHERE account_id=?`, id)
 	return err
 }
 

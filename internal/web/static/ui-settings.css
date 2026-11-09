@@ -226,6 +226,8 @@
   & .pedit > summary::-webkit-details-marker { display: none; }
   & .pedit .dform { margin-top: 8px; }
   & .ph3 { margin: 16px 0 8px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .pgh { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  & .pghl { font-weight: 600; overflow-wrap: anywhere; }
   & .porgs { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
   & .porgs a { display: flex; align-items: center; gap: 8px; }
   & .porgs .gav { width: 20px; height: 20px; border-radius: 4px; }

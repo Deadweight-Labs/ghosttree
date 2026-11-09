@@ -21,14 +21,22 @@ import (
 func WithSourceProver(p forge.Prover) Option { return func(a *app) { a.prover = p } }
 
 const (
-	sourceFlowTTL    = 10 * time.Minute
-	maxSourceFlows   = 200
-	sourcePathPrefix = "/ui/orgs/source/"
+	sourceFlowTTL            = 10 * time.Minute
+	maxSourceFlows           = 200
+	maxSourceFlowsPerAccount = 3
+	sourcePathPrefix         = "/ui/orgs/source/"
 )
+
+// flowLink ist der Zweck eines Ablaufs, der das GitHub-Konto des Menschen mit
+// seinem ghosttree-Konto verbindet (Profilbild). Ein Ablauf ohne Zweck verbindet
+// eine GitHub-Organisation. Beide teilen die Rückkehradresse, weil die App nur zu
+// hinterlegten Adressen zurückleitet.
+const flowLink = "link"
 
 type sourceFlow struct {
 	account string
 	org     string
+	purpose string
 	until   time.Time
 	// accounts ist gesetzt, sobald der Nachweis geliefert wurde.
 	accounts []forge.Account
@@ -56,6 +64,15 @@ func randomToken() (string, error) {
 }
 
 func (f *sourceFlows) start(account, org string) (string, error) {
+	return f.begin(sourceFlow{account: account, org: org})
+}
+
+// startLink beginnt einen Ablauf, der nur das eigene GitHub-Konto verbindet.
+func (f *sourceFlows) startLink(account string) (string, error) {
+	return f.begin(sourceFlow{account: account, purpose: flowLink})
+}
+
+func (f *sourceFlows) begin(fl sourceFlow) (string, error) {
 	tok, err := randomToken()
 	if err != nil {
 		return "", err
@@ -63,10 +80,12 @@ func (f *sourceFlows) start(account, org string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pruneLocked()
-	if len(f.flows) >= maxSourceFlows {
-		f.flows = map[string]sourceFlow{}
-	}
-	f.flows[tok] = sourceFlow{account: account, org: org, until: f.now().Add(sourceFlowTTL)}
+	// One account cannot push out the flows of others: it keeps a few of its
+	// own, and a full table drops its oldest entry instead of all of them.
+	f.dropOldestLocked(func(v sourceFlow) bool { return v.account == fl.account }, maxSourceFlowsPerAccount)
+	f.dropOldestLocked(func(sourceFlow) bool { return true }, maxSourceFlows)
+	fl.until = f.now().Add(sourceFlowTTL)
+	f.flows[tok] = fl
 	return tok, nil
 }
 
@@ -96,6 +115,27 @@ func (f *sourceFlows) put(tok string, fl sourceFlow) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.flows[tok] = fl
+}
+
+// dropOldestLocked removes the entries that expire first among those matching
+// keep until fewer than limit match.
+func (f *sourceFlows) dropOldestLocked(match func(sourceFlow) bool, limit int) {
+	for {
+		n, oldest, first := 0, "", time.Time{}
+		for k, v := range f.flows {
+			if !match(v) {
+				continue
+			}
+			n++
+			if oldest == "" || v.until.Before(first) {
+				oldest, first = k, v.until
+			}
+		}
+		if n < limit {
+			return
+		}
+		delete(f.flows, oldest)
+	}
 }
 
 func (f *sourceFlows) pruneLocked() {
@@ -188,6 +228,10 @@ func (a *app) orgSourceCallback(w http.ResponseWriter, r *http.Request) {
 	fl, ok := a.sourceFlows.take(r.URL.Query().Get("state"), me)
 	if !ok {
 		http.Redirect(w, r, "/ui/orgs?notice=source_failed", http.StatusSeeOther)
+		return
+	}
+	if fl.purpose == flowLink {
+		a.finishGitHubLink(w, r, me)
 		return
 	}
 	if !a.sourceReady() || r.URL.Query().Get("code") == "" {
