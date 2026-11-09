@@ -137,7 +137,11 @@ func TestRequestDetailForAGuestCarriesNoHiddenSessionAndNoNumbers(t *testing.T) 
 		}
 	}
 	// 2/2 criteria are met, but only one proof is readable: the hidden one is dropped, not blanked.
-	checklist := page[:strings.Index(page, `<div class="tlx">`)]
+	end := strings.Index(page, `class="cmt ev tev"`)
+	if end < 0 {
+		end = len(page)
+	}
+	checklist := page[:end]
 	if strings.Count(checklist, `class="chip ar"`) != 1 {
 		t.Errorf("guest sees %d proofs in the checklist, want 1", strings.Count(checklist, `class="chip ar"`))
 	}

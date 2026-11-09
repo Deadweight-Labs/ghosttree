@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -868,17 +869,17 @@ func (a *app) pullItems(l lang, view *repoView, d store.PullDetail, commits []st
 		if len(g.cs) == 1 {
 			key = "pulls.ev.commit_one"
 		}
-		var head strings.Builder
-		head.WriteString(html.EscapeString(l.msg(key, len(g.cs))))
+		head := html.EscapeString(l.msg(key, len(g.cs)))
+		var right strings.Builder
 		for j, c := range g.cs {
 			if j == 3 {
-				head.WriteString(` <span class="muted">` + html.EscapeString(l.msg("pulls.ev.more", len(g.cs)-3)) + `</span>`)
+				right.WriteString(`<span class="muted">` + html.EscapeString(l.msg("pulls.ev.more", len(g.cs)-3)) + `</span>`)
 				break
 			}
 			short := shortSHA(c.SHA)
-			head.WriteString(" " + string(shaPill(l, short, view.Href+"/commits/"+c.SHA)))
+			right.WriteString(string(shaPill(l, short, view.Href+"/commits/"+c.SHA)))
 		}
-		it := tlItem{ID: "commits-" + strconv.Itoa(i), Act: "pull.commits", Who: g.who, Icon: "commit", Tone: "ok", Head: template.HTML(head.String()), at: g.last}
+		it := tlItem{ID: "commits-" + strconv.Itoa(i), Act: "pull.commits", Who: g.who, Icon: "commit", Tone: "ok", Head: template.HTML(head), Right: template.HTML(right.String()), at: g.last}
 		if !g.last.IsZero() {
 			it.Age = shortAgo(l, now, g.last)
 		}
@@ -894,5 +895,7 @@ func (a *app) pullItems(l lang, view *repoView, d store.PullDetail, commits []st
 	case store.PullClosed:
 		items = append(items, tlItem{ID: "closed", Act: "pull.closed", Icon: "drop", Head: template.HTML(html.EscapeString(l.msg("pulls.ev.closed"))), Age: shortAgo(l, now, parseTime(d.UpdatedAt)), at: parseTime(d.UpdatedAt)})
 	}
+	// One rule with or without messages: by time. The opening no longer jumps.
+	sort.SliceStable(items, func(i, j int) bool { return before(items[i].at, items[j].at) })
 	return items
 }
