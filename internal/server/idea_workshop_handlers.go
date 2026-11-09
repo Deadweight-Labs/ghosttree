@@ -425,7 +425,7 @@ func (a *api) voteDecision(w http.ResponseWriter, r *http.Request) {
 		writeIdeaError(w, err)
 		return
 	}
-	a.stampActor(r, actor.Vote, a.st.VoteRowID(id, store.VoterKey(voter)), body.SessionID)
+	a.stampActor(r, actor.Vote, actor.VoteEntryID(id, store.VoterKey(voter)), body.SessionID)
 	writeJSON(w, http.StatusOK, d)
 }
 
