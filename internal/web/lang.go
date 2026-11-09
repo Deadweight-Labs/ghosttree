@@ -154,7 +154,7 @@ func parseTemplates(l lang) *template.Template {
 		"lower": strings.ToLower,
 		// more is how many of n entries are left after the first k.
 		"more": func(n, k int) int { return n - k },
-	}).Funcs(identityFuncs(l)).ParseFS(files, "templates/*.html"))
+	}).Funcs(identityFuncs(l)).Funcs(pillFuncs(l)).ParseFS(files, "templates/*.html"))
 }
 
 var pages = map[lang]*template.Template{langEN: parseTemplates(langEN), langDE: parseTemplates(langDE)}

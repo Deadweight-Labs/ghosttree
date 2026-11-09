@@ -14,7 +14,7 @@ var p1Templates = []string{"templates/layout.html", "templates/login.html", "tem
 var (
 	scriptRE   = regexp.MustCompile(`(?s)<script>.*?</script>`)
 	actionRE   = regexp.MustCompile(`(?s)\{\{.*?\}\}`)
-	catalogRE  = regexp.MustCompile(`\{\{\s*(?:t|agot)\s+"([^"]+)"`)
+	catalogRE  = regexp.MustCompile(`(?:\{\{|\()\s*(?:t|agot)\s+"([^"]+)"`)
 	textNodeRE = regexp.MustCompile(`>([^<>]+)<`)
 	attrRE     = regexp.MustCompile(`\s(?:title|aria-label|placeholder|alt|value|label)="([^"]*)"`)
 )

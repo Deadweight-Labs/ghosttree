@@ -4,7 +4,7 @@
    components.go; mock: git-native-v2 gh.css, gh3.css, gh5.css. */
 
 :is(.g2, .gh-header, .rband, .gt-foot, .pcard) {
-  /* ---- Reference: short form (icon + #nr) and long form as a pill (PAIN-55) ---- */
+  /* ---- Reference: icon + #nr, as plain short form (.ref) or as the pill (.ref.pill, with the title after it in the long form) ---- */
   & .ref { display: inline-flex; align-items: baseline; gap: 3px; font-family: inherit; font-size: inherit; color: var(--fg-muted); white-space: nowrap; text-decoration: none; }
   & .ref > svg, & .ref > .i { align-self: center; width: 14px; height: 14px; flex: none; }
   & .ref .num { font-variant-numeric: tabular-nums; }
@@ -17,12 +17,21 @@
   & .ref.k-feat svg { color: var(--done-fg); }
   & .ref.k-dec svg { color: var(--attention-fg); }
   & .ref.k-sess svg { color: var(--accent-fg); }
+  & .ref.k-commit svg, & .ref.k-branch svg { color: var(--accent-fg); }
+  & .ref.k-pr svg { color: var(--success-fg); }
+  & .ref.k-pr.s-merged svg { color: var(--done-fg); }
+  & .ref.k-pr.s-closed svg { color: var(--danger-fg); }
+  & .ref.k-org svg, & .ref.k-machine svg, & .ref.k-url svg, & .ref.k-file svg, & .ref.k-lock svg { color: var(--fg-muted); }
   & .ref + .ref { margin-left: 6px; }
-  & .ref.pill { box-sizing: border-box; align-items: baseline; height: 20px; padding: 1px 8px 0 6px; gap: 4px; font-size: 12px; font-weight: 500; line-height: 18px; color: var(--fg-default); background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 2em; vertical-align: baseline; }
+  /* The pill: one shape for every kind. The number is quiet, the title after it is the text; a name that is too long is cut with an ellipsis, the card says it whole. */
+  & .ref.pill { box-sizing: border-box; align-items: baseline; max-width: 100%; min-width: 0; height: 20px; padding: 0 8px 0 6px; gap: 4px; font-size: 12px; font-weight: 500; line-height: 18px; color: var(--fg-default); background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 2em; vertical-align: baseline; }
   & .ref.pill > svg { width: 12px; height: 12px; align-self: center; }
-  & .ref.pill:hover { background: var(--btn-hover); text-decoration: none; }
-  & .ref.pill:hover .num { color: var(--accent-fg); text-decoration: none; }
-  & .ref.pill .num { letter-spacing: .01em; }
+  & a.ref.pill:hover { background: var(--btn-hover); text-decoration: none; }
+  & a.ref.pill:hover .num { color: var(--accent-fg); text-decoration: none; }
+  & .ref.pill .num { flex: none; min-width: 0; letter-spacing: .01em; }
+  & .ref.pill .pt { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 400; color: var(--fg-default); }
+  & .ref.pill .pt::before { content: ""; display: inline-block; width: 1px; height: 10px; margin-right: 6px; vertical-align: -1px; background: var(--border-default); }
+  & .ref.pill.mono .num { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; font-family: var(--ui-mono); font-weight: 400; letter-spacing: 0; }
   & .ref.pill + .ref.pill { margin-left: 4px; }
   & .rn { color: var(--fg-subtle); font-size: 14px; font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; }
   & a.rn:hover { color: var(--accent-fg); text-decoration: none; }
@@ -39,6 +48,15 @@
   & .waits.multi .ring:first-child .gav { z-index: 3; box-shadow: 0 0 0 2px var(--canvas-default); }
   & .waits .wstack::after { content: ""; position: absolute; z-index: 3; right: -3px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--danger-fg); box-shadow: 0 0 0 2px var(--canvas-default); }
   & .waits .wn { display: none; font-size: 14px; color: var(--fg-default); }
+  /* In a head line the name stands next to the ring on one line: centered with it, once (the name the stack keeps for small screens stays hidden there). */
+  /* A pill with the person it waits for: they stay together when the line wraps */
+  & .pair { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+  & .pair > .waits { margin-right: 4px; }
+  & .person:has(> .waits) { align-items: center; gap: 8px; }
+  & .dmeta .person > .waits { align-self: center; margin-right: 0; }
+  & .dmeta .wl { display: inline-flex; align-items: center; gap: 10px; min-height: 32px; }
+  & .dmeta .wl .wl-age { color: var(--fg-muted); font-weight: 400; }
+  & .dmeta .waits .wn { display: none; }
 
   /* ---- Progress ---- */
   & .prog { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }

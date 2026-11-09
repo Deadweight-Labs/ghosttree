@@ -1,7 +1,9 @@
-// Hover card of references (pills REQ-5 and number chips #5). Every element
-// with data-ref="REQ-5" gets the card of <template data-ref-card="REQ-5">, which
-// the server wrote into the page for exactly the objects the viewer may read;
-// an element without such a template gets no card. Opens after about 300 ms on
+// Hover card of references (pills "#5" with their icon). Every element with
+// data-ref="REQ-5" gets the card of <template data-ref-card="REQ-5">, which the
+// server wrote into the page for exactly the objects the viewer may read; an
+// element without such a template gets no card. Every other pill (pull request,
+// commit, branch, organisation, machine, outside address, the waiting) carries
+// its own card as JSON in data-pc, written by pill.go from what the page knows. Opens after about 300 ms on
 // hover and at once on keyboard focus, bridges the gap to the card, closes on
 // Escape, folds over when there is no room. The card is built from the
 // template's nodes (cloneNode), never from a string.
@@ -14,7 +16,10 @@
 // pill stays without a card.
 (function () {
   "use strict";
-  var KEY = /^(?:REQ|PAIN|TASK|IDEA|DEC)-\d+$/;
+  var KEY = /^(?:REQ|PAIN|TASK|IDEA|DEC|FEAT|KN)-\d+$/;
+  // The lookup speaks the short forms of the API: a knowledge entry is "#1970" there.
+  function apiRef(key) { return key.indexOf("KN-") === 0 ? "#" + key.slice(3) : key; }
+  function localKey(ref) { return typeof ref === "string" && ref.charAt(0) === "#" ? "KN-" + ref.slice(1) : ref; }
   function $$(s, c) { return [].slice.call((c || document).querySelectorAll(s)); }
 
   function template(key) {
@@ -22,13 +27,6 @@
   }
   // remote: what /ui/refs answered, by key; asked: keys that were asked for
   var remote = {}, asked = {};
-  var KINDS = {
-    REQ: { cls: "k-req", icon: '<circle cx="8" cy="8" r="6.25"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/>' },
-    PAIN: { cls: "k-pain", icon: '<circle cx="8" cy="8" r="6.25"/><path d="M8 4.7v3.9"/><circle cx="8" cy="11.1" r=".95" fill="currentColor" stroke="none"/>' },
-    IDEA: { cls: "k-idea", icon: '<path d="M6.2 12.4h3.6M6.6 14.2h2.8"/><path d="M8 1.8a4.2 4.2 0 0 0-2.5 7.6c.5.4.8.9.8 1.5v.5h3.4v-.5c0-.6.3-1.1.8-1.5A4.2 4.2 0 0 0 8 1.8z"/>' },
-    TASK: { cls: "k-task", icon: '<path d="M9.8 2.2 13.8 6.2 12 7.2l-1.2 3.1-1.2-1.2-3.5 3.5-.9-.9 3.5-3.5-1.2-1.2L9 5z"/>' },
-    DEC: { cls: "k-dec", icon: '<path d="M8 14V8.4M8 8.4C8 6.4 5.6 6 4.2 4M8 8.4c0-2 2.4-2.4 3.8-4.4"/><path d="M2.6 5.6 4 3.6l2.2 1.2M13.4 5.6 12 3.6 9.8 4.8"/>' }
-  };
   function node(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -37,22 +35,44 @@
   }
   // cardOf builds the card of an answer with createElement and textContent only.
   function cardOf(key, info) {
-    var kd = KINDS[key.split("-")[0]], frag = document.createDocumentFragment();
+    var kd = window.GTPill.kind(key.split("-")[0]), frag = document.createDocumentFragment();
     var h = node("div", "pc-h"), k = node("span", "pc-k " + kd.cls);
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("class", "i");
-    svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("aria-hidden", "true");
-    var parsed = new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg">' + kd.icon + "</svg>", "image/svg+xml");
-    [].slice.call(parsed.documentElement.childNodes).forEach(function (n) { svg.appendChild(document.importNode(n, true)); });
-    k.appendChild(svg);
-    k.appendChild(node("span", "", key));
+    k.appendChild(window.GTPill.icon(kd.icon));
+    k.appendChild(node("span", "", key.indexOf("KN-") === 0 ? "#" + key.slice(3) : key));
     h.appendChild(k);
     if (info.zustand) h.appendChild(node("span", "state sm gray", info.zustand));
     frag.appendChild(h);
     frag.appendChild(node("div", "pc-t", info.titel));
     if (info.kurzfassung) frag.appendChild(node("div", "pc-b", info.kurzfassung));
     var by = [info.autor, info.zeit ? new Date(info.zeit).toLocaleDateString() : ""].filter(Boolean).join(" · ");
+    if (by) {
+      var m = node("div", "pc-m"), who = node("span", "pc-by");
+      who.appendChild(node("span", "", by));
+      m.appendChild(who);
+      frag.appendChild(m);
+    }
+    return frag;
+  }
+  // pcOf reads the card a pill carries itself (data-pc), or null.
+  function pcOf(trg) {
+    var raw = trg && trg.getAttribute && trg.getAttribute("data-pc");
+    if (!raw) return null;
+    try { var c = JSON.parse(raw); return c && typeof c === "object" ? c : null; } catch (e) { return null; }
+  }
+  // inlineCard builds the card of a pill without a key from its data-pc: the
+  // icon is the one the pill shows, the state a pill, title and line as text.
+  function inlineCard(trg, c) {
+    var frag = document.createDocumentFragment(), h = node("div", "pc-h");
+    var k = node("span", "pc-k " + (trg.className.match(/\b[ks]-[a-z]+\b/g) || []).join(" "));
+    var ic = trg.querySelector("svg");
+    if (ic) k.appendChild(ic.cloneNode(true));
+    k.appendChild(node("span", "", c.l || ""));
+    h.appendChild(k);
+    if (c.s) h.appendChild(node("span", "state sm " + (/^(open|done|gray|bad|amber4)$/.test(c.t) ? c.t : "gray"), c.s));
+    frag.appendChild(h);
+    if (c.h) frag.appendChild(node("div", "pc-t" + (/\bmono\b/.test(trg.className) ? " mono" : ""), c.h));
+    if (c.b) frag.appendChild(node("div", "pc-b", c.b));
+    var by = [c.w, c.a].filter(Boolean).join(" · ");
     if (by) {
       var m = node("div", "pc-m"), who = node("span", "pc-by");
       who.appendChild(node("span", "", by));
@@ -78,27 +98,31 @@
       return remote[key] ? safeLink(remote[key].link) : "";
     },
     // lookup: asks /ui/refs for the keys of the page without a card, calls done afterwards
-    lookup: function (done) { lookup(done); }
+    lookup: function (done) { lookup(done); },
+    // resolve: upgrades the marks of "#1970" in root (ui-md.js) to pills
+    resolve: function (root, done) { resolve(root, done); }
   };
 
-  function missingKeys() {
+  function missingKeys(extra) {
     var keys = [];
-    for (var a of $$("[data-ref]")) {
-      var key = a.getAttribute("data-ref");
+    function want(key) {
       if (KEY.test(key) && !template(key) && !asked[key] && keys.indexOf(key) < 0) keys.push(key);
     }
+    for (var a of $$("[data-ref]")) want(a.getAttribute("data-ref"));
+    (extra || []).forEach(want);
     return keys.slice(0, 50);
   }
-  function lookup(done) {
-    var keys = missingKeys();
+  function lookup(done, extra) {
+    var keys = missingKeys(extra);
     if (!keys.length) { if (done) done(); return; }
     keys.forEach(function (k) { asked[k] = true; });
-    var q = keys.map(function (k) { return "ref=" + encodeURIComponent(k); }).join("&");
+    var q = keys.map(function (k) { return "ref=" + encodeURIComponent(apiRef(k)); }).join("&");
     fetch("/ui/refs?" + q, { credentials: "same-origin", headers: { Accept: "application/json" } })
       .then(function (r) { return r.ok ? r.json() : { refs: [] }; })
       .then(function (data) {
         (data.refs || []).forEach(function (info) {
-          if (info && info.gefunden && KEY.test(info.ref)) remote[info.ref] = info;
+          var key = info && info.gefunden ? localKey(info.ref) : "";
+          if (key && KEY.test(key)) remote[key] = info;
         });
         linkify(document);
       })
@@ -116,11 +140,34 @@
       while (s.firstChild) a.appendChild(s.firstChild);
       s.replaceWith(a);
     }
+    // A pill that asks for its title (data-long) gets it from the answer.
+    for (var p of $$("[data-ref][data-long]", root)) {
+      var info = remote[p.getAttribute("data-ref")];
+      if (info && info.titel && window.GTPill) window.GTPill.setTitle(p, info.titel);
+    }
+  }
+  // resolve turns the marks a text wrote for a "#1970" (ui-md.js) into pills:
+  // only for what the server knows and the viewer may read. A mark that is no
+  // knowledge entry goes back to the plain text it was.
+  function resolve(root, done) {
+    var marks = $$("[data-maybe]", root);
+    if (!marks.length) { if (done) done(); return; }
+    var keys = marks.map(function (m) { return m.getAttribute("data-maybe"); });
+    lookup(function () {
+      marks.forEach(function (m) {
+        var key = m.getAttribute("data-maybe"), href = window.GTRefs.href(key);
+        if (remote[key] && href && window.GTPill) m.replaceWith(window.GTPill.ref(key, { href: href }));
+        else m.replaceWith(document.createTextNode(m.textContent));
+      });
+      if (done) done();
+    }, keys);
   }
 
   var seq = 0, card, cur = null, tOpen = 0, tClose = 0;
 
+  var SEL = "[data-ref],[data-pc]";
   function known(t) {
+    if (t && t.hasAttribute("data-pc")) return !!pcOf(t);
     var key = t && t.getAttribute("data-ref");
     return !!key && (!!template(key) || !!remote[key]);
   }
@@ -140,8 +187,9 @@
     document.body.appendChild(c);
     return c;
   }
-  function fill(c, key) {
-    var nodes = window.GTRefs.card(key);
+  function fill(c, trg) {
+    var pc = pcOf(trg), key = trg.getAttribute("data-ref");
+    var nodes = pc ? inlineCard(trg, pc) : window.GTRefs.card(key);
     c.textContent = "";
     if (nodes) c.appendChild(nodes);
     for (var bar of $$("[data-pct]", c)) bar.style.width = Math.max(0, Math.min(100, Number(bar.getAttribute("data-pct")) || 0)) + "%";
@@ -185,7 +233,7 @@
   function show(trg) {
     if (cur && cur !== trg) cur.removeAttribute("aria-describedby");
     card = card || newCard();
-    fill(card, trg.getAttribute("data-ref"));
+    fill(card, trg);
     cur = trg;
     trg.setAttribute("aria-describedby", card.id);
     place(card, trg);
@@ -205,27 +253,27 @@
     if (e.pointerType === "touch" || !e.target.closest) return;
     var inCard = e.target.closest(".pcard");
     if (inCard) { if (inCard === card) { clearTimeout(tClose); tClose = 0; } return; }
-    var t = e.target.closest("[data-ref]");
+    var t = e.target.closest(SEL);
     if (known(t)) open(t, false);
     else if (askFor(t)) return;
     else if (cur || tOpen) later();
   });
   document.documentElement.addEventListener("mouseleave", later);
   document.addEventListener("focusin", function (e) {
-    var t = e.target.closest && e.target.closest("[data-ref]");
+    var t = e.target.closest && e.target.closest(SEL);
     if (known(t) && t.matches(":focus-visible")) open(t, true);
     else if (t && t.matches(":focus-visible")) lookup(function () { if (known(t)) open(t, true); });
   });
   document.addEventListener("focusout", function (e) { if (cur && e.target === cur) hide(); });
   document.addEventListener("keydown", function (e) { if (e.key === "Escape" && (cur || tOpen)) hide(); });
-  document.addEventListener("click", function (e) { if (cur && e.target.closest && e.target.closest("[data-ref]")) hide(); });
+  document.addEventListener("click", function (e) { if (cur && e.target.closest && e.target.closest(SEL)) hide(); });
   function relayout() { if (cur && card && !card.hidden) place(card, cur); }
   window.addEventListener("resize", relayout);
   window.addEventListener("load", relayout);
 
   // The card says what the pill is; the title would say it a second time as a tooltip.
   function scan(root) {
-    for (var a of $$("[data-ref]", root)) {
+    for (var a of $$(SEL, root)) {
       if (!known(a)) continue;
       var t = a.getAttribute("title");
       if (t) {
@@ -235,5 +283,7 @@
     }
   }
   scan(document);
+  // ui-md.js ran before this script: its marks of "#1970" are resolved now.
+  resolve(document);
   window.GTCards = { scan: scan, hide: hide };
 })();

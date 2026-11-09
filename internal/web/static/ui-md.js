@@ -2,7 +2,8 @@
 // textContent) and never HTML from the text of a person, so nothing typed can
 // become markup or script. Links only to http(s) and relative addresses.
 // Supported: headings # to ###, bold, italic, code, code blocks, lists, task
-// lists, quotes, links, @mentions and REQ-n, PAIN-n, TASK-n, IDEA-n as pills.
+// lists, quotes, links, @mentions, REQ-n, PAIN-n, TASK-n, IDEA-n, DEC-n, FEAT-n
+// as pills (ui-pill.js) and #1970 as the pill of a knowledge entry.
 // Port of the accepted mock (git-native-v2, gh6.js).
 (function () {
   "use strict";
@@ -14,33 +15,8 @@
     return e;
   }
 
-  // Icons are fixed constants (no text of a person), parsed once.
-  var ICON = {
-    issue: '<circle cx="8" cy="8" r="6.25"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/>',
-    pain: '<circle cx="8" cy="8" r="6.25"/><path d="M8 4.7v3.9"/><circle cx="8" cy="11.1" r=".95" fill="currentColor" stroke="none"/>',
-    idea: '<path d="M6.2 12.4h3.6M6.6 14.2h2.8"/><path d="M8 1.8a4.2 4.2 0 0 0-2.5 7.6c.5.4.8.9.8 1.5v.5h3.4v-.5c0-.6.3-1.1.8-1.5A4.2 4.2 0 0 0 8 1.8z"/>',
-    pin: '<path d="M9.8 2.2 13.8 6.2 12 7.2l-1.2 3.1-1.2-1.2-3.5 3.5-.9-.9 3.5-3.5-1.2-1.2L9 5z"/>',
-    check: '<path d="m3.5 8.4 3 3 6-6.5"/>'
-  };
-  var iconCache = {};
-  function icon(name) {
-    if (!iconCache[name]) {
-      var doc = new DOMParser().parseFromString('<svg xmlns="' + SVGNS + '">' + ICON[name] + "</svg>", "image/svg+xml");
-      var s = document.createElementNS(SVGNS, "svg");
-      s.setAttribute("class", "i");
-      s.setAttribute("viewBox", "0 0 16 16");
-      s.setAttribute("aria-hidden", "true");
-      [].slice.call(doc.documentElement.childNodes).forEach(function (n) { s.appendChild(document.importNode(n, true)); });
-      iconCache[name] = s;
-    }
-    return iconCache[name].cloneNode(true);
-  }
-  var KIND = {
-    REQ: { icon: "issue", cls: "k-req" },
-    TASK: { icon: "pin", cls: "k-task" },
-    PAIN: { icon: "pain", cls: "k-pain" },
-    IDEA: { icon: "idea", cls: "k-idea" }
-  };
+  // The icons and the pill are the ones of ui-pill.js, the same the server writes.
+  function icon(name) { return window.GTPill.icon(name); }
 
   // Allowed: http(s) and relative addresses. Everything else (javascript:, data:, //host) is dropped.
   function safeUrl(u) {
@@ -64,18 +40,19 @@
   }
 
   function pill(key) {
-    var kd = KIND[key.split("-")[0]];
-    var href = refHref(key);
-    var a = el(href ? "a" : "span", "ref pill " + kd.cls);
-    if (href) a.setAttribute("href", href);
-    a.setAttribute("data-ref", key);
-    a.appendChild(icon(kd.icon));
-    a.appendChild(el("span", "num", key));
-    return a;
+    return window.GTPill.ref(key, { href: refHref(key) });
+  }
+  // A "#1970" may be a knowledge entry or just a number: it stays text, marked,
+  // until the server says it is one the reader may open (GTRefs.resolve).
+  function maybeKnowledge(num) {
+    var m = el("span", "", "#" + num);
+    m.setAttribute("data-maybe", "KN-" + num);
+    return m;
   }
 
   var ESC = "\\`*_[]()#>@-!";
-  var RE_REF = /(REQ|PAIN|TASK|IDEA)-(\d+)(?![\p{L}\p{N}_-])/uy;
+  var RE_REF = /(REQ|PAIN|TASK|IDEA|DEC|FEAT)-(\d+)(?![\p{L}\p{N}_-])/uy;
+  var RE_KN = /#(\d{1,15})(?![\p{L}\p{N}_-])/uy;
   var RE_MENTION = /@[\p{L}\p{N}][\p{L}\p{N}_-]*/uy;
   var RE_WORD = /[\p{L}\p{N}_]/u;
 
@@ -185,7 +162,11 @@
         RE_MENTION.lastIndex = i;
         if ((m = RE_MENTION.exec(src))) { flush(); parent.appendChild(el("span", "mention", m[0])); i += m[0].length; continue; }
       }
-      if (!o.noLink && (c === "R" || c === "P" || c === "T" || c === "I") && (!prev || !/[\p{L}\p{N}_-]/u.test(prev))) {
+      if (c === "#" && !o.noLink && (!prev || !/[\p{L}\p{N}_&#\/-]/u.test(prev))) {
+        RE_KN.lastIndex = i;
+        if ((m = RE_KN.exec(src))) { flush(); parent.appendChild(maybeKnowledge(m[1])); i += m[0].length; continue; }
+      }
+      if (!o.noLink && (c === "R" || c === "P" || c === "T" || c === "I" || c === "D" || c === "F") && (!prev || !/[\p{L}\p{N}_-]/u.test(prev))) {
         RE_REF.lastIndex = i;
         if ((m = RE_REF.exec(src))) { flush(); parent.appendChild(pill(m[0])); i += m[0].length; continue; }
       }
@@ -314,6 +295,7 @@
       box.appendChild(render(src, {}));
     }
     if (window.GTCards) window.GTCards.scan(document);
+    if (window.GTRefs) window.GTRefs.resolve(document);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", upgrade); else upgrade();
 })();

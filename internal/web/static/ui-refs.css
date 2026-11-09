@@ -47,6 +47,11 @@
   & .pc-k.k-idea .i { color: var(--attention-fg); }
   & .pc-k.k-task .i { color: var(--accent-fg); }
   & .pc-k.k-dec .i { color: var(--attention-fg); }
+  & .pc-k.k-know .i, & .pc-k.k-feat .i, & .pc-k.k-pr.s-merged .i { color: var(--done-fg); }
+  & .pc-k.k-pr .i { color: var(--success-fg); }
+  & .pc-k.k-pr.s-closed .i { color: var(--danger-fg); }
+  & .pc-k.k-commit .i, & .pc-k.k-branch .i { color: var(--accent-fg); }
+  & .pc-t.mono { font: 600 13px/1.35 var(--ui-mono); }
   & .state { flex: none; }
   & .pc-t { font-size: 14px; font-weight: 600; line-height: 1.35; color: var(--fg-default); overflow-wrap: anywhere; }
   & .pc-b { color: var(--fg-muted); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }

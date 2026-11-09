@@ -5,6 +5,7 @@ import (
 	"html"
 	"html/template"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -31,7 +32,7 @@ import (
 const refCardsMax = 80
 
 var (
-	refKeyRE = regexp.MustCompile(`data-ref="(REQ|PAIN|TASK|IDEA|DEC)-([0-9]{1,15})"`)
+	refKeyRE = regexp.MustCompile(`data-ref="(REQ|PAIN|TASK|IDEA|DEC|FEAT|KN)-([0-9]{1,15})"`)
 	// hrefRefRE reads the reference an address stands for: .../issues/12,
 	// /ui/requests/12, .../pains/5, .../ideas/3.
 	hrefRefRE = regexp.MustCompile(`(?:^|/)(issues|requests|pains|ideas|tasks)/([0-9]{1,15})(?:[/?#].*)?$`)
@@ -41,6 +42,10 @@ var (
 // refKeyOf is the reference key ("REQ-12") of an address a chip links to, or ""
 // when the address is no issue, pain, idea or task.
 func refKeyOf(href string) string {
+	// An address outside ghosttree is nobody's issue: https://github.com/x/issues/12 is no REQ-12.
+	if strings.Contains(href, "://") || strings.HasPrefix(href, "//") {
+		return ""
+	}
 	if m := hrefTask.FindStringSubmatch(href); m != nil && !strings.Contains(href, "/") {
 		return "TASK-" + m[1]
 	}
@@ -165,6 +170,31 @@ func (a *app) resolveRefCard(l lang, pa *store.ProjectAccess, now time.Time, pre
 		card = refCardBase(l, "decision", id, d.Question, d.State, workshopDecisionKeys)
 		card.Brief, card.Who, card.When = links.Clean(d.Detail, 180), d.Person, when(d.CreatedAt)
 		href = decisionHref(d)
+	case "KN":
+		k, err := pa.KnowledgeRead(id)
+		if err != nil {
+			return
+		}
+		c := links.New("https://ghosttree.invalid", "").KnowledgeCard(k)
+		kd := refKinds["knowledge"]
+		// The card says what the entry is about, in words; a code block belongs on its page.
+		body, _, _ := strings.Cut(k.Body, "```")
+		card = refCardView{Key: "KN-" + strconv.FormatInt(id, 10), Long: "#" + strconv.FormatInt(id, 10), Class: kd.Class, Icon: template.HTML(kd.Icon),
+			Tone: "gray", Title: links.Clean(c.Title, 140), Brief: links.Clean(body, 180), Who: k.Person, When: when(k.CreatedAt)}
+		if u, err := url.Parse(c.URL); err == nil && u.Path != "" {
+			href = u.RequestURI()
+		}
+	case "FEAT":
+		info, err := links.Peek(links.New("https://ghosttree.invalid", ""), links.AccessReader{PA: pa}, links.Ref{Kind: links.KindFeature, ID: id}, "")
+		if err != nil || !info.Gefunden {
+			return
+		}
+		kd := refKinds["feature"]
+		card = refCardView{Key: "FEAT-" + strconv.FormatInt(id, 10), Long: "FEAT-" + strconv.FormatInt(id, 10), Class: kd.Class, Icon: template.HTML(kd.Icon),
+			State: info.Zustand, Tone: "gray", Title: info.Titel, Brief: info.Kurzfassung, Who: info.Autor, When: when(info.Zeit)}
+		if u, err := url.Parse(info.Link); err == nil && u.Path != "" {
+			href = u.RequestURI()
+		}
 	default:
 		return
 	}

@@ -153,7 +153,7 @@ func TestFeatureShortFormLeadsToTheAddressInTheRepositoryAndHidesForeignOnes(t *
 
 func TestFeatureReferencePillHasItsOwnIcon(t *testing.T) {
 	pill := string(refPillHTML(langEN, "feature", 12, "/ui/f/12"))
-	for _, want := range []string{`class="ref pill k-feat"`, "FEAT-12", `title="Feature FEAT-12"`, "<svg"} {
+	for _, want := range []string{`class="ref pill k-feat"`, `data-ref="FEAT-12"`, `aria-label="Feature 12"`, "<svg"} {
 		if !strings.Contains(pill, want) {
 			t.Errorf("feature pill lacks %q: %s", want, pill)
 		}

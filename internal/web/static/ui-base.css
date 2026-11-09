@@ -50,7 +50,7 @@
   & .gav.hc-1 { background: linear-gradient(var(--done-subtle), var(--done-subtle)), var(--canvas-default); border-color: var(--done-muted); color: var(--done-fg); }
   & .gav.hc-2 { background: linear-gradient(var(--success-subtle), var(--success-subtle)), var(--canvas-default); border-color: var(--success-muted); color: var(--success-fg); }
   & .gav.hc-3 { background: linear-gradient(var(--attention-subtle), var(--attention-subtle)), var(--canvas-default); border-color: var(--attention-muted); color: var(--attention-fg); }
-  & .gav.hc-4 { background: linear-gradient(var(--danger-subtle), var(--danger-subtle)), var(--canvas-default); border-color: var(--danger-muted); color: var(--danger-fg); }
+  & .gav.hc-4 { --tint: color-mix(in srgb, var(--accent-fg) 45%, var(--success-fg)); background: linear-gradient(color-mix(in srgb, var(--tint) 15%, transparent), color-mix(in srgb, var(--tint) 15%, transparent)), var(--canvas-default); border-color: color-mix(in srgb, var(--tint) 40%, transparent); color: var(--tint); }
   & .gav.hc-5 { background: var(--canvas-subtle); color: var(--fg-muted); }
   & .gav.agent { position: relative; border: none; border-radius: 6px; color: #fff; }
   & .gav.agent .i { color: #fff; }
@@ -68,7 +68,7 @@
   & .gav.agent .own.hc-1 { background: linear-gradient(var(--done-subtle), var(--done-subtle)), var(--canvas-default); border-color: var(--done-muted); color: var(--done-fg); }
   & .gav.agent .own.hc-2 { background: linear-gradient(var(--success-subtle), var(--success-subtle)), var(--canvas-default); border-color: var(--success-muted); color: var(--success-fg); }
   & .gav.agent .own.hc-3 { background: linear-gradient(var(--attention-subtle), var(--attention-subtle)), var(--canvas-default); border-color: var(--attention-muted); color: var(--attention-fg); }
-  & .gav.agent .own.hc-4 { background: linear-gradient(var(--danger-subtle), var(--danger-subtle)), var(--canvas-default); border-color: var(--danger-muted); color: var(--danger-fg); }
+  & .gav.agent .own.hc-4 { --tint: color-mix(in srgb, var(--accent-fg) 45%, var(--success-fg)); background: linear-gradient(color-mix(in srgb, var(--tint) 15%, transparent), color-mix(in srgb, var(--tint) 15%, transparent)), var(--canvas-default); border-color: color-mix(in srgb, var(--tint) 40%, transparent); color: var(--tint); }
   & .gav.agent .live { position: absolute; left: -3px; top: -3px; width: 9px; height: 9px; border-radius: 50%; background: var(--success-emphasis); box-shadow: 0 0 0 2px var(--canvas-default); animation: gpulse 1.8s ease-out infinite; }
   & .gav.lg.agent .live, & .gav.xl.agent .live { width: 11px; height: 11px; left: -4px; top: -4px; }
 

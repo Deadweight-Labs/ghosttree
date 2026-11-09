@@ -1,6 +1,6 @@
 {{define "machine"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id sess ag mh"><div class="wrap">
 {{with .MachineV}}<div class="dhead"><div class="dtitle"><h1><span class="mono">{{.Name}}</span></h1></div>
-<div class="dmeta"><span class="lb pillbig {{.RelationTone}}">{{mi "server"}}{{.RelationLabel}}</span>{{if .Owner}}<span><span class="person">{{avatarOf .Owner}}{{.Owner}}</span></span>{{end}}{{if .OwnerOrg}}<a class="chip" href="{{.OwnerOrgHref}}">{{mi "people"}}{{.OwnerOrg}}</a>{{end}}<span class="muted">{{t "machine.seen" .LastSeen}}</span></div></div>
+<div class="dmeta"><span class="lb pillbig {{.RelationTone}}">{{mi "server"}}{{.RelationLabel}}</span>{{if .Owner}}<span><span class="person">{{avatarOf .Owner}}{{.Owner}}</span></span>{{end}}{{if .OwnerOrg}}{{pillx "org" .OwnerOrg .OwnerOrgHref .OwnerOrg ""}}{{end}}<span class="muted">{{t "machine.seen" .LastSeen}}</span></div></div>
 {{template "resultbanner" (dict "R" .Result "Strip" "done fail")}}
 <div class="dgrid"><div class="dmain">
 {{if .Entries}}<div class="box"><div class="box-h"><span class="t">{{mi "book"}} {{t "machine.entries"}}</span><span class="sp"></span><span class="muted fw4">{{len .Entries}}</span></div>

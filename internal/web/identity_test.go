@@ -19,8 +19,8 @@ func TestRefShowsNoPrefixInVisibleText(t *testing.T) {
 		if visible != "#599" {
 			t.Errorf("%s: visible text %q, want #599", kind, visible)
 		}
-		if !strings.Contains(out, `title="`) || !strings.Contains(out, prefix+"599") {
-			t.Errorf("%s: title lacks %s599: %s", kind, prefix, out)
+		if strings.Contains(out, `title="`) || !strings.Contains(out, `data-ref="`+prefix+"599") {
+			t.Errorf("%s: the card key lacks %s599 or a tooltip stands next to the card: %s", kind, prefix, out)
 		}
 	}
 	if out := string(refHTML(langDE, "request", 1, "")); strings.Contains(out, "<a ") {

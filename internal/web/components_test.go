@@ -26,7 +26,7 @@ func partText(s string) string {
 }
 
 func TestRefPillIsTheLongFormAndTheRefTheShortOne(t *testing.T) {
-	for kind, want := range map[string]string{"pain": "PAIN-55", "request": "REQ-599", "task": "TASK-124", "idea": "IDEA-7"} {
+	for kind, want := range map[string]string{"pain": "#55", "request": "#599", "task": "#124", "idea": "#7"} {
 		n := map[string]int64{"pain": 55, "request": 599, "task": 124, "idea": 7}[kind]
 		long := string(refPillHTML(langDE, kind, n, "/x"))
 		if !strings.Contains(long, `class="ref pill `) || !strings.Contains(long, `<svg class="i"`) || !strings.Contains(long, `<span class="num">`+want+`</span>`) {

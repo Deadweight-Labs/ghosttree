@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,7 +43,9 @@ type featuresView struct {
 	ClearHref      string
 }
 
-type featureAreaLine struct{ Path, Href string }
+// featureAreaLine is one area of a feature: a folder or a single file. Icon is
+// the folder or the file icon, Href the tree or the blob page of the code.
+type featureAreaLine struct{ Path, Href, Icon string }
 
 type featureRef struct{ Num, Title, Brief, Href string }
 
@@ -262,7 +265,12 @@ func (a *app) featureDetail(w http.ResponseWriter, r *http.Request, remote, id s
 	_, def := a.codeBranches(r2, pa, remote)
 	links := codeLinks{base: view.Href, def: def}
 	for _, area := range f.Areas {
-		v.Areas = append(v.Areas, featureAreaLine{Path: area, Href: links.tree(def, strings.TrimSuffix(area, "/"))})
+		p := strings.TrimSuffix(area, "/")
+		if file := !strings.HasSuffix(area, "/") && strings.Contains(path.Base(p), "."); file {
+			v.Areas = append(v.Areas, featureAreaLine{Path: area, Href: links.blob(def, p), Icon: "file"})
+			continue
+		}
+		v.Areas = append(v.Areas, featureAreaLine{Path: area, Href: links.tree(def, p), Icon: "folder"})
 	}
 	ideaRef := func(ref feature.Ref) featureRef {
 		return featureRef{Num: "#" + strconv.FormatInt(ref.ID, 10), Title: ref.Title, Href: view.Href + "/ideas/" + strconv.FormatInt(ref.ID, 10),

@@ -8,7 +8,7 @@
 
 {{define "task"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id ft tk"><div class="wrap">
 {{with .TaskV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">#{{.ID}}</span></h1></div>
-<div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "tasks"}}{{.StateLabel}}</span><span class="lb neu">{{.KindLabel}}</span>{{if .Assignee}}<span>{{t "tasks.waits_for"}} <span class="person">{{avatarWait .Assignee}}{{.Assignee}}</span></span>{{end}}{{if .CreatedBy}}<span><span class="person">{{avatarOf .CreatedBy}}{{.CreatedBy}}</span> {{t "tasks.asked" .Age}}</span>{{end}}</div></div>
+<div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "tasks"}}{{.StateLabel}}</span><span class="lb neu">{{.KindLabel}}</span>{{if and .Assignee (eq .State "open")}}<span class="wl"><span>{{t "tasks.waits_for"}}</span><span class="person">{{avatarWait .Assignee}}{{.Assignee}}</span>{{if .SameAsker}}<span class="wl-age">· {{.Age}}</span>{{end}}</span>{{else if .Assignee}}<span class="wl"><span class="person">{{avatarOf .Assignee}}{{.Assignee}}</span>{{if .SameAsker}}<span class="wl-age">· {{t "tasks.asked" .Age}}</span>{{end}}</span>{{end}}{{if and .CreatedBy (not .SameAsker)}}<span class="wl"><span class="person">{{avatarOf .CreatedBy}}{{.CreatedBy}}</span><span>{{t "tasks.asked" .Age}}</span></span>{{end}}</div></div>
 <div class="dgrid"><div class="dmain">
 {{if .CheckHint}}<div class="callout neu" role="note">{{mi "check"}}<div><div class="k">{{t "tasks.check_hint"}}</div><div class="tt">{{.CheckHint}}</div></div></div>{{end}}
 {{if or .Blocks .Where}}<div class="cmt">{{avatarX "xl" "" .CreatedBy "" false}}<div class="cbox"><div class="ch"><b>{{.CreatedBy}}</b><span>{{t "tasks.asked_ch"}}</span></div>
@@ -38,7 +38,7 @@
 
 {{define "package"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id ft pk"><div class="wrap">
 {{with .PackageV}}<div class="dhead"><div class="dtitle"><h1>{{.Name}}<span class="n">#{{.ID}}</span></h1></div>
-<div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "list"}}{{.StateLabel}}</span>{{if .Branch}}<span class="chip br">{{mi "branch"}}{{.Branch}}</span>{{end}}{{if .PRText}}<a class="chip pr" href="{{.PRHref}}">{{mi "pr"}}{{.PRText}}</a>{{end}}{{if .Total}}<span class="prog wide"><span class="bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{t "packages.met_x_of_y" .Done .Total}}</span>{{end}}</div></div>
+<div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "list"}}{{.StateLabel}}</span>{{if .Branch}}{{branchPill .Branch ""}}{{end}}{{if .PRText}}{{.PRPill}}{{end}}{{if .Total}}<span class="prog wide"><span class="bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{t "packages.met_x_of_y" .Done .Total}}</span>{{end}}</div></div>
 <div class="dgrid"><div class="dmain">
 {{if .Members}}<div class="sec"><h2>{{t "packages.requests"}}</h2><span class="counter">{{len .Members}}</span></div>
 <div class="box">{{range $i, $m := .Members}}<details class="rq"{{if .Open}} open{{end}}><summary><span class="car">{{mi "chevr"}}</span><span class="nn">{{ref "request" .N .Href}}</span><span class="ell rqt">{{.Title}}</span><span class="rqs"><span class="lb {{if .Optional}}out{{else}}neu{{end}}">{{index $.PackageV.Roles $i}}</span><span class="prog{{if .Warn}} amber{{end}}" title="{{.Progress.Title}}"><span class="bar" aria-hidden="true"><i data-pct="{{.Progress.Percent}}"></i></span>{{.Progress.Text}}</span></span></summary>
@@ -52,8 +52,8 @@
 </div>
 <aside class="side" aria-label="{{t "packages.side.facts"}}">
 <div class="sblk"><h3>{{t "packages.side.state"}}</h3><div class="v"><span class="lb {{.Tone}}">{{.StateLabel}}</span></div></div>
-{{if .Branch}}<div class="sblk"><h3>{{t "packages.side.branch"}}</h3><div class="v"><span class="chip br">{{mi "branch"}}{{.Branch}}</span>{{if .Inherited}}<span class="muted">{{t "packages.inherited" .Inherited}}</span>{{end}}</div></div>{{end}}
-{{if .PRText}}<div class="sblk"><h3>{{t "packages.side.pull"}}</h3><div class="v"><a class="chip pr" href="{{.PRHref}}">{{mi "pr"}}{{.PRText}}</a>{{if .PRGitHub}}<a class="nchip" href="{{.PRGitHub}}" rel="noopener noreferrer">{{t "packages.on_github"}}</a>{{end}}</div></div>{{end}}
+{{if .Branch}}<div class="sblk"><h3>{{t "packages.side.branch"}}</h3><div class="v">{{branchPill .Branch ""}}{{if .Inherited}}<span class="muted">{{t "packages.inherited" .Inherited}}</span>{{end}}</div></div>{{end}}
+{{if .PRText}}<div class="sblk"><h3>{{t "packages.side.pull"}}</h3><div class="v">{{.PRPill}}{{if .PRGitHub}}{{pillx "url" (t "packages.on_github") .PRGitHub (t "packages.on_github") .PRGitHub}}{{end}}</div></div>{{end}}
 {{if .Required}}<div class="sblk"><h3>{{t "packages.side.required"}}</h3><div class="v"><span>{{t "packages.required_open" .RequiredOpen .Required}}</span></div></div>{{end}}
 <div class="sblk"><h3>{{t "packages.side.list"}}</h3><div class="v"><a href="{{.Base}}">{{t "packages.side.all"}}</a></div></div>
 </aside></div>

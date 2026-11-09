@@ -91,7 +91,7 @@ func TestEveryEntryTypeShowsItsGitAnchorAsLinks(t *testing.T) {
 		if status != http.StatusOK {
 			t.Fatalf("%s: %d", name, status)
 		}
-		for _, want := range []string{commit, anchorSha[:7] + `</a>`, pull, `class="chip br"`, "feat/x"} {
+		for _, want := range []string{commit, anchorSha[:7] + `</span></a>`, pull, `k-branch`, "feat/x"} {
 			if !strings.Contains(page, want) {
 				t.Errorf("%s page lacks %q", name, want)
 			}

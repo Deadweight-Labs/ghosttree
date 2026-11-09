@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"html/template"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,7 +46,9 @@ type packageView struct {
 	State, StateLabel, Tone  string
 	Branch, Inherited        string
 	PRText, PRHref, PRGitHub string
-	Members                  []pullMember
+	// PRPill is the pull request as a pill with its state colour and card.
+	PRPill  template.HTML
+	Members []pullMember
 	// Roles gives each member its role label in the same order as Members.
 	Roles                  []string
 	Done, Total, Percent   int
@@ -137,10 +140,10 @@ func packageRowOf(l lang, pa *store.ProjectAccess, view *repoView, p requestdoma
 		row.Age, row.AgeTitle = shortAge(l, now, at), l.dateTime(at.Local())
 	}
 	if b := pa.BranchView(view.Project, p.Branch); b != "" {
-		row.Meta = append(row.Meta, branchChipHTML(b, ""))
+		row.Meta = append(row.Meta, branchChipHTML(l, b, ""))
 	}
 	if p.PR > 0 {
-		row.Chip, row.ChipHref = "#"+strconv.FormatInt(p.PR, 10), view.Href+"/pulls/"+strconv.FormatInt(p.PR, 10)
+		row.Chip = pullPillFor(l, pa, view.Project, view.Href, p.PR)
 	}
 	return row
 }
@@ -192,6 +195,7 @@ func (a *app) packageDetail(w http.ResponseWriter, r *http.Request, remote, id s
 	}
 	if full.PR > 0 {
 		v.PRText, v.PRHref = "#"+strconv.FormatInt(full.PR, 10), view.Href+"/pulls/"+strconv.FormatInt(full.PR, 10)
+		v.PRPill = pullPillFor(l, pa, remote, view.Href, full.PR)
 		if view.External != "" {
 			v.PRGitHub = view.External + "/pull/" + strconv.FormatInt(full.PR, 10)
 		}

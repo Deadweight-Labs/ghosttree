@@ -22,8 +22,9 @@ import (
 // issue); somebody who may only read or vote finds it on the page of the idea.
 
 func init() {
-	// decide: one road that forks, the sign of a choice.
-	mockIcons["decide"] = `<path d="M8 14V8.4M8 8.4C8 6.4 5.6 6 4.2 4M8 8.4c0-2 2.4-2.4 3.8-4.4"/><path d="M2.6 5.6 4 3.6l2.2 1.2M13.4 5.6 12 3.6 9.8 4.8"/>`
+	// decide: the signpost, the sign of a choice (decision of Robin, variant B).
+	// The same path stands in ui-pill.js.
+	mockIcons["decide"] = `<path d="M8 1.8v12.4M5.8 14.2h4.4"/><path d="M8 3.2h4.4L14 4.9l-1.6 1.7H8z"/><path d="M8 8.2H3.6L2 9.9l1.6 1.7H8z"/>`
 	refKinds["decision"] = refKind{"DEC", "k-dec", "ref.kind.decision", mockIcons["decide"]}
 }
 

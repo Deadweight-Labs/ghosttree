@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"html"
 	"html/template"
 	"net/url"
@@ -59,7 +60,9 @@ func safeRefHref(href string) string {
 	return href
 }
 
-// refHTML writes one identifier. href may be empty: then it is no link.
+// refHTML writes one identifier in its short form: icon and "#5", no frame. It is
+// what a list row or a column uses; the card on hover tells which one it is, and
+// aria-label tells a screen reader. href may be empty: then it is no link.
 func refHTML(l lang, kind string, n int64, href string) template.HTML {
 	href = safeRefHref(href)
 	k, ok := refKinds[kind]
@@ -67,30 +70,18 @@ func refHTML(l lang, kind string, n int64, href string) template.HTML {
 		k = refKinds["request"]
 	}
 	short := k.Prefix + "-" + strconv.FormatInt(n, 10)
-	title := html.EscapeString(l.msg(k.Key) + " " + short)
+	name := html.EscapeString(l.msg(k.Key) + " " + strconv.FormatInt(n, 10))
 	inner := `<svg class="i" viewBox="0 0 16 16" aria-hidden="true">` + k.Icon + `</svg><span class="num">#` + strconv.FormatInt(n, 10) + `</span>`
 	if href == "" {
-		return template.HTML(`<span class="ref ` + k.Class + `" data-ref="` + short + `" title="` + title + `">` + inner + `</span>`)
+		return template.HTML(`<span class="ref ` + k.Class + `" data-ref="` + short + `" aria-label="` + name + `">` + inner + `</span>`)
 	}
-	return template.HTML(`<a class="ref ` + k.Class + `" href="` + html.EscapeString(href) + `" data-ref="` + short + `" title="` + title + `">` + inner + `</a>`)
+	return template.HTML(`<a class="ref ` + k.Class + `" href="` + html.EscapeString(href) + `" data-ref="` + short + `" aria-label="` + name + `">` + inner + `</a>`)
 }
 
-// refPillHTML writes the long form of an identifier as a pill: icon and
-// "PAIN-55", for running text and meta lines. The short form (refHTML) stays in
-// columns and lists, where the row already says what it is.
+// refPillHTML writes an identifier as a pill (pill.go): icon and "#55", for
+// running text and meta lines. Where a title is known, refPillT adds it.
 func refPillHTML(l lang, kind string, n int64, href string) template.HTML {
-	href = safeRefHref(href)
-	k, ok := refKinds[kind]
-	if !ok {
-		k = refKinds["request"]
-	}
-	short := k.Prefix + "-" + strconv.FormatInt(n, 10)
-	title := html.EscapeString(l.msg(k.Key) + " " + short)
-	inner := `<svg class="i" viewBox="0 0 16 16" aria-hidden="true">` + k.Icon + `</svg><span class="num">` + short + `</span>`
-	if href == "" {
-		return template.HTML(`<span class="ref pill ` + k.Class + `" data-ref="` + short + `" title="` + title + `">` + inner + `</span>`)
-	}
-	return template.HTML(`<a class="ref pill ` + k.Class + `" href="` + html.EscapeString(href) + `" data-ref="` + short + `" title="` + title + `">` + inner + `</a>`)
+	return numberedPill(l, kind, n, href, "")
 }
 
 // Avatar kinds. A person gets initials (or a picture, see avatarImage), every
@@ -242,18 +233,20 @@ func avatarMarkup(l lang, o avatarSpec) template.HTML {
 }
 
 // wrapWaiting draws the stack of the waiting: every avatar in a ring, the dot at
-// the last one, the names for small screens and the tooltip.
+// the last one, the names for small screens. The card on hover says who is waited
+// for (pill.go, data-pc); there is no title attribute next to it.
 func wrapWaiting(l lang, names, avatars []string) template.HTML {
-	tip := html.EscapeString(l.msg("avatar.waiting", strings.Join(names, ", ")))
+	tip := l.msg("avatar.waiting", strings.Join(names, ", "))
 	cls := "waits"
 	if len(names) > 1 {
 		cls += " multi"
 	}
+	card, _ := json.Marshal(pillCard{Label: l.msg("ref.kind.waiting"), Title: strings.Join(names, ", ")})
 	var rings strings.Builder
 	for _, a := range avatars {
 		rings.WriteString(`<span class="ring">` + a + `</span>`)
 	}
-	return template.HTML(`<span class="` + cls + `" title="` + tip + `"><span class="wstack">` + rings.String() + `</span><span class="wn">` + html.EscapeString(strings.Join(names, ", ")) + `</span></span>`)
+	return template.HTML(`<span class="` + cls + `" data-pc="` + html.EscapeString(string(card)) + `" aria-label="` + html.EscapeString(tip) + `" role="group"><span class="wstack">` + rings.String() + `</span><span class="wn">` + html.EscapeString(strings.Join(names, ", ")) + `</span></span>`)
 }
 
 // avatarsWaiting is the stack for several people waited for.
@@ -272,7 +265,6 @@ func avatarHTML(l lang, kind, name string, waiting bool) template.HTML {
 // identityFuncs are the template functions of this file, bound to a language.
 func identityFuncs(l lang) template.FuncMap {
 	return template.FuncMap{
-		"refPill":   func(kind string, n int64, href string) template.HTML { return refPillHTML(l, kind, n, href) },
 		"waitStack": func(names []string) template.HTML { return waitStack(l, names) },
 		"join":      strings.Join,
 		"ref":       func(kind string, n int64, href string) template.HTML { return refHTML(l, kind, n, href) },

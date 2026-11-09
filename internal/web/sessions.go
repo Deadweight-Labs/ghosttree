@@ -51,6 +51,8 @@ var maxBlocksPerPage = 2000
 
 type chip struct {
 	Href, Text string
+	// Pill is the reference as a pill (pill.go); when it is set, the template writes it instead of Text.
+	Pill template.HTML
 }
 
 type filterOption struct {
@@ -692,7 +694,8 @@ func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, n
 
 // linkChips fasst die Verknüpfungen für die Liste zusammen: bis zu zwei
 // Requests, dazu die Zahl der Wissenseinträge.
-func linkChips(l lang, links []store.SessionLink) []chip {
+func linkChips(lg lang, links []store.SessionLink) []chip {
+	l := lg
 	var out []chip
 	knowledge, requests := 0, 0
 	for _, l := range links {
@@ -700,7 +703,8 @@ func linkChips(l lang, links []store.SessionLink) []chip {
 		case "request":
 			requests++
 			if requests <= 2 {
-				out = append(out, chip{Href: "/ui/requests/" + strconv.FormatInt(l.ID, 10), Text: fmt.Sprintf("REQ-%d", l.ID)})
+				href := "/ui/requests/" + strconv.FormatInt(l.ID, 10)
+				out = append(out, chip{Href: href, Text: fmt.Sprintf("REQ-%d", l.ID), Pill: refHTML(lg, "request", l.ID, href)})
 			}
 		case "knowledge":
 			knowledge++
@@ -1079,9 +1083,11 @@ func toggleParam(name string, on bool) url.Values {
 func linkChip(l lang, link store.SessionLink) chip {
 	switch link.Kind {
 	case "request":
-		return chip{Href: "/ui/requests/" + strconv.FormatInt(link.ID, 10), Text: fmt.Sprintf("REQ-%d %s", link.ID, ellipsize(link.Label, 40))}
+		href := "/ui/requests/" + strconv.FormatInt(link.ID, 10)
+		return chip{Href: href, Text: fmt.Sprintf("REQ-%d %s", link.ID, ellipsize(link.Label, 40)), Pill: numberedPill(l, "request", link.ID, href, ellipsize(link.Label, 40))}
 	}
-	return chip{Href: "/ui/knowledge", Text: l.msg("sessions.knowledge_ref", link.ID)}
+	href := "/ui/knowledge/" + strconv.FormatInt(link.ID, 10)
+	return chip{Href: href, Text: l.msg("sessions.knowledge_ref", link.ID), Pill: numberedPill(l, "knowledge", link.ID, href, "")}
 }
 
 // detailMeta is the start time of a session under the title, a <time> element
