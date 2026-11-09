@@ -5,9 +5,11 @@
 <div class="dgrid"><div class="dmain">
 {{if and .Remaining (eq .State "mitigated")}}<div class="callout" role="note">{{mi "tri"}}<div><div class="k">{{t "pains.stays_open"}}</div><div class="tt">{{md .Remaining}}</div></div></div>{{end}}
 {{if and .Accepted (eq .State "accepted")}}<div class="callout neu" role="note">{{mi "pain"}}<div><div class="k">{{t "pains.why"}}</div><div class="tt">{{.Accepted}}</div></div></div>{{end}}
-{{if or .Blocks .Explain}}<div class="cmt">{{if .Actor.Label}}{{avatarX "xl" .Actor.Kind .Actor.Label .Actor.Owner false}}{{else}}{{avatarX "xl" "" .Person "" false}}{{end}}<div class="cbox"><div class="ch"><b>{{or .Actor.Label .Person}}</b><span>{{t "pains.recorded_ch"}}</span><span class="sp"></span><span class="lb out">{{t "issue.author"}}</span></div>
-<div class="cb prose">{{template "explain" .Explain}}{{template "knbody" .Blocks}}</div></div></div>{{end}}
-{{if .Items}}{{template "uitimeline" .Items}}{{end}}
+{{if or .Blocks .Explain .Items}}<div class="tlx tl0">
+{{if or .Blocks .Explain}}{{template "firstopen" .First}}
+{{if .Blocks}}<div class="cb prose">{{template "knbody" .Blocks}}</div>{{end}}
+{{template "explain" .Explain}}{{template "firstclose"}}{{end}}
+{{template "uitlitems" .Items}}</div>{{end}}
 {{with .Composer}}{{template "uicomposer" .}}{{end}}
 </div>
 <aside class="side" aria-label="{{t "pains.side.facts"}}">

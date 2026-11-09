@@ -72,6 +72,9 @@ func label(l lang, keys map[string]string, v string) string {
 
 type evidenceLine struct {
 	Kind, Label, Ref, Href string
+	// Note is what the writer put after the address or the file: Ref is the
+	// thing itself, Note the words about it. Both stood in one string.
+	Note string
 	// Person is who gave the proof.
 	Person string
 	// Git is the anchor the proof was written at.
@@ -130,6 +133,8 @@ type requestResult struct {
 }
 
 type requestView struct {
+	// First is the head of the bubble that opens the timeline.
+	First firstHead
 	// Reactions is the row under the text of the issue page.
 	Reactions                      *reactionsView
 	Explain                        *explainView
@@ -251,6 +256,7 @@ var sessionScrub = regexp.MustCompile(`session:[^\s#]+(#\S*)?`)
 
 func (a *app) evidenceLineFor(l lang, pa *store.ProjectAccess, project string, e requestdomain.Evidence) evidenceLine {
 	line := evidenceLine{Kind: e.Kind, Label: evidenceLabel(l, e.Kind), Ref: e.Ref, Person: e.Person, Git: anchorViewOf(pa, project, e.GitAnchor, e.Via)}
+	line.Ref, line.Note = splitProofRef(e.Kind, e.Ref)
 	switch e.Kind {
 	case "session":
 		line.Ref = ""
@@ -268,11 +274,56 @@ func (a *app) evidenceLineFor(l lang, pa *store.ProjectAccess, project string, e
 		line.Href = "/ui/sessions/" + pub + fragmentOf(frag)
 		line.Ref = l.msg("requests.open_session")
 	case "url":
-		if strings.HasPrefix(e.Ref, "https://") || strings.HasPrefix(e.Ref, "http://") {
-			line.Href = e.Ref
+		if strings.HasPrefix(line.Ref, "https://") || strings.HasPrefix(line.Ref, "http://") {
+			line.Href = line.Ref
 		}
 	}
 	return line
+}
+
+// splitProofRef parts a proof as people write it, "https://… (what it shows)"
+// or "docs/a.md (what is in it)", into the thing and the note about it. An
+// address ends at the first blank; a file or a decision at the first " (". A
+// note wrapped in one pair of brackets loses them. Other kinds (a commit, a
+// test, a session) stay whole.
+func splitProofRef(kind, ref string) (thing, note string) {
+	ref = strings.TrimSpace(ref)
+	switch kind {
+	case "url":
+		if strings.HasPrefix(ref, "https://") || strings.HasPrefix(ref, "http://") {
+			if i := strings.IndexAny(ref, " \t\n"); i > 0 {
+				return ref[:i], unwrapNote(ref[i:])
+			}
+		}
+	case "file", "decision":
+		if i := strings.Index(ref, " ("); i > 0 {
+			return strings.TrimSpace(ref[:i]), unwrapNote(ref[i:])
+		}
+	}
+	return ref, ""
+}
+
+// unwrapNote trims a note and takes off one pair of brackets that encloses it
+// all; "(PR #169), inklusive" stays as written because its first bracket
+// closes before the end.
+func unwrapNote(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
+		return s
+	}
+	depth := 0
+	for i, r := range s {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 && i < len(s)-1 {
+				return s
+			}
+		}
+	}
+	return strings.TrimSpace(s[1 : len(s)-1])
 }
 
 func evidenceLabel(l lang, kind string) string { return label(l, evidenceKeys, kind) }

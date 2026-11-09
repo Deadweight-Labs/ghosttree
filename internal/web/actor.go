@@ -170,3 +170,36 @@ func (a *app) rowActors(l lang, rows []issueRow) {
 			Label: possessive(l, r.Person) + " " + actor.Family(ea.Harness)}
 	}
 }
+
+// stampedActors reads the stamps of entries of one kind and answers who made
+// each: a person by name, an agent as "Robin’s Claude" with its mark. persons
+// holds the name each page already shows for the entry; where the page names
+// nobody, nobody is shown. An entry without a stamp stays the person.
+func (a *app) stampedActors(l lang, kind string, persons map[int64]string) map[int64]actorView {
+	out := map[int64]actorView{}
+	if len(persons) == 0 {
+		return out
+	}
+	ids := make([]int64, 0, len(persons))
+	for id := range persons {
+		ids = append(ids, id)
+	}
+	found, err := a.store.ActorsOf(kind, ids)
+	if err != nil {
+		found = nil
+	}
+	for id, person := range persons {
+		v := actorView{Person: person, Label: person, Kind: avHuman}
+		if ea, ok := found[id]; ok && person != "" {
+			switch {
+			case ea.IsAgent():
+				v.Agent, v.Kind = true, harnessKind(ea.Harness)
+				v.Label = possessive(l, person) + " " + actor.Family(ea.Harness)
+			default:
+				v.Terminal = ea.Via == actor.ViaTerminal
+			}
+		}
+		out[id] = v
+	}
+	return out
+}

@@ -36,8 +36,9 @@
 <div class="dgrid"><div class="dmain">
 {{range .Blockers}}<div class="callout" id="task-{{.N}}" role="group" aria-label="{{t "issues.blocker"}}">{{mi "pin"}}<div><div class="k">{{t "issue.waits_for" .Assignee}} {{refPill "task" .N .Href}}</div><div class="tt">{{.Title}}</div>{{if .Where}}<div class="k mono">{{.Where}}</div>{{end}}<div class="gacts"><a class="gbtn sm" href="/ui/inbox">{{t "issue.open_inbox"}}</a></div></div></div>
 {{end}}
-{{if or .Blocks .Explain .Criteria .CanEdit}}<div class="cmt">{{if .Actor.Label}}{{avatarX "xl" .Actor.Kind .Actor.Label .Actor.Owner false}}{{else}}{{avatarX "xl" "" .Person "" false}}{{end}}<div class="cbox"><div class="ch"><b>{{or .Actor.Label .Person}}</b><span>{{t "issue.commented"}}</span><span class="sp"></span><span class="lb out">{{t "issue.author"}}</span>{{if .CanEdit}}<a class="gbtn sm icon quiet" href="{{.Base}}/{{.ID}}?panel=edit#edit" aria-label="{{t "issue.action.edit"}}">{{mi "pencil"}}</a>{{end}}</div>
-{{if or .Blocks .Explain}}<div class="cb prose">{{template "explain" .Explain}}{{template "knbody" .Blocks}}</div>{{end}}
+{{$first := or .Blocks .Explain .Criteria .CanEdit}}{{if or $first .Timeline}}<div class="tlx tl0">
+{{if $first}}{{template "firstopen" .First}}
+{{if .Blocks}}<div class="cb prose">{{template "knbody" .Blocks}}</div>{{end}}
 {{if or .Criteria .CanEdit}}<div class="reqs"><div class="rh"><b>{{t "issues.requirements"}}</b>{{if .Total}}<span class="counter">{{.Progress}}</span><span class="sp"></span><span class="prog wide"><span class="bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{t "issue.met_x_of_y" .Done .Total}}</span>{{end}}</div>
 {{range .Criteria}}<div class="crit num{{if eq .State "met"}} done{{end}}" id="criterion-{{.Number}}" data-crit="{{.State}}"><span class="no">{{.Number}}</span><span class="cbx{{if eq .State "met"}} on{{else if eq .State "waived"}} waived{{end}}" role="img" aria-label="{{.StateLabel}}">{{if eq .State "met"}}{{mi "check"}}{{end}}</span><div><div class="tx">{{.Text}}</div>
 {{if or .Evidence (eq .State "met") (eq .State "waived")}}<div class="pf">{{range $i, $e := .Evidence}}{{if eq $i 0}}{{if $e.Person}}{{avatarOf $e.Person}}{{end}}{{end}}{{end}}{{proofs .Evidence}}{{range .Evidence}}{{template "gitanchor" .Git}}{{end}}{{if and (eq .State "met") (not .Evidence)}}<span class="chip noproof">{{mi "tri"}}{{t "issue.no_proof"}}</span>{{end}}{{if eq .State "waived"}}<span class="lb neu">{{.StateLabel}}</span>{{end}}</div>{{end}}
@@ -50,9 +51,9 @@
 {{end}}
 {{if and .Open .CanEdit}}<form method="post" action="/ui/requests/{{.ID}}/criteria" class="lnew"><input type="hidden" name="csrf_token" value="{{.Token}}"><label class="gfield"><input name="description" required maxlength="2000" placeholder="{{t "issues.add_requirement"}}" aria-label="{{t "issues.add_requirement"}}" autocomplete="off"></label><button class="gbtn">{{t "requests.add"}}</button></form>{{end}}
 </div>{{end}}
-{{with .Reactions}}<div class="cf">{{template "uireactions" .}}</div>{{end}}</div></div>{{end}}
-
-{{if .Timeline}}{{template "uitimeline" .Timeline}}{{end}}
+{{template "explain" .Explain}}
+{{with .Reactions}}<div class="cf">{{template "uireactions" .}}</div>{{end}}{{template "firstclose"}}{{end}}
+{{template "uitlitems" .Timeline}}</div>{{end}}
 {{with .Composer}}{{template "uicomposer" .}}{{end}}
 </div>
 
