@@ -232,11 +232,32 @@ func (c *avatarCache) refresh(id int64) (avatarEntry, bool) {
 		c.mu.Unlock()
 		return avatarEntry{}, false
 	}
+	// The link may have been removed or changed while the picture came in; then
+	// the picture belongs to nobody any more and must not be kept.
+	if now, still := c.store.AccountGitHub("person:" + strconv.FormatInt(id, 10)); !still || now != link {
+		return avatarEntry{}, false
+	}
 	c.save(id, e)
 	c.mu.Lock()
 	delete(c.failed, id)
 	c.mu.Unlock()
 	return e, true
+}
+
+// forget drops everything kept for an account: the picture in memory and on
+// disk, the pause after a failed fetch and the remembered name lookups (a name
+// stays "linked" or "not linked" for a minute otherwise). Used when the link
+// changes, so the next page shows what the link says now.
+func (c *avatarCache) forget(id int64) {
+	c.mu.Lock()
+	delete(c.mem, id)
+	delete(c.failed, id)
+	c.names = map[string]avatarName{}
+	c.mu.Unlock()
+	if c.dir != "" {
+		os.Remove(c.path(id, ".img"))
+		os.Remove(c.path(id, ".json"))
+	}
 }
 
 // backoff: the last fetch failed a short while ago.

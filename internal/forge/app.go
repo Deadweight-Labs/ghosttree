@@ -286,6 +286,27 @@ func (g *GitHubApp) ProveInstallation(ctx context.Context, code, redirectURI str
 	return out, nil
 }
 
+// Identify tauscht den Code gegen das Token des Nutzers und liest damit, wer er
+// auf GitHub ist (GET /user, mit dem Benutzer-Token der App erlaubt). Das Token
+// bleibt in diesem Aufruf.
+func (g *GitHubApp) Identify(ctx context.Context, code, redirectURI string) (Identity, error) {
+	if !g.Configured() {
+		return Identity{}, ErrNotConfigured
+	}
+	token, err := g.exchange(ctx, code, redirectURI)
+	if err != nil {
+		return Identity{}, err
+	}
+	var u struct {
+		Login string `json:"login"`
+		ID    int64  `json:"id"`
+	}
+	if err := g.getAs(ctx, token, "/user", &u); err != nil {
+		return Identity{}, err
+	}
+	return parseIdentity(u.Login, u.ID)
+}
+
 // InstallationRepos listet alle Repos der Installation (auch private) als
 // normalisierte Remotes, über ein auf Metadata: read begrenztes Token.
 func (g *GitHubApp) InstallationRepos(ctx context.Context, installationID int64) ([]string, error) {

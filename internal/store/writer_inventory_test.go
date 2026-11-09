@@ -188,6 +188,7 @@ var writerMethodClasses = map[string]string{
 	"AddAccount":                    "write",
 	"SetOwnName":                    "write",
 	"SetAccountGitHub":              "write",
+	"ClearAccountGitHub":            "write",
 	"AccountGitHub":                 "read",
 	"NameLocked":                    "read",
 	"CreateAccountCode":             "write",

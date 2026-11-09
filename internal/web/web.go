@@ -255,6 +255,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/account/tokens/revoke-unused", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokensRevokeUnused)))))
 	a.handle(mux, "GET /ui/profile", a.requirePerson(http.HandlerFunc(a.profilePage)))
 	a.handle(mux, "POST /ui/profile", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileSave))))))
+	a.handle(mux, "POST /ui/profile/github/link", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileGitHubLink))))))
+	a.handle(mux, "POST /ui/profile/github/unlink", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileGitHubUnlink))))))
 	a.handle(mux, "GET /ui/orgs", a.requirePerson(http.HandlerFunc(a.orgsPage)))
 	a.handle(mux, "GET /ui/orgs/source/callback", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.orgSourceCallback))))
 	// Verwaltung nur aus einer interaktiven Sitzung, nicht aus eingefügtem Token.
@@ -546,6 +548,8 @@ var webRoutes = map[string]webClass{
 	"POST /ui/account/tokens/revoke-unused": webAccount,
 	"GET /ui/profile":                       webAccount,
 	"POST /ui/profile":                      webAdmin,
+	"POST /ui/profile/github/link":          webAdmin,
+	"POST /ui/profile/github/unlink":        webAdmin,
 	"GET /ui/orgs":                          webAccount,
 	"POST /ui/orgs/invite":                  webAdmin,
 	"POST /ui/orgs/invite/revoke":           webAdmin,

@@ -18,6 +18,8 @@ type profileView struct {
 	AgentCount int
 	// Devices are the device tokens of the account, newest contact first.
 	Devices []profileDevice
+	// GitHub is the GitHub link block; nil when there is nothing to show.
+	GitHub *profileGitHub
 }
 
 type profileDevice struct{ Name, Seen string }
@@ -61,8 +63,20 @@ func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, 
 			}
 		}
 	}
-	if r.URL.Query().Get("notice") == "saved" {
+	if gh, ok := a.githubBlock(r); ok {
+		v.GitHub = &gh
+	}
+	switch r.URL.Query().Get("notice") {
+	case "saved":
 		v.Notice = l.msg("profile.saved")
+	case "github_linked":
+		v.Notice = l.msg("profile.gh.linked")
+	case "github_unlinked":
+		v.Notice = l.msg("profile.gh.unlinked")
+	case "github_failed":
+		if errMsg == "" {
+			errMsg = l.msg("profile.gh.failed")
+		}
 	}
 	if status != http.StatusOK {
 		w.WriteHeader(status)

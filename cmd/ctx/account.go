@@ -24,7 +24,9 @@ const accountUsage = `usage: ctx account add <name> [--email E] [--admin] --db <
 
 link-github records the GitHub account of a person; the web interface shows its
 profile picture (fetched by the server, never by the browser). Only someone with
-the host can set it from here; the number is optional.
+the host can set it from here; the number is optional. People link (and unlink)
+their own GitHub account on their profile page in the web interface, where GitHub
+itself says who they are; this command stays for administrators.
 
 set-gardener makes one account the gardener's, once and for good: the number of
 the account is stored (name, or person:N, or the bare number is looked up once),
