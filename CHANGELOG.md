@@ -267,6 +267,11 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- The collector service restarts after any exit (`Restart=always`, launchd
+  `KeepAlive`). `ctx watch` exits cleanly on SIGTERM, so a collector stopped by
+  anything other than the service manager stayed off and sessions stopped
+  reaching the server. `ctx install` replaces the older unit.
+
 - Joining from a fresh machine: the collector service is always set up,
   `ctx doctor` skips harnesses that are not installed, and a machine name that
   another account uses no longer blocks the join. Pairing pages no longer
