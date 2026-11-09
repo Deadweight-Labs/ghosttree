@@ -176,10 +176,32 @@ func (s *Store) InviteNameFree(wanted string) bool {
 	if s.reader != nil {
 		return s.reader.InviteNameFree(wanted)
 	}
-	name := NormalizeAccountName(wanted)
-	if name == "" || MixedScriptName(name) {
+	base, exact := inviteBaseName(wanted)
+	if !exact {
 		return false
 	}
-	taken, err := accountNameTakenByOtherTx(s.db, name, 0)
+	taken, err := accountNameTakenByOtherTx(s.db, base, 0)
 	return err == nil && !taken
+}
+
+// inviteSuffixStemRunes ist die Länge, auf die ein Name gekürzt wird, wenn ein
+// "-N"-Zähler dahinter muss: Platz für "-999" unter MaxDisplayNameRunes.
+const inviteSuffixStemRunes = MaxDisplayNameRunes - 4
+
+// inviteBaseName ist der Name, den eine Einladung für den Wunsch zuerst probiert:
+// der normalisierte Anzeigename, bei leerem oder gemischtschriftigem Wunsch
+// "user". exact sagt, ob das der Wunsch selbst ist; nur dann darf ein Konto so
+// heißen, wie die Person es tippte. inviteName und InviteNameFree gehen beide
+// hierüber, damit sie sich nicht in Länge oder Ersatzname unterscheiden.
+func inviteBaseName(wanted string) (base string, exact bool) {
+	base = NormalizeAccountName(wanted)
+	if base == "" || MixedScriptName(base) {
+		return "user", false
+	}
+	// NormalizeAccountName kürzt auf MaxDisplayNameRunes; ein längerer Wunsch
+	// würde sonst still zu einem anderen Namen.
+	if len([]rune(base)) == MaxDisplayNameRunes && len([]rune(strings.TrimSpace(wanted))) > MaxDisplayNameRunes {
+		return base, false
+	}
+	return base, true
 }

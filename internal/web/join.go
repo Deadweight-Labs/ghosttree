@@ -312,16 +312,19 @@ func (a *app) joinLogin(w http.ResponseWriter, r *http.Request) {
 
 // joinNameRejected zeigt die Einladungsseite wieder, mit der Meldung am Namensfeld
 // und dem getippten Namen; es wurde nichts angelegt.
-func (a *app) joinNameRejected(l lang, w http.ResponseWriter, r *http.Request, code, name string) {
+func (a *app) joinNameRejected(l lang, w http.ResponseWriter, r *http.Request, code, name, msgKey string, status int) {
 	preview, ok := a.joinPreview(code)
 	if !ok {
 		a.joinNotFound(l, w)
 		return
 	}
 	view := a.joinViewFor(r, l, code, preview)
-	view.NameError, view.NameValue = l.msg("join.error_name"), name
+	view.NameError, view.NameValue = l.msg(msgKey), name
 	a.joinHeaders(w)
-	w.WriteHeader(http.StatusUnprocessableEntity)
+	if status == http.StatusTooManyRequests {
+		w.Header().Set("Retry-After", strconv.Itoa(int(inviteNameLockFor/time.Second)))
+	}
+	w.WriteHeader(status)
 	a.joinWrite(l, w, "join", view)
 }
 

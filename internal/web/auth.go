@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -480,13 +481,30 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 			a.beginOIDC(w, r, code)
 			return
 		}
+		// Die Namensprüfung verrät, welche Konten es gibt. Darum zählt jeder Aufruf
+		// gegen die Grenze der Beitrittswege, und je Einladung sind nur wenige
+		// abgelehnte Namen erlaubt; ist sie gesperrt, wird gar nicht mehr geprüft.
+		if !a.joinGate(w, r) {
+			return
+		}
+		if a.inviteNames.locked(code) {
+			a.inviteNameRejected(l, w, r, code, "join.error_name_locked", http.StatusTooManyRequests)
+			return
+		}
 		if !a.store.InviteNameFree(r.FormValue("name")) {
 			// Kein stilles Umbenennen in "robin-2" oder "user": die Person ändert den
 			// Namen selbst.
-			a.inviteNameRejected(l, w, r, code)
+			key, status := "join.error_name", http.StatusUnprocessableEntity
+			if a.inviteNames.miss(code) {
+				key, status = "join.error_name_locked", http.StatusTooManyRequests
+			}
+			a.inviteNameRejected(l, w, r, code, key, status)
 			return
 		}
 		account, err = a.store.InviteLocal(code, r.FormValue("name"))
+		if err == nil {
+			a.inviteNames.accepted(code)
+		}
 	default:
 		err = store.ErrCodeInvalid
 	}
@@ -513,22 +531,25 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 
 // inviteNameRejected zeigt dort, wo der Name getippt wurde (Einladungsseite oder
 // Einmalcode-Seite), die Meldung am Feld.
-func (a *app) inviteNameRejected(l lang, w http.ResponseWriter, r *http.Request, code string) {
+func (a *app) inviteNameRejected(l lang, w http.ResponseWriter, r *http.Request, code, msgKey string, status int) {
 	name := strings.TrimSpace(r.FormValue("name"))
 	if r.FormValue("join") == "1" {
-		a.joinNameRejected(l, w, r, code, name)
+		a.joinNameRejected(l, w, r, code, name, msgKey, status)
 		return
 	}
 	codeHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusUnprocessableEntity)
+	if status == http.StatusTooManyRequests {
+		w.Header().Set("Retry-After", strconv.Itoa(int(inviteNameLockFor/time.Second)))
+	}
+	w.WriteHeader(status)
 	data := a.loginData(l.msg("login.code_title"), "")
 	data.Code, data.NeedsName, data.Invite = code, true, true
 	data.InviteV = a.orgInviteView(r, l, code)
 	if data.InviteV != nil {
-		data.InviteV.NameError, data.InviteV.NameValue = l.msg("join.error_name"), name
+		data.InviteV.NameError, data.InviteV.NameValue = l.msg(msgKey), name
 	} else {
-		data.Error = l.msg("join.error_name")
+		data.Error = l.msg(msgKey)
 	}
 	a.render(l, w, "logincode", data)
 }
