@@ -35,10 +35,6 @@
   & .waits .ring::before { inset: -4px; z-index: 0; background: var(--danger-fg); }
   & .waits .ring::after { inset: -2px; z-index: 1; background: var(--canvas-default); }
   & .waits .ring .gav { position: relative; z-index: 2; width: 28px; height: 28px; font-size: 11px; box-shadow: none; border-color: transparent; }
-  & .waits .ring .gav.hc-0 { background: linear-gradient(var(--accent-subtle), var(--accent-subtle)), var(--canvas-default); }
-  & .waits .ring .gav.hc-1 { background: linear-gradient(var(--done-subtle), var(--done-subtle)), var(--canvas-default); }
-  & .waits .ring .gav.hc-2 { background: linear-gradient(var(--success-subtle), var(--success-subtle)), var(--canvas-default); }
-  & .waits .ring .gav.hc-3 { background: linear-gradient(var(--attention-subtle), var(--attention-subtle)), var(--canvas-default); }
   & .waits.multi .ring + .ring { margin-left: -5px; }
   & .waits.multi .ring:first-child .gav { z-index: 3; box-shadow: 0 0 0 2px var(--canvas-default); }
   & .waits .wstack::after { content: ""; position: absolute; z-index: 3; right: -3px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--danger-fg); box-shadow: 0 0 0 2px var(--canvas-default); }

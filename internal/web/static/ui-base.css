@@ -44,11 +44,12 @@
   & .gav.lg .i { width: 18px; height: 18px; }
   & .gav.xl .i { width: 22px; height: 22px; }
   & img.gav { padding: 0; object-fit: cover; background: var(--canvas-subtle); }
-  & .gav.hc-0 { background: var(--accent-subtle); border-color: var(--accent-muted); color: var(--accent-fg); }
-  & .gav.hc-1 { background: var(--done-subtle); border-color: var(--done-muted); color: var(--done-fg); }
-  & .gav.hc-2 { background: var(--success-subtle); border-color: var(--success-muted); color: var(--success-fg); }
-  & .gav.hc-3 { background: var(--attention-subtle); border-color: var(--attention-muted); color: var(--attention-fg); }
-  & .gav.hc-4 { background: var(--danger-subtle); border-color: var(--danger-muted); color: var(--danger-fg); }
+  /* The tints are see-through in dark mode; the canvas under them keeps lines behind an avatar hidden */
+  & .gav.hc-0 { background: linear-gradient(var(--accent-subtle), var(--accent-subtle)), var(--canvas-default); border-color: var(--accent-muted); color: var(--accent-fg); }
+  & .gav.hc-1 { background: linear-gradient(var(--done-subtle), var(--done-subtle)), var(--canvas-default); border-color: var(--done-muted); color: var(--done-fg); }
+  & .gav.hc-2 { background: linear-gradient(var(--success-subtle), var(--success-subtle)), var(--canvas-default); border-color: var(--success-muted); color: var(--success-fg); }
+  & .gav.hc-3 { background: linear-gradient(var(--attention-subtle), var(--attention-subtle)), var(--canvas-default); border-color: var(--attention-muted); color: var(--attention-fg); }
+  & .gav.hc-4 { background: linear-gradient(var(--danger-subtle), var(--danger-subtle)), var(--canvas-default); border-color: var(--danger-muted); color: var(--danger-fg); }
   & .gav.hc-5 { background: var(--canvas-subtle); color: var(--fg-muted); }
   & .gav.agent { position: relative; border: none; border-radius: 6px; color: #fff; }
   & .gav.agent .i { color: #fff; }
