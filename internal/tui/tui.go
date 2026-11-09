@@ -25,14 +25,25 @@ const (
 	ScreenCard
 	ScreenSettings
 	ScreenLogin
+	ScreenClaim
+	ScreenDirs
+	ScreenProjects
+)
+
+// Focus zones of the home screen: the lists, or the buttons of the "no
+// project" state.
+const (
+	zoneList = iota
+	zoneButtons
 )
 
 // Options set up one run.
 type Options struct {
-	Look  LogoStyle
-	Still bool // draw the logo without animation
-	Plain bool // NO_COLOR: no colours at all
-	Lang  string
+	Look   LogoStyle
+	Switch SwitchStyle // how the mode switch is drawn
+	Still  bool        // draw the logo without animation
+	Plain  bool        // NO_COLOR: no colours at all
+	Lang   string
 	// Start is ScreenHome for `ctx`, ScreenLogin for `ctx login`.
 	Start Screen
 	// LoginServer and LoginMachine fill the login form; LoginDirect skips it.
@@ -41,14 +52,17 @@ type Options struct {
 	LoginDirect  bool
 	// Getenv is os.Getenv unless a test replaces it.
 	Getenv func(string) string
+
+	// tick and now are the clock: timers for animation, spinner and flash
+	// messages, and the current time. Tests replace both so that nothing
+	// waits for real time.
+	tick func(d time.Duration, msg tea.Msg) tea.Cmd
+	now  func() time.Time
 }
 
-const (
-	listTasks = iota
-	listRequests
-	listMessages
-	listCount
-)
+func realTick(d time.Duration, msg tea.Msg) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return msg })
+}
 
 // Timeouts for calls a person waits on: a slow server must look like an
 // absent one instead of freezing the screen.
@@ -79,10 +93,12 @@ type Model struct {
 	local  Local
 	server Server // the checked default server
 
-	search  textinput.Model
-	lists   [listCount]listState
-	section int
-	cursor  int
+	search textinput.Model
+	lists  [listKindCount]listState
+	mode   int    // modeProject or modeInbox
+	tab    [2]int // the open list of each mode
+	cursor int
+	splash bool // the big logo of the start, before the home
 
 	results       listState
 	resultsQuery  string
@@ -94,6 +110,14 @@ type Model struct {
 
 	settings settingsState
 	login    loginState
+
+	proj     projectState
+	zone     int
+	button   int
+	claim    claimState
+	dirs     dirsState
+	projects projectsState
+	pal      paletteState
 
 	flash    string
 	flashBad bool
@@ -116,6 +140,12 @@ func New(be Backend, opt Options) Model {
 	if opt.Getenv == nil {
 		opt.Getenv = os.Getenv
 	}
+	if opt.tick == nil {
+		opt.tick = realTick
+	}
+	if opt.now == nil {
+		opt.now = time.Now
+	}
 	m := Model{be: be, opt: opt, w: 100, h: 34}
 	if opt.Lang == "de" {
 		m.lang = langDE
@@ -137,15 +167,18 @@ func New(be Backend, opt Options) Model {
 	m.search.Prompt = "› "
 	m.search.Placeholder = m.lang.t("search.placeholder")
 	m.search.CharLimit = 400
-	m.search.Focus()
 	m.applyInputStyles()
 	m.screen = opt.Start
 	m.login = newLoginState(m.lang, opt.LoginServer, opt.LoginMachine, m.local)
 	if m.screen != ScreenLogin && m.local.Configured {
-		for i := range m.lists {
-			m.lists[i].loading = true
+		for k := range m.lists {
+			if ListKind(k) >= ListMyTasks || m.local.Project != "" {
+				m.lists[k].loading = true
+			}
 		}
 	}
+	m.splash = m.screen == ScreenHome && !opt.Still
+	m.setMode(modeProject)
 	if m.screen == ScreenLogin && opt.LoginDirect {
 		m.initCmd = m.startLogin()
 	}
@@ -169,13 +202,15 @@ func (m *Model) applyInputStyles() {
 	st.Cursor.Blink = false
 	m.search.SetStyles(st)
 	m.login.applyStyles(st)
+	m.dirs.input.SetStyles(st)
+	m.pal.input.SetStyles(st)
 }
 
 // Init asks for the background colour, starts the logo and the first loads.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{tea.RequestBackgroundColor}
 	if !m.logo.done() {
-		cmds = append(cmds, logoTick())
+		cmds = append(cmds, m.logoTick())
 	}
 	if m.screen == ScreenLogin {
 		cmds = append(cmds, m.initCmd)
@@ -191,7 +226,7 @@ type (
 	flashDoneMsg struct{ id int }
 	serverMsg    struct{ s Server }
 	listMsg      struct {
-		which int
+		which ListKind
 		items []Item
 		err   error
 	}
@@ -208,13 +243,9 @@ type (
 	wheelMsg struct{ up bool }
 )
 
-func logoTick() tea.Cmd {
-	return tea.Tick(time.Second/logoFPS, func(time.Time) tea.Msg { return logoTickMsg{} })
-}
+func (m Model) logoTick() tea.Cmd { return m.opt.tick(time.Second/logoFPS, logoTickMsg{}) }
 
-func spinTick() tea.Cmd {
-	return tea.Tick(90*time.Millisecond, func(time.Time) tea.Msg { return spinTickMsg{} })
-}
+func (m Model) spinTick() tea.Cmd { return m.opt.tick(90*time.Millisecond, spinTickMsg{}) }
 
 // call runs f with a timeout in a command.
 func call(d time.Duration, f func(ctx context.Context) tea.Msg) tea.Cmd {
@@ -239,7 +270,7 @@ func (m *Model) ensureSpin() tea.Cmd {
 		return nil
 	}
 	m.spinOn = true
-	return spinTick()
+	return m.spinTick()
 }
 
 // homeCmds are the loads of the home screen, without touching the model;
@@ -259,15 +290,28 @@ func (m *Model) loadHome() []tea.Cmd {
 	if !m.local.Configured {
 		return cmds
 	}
-	loaders := [listCount]func(context.Context) ([]Item, error){m.be.MyTasks, m.be.OpenRequests, m.be.Messages}
-	for i := range loaders {
-		i, f := i, loaders[i]
-		m.lists[i].loading = true
-		cmds = append(cmds, call(quickTimeout, func(ctx context.Context) tea.Msg {
-			items, err := f(ctx)
-			return listMsg{which: i, items: items, err: err}
-		}))
+	if c := m.checkProject(); c != nil {
+		cmds = append(cmds, c)
 	}
+	for k := ListKind(0); k < listKindCount; k++ {
+		if k < ListMyTasks && m.local.Project == "" {
+			// Without a project the project mode shows only the "no
+			// project" state; asking anyway would list every project.
+			m.lists[k] = listState{err: &ProblemError{Kind: ProblemNoProject}, loaded: true}
+			continue
+		}
+		cmds = append(cmds, m.loadList(k))
+	}
+	return cmds
+}
+
+// reloadHome forgets what was known about the folder's project and loads the
+// home again, after a folder change or a new project.
+func (m *Model) reloadHome() []tea.Cmd {
+	m.proj = projectState{}
+	m.button = 0
+	cmds := m.loadHome()
+	m.setMode(m.mode)
 	return cmds
 }
 
@@ -275,7 +319,7 @@ func (m *Model) setFlash(s string, bad bool) tea.Cmd {
 	m.flash, m.flashBad = s, bad
 	m.flashID++
 	id := m.flashID
-	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return flashDoneMsg{id} })
+	return m.opt.tick(4*time.Second, flashDoneMsg{id})
 }
 
 func (m *Model) go_(s Screen) {
@@ -298,9 +342,6 @@ func (m *Model) goBack() tea.Cmd {
 	m.screen = m.back[len(m.back)-1]
 	m.back = m.back[:len(m.back)-1]
 	m.flash = ""
-	if m.screen == ScreenHome {
-		return m.search.Focus()
-	}
 	return nil
 }
 
@@ -325,18 +366,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case logoTickMsg:
-		if m.logo.done() {
+		if m.splash && m.logo.frame >= logoFrames+splashHold {
+			m.splash = false
+			return m, nil
+		}
+		if !m.splash && m.logo.done() {
 			return m, nil
 		}
 		m.logo.frame++
-		return m, logoTick()
+		return m, m.logoTick()
 	case spinTickMsg:
 		if !m.spinning() {
 			m.spinOn = false
 			return m, nil
 		}
 		m.spin++
-		return m, spinTick()
+		return m, m.spinTick()
 	case flashDoneMsg:
 		if msg.id == m.flashID {
 			m.flash = ""
@@ -362,6 +407,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case listMsg:
 		m.lists[msg.which] = listState{items: msg.items, err: msg.err, loaded: true}
 		return m, nil
+	case projectCheckMsg:
+		if msg.project != m.local.Project {
+			return m, nil
+		}
+		m.proj = projectState{checked: true, known: msg.known, err: msg.err}
+		m.setMode(m.mode)
+		return m, nil
+	case claimPlanMsg, claimDoneMsg:
+		return m.updateClaim(msg)
+	case recentDirsMsg:
+		return m.updateDirs(msg)
+	case projectsMsg, previewMsg:
+		return m.updateProjects(msg)
+	case palProjectsMsg, palDirsMsg:
+		return m.updatePalette(msg)
 	case cardMsg:
 		m.cardLoading = false
 		m.card, m.cardErr = msg.card.Sanitized(), msg.err
@@ -373,10 +433,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case wheelMsg:
+		if m.pal.open {
+			return m.updatePalette(tea.KeyPressMsg{Code: map[bool]rune{true: tea.KeyUp, false: tea.KeyDown}[msg.up]})
+		}
 		return m.move(map[bool]int{true: -1, false: 1}[msg.up])
 	case clickMsg:
 		return m.click(msg.act)
 	case tea.PasteMsg:
+		if m.pal.open {
+			return m.updatePalette(msg)
+		}
 		if m.screen == ScreenHome {
 			var cmd tea.Cmd
 			m.search, cmd = m.search.Update(msg)
@@ -385,14 +451,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == ScreenLogin {
 			return m.updateLogin(msg)
 		}
+		if m.screen == ScreenDirs {
+			return m.updateDirs(msg)
+		}
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			m.quitting = true
 			return m, tea.Quit
 		}
-		if msg.String() == "f2" {
+		if m.splash {
+			// A key ends the start picture and then counts as usual.
+			m.splash = false
+		}
+		if m.pal.open {
+			return m.updatePalette(msg)
+		}
+		switch msg.String() {
+		case "ctrl+k":
+			if m.screen != ScreenLogin {
+				return m, m.openPalette()
+			}
+		case "ctrl+f":
+			return m.focusSearch()
+		case "f2":
 			m.opt.Look = (m.opt.Look + 1) % 3
 			m.logo.style = m.opt.Look
+			return m, nil
+		case "f3":
+			m.opt.Switch = (m.opt.Switch + 1) % 2
 			return m, nil
 		}
 		switch m.screen {
@@ -406,6 +492,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.keySettings(msg)
 		case ScreenLogin:
 			return m.updateLogin(msg)
+		case ScreenClaim:
+			return m.updateClaim(msg)
+		case ScreenDirs:
+			return m.updateDirs(msg)
+		case ScreenProjects:
+			return m.updateProjects(msg)
 		}
 	}
 	switch m.screen {
@@ -463,13 +555,43 @@ func (m *Model) runSearch(line string) tea.Cmd {
 	})
 }
 
-func (m Model) currentList() []Item { return m.lists[m.section].items }
-
 func (m Model) keyHome(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	empty := strings.TrimSpace(m.search.Value()) == ""
+	buttons := m.homeZone() == zoneButtons
 	switch msg.String() {
+	case "shift+tab":
+		m.setMode(1 - m.mode)
+		return m, nil
+	case "tab":
+		if buttons {
+			m.moveButton(1)
+			return m, nil
+		}
+		n := len(m.tabs())
+		m.tab[m.mode] = (m.tab[m.mode] + 1) % max(1, n)
+		m.cursor = 0
+		return m, nil
+	case "left", "right":
+		if !empty {
+			break
+		}
+		d := 1
+		if msg.String() == "left" {
+			d = -1
+		}
+		if buttons {
+			m.moveButton(d)
+			return m, nil
+		}
+		n := max(1, len(m.tabs()))
+		m.tab[m.mode] = (m.tab[m.mode] + d + n) % n
+		m.cursor = 0
+		return m, nil
 	case "esc":
-		if m.search.Value() != "" {
+		// Esc leaves the search line first (and empties it), then quits.
+		if m.search.Focused() || m.search.Value() != "" {
 			m.search.SetValue("")
+			m.search.Blur()
 			return m, nil
 		}
 		m.quitting = true
@@ -482,17 +604,12 @@ func (m Model) keyHome(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.runSearch(v)
 		}
+		if buttons {
+			return m, m.activateButton(m.button)
+		}
 		if items := m.currentList(); m.cursor < len(items) {
 			return m, m.openItem(items[m.cursor])
 		}
-		return m, nil
-	case "tab":
-		m.section = (m.section + 1) % listCount
-		m.cursor = 0
-		return m, nil
-	case "shift+tab":
-		m.section = (m.section + listCount - 1) % listCount
-		m.cursor = 0
 		return m, nil
 	case "up", "ctrl+p":
 		return m.move(-1)
@@ -506,11 +623,16 @@ func (m Model) keyHome(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.openLogin(m.server.URL, false)
 	case "ctrl+r":
 		m.local = m.be.Local()
-		return m, tea.Batch(m.loadHome()...)
+		return m, tea.Batch(m.reloadHome()...)
+	}
+	// Typing starts the search wherever the focus was.
+	var focus tea.Cmd
+	if !m.search.Focused() && msg.Text != "" && msg.Mod&(tea.ModCtrl|tea.ModAlt) == 0 {
+		focus = m.search.Focus()
 	}
 	var cmd tea.Cmd
 	m.search, cmd = m.search.Update(msg)
-	return m, cmd
+	return m, tea.Batch(focus, cmd)
 }
 
 func (m Model) move(d int) (tea.Model, tea.Cmd) {
@@ -578,11 +700,14 @@ func (m *Model) openURL(url string) tea.Cmd {
 
 func (m Model) click(a action) (tea.Model, tea.Cmd) {
 	switch a.kind {
-	case "section":
-		m.section, m.cursor = a.a, 0
+	case "mode":
+		m.setMode(a.a)
+		return m, nil
+	case "tab":
+		m.tab[m.mode], m.cursor = a.a, 0
 		return m, nil
 	case "item":
-		m.section, m.cursor = a.a, a.b
+		m.tab[m.mode], m.cursor = a.a, a.b
 		if items := m.currentList(); a.b < len(items) {
 			return m, m.openItem(items[a.b])
 		}
@@ -604,6 +729,18 @@ func (m Model) click(a action) (tea.Model, tea.Cmd) {
 		return m, m.goBack()
 	case "login.open":
 		return m, m.openURL(m.login.start.CompleteURL)
+	case "button":
+		m.button = a.a
+		return m, m.activateButton(a.a)
+	case "dir":
+		if a.a < len(m.dirs.recent.items) {
+			return m.changeDir(m.dirs.recent.items[a.a].Ref)
+		}
+	case "project":
+		m.projects.cursor = a.a
+		return m, m.loadPreview()
+	case "pal":
+		return m.palRun(a.a)
 	}
 	return m, nil
 }
@@ -620,11 +757,20 @@ func (m Model) View() tea.View {
 		b = m.viewSettings()
 	case ScreenLogin:
 		b = m.viewLogin()
+	case ScreenClaim:
+		b = m.viewClaim()
+	case ScreenDirs:
+		b = m.viewDirs()
+	case ScreenProjects:
+		b = m.viewProjects()
 	default:
 		b = m.viewHome()
 	}
 	if m.quitting {
 		return tea.NewView("")
+	}
+	if m.pal.open {
+		b = m.overlayPalette(b)
 	}
 	v := tea.NewView(b.String())
 	v.AltScreen = true
@@ -658,6 +804,8 @@ func (m Model) title() string {
 		return "ghosttree · " + m.lang.t("settings")
 	case ScreenLogin:
 		return "ghosttree · login"
+	case ScreenProjects:
+		return "ghosttree · " + m.lang.t("projects")
 	}
 	return "ghosttree"
 }

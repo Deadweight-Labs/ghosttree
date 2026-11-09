@@ -38,8 +38,10 @@ func TestOpenTasksForMeShowAsABadgeAndCountOnlyWhatIsVisible(t *testing.T) {
 	if got := count(e.Member, "/ui/inbox"); got != "2" {
 		t.Errorf("anna's badge = %q, want 2 (hers and the one for everyone)", got)
 	}
-	if got := count(e.Guest, "/ui/inbox"); got != "1" {
-		t.Errorf("gina's badge = %q, want 1 (only what is assigned to her)", got)
+	// Ein Gast erledigt keine Aufgaben (Robin, 2026-11-09): auch die ihm
+	// zugewiesene wartet nicht auf ihn.
+	if got := count(e.Guest, "/ui/inbox"); got != "" {
+		t.Errorf("gina's badge = %q, want none (a guest does not mark tasks done)", got)
 	}
 	if got := count(e.Owner, "/ui/inbox"); got != "2" {
 		t.Errorf("alice's badge = %q, want 2 (the two for everyone, one of them in the project only she is in)", got)

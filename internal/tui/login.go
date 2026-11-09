@@ -150,9 +150,11 @@ func (m Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.login.step = loginWaiting
 		m.login.start = st
 		m.login.opened, m.login.why = m.be.Open(st.CompleteURL)
+		// The wait ends a little after the code expires, measured on the
+		// model's clock, so a test clock does not make it end at once.
 		ctx, cancel := context.WithCancel(context.Background())
 		if !msg.start.Expires.IsZero() {
-			ctx, cancel = context.WithDeadline(context.Background(), msg.start.Expires.Add(5*time.Second))
+			ctx, cancel = context.WithTimeout(context.Background(), msg.start.Expires.Sub(m.opt.now())+5*time.Second)
 		}
 		m.login.cancel = cancel
 		seq, start := msg.seq, msg.start
@@ -182,7 +184,7 @@ func (m Model) updateLogin(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.server = s
 		}
 		if m.opt.Start == ScreenLogin {
-			return m, tea.Tick(1600*time.Millisecond, func(time.Time) tea.Msg { return loginQuitMsg{} })
+			return m, m.opt.tick(1600*time.Millisecond, loginQuitMsg{})
 		}
 		return m, nil
 	case loginQuitMsg:

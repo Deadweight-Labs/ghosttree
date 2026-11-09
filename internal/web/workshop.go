@@ -450,7 +450,7 @@ func (a *app) workshopVote(w http.ResponseWriter, r *http.Request) {
 		a.workshopFail(w, r, err, i.Project, i.ID)
 		return
 	}
-	a.stampActor(r, actor.Vote, a.store.VoteRowID(d.ID, store.VoterKey(voter)))
+	a.stampActor(r, actor.Vote, actor.VoteEntryID(d.ID, store.VoterKey(voter)))
 	http.Redirect(w, r, workshopBack(i.Project, i.ID, "wdone", "vote")+"", http.StatusSeeOther)
 }
 

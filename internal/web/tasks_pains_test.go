@@ -87,7 +87,7 @@ func TestMarkDoneIsAllOrNothingAndAGuestCannotTouchForeignTasks(t *testing.T) {
 	req := rqMake(t, e.St, rqSpec{Title: "Ship it"})
 	own := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "For gina", Assignee: "gina"})
 	other := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "For all members"})
-	resp := tpPost(t, e, e.Guest, "/ui/tasks/done", url.Values{"id": {strconv.FormatInt(own.ID, 10), strconv.FormatInt(other.ID, 10)}})
+	resp := tpPost(t, e, e.Guest, "/ui/tasks/done", url.Values{"id": {strconv.FormatInt(other.ID, 10), strconv.FormatInt(own.ID, 10)}})
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("guest marking a foreign task = %d", resp.StatusCode)
 	}
@@ -96,11 +96,16 @@ func TestMarkDoneIsAllOrNothingAndAGuestCannotTouchForeignTasks(t *testing.T) {
 			t.Errorf("task %d changed although the batch failed", id)
 		}
 	}
-	if resp := tpPost(t, e, e.Guest, "/ui/tasks/done", url.Values{"id": {strconv.FormatInt(own.ID, 10)}}); resp.StatusCode != http.StatusSeeOther {
+	// Ein Gast liest nur: auch die ihm zugewiesene Aufgabe meldet er nicht (Robin, 2026-11-09).
+	if resp := tpPost(t, e, e.Guest, "/ui/tasks/done", url.Values{"id": {strconv.FormatInt(own.ID, 10)}}); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("guest marking the assigned task = %d", resp.StatusCode)
 	}
-	if got, _ := e.St.TaskByID(own.ID); got.State != humantask.Done {
-		t.Errorf("assigned task not done: %+v", got)
+	if got, _ := e.St.TaskByID(own.ID); got.State != humantask.Open {
+		t.Errorf("a guest marked the assigned task done: %+v", got)
+	}
+	// Die Aufgabe selbst liest er weiter.
+	if code, _ := fetchPage(t, e.Guest, e.Base+"/ui/x/shell/tasks/"+strconv.FormatInt(own.ID, 10)); code != http.StatusOK {
+		t.Errorf("guest reads the assigned task: %d", code)
 	}
 }
 

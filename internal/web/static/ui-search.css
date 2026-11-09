@@ -45,7 +45,9 @@
   & .hit .hs .chip.ar { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; padding: 0 6px; border: 1px solid var(--border-default); border-radius: 999px; font-size: 12px; font-family: var(--font-mono, monospace); color: var(--fg-muted); }
   & .hit .hs .chip.ar .i { width: 12px; height: 12px; }
   & .frow.qf { flex-wrap: wrap; row-gap: 4px; }
-  & .frow.qf .gfield { flex: 1 1 90px; min-width: 0; height: 28px; font-size: 13px; padding: 0 6px; }
+  /* The name takes the first line, field and button the second, under the name */
+  & .frow.qf .nm { flex: 1 1 calc(100% - 24px); white-space: normal; }
+  & .frow.qf .gfield { flex: 1 1 90px; min-width: 0; height: 28px; margin-left: 24px; font-size: 13px; padding: 0 6px; }
   & .frow.qf .gbtn.sm { height: 28px; padding: 0 8px; }
   & .pre-h { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
   & .pre-h code { font-size: 12px; color: var(--fg-muted); }

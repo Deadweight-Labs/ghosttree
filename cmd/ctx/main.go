@@ -14,6 +14,7 @@ var version = "0.1.0-dev"
 
 func run(args []string, stdout io.Writer) int {
 	client.ClientVersion = version
+	client.TerminalPerson = terminalPersonFor(args)
 	if len(args) == 0 {
 		if interactiveTerminal(stdout) {
 			return cmdTUI(nil, stdout)

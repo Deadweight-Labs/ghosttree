@@ -39,6 +39,9 @@ func (m Model) page(content block, footer string) block {
 		}
 	}
 	content.add("  " + flash)
+	if m.screen != ScreenLogin {
+		footer = m.keys("ctrl+k", m.lang.t("key.commands")) + "   " + footer
+	}
 	content.add("  " + footer)
 	return content
 }
@@ -55,68 +58,9 @@ func host(raw string) string {
 	return u.Host
 }
 
-// accountLine is who, where and which machine, in one dim line.
-func (m Model) accountLine() string {
-	if !m.local.Configured {
-		return m.th.Caution.Render(m.lang.t("no.config")) + m.th.Dim.Render("   ctrl+l "+m.lang.t("key.login"))
-	}
-	s := m.server
-	var parts []string
-	switch {
-	case s.Account != "":
-		parts = append(parts, m.th.Text.Render(clean(s.Account, 60)))
-	case s.Checked && s.Token == TokenRejected:
-		parts = append(parts, m.th.Bad.Render(m.lang.t("token.rejected")))
-	case s.Checked && !s.Reachable:
-		parts = append(parts, m.th.Caution.Render(m.lang.t("unreachable")))
-	case s.Token == TokenNone:
-		parts = append(parts, m.th.Caution.Render(m.lang.t("signed.out")))
-	}
-	if m.local.Machine != "" {
-		parts = append(parts, m.th.Dim.Render(clean(m.local.Machine, 64)))
-	}
-	if s.URL != "" {
-		parts = append(parts, m.th.Dim.Render(clean(host(s.URL), 80)))
-	}
-	if m.local.Project != "" {
-		parts = append(parts, m.th.Dim.Render(clean(projectShort(m.local.Project), 80)))
-	}
-	return strings.Join(parts, m.th.Subtle.Render(" · "))
-}
-
 func projectShort(p string) string {
 	p = strings.TrimPrefix(p, "github.com/")
 	return p
-}
-
-var sectionKeys = [listCount]string{"tasks", "requests", "messages"}
-
-// tabs renders the three list names; the active one stands out.
-func (m Model) tabs() block {
-	var b block
-	var parts []string
-	var hits []hit
-	x := 0
-	for i := 0; i < listCount; i++ {
-		label := m.lang.t(sectionKeys[i])
-		count := ""
-		if st := m.lists[i]; st.loaded && st.err == nil {
-			count = fmt.Sprintf(" %d", len(st.items))
-		}
-		var s string
-		if i == m.section {
-			s = m.th.Title.Render(label) + m.th.Key.Render(count)
-		} else {
-			s = m.th.Dim.Render(label + count)
-		}
-		w := lipgloss.Width(s)
-		hits = append(hits, hit{row: 0, x0: x, x1: x + w, act: action{kind: "section", a: i}})
-		parts = append(parts, s)
-		x += w + 4
-	}
-	b.add(strings.Join(parts, "    "))
-	b.hits = hits
-	return b
 }
 
 // itemLine renders one list row in width columns.
@@ -155,7 +99,7 @@ func (m Model) listBlock(st listState, cursor, rows, width int, kind string, sec
 		b.add("  " + m.th.Subtle.Render(m.lang.t("loading")))
 		return b
 	case st.err != nil:
-		b.add("  " + m.th.Caution.Render(errText(st.err)))
+		b.add("  " + m.th.Caution.Render(m.problemText(st.err)))
 		return b
 	case len(st.items) == 0:
 		b.add("  " + m.th.Subtle.Render(m.lang.t("nothing")))
@@ -178,170 +122,7 @@ func (m Model) listBlock(st listState, cursor, rows, width int, kind string, sec
 	return b
 }
 
-func (m Model) homeFooter() string {
-	pairs := []string{"enter", m.lang.t("key.open"), "tab", m.lang.t("key.section"), "↑↓", m.lang.t("key.select"), "ctrl+s", m.lang.t("key.settings")}
-	if m.w >= 110 {
-		pairs = append(pairs, "f2", m.lang.t("key.look"))
-	}
-	return m.keys(append(pairs, "esc", m.lang.t("key.quit"))...)
-}
-
-func (m Model) viewHome() block {
-	switch m.opt.Look {
-	case LogoTree:
-		return m.page(m.homeSplit(), m.homeFooter())
-	case LogoLines:
-		return m.page(m.homeHeader(), m.homeFooter())
-	}
-	return m.page(m.homeCentered(), m.homeFooter())
-}
-
 func (m Model) contentWidth() int { return max(30, min(96, m.w-6)) }
-
-// homeCentered: the logo and the search in the middle, the lists below as
-// tabs. The look of `ctx` with the web logo.
-func (m Model) homeCentered() block {
-	var b block
-	width := m.contentWidth()
-	lg := m.logo.View()
-	logoH := lipgloss.Height(lg)
-	listRows := max(3, m.h-logoH-14)
-	showLogo := m.h >= logoH+16
-	if showLogo {
-		b.blank(1)
-		var head block
-		head.add(lg)
-		b.append(head.center(m.w))
-		b.blank(1)
-	} else {
-		b.blank(1)
-	}
-	var mark block
-	mark.add(m.wordmark())
-	b.append(mark.center(m.w))
-	var acc block
-	acc.add(m.accountLine())
-	b.append(acc.center(m.w))
-	b.blank(1)
-
-	var body block
-	body.add(m.search.View())
-	body.add(m.th.Rule.Render(strings.Repeat("─", width)))
-	body.blank(1)
-	body.append(m.tabs().indent(2))
-	body.blank(1)
-	if !showLogo {
-		listRows = max(3, m.h-12)
-	}
-	body.append(m.listBlock(m.lists[m.section], m.cursor, listRows, width, "item", m.section))
-	b.append(body.indent(max(2, (m.w-width)/2)))
-	return b
-}
-
-// homeSplit: a narrow column with the tree logo and the account on the
-// left, search and all three lists on the right.
-func (m Model) homeSplit() block {
-	var left block
-	left.blank(1)
-	left.add(m.logo.View())
-	left.blank(1)
-	left.add(m.wordmark())
-	left.blank(1)
-	s := m.server
-	if m.local.Configured {
-		if s.Account != "" {
-			left.add(m.th.Text.Render(clean(s.Account, 30)))
-		} else {
-			left.add(m.th.Caution.Render(m.lang.t("signed.out")))
-		}
-		left.add(m.th.Dim.Render(clean(m.local.Machine, 30)))
-		left.add(m.th.Dim.Render(clean(host(s.URL), 30)))
-		left.add(m.th.Dim.Render(clean(m.local.Channel, 16)))
-	} else {
-		left.add(m.th.Caution.Render(m.lang.t("no.config")))
-	}
-	left.blank(1)
-	left.addHit(m.th.Key.Render("ctrl+s")+" "+m.th.Dim.Render(m.lang.t("settings")), action{kind: "settings"})
-
-	rightW := max(30, min(90, m.w-left.width()-10))
-	var right block
-	right.blank(1)
-	right.add(m.search.View())
-	right.add(m.th.Rule.Render(strings.Repeat("─", rightW)))
-	per := max(2, (m.h-10)/3-2)
-	for i := 0; i < listCount; i++ {
-		right.blank(1)
-		label := m.lang.t(sectionKeys[i])
-		var head string
-		if i == m.section {
-			head = m.th.Title.Render(label)
-		} else {
-			head = m.th.Dim.Render(label)
-		}
-		if st := m.lists[i]; st.loaded && st.err == nil {
-			head += m.th.Subtle.Render(fmt.Sprintf("  %d", len(st.items)))
-		}
-		right.addHit(head, action{kind: "section", a: i})
-		cur := -1
-		if i == m.section {
-			cur = m.cursor
-		}
-		lb := m.listBlock(m.lists[i], cur, per, rightW, "item", i)
-		if cur < 0 && len(lb.lines) > per {
-			lb.lines = lb.lines[:per]
-		}
-		right.append(lb)
-	}
-	return beside(4, left.indent(3), right)
-}
-
-// homeHeader: a framed header in the manner of a terminal app, braille
-// logo inside, then search and the active list.
-func (m Model) homeHeader() block {
-	var info block
-	info.blank(1)
-	info.add(m.wordmark() + "  " + m.th.Subtle.Render(clean(m.local.ClientVersion, 40)))
-	info.blank(1)
-	s := m.server
-	row := func(k, v string) { info.add(m.th.Dim.Render(fmt.Sprintf("%-9s", k)) + v) }
-	acct := m.th.Caution.Render(m.lang.t("signed.out"))
-	if s.Account != "" {
-		acct = m.th.Text.Render(clean(s.Account, 60))
-	}
-	row(strings.ToLower(m.lang.t("account")), acct)
-	row("server", m.th.Text.Render(clean(host(s.URL), 80)))
-	row(strings.ToLower(m.lang.t("machine")), m.th.Text.Render(clean(m.local.Machine, 64)))
-	if m.local.Project != "" {
-		repo := clean(projectShort(m.local.Project), 80)
-		if m.local.Branch != "" {
-			repo += m.th.Subtle.Render(" @ ") + clean(m.local.Branch, 60)
-		}
-		row("repo", m.th.Text.Render(repo))
-	}
-	var lg block
-	lg.add(m.logo.View())
-	inner := beside(3, lg, info)
-	boxStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.th.Faint).Padding(0, 2)
-	if m.th.Plain {
-		boxStyle = boxStyle.UnsetBorderForeground()
-	}
-	box := boxStyle.Render(inner.String())
-	var b block
-	b.blank(1)
-	var hb block
-	hb.add(box)
-	b.append(hb.indent(2))
-	b.blank(1)
-	width := m.contentWidth()
-	var body block
-	body.add(m.search.View())
-	body.blank(1)
-	body.append(m.tabs().indent(2))
-	body.add(m.th.Rule.Render(strings.Repeat("─", width)))
-	body.append(m.listBlock(m.lists[m.section], m.cursor, max(3, m.h-len(b.lines)-9), width, "item", m.section))
-	b.append(body.indent(3))
-	return b
-}
 
 func (m Model) smallHeader(title string) block {
 	var b block
@@ -374,7 +155,7 @@ func (m Model) viewCard() block {
 	case m.cardErr != nil:
 		b.add("  " + m.th.Ref.Render(links.Clean(c.Ref, 40)))
 		b.blank(1)
-		for _, l := range strings.Split(lipgloss.Wrap(errText(m.cardErr), m.contentWidth(), " "), "\n") {
+		for _, l := range strings.Split(lipgloss.Wrap(m.problemText(m.cardErr), m.contentWidth(), " "), "\n") {
 			b.add("  " + m.th.Caution.Render(l))
 		}
 		return m.page(b, m.keys("esc", m.lang.t("key.back")))

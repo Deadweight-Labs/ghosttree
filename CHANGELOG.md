@@ -12,6 +12,12 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Before you upgrade
 
+- Some refusals now hold even without `GHOSTTREE_ENFORCE_ACCESS`: a guest
+  writes nothing the role matrix does not give them (no knowledge edits, no
+  runbooks, no runbook runs, no tasks), and approving knowledge needs the
+  review right (owner, lead or `can_review`). Reporting a run of a project
+  runbook (`POST /api/runbooks/{id}/runs`) needs a member, not just reading. Reading stays open in log mode as before. A guest no
+  longer marks tasks done, not even one assigned to them.
 - `ctx person add` is deprecated; use `ctx account add`. Existing person tokens
   keep working and are migrated on startup.
 - Per-project roles and visibility are only enforced with
@@ -92,6 +98,42 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   moves for about a second at start; `--look mark|tree|lines` (or
   `GHOSTTREE_TUI_LOOK`, f2 inside) picks one of three looks,
   `GHOSTTREE_TUI_STILL=1` keeps it still.
+
+- `ctx` in a folder without a project no longer shows a raw `HTTP 400`. The
+  terminal interface says what is missing (no git repository, no git remote,
+  a remote ghosttree does not know) and offers three ways on: create the
+  project from this folder (only with a git remote, after a confirmation with
+  the name and the organization; `ctx project claim`), choose another folder
+  (typed path with tab completion or the recent folders of this machine's
+  sessions; `cd … && ctx`), or show the projects you can see with their open
+  requests and your tasks (`ctx project list`). Failed loads read as no
+  project, no access, server not reachable or not signed in; search,
+  settings and your tasks across all projects keep working. Open requests are
+  no longer listed for every project when the folder has none, and an
+  unknown room reads as no messages.
+
+- The terminal interface has two working modes instead of one crowded
+  screen, switched with shift+tab and shown on a rail at the left (or in the
+  header line with `--switch bar`, `GHOSTTREE_TUI_SWITCH=bar` or f3).
+  Project: the folder's project with open requests, pains, tasks and room
+  messages, one list at a time (tab switches); without a project only the
+  "no project" state and its three actions. Inbox: what waits for you across
+  projects, each row with its project: your tasks, decisions and questions
+  or approvals for people, messages of the last seven days, and suggestions
+  to review when there are any; the switch shows a number once something
+  waits. The big logo only shows at the start and gives way to a compact
+  header line. Room messages are read through the search where this
+  terminal never joined the room, so reading never writes.
+
+- Command palette in the terminal interface: ctrl+k opens it over the
+  current screen (dimmed behind it where the terminal has colours, framed
+  always). Fuzzy search over jump targets (REQ-n, PAIN-n, TASK-n, #id, pr:n,
+  projects, recent folders), actions (switch mode, settings, update channel,
+  doctor and repair, restart collector, sign out with its confirmation,
+  create project from this folder, open in browser, copy link) and a search
+  in the search language; each action shows its key or command, the
+  recently used ones come first. ctrl+f jumps into the search line from any
+  screen but forms; esc leaves it. The footer names ctrl+k.
 
 #### Short ways between agent and human
 
@@ -199,8 +241,11 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   every token call (MCP, hooks, CLI) is an agent, and the session counts only
   when it belongs to the calling account. No tool parameter sets or overrides it;
   a token can no longer store `origin: human` on a request or knowledge entry.
-  This includes `ctx` typed by hand in a terminal: it writes with a token and
-  counts as an agent (without harness when no agent session runs).
+  `ctx` typed by a person in a terminal (no agent session, no agent harness in
+  the environment, stdin and stdout a terminal) is recorded as "person
+  (terminal)", apart from "person (web)". It is the client's own word: it grants
+  no right, an agent could claim it, and a call with an agent session is always
+  an agent.
 - The model of a session is read from its uploaded transcript (Claude Code
   `message.model`, Codex `turn_context`), with every switch and its time; an
   entry gets the model that was active when it was written.
@@ -327,6 +372,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - `GHOSTTREE_PUBLIC_URL` and `GHOSTTREE_TRUSTED_PROXIES` for TLS and reverse
   proxies, with `Secure` cookies.
 - `DELETE /api/tokens/self` revokes the token that made the request.
+- `ctx db chunk-stats --db PATH [--sample N]` shows, from a sample, how many
+  bytes stored transcript lines take per line type and what the slim rule
+  would leave of them; read-only and throttled, so it may run beside the
+  server.
 
 ### Changed
 
@@ -335,6 +384,24 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   redact-sessions` in existing data. The server also redacts on arrival.
 - Stored transcripts no longer keep base64 images and files; a placeholder with
   type, size and hash stands in their place.
+- Transcripts are stored slim: lines and fields that only repeat what is
+  already there or that no reader uses are left out before upload (Claude
+  Code's `api-request*` lines, `prompt_snapshot` and `hook_success`
+  attachments, thinking signatures, `wireToolInputs`, the copies in
+  `toolUseResult`; Codex's `item_completed` copies, encrypted reasoning,
+  replaced history after compaction, rate limits), and tool outputs over
+  8 KB keep their first 6 KB and last 2 KB with length and hash. Prompts,
+  answers, thinking, tool calls, models and times stay. The server applies the
+  same rule to lines from older clients. Left-out lines leave gaps in the line
+  numbers. On local transcripts this saves about two thirds of the stored
+  bytes. `ctx export` returns the slim lines, which read the same but cannot be
+  resumed in Claude Code or Codex. What this gives up: the middle of a long
+  tool output is no longer stored, so search and embeddings cannot find it
+  (the marker's hash is over the redacted text); and an input that was queued
+  while the agent worked but never sent (`queue-operation` content) is no
+  longer in the archive. Secrets are redacted before anything is cut.
+- The session view shows the commands Codex's `exec` tool ran, with their
+  output, and the output of `exec` itself, which it skipped before.
 - The gardener runs as a real, hardened Claude Code agent by default (no Bash,
   sandboxed, allowlists) instead of one API call per entry.
 - The model for "In short" notes has its own `explain` entry in `llm.json`; it
@@ -351,6 +418,15 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- The server starts without reading every transcript line: the check for
+  lines an older binary wrote without search index compares the two highest
+  line numbers instead of scanning all lines since the last index run. Once
+  per start, two minutes after the index backfill, a throttled background
+  pass compares the line keys with the index keys (no transcript text is read)
+  and indexes any line it finds missing (`session_index_gaps` in the log).
+- The knowledge, review, context and sessions pages of a repository showed
+  guests and members without admin rights all projects instead of that
+  repository (including machine entries of other people in log mode).
 - Pains, ideas, tasks and comments written through MCP now carry their
   session: the server takes the session the client names in its header when the
   body has no numeric id. Before, a pain never had a session.

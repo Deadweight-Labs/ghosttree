@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 const dbUsage = `usage: ctx db vacuum --db <path> [--tmpdir <dir>] [--fts-optimize] [--yes]
        ctx db check --db <path> [--full]
        ctx db backfill-actors --db <path> [--dry-run] [--batch N] [--kind k,...] [--no-models] [--json]
+       ctx db chunk-stats --db <path> [--sample N] [--json]
 
 Maintenance of the database file with the SQL functions of the schema. The
 sqlite3 CLI cannot do this: the CHECK constraints of the snapshot tables call
@@ -26,7 +28,20 @@ ghosttree_valid_utf8, which only ctx registers, so "sqlite3 <db> VACUUM" and
 
   vacuum  give the free pages back to the filesystem (server stopped)
   check   quick_check or integrity_check, writes nothing (may run beside the server)
-  backfill-actors  who wrote existing entries (agent or person), only where proven`
+  backfill-actors  who wrote existing entries (agent or person), only where proven
+  chunk-stats  bytes of stored transcript lines per line type, from a sample`
+
+const dbChunkStatsUsage = `usage: ctx db chunk-stats --db <path> [--sample N] [--json]
+
+Draw N random transcript lines from session_chunks (default 2000) and count the
+bytes of their raw JSON per line type (claude:assistant,
+codex:event_msg:item_completed:CommandExecution, ...): how many lines, how
+large, and what the current slim rule would leave of them. Use it to spot new
+ballast that a harness started to write.
+
+Each line is one lookup by its number; nothing scans the table, and it pauses
+between batches. Nothing is written (query_only), so the server may keep
+running. Shares are of the sample, not exact.`
 
 const dbVacuumUsage = `usage: ctx db vacuum --db <path> [--tmpdir <dir>] [--fts-optimize] [--yes]
 
@@ -96,6 +111,8 @@ func cmdDB(args []string, stdout io.Writer) int {
 		return cmdDBCheck(args[1:], stdout)
 	case "backfill-actors":
 		return cmdDBBackfillActors(args[1:], stdout)
+	case "chunk-stats":
+		return cmdDBChunkStats(args[1:], stdout)
 	case "help", "--help", "-h":
 		fmt.Fprintln(stdout, dbUsage)
 		return 0
@@ -256,4 +273,55 @@ func printCheckFindings(stdout io.Writer, pragma string, msgs []string) {
 	for _, m := range msgs {
 		fmt.Fprintf(stdout, "  %s\n", m)
 	}
+}
+
+func cmdDBChunkStats(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("db chunk-stats", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	dbPath := fs.String("db", "", "path to the ghosttree database")
+	sample := fs.Int("sample", 2000, "number of lines to sample")
+	asJSON := fs.Bool("json", false, "print the report as JSON")
+	fs.Usage = func() { fmt.Fprintln(stdout, dbChunkStatsUsage) }
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *dbPath == "" || fs.NArg() > 0 || *sample <= 0 || *sample > 1_000_000 {
+		fmt.Fprintln(stdout, dbChunkStatsUsage)
+		return 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	rep, err := store.ChunkStats(ctx, *dbPath, store.ChunkStatsOptions{Sample: *sample})
+	if err != nil {
+		fmt.Fprintf(stdout, "chunk-stats failed: %v\n", err)
+		return 1
+	}
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(rep); err != nil {
+			return 1
+		}
+		return 0
+	}
+	printChunkStats(stdout, rep)
+	return 0
+}
+
+func printChunkStats(stdout io.Writer, rep store.ChunkStatsReport) {
+	fmt.Fprintf(stdout, "chunks: about %d (highest id), sampled %d lines, %s raw, slim rule version %d, %s\n",
+		rep.HighestID, rep.Sampled, humanBytes(int(rep.Bytes)), rep.SlimVersion, rep.Duration.Round(time.Millisecond))
+	if rep.Sampled == 0 {
+		return
+	}
+	fmt.Fprintf(stdout, "%-56s %7s %7s %11s %10s\n", "line type", "bytes", "lines", "avg bytes", "after slim")
+	for _, k := range rep.Kinds {
+		after := "-"
+		if k.Bytes > 0 {
+			after = fmt.Sprintf("%.0f%%", 100*float64(k.SlimBytes)/float64(k.Bytes))
+		}
+		fmt.Fprintf(stdout, "%-56s %6.1f%% %7d %11d %10s\n", k.Kind,
+			100*float64(k.Bytes)/float64(rep.Bytes), k.Chunks, k.Bytes/int64(k.Chunks), after)
+	}
+	fmt.Fprintf(stdout, "after slim: %.0f%% of the sampled bytes would remain\n", 100*float64(rep.SlimBytes)/float64(max(rep.Bytes, 1)))
 }
