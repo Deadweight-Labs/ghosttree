@@ -5,7 +5,7 @@
 <details class="ct-dd" data-ct-dd><summary class="ct-btn" aria-label="{{t "code.branch_switch"}}">{{template "cticon" "branch"}}<span class="ct-mono">{{.Branch.Name}}</span>{{template "cticon" "chev"}}</summary>
 <div class="ct-pop"><p class="ct-ph">{{t "code.branch_switch"}}</p>
 <label class="ct-pf js-only">{{template "cticon" "search"}}<input type="text" data-ct-branches placeholder="{{t "code.branch_search"}}" aria-label="{{t "code.branch_search"}}" autocomplete="off"></label>
-{{range .Branch.Options}}<a class="ct-opt{{if .Current}} is-cur{{end}}" href="{{.Href}}" data-branch="{{.Name}}"{{if .Current}} aria-current="true"{{end}}><span class="ct-chk">{{if .Current}}{{template "cticon" "check"}}{{end}}</span><span class="ct-mono ct-ell">{{.Name}}</span>{{if .Default}}<small>{{t "code.branch_default"}}</small>{{end}}</a>{{end}}</div></details>
+{{range .Branch.Options}}<a class="ct-opt{{if .Current}} is-cur{{end}}" href="{{.Href}}" data-branch="{{.Name}}"{{if .Current}} aria-current="true"{{end}}><span class="ct-chk">{{if .Current}}{{template "cticon" "check"}}{{end}}</span><span class="ct-mono ct-ell">{{.Name}}</span>{{if .Default}}<small>{{t "code.branch_default"}}</small>{{end}}</a>{{end}}<hr><a class="ct-opt" href="{{.Branch.AllHref}}"><span class="ct-chk"></span>{{t "code.branch_all"}}</a></div></details>
 <span class="ct-sp"></span>
 {{if .Filter}}<label class="ct-field js-only">{{template "cticon" "search"}}<input id="ct-filter" type="text" placeholder="{{t "code.filter"}}" aria-label="{{t "code.filter"}}" autocomplete="off"><kbd aria-hidden="true">t</kbd></label>{{end}}
 {{if .GitHub}}<a class="gbtn ct-ghb" href="{{.GitHub}}" rel="noopener noreferrer">{{template "cticon" "ext"}}{{t "repo.on_github"}}</a>{{end}}

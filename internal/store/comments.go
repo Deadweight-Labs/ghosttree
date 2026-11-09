@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -11,7 +12,7 @@ import (
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
 
-// Kommentare an Issue, Idee und Pain. Eigene Tabellen, weil die Threads der
+// Kommentare an Issue, Idee, Pain und Wissen. Eigene Tabellen, weil die Threads der
 // Koordination etwas anderes sind: sie hängen am Raum und seiner Mitgliedschaft
 // (CoordAccess, Gäste bekommen dort Sonderansichten), ihre Nachrichten sind
 // unveränderlich und laufen unter der Chat-Aufbewahrung, und jeder Thread ist
@@ -19,20 +20,7 @@ import (
 // dessen Leserecht (ProjectAccess), wird vom Autor bearbeitet (mit allen
 // Fassungen) und weich gelöscht.
 const commentSchema = `
-CREATE TABLE IF NOT EXISTS comments(
-  id INTEGER PRIMARY KEY,
-  project TEXT NOT NULL,
-  object_kind TEXT NOT NULL CHECK(object_kind IN ('request','idea','pain')),
-  object_id INTEGER NOT NULL,
-  body TEXT NOT NULL CHECK(trim(body) != ''),
-  person TEXT NOT NULL DEFAULT '',
-  account_id INTEGER NOT NULL DEFAULT 0,
-  session_id INTEGER NOT NULL DEFAULT 0,
-  revision INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  edited_at TEXT NOT NULL DEFAULT '',
-  deleted_at TEXT NOT NULL DEFAULT '',
-  deleted_by TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS comments(` + commentsColumns + `);
 CREATE INDEX IF NOT EXISTS comments_object ON comments(object_kind, object_id, id);
 CREATE TABLE IF NOT EXISTS comment_versions(
   id INTEGER PRIMARY KEY,
@@ -48,12 +36,105 @@ CREATE TRIGGER IF NOT EXISTS comment_versions_no_delete BEFORE DELETE ON comment
   BEGIN SELECT RAISE(ABORT,'comment_versions is append-only'); END;
 `
 
+// commentsColumns ist die Definition der Spalten von comments: ein Kommentar
+// hängt an einem Issue, einer Idee, einem Pain oder einem Wissenseintrag. Das
+// Wissen kam später dazu (allowKnowledgeComments); der Umbau und die frische
+// Tabelle teilen sich diese Definition.
+const commentsColumns = `
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL,
+  object_kind TEXT NOT NULL CHECK(object_kind IN ('request','idea','pain','knowledge')),
+  object_id INTEGER NOT NULL,
+  body TEXT NOT NULL CHECK(trim(body) != ''),
+  person TEXT NOT NULL DEFAULT '',
+  account_id INTEGER NOT NULL DEFAULT 0,
+  session_id INTEGER NOT NULL DEFAULT 0,
+  revision INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  edited_at TEXT NOT NULL DEFAULT '',
+  deleted_at TEXT NOT NULL DEFAULT '',
+  deleted_by TEXT NOT NULL DEFAULT ''`
+
 // ensureComments legt die Tabellen additiv an, beliebig oft aufrufbar. Er läuft
 // vor ensureGitAnchors: comment_versions trägt anchor_id und origin_id (siehe
 // anchoredTables).
 func ensureComments(db *sql.DB) error {
-	_, err := db.Exec(commentSchema)
-	return err
+	if _, err := db.Exec(commentSchema); err != nil {
+		return err
+	}
+	return allowKnowledgeComments(db)
+}
+
+// allowKnowledgeComments lässt Kommentare an Wissenseinträgen zu (Entscheidung 11
+// der UI-Durchsicht): die CHECK-Bedingung von comments.object_kind nennt dann
+// auch knowledge. SQLite ändert eine CHECK-Bedingung nicht; die Tabelle wird
+// einmal neu gebaut, wenn ihre Definition die Art noch nicht kennt. Zeilen,
+// Nummern und alles, was darauf zeigt, bleiben. Eine Datenbank, die die Art
+// kennt, bleibt unberührt, der Aufruf ist wiederholbar. Einen Rückweg gibt es
+// wie bei den anderen Umbauten nicht: eine Datenbank mit Kommentaren an Wissen
+// kennt die Art danach, und ein älteres Programm legt sie nicht an.
+//
+// comment_versions zeigt mit ON DELETE RESTRICT auf comments, und das DROP der
+// alten Tabelle würde verweigert, solange sie Zeilen hält. Fremdschlüssel sind
+// darum für den Umbau auf einer eigenen Verbindung ausgeschaltet (der Schalter
+// gilt je Verbindung und wirkt in einer Transaktion nicht) und werden vor dem
+// Commit geprüft.
+func allowKnowledgeComments(db *sql.DB) error {
+	known := func(q interface {
+		QueryRow(string, ...any) *sql.Row
+	}) (bool, error) {
+		var ddl string
+		if err := q.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='comments'`).Scan(&ddl); err != nil {
+			return false, err
+		}
+		return strings.Contains(ddl, "'knowledge'"), nil
+	}
+	if ok, err := known(db); err != nil || ok {
+		return err
+	}
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	defer conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`)
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Ein zweiter Prozess kann den Umbau inzwischen gemacht haben.
+	if ok, err := known(tx); err != nil || ok {
+		return err
+	}
+	for _, q := range []string{
+		`CREATE TABLE comments_new(` + commentsColumns + `)`,
+		`INSERT INTO comments_new(id,project,object_kind,object_id,body,person,account_id,session_id,revision,created_at,edited_at,deleted_at,deleted_by)
+  SELECT id,project,object_kind,object_id,body,person,account_id,session_id,revision,created_at,edited_at,deleted_at,deleted_by FROM comments`,
+		`DROP TABLE comments`,
+		`ALTER TABLE comments_new RENAME TO comments`,
+		`CREATE INDEX IF NOT EXISTS comments_object ON comments(object_kind, object_id, id)`,
+	} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	// Nur die Tabellen, die auf comments zeigen: eine Prüfung der ganzen
+	// Datenbank läse beim Start jede Tabelle einer großen Instanz.
+	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check(comment_versions)`)
+	if err != nil {
+		return err
+	}
+	broken := rows.Next()
+	rows.Close()
+	if broken {
+		return fmt.Errorf("comments rebuild: a version refers to a comment that is gone")
+	}
+	return tx.Commit()
 }
 
 // Arten von Objekten, an die ein Kommentar hängt.
@@ -61,6 +142,10 @@ const (
 	CommentOnRequest = "request"
 	CommentOnIdea    = "idea"
 	CommentOnPain    = "pain"
+	// CommentOnKnowledge: ein Wissenseintrag. Ein Eintrag ohne Projekt (global
+	// oder an eine Maschine gebunden) hat keinen Ort für Rechte und bleibt ohne
+	// Kommentare.
+	CommentOnKnowledge = "knowledge"
 )
 
 // MaxCommentBytes begrenzt einen Kommentar.
@@ -122,7 +207,7 @@ func commentNotFound(id int64) error {
 }
 
 func commentTargetNotFound(kind string, id int64) error {
-	return requestdomain.NewRuleError("comment_target_not_found", fmt.Sprintf("%s %d not found, or you may not read it", kind, id), "name an issue, idea or pain you can read", nil)
+	return requestdomain.NewRuleError("comment_target_not_found", fmt.Sprintf("%s %d not found, or you may not read it", kind, id), "name an issue, idea, pain or knowledge entry you can read", nil)
 }
 
 // commentTarget prüft, dass der Betrachter das Objekt lesen darf, und liefert
@@ -153,8 +238,15 @@ func (a *ProjectAccess) commentTarget(kind string, id int64) (string, error) {
 			return "", notFound
 		}
 		return p.Project, nil
+	case CommentOnKnowledge:
+		k, err := a.st.KnowledgeByID(id)
+		if err != nil || strings.TrimSpace(k.Scope.Project) == "" || !a.CanSeeKnowledge(k) {
+			a.Filtered()
+			return "", notFound
+		}
+		return k.Scope.Project, nil
 	}
-	return "", requestdomain.NewRuleError("invalid_comment_target", "comments hang on request, idea or pain", "use kind request, idea or pain", nil)
+	return "", requestdomain.NewRuleError("invalid_comment_target", "comments hang on request, idea, pain or knowledge", "use kind request, idea, pain or knowledge", nil)
 }
 
 func checkCommentBody(body string) (string, error) {

@@ -25,6 +25,35 @@ func (s *Store) CountRequests(f requestdomain.SearchFilter) (int, error) {
 	return n, err
 }
 
+// CountRequestMatches zählt die Requests, die eine Suche mit diesem Filter und
+// Suchtext findet: dieselben Klauseln für Bereich und Sichtbarkeit wie die Suche
+// (requestAttrWhere, Rechte stecken in der Abfrage) und dieselbe Entscheidung
+// über den Text wie requestsByList, nur ohne Cursor und Seitengröße. Wörter, die
+// nur den Rückstand erfragen (ClassifySearch), schränken nicht ein. Treffer, die
+// allein die Einbettung findet, zählt sie nicht mit.
+func (s *Store) CountRequestMatches(f requestdomain.SearchFilter) (int, error) {
+	if s.reader != nil {
+		return s.reader.CountRequestMatches(f)
+	}
+	q := `SELECT COUNT(*) FROM requests r`
+	var where []string
+	var args []any
+	if f.Query != "" && ClassifySearch(f.Query) == SearchFullText {
+		q += ` JOIN search_documents d ON d.kind='request' AND d.domain_id=r.id JOIN search_documents_fts f ON f.rowid=d.id`
+		where = append(where, `search_documents_fts MATCH ?`)
+		args = append(args, ftsQuery(f.Query))
+	}
+	attrWhere, attrArgs := requestAttrWhere(f)
+	where = append(where, attrWhere...)
+	args = append(args, attrArgs...)
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	var n int
+	err := s.db.QueryRowContext(s.ctx(), q, args...).Scan(&n)
+	return n, err
+}
+
 // CountRequests zählt für den Betrachter, mit der Semantik der Listenabfrage
 // (GET /api/requests): ein Request ohne Branch gilt für jeden Branch, einer mit
 // anderem Branch nicht, fremde Projekte und gehaltene Aufträge fehlen. state ""

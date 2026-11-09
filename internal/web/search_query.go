@@ -40,7 +40,9 @@ type searchLine struct {
 	anchor    store.AnchorFilter
 	origin    originctx.Filter
 	fetch     int
-	project   string
+	// shown is how many hits the page shows of each kind (searchPlan.shown).
+	shown   int
+	project string
 }
 
 // searchProblem ist, was an einer Zeile nicht geht: ein Schlüssel der Meldung
@@ -69,7 +71,7 @@ func (a *app) parseSearchLine(line string, pa *store.ProjectAccess, guest bool, 
 		}
 		return searchLine{}, &searchProblem{Key: "search.err.invalid", Args: []any{err.Error()}}
 	}
-	sl := searchLine{q: q, text: q.Text, qualified: q.Qualified(), project: project, fetch: searchPerGroup + 1}
+	sl := searchLine{q: q, text: q.Text, qualified: q.Qualified(), project: project, fetch: searchCountCap + 1}
 	if !sl.qualified {
 		return sl, nil
 	}

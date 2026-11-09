@@ -186,6 +186,7 @@ var writerMethodClasses = map[string]string{
 	"RequestRef":                    "read",
 	"CountOpenRequestsFor":          "read",
 	"CountRequests":                 "read",
+	"CountRequestMatches":           "read",
 	"InterruptedWorkFor":            "read",
 	"RequestHandoffs":               "read",
 	"SessionIsShared":               "read",

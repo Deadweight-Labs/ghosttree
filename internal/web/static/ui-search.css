@@ -30,6 +30,7 @@
   & .hit mark { background: var(--attention-muted); color: inherit; border-radius: 2px; }
   & .hit .ht { font-size: 16px; font-weight: 600; color: var(--fg-default); overflow-wrap: anywhere; }
   & .hit .ht:hover { color: var(--accent-fg); }
+  & .hits .morelink { display: block; padding: 12px 16px; border-top: 1px solid var(--border-muted); font-size: 14px; text-align: center; }
   & .hit .hs { margin-top: 2px; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; }
 }
 
