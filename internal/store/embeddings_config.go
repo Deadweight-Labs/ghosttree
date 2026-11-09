@@ -84,6 +84,8 @@ type embedShared struct {
 	hybrid    atomic.Int64
 	fallbacks atomic.Int64
 
+	queries queryVectors
+
 	logMu      sync.Mutex
 	lastLog    time.Time
 	suppressed int
@@ -102,6 +104,7 @@ func (s *Store) embedShared() *embedShared {
 // SetEmbedder turns hybrid search on for this store and its readers, or off
 // again with a nil Embedder. It is called while the server starts.
 func (s *Store) SetEmbedder(c EmbedSearchConfig) {
+	s.embedShared().queries.reset()
 	if c.Embedder == nil {
 		s.embedShared().cfg.Store(nil)
 		return

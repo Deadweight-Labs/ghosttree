@@ -20,6 +20,12 @@ import (
 // werden beim Schreiben in derselben Transaktion indiziert. Den Bestand holt
 // ein Hintergrundlauf in kleinen Schritten nach (RunIndexBackfill); sein
 // Fortschritt steht in index_state und überlebt einen Neustart.
+//
+// chunk_index_chunk ist die schmale Zuordnung Chunk → Session: Suchen, die von
+// Volltext-Treffern oder Embeddings ausgehen, schlagen die Session darin nach
+// statt in den breiten Zeilen von chunk_index (sessionChunkMap). Beim ersten
+// Start auf einem großen Bestand dauert ihr Aufbau einmalig etwa so lange wie
+// ein Lesen von chunk_index.
 
 const sessionIndexDDL = `
 CREATE TABLE IF NOT EXISTS chunk_index(
@@ -35,6 +41,7 @@ CREATE TABLE IF NOT EXISTS chunk_index(
   tool_input TEXT NOT NULL DEFAULT '',
   tool_output TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS chunk_index_session ON chunk_index(session_id, seq);
+CREATE INDEX IF NOT EXISTS chunk_index_chunk ON chunk_index(chunk_id, session_id, seq, role);
 CREATE VIRTUAL TABLE IF NOT EXISTS sess_fts USING fts5(text, thinking, tool_input, tool_output,
   content='chunk_index', content_rowid='chunk_id');
 CREATE TABLE IF NOT EXISTS index_state(key TEXT PRIMARY KEY, val INTEGER NOT NULL);
@@ -64,7 +71,8 @@ func newPublicID() (string, error) {
 }
 
 // ensureSessionIndex legt Spalten, Tabellen und Adressen an. Alles hier ist
-// klein oder eine reine Metadaten-Änderung; das Nachindizieren der Chunks läuft
+// klein oder eine reine Metadaten-Änderung, bis auf den einmaligen Aufbau von
+// chunk_index_chunk; das Nachindizieren der Chunks läuft
 // getrennt (startIndexBackfill, RunIndexBackfill).
 func ensureSessionIndex(db *sql.DB) error {
 	for _, c := range []struct{ name, ddl string }{

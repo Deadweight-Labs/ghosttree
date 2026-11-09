@@ -1,10 +1,13 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -43,6 +46,8 @@ type searchGroup struct {
 	Mark, Href string
 	// Shown is how many hits the group shows ("5+" when more lie behind them).
 	Shown string
+	// On: the page is narrowed to this group.
+	On bool
 }
 
 type searchView struct {
@@ -50,6 +55,8 @@ type searchView struct {
 	Groups []searchGroup
 	// Searched: the query was long enough to run.
 	Searched bool
+	// Live is the frame of the live page; its groups come from the stream.
+	Live *searchLive
 	// Notice is what is wrong with the search line (an unknown qualifier, one
 	// that guests do not get, a kind this page does not show); empty when
 	// the search ran as asked. NoticeKind is "err" or "note".
@@ -85,9 +92,59 @@ var searchKindMark = map[string]string{"requests": "issue", "ideas": "idea", "kn
 // only, as the start page shows them nothing else. The groups are never mixed
 // into one ranking, and the sessions group runs the sessions search as it is,
 // including its ranking for restricted viewers.
+//
+// With live=1 (set by the page script, never by a link) the page is only the
+// frame: the groups come from /ui/search/stream as each kind is done (searchStream).
+// Without it every kind is searched before the page is sent.
 func (a *app) searchPage(w http.ResponseWriter, r *http.Request) {
-	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
+	p := a.planSearch(r)
+	if p.runnable() {
+		if r.URL.Query().Get("live") == "1" {
+			p.v.Live = p.liveView(r)
+		} else {
+			p.v.Groups = a.runSearch(r.Context(), r, p)
+		}
+	}
+	if kind := r.URL.Query().Get("kind"); kind != "" {
+		for _, g := range p.v.Groups {
+			if g.Key == kind {
+				p.v.Kind = kind
+			}
+		}
+		if p.v.Live != nil && slices.Contains(p.kinds, kind) {
+			p.v.Kind = kind
+		}
+	}
+	for i := range p.v.Groups {
+		p.v.Groups[i].On = p.v.Groups[i].Key == p.v.Kind
+	}
+	a.searchSidebar(p.l, r, p.pa, p.v, p.project, p.guest)
+	a.renderBrowser(w, r, "search", pageData{Title: p.l.msg("search.title"), Project: p.project, SearchV: p.v})
+}
+
+// searchPlan is a search before any kind is searched: the view with what the line
+// says, the lines that run and the kinds the viewer gets.
+type searchPlan struct {
+	l       lang
+	pa      *store.ProjectAccess
+	v       *searchView
+	guest   bool
+	project string
+	now     time.Time
+	// lines are the lines that run, raw their text as typed.
+	lines []searchLine
+	raw   []string
+	// kinds are the groups this viewer gets, in the order of the page.
+	kinds []string
+	href  func(kind string) string
+}
+
+func (p *searchPlan) runnable() bool { return len(p.lines) > 0 }
+
+// planSearch reads the line (or the quick filter) of r for its viewer.
+func (a *app) planSearch(r *http.Request) *searchPlan {
+	l := a.langFor(r)
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if utf8.RuneCountInString(q) > maxQueryRunes {
 		q = string([]rune(q)[:maxQueryRunes])
@@ -102,85 +159,123 @@ func (a *app) searchPage(w http.ResponseWriter, r *http.Request) {
 	} else {
 		v.Searched = utf8.RuneCountInString(q) >= minSearchRunes
 	}
-	kind := r.URL.Query().Get("kind")
-	href := func(k string) string {
+	p := &searchPlan{l: l, pa: pa, v: v, guest: guest, project: project, now: overviewNow().UTC()}
+	p.href = func(k string) string {
 		qs := url.Values{"q": {q}}
 		if v.Preset != "" {
 			qs = r.URL.Query()
 			qs.Del("kind")
+			qs.Del("live")
 		}
 		if k != "" {
 			qs.Set("kind", k)
 		}
 		return "/ui/search?" + qs.Encode()
 	}
-	v.AllHref = href("")
-	now := overviewNow().UTC()
-	if v.Searched {
-		person := personOf(r)
-		merged := map[string]*searchGroup{}
-		var order []string
-		for _, line := range lines {
-			sl, problem := a.parseSearchLine(line, pa, guest, project, person, now)
-			if problem != nil {
-				v.Notice, v.NoticeKind = l.msg(problem.Key, problem.Args...), "err"
-				v.Groups, v.Searched = nil, false
-				break
-			}
-			if !sl.qualified && utf8.RuneCountInString(sl.text) < minSearchRunes {
-				continue
-			}
-			if un := sl.unsupportedKinds(); len(un) > 0 && v.Notice == "" {
-				v.Notice, v.NoticeKind = l.msg("search.err.kinds", strings.Join(un, ", ")), "note"
-			}
-			var groups []searchGroup
-			groups = append(groups, a.searchRequests(l, pa, sl, line, now))
-			groups = append(groups, a.searchIdeas(l, pa, sl, line, now))
-			groups = append(groups, a.searchKnowledge(l, pa, sl, line, now))
-			if !guest {
-				groups = append(groups, a.searchSessions(l, r, pa, sl, line, now))
-				groups = append(groups, a.searchTasks(l, pa, sl, now))
-				groups = append(groups, a.searchPains(l, pa, sl, now))
-			}
-			for _, g := range groups {
-				if len(g.Hits) == 0 {
-					continue
-				}
-				m, ok := merged[g.Key]
-				if !ok {
-					g.Mark, g.Href = searchKindMark[g.Key], href(g.Key)
-					merged[g.Key] = &g
-					order = append(order, g.Key)
-					continue
-				}
-				for _, h := range g.Hits {
-					if !hasHitHref(m.Hits, h.Href) {
-						m.Hits = append(m.Hits, h)
-					}
-				}
-				if m.All == "" {
-					m.All = g.All
-				}
-			}
+	v.AllHref = p.href("")
+	p.kinds = []string{"requests", "ideas", "knowledge"}
+	if !guest {
+		p.kinds = append(p.kinds, "sessions", "tasks", "pains")
+	}
+	if !v.Searched {
+		return p
+	}
+	person := personOf(r)
+	for _, line := range lines {
+		sl, problem := a.parseSearchLine(line, pa, guest, project, person, p.now)
+		if problem != nil {
+			v.Notice, v.NoticeKind = l.msg(problem.Key, problem.Args...), "err"
+			v.Searched = false
+			break
 		}
-		for _, key := range order {
-			g := *merged[key]
-			g.Shown = strconv.Itoa(len(g.Hits))
-			if g.All != "" {
-				g.Shown += "+"
-			}
-			v.Groups = append(v.Groups, g)
+		if !sl.qualified && utf8.RuneCountInString(sl.text) < minSearchRunes {
+			continue
+		}
+		if un := sl.unsupportedKinds(); len(un) > 0 && v.Notice == "" {
+			v.Notice, v.NoticeKind = l.msg("search.err.kinds", strings.Join(un, ", ")), "note"
+		}
+		p.lines = append(p.lines, sl)
+		p.raw = append(p.raw, line)
+	}
+	return p
+}
+
+// runSearch searches every kind of the plan at the same time and returns the
+// groups with hits in the order of the page.
+func (a *app) runSearch(ctx context.Context, r *http.Request, p *searchPlan) []searchGroup {
+	out := make([]searchGroup, len(p.kinds))
+	var wg sync.WaitGroup
+	for i, key := range p.kinds {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i] = a.searchKind(ctx, r, p, key)
+		}()
+	}
+	wg.Wait()
+	var groups []searchGroup
+	for _, g := range out {
+		if len(g.Hits) > 0 {
+			groups = append(groups, g)
 		}
 	}
-	if kind != "" {
-		for _, g := range v.Groups {
-			if g.Key == kind {
-				v.Kind = kind
+	return groups
+}
+
+// searchKind searches one kind over every line of the plan and joins the hits.
+// It asks with its own access check: a ProjectAccess is not shared between the
+// kinds that run at the same time.
+func (a *app) searchKind(ctx context.Context, r *http.Request, p *searchPlan, key string) searchGroup {
+	pa := a.access(r)
+	var merged *searchGroup
+	for i, sl := range p.lines {
+		if ctx.Err() != nil {
+			return searchGroup{Key: key}
+		}
+		g := a.searchOne(ctx, p.l, pa, sl, p.raw[i], p.now, key)
+		if len(g.Hits) == 0 {
+			continue
+		}
+		if merged == nil {
+			g.Mark, g.Href = searchKindMark[g.Key], p.href(g.Key)
+			merged = &g
+			continue
+		}
+		for _, h := range g.Hits {
+			if !hasHitHref(merged.Hits, h.Href) {
+				merged.Hits = append(merged.Hits, h)
 			}
 		}
+		if merged.All == "" {
+			merged.All = g.All
+		}
 	}
-	a.searchSidebar(l, r, pa, v, project, guest)
-	a.renderBrowser(w, r, "search", pageData{Title: l.msg("search.title"), Project: project, SearchV: v})
+	if merged == nil || ctx.Err() != nil {
+		return searchGroup{Key: key}
+	}
+	merged.Shown = strconv.Itoa(len(merged.Hits))
+	if merged.All != "" {
+		merged.Shown += "+"
+	}
+	return *merged
+}
+
+func (a *app) searchOne(ctx context.Context, l lang, pa *store.ProjectAccess, sl searchLine, line string, now time.Time, key string) searchGroup {
+	switch key {
+	case "requests":
+		return a.searchRequests(l, pa, sl, line, now)
+	case "ideas":
+		return a.searchIdeas(l, pa, sl, line, now)
+	case "knowledge":
+		return a.searchKnowledge(l, pa, sl, line, now)
+	case "sessions":
+		return a.searchSessions(ctx, l, pa, sl, line, now)
+	case "tasks":
+		return a.searchTasks(l, pa, sl, now)
+	case "pains":
+		return a.searchPains(l, pa, sl, now)
+	}
+	return searchGroup{Key: key}
 }
 
 func hasHitHref(hits []searchHit, href string) bool {
@@ -356,7 +451,7 @@ func (a *app) searchKnowledge(l lang, pa *store.ProjectAccess, sl searchLine, li
 	return g
 }
 
-func (a *app) searchSessions(l lang, r *http.Request, pa *store.ProjectAccess, sl searchLine, line string, now time.Time) searchGroup {
+func (a *app) searchSessions(ctx context.Context, l lang, pa *store.ProjectAccess, sl searchLine, line string, now time.Time) searchGroup {
 	g := searchGroup{Key: "sessions", Label: l.msg("nav.sessions"), Icon: "sessions"}
 	// A transcript is found by its words, not listed: without a word there is no hit.
 	if !sl.wants(query.KindSession) || strings.TrimSpace(sl.text) == "" {
@@ -367,7 +462,7 @@ func (a *app) searchSessions(l lang, r *http.Request, pa *store.ProjectAccess, s
 	if sl.qualified {
 		limit = min(sl.fetch, 60)
 	}
-	page, err := a.store.SearchTranscripts(pa, store.SearchQuery{Q: sl.text, Filter: filter, Sort: "best", Limit: limit})
+	page, err := a.store.SearchTranscripts(pa, store.SearchQuery{Q: sl.text, Filter: filter, Sort: "best", Limit: limit, Ctx: ctx})
 	if err != nil {
 		return g
 	}

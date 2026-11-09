@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"slices"
@@ -81,11 +82,15 @@ type sessionBest struct {
 // text is below the minimum similarity is left out. Only the vectors of the
 // configured model and text format are read, and of the sessions of r (the
 // asking session excepted): nothing outside is compared.
-func (s *Store) sessionVectorRanking(cfg *EmbedSearchConfig, qvec []float32, exclude string, r readableSessions) ([]sessionBest, error) {
-	rows, err := s.db.Query(`SELECT c.session_id, c.id, c.seq, e.scale, e.vec
+func (s *Store) sessionVectorRanking(ctx context.Context, cfg *EmbedSearchConfig, qvec []float32, exclude string, r readableSessions) ([]sessionBest, error) {
+	// Von den Embeddings aus (wenige Zehntausend Zeilen): die Session jedes
+	// Chunks steht in der schmalen Zuordnung chunk_index_chunk. Ohne die
+	// erzwungene Reihenfolge ginge SQLite von der lesbaren Menge aus und läse alle
+	// Chunks aller lesbaren Sessions.
+	rows, err := s.db.QueryContext(ctx, `SELECT ci.session_id, e.chunk_id, ci.seq, e.scale, e.vec
 		FROM session_embeddings e
-		JOIN session_chunks c ON c.id = e.chunk_id
-		JOIN sessions se ON se.id = c.session_id
+		CROSS JOIN chunk_index ci INDEXED BY chunk_index_chunk ON ci.chunk_id = e.chunk_id
+		CROSS JOIN sessions se ON se.id = ci.session_id
 		WHERE e.model = ? AND e.prefix_version = ? AND (? = '' OR se.external_id != ?) AND `+r.where,
 		append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion(), exclude, exclude}, r.args...)...)
 	if err != nil {
@@ -197,7 +202,7 @@ func (s *Store) hybridSessions(q string, o SessionSearch, qvec []float32, cfg *E
 			}
 		}
 	}
-	best, err := s.sessionVectorRanking(cfg, qvec, o.ExcludeSession, r)
+	best, err := s.sessionVectorRanking(context.Background(), cfg, qvec, o.ExcludeSession, r)
 	if err != nil {
 		return nil, err
 	}
@@ -296,22 +301,54 @@ func transcriptKindUsesVectors(kind string) bool {
 // for search, and the query is not one of ordinary words. It returns nil for a
 // search that is answered by words alone. A failure of the vectors is logged, and
 // the search goes on without them.
-func (s *Store) transcriptVectors(q SearchQuery, readable []Session) ([]sessionBest, *EmbedSearchConfig) {
-	if q.Sort == "newest" || !transcriptKindUsesVectors(q.Kind) {
+func (s *Store) transcriptVectors(q SearchQuery, query func() ([]float32, *EmbedSearchConfig), byID map[int64]Session) ([]sessionBest, *EmbedSearchConfig) {
+	if query == nil {
 		return nil, nil
 	}
-	qvec, cfg, _ := s.queryVector(q.Q, SearchAuto, KindSession)
+	qvec, cfg := query()
 	if qvec == nil {
 		return nil, nil
 	}
-	best, err := s.sessionVectorRanking(cfg, qvec, "", readableSessions{
-		where: `(1=1) AND se.id IN (SELECT value FROM json_each(?))`, args: []any{idsJSON(readable)}, restricted: true})
+	// Die lesbare Menge steht schon fest (byID); sie wird in Go angewandt, nicht
+	// als Liste aller ihrer Nummern in der Abfrage.
+	best, err := s.sessionVectorRanking(q.ctx(), cfg, qvec, "", readableSessions{where: `(1=1)`, restricted: true})
 	if err != nil {
-		s.embedShared().logFallback(cfg, err)
+		if q.ctx().Err() == nil {
+			s.embedShared().logFallback(cfg, err)
+		}
 		return nil, nil
 	}
+	kept := best[:0]
+	for _, b := range best {
+		if _, ok := byID[b.session]; ok {
+			kept = append(kept, b)
+		}
+	}
+	best = kept
 	s.embedShared().hybrid.Add(1)
 	return best, cfg
+}
+
+// transcriptQueryVector starts the embedding of the query of a transcript search,
+// so that it runs while the full-text index is read; the function it returns waits
+// for it. Nil when the search does not use the vectors.
+func (s *Store) transcriptQueryVector(q SearchQuery) func() ([]float32, *EmbedSearchConfig) {
+	if q.Sort == "newest" || !transcriptKindUsesVectors(q.Kind) {
+		return nil
+	}
+	type answer struct {
+		vec []float32
+		cfg *EmbedSearchConfig
+	}
+	ch := make(chan answer, 1)
+	go func() {
+		vec, cfg, _ := s.queryVectorCtx(q.ctx(), q.Q, SearchAuto, KindSession)
+		ch <- answer{vec, cfg}
+	}()
+	return func() ([]float32, *EmbedSearchConfig) {
+		a := <-ch
+		return a.vec, a.cfg
+	}
 }
 
 // fuseTranscripts fuses the sessions the words found (kept, in the order of the

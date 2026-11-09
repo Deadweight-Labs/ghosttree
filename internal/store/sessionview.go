@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"slices"
@@ -380,6 +381,16 @@ type SearchQuery struct {
 	Sort   string
 	Cursor string
 	Limit  int
+	// Ctx ends the search early: its SQL is interrupted and the embedding of the
+	// query is given up. Nil means it runs to the end.
+	Ctx context.Context
+}
+
+func (q SearchQuery) ctx() context.Context {
+	if q.Ctx == nil {
+		return context.Background()
+	}
+	return q.Ctx
 }
 
 type SearchPage struct {
@@ -445,6 +456,10 @@ type matchedSession struct {
 	closest  sessionBest
 }
 
+// smallReadableSet: bis zu so vielen lesbaren Sessions sucht SearchTranscripts
+// von deren Chunks aus, darüber von den Treffern aus.
+var smallReadableSet = 200
+
 // SearchTranscripts sucht in den Transkripten, die der Betrachter lesen darf.
 func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage, error) {
 	if s.reader != nil {
@@ -472,6 +487,8 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	if len(readable) == 0 {
 		return SearchPage{}, nil
 	}
+	ctx := q.ctx()
+	queryVec := s.transcriptQueryVector(q)
 	// bm25() gilt nur in der Abfrage, die den FTS-Index selbst liest; die
 	// Verbindung zu chunk_index folgt deshalb in einer zweiten Stufe.
 	// bm25 rechnet mit der Dokumenthäufigkeit des ganzen Index, also auch mit
@@ -482,11 +499,23 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	if q.Sort != "newest" && !restricted {
 		rankExpr = "bm25(sess_fts, 2.0, 0.5, 1.0, 0.5)"
 	}
-	rows, err := s.db.Query(`WITH h AS MATERIALIZED (SELECT rowid AS rid, `+rankExpr+` AS r FROM sess_fts WHERE sess_fts MATCH ?)
+	// Wenige lesbare Sessions: von ihren Chunks aus suchen. Viele: von den
+	// Treffern aus, die Session steht in der schmalen Zuordnung chunk_index_chunk;
+	// was nicht lesbar ist, fällt danach in Go heraus (byID). Beide Wege liefern
+	// dieselben Zeilen.
+	var rows *sql.Rows
+	if len(readable) <= smallReadableSet {
+		rows, err = s.db.QueryContext(ctx, `WITH h AS MATERIALIZED (SELECT rowid AS rid, `+rankExpr+` AS r FROM sess_fts WHERE sess_fts MATCH ?)
 		SELECT ci.session_id, MIN(h.r), COUNT(*)
 		FROM h JOIN chunk_index ci ON ci.chunk_id = h.rid
 		WHERE ci.session_id IN (SELECT value FROM json_each(?))
 		GROUP BY ci.session_id`, expr, idsJSON(readable))
+	} else {
+		rows, err = s.db.QueryContext(ctx, `WITH h AS MATERIALIZED (SELECT rowid AS rid, `+rankExpr+` AS r FROM sess_fts WHERE sess_fts MATCH ?)
+		SELECT ci.session_id, MIN(h.r), COUNT(*)
+		FROM h CROSS JOIN chunk_index ci INDEXED BY chunk_index_chunk ON ci.chunk_id = h.rid
+		GROUP BY ci.session_id`, expr)
+	}
 	if err != nil {
 		return SearchPage{}, err
 	}
@@ -498,7 +527,11 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 			rows.Close()
 			return SearchPage{}, err
 		}
-		m.sess = byID[id]
+		sess, ok := byID[id]
+		if !ok {
+			continue
+		}
+		m.sess = sess
 		matched = append(matched, m)
 	}
 	rows.Close()
@@ -535,7 +568,7 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	// With the vectors, a facet counts what the list shows after a click on it, which
 	// is made by the fusion within the filter that click gives (see
 	// computeFacetsWithVectors).
-	vec, vecCfg := s.transcriptVectors(q, readable)
+	vec, vecCfg := s.transcriptVectors(q, queryVec, byID)
 	var facets Facets
 	if vecCfg != nil {
 		facets = pa.computeFacetsWithVectors(cands, vec, byID, q.Filter, maxSemanticOnly(q.Limit))
@@ -572,7 +605,7 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 			page.Next = encodeOffsetCursor(end)
 		}
 	}
-	groups, err := s.hitsFor(pa, pageRows, expr, q.Kind)
+	groups, err := s.hitsFor(ctx, pa, pageRows, expr, q.Kind)
 	if err != nil {
 		return SearchPage{}, err
 	}
@@ -616,7 +649,7 @@ func positionAfter(kept []matchedSession, cursor string, newest bool) int {
 }
 
 // hitsFor holt je Session die drei besten Treffer mit Ausschnitt.
-func (s *Store) hitsFor(pa *ProjectAccess, page []matchedSession, expr, kind string) ([]SearchGroup, error) {
+func (s *Store) hitsFor(ctx context.Context, pa *ProjectAccess, page []matchedSession, expr, kind string) ([]SearchGroup, error) {
 	if len(page) == 0 {
 		return nil, nil
 	}
@@ -624,11 +657,14 @@ func (s *Store) hitsFor(pa *ProjectAccess, page []matchedSession, expr, kind str
 	for i, m := range page {
 		sessions[i] = m.sess
 	}
-	// Die drei ersten Treffer je Session, in Reihenfolge des Verlaufs.
-	rows, err := s.db.Query(`SELECT ci.session_id, ci.chunk_id, ci.seq, ci.role, 0
-		FROM sess_fts JOIN chunk_index ci ON ci.chunk_id = sess_fts.rowid
-		WHERE sess_fts MATCH ? AND ci.session_id IN (SELECT value FROM json_each(?))
-		ORDER BY ci.session_id, ci.seq`, expr, idsJSON(sessions))
+	// Die drei ersten Treffer je Session, in Reihenfolge des Verlaufs. Die
+	// Treffermenge wird einmal gebildet und gegen die Chunks der wenigen Sessions
+	// der Seite gehalten, statt für jeden Treffer in chunk_index nachzuschlagen.
+	rows, err := s.db.QueryContext(ctx, `SELECT ci.session_id, ci.chunk_id, ci.seq, ci.role, 0
+		FROM chunk_index ci INDEXED BY chunk_index_session
+		WHERE ci.session_id IN (SELECT value FROM json_each(?))
+		AND ci.chunk_id IN (SELECT rowid FROM sess_fts WHERE sess_fts MATCH ?)
+		ORDER BY ci.session_id, ci.seq`, idsJSON(sessions), expr)
 	if err != nil {
 		return nil, err
 	}
@@ -658,7 +694,7 @@ func (s *Store) hitsFor(pa *ProjectAccess, page []matchedSession, expr, kind str
 	}
 	chunkJSON, _ := json.Marshal(chunkIDs)
 	snips := map[int64][4]string{}
-	srows, err := s.db.Query(`SELECT rowid,
+	srows, err := s.db.QueryContext(ctx, `SELECT rowid,
 		snippet(sess_fts, 0, char(2), char(3), '…', 18), snippet(sess_fts, 1, char(2), char(3), '…', 18),
 		snippet(sess_fts, 2, char(2), char(3), '…', 18), snippet(sess_fts, 3, char(2), char(3), '…', 18)
 		FROM sess_fts WHERE sess_fts MATCH ? AND rowid IN (SELECT value FROM json_each(?))`, expr, string(chunkJSON))
