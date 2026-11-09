@@ -445,12 +445,17 @@ func (a *app) workLines(l lang, pa *store.ProjectAccess, work []requestdomain.Wo
 		if wk.SessionPublicID != "" {
 			line.Href = "/ui/sessions/" + wk.SessionPublicID
 			line.Title = l.msg("requests.session")
-			if sess, err := a.store.SessionByPublicID(wk.SessionPublicID); err == nil && pa.CanSeeTranscript(sess) {
+			if raw, err := a.store.SessionByPublicID(wk.SessionPublicID); err == nil && pa.CanSeeTranscript(raw) {
+				// Die Ansicht des Betrachters: ein Gast sieht weder Besitzer noch
+				// Kennung noch Maschine einer fremden Session.
+				sess := pa.SessionView(raw)
 				line.Kind = harnessKind(sess.Harness)
 				line.Handle = sessionHandle(pa, sess)
 				line.External, line.Started = sess.ExternalID, wk.StartedAt
-				if acct, err := a.store.AccountByPrincipalID("person:" + strconv.FormatInt(sess.AccountID, 10)); err == nil {
-					line.Owner = acct.Name
+				if sess.AccountID != 0 {
+					if acct, err := a.store.AccountByPrincipalID("person:" + strconv.FormatInt(sess.AccountID, 10)); err == nil {
+						line.Owner = acct.Name
+					}
 				}
 				if strings.TrimSpace(sess.Title) != "" {
 					line.Title = ellipsize(sess.Title, 80)

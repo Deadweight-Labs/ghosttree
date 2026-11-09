@@ -59,30 +59,38 @@ func (a *app) liveAgents(pa *store.ProjectAccess, work []workLine, now time.Time
 // liveOf reads one session: who it is and whether it shows a fresh sign of
 // life. ok is false for a session the viewer cannot read.
 func (a *app) liveOf(pa *store.ProjectAccess, publicID string, started, now time.Time, l lang) (liveAgent, bool) {
-	sess, err := a.store.SessionByPublicID(publicID)
-	if err != nil || !pa.CanSeeTranscript(sess) {
+	raw, err := a.store.SessionByPublicID(publicID)
+	if err != nil || !pa.CanSeeTranscript(raw) {
 		return liveAgent{}, false
 	}
+	// Angezeigt wird die Ansicht des Betrachters (Gast: ohne Besitzer, Kennung,
+	// Maschine); die Aktivität liest der Server aus der echten Session.
+	sess := pa.SessionView(raw)
 	la := liveAgent{Handle: sessionHandle(pa, sess), Kind: harnessKind(sess.Harness), Href: "/ui/sessions/" + sess.PublicID, External: sess.ExternalID}
-	if acct, err := a.store.AccountByPrincipalID("person:" + strconv.FormatInt(sess.AccountID, 10)); err == nil {
-		la.Owner = acct.Name
+	if sess.AccountID != 0 {
+		if acct, err := a.store.AccountByPrincipalID("person:" + strconv.FormatInt(sess.AccountID, 10)); err == nil {
+			la.Owner = acct.Name
+		}
 	}
 	if !started.IsZero() {
 		la.Since = shortAge(l, now, started)
 	}
 	fresh := now.Add(-liveFresh)
-	if seen := parseTime(sess.LastSeenAt); !seen.IsZero() && seen.After(fresh) && !seen.After(now.Add(time.Minute)) {
+	if seen := parseTime(raw.LastSeenAt); !seen.IsZero() && seen.After(fresh) && !seen.After(now.Add(time.Minute)) {
 		la.Live, la.At = true, seen
 	}
 	// The last file the session touched, within the last day, however old.
-	if acts, err := a.store.SessionPathActivity(sess.ExternalID, sess.AccountID, now.Add(-24*time.Hour).Format(time.RFC3339), 1); err == nil && len(acts) > 0 {
+	if acts, err := a.store.SessionPathActivity(raw.ExternalID, raw.AccountID, now.Add(-24*time.Hour).Format(time.RFC3339), 1); err == nil && len(acts) > 0 {
 		at := parseTime(acts[0].At)
 		if !at.IsZero() {
 			if at.After(fresh) && !at.After(now.Add(time.Minute)) {
 				la.Live = true
 			}
 			la.At = at
-			la.Last = l.msg("live.last_file", ellipsize(acts[0].Path, 80), shortAge(l, now, at))
+			// Den Dateipfad sieht, wer auch Besitzer und Maschine sieht.
+			if sess.AccountID != 0 {
+				la.Last = l.msg("live.last_file", ellipsize(acts[0].Path, 80), shortAge(l, now, at))
+			}
 		}
 	}
 	return la, true

@@ -242,3 +242,46 @@ func TestLiveStreamDropsRightsOfAMemberRemovedFromTheProject(t *testing.T) {
 		t.Errorf("after the removal the stream still tells who works there: %q (open %v)", second, ok)
 	}
 }
+
+// Für Gäste geteilt: der Gast sieht, dass an dem Issue gearbeitet wird, aber nicht
+// wer (Besitzer der Session), mit welcher Kennung, auf welcher Maschine oder an
+// welcher Datei. Den Autor des Issues sieht er wie jeder Leser.
+func TestGuestSeesASharedSessionOnTheIssueWithoutOwnerIdOrPath(t *testing.T) {
+	f := newLiveFixture(t)
+	if err := f.e.St.SetSessionVisibility(1, f.e.St.Access(store.Principal{ID: "person:1", Label: "alice"}), store.VisGuests); err != nil {
+		t.Fatal(err)
+	}
+	f.touch(t, "internal/secret/plan.go", time.Now())
+	_, page := fetchPage(t, f.e.Guest, f.e.Base+f.issue)
+	for _, s := range []string{"ext-live", "mainex", "internal/secret/plan.go"} {
+		if strings.Contains(page, s) {
+			t.Errorf("the guest's issue page shows %q", s)
+		}
+	}
+	// Gegenprobe: der Besitzer sieht die Maschine und die Datei.
+	if _, own := fetchPage(t, f.e.Owner, f.e.Base+f.issue); !strings.Contains(own, "mainex") {
+		t.Error("the owner's issue page lacks the machine")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, f.e.Base+"/ui/live?ids="+itoa(f.id), nil)
+	resp, err := f.e.Guest.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		data, ok := strings.CutPrefix(sc.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		for _, leak := range []string{"ext-live", "mainex", "internal/secret/plan.go", "alice"} {
+			if strings.Contains(data, leak) {
+				t.Errorf("the guest's live stream shows %q: %s", leak, data)
+			}
+		}
+		break
+	}
+}
