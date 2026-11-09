@@ -2,7 +2,10 @@ package web
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -205,5 +208,27 @@ func TestShortNameIsTheLastSegment(t *testing.T) {
 		if got := shortName(in); got != want {
 			t.Errorf("%q -> %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The first sign-in of a new instance lands in the setup, not in an empty inbox; a
+// later sign-in goes where it always went.
+func TestBootstrapSignInLandsInTheSetup(t *testing.T) {
+	st := mustStore(t)
+	code, ok, err := st.EnsureBootstrapCode()
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	file := filepath.Join(t.TempDir(), "bootstrap-code")
+	if err := os.WriteFile(file, []byte(code), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st, WithBootstrapFile(file)))
+	defer srv.Close()
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp := sameOriginPostForm(t, c, srv.URL+"/ui/login/code", url.Values{"code": {code}, "name": {"robin"}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/overview" {
+		t.Fatalf("bootstrap sign-in: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 }

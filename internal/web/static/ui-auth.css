@@ -41,7 +41,8 @@
   & .pfield .gfield { font-weight: 400; background: var(--canvas-default); }
   & .pfield small { margin-top: 4px; font-size: 12px; font-weight: 400; }
   & .pfield small.bad { color: var(--danger-fg); }
-  & .gfield.is-bad { border-color: var(--danger-emphasis); }
+  & .gfield.is-bad, & .gfield.is-bad:focus-within { border-color: var(--danger-emphasis); }
+  & .gfield.is-bad:focus-within { box-shadow: inset 0 0 0 1px var(--danger-emphasis); }
   & .gfield input::placeholder { color: var(--fg-muted); }
   & .gfield.big { height: 48px; }
   & .gfield.big input { text-align: center; text-transform: uppercase; font: 600 22px/1 var(--ui-mono); letter-spacing: .14em; }
