@@ -271,6 +271,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   goreleaser names `ghosttree_<version>_<os>_<arch>.tar.gz`; it looked for
   `ctx_…` and found nothing. It restarts the collector service only when the
   service runs the binary that was just updated.
+- The collector service restarts after any exit (`Restart=always`, launchd
+  `KeepAlive`). `ctx watch` exits cleanly on SIGTERM, so a collector stopped by
+  anything other than the service manager stayed off and sessions stopped
+  reaching the server. `ctx install` replaces the older unit.
 
 - Joining from a fresh machine: the collector service is always set up,
   `ctx doctor` skips harnesses that are not installed, and a machine name that
