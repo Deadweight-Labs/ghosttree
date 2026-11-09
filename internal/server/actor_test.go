@@ -437,3 +437,40 @@ func TestTerminalPersonIsASelfReportedHuman(t *testing.T) {
 		t.Errorf("stats: %+v", got.Stats)
 	}
 }
+
+// Prüfbefund B2: eine Session-Id im Body, die einem anderen Konto gehört, macht
+// den Aufruf nie zum Menschen im Terminal, und der Gärtner ist nie ein Mensch.
+func TestForeignBodySessionAndGardenerAreNeverATerminalPerson(t *testing.T) {
+	f := accessAPI(t, true)
+	post := func(who string, body map[string]any) int64 {
+		t.Helper()
+		b, _ := json.Marshal(body)
+		rq, _ := http.NewRequest("POST", f.srv.URL+"/api/pains", bytes.NewReader(b))
+		rq.Header.Set("Authorization", "Bearer "+f.tok[who])
+		rq.Header.Set(actor.ViaHeader, actor.ViaTerminal)
+		resp, err := http.DefaultClient.Do(rq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var d struct {
+			Pain struct{ ID int64 } `json:"pain"`
+		}
+		json.NewDecoder(resp.Body).Decode(&d)
+		if resp.StatusCode != 201 {
+			t.Fatalf("%s create pain: %d", who, resp.StatusCode)
+		}
+		return d.Pain.ID
+	}
+	id := post("mia", map[string]any{"project": accProject, "title": "Fremde Session", "session_id": f.id["s-robin"]})
+	if ea := stampOf(t, f.st, actor.Pain, id); ea.Kind != actor.Agent || ea.SessionID != 0 {
+		t.Errorf("foreign body session: %+v", ea)
+	}
+	if err := f.st.SetGardenerAccount(3); err != nil {
+		t.Fatal(err)
+	}
+	g := post("mia", map[string]any{"project": accProject, "title": "Vom Gärtner"})
+	if ea := stampOf(t, f.st, actor.Pain, g); ea.Kind != actor.Agent {
+		t.Errorf("gardener: %+v", ea)
+	}
+}

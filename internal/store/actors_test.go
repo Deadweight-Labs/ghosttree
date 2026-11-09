@@ -411,3 +411,73 @@ func TestCanonicalizeRemovesStampsOfMergedRequests(t *testing.T) {
 		t.Errorf("stamps of the surviving request: %d, want 3", kept)
 	}
 }
+
+// Prüfbefund B3: Stimmen-Stempel der ersten Fassung (Schlüssel rowid) bekommen
+// beim Start den stabilen Schlüssel; ein zweiter Start ändert nichts.
+func TestVoteStampsKeyedByRowIDAreRekeyed(t *testing.T) {
+	st := originStore(t)
+	if _, err := st.db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO decision_votes(decision_id,voter_key,voter,by_agent,variant_id,reason,created_at,updated_at)
+		VALUES(7,'person:1:agent','robin',1,1,'weil','2026-11-01T00:00:00Z','2026-11-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	var rowid int64
+	st.db.QueryRow(`SELECT rowid FROM decision_votes WHERE decision_id=7`).Scan(&rowid)
+	if err := recordActorTx(st.db, actordomain.Vote, rowid, actordomain.Actor{Kind: actordomain.Agent, AccountID: 1, Harness: "codex"}, "2026-11-01T00:00:00Z", false); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := rekeyVoteActors(st.db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := actordomain.VoteEntryID(7, "person:1:agent")
+	if ea, ok, _ := st.ActorOf(actordomain.Vote, want); !ok || ea.Harness != "codex" {
+		t.Errorf("rekeyed stamp: %+v %v", ea, ok)
+	}
+	if _, ok, _ := st.ActorOf(actordomain.Vote, rowid); ok {
+		t.Error("the old key stayed")
+	}
+	var n int
+	st.db.QueryRow(`SELECT COUNT(*) FROM entry_actors WHERE kind='vote'`).Scan(&n)
+	if n != 1 {
+		t.Errorf("vote stamps: %d", n)
+	}
+}
+
+// Prüfbefund B4: kommt zwischen Lesen und Ersetzen eine Zeile dazu, ersetzt der
+// Nachtrag nichts; die Zeile (und ihr Modell vom Upload) geht nicht verloren.
+func TestModelBackfillDoesNotReplaceAfterANewLine(t *testing.T) {
+	st := originStore(t)
+	sid := actorSession(t, st, "claude-code", "s-race", 1, "laptop", "2026-11-01T08:00:00Z", "2026-11-01T12:00:00Z")
+	actorExec(t, st, `INSERT INTO session_chunks(session_id,seq,role,text,raw) VALUES(?,0,'assistant','',?)`, sid, claudeLine("claude-opus-5-5", "2026-11-01T08:01:00Z"))
+	top, err := maxChunkSeq(st.db, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := sessionObservations(st.db, sid, top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segs := actordomain.Fold(nil, obs)
+	// Der Upload kommt dazwischen.
+	if err := st.AppendChunks(sid, []Chunk{{Seq: 1, Role: "assistant", Raw: claudeLine("claude-sonnet-5-5", "2026-11-01T09:00:00Z")}}); err != nil {
+		t.Fatal(err)
+	}
+	done, err := st.replaceSessionModels(sid, top, segs)
+	if err != nil || done {
+		t.Fatalf("replaced despite a new line: %v %v", done, err)
+	}
+	if got, _ := st.SessionModels(sid); len(got) != 1 || got[0].Model != "claude-sonnet-5-5" {
+		t.Errorf("the upload's model was lost: %+v", got)
+	}
+	// Der ganze Lauf liest dann neu und hat beide.
+	if n, err := st.backfillSessionModelsOf(sid, false); err != nil || n != 2 {
+		t.Fatalf("backfill: %d %v", n, err)
+	}
+	if got, _ := st.SessionModels(sid); len(got) != 2 {
+		t.Errorf("after backfill: %+v", got)
+	}
+}

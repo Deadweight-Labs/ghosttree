@@ -51,7 +51,33 @@ func ensureActors(db *sql.DB) error {
 		return err
 	}
 	// via: wie ein Mensch handelte, web oder terminal (Selbstauskunft); additiv.
-	return ensureColumn(db, "entry_actors", "via", `TEXT NOT NULL DEFAULT ''`)
+	if err := ensureColumn(db, "entry_actors", "via", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	return rekeyVoteActors(db)
+}
+
+// rekeyVoteActors gives vote stamps written by the first version (#191, keyed
+// by the rowid of decision_votes) the stable key VoteEntryID. A stamp counts as
+// old when a vote has its entry_id as rowid and a different hash. Idempotent
+// and cheap (only vote stamps, a handful); it runs at start-up. A stamp whose
+// new key a live stamp already holds is dropped, the live one is newer.
+func rekeyVoteActors(db *sql.DB) error {
+	const old = `kind='vote' AND EXISTS (SELECT 1 FROM decision_votes v WHERE v.rowid=entry_actors.entry_id
+		AND ghosttree_vote_entry(v.decision_id, v.voter_key)<>entry_actors.entry_id)`
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE OR IGNORE entry_actors SET entry_id=(SELECT ghosttree_vote_entry(v.decision_id, v.voter_key)
+		FROM decision_votes v WHERE v.rowid=entry_actors.entry_id) WHERE ` + old); err != nil {
+		return fmt.Errorf("rekey vote stamps: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM entry_actors WHERE ` + old); err != nil {
+		return fmt.Errorf("rekey vote stamps: %w", err)
+	}
+	return tx.Commit()
 }
 
 // EntryActor is the stored actor of one entry with what the reader derives:

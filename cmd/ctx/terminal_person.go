@@ -38,3 +38,22 @@ func terminalPerson() bool {
 	}
 	return ttyCheck(os.Stdin) && ttyCheck(os.Stdout)
 }
+
+// automatedCommands run on their own (servers, watchers, hooks, agent loops,
+// model jobs) even when started from a terminal: what they write is never a
+// person typing, so they never claim one.
+var automatedCommands = map[string]bool{
+	"serve": true, "watch": true, "mcp": true, "channel": true, "claude": true, "hook": true,
+	"garden": true, "explain": true, "distill-sessions": true, "migrate": true, "embed": true,
+	"eval": true, "mirror": true, "snapshot": true,
+}
+
+func automatedCommand(cmd string) bool { return automatedCommands[cmd] }
+
+// terminalPersonFor is terminalPerson for a command line: never for an
+// automated command (ctx garden in a terminal is the gardener, not a person).
+// ctx without arguments opens the terminal interface and counts like any
+// other command a person types.
+func terminalPersonFor(args []string) bool {
+	return (len(args) == 0 || !automatedCommand(args[0])) && terminalPerson()
+}

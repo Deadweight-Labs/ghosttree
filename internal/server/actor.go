@@ -43,12 +43,17 @@ func (a *api) actorOf(r *http.Request, bodySession int64) actor.Actor {
 		}
 		return act
 	}
+	if bodySession > 0 {
+		// Eine Session im Body, die nicht dem Aufrufer gehört (oder unbekannt ist):
+		// genannt ist genannt, das bleibt ein Agent ohne Session.
+		return act
+	}
 	// Ohne jede Agenten-Session: sagt der Client, dass ein Mensch im Terminal
 	// tippt, steht der Stempel als Mensch (Terminal). Das ist eine
 	// Selbstauskunft des Clients, kein Recht: ein Agent, der ctx selbst aufruft,
 	// könnte sie fälschen. Was einen Menschen verlangt (human_only), bleibt der
-	// Websitzung vorbehalten.
-	if r.Header.Get(actor.ViaHeader) == actor.ViaTerminal {
+	// Websitzung vorbehalten. Das Konto des Gärtners ist nie ein Mensch.
+	if r.Header.Get(actor.ViaHeader) == actor.ViaTerminal && !a.st.IsGardenerPrincipal(p) {
 		act.Kind, act.Via, act.Machine = actor.Human, actor.ViaTerminal, ""
 	}
 	return act

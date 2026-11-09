@@ -25,9 +25,11 @@ type toolUse struct {
 }
 
 // CallsTool says whether a raw transcript line is a call of one of the tools
-// or a shell call of one of the commands: in Claude Code an assistant line
-// with a tool_use block (the tool by name, or Bash whose command starts with
-// the command), in Codex a function_call or custom_tool_call. A tool counts by
+// or a shell call of one of the CLI subcommands ("pain add"): in Claude Code
+// an assistant line with a tool_use block (the tool by name, or Bash whose
+// command runs ctx or ghosttree with the subcommand, also by path, after cd
+// … && or variable assignments), in Codex a function_call or
+// custom_tool_call. A tool counts by
 // its last name part (mcp__ghosttree__pain_record is pain_record). Results,
 // prompts and text that only mention the name do not count.
 func CallsTool(raw string, tools, commands []string) bool {
@@ -81,13 +83,55 @@ func callMatches(name, input string, tools, commands []string) bool {
 		return false
 	}
 	for _, cmd := range shellCommands(input) {
-		for _, c := range commands {
-			if strings.HasPrefix(cmd, c+" ") || cmd == c {
-				return true
+		for _, seg := range shellSegments(cmd) {
+			for _, c := range commands {
+				if invokesCLI(seg, c) {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// cliNames are the names of the ghosttree binary: ctx and ghosttree.
+var cliNames = map[string]bool{"ctx": true, "ghosttree": true}
+
+// shellSegments splits a shell line into the commands it runs one after the
+// other (&&, ||, ;, |, line breaks): "cd repo && ctx pain add x" has two.
+func shellSegments(line string) []string {
+	f := func(r rune) bool { return r == ';' || r == '|' || r == '&' || r == '\n' }
+	return strings.FieldsFunc(line, f)
+}
+
+// invokesCLI says whether one shell command runs the CLI with this subcommand
+// ("pain add"): the binary by name or path (ctx, ghosttree, /usr/local/bin/ctx),
+// optionally after variable assignments (FOO=1 ctx pain add).
+func invokesCLI(seg, sub string) bool {
+	words := strings.Fields(seg)
+	for len(words) > 0 && strings.Contains(words[0], "=") && !strings.ContainsAny(words[0][:strings.Index(words[0], "=")], "/ ") {
+		words = words[1:]
+	}
+	if len(words) == 0 {
+		return false
+	}
+	bin := words[0]
+	if i := strings.LastIndex(bin, "/"); i >= 0 {
+		bin = bin[i+1:]
+	}
+	if !cliNames[strings.Trim(bin, `"'`)] {
+		return false
+	}
+	want := strings.Fields(sub)
+	if len(words)-1 < len(want) {
+		return false
+	}
+	for i, w := range want {
+		if words[1+i] != w {
+			return false
+		}
+	}
+	return true
 }
 
 // shellCommands reads the command of a shell call: Claude Bash

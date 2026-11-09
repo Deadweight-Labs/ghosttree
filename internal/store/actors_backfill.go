@@ -88,8 +88,8 @@ type actorBackfillSource struct {
 }
 
 // toolProof names how a session creates an entry of a kind: tool names, CLI
-// commands (the start of a shell command), and the prefix of the identifier
-// the answer carries (PAIN-12).
+// subcommands (run as ctx or ghosttree, actordomain.CallsTool), and the prefix
+// of the identifier the answer carries (PAIN-12).
 type toolProof struct {
 	tools    []string
 	commands []string
@@ -111,12 +111,12 @@ var actorBackfillSources = []actorBackfillSource{
 		COALESCE(o.session_ref,''), COALESCE(o.via,'')
 		FROM knowledge k LEFT JOIN origin_contexts o ON o.id=k.origin_id
 		WHERE k.id>? AND NOT EXISTS (SELECT 1 FROM entry_actors e WHERE e.kind='knowledge' AND e.entry_id=k.id) ORDER BY k.id LIMIT ?`},
-	{kind: actordomain.Pain, tool: &toolProof{tools: []string{"pain_record"}, commands: []string{"ctx pain add"}, prefix: "PAIN-"}, query: `SELECT p.id, p.created_at, COALESCE((SELECT a.account_id FROM pain_authors a WHERE a.pain_id=p.id),0),
+	{kind: actordomain.Pain, tool: &toolProof{tools: []string{"pain_record"}, commands: []string{"pain add"}, prefix: "PAIN-"}, query: `SELECT p.id, p.created_at, COALESCE((SELECT a.account_id FROM pain_authors a WHERE a.pain_id=p.id),0),
 		'', '', COALESCE(ev.session_id,0), p.session_ref, COALESCE(o.session_ref,''), COALESCE(o.via,'')
 		FROM pains p LEFT JOIN pain_events ev ON ev.id=(SELECT MIN(x.id) FROM pain_events x WHERE x.pain_id=p.id AND x.kind='created')
 		LEFT JOIN origin_contexts o ON o.id=ev.origin_id
 		WHERE p.id>? AND NOT EXISTS (SELECT 1 FROM entry_actors e WHERE e.kind='pain' AND e.entry_id=p.id) ORDER BY p.id LIMIT ?`},
-	{kind: actordomain.Idea, tool: &toolProof{tools: []string{"idea_record"}, commands: []string{"ctx idea add"}, prefix: "IDEA-"}, query: `SELECT i.id, i.created_at, COALESCE((SELECT a.account_id FROM idea_authors a WHERE a.idea_id=i.id),0),
+	{kind: actordomain.Idea, tool: &toolProof{tools: []string{"idea_record"}, commands: []string{"idea add"}, prefix: "IDEA-"}, query: `SELECT i.id, i.created_at, COALESCE((SELECT a.account_id FROM idea_authors a WHERE a.idea_id=i.id),0),
 		'', '', 0, i.session_ref, COALESCE(o.session_ref,''), COALESCE(o.via,'')
 		FROM ideas i LEFT JOIN origin_contexts o ON o.id=i.origin_id
 		WHERE i.id>? AND NOT EXISTS (SELECT 1 FROM entry_actors e WHERE e.kind='idea' AND e.entry_id=i.id) ORDER BY i.id LIMIT ?`},
@@ -558,9 +558,9 @@ func (s *Store) seqAtTime(sessionID int64, at string) (int, bool) {
 // without role). A session whose history already begins near its first line
 // is left alone; one that ran when this version was deployed has only the
 // later part from the live upload and is read again in full, its rows
-// replaced. Reading and replacing happen in one transaction per session, so
-// an upload in between cannot be lost: it waits for the write lock and then
-// folds its lines onto the new rows.
+// replaced. The lines are read without a lock; the replacing transaction
+// first takes the write lock and checks that no line came after the read,
+// so an upload in between is never lost (backfillSessionModelsOf).
 func (s *Store) backfillSessionModels(ids []int64, dryRun bool) (sessions, segments int, err error) {
 	for _, id := range ids {
 		n, err := s.backfillSessionModelsOf(id, dryRun)
@@ -576,42 +576,78 @@ func (s *Store) backfillSessionModels(ids []int64, dryRun bool) (sessions, segme
 }
 
 func (s *Store) backfillSessionModelsOf(id int64, dryRun bool) (int, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-	if !dryRun {
-		// Die Schreibsperre vor dem Lesen nehmen: ein Upload zwischen Lesen und
-		// Ersetzen ginge sonst verloren.
-		if _, err := tx.Exec(`DELETE FROM session_models WHERE 0`); err != nil {
+	// Lesen ohne Sperre (eine große Session hält sonst jeden Upload auf); in der
+	// Transaktion nur prüfen, dass seither keine Zeile dazukam, und ersetzen.
+	// Kam eine dazu, noch einmal von vorn; bewegt sich die Session dauernd,
+	// bleibt sie diesmal liegen und bekommt ihre Modelle vom Live-Upload.
+	for attempt := 0; attempt < 3; attempt++ {
+		top, err := maxChunkSeq(s.db, id)
+		if err != nil {
 			return 0, err
 		}
+		var first sql.NullString
+		if err := s.db.QueryRow(`SELECT MIN(first_at) FROM session_models WHERE session_id=?`, id).Scan(&first); err != nil {
+			return 0, err
+		}
+		if first.Valid && modelsCoverStart(s.db, id, first.String) {
+			return 0, nil
+		}
+		obs, err := sessionObservations(s.db, id, top)
+		if err != nil {
+			return 0, err
+		}
+		segs := actordomain.Fold(nil, obs)
+		if len(segs) == 0 || dryRun {
+			return len(segs), nil
+		}
+		done, err := s.replaceSessionModels(id, top, segs)
+		if err != nil || done {
+			return len(segs), err
+		}
 	}
-	var first sql.NullString
-	if err := tx.QueryRow(`SELECT MIN(first_at) FROM session_models WHERE session_id=?`, id).Scan(&first); err != nil {
-		return 0, err
-	}
-	if first.Valid && modelsCoverStart(tx, id, first.String) {
-		return 0, nil
-	}
-	obs, err := sessionObservations(tx, id)
+	return 0, nil
+}
+
+// replaceSessionModels writes the history of a session if no line was added
+// after top; done is false when one was (the caller reads again).
+func (s *Store) replaceSessionModels(id int64, top int64, segs []actordomain.Segment) (bool, error) {
+	tx, err := s.db.Begin()
 	if err != nil {
-		return 0, err
+		return false, err
 	}
-	segs := actordomain.Fold(nil, obs)
-	if len(segs) == 0 || dryRun {
-		return len(segs), nil
+	defer tx.Rollback()
+	// Die Schreibsperre zuerst: danach kann kein Upload mehr dazwischen.
+	if _, err := tx.Exec(`DELETE FROM session_models WHERE 0`); err != nil {
+		return false, err
+	}
+	now, err := maxChunkSeq(tx, id)
+	if err != nil {
+		return false, err
+	}
+	if now != top {
+		return false, nil
 	}
 	if _, err := tx.Exec(`DELETE FROM session_models WHERE session_id=?`, id); err != nil {
-		return 0, err
+		return false, err
 	}
 	for _, seg := range segs {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO session_models(session_id,first_at,model,last_at) VALUES(?,?,?,?)`, id, seg.FirstAt, seg.Model, seg.LastAt); err != nil {
-			return 0, err
+			return false, err
 		}
 	}
-	return len(segs), tx.Commit()
+	return true, tx.Commit()
+}
+
+// maxChunkSeq is the last line number of a session, -1 without lines.
+func maxChunkSeq(q queryer, id int64) (int64, error) {
+	var top sql.NullInt64
+	if err := q.QueryRow(`SELECT MAX(seq) FROM session_chunks WHERE session_id=?`, id).Scan(&top); err != nil {
+		return 0, err
+	}
+	if !top.Valid {
+		return -1, nil
+	}
+	return top.Int64, nil
 }
 
 // modelsStartSlack is how long after the first line of a session its first
@@ -633,12 +669,13 @@ func modelsCoverStart(q queryer, id int64, firstModel string) bool {
 	return m.Sub(t) <= modelsStartSlack
 }
 
-func sessionObservations(q queryer, id int64) ([]actordomain.Observation, error) {
+// sessionObservations reads the model sightings of a session up to line top.
+func sessionObservations(q queryer, id int64, top int64) ([]actordomain.Observation, error) {
 	var out []actordomain.Observation
 	after := -1
 	for {
-		rows, err := q.Query(`SELECT seq, raw FROM session_chunks WHERE session_id=? AND seq>?
-			AND (role='assistant' OR (role='' AND instr(raw,'"turn_context"')>0)) ORDER BY seq LIMIT 1000`, id, after)
+		rows, err := q.Query(`SELECT seq, raw FROM session_chunks WHERE session_id=? AND seq>? AND seq<=?
+			AND (role='assistant' OR (role='' AND instr(raw,'"turn_context"')>0)) ORDER BY seq LIMIT 1000`, id, after, top)
 		if err != nil {
 			return nil, err
 		}
