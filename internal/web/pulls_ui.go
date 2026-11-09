@@ -298,15 +298,12 @@ func (a *app) branchRule(r *http.Request, pa *store.ProjectAccess, project strin
 
 // hiddenBranchChip stands where the name of a branch the viewer may not see would be.
 func hiddenBranchChip(l lang) template.HTML {
-	return template.HTML(`<span class="chip br">` + string(mockIcon("lock")) + html.EscapeString(l.msg("pulls.branch_hidden")) + `</span>`)
+	return kindPill(l, "lock", l.msg("pulls.branch_hidden"), "", pillCard{})
 }
 
-func branchChipHTML(label, href string) template.HTML {
-	inner := string(mockIcon("branch")) + html.EscapeString(label)
-	if href == "" {
-		return template.HTML(`<span class="chip br">` + inner + `</span>`)
-	}
-	return template.HTML(`<a class="chip br" href="` + html.EscapeString(href) + `">` + inner + `</a>`)
+// branchChipHTML is a branch as the pill of pill.go: cut when it is long, with its whole name on the card.
+func branchChipHTML(l lang, label, href string) template.HTML {
+	return branchPill(l, label, href)
 }
 
 // pullsPage ist /ui/{org}/{repo}/pulls.
@@ -443,7 +440,7 @@ func (a *app) pullRow(l lang, base, q string, it store.PullSummary, pkg pullPack
 	switch {
 	case it.Head == "":
 	case visible(it.Head):
-		row.Meta = append(row.Meta, branchChipHTML(it.Head, base+"?q="+url.QueryEscape(withQualifier(q, dropKey("branch"), "branch:"+it.Head))))
+		row.Meta = append(row.Meta, branchChipHTML(l, it.Head, base+"?q="+url.QueryEscape(withQualifier(q, dropKey("branch"), "branch:"+it.Head))))
 	default:
 		row.Meta = append(row.Meta, hiddenBranchChip(l))
 	}
@@ -605,7 +602,7 @@ func (a *app) pullDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 		ChecklistHref: base + "?tab=" + pullTabChecklist + "#tabs", KnowledgeHref: base + "?tab=" + pullTabKnowledge + "#tabs"}
 	v.HeadChip = hiddenBranchChip(l)
 	if visible(d.Head) {
-		v.HeadChip = branchChipHTML(d.Head, v.Base+"?q="+url.QueryEscape("is:any branch:"+d.Head))
+		v.HeadChip = branchChipHTML(l, d.Head, v.Base+"?q="+url.QueryEscape("is:any branch:"+d.Head))
 	}
 	if d.Base != "" && !visible(d.Base) {
 		v.BaseChip = hiddenBranchChip(l)
@@ -614,7 +611,7 @@ func (a *app) pullDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 		if slices.Contains(names, d.Base) {
 			baseHref = links.tree(d.Base, "")
 		}
-		v.BaseChip = branchChipHTML(d.Base, baseHref)
+		v.BaseChip = branchChipHTML(l, d.Base, baseHref)
 	}
 	count := d.Commits
 	if count == 0 {
@@ -879,7 +876,7 @@ func (a *app) pullItems(l lang, view *repoView, d store.PullDetail, commits []st
 				break
 			}
 			short := shortSHA(c.SHA)
-			head.WriteString(` <a class="chip sha" href="` + html.EscapeString(view.Href+"/commits/"+c.SHA) + `">` + html.EscapeString(short) + `</a>`)
+			head.WriteString(" " + string(shaPill(l, short, view.Href+"/commits/"+c.SHA)))
 		}
 		it := tlItem{ID: "commits-" + strconv.Itoa(i), Act: "pull.commits", Who: g.who, Icon: "commit", Tone: "ok", Head: template.HTML(head.String()), at: g.last}
 		if !g.last.IsZero() {

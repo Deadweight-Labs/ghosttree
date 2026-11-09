@@ -144,6 +144,7 @@
           pv.textContent = ta.value;
         }
         if (window.GTCards) window.GTCards.scan(pv);
+        if (window.GTRefs) window.GTRefs.resolve(pv);
       }
       w.hidden = preview;
       pv.hidden = !preview;

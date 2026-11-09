@@ -4,7 +4,7 @@
 {{else}}<div class="sbar"><label class="gfield mono-in">{{mi "search"}}<input type="search" data-list-filter=".rbrow" placeholder="{{t "runbooks.search"}}" aria-label="{{t "runbooks.search"}}" autocomplete="off" spellcheck="false"></label>{{with .NewHref}}<a class="gbtn pri" href="{{.}}">{{mi "plus"}}{{t "runbooks.new"}}</a>{{end}}</div>
 <div class="box"><div class="box-h lh"><span class="t">{{t "runbooks.n" (len .Rows)}}</span><span class="sp"></span><span class="muted fw4">{{t "runbooks.last_ok"}}</span></div>
 {{range .Rows}}<div class="row rbrow"><span class="st open">{{mi "play"}}</span><div class="rbmain"><a class="rbname mono" href="{{.Href}}">{{.Name}}</a>{{if .Machine}}<span class="lb out mono">{{.Machine}}</span>{{end}}<div class="rbpurpose">{{.Purpose}}</div></div>
-<div class="rbmeta">{{if .LastAge}}<span class="rbrun">{{mi "done"}}{{t "runbooks.last_run" .LastAge}}</span>{{end}}{{if .Approved}}<span class="lb ok">{{t "runbooks.approved"}}</span>{{else}}<span class="lb warn">{{t "runbooks.needs_approval"}}</span>{{end}}<span class="rbsha">{{if .Sha}}<span class="chip sha">{{.Sha}}</span>{{end}}</span></div></div>
+<div class="rbmeta">{{if .LastAge}}<span class="rbrun">{{mi "done"}}{{t "runbooks.last_run" .LastAge}}</span>{{end}}{{if .Approved}}<span class="lb ok">{{t "runbooks.approved"}}</span>{{else}}<span class="lb warn">{{t "runbooks.needs_approval"}}</span>{{end}}<span class="rbsha">{{if .Sha}}{{shaPill .Sha ""}}{{end}}</span></div></div>
 {{end}}</div>{{end}}
 {{end}}</div><script src="/static/ui-list.js" defer></script>
 {{template "foot" .}}{{end}}
@@ -13,7 +13,7 @@
 
 {{define "runbook"}}{{template "head" .}}{{template "nav" .}}<main class="g2 rb"><link rel="stylesheet" href="/static/ui-runbooks.css"><div class="wrap">
 {{with .RunbookV}}<div class="dhead"><div class="dtitle"><h1 class="mono">{{.Name}}</h1><div class="gacts">{{if .EditHref}}<a class="gbtn sm" href="{{.EditHref}}">{{mi "pencil"}}{{t "runbooks.edit"}}</a>{{end}}{{if .GiveHref}}<a class="gbtn sm" href="{{.GiveHref}}">{{mi "chat"}}{{t "runbooks.give"}}</a>{{end}}</div></div>
-<div class="dmeta">{{if .LastRun}}<span class="ok rbrun">{{mi "done"}}{{t "runbooks.run_n" .LastRun}} · {{.LastAge}}</span>{{end}}{{if .Approved}}<span class="lb ok">{{if .ApprovedBy}}{{t "runbooks.approved_by" .ApprovedBy}}{{else}}{{t "runbooks.approved"}}{{end}}</span>{{else}}<span class="lb warn">{{t "runbooks.needs_approval"}}</span>{{end}}{{if .Sha}}<span class="chip sha">{{.Sha}}</span>{{end}}<span class="muted">{{.Purpose}}</span></div></div>
+<div class="dmeta">{{if .LastRun}}<span class="ok rbrun">{{mi "done"}}{{t "runbooks.run_n" .LastRun}} · {{.LastAge}}</span>{{end}}{{if .Approved}}<span class="lb ok">{{if .ApprovedBy}}{{t "runbooks.approved_by" .ApprovedBy}}{{else}}{{t "runbooks.approved"}}{{end}}</span>{{else}}<span class="lb warn">{{t "runbooks.needs_approval"}}</span>{{end}}{{if .Sha}}{{shaPill .Sha ""}}{{end}}<span class="muted">{{.Purpose}}</span></div></div>
 {{template "resultbanner" (dict "R" .Result "Strip" "done fail")}}
 <div class="dgrid"><div class="dmain">
 <div class="sec"><h2>{{t "runbooks.execute"}}</h2></div>

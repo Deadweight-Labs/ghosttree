@@ -97,7 +97,7 @@ func TestPullListShowsTabsRowsProgressAndFilters(t *testing.T) {
 		t.Fatalf("pull list = %d", code)
 	}
 	mustContain(t, "pull list", page, `value="is:pr is:open"`, "feat(web): Pull requests tab", "#12", `href="/ui/x/shell/pulls/12"`, "Feature", "alice-gh",
-		`class="chip br"`, "feat/x", "→ main", `aria-label="Pull request, open"`, "1 of 2 criteria met", "1/2",
+		`k-branch`, "feat/x", "→ main", `aria-label="Pull request, open"`, "1 of 2 criteria met", "1/2",
 		`<span class="n">1</span> Open`, `<span class="n">1</span> Merged`, `<span class="n">1</span> Closed`,
 		`href="https://github.com/x/shell/pulls"`, `aria-label="Open on GitHub: pull requests"`, `href="https://github.com/x/shell/compare"`, "New pull request")
 	mustNotContain(t, "open tab", page, "fix(store): count guests", "docs: old plan", "SECRET")
@@ -161,7 +161,7 @@ func TestPullPageShowsConversationChecklistKnowledgeAndCommits(t *testing.T) {
 	mustNotContain(t, "pull page", page, "SECRET", "<script>", "Merge pull request")
 
 	_, list := fetchPage(t, e.Owner, base+"?tab=checklist")
-	mustContain(t, "checklist tab", list, "Pull request tab", "Lists the pull requests", "Shows the checklist", `class="chip sha"`, "aaaaaaa",
+	mustContain(t, "checklist tab", list, "Pull request tab", "Lists the pull requests", "Shows the checklist", `k-commit`, "aaaaaaa",
 		`href="/ui/x/shell/commits/`+pullShaA+`"`, "cbx on", `href="/ui/x/shell/issues/`)
 	_, know := fetchPage(t, e.Owner, base+"?tab=knowledge")
 	mustContain(t, "knowledge tab", know, "Anchored pitfall", `href="/ui/x/shell/knowledge/`, "Pitfall")
@@ -248,7 +248,7 @@ func TestCommitPageShowsWhatWasSaidAndAcceptsAPrefix(t *testing.T) {
 		t.Fatalf("commit page = %d", code)
 	}
 	mustContain(t, "commit page", page, "feat(web): list of pull requests", "aaaaaaa", "alice-gh", "What was said about it", "wrote knowledge", "Anchored pitfall", `href="/ui/x/shell/knowledge/`,
-		`href="https://github.com/x/shell/commit/`+pullShaA+`"`, `aria-label="Open on GitHub: commit aaaaaaa"`, `class="chip br"`, "feat/x", `href="/ui/x/shell/pulls/12"`, "committed")
+		`href="https://github.com/x/shell/commit/`+pullShaA+`"`, `aria-label="Open on GitHub: commit aaaaaaa"`, `k-branch`, "feat/x", `href="/ui/x/shell/pulls/12"`, "committed")
 	_, prefix := fetchPage(t, e.Owner, base+pullShaA[:8])
 	mustContain(t, "prefix", prefix, "feat(web): list of pull requests")
 	// A commit without anything said says so; one that is none is unknown.

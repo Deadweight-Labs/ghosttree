@@ -182,7 +182,7 @@ func TestIssuePageShowsBlockerChecklistSidebarAndKeepsTheActions(t *testing.T) {
 		t.Fatalf("status %d", status)
 	}
 	for _, want := range []string{"Build the thing", `class="n" title="REQ-` + itoa(d.Request.ID) + `"`, `id="task-`, "Decide the three questions", `class="waits"`,
-		`data-crit="met"`, `data-crit="open"`, "a41c7e2", "Parent dach", `title="Task TASK-`, `<a href="/ui/x/shell/issues" aria-current="page"`,
+		`data-crit="met"`, `data-crit="open"`, "a41c7e2", "Parent dach", `data-ref="TASK-`, `<a href="/ui/x/shell/issues" aria-current="page"`,
 		`a-claude`, `a-codex`, `/ui/requests/` + itoa(d.Request.ID) + `/criteria/`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("issue page lacks %q", want)
@@ -190,7 +190,7 @@ func TestIssuePageShowsBlockerChecklistSidebarAndKeepsTheActions(t *testing.T) {
 	}
 	// Running text (the history) names an object with the long pill ("REQ-1"), the
 	// columns and the sidebar with the short form ("#1").
-	if !strings.Contains(page, `class="ref pill k-req"`) || !strings.Contains(page, `class="nchip"`) {
+	if !strings.Contains(page, `class="ref pill k-req"`) || !strings.Contains(page, `class="ref pill k-task"`) {
 		t.Error("the page lacks the long pill in the history or the short reference in the sidebar")
 	}
 	// The old address leads here, with what the action reports.
@@ -303,7 +303,7 @@ func TestIssueHistoryReadsAsSentencesWithObjects(t *testing.T) {
 		}
 	}
 	// The object is a link or a reference, the proof sits behind the sentence.
-	for _, want := range []string{`href="/ui/requests/` + itoa(parent.Request.ID) + `"`, `href="#criterion-1"`, `class="chip sha"`, `data-act="work.started"`, `data-act="criterion.met"`, `data-act="task.created"`} {
+	for _, want := range []string{`href="/ui/requests/` + itoa(parent.Request.ID) + `"`, `href="#criterion-1"`, `k-commit`, `data-act="work.started"`, `data-act="criterion.met"`, `data-act="task.created"`} {
 		if !strings.Contains(tl, want) {
 			t.Errorf("the history lacks %q", want)
 		}

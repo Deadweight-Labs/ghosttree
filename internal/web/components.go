@@ -152,10 +152,10 @@ type uiRow struct {
 	WaitText string
 	// Excerpt is a line of text under the title (an idea's first words, what a
 	// pain leaves open); ExLead is its bold start. Pill is a state word at the
-	// right ("offen") with its tone class (ok, warn, done, out). Chip is a
-	// linked issue at the right ("#597"), ChipHref its address.
+	// right ("offen") with its tone class (ok, warn, done, out). Chip is what the
+	// row points at, at the right, ready as a pill (an issue "#597", a pull request).
 	Excerpt, ExLead, Pill, PillTone string
-	Chip, ChipHref                  string
+	Chip                            template.HTML
 	Progress                        *rowProgress
 	// Live is the live dot of an agent at work, ready as HTML; LiveID names the
 	// issue so the live stream can replace it.

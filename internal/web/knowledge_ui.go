@@ -210,7 +210,7 @@ func (a *app) fillKnowledgeItem(l lang, k store.Knowledge, v *knowledgeItemView)
 		v.Revs = nil
 	}
 	// Timeline, newest first.
-	chip := func(s string) string { return ` <span class="chip sha">` + html.EscapeString(s) + `</span>` }
+	chip := func(s string) string { return " " + string(shaPill(l, s, "")) }
 	sha := ""
 	if v.Side.Sha != "" {
 		sha = chip(v.Side.Sha)

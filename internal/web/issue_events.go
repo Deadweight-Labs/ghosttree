@@ -73,8 +73,14 @@ var (
 // issueEvents turns the visible activity of a request into history entries,
 // newest first. criteria are the requirement lines (for numbers, texts and
 // proofs), tasks the open tasks (for who a task waits for), pkg the name of
-// the work package of the issue's branch ("" when there is none).
-func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine, assignees map[int64]string, pkg string, now func(string) string) []issueEvent {
+// the work package of the issue's branch ("" when there is none). repo is the
+// address of the repository (/ui/org/repo), so that ideas and pull requests named
+// in a sentence are links; without it they stay pills without an address.
+func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine, assignees map[int64]string, pkg string, now func(string) string, repo ...string) []issueEvent {
+	base := ""
+	if len(repo) > 0 {
+		base = repo[0]
+	}
 	byID := map[int64]criterionLine{}
 	byText := map[string]criterionLine{}
 	for _, c := range criteria {
@@ -137,7 +143,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 				ev.Sentence = sentence("issue.ev.criterion_waived", crit(c.Number))
 			}
 		case "relation.added", "relation.removed":
-			ev.Sentence = relationSentence(l, act, reqLink, sentence)
+			ev.Sentence = relationSentence(l, act, reqLink, sentence, base)
 		case "work.started", "work.resumed":
 			ev.Tone, ev.Icon = "acc", "play"
 			role := ""
@@ -177,7 +183,11 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			// the page names the pull request and says it in its own language.
 			ev.Icon, ev.Tone, ev.Sentence = "pr", "don", sentence("issue.ev.pr_merged_any")
 			if m := mergedData.FindStringSubmatch(act.Data); m != nil {
-				ev.Sentence = sentence("issue.ev.pr_merged", html.EscapeString("#"+m[1]))
+				pr := html.EscapeString("#" + m[1])
+				if n, err := strconv.ParseInt(m[1], 10, 64); err == nil && base != "" {
+					pr = string(prPill(l, n, base+"/pulls/"+m[1], "merged", "", ""))
+				}
+				ev.Sentence = sentence("issue.ev.pr_merged", pr)
 			}
 		case "package.added", "package.removed", "package.role":
 			ev.Icon = "book"
@@ -268,7 +278,7 @@ func withoutRepeatedNotes(events []issueEvent, comments []tlItem) []issueEvent {
 }
 
 // relationSentence says what happened to a link, naming the other side.
-func relationSentence(l lang, act requestdomain.Activity, reqLink func(int64) string, sentence func(string, ...any) template.HTML) template.HTML {
+func relationSentence(l lang, act requestdomain.Activity, reqLink func(int64) string, sentence func(string, ...any) template.HTML, base string) template.HTML {
 	removed := act.Kind == "relation.removed"
 	m := relationTarget.FindStringSubmatch(act.Data)
 	if m == nil {
@@ -284,13 +294,17 @@ func relationSentence(l lang, act requestdomain.Activity, reqLink func(int64) st
 		target = reqLink(n)
 	case m[3] != "":
 		n, _ := strconv.ParseInt(m[3], 10, 64)
-		target = string(refPillHTML(l, "idea", n, ""))
+		href := ""
+		if base != "" {
+			href = base + "/ideas/" + m[3]
+		}
+		target = string(refPillHTML(l, "idea", n, href))
 	case m[4] != "":
 		target = `<a href="/ui/knowledge/` + m[4] + `">` + html.EscapeString(l.msg("issue.knowledge_n", m[4])) + `</a>`
 	default:
 		target = html.EscapeString(ellipsize(m[5], 120))
 		if strings.HasPrefix(m[5], "https://") || strings.HasPrefix(m[5], "http://") {
-			target = `<a href="` + html.EscapeString(m[5]) + `" rel="noopener noreferrer">` + target + `</a>`
+			target = string(urlPill(l, m[5]))
 		}
 	}
 	if removed {
@@ -320,14 +334,14 @@ func proofChips(l lang, es []evidenceLine) template.HTML {
 				short = short[:7]
 			}
 			text = html.EscapeString(short)
-			if e.Href != "" {
-				b.WriteString(`<a class="chip sha" href="` + html.EscapeString(e.Href) + `" title="` + html.EscapeString(e.Label+" "+ref) + `" rel="noopener noreferrer">` + text + `</a>`)
-			} else {
-				b.WriteString(`<span class="chip sha" title="` + html.EscapeString(e.Label+" "+ref) + `">` + text + `</span>`)
-			}
+			b.WriteString(string(kindPill(l, "commit", short, e.Href, pillCard{Label: e.Label, Title: ref})))
 		case "test":
 			b.WriteString(`<span class="chip test" title="` + html.EscapeString(e.Label) + `">` + text + `</span>`)
 		default:
+			if e.Kind == "url" && e.Href != "" {
+				b.WriteString(string(urlPill(l, e.Href)))
+				continue
+			}
 			inner := string(mockIcon(proofIcon[e.Kind])) + text
 			if e.Href != "" {
 				rel := ""

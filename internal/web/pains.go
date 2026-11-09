@@ -112,6 +112,7 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 			line.Pill = refPillHTML(lg, "request", l.RequestID, line.Href)
 		case "knowledge":
 			line.Text, line.Href = ellipsize(l.Title, 80), "/ui/knowledge/"+strconv.FormatInt(l.KnowledgeID, 10)
+			line.Pill = numberedPill(lg, "knowledge", l.KnowledgeID, line.Href, "")
 		case "idea":
 			line.Text, line.Href = ellipsize(l.Title, 80), repoHref(p.Project)+"/ideas/"+strconv.FormatInt(l.IdeaID, 10)
 			line.Pill = refPillHTML(lg, "idea", l.IdeaID, line.Href)
@@ -119,6 +120,7 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 			line.Text = ellipsize(l.ExternalRef, 120)
 			if strings.HasPrefix(l.ExternalRef, "https://") || strings.HasPrefix(l.ExternalRef, "http://") {
 				line.Href = l.ExternalRef
+				line.Pill = urlPill(lg, l.ExternalRef)
 			}
 		}
 		v.Motivates = append(v.Motivates, line)

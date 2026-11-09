@@ -166,7 +166,7 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 	}
 	ago := func(at string) string { return shortAgo(l, now, parseTime(at)) }
 	acts := a.visibleActivity(pa, detail)
-	v.Events = issueEvents(l, acts, v.Criteria, assignees, pkg, ago)
+	v.Events = issueEvents(l, acts, v.Criteria, assignees, pkg, ago, repoHref(remote))
 	anchors := map[int64]*anchorView{}
 	for _, act := range acts {
 		anchors[act.ID] = anchorViewOf(pa, remote, act.GitAnchor, act.Via)

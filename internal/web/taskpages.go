@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
@@ -53,10 +54,12 @@ type taskStepView struct {
 }
 
 type taskPageView struct {
-	ID                                int64
-	Title, KindLabel                  string
-	State, StateLabel, Tone           string
-	Assignee, CreatedBy, Age, Where   string
+	ID                              int64
+	Title, KindLabel                string
+	State, StateLabel, Tone         string
+	Assignee, CreatedBy, Age, Where string
+	// SameAsker: the person who asked is the person who is waited for; the head says it once.
+	SameAsker                         bool
 	Blocks                            []bodyBlock
 	CheckHint                         string
 	Steps                             []taskStepView
@@ -150,8 +153,11 @@ func taskRowOf(l lang, t humantask.Task, now time.Time, withRepo bool) uiRow {
 	if at := parseTime(t.CreatedAt); !at.IsZero() {
 		row.Age, row.AgeTitle = shortAge(l, now, at), l.dateTime(at.Local())
 	}
+	if t.State == humantask.Open && t.Assignee != "" {
+		row.Waiting = []string{store.NormalizeAccountName(t.Assignee)}
+	}
 	if t.RequestID != 0 {
-		row.Chip, row.ChipHref = "#"+strconv.FormatInt(t.RequestID, 10), repoHref(t.Project)+"/issues/"+strconv.FormatInt(t.RequestID, 10)
+		row.Chip = refHTML(l, "request", t.RequestID, repoHref(t.Project)+"/issues/"+strconv.FormatInt(t.RequestID, 10))
 	}
 	if withRepo {
 		row.Meta = append(row.Meta, hrefChip(repoHref(t.Project), lastSegment(t.Project)))
@@ -258,6 +264,7 @@ func (a *app) taskDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 	v := &taskPageView{ID: t.ID, Title: t.Title, KindLabel: label(l, taskKindKeys, t.Kind), State: t.State, StateLabel: label(l, taskPageStates, t.State),
 		Tone: taskPageTone[t.State], Assignee: store.NormalizeAccountName(t.Assignee), CreatedBy: t.CreatedBy, Where: t.Location, CheckHint: t.CheckHint,
 		Blocks: bodyBlocks(t.Description, 0), Reason: t.StateNote, DoneBy: t.DoneBy, DoneNote: t.DoneNote, Base: view.Href + "/tasks", Token: csrfOf(r)}
+	v.SameAsker = v.Assignee != "" && strings.EqualFold(store.NormalizeAccountName(t.CreatedBy), v.Assignee)
 	if at := parseTime(t.CreatedAt); !at.IsZero() {
 		v.Age = shortAgo(l, now, at)
 	}
