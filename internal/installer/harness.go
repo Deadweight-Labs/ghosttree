@@ -208,7 +208,9 @@ func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok b
 		if h.Name == "codex" {
 			return "PreToolUse", withCtx(preToolHookCommand) + " --harness " + h.Name, "", true
 		}
-		return "PreToolUse", withCtx(preToolHookCommand) + " --harness " + h.Name, "Read|Edit|Write|NotebookEdit", true
+		// Bash gehört dazu: Abläufe (REQ-604) lösen an Befehlen aus, ohne Bash
+		// kamen sie in Claude Code nie an.
+		return "PreToolUse", withCtx(preToolHookCommand) + " --harness " + h.Name, "Read|Edit|Write|NotebookEdit|Bash", true
 	case ChannelPauseGate:
 		return "PreToolUse", withCtx(pauseGateHookCommand) + " --harness " + h.Name, "", true
 	case ChannelCoordInbox:
