@@ -12,6 +12,12 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Before you upgrade
 
+- Some refusals now hold even without `GHOSTTREE_ENFORCE_ACCESS`: a guest
+  writes nothing the role matrix does not give them (no knowledge edits, no
+  runbooks, no runbook runs, no tasks), and approving knowledge needs the
+  review right (owner, lead or `can_review`). Reporting a run of a project
+  runbook (`POST /api/runbooks/{id}/runs`) needs a member, not just reading. Reading stays open in log mode as before. A guest no
+  longer marks tasks done, not even one assigned to them.
 - `ctx person add` is deprecated; use `ctx account add`. Existing person tokens
   keep working and are migrated on startup.
 - Per-project roles and visibility are only enforced with
@@ -212,8 +218,11 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   every token call (MCP, hooks, CLI) is an agent, and the session counts only
   when it belongs to the calling account. No tool parameter sets or overrides it;
   a token can no longer store `origin: human` on a request or knowledge entry.
-  This includes `ctx` typed by hand in a terminal: it writes with a token and
-  counts as an agent (without harness when no agent session runs).
+  `ctx` typed by a person in a terminal (no agent session, no agent harness in
+  the environment, stdin and stdout a terminal) is recorded as "person
+  (terminal)", apart from "person (web)". It is the client's own word: it grants
+  no right, an agent could claim it, and a call with an agent session is always
+  an agent.
 - The model of a session is read from its uploaded transcript (Claude Code
   `message.model`, Codex `turn_context`), with every switch and its time; an
   entry gets the model that was active when it was written.
@@ -364,6 +373,9 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- The knowledge, review, context and sessions pages of a repository showed
+  guests and members without admin rights all projects instead of that
+  repository (including machine entries of other people in log mode).
 - Pains, ideas, tasks and comments written through MCP now carry their
   session: the server takes the session the client names in its header when the
   body has no numeric id. Before, a pain never had a session.

@@ -189,10 +189,13 @@ func TestBackfillActorsFillsOnlyWhatIsProven(t *testing.T) {
 			actorExec(t, st, `INSERT INTO session_chunks(session_id,seq,role,text,raw) VALUES(?,?,'','',?)`, sid, i, l)
 		}
 	}
-	chunks(sa, claudeLine("claude-opus-5-5", "2026-11-01T08:05:00Z"), call("2026-11-01T08:29:50Z"), result("2026-11-01T08:29:55Z", pOnly),
-		claudeLine("claude-sonnet-5-5", "2026-11-01T08:40:00Z"))
+	// Zeilen ohne Zeit liegen dazwischen und zählen weder als Aufruf noch als Ende des Fensters.
+	chunks(sa, claudeLine("claude-opus-5-5", "2026-11-01T08:05:00Z"), `{"type":"progress","data":"x"}`, call("2026-11-01T08:29:50Z"),
+		`{"type":"progress","data":"y"}`, result("2026-11-01T08:29:55Z", pOnly), claudeLine("claude-sonnet-5-5", "2026-11-01T08:40:00Z"))
 	actorExec(t, st, `UPDATE session_chunks SET role='assistant' WHERE session_id=? AND raw LIKE '%"model"%'`, sa)
-	chunks(sb, `{"timestamp":"2026-11-01T10:01:00Z","type":"turn_context","payload":{"model":"gpt-6-sol"}}`, call("2026-11-01T10:34:30Z"), result("2026-11-01T10:34:40Z", pNamed+100))
+	// In s-b nennt bei pNone nur ein Prompt das Werkzeug und ein Ergebnis die Nummer: kein Aufruf.
+	chunks(sb, `{"timestamp":"2026-11-01T10:01:00Z","type":"turn_context","payload":{"model":"gpt-6-sol"}}`, call("2026-11-01T10:34:30Z"), result("2026-11-01T10:34:40Z", pNamed+100),
+		`{"type":"user","timestamp":"2026-11-01T10:39:50Z","message":{"content":"bitte pain_record aufrufen, ctx pain add geht auch"}}`, result("2026-11-01T10:39:55Z", pNone))
 	chunks(sc, call("2026-11-01T10:34:00Z"), result("2026-11-01T10:34:10Z", pNamed), `{"type":"user","timestamp":"2026-11-01T10:44:00Z"}`)
 
 	dry, err := st.BackfillActors(ActorBackfillOptions{DryRun: true, Batch: 2, Models: true})
@@ -360,5 +363,121 @@ func TestCoordRetentionRemovesStampsOfDeletedMessages(t *testing.T) {
 	}
 	if _, ok, _ := st.ActorOf(actordomain.Pain, 999); !ok {
 		t.Error("retention removed a stamp of another kind")
+	}
+}
+
+// Die SQL-Funktion des Nachtrags rechnet dieselbe Id wie der Live-Stempel.
+func TestVoteEntrySQLFunctionMatchesGo(t *testing.T) {
+	st := originStore(t)
+	var got int64
+	if err := st.db.QueryRow(`SELECT ghosttree_vote_entry(5, 'person:1:agent')`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if want := actordomain.VoteEntryID(5, "person:1:agent"); got != want {
+		t.Errorf("sql %d, go %d", got, want)
+	}
+}
+
+// Die Kanonisierung löscht doppelte Requests samt ihren Stempeln.
+func TestCanonicalizeRemovesStampsOfMergedRequests(t *testing.T) {
+	s := openTest(t)
+	var ids []int64
+	for _, project := range []string{"github.com/Old-Owner/Project", "github.com/example/project"} {
+		d, err := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "change", Title: "Doppelt",
+			Description: "gleich", Scope: scope.Axes{Project: project}}, Criteria: []string{"eins"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, d.Request.ID)
+		agent := actordomain.Actor{Kind: actordomain.Agent, AccountID: 1}
+		for kind, id := range map[string]int64{actordomain.Request: d.Request.ID, actordomain.RequestDone: d.Request.ID, actordomain.Criterion: d.Criteria[0].ID} {
+			if err := s.RecordActor(kind, id, agent); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := s.CanonicalizeScopes(map[string]string{"github.com/old-owner/project": "github.com/example/project"}); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	s.db.QueryRow(`SELECT COUNT(*) FROM entry_actors e WHERE (e.kind IN ('request','request_done') AND NOT EXISTS (SELECT 1 FROM requests r WHERE r.id=e.entry_id))
+		OR (e.kind='criterion' AND NOT EXISTS (SELECT 1 FROM request_criteria c WHERE c.id=e.entry_id))`).Scan(&left)
+	if left != 0 {
+		t.Errorf("%d stamps of deleted requests stayed", left)
+	}
+	var kept int
+	s.db.QueryRow(`SELECT COUNT(*) FROM entry_actors`).Scan(&kept)
+	if kept != 3 {
+		t.Errorf("stamps of the surviving request: %d, want 3", kept)
+	}
+}
+
+// Prüfbefund B3: Stimmen-Stempel der ersten Fassung (Schlüssel rowid) bekommen
+// beim Start den stabilen Schlüssel; ein zweiter Start ändert nichts.
+func TestVoteStampsKeyedByRowIDAreRekeyed(t *testing.T) {
+	st := originStore(t)
+	if _, err := st.db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO decision_votes(decision_id,voter_key,voter,by_agent,variant_id,reason,created_at,updated_at)
+		VALUES(7,'person:1:agent','robin',1,1,'weil','2026-11-01T00:00:00Z','2026-11-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	var rowid int64
+	st.db.QueryRow(`SELECT rowid FROM decision_votes WHERE decision_id=7`).Scan(&rowid)
+	if err := recordActorTx(st.db, actordomain.Vote, rowid, actordomain.Actor{Kind: actordomain.Agent, AccountID: 1, Harness: "codex"}, "2026-11-01T00:00:00Z", false); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := rekeyVoteActors(st.db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := actordomain.VoteEntryID(7, "person:1:agent")
+	if ea, ok, _ := st.ActorOf(actordomain.Vote, want); !ok || ea.Harness != "codex" {
+		t.Errorf("rekeyed stamp: %+v %v", ea, ok)
+	}
+	if _, ok, _ := st.ActorOf(actordomain.Vote, rowid); ok {
+		t.Error("the old key stayed")
+	}
+	var n int
+	st.db.QueryRow(`SELECT COUNT(*) FROM entry_actors WHERE kind='vote'`).Scan(&n)
+	if n != 1 {
+		t.Errorf("vote stamps: %d", n)
+	}
+}
+
+// Prüfbefund B4: kommt zwischen Lesen und Ersetzen eine Zeile dazu, ersetzt der
+// Nachtrag nichts; die Zeile (und ihr Modell vom Upload) geht nicht verloren.
+func TestModelBackfillDoesNotReplaceAfterANewLine(t *testing.T) {
+	st := originStore(t)
+	sid := actorSession(t, st, "claude-code", "s-race", 1, "laptop", "2026-11-01T08:00:00Z", "2026-11-01T12:00:00Z")
+	actorExec(t, st, `INSERT INTO session_chunks(session_id,seq,role,text,raw) VALUES(?,0,'assistant','',?)`, sid, claudeLine("claude-opus-5-5", "2026-11-01T08:01:00Z"))
+	top, err := maxChunkSeq(st.db, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := sessionObservations(st.db, sid, top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segs := actordomain.Fold(nil, obs)
+	// Der Upload kommt dazwischen.
+	if err := st.AppendChunks(sid, []Chunk{{Seq: 1, Role: "assistant", Raw: claudeLine("claude-sonnet-5-5", "2026-11-01T09:00:00Z")}}); err != nil {
+		t.Fatal(err)
+	}
+	done, err := st.replaceSessionModels(sid, top, segs)
+	if err != nil || done {
+		t.Fatalf("replaced despite a new line: %v %v", done, err)
+	}
+	if got, _ := st.SessionModels(sid); len(got) != 1 || got[0].Model != "claude-sonnet-5-5" {
+		t.Errorf("the upload's model was lost: %+v", got)
+	}
+	// Der ganze Lauf liest dann neu und hat beide.
+	if n, err := st.backfillSessionModelsOf(sid, false); err != nil || n != 2 {
+		t.Fatalf("backfill: %d %v", n, err)
+	}
+	if got, _ := st.SessionModels(sid); len(got) != 2 {
+		t.Errorf("after backfill: %+v", got)
 	}
 }

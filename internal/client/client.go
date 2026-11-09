@@ -32,6 +32,12 @@ import (
 // carries it so the server can tell the briefing when this client is old.
 var ClientVersion string
 
+// TerminalPerson says that this process runs for a person typing in a
+// terminal, not inside an agent (main decides it once). Every client of the
+// process then marks its writes with actor.ViaHeader; the server takes it as a
+// self-report (REQ-620).
+var TerminalPerson bool
+
 type Client struct {
 	cfg  config.Config
 	http *http.Client
