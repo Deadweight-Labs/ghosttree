@@ -206,4 +206,3 @@ func finishUpdate(stdout io.Writer, target, newPath, newVersion string) int {
 	fmt.Fprintln(stdout, "note        running MCP servers and hooks of open Claude/Codex sessions keep the old binary until those sessions are restarted")
 	return 0
 }
-
