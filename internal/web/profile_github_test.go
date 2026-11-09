@@ -250,7 +250,7 @@ func TestUnlinkClearsTheLinkAndTheKeptPicture(t *testing.T) {
 	if page := e.profile(t, e.alice); !strings.Contains(page, `src="/ui/avatar/1"`) {
 		t.Fatalf("the picture shows before: %s", page)
 	}
-	if _, err := os.Stat(filepath.Join(e.dir, "1.img")); err != nil {
+	if _, err := os.Stat(filepath.Join(e.dir, "1-320.img")); err != nil {
 		t.Fatalf("the picture is kept on disk: %v", err)
 	}
 
@@ -265,7 +265,7 @@ func TestUnlinkClearsTheLinkAndTheKeptPicture(t *testing.T) {
 	if l, ok := e.st.AccountGitHub("person:2"); !ok || l.Login != "hubot" {
 		t.Fatalf("somebody else's link was touched: %+v %v", l, ok)
 	}
-	for _, f := range []string{"1.img", "1.json"} {
+	for _, f := range []string{"1-320.img", "1-320.json"} {
 		if _, err := os.Stat(filepath.Join(e.dir, f)); !os.IsNotExist(err) {
 			t.Errorf("%s stays on disk after unlinking: %v", f, err)
 		}
@@ -295,7 +295,7 @@ func TestRelinkingShowsThePictureOfTheNewAccount(t *testing.T) {
 	}
 	e.profile(t, e.alice)
 	last := e.gh.calls[len(e.gh.calls)-1]
-	if last != "https://avatars.githubusercontent.com/u/583231?s=96&v=4" {
+	if last != "https://avatars.githubusercontent.com/u/583231?s=320&v=4" {
 		t.Fatalf("the picture of the new account was fetched, not the old one kept: %v", e.gh.calls)
 	}
 }
