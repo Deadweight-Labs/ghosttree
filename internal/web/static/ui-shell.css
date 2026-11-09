@@ -149,3 +149,10 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 @media (max-width: 1011px) {
   .rband .wrap { gap: 8px; }
 }
+
+/* Owner line above the tabs of an organization or a person (REQ-623). */
+.rband .ohead { display: flex; align-items: center; gap: 16px; padding-top: 20px; padding-bottom: 12px; }
+.rband .ohead h1 { margin: 0; font-size: 20px; font-weight: 600; line-height: 1.3; }
+.rband .ohead .ohead-pic { width: 48px; height: 48px; border-radius: 8px; border: 1px solid var(--border-default); object-fit: cover; background: var(--canvas-default); }
+.rband .ohead .ohead-gh { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-muted); font-size: 13px; }
+.rband .ohead .ohead-gh .i { width: 14px; height: 14px; }

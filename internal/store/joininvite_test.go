@@ -13,7 +13,7 @@ func joinFixture(t *testing.T) (*Store, Org) {
 	st := orgStore(t, "robin", "anna", "ben")
 	st.SetAccessMode(AccessMode{Enforce: true})
 	o := mustOrg(t, st, "person:1", "Alpha", "alpha")
-	if _, err := st.EnsureProject("person:1", joinRemote); err != nil {
+	if _, err := claimInOrg(st, "person:1", joinRemote); err != nil {
 		t.Fatal(err)
 	}
 	return st, o
@@ -126,7 +126,7 @@ func TestPreviewInviterNoLongerOwner(t *testing.T) {
 
 func TestAcceptProjectInvitationGrantsOnlyTheProjectRoleOnce(t *testing.T) {
 	st, o := joinFixture(t)
-	if _, err := st.EnsureProject("person:1", "github.com/alpha/other"); err != nil {
+	if _, err := claimInOrg(st, "person:1", "github.com/alpha/other"); err != nil {
 		t.Fatal(err)
 	}
 	code, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleGuest, 0)
@@ -275,7 +275,7 @@ func TestOrgMemberListShowsOnlyWhoSharesAProject(t *testing.T) {
 		}
 	}
 	const other = "github.com/alpha/secret"
-	if _, err := st.EnsureProject("person:1", other); err != nil {
+	if _, err := claimInOrg(st, "person:1", other); err != nil {
 		t.Fatal(err)
 	}
 	join := func(who, remote, role string) {

@@ -231,7 +231,7 @@ func TestForeignOriginEventIDCannotAttachOptionsToSomeoneElsesQuestion(t *testin
 	if _, err := f.st.CreateOrg("person:6", "Nora", "nora-org"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.st.EnsureProject("person:6", "nora-proj"); err != nil {
+	if _, err := claimInOrg(f.st, "person:6", "nora-proj"); err != nil {
 		t.Fatal(err)
 	}
 	noraRoom := store.RoomKeyForProject("nora-proj")

@@ -248,6 +248,7 @@ func (m Model) updateClaim(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i, o := range msg.plan.Orgs {
 			if o.Default {
 				m.claim.org = i
+				break
 			}
 		}
 	case claimDoneMsg:
@@ -279,7 +280,7 @@ func (m Model) updateClaim(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.claim.busy, m.claim.err = true, nil
-			remote, org := m.claim.plan.Remote, m.claim.plan.Orgs[m.claim.org].Slug
+			remote, org := m.claim.plan.Remote, m.claimOrg()
 			return m, tea.Batch(m.ensureSpin(), call(quickTimeout, func(ctx context.Context) tea.Msg {
 				p, err := m.be.Claim(ctx, remote, org)
 				return claimDoneMsg{p, err}
@@ -289,11 +290,27 @@ func (m Model) updateClaim(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// claimOrg is the organization the claim names; "" for the own namespace,
+// where the server applies the owner rule.
 func (m Model) claimOrg() string {
-	if len(m.claim.plan.Orgs) == 0 {
+	if len(m.claim.plan.Orgs) == 0 || m.claim.plan.Orgs[m.claim.org].Own {
 		return ""
 	}
 	return m.claim.plan.Orgs[m.claim.org].Slug
+}
+
+// claimLabel names an owner on the screen.
+func (m Model) claimLabel(o OrgChoice) string {
+	if o.Own {
+		if o.Slug != "" {
+			return fmt.Sprintf(m.lang.t("claim.own_named"), clean(o.Slug, 40))
+		}
+		return m.lang.t("claim.own")
+	}
+	if label := clean(o.Name, 40); label != "" {
+		return label
+	}
+	return clean(o.Slug, 40)
 }
 
 func (m Model) viewClaim() block {
@@ -316,10 +333,7 @@ func (m Model) viewClaim() block {
 	}
 	var orgs []string
 	for i, o := range c.plan.Orgs {
-		label := clean(o.Name, 40)
-		if label == "" {
-			label = clean(o.Slug, 40)
-		}
+		label := m.claimLabel(o)
 		if i == c.org {
 			orgs = append(orgs, m.th.Selected.Render(" "+label+" "))
 		} else {
@@ -327,11 +341,12 @@ func (m Model) viewClaim() block {
 		}
 	}
 	b.add("  " + m.th.Dim.Render(fmt.Sprintf("%-14s", m.lang.t("claim.org"))) + strings.Join(orgs, " "))
-	if o := c.plan.Orgs[c.org]; o.Role != "" && o.Role != "owner" {
-		b.add("  " + strings.Repeat(" ", 14) + m.th.Caution.Render(fmt.Sprintf(m.lang.t("claim.role"), clean(o.Role, 20))))
-	}
 	b.blank(1)
-	b.add("  " + m.th.Title.Render(fmt.Sprintf(m.lang.t("claim.question"), clean(c.plan.Remote, 120), clean(m.claimOrg(), 40))))
+	question := fmt.Sprintf(m.lang.t("claim.question"), clean(c.plan.Remote, 120), m.claimLabel(c.plan.Orgs[c.org]))
+	if c.plan.Orgs[c.org].Own {
+		question = fmt.Sprintf(m.lang.t("claim.question_own"), clean(c.plan.Remote, 120))
+	}
+	b.add("  " + m.th.Title.Render(question))
 	if c.busy {
 		b.add("  " + m.th.Key.Render(spinner(m.spin)))
 	}
@@ -343,7 +358,11 @@ func (m Model) viewClaim() block {
 	}
 	b.blank(1)
 	b.add("  " + m.th.Rule.Render(strings.Repeat("─", width)))
-	b.add("  " + m.th.Subtle.Render("ctx project claim "+clean(c.plan.Remote, 120)+" --org "+clean(m.claimOrg(), 40)))
+	command := "ctx project claim " + clean(c.plan.Remote, 120)
+	if org := m.claimOrg(); org != "" {
+		command += " --org " + clean(org, 40)
+	}
+	b.add("  " + m.th.Subtle.Render(command))
 	pairs := []string{"enter", m.lang.t("key.create")}
 	if len(c.plan.Orgs) > 1 {
 		pairs = append(pairs, "←→", m.lang.t("claim.org"))

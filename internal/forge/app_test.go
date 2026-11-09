@@ -115,6 +115,17 @@ func newFakeApp(t *testing.T) *fakeApp {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"total_count": total, "repositories": repos})
 	})
+	mux.HandleFunc("GET /orgs/{org}", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer itok-") {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		if r.PathValue("org") == "evil" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"login": "Other-Org", "name": "x", "id": 9})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"login": "Deadweight-Labs", "name": "Deadweight Labs", "id": 4242})
+	})
 	mux.HandleFunc("GET /repos/{owner}/{repo}/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if f.pullsStatus != 200 {
 			http.Error(w, "forbidden", f.pullsStatus)
@@ -469,5 +480,20 @@ func TestWebhookTranslatesRepositoryEvents(t *testing.T) {
 	rec := deliver(t, bad, "repository", "whsec", cases[0].body)
 	if rec.Code != http.StatusInternalServerError || logged == nil || strings.Contains(rec.Body.String(), "db down") {
 		t.Fatalf("apply failure: %d %v %q", rec.Code, logged, rec.Body.String())
+	}
+}
+
+func TestOrgProfileReadsNameAndRefusesAnotherOrg(t *testing.T) {
+	f := newFakeApp(t)
+	app := f.app()
+	p, err := app.OrgProfile(context.Background(), 5, "deadweight-labs")
+	if err != nil || p.Login != "Deadweight-Labs" || p.Name != "Deadweight Labs" || p.ID != 4242 {
+		t.Fatalf("profile = %+v %v", p, err)
+	}
+	if _, err := app.OrgProfile(context.Background(), 5, "evil"); !errors.Is(err, ErrBadIdentity) {
+		t.Fatalf("answer for another org accepted: %v", err)
+	}
+	if _, err := app.OrgProfile(context.Background(), 5, "../x"); !errors.Is(err, ErrBadIdentity) {
+		t.Fatalf("bad login accepted: %v", err)
 	}
 }

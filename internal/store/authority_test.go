@@ -608,7 +608,12 @@ func TestEndStandingRoleChangesAdminsAndUnclaimedRooms(t *testing.T) {
 		t.Fatal("machine rooms know no ranks")
 	}
 
-	// Unbeanspruchtes Projekt: wie ein Raum ohne Rollen.
+	// Unbeanspruchtes Projekt: wie ein Raum ohne Rollen. Offen ist er nur, wer
+	// dort selbst gearbeitet hat (Prüfpunkt 4); ben hat einen Eintrag darunter.
+	if _, err := e.st.db.Exec(`INSERT INTO knowledge(type, title, body, project, person, created_at, updated_at)
+		SELECT 'note','t','b','github.com/dw/unclaimed', name, ?, ? FROM persons WHERE id=3`, now(), now()); err != nil {
+		t.Fatal(err)
+	}
 	open := RoomKeyForProject("github.com/dw/unclaimed")
 	registerRoleAgent(t, e.st, "u-one", "person:1", open, "lead")
 	registerRoleAgent(t, e.st, "u-two", "person:3", open, "member")

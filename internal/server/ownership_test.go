@@ -35,6 +35,7 @@ func newOwnershipFixture(t *testing.T) ownershipFixture {
 	if f.annaBound, _, err = st.CreateToken("anna", store.TokenSpec{Label: "box", Machine: "annabox"}); err != nil {
 		t.Fatal(err)
 	}
+	shareRemoteInTeam(t, st, "github.com/x/y", "person:2")
 	f.srv = httptest.NewServer(New(st))
 	t.Cleanup(f.srv.Close)
 	return f

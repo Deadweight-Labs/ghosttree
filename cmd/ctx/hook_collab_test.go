@@ -54,7 +54,7 @@ func newCollabEnv(t *testing.T) *collabEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.EnsureProject("person:1", project); err != nil {
+	if _, err := claimInOrg(st, "person:1", project); err != nil {
 		t.Fatal(err)
 	}
 	code, _, err := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)

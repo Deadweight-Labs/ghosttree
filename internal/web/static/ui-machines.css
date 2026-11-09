@@ -30,3 +30,7 @@
   :is(.g2.mh) .merow { grid-template-columns: 16px minmax(0, 1fr); }
   :is(.g2.mh) .merow .rt { grid-column: 2; justify-content: flex-start; max-width: none; margin-top: 4px; }
 }
+
+/* The two parts of an organization's machines tab (REQ-623). */
+:is(.g2.mh) .mh-sec { font-size: 16px; font-weight: 600; margin: 24px 0 8px; }
+:is(.g2.mh) .mh-sec:first-child { margin-top: 0; }

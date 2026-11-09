@@ -696,7 +696,12 @@ func TestForeignFeatureFromAnUnclaimedProjectIsNotDelivered(t *testing.T) {
 	if err := w.st.db.QueryRow(`SELECT id FROM features WHERE project=? AND name='Fremdtext'`, remote).Scan(&foreign.ID); err != nil {
 		t.Fatalf("the stranger's feature was not stored: %v", err)
 	}
-	if _, err := w.st.ClaimProject("person:1", remote, "alpha"); err != nil {
+	// A stranger's entry lies under the remote: the claim is contested, and the
+	// instance admin decides it.
+	if _, err := w.st.ClaimProject("person:1", remote, "alpha"); !errors.Is(err, ErrContested) {
+		t.Fatalf("claim over a stranger's entry: %v", err)
+	}
+	if _, err := w.st.ClaimContested("person:1", remote, "alpha"); err != nil {
 		t.Fatal(err)
 	}
 	robin := func() *ProjectAccess { return w.st.Access(Principal{ID: "person:1", Label: "robin"}) }
@@ -798,7 +803,12 @@ func TestALaterVersionByAMemberDoesNotLaunderTheStrangersText(t *testing.T) {
 	if err := w.st.db.QueryRow(`SELECT id FROM features WHERE project=? AND name='Fremdtext'`, remote).Scan(&id); err != nil {
 		t.Fatalf("the stranger's feature was not stored: %v", err)
 	}
-	if _, err := w.st.ClaimProject("person:1", remote, "alpha"); err != nil {
+	// A stranger's entry lies under the remote: the claim is contested, and the
+	// instance admin decides it.
+	if _, err := w.st.ClaimProject("person:1", remote, "alpha"); !errors.Is(err, ErrContested) {
+		t.Fatalf("claim over a stranger's entry: %v", err)
+	}
+	if _, err := w.st.ClaimContested("person:1", remote, "alpha"); err != nil {
 		t.Fatal(err)
 	}
 	robin := func() *ProjectAccess { return w.st.Access(Principal{ID: "person:1", Label: "robin"}) }

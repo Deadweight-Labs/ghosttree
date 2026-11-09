@@ -20,6 +20,7 @@ type fileID struct{ dev, ino uint64 }
 func scanDatabaseHolders(dbPath string) HolderScan {
 	res := HolderScan{Supported: true}
 	var targets []fileID
+	owner := -1
 	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
 		info, err := os.Stat(p)
 		if err != nil {
@@ -27,6 +28,9 @@ func scanDatabaseHolders(dbPath string) HolderScan {
 		}
 		if st, ok := info.Sys().(*syscall.Stat_t); ok {
 			targets = append(targets, fileID{uint64(st.Dev), uint64(st.Ino)})
+			if owner < 0 {
+				owner = int(st.Uid)
+			}
 		}
 	}
 	procs, err := os.ReadDir("/proc")
@@ -44,6 +48,12 @@ func scanDatabaseHolders(dbPath string) HolderScan {
 		if err != nil {
 			if errors.Is(err, fs.ErrPermission) {
 				res.Unreadable++
+				// A process of one's own user that hides its files is not
+				// dumpable (ssh-agent and the like); a server of the database's
+				// owner is suspect only when that owner is somebody else.
+				if (owner != os.Getuid() && processUID(p.Name()) == owner) || mayBeServer(processCommand(p.Name())) {
+					res.Suspect++
+				}
 			}
 			continue
 		}
@@ -64,6 +74,24 @@ func scanDatabaseHolders(dbPath string) HolderScan {
 		}
 	}
 	return res
+}
+
+// processUID is the real user of a process, -1 when unknown.
+func processUID(pid string) int {
+	b, err := os.ReadFile("/proc/" + pid + "/status")
+	if err != nil {
+		return -1
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if rest, ok := strings.CutPrefix(line, "Uid:"); ok {
+			if f := strings.Fields(rest); len(f) > 0 {
+				if uid, err := strconv.Atoi(f[0]); err == nil {
+					return uid
+				}
+			}
+		}
+	}
+	return -1
 }
 
 func containsFileID(ids []fileID, id fileID) bool {

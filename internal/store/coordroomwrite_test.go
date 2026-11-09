@@ -112,7 +112,7 @@ func mentionFixture(t *testing.T) (*Store, string) {
 	st, room := roleRoomFixture(t)
 	st.SetAccessMode(AccessMode{Enforce: true})
 	registerRoleAgent(t, st, "a-lena", "person:2", room, "lead")
-	if _, err := st.EnsureProject("person:1", otherRoleProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", otherRoleProject); err != nil {
 		t.Fatal(err)
 	}
 	registerRoleAgent(t, st, "a-far", "person:2", RoomKeyForProject(otherRoleProject), "lead")

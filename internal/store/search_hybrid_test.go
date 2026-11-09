@@ -200,7 +200,7 @@ func hiddenWorld(t *testing.T, hidden int) (*Store, *embed.Client) {
 	t.Helper()
 	st := accessFixture(t)
 	st.SetAccessMode(AccessMode{Enforce: true})
-	if _, err := st.EnsureProject("person:1", otherProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", otherProject); err != nil {
 		t.Fatal(err)
 	}
 	_, c := newFakeEmbedder(t)

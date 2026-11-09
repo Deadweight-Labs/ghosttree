@@ -291,6 +291,13 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 			  AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END) != ?))`)
 		args = append(args, filter.HeldInstanceOwner, filter.HeldViewer)
 	}
+	if filter.HideHeldEntries {
+		// A viewer without an account (0) is nobody's author, not the author
+		// of entries nobody could be told apart for (author 0).
+		where = append(where, `NOT EXISTS (SELECT 1 FROM held_entries he WHERE he.kind='request' AND he.entry_id=r.id
+			AND he.state<>'released' AND (?=0 OR he.author_id<>?))`)
+		args = append(args, filter.HeldViewer, filter.HeldViewer)
+	}
 	return where, args
 }
 

@@ -147,7 +147,8 @@ func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
 	}
 	if orgs, err := a.store.ListOrgs(browserPrincipal(r).ID); err == nil {
 		for _, o := range orgs {
-			if o.Role == store.OrgOwner && (m.Repo == "" || o.Default) {
+			// Every member creates projects in the organization (17 A, #4376).
+			if !o.Guest && !o.IsUser() && m.Repo == "" {
 				m.Repo = "/ui/orgs?org=" + url.QueryEscape(o.Slug) + "#projects"
 			}
 		}
@@ -338,8 +339,19 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 // orgSwitchFor lists the organizations of the viewer for the header. Each entry
 // leads to the organization's page.
 func (a *app) orgSwitchFor(r *http.Request) *orgSwitch {
-	orgs, err := a.store.ListOrgs(browserPrincipal(r).ID)
-	if err != nil || len(orgs) == 0 {
+	all, err := a.store.ListOrgs(browserPrincipal(r).ID)
+	if err != nil {
+		return nil
+	}
+	// A guest's organizations are not in the menu: guests see their project
+	// only (14 A, #4376).
+	var orgs []store.Org
+	for _, o := range all {
+		if !o.Guest {
+			orgs = append(orgs, o)
+		}
+	}
+	if len(orgs) == 0 {
 		return nil
 	}
 	current := 0

@@ -48,6 +48,10 @@ func acquireWatchLock(path string) (release func(), err error) {
 }
 
 func cmdWatch(args []string, stdout io.Writer) int {
+	if hooksOff() {
+		fmt.Fprintln(stdout, "ghosttree is switched off here ("+envHooks+"=off): not collecting")
+		return 0
+	}
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	interval := fs.Duration("interval", 30*time.Second, "full sweep interval")

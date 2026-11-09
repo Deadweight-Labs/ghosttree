@@ -154,7 +154,7 @@ func TestIdeaRights(t *testing.T) {
 	}
 	// Eine Idee eines fremden Projekts sieht der Gast nicht.
 	other := "github.com/acme/other"
-	if _, err := w.st.EnsureProject("person:1", other); err != nil {
+	if _, err := claimInOrg(w.st, "person:1", other); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.pa["robin"].CreateIdea(CreateIdeaInput{Project: other, Title: "Geheim", Actor: ideaActor("robin")}); err != nil {

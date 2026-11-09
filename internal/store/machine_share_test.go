@@ -792,3 +792,39 @@ func TestMachineBoundTokenSharesOnlyEntriesOfItsOwnMachine(t *testing.T) {
 		t.Fatalf("unbound owner: %v", err)
 	}
 }
+
+// Security review 7: a service that is a member of the organization reads no
+// shared machine through it, and a shared project does not list it as an
+// inherited member.
+func TestServicesGetNothingThroughMachineSharesOrSharedProjects(t *testing.T) {
+	f := newShareFixture(t)
+	st := f.st
+	shared := f.entry(t, "shared", 1, "robin", "build-1")
+	f.share(t, "build-1", ShareRead)
+	if err := st.ShareEntry(webRobin, EntryKnowledge, shared, "dw"); err != nil {
+		t.Fatal(err)
+	}
+	mia := Principal{ID: "person:3", Label: "mia"}
+	if !f.sees(t, mia, shared) {
+		t.Fatal("a member does not see the shared entry")
+	}
+	if err := st.SetAccountKindAsOperator(3, AccountKindService, 0); err != nil {
+		t.Fatal(err)
+	}
+	if f.sees(t, mia, shared) {
+		t.Error("a service reads a shared machine through its organization")
+	}
+	if _, err := st.ClaimProject("person:1", "github.com/dw/app", "dw"); err != nil {
+		t.Fatal(err)
+	}
+	mustShare(t, st, "person:1", "github.com/dw/app", true)
+	members, err := st.ListProjectMembers("github.com/dw/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range members {
+		if m.AccountID == "person:3" {
+			t.Errorf("the service is listed as %+v", m)
+		}
+	}
+}

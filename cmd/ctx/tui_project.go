@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"net"
 	"net/http"
 	"net/url"
@@ -219,10 +220,40 @@ func (b cliBackend) ClaimPlan(ctx context.Context) (tui.ClaimPlan, error) {
 	if err != nil {
 		return tui.ClaimPlan{}, classifyErr(err)
 	}
+	// Owners as on GitHub (REQ-623): the connected organization whose address
+	// is the owner of the remote comes first, else the person's own namespace;
+	// the other organizations the person is a member of stay a choice.
 	plan := tui.ClaimPlan{Remote: links.Clean(remote, 200)}
-	for _, o := range orgs {
-		plan.Orgs = append(plan.Orgs, tui.OrgChoice{Slug: links.Clean(o.Slug, 40), Name: links.Clean(o.Name, 60), Role: links.Clean(o.Role, 20), Default: o.Default})
+	norm := scope.NormalizeRemote(remote)
+	ghOwner := ""
+	if rest, ok := strings.CutPrefix(norm, "github.com/"); ok {
+		ghOwner, _, _ = strings.Cut(rest, "/")
 	}
+	own := tui.OrgChoice{Own: true}
+	var match *tui.OrgChoice
+	var others []tui.OrgChoice
+	for _, o := range orgs {
+		c := tui.OrgChoice{Slug: links.Clean(o.Slug, 40), Name: links.Clean(o.Name, 60), Role: links.Clean(o.Role, 20)}
+		switch {
+		case o.Kind == store.OrgKindUser:
+			own.Slug = c.Slug
+		case o.Guest:
+		case ghOwner != "" && strings.EqualFold(o.Slug, ghOwner):
+			c.Default = true
+			match = &c
+		case !o.Guest:
+			// Every member creates projects in the organization (17 A, #4376);
+			// a guest sees only its project and is not offered the organization.
+			others = append(others, c)
+		}
+	}
+	if match != nil {
+		plan.Orgs = append(plan.Orgs, *match)
+	} else {
+		own.Default = true
+	}
+	plan.Orgs = append(plan.Orgs, own)
+	plan.Orgs = append(plan.Orgs, others...)
 	return plan, nil
 }
 
@@ -236,7 +267,7 @@ func (b cliBackend) Claim(ctx context.Context, remote, org string) (tui.ProjectI
 		var ae *client.APIError
 		if errors.As(err, &ae) {
 			switch ae.Code {
-			case "not_org_owner", "not_org_member", "project_claimed", "org_not_found":
+			case "not_org_owner", "not_org_member", "project_claimed", "org_not_found", "invalid_remote", "service_account", "contested", "guest_only":
 				return tui.ProjectInfo{}, &tui.ClaimError{Code: ae.Code}
 			}
 		}

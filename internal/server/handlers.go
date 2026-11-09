@@ -33,8 +33,15 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Scope = scope.CanonicalAxes(s.Scope)
-	if !a.gateMachine(w, r, s.Scope.Machine, true) || !a.gateProject(w, r, s.Scope.Project) {
+	if !a.gateMachine(w, r, s.Scope.Machine, true) {
 		return
+	}
+	var placed bool
+	if s.Scope.Project, placed = a.sessionProject(w, r, s.Scope.Project); !placed {
+		return
+	}
+	if s.Scope.Project == "" {
+		s.Scope.Branch, s.Scope.Lineage = "", nil
 	}
 	// Besitz kommt aus dem Token, nie aus dem Rumpf.
 	acct, ok := accountOf(principalOf(r))

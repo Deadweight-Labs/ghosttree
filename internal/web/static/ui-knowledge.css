@@ -124,3 +124,4 @@
     & .cl { grid-template-columns: 32px 12px minmax(0, 1fr); }
   }
 }
+.heldtext{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;font:inherit}

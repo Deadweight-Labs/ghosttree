@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/forge"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // pickToken is the pick= value of a redirect, without the section anchor.
@@ -109,40 +110,54 @@ func TestSomeoneWithoutAnOrganizationCanStillCreateOne(t *testing.T) {
 	}
 }
 
-func TestTheGardenerAccountIsMarkedAsAServiceInThePeopleList(t *testing.T) {
+// Robin's decision E6: the gardener is a built-in feature with its own tab,
+// not a member and not one of the services; its account stays a service. A
+// background account set up for the organization is marked as a service.
+func TestTheGardenerIsNoMemberAndServicesAreMarked(t *testing.T) {
 	base, st, alice, _, org := orgWeb(t)
-	if _, err := st.AddPerson("gardener"); err != nil {
-		t.Fatal(err)
+	for _, n := range []string{"gardener", "ops-runner"} {
+		if _, err := st.AddPerson(n); err != nil {
+			t.Fatal(err)
+		}
 	}
-	code, _, _ := st.CreateInvitation("person:1", org.ID, "", "member", 0)
-	if _, err := st.AcceptInvitation("person:3", code); err != nil {
-		t.Fatal(err)
-	}
-	rows := func() []string {
-		page := getOrgs(t, alice, base, "?org=alpha")
-		return strings.Split(page, `<div class="row mrow">`)
-	}
-	service := func(row string) bool { return strings.Contains(row, `<span class="lb neu">Service</span>`) }
-	for _, row := range rows() {
-		if service(row) {
-			t.Fatalf("nobody is a service before the gardener is set: %s", row)
+	for _, who := range []string{"person:3", "person:4"} {
+		code, _, _ := st.CreateInvitation("person:1", org.ID, "", "member", 0)
+		if _, err := st.AcceptInvitation(who, code); err != nil {
+			t.Fatal(err)
 		}
 	}
 	if err := st.SetGardenerAccount(3); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.SetAccountKindAsOperator(4, store.AccountKindService, org.ID); err != nil {
+		t.Fatal(err)
+	}
+	page := getOrgs(t, alice, base, "?org=alpha")
+	if strings.Contains(page, "<b>gardener</b>") {
+		t.Fatal("the gardener is listed as a member")
+	}
 	marked := 0
-	for _, row := range rows() {
-		if service(row) {
+	for _, row := range strings.Split(page, `<div class="row mrow">`) {
+		if strings.Contains(row, `<span class="lb neu">Service</span>`) {
 			marked++
-			if !strings.Contains(row, "<b>gardener</b>") {
+			if !strings.Contains(row, "<b>ops-runner</b>") {
 				t.Fatalf("the wrong row is marked: %s", row)
 			}
-		} else if strings.Contains(row, "<b>gardener</b>") {
-			t.Fatalf("the gardener row is not marked: %s", row)
 		}
 	}
 	if marked != 1 {
-		t.Fatalf("exactly the gardener is marked, got %d", marked)
+		t.Fatalf("services marked: %d", marked)
+	}
+	services, err := st.OrgServices("person:1", org.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sv := range services {
+		if sv.Name == "gardener" {
+			t.Fatal("the gardener is listed among the services")
+		}
+	}
+	if len(services) != 1 || services[0].Name != "ops-runner" {
+		t.Fatalf("services = %+v", services)
 	}
 }

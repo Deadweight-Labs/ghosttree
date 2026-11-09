@@ -254,6 +254,9 @@ type SearchFilter struct {
 	HideHeld          bool
 	HeldViewer        int64
 	HeldInstanceOwner int64
+	// HideHeldEntries leaves out requests held back since their project came
+	// into existence (held_entries), except the viewer's own (HeldViewer).
+	HideHeldEntries bool
 }
 
 type SearchHit struct {
