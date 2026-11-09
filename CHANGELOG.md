@@ -12,6 +12,11 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Before you upgrade
 
+- Some refusals now hold even without `GHOSTTREE_ENFORCE_ACCESS`: a guest
+  writes nothing the role matrix does not give them (no knowledge edits, no
+  runbooks, no tasks), and approving knowledge needs the review right (owner,
+  lead or `can_review`). Reading stays open in log mode as before. A guest no
+  longer marks tasks done, not even one assigned to them.
 - `ctx person add` is deprecated; use `ctx account add`. Existing person tokens
   keep working and are migrated on startup.
 - Per-project roles and visibility are only enforced with
@@ -351,6 +356,9 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- The knowledge, review and context pages of a repository showed guests and
+  members without admin rights all projects instead of that repository
+  (including machine entries of other people in log mode).
 - Pains, ideas, tasks and comments written through MCP now carry their
   session: the server takes the session the client names in its header when the
   body has no numeric id. Before, a pain never had a session.
