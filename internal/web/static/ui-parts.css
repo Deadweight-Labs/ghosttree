@@ -70,20 +70,25 @@
 
   /* ---- List row: state icon once, #nr muted, title; line two kind, short time, person;
           fixed columns on the right, the waiting ones left of the progress ---- */
-  & .irow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 0 8px; padding: 8px 16px; align-items: start; cursor: pointer; }
+  & .irow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 0 8px; padding: 8px 16px; align-items: start; }
   & .irow:hover, & .irow:focus-within { background: var(--row-hover); }
-  & .irow:has(a.title:focus-visible) { box-shadow: inset 3px 0 0 var(--tab-accent); }
-  & .irow > .st { margin-top: 3px; display: inline-flex; }
+  /* the icon sits in a box as high as the first title line, so its middle is the line's middle */
+  & .irow > .st { display: inline-flex; align-items: center; height: 24px; }
   & .irow > div:nth-child(2) { min-width: 0; }
   & .st.open { color: var(--success-fg); }
   & .st.closed, & .st.merged, & .st.taken { color: var(--done-fg); }
   & .st.pain { color: var(--danger-fg); }
   & .st.idea { color: var(--attention-fg); }
   & .st.drop, & .st.gray { color: var(--fg-subtle); }
-  & .irow .ti { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; line-height: 24px; }
+  /* number, title and labels run as text: a long title wraps under its number, and the labels follow the last word */
+  & .irow .ti { line-height: 24px; }
   & .irow .ti a.title { font-size: 16px; font-weight: 600; color: var(--fg-default); overflow-wrap: anywhere; }
   & .irow .ti a.title:hover { color: var(--accent-fg); }
-  & .irow .ti .rn { margin-right: 2px; }
+  & .irow .ti .rn { margin-right: 6px; color: var(--fg-muted); }
+  & .irow .ti .lb { margin-left: 6px; vertical-align: 2px; }
+  & .irow .xt { margin-top: 2px; font-size: 14px; line-height: 20px; color: var(--fg-muted); overflow-wrap: anywhere; }
+  & .irow .xt + .meta { margin-top: 4px; }
+  & .irow .rt-live:empty { display: none; }
   & .irow .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 0 10px; margin-top: 2px; font-size: 12px; line-height: 20px; color: var(--fg-muted); }
   & .irow .meta a { color: var(--fg-muted); }
   & .irow .meta a:hover { color: var(--accent-fg); }

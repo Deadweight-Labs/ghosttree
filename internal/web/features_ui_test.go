@@ -53,7 +53,7 @@ func TestFeatureTabListsTheFeaturesWithTheirStateIdeasAndPullRequests(t *testing
 		t.Fatalf("feature list = %d", code)
 	}
 	for _, want := range []string{`href="/ui/x/shell/features"`, "Inbox", "One place for everything that waits for you.", "Version 2", `href="/ui/x/shell/features/` + strconv.FormatInt(f.ID, 10) + `"`,
-		`href="/ui/x/shell/ideas/` + strconv.FormatInt(i.ID, 10) + `"`, "#12", `class="lb p-ok"`, "Active", "Retired", `class="rband`} {
+		`href="/ui/x/shell/ideas/` + strconv.FormatInt(i.ID, 10) + `"`, "#12", "Active", "Retired", `class="rband`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("feature list lacks %q", want)
 		}

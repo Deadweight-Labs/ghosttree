@@ -1,0 +1,18 @@
+/* Rows of lists. The whole row opens its object: the link of the title (class rl)
+   stretches over the row with ::after, so a click on the row, a middle click and
+   the keyboard behave as on the link itself, and no script is needed. What has its own
+   target (labels, pills, branch, buttons) lies above and keeps it. */
+
+:is(.g2) {
+  & :is(.row, .hit):has(.rl) { position: relative; cursor: pointer; }
+  & :is(.row, .hit) .rl::after { content: ""; position: absolute; inset: 0; }
+  & :is(.row, .hit):has(.rl) :is(a, button, summary, label, input, select, textarea, [data-ref], [data-pc]):not(.rl) { position: relative; z-index: 1; }
+  & :is(.row, .hit):hover .rl { color: var(--accent-fg); text-decoration: none; }
+  /* one sign of focus per row: the bar and the tint, not an outline around the title as well */
+  & :is(.row, .hit) .rl:focus-visible { outline: none; }
+  & :is(.row, .hit):has(.rl:focus-visible) { background: var(--row-hover); box-shadow: inset 3px 0 0 var(--tab-accent); }
+  & .hit:hover { background: var(--row-hover); }
+
+  /* a list narrowed to nothing: one line with the way back */
+  & .box-empty[hidden] { display: none; }
+}

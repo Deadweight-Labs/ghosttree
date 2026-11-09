@@ -10,10 +10,11 @@
   & .arow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; padding: 12px 16px; }
   & .arow.is-asking { box-shadow: inset 3px 0 0 var(--danger-fg); }
   & .ahead { display: flex; gap: 12px; min-width: 0; }
-  & .ahead .gav.lg { width: 28px; height: 28px; border-radius: 6px; margin-top: 2px; }
+  & .ahead .gav.lg { width: 28px; height: 28px; border-radius: 6px; }
   & .ahead .gav.lg .i { width: 16px; height: 16px; }
   & .ainfo { min-width: 0; }
-  & .at { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; line-height: 24px; }
+  /* the first line is as high as the logo (28 px): logo, name and state have one middle */
+  & .at { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-height: 28px; line-height: 24px; }
   & .at .title { font-size: 14px; font-weight: 600; color: var(--fg-default); }
   & .at .title:hover { color: var(--accent-fg); }
   & .at .mono { font-size: 12px; }
@@ -41,7 +42,7 @@
   & details.asec[open] > summary .chv { transform: none; }
   & details.asec:not([open]) > summary.box-h { border-bottom: 0; }
   & .aseen { display: inline-flex; margin: 0; }
-  & .astate { display: flex; align-items: center; gap: 12px; align-self: start; padding-top: 2px; font-size: 12px; white-space: nowrap; }
+  & .astate { display: flex; align-items: center; gap: 12px; align-self: start; min-height: 28px; font-size: 12px; white-space: nowrap; }
   & .ast { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
   & .ast.st-work { color: var(--success-fg); }
   & .ast.st-wait_you, & .ast.st-stuck { color: var(--danger-fg); }

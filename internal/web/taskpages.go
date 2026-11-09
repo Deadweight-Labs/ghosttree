@@ -149,9 +149,13 @@ func (a *app) myIssuesPage(w http.ResponseWriter, r *http.Request) {
 func taskRowOf(l lang, t humantask.Task, now time.Time, withRepo bool) uiRow {
 	row := uiRow{Icon: "tasks", Tone: taskRowTone[t.State], StateLabel: label(l, taskPageStates, t.State), Num: "#" + strconv.FormatInt(t.ID, 10),
 		Title: t.Title, Href: taskHrefOf(t), Kind: label(l, taskKindKeys, t.Kind), Person: firstNonEmpty(t.Assignee, t.CreatedBy),
-		Pill: label(l, taskPageStates, t.State), PillTone: taskPageTone[t.State], Excerpt: ellipsize(oneLineText(firstNonEmpty(t.Location, t.Description)), 160)}
+		Excerpt: ellipsize(oneLineText(firstNonEmpty(t.Location, t.Description)), 160)}
 	if at := parseTime(t.CreatedAt); !at.IsZero() {
 		row.Age, row.AgeTitle = shortAge(l, now, at), l.dateTime(at.Local())
+	}
+	// The open list says "open" in its tab; only a state that differs from it gets a pill.
+	if t.State != humantask.Open {
+		row.Pill, row.PillTone = label(l, taskPageStates, t.State), taskPageTone[t.State]
 	}
 	if t.State == humantask.Open && t.Assignee != "" {
 		row.Waiting = []string{store.NormalizeAccountName(t.Assignee)}

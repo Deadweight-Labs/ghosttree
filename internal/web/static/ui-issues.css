@@ -36,7 +36,6 @@
   & .box-h.lh { min-height: 45px; box-sizing: border-box; }
 
   /* what an idea or a pain adds to a list row: an extra line and a state word */
-  & .irow .xt { margin-top: 2px; font-size: 14px; line-height: 20px; color: var(--fg-default); overflow-wrap: anywhere; }
   & .irow .xt .xtl { color: var(--attention-fg); font-weight: 600; }
   & .irow .rt .lb.p-ok { color: #fff; background: var(--success-emphasis); }
   & .irow .rt .lb.p-warn { color: #fff; background: var(--attention-emphasis); }

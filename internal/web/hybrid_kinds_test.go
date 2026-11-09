@@ -75,7 +75,7 @@ func TestRequestPagesFindByMeaningNeverReachAHiddenProjectAndPage(t *testing.T) 
 	// The request page shows at most five requests found by meaning alone, and its
 	// "older" link, which carries a position, is followed.
 	_, page := fetchPage(t, e.Member, e.Base+list)
-	if got := strings.Count(page, `class="title" href="/ui/x/shell/issues/`); got == 0 || got > maxSemanticRows {
+	if got := strings.Count(page, `class="title rl" href="/ui/x/shell/issues/`); got == 0 || got > maxSemanticRows {
 		t.Fatalf("%d requests on a page of a search that found them by meaning alone", got)
 	}
 

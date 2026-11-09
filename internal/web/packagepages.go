@@ -146,7 +146,7 @@ func packageName(l lang, p requestdomain.Package) string {
 
 func packageRowOf(l lang, pa *store.ProjectAccess, view *repoView, p requestdomain.PackageSummary) uiRow {
 	row := uiRow{Icon: "list", Tone: packageRowTone[p.State], StateLabel: label(l, packageStateKeys, p.State), Num: "#" + strconv.FormatInt(p.ID, 10), Title: packageName(l, p.Package),
-		Href: view.Href + "/packages/" + strconv.FormatInt(p.ID, 10), Pill: label(l, packageStateKeys, p.State), PillTone: packageTone[p.State],
+		Href:    view.Href + "/packages/" + strconv.FormatInt(p.ID, 10),
 		Excerpt: l.msg("packages.row", p.Requests, p.OpenCriteria)}
 	if at := parseTime(p.UpdatedAt); !at.IsZero() {
 		now := overviewNow().UTC()

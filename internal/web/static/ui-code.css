@@ -61,6 +61,8 @@
   & .ct-head .ct-mkc { cursor: help; }
   & .ct-fi { display: inline-flex; color: var(--fg-muted); }
   & .ct-fi.is-dir { color: var(--accent-fg); }
+  /* a long name is cut with an ellipsis (the link carries it in its title) and never reaches into the next column */
+  & .ct-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   & .ct-nm a { color: var(--fg-default); }
   & .ct-nm a:hover { color: var(--accent-fg); }
   & .ct-gh { color: var(--fg-muted); }
@@ -113,7 +115,9 @@
   & .ct-sec:first-child { margin-top: 0; }
   & .ct-sec h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0; }
   & .ct-sub { color: var(--fg-muted); font-size: 12px; }
-  & .ct-rev { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto auto; gap: 12px; align-items: center; padding: 8px 16px; }
+  /* fixed columns: the commit, the time and the diff button stand in one place whether a row has them or not */
+  & .ct-rev { display: grid; grid-template-columns: 20px minmax(0, 1fr) 72px 80px 72px; gap: 12px; align-items: center; padding: 8px 16px; }
+  & .ct-rev > :nth-child(3), & .ct-rev > :nth-child(4) { justify-self: end; }
   & .ct-rev + .ct-rev, & .ct-know + .ct-know, & .ct-work + .ct-work { border-top: 1px solid var(--border-muted); }
   & .ct-rm { min-width: 0; font-size: 14px; }
   & .ct-quiet { border-color: transparent; background: transparent; box-shadow: none; color: var(--fg-muted); }

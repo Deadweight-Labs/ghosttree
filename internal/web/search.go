@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"fmt"
+	"html"
+	"html/template"
 	"net/http"
 	"net/url"
 	"runtime/debug"
@@ -38,6 +40,12 @@ type searchHit struct {
 	Date, Stamp, Area string
 	// Snip is the line of a document the words were found in.
 	Snip string
+	// RefKind and RefN make the number pill before the title ("#12"); Project is
+	// the short name of the repository, shown only when the hits of a group come
+	// from more than one. Marked is the title with the searched words marked.
+	RefKind, Project, Lead string
+	RefN                   int64
+	Marked, SnipHTML       template.HTML
 }
 
 // searchGroup is the hits of one kind. All is the link to the full list, empty
@@ -48,6 +56,8 @@ type searchGroup struct {
 	All              string
 	// Mark is the icon of the kind, Href the link that narrows the page to it.
 	Mark, Href string
+	// MultiProject: the hits come from more than one repository.
+	MultiProject bool
 	// Shown is how many hits the group shows ("5+" when more lie behind them).
 	Shown string
 	// On: the page is narrowed to this group.
@@ -286,6 +296,12 @@ func (a *app) searchKind(ctx context.Context, r *http.Request, p *searchPlan, ke
 }
 
 func (a *app) searchOne(ctx context.Context, l lang, st *store.Store, pa *store.ProjectAccess, sl searchLine, line string, now time.Time, key string) searchGroup {
+	g := a.searchOneKind(ctx, l, st, pa, sl, line, now, key)
+	markHits(&g, sl.text)
+	return g
+}
+
+func (a *app) searchOneKind(ctx context.Context, l lang, st *store.Store, pa *store.ProjectAccess, sl searchLine, line string, now time.Time, key string) searchGroup {
 	switch key {
 	case "requests":
 		return a.searchRequests(l, st, pa, sl, line, now)
@@ -384,12 +400,9 @@ func (a *app) searchRequests(l lang, st *store.Store, pa *store.ProjectAccess, s
 			break
 		}
 		h := pa.RequestHitView(raw)
-		sub := requestStateLabel(l, h.Request.State)
-		if p := lastSegment(h.Request.Scope.Project); p != "" {
-			sub = p + " · " + sub
-		}
 		o := originOf(l, now, h.Request.CreatedAt, facts[raw.Request.ID])
-		g.Hits = append(g.Hits, searchHit{Title: h.Request.Title, Sub: sub, Href: requestURL(h.Request.ID), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
+		g.Hits = append(g.Hits, searchHit{Title: h.Request.Title, Sub: requestStateLabel(l, h.Request.State), Project: lastSegment(h.Request.Scope.Project), RefKind: "request", RefN: h.Request.ID,
+			Href: requestURL(h.Request.ID), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
 	}
 	return g
 }
@@ -429,7 +442,7 @@ func (a *app) searchIdeas(l lang, st *store.Store, pa *store.ProjectAccess, sl s
 			break
 		}
 		o := originOf(l, now, f.idea.CreatedAt, f.of)
-		g.Hits = append(g.Hits, searchHit{Title: f.idea.Title, Sub: lastSegment(f.idea.Project) + " · " + label(l, ideaStateKeys, f.idea.State),
+		g.Hits = append(g.Hits, searchHit{Title: f.idea.Title, Sub: label(l, ideaStateKeys, f.idea.State), Project: lastSegment(f.idea.Project), RefKind: "idea", RefN: f.idea.ID,
 			Href: repoHref(f.idea.Project) + "/ideas/" + strconv.FormatInt(f.idea.ID, 10), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
 	}
 	return g
@@ -468,12 +481,8 @@ func (a *app) searchKnowledge(l lang, st *store.Store, pa *store.ProjectAccess, 
 			break
 		}
 		row := a.knowledgeRowFor(l, pa, k, true)
-		sub := row.TypeLabel
-		if row.Project != "" {
-			sub = row.Project + " · " + sub
-		}
 		o := originOf(l, now, k.CreatedAt, facts[k.ID])
-		g.Hits = append(g.Hits, searchHit{Title: row.Title, Sub: sub, Href: row.Href, Date: o.Date, Stamp: o.Stamp, Area: o.Area})
+		g.Hits = append(g.Hits, searchHit{Title: row.Title, Sub: row.TypeLabel, Project: row.Project, RefKind: "knowledge", RefN: k.ID, Href: row.Href, Date: o.Date, Stamp: o.Stamp, Area: o.Area})
 	}
 	return g
 }
@@ -564,12 +573,12 @@ func (a *app) searchTasks(l lang, st *store.Store, pa *store.ProjectAccess, sl s
 				g.All = "/ui/inbox?f=aufgaben&done=1"
 				return g
 			}
-			sub := lastSegment(t.Project)
+			sub := ""
 			if t.State != humantask.Open {
-				sub += " · " + label(l, taskStateKeys, t.State)
+				sub = label(l, taskStateKeys, t.State)
 			}
 			o := originOf(l, now, t.CreatedAt, of)
-			g.Hits = append(g.Hits, searchHit{Title: t.Title, Sub: sub, Href: taskHref(t), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
+			g.Hits = append(g.Hits, searchHit{Title: t.Title, Sub: sub, Project: lastSegment(t.Project), RefKind: "task", RefN: t.ID, Href: taskHref(t), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
 		}
 	}
 	return g
@@ -603,7 +612,7 @@ func (a *app) searchPains(l lang, st *store.Store, pa *store.ProjectAccess, sl s
 			break
 		}
 		o := originOf(l, now, row.CreatedAt, facts[row.ID])
-		g.Hits = append(g.Hits, searchHit{Title: row.Title, Sub: lastSegment(row.Project) + " · " + label(l, painStateKeys, row.State), Href: painURL(row.ID), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
+		g.Hits = append(g.Hits, searchHit{Title: row.Title, Sub: label(l, painStateKeys, row.State), Project: lastSegment(row.Project), RefKind: "pain", RefN: row.ID, Href: painURL(row.ID), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
 	}
 	return g
 }
@@ -620,4 +629,79 @@ func searchKindWords(l lang, kinds []string) string {
 		words = append(words, k)
 	}
 	return strings.Join(words, ", ")
+}
+
+// markHits writes the title and the snippet of each hit with the searched words
+// marked, and says whether the hits come from more than one repository.
+func markHits(g *searchGroup, text string) {
+	var words []string
+	for _, w := range strings.Fields(text) {
+		if utf8.RuneCountInString(w) >= 2 {
+			words = append(words, w)
+		}
+	}
+	for i := range g.Hits {
+		h := &g.Hits[i]
+		h.Marked = markWords(h.Title, words)
+		if h.Snip != "" {
+			h.SnipHTML = markWords(h.Snip, words)
+		}
+		if h.Project != g.Hits[0].Project {
+			g.MultiProject = true
+		}
+	}
+	for i := range g.Hits {
+		h := &g.Hits[i]
+		h.Lead = h.Sub
+		if g.MultiProject && h.Project != "" {
+			h.Lead = h.Project
+			if h.Sub != "" {
+				h.Lead += " · " + h.Sub
+			}
+		}
+	}
+}
+
+// markWords is a text with every occurrence of the words (any case) in <mark>;
+// the text itself is escaped.
+func markWords(text string, words []string) template.HTML {
+	if len(words) == 0 {
+		return template.HTML(html.EscapeString(text))
+	}
+	low := strings.ToLower(text)
+	if len(low) != len(text) { // a case fold that changes the length: skip the marks, keep the text
+		return template.HTML(html.EscapeString(text))
+	}
+	mark := make([]bool, len(text))
+	for _, w := range words {
+		w = strings.ToLower(w)
+		for from := 0; ; {
+			i := strings.Index(low[from:], w)
+			if i < 0 {
+				break
+			}
+			for j := from + i; j < from+i+len(w); j++ {
+				mark[j] = true
+			}
+			from += i + len(w)
+		}
+	}
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		j := i
+		for j < len(text) && mark[j] == mark[i] {
+			j++
+		}
+		// do not cut a multi-byte rune: extend j to a rune boundary
+		for j < len(text) && !utf8.RuneStart(text[j]) {
+			j++
+		}
+		seg := html.EscapeString(text[i:j])
+		if mark[i] {
+			seg = "<mark>" + seg + "</mark>"
+		}
+		b.WriteString(seg)
+		i = j
+	}
+	return template.HTML(b.String())
 }

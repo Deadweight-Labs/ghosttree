@@ -12,6 +12,8 @@
   & .nrow .t .lnk { color: var(--fg-default); }
   & .nrow .inreply:has(.dd.open, details[open]) { z-index: 60; }
   & .nrow .top2 a, & .nrow .ref, & .nrow .acts, & .nrow .inreply, & .nrow .rquote { position: relative; z-index: 1; }
+  /* plain text above the row link lets the click through, so the whole row opens */
+  & .nrow .rquote, & .nrow .brief { pointer-events: none; }
   & .nrow .acts { align-self: center; }
   & .nrow .q { margin-top: 4px; padding: 0 12px; color: var(--fg-default); border-left: 3px solid var(--border-default); font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
   & .nrow .rquote { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 0 12px; border-left: 3px solid var(--border-default); font-size: 12px; line-height: 20px; color: var(--fg-muted); }
