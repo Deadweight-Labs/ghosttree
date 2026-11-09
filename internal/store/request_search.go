@@ -204,7 +204,7 @@ func (s *Store) requestsByList(filter requestdomain.SearchFilter) (requestdomain
 		query += ` OFFSET ?`
 		args = append(args, offset)
 	}
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.db.QueryContext(s.ctx(), query, args...)
 	if err != nil {
 		return requestdomain.SearchPage{}, err
 	}
@@ -259,7 +259,7 @@ func (s *Store) fuseRequests(filter requestdomain.SearchFilter, mode SearchMode,
 		}
 		// The id decides a tie, so that the same query always reads the same rows.
 		query += ` ORDER BY f.rank, r.id LIMIT ?`
-		rows, err := s.db.Query(query, append(append([]any{ftsQuery(filter.Query)}, args...), pool+1)...)
+		rows, err := s.db.QueryContext(s.ctx(), query, append(append([]any{ftsQuery(filter.Query)}, args...), pool+1)...)
 		if err != nil {
 			return nil, false, err
 		}
@@ -324,7 +324,7 @@ func (s *Store) hybridRequests(filter requestdomain.SearchFilter, mode SearchMod
 	for i, f := range shown {
 		ids[i], inArgs[i] = f.ID, f.ID
 	}
-	rows, err := s.db.Query(requestHitSelect(filter)+` WHERE r.id IN (`+placeholders(len(ids))+`)`, inArgs...)
+	rows, err := s.db.QueryContext(s.ctx(), requestHitSelect(filter)+` WHERE r.id IN (`+placeholders(len(ids))+`)`, inArgs...)
 	if err != nil {
 		return requestdomain.SearchPage{}, err
 	}

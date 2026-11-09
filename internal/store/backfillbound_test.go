@@ -28,8 +28,9 @@ func TestRaiseBackfillBoundUsesNoTableScan(t *testing.T) {
 			plan = append(plan, detail)
 		}
 		rows.Close()
-		if got := strings.Join(plan, "; "); got != "SEARCH "+table {
-			t.Errorf("%s: plan %q, want %q", q, got, "SEARCH "+table)
+		// One B-tree seek, on the table or on any of its indexes; never a scan.
+		if got := strings.Join(plan, "; "); len(plan) != 1 || !strings.HasPrefix(got, "SEARCH "+table) {
+			t.Errorf("%s: plan %q, want a single SEARCH on %s", q, got, table)
 		}
 	}
 }

@@ -194,7 +194,7 @@ func ftsConditions(o KnowledgeSearch) string {
 func (s *Store) ftsKnowledge(q, where string, args []any, limit int, o KnowledgeSearch) ([]Knowledge, error) {
 	args = append([]any{ftsQuery(q)}, args...)
 	args = append(args, limit)
-	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+`
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+prefix(knowledgeCols, "k.")+`
 		FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
 		WHERE knowledge_fts MATCH ? AND `+where+ftsConditions(o)+`
 		ORDER BY f.rank LIMIT ?`, args...)
@@ -295,6 +295,12 @@ func fuseRankingsWeighted(text, vec []int64, depth, room int, vecWeight float64)
 // a minute). In the strict modes of the quality measurement, where an answer from
 // full text would be a wrong measurement, each of those is an error instead.
 func (s *Store) queryVector(q string, mode SearchMode, kind string) ([]float32, *EmbedSearchConfig, error) {
+	return s.queryVectorCtx(s.ctx(), q, mode, kind)
+}
+
+// queryVectorCtx is queryVector that stops waiting for the vector when ctx ends;
+// the search then answers from full text, as after a timeout.
+func (s *Store) queryVectorCtx(ctx context.Context, q string, mode SearchMode, kind string) ([]float32, *EmbedSearchConfig, error) {
 	sh := s.embedShared()
 	cfg := sh.cfg.Load()
 	switch {
@@ -321,9 +327,7 @@ func (s *Store) queryVector(q string, mode SearchMode, kind string) ([]float32, 
 		err = cfg.Ready()
 	}
 	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
-		v, err = cfg.Embedder.Query(ctx, q)
-		cancel()
+		v, err = sh.queries.vector(ctx, cfg, q)
 	}
 	switch {
 	case err == nil:
@@ -331,7 +335,9 @@ func (s *Store) queryVector(q string, mode SearchMode, kind string) ([]float32, 
 	case mode.strict():
 		return nil, cfg, fmt.Errorf("embedding the query: %w", err)
 	}
-	sh.logFallback(cfg, err)
+	if ctx.Err() == nil {
+		sh.logFallback(cfg, err)
+	}
 	return nil, cfg, nil
 }
 
@@ -398,7 +404,7 @@ func (s *Store) textRanking(q, where string, args []any, pool int, o KnowledgeSe
 	}
 	args = append([]any{ftsQuery(q)}, args...)
 	args = append(args, scan)
-	rows, err := s.db.Query(`SELECT k.id FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT k.id FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
 		WHERE knowledge_fts MATCH ? AND `+where+ftsConditions(o)+`
 		ORDER BY f.rank LIMIT ?`, args...)
 	if err != nil {
@@ -423,7 +429,7 @@ func (s *Store) vectorRanking(qvec []float32, cfg *EmbedSearchConfig, where stri
 	if !o.Operator {
 		query += ` AND k.confidence != 'quarantined'`
 	}
-	rows, err := s.db.Query(query+` AND `+where, append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion()}, args...)...)
+	rows, err := s.db.QueryContext(s.ctx(), query+` AND `+where, append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion()}, args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -468,7 +474,7 @@ func (s *Store) keptRows(ids []int64, want int, keep func(Knowledge) bool) ([]Kn
 		for i, id := range part {
 			args[i] = id
 		}
-		rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge WHERE id IN (`+placeholders(len(part))+`)`, args...)
+		rows, err := s.db.QueryContext(s.ctx(), `SELECT `+knowledgeCols+` FROM knowledge WHERE id IN (`+placeholders(len(part))+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -502,7 +508,7 @@ func (s *Store) listKnowledgeFiltered(where string, args []any, limit int, o Kno
 		args = append(slices.Clone(args), o.Prefilter.Args...)
 	}
 	args = append(slices.Clone(args), limit)
-	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+` FROM knowledge k
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+prefix(knowledgeCols, "k.")+` FROM knowledge k
 		WHERE `+where+ftsConditions(o)+` ORDER BY k.updated_at DESC, k.id DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err

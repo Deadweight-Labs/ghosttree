@@ -152,8 +152,8 @@ func (s *Store) AccountRoles(accountPrincipal string) (map[string]RoleInfo, bool
 		return out, false
 	}
 	var admin int
-	_ = s.db.QueryRow(`SELECT is_admin FROM persons WHERE id=?`, id).Scan(&admin)
-	rows, err := s.db.Query(`SELECT p.remote, om.role, COALESCE(pm.role,''), COALESCE(pm.can_review,0),
+	_ = s.db.QueryRowContext(s.ctx(), `SELECT is_admin FROM persons WHERE id=?`, id).Scan(&admin)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT p.remote, om.role, COALESCE(pm.role,''), COALESCE(pm.can_review,0),
 			EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id=p.id)
 			AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=p.org_id AND og.account_id=om.account_id)
 		FROM projects p
@@ -182,7 +182,7 @@ func (s *Store) machineOwners() (map[string]int64, int64) {
 	}
 	owner := instanceOwnerID(s.db)
 	out := map[string]int64{}
-	rows, err := s.db.Query(`SELECT hostname, account_id FROM machines`)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT hostname, account_id FROM machines`)
 	if err != nil {
 		return out, owner
 	}
@@ -436,7 +436,7 @@ func (s *Store) GrantableRoles(actorPrincipal, remote, targetPrincipal string) [
 		return nil
 	}
 	var orgID int64
-	if s.db.QueryRow(`SELECT org_id FROM projects WHERE remote=?`, remote).Scan(&orgID) != nil {
+	if s.db.QueryRowContext(s.ctx(), `SELECT org_id FROM projects WHERE remote=?`, remote).Scan(&orgID) != nil {
 		return nil
 	}
 	if orgRoleTx(s.db, orgID, target) == "" || orgRoleTx(s.db, orgID, target) == OrgOwner {
@@ -476,13 +476,13 @@ func (s *Store) ListProjectMembers(remote string) ([]ProjectMember, error) {
 	}
 	remote = strings.TrimSpace(remote)
 	var pid, orgID int64
-	if err := s.db.QueryRow(`SELECT id, org_id FROM projects WHERE remote=?`, remote).Scan(&pid, &orgID); err != nil {
+	if err := s.db.QueryRowContext(s.ctx(), `SELECT id, org_id FROM projects WHERE remote=?`, remote).Scan(&pid, &orgID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrProjectNotFound
 		}
 		return nil, err
 	}
-	rows, err := s.db.Query(`SELECT o.account_id, p.name, o.role, COALESCE(m.role,''), COALESCE(m.can_review,0), COALESCE(m.granted_by,0), COALESCE(m.granted_at,'')
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT o.account_id, p.name, o.role, COALESCE(m.role,''), COALESCE(m.can_review,0), COALESCE(m.granted_by,0), COALESCE(m.granted_at,'')
 		FROM org_members o JOIN persons p ON p.id=o.account_id
 		LEFT JOIN project_members m ON m.project_id=? AND m.account_id=o.account_id
 		WHERE o.org_id=? AND (o.role='owner' OR m.role IS NOT NULL OR (?=1 AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=o.org_id AND og.account_id=o.account_id)))
@@ -595,7 +595,7 @@ func (s *Store) ProjectByID(id int64) (Project, bool) {
 		return s.reader.ProjectByID(id)
 	}
 	var remote string
-	if s.db.QueryRow(`SELECT remote FROM projects WHERE id=?`, id).Scan(&remote) != nil {
+	if s.db.QueryRowContext(s.ctx(), `SELECT remote FROM projects WHERE id=?`, id).Scan(&remote) != nil {
 		return Project{}, false
 	}
 	return projectTx(s.db, remote)
@@ -609,7 +609,7 @@ func (s *Store) OrgOwnerPrincipal(orgID int64) (string, bool) {
 		return s.reader.OrgOwnerPrincipal(orgID)
 	}
 	var id int64
-	if s.db.QueryRow(`SELECT account_id FROM org_members WHERE org_id=? AND role='owner' ORDER BY joined_at, account_id LIMIT 1`, orgID).Scan(&id) != nil {
+	if s.db.QueryRowContext(s.ctx(), `SELECT account_id FROM org_members WHERE org_id=? AND role='owner' ORDER BY joined_at, account_id LIMIT 1`, orgID).Scan(&id) != nil {
 		return "", false
 	}
 	return principalOfID(id), true
@@ -623,7 +623,7 @@ func (s *Store) ProjectWriters(remote string) map[string]bool {
 		return s.reader.ProjectWriters(remote)
 	}
 	out := map[string]bool{}
-	rows, err := s.db.Query(`SELECT p.name FROM projects pr
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT p.name FROM projects pr
 		JOIN org_members om ON om.org_id=pr.org_id
 		JOIN persons p ON p.id=om.account_id
 		LEFT JOIN project_members pm ON pm.project_id=pr.id AND pm.account_id=p.id

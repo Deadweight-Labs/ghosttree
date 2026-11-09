@@ -36,7 +36,7 @@ func (s *Store) vectorIDs(k embedKind, cfg *EmbedSearchConfig, qvec []float32, c
 	if cond != "" {
 		query += ` AND (` + cond + `)`
 	}
-	rows, err := s.db.Query(query, append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion()}, args...)...)
+	rows, err := s.db.QueryContext(s.ctx(), query, append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion()}, args...)...)
 	if err != nil {
 		return nil, err
 	}

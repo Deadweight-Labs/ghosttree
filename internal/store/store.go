@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -32,6 +33,10 @@ type Store struct {
 	accessOnce    sync.Once
 	esh           *embedShared
 	embedOnce     sync.Once
+	chunkMap      *chunkMapState
+	chunkMapOnce  sync.Once
+	// qctx ends the reads of a view made by WithContext; nil elsewhere.
+	qctx context.Context
 }
 
 type OpenOptions struct {

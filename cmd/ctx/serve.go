@@ -398,7 +398,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	apiHandler := server.New(st, options...)
 	root.Handle("/api/", apiHandler)
 	root.Handle("/metrics", apiHandler)
-	webOptions := []web.Option{web.WithBootstrapFile(bootstrapCodePath(cfg.DB)), web.WithTrustedProxies(cfg.TrustedProxies)}
+	webOptions := []web.Option{web.WithBootstrapFile(bootstrapCodePath(cfg.DB)), web.WithTrustedProxies(cfg.TrustedProxies), web.WithLogger(logger)}
 	if cfg.PublicURL != "" {
 		webOptions = append(webOptions, web.WithPublicURL(cfg.PublicURL))
 	}

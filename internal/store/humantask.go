@@ -40,7 +40,7 @@ func (s *Store) TaskByID(id int64) (humantask.Task, error) {
 	if s.reader != nil {
 		return s.reader.TaskByID(id)
 	}
-	rows, err := s.db.Query(`SELECT `+taskCols+taskFrom+` WHERE t.id=?`, id)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+taskCols+taskFrom+` WHERE t.id=?`, id)
 	if err != nil {
 		return humantask.Task{}, err
 	}
@@ -226,7 +226,7 @@ func (s *Store) workRequest(workID int64) (int64, bool) {
 		return s.reader.workRequest(workID)
 	}
 	var id int64
-	err := s.db.QueryRow(`SELECT request_id FROM request_work WHERE id=?`, workID).Scan(&id)
+	err := s.db.QueryRowContext(s.ctx(), `SELECT request_id FROM request_work WHERE id=?`, workID).Scan(&id)
 	return id, err == nil
 }
 
@@ -234,7 +234,7 @@ func (s *Store) activePrimaryWork(sessionID int64) (workID, requestID int64) {
 	if s.reader != nil {
 		return s.reader.activePrimaryWork(sessionID)
 	}
-	_ = s.db.QueryRow(`SELECT id,request_id FROM request_work WHERE session_id=? AND role='primary' AND state='active'`, sessionID).Scan(&workID, &requestID)
+	_ = s.db.QueryRowContext(s.ctx(), `SELECT id,request_id FROM request_work WHERE session_id=? AND role='primary' AND state='active'`, sessionID).Scan(&workID, &requestID)
 	return
 }
 
@@ -243,7 +243,7 @@ func (s *Store) requestState(id int64) string {
 		return s.reader.requestState(id)
 	}
 	var st string
-	_ = s.db.QueryRow(`SELECT state FROM requests WHERE id=?`, id).Scan(&st)
+	_ = s.db.QueryRowContext(s.ctx(), `SELECT state FROM requests WHERE id=?`, id).Scan(&st)
 	return st
 }
 
@@ -252,7 +252,7 @@ func (s *Store) personByName(name string) (int64, bool) {
 		return s.reader.personByName(name)
 	}
 	var id int64
-	err := s.db.QueryRow(`SELECT id FROM persons WHERE lower(name)=lower(?)`, name).Scan(&id)
+	err := s.db.QueryRowContext(s.ctx(), `SELECT id FROM persons WHERE lower(name)=lower(?)`, name).Scan(&id)
 	return id, err == nil
 }
 
@@ -519,7 +519,7 @@ func (s *Store) taskRows(f TaskFilter, account int64) ([]humantask.Task, error) 
 	if f.State == "closed" {
 		order = `COALESCE(NULLIF(t.done_at,''),t.updated_at) DESC, t.id DESC`
 	}
-	rows, err := s.db.Query(`SELECT `+taskCols+taskFrom+` WHERE `+strings.Join(where, ` AND `)+
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+taskCols+taskFrom+` WHERE `+strings.Join(where, ` AND `)+
 		` ORDER BY `+order+` LIMIT 2000`, args...)
 	if err != nil {
 		return nil, err

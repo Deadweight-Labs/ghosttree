@@ -148,7 +148,7 @@ func (s *Store) withFeatureLinks(kind string, ids []int64) func(map[int64]Object
 			return out, err
 		}
 		err = chunked(ids, func(part []int64) error {
-			rows, err := s.db.Query(`SELECT ref_id, feature_id FROM feature_links WHERE kind=? AND ref_id IN (`+placeholders(len(part))+`) ORDER BY feature_id`,
+			rows, err := s.db.QueryContext(s.ctx(), `SELECT ref_id, feature_id FROM feature_links WHERE kind=? AND ref_id IN (`+placeholders(len(part))+`) ORDER BY feature_id`,
 				append([]any{kind}, factIDArgs(part)...)...)
 			if err != nil {
 				return err
@@ -182,7 +182,7 @@ func (s *Store) featureFacts(ids []int64) (map[int64]ObjectFacts, error) {
 		out[id] = ObjectFacts{}
 	}
 	err := chunked(ids, func(part []int64) error {
-		rows, err := s.db.Query(`SELECT v.feature_id, v.revision, v.areas, v.pr, v.created_at, a.commit_sha, a.branch, a.pr
+		rows, err := s.db.QueryContext(s.ctx(), `SELECT v.feature_id, v.revision, v.areas, v.pr, v.created_at, a.commit_sha, a.branch, a.pr
 			FROM feature_versions v LEFT JOIN git_anchors a ON a.id=v.anchor_id
 			WHERE v.feature_id IN (`+placeholders(len(part))+`) ORDER BY v.revision`, factIDArgs(part)...)
 		if err != nil {
@@ -279,7 +279,7 @@ func (s *Store) plainFacts(kind string, ids []int64) (map[int64]ObjectFacts, err
 		table = "coord_messages"
 	}
 	err := chunked(ids, func(part []int64) error {
-		rows, err := s.db.Query(`SELECT t.`+ownerCol+`, t.id, a.commit_sha, a.branch, a.pr FROM `+table+` t
+		rows, err := s.db.QueryContext(s.ctx(), `SELECT t.`+ownerCol+`, t.id, a.commit_sha, a.branch, a.pr FROM `+table+` t
 			JOIN git_anchors a ON a.id=t.anchor_id WHERE t.`+ownerCol+` IN (`+placeholders(len(part))+`)`, factIDArgs(part)...)
 		if err != nil {
 			return err
@@ -305,7 +305,7 @@ func (s *Store) plainFacts(kind string, ids []int64) (map[int64]ObjectFacts, err
 		}
 		rows.Close()
 		// Kontexte der Zeilen dieser Objekte.
-		rows2, err := s.db.Query(`SELECT t.id, t.`+ownerCol+` FROM `+table+` t WHERE t.origin_id IS NOT NULL AND t.`+ownerCol+` IN (`+placeholders(len(part))+`)`, factIDArgs(part)...)
+		rows2, err := s.db.QueryContext(s.ctx(), `SELECT t.id, t.`+ownerCol+` FROM `+table+` t WHERE t.origin_id IS NOT NULL AND t.`+ownerCol+` IN (`+placeholders(len(part))+`)`, factIDArgs(part)...)
 		if err != nil {
 			return err
 		}
@@ -351,7 +351,7 @@ func (s *Store) requestFacts(ids []int64) (map[int64]ObjectFacts, error) {
 		in := placeholders(len(part))
 		args := factIDArgs(part)
 		// Der Branch, auf dem der Request angelegt wurde.
-		rows, err := s.db.Query(`SELECT id, branch FROM requests WHERE id IN (`+in+`)`, args...)
+		rows, err := s.db.QueryContext(s.ctx(), `SELECT id, branch FROM requests WHERE id IN (`+in+`)`, args...)
 		if err != nil {
 			return err
 		}
@@ -372,7 +372,7 @@ func (s *Store) requestFacts(ids []int64) (map[int64]ObjectFacts, error) {
 			return err
 		}
 		for _, table := range []string{"request_activity", "request_evidence"} {
-			rows, err := s.db.Query(`SELECT t.request_id, a.commit_sha, a.branch, a.pr FROM `+table+` t JOIN git_anchors a ON a.id=t.anchor_id
+			rows, err := s.db.QueryContext(s.ctx(), `SELECT t.request_id, a.commit_sha, a.branch, a.pr FROM `+table+` t JOIN git_anchors a ON a.id=t.anchor_id
 				WHERE t.request_id IN (`+in+`)`, args...)
 			if err != nil {
 				return err
@@ -399,7 +399,7 @@ func (s *Store) requestFacts(ids []int64) (map[int64]ObjectFacts, error) {
 				return err
 			}
 		}
-		rows, err = s.db.Query(`SELECT m.request_id, p.id, p.branch, COALESCE(p.pr,0) FROM work_package_requests m JOIN work_packages p ON p.id=m.package_id
+		rows, err = s.db.QueryContext(s.ctx(), `SELECT m.request_id, p.id, p.branch, COALESCE(p.pr,0) FROM work_package_requests m JOIN work_packages p ON p.id=m.package_id
 			WHERE m.request_id IN (`+in+`)`, args...)
 		if err != nil {
 			return err
@@ -422,7 +422,7 @@ func (s *Store) requestFacts(ids []int64) (map[int64]ObjectFacts, error) {
 		if err != nil {
 			return err
 		}
-		rows, err = s.db.Query(`SELECT request_id, kind, COALESCE(other_request_id,0), external_ref FROM request_relations
+		rows, err = s.db.QueryContext(s.ctx(), `SELECT request_id, kind, COALESCE(other_request_id,0), external_ref FROM request_relations
 			WHERE request_id IN (`+in+`) AND kind IN ('parent','blocks','external')`, args...)
 		if err != nil {
 			return err
@@ -455,7 +455,7 @@ func (s *Store) requestFacts(ids []int64) (map[int64]ObjectFacts, error) {
 		if err != nil {
 			return err
 		}
-		rows, err = s.db.Query(`SELECT id, request_id FROM request_activity WHERE kind='request.created' AND origin_id IS NOT NULL AND request_id IN (`+in+`)`, args...)
+		rows, err = s.db.QueryContext(s.ctx(), `SELECT id, request_id FROM request_activity WHERE kind='request.created' AND origin_id IS NOT NULL AND request_id IN (`+in+`)`, args...)
 		if err != nil {
 			return err
 		}
@@ -499,7 +499,7 @@ func (s *Store) derivedFacts(kind string, ids []int64) (map[int64]ObjectFacts, e
 		table = "human_tasks"
 	}
 	err := chunked(ids, func(part []int64) error {
-		rows, err := s.db.Query(`SELECT id, request_id FROM `+table+` WHERE id IN (`+placeholders(len(part))+`)`, factIDArgs(part)...)
+		rows, err := s.db.QueryContext(s.ctx(), `SELECT id, request_id FROM `+table+` WHERE id IN (`+placeholders(len(part))+`)`, factIDArgs(part)...)
 		if err != nil {
 			return err
 		}
@@ -536,7 +536,7 @@ func (s *Store) derivedFacts(kind string, ids []int64) (map[int64]ObjectFacts, e
 	}
 	if kind == "criterion" {
 		err := chunked(ids, func(part []int64) error {
-			rows, err := s.db.Query(`SELECT e.criterion_id, a.commit_sha, a.branch, a.pr FROM request_evidence e JOIN git_anchors a ON a.id=e.anchor_id
+			rows, err := s.db.QueryContext(s.ctx(), `SELECT e.criterion_id, a.commit_sha, a.branch, a.pr FROM request_evidence e JOIN git_anchors a ON a.id=e.anchor_id
 				WHERE e.criterion_id IN (`+placeholders(len(part))+`)`, factIDArgs(part)...)
 			if err != nil {
 				return err

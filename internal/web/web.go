@@ -6,6 +6,7 @@ import (
 	"embed"
 	"errors"
 	"github.com/Deadweight-Labs/ghosttree/internal/forge"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -47,6 +48,11 @@ type app struct {
 	avatarDir    string
 	avatarClient *http.Client
 	buildVersion string // ctx version of this server, for ServerVersion in pages
+	// The kinds searched at once on the server, and the running search stream of
+	// each account (search_stream.go).
+	searchSlots   searchLimiter
+	searchStreams searchStreams
+	logger        *slog.Logger // http_request lines and search failures; nil = slog.Default
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
@@ -216,6 +222,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/labels/assign", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.labelAssign))))))
 	a.registerPainTaskPages(mux)
 	a.handle(mux, "GET /ui/search", a.requirePerson(http.HandlerFunc(a.searchPage)))
+	a.handle(mux, "GET /ui/search/stream", a.requirePerson(http.HandlerFunc(a.searchStream)))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
 	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
 	a.handle(mux, "POST /ui/knowledge/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeMove))))))
@@ -527,6 +534,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/knowledge/{id}/move":          webAdmin,
 	"GET /ui/review":                        webProject,
 	"GET /ui/search":                        webProject,
+	"GET /ui/search/stream":                 webProject,
 	"POST /ui/review/bulk":                  webAdmin,
 	"POST /ui/review/{id}/{verdict}":        webAdmin,
 	"POST /ui/review/{id}/merge":            webAdmin,
@@ -609,6 +617,14 @@ func (a *app) handle(mux *http.ServeMux, pattern string, h any) {
 		panic("web: route " + pattern + " is not classified in webRoutes")
 	}
 	a.registered = append(a.registered, pattern)
+	if loggedRoutes[pattern] {
+		switch f := h.(type) {
+		case http.Handler:
+			h = a.observed(pattern, f)
+		case func(http.ResponseWriter, *http.Request):
+			h = a.observed(pattern, http.HandlerFunc(f))
+		}
+	}
 	switch h := h.(type) {
 	case http.Handler:
 		mux.Handle(pattern, h)
