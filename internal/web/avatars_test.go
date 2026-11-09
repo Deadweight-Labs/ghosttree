@@ -122,7 +122,7 @@ func TestProfilePictureComesFromOwnRouteAndNeverFromGitHub(t *testing.T) {
 		t.Errorf("CSP lets the browser load pictures from elsewhere: %q", csp)
 	}
 	// Only the fixed address was asked, and once for all those pages.
-	if n := e.gh.count(); n != 1 || e.gh.calls[0] != "https://avatars.githubusercontent.com/u/583231?s=96&v=4" {
+	if n := e.gh.count(); n != 1 || e.gh.calls[0] != "https://avatars.githubusercontent.com/u/583231?s=320&v=4" {
 		t.Errorf("GitHub was asked %d times: %v", n, e.gh.calls)
 	}
 }
@@ -207,7 +207,7 @@ func TestProfilePictureRedirectOnlyToThePictureHost(t *testing.T) {
 	if _, ok := e.cache.refresh(1); !ok {
 		t.Fatal("the redirect to the picture host was refused")
 	}
-	if e.gh.calls[0] != "https://github.com/octo-cat.png?size=96" {
+	if e.gh.calls[0] != "https://github.com/octo-cat.png?size=320" {
 		t.Errorf("first address: %s", e.gh.calls[0])
 	}
 	// Anywhere else is refused: another host, plain http, an internal address.
@@ -238,7 +238,7 @@ func TestProfilePictureIsKeptADayOnDiskAndFetchedAgainAfterwards(t *testing.T) {
 	if e.gh.count() != 1 {
 		t.Fatalf("first page fetched %d times", e.gh.count())
 	}
-	if _, err := os.Stat(filepath.Join(e.dir, "1.img")); err != nil {
+	if _, err := os.Stat(filepath.Join(e.dir, "1-320.img")); err != nil {
 		t.Errorf("the picture is not on disk: %v", err)
 	}
 	// A new server on the same directory (a restart) does not fetch.

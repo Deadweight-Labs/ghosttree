@@ -10,6 +10,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/slim"
 )
 
 type Session struct {
@@ -132,8 +133,9 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 }
 
 // sanitizeChunks ersetzt base64-Nutzlasten in Raw durch Platzhalter
-// (blobstrip) und schwärzt Geheimnisse in Text und Raw (redact). Raw ist eine
-// JSON-Zeile und wird als solche geschwärzt, sie bleibt gültiges JSON. Das
+// (blobstrip), schwärzt Geheimnisse in Text und Raw (redact) und lässt dann
+// Kopien und Ballast weg (slim). Raw ist eine JSON-Zeile und wird als solche
+// geschwärzt, sie bleibt gültiges JSON. Das
 // geschieht hier und nicht nur im Sammler, damit auch ältere Clients nichts
 // Ungeschwärztes ablegen. Die Bilder gehen zuerst, damit die Schwärzung sie
 // nicht durchsuchen muss.
@@ -147,14 +149,29 @@ func sanitizeChunks(in []Chunk) []Chunk {
 	for i := range in {
 		raw, _ := blobstrip.Strip(in[i].Raw)
 		raw = redact.RedactJSON(raw)
+		// Geschlankt wird zuletzt: das Kürzen langer Ausgaben darf weder base64
+		// anschneiden (sonst erkennt blobstrip das Bild nicht) noch ein
+		// Geheimnis, das die Schwärzung nur vollständig erkennt (ein privater
+		// Schlüssel zwischen BEGIN und END). Neue Clients haben die Regel
+		// schon angewandt, dann ändert sich nichts; für ältere geschieht es
+		// hier. Eine weggelassene Zeile behält ihre Nummer, die Folge hat dort
+		// eine Lücke.
+		raw, keep := slim.Line(raw)
 		text := redact.Redact(in[i].Text)
-		if raw == in[i].Raw && text == in[i].Text {
+		if keep && raw == in[i].Raw && text == in[i].Text {
+			if out != nil {
+				out = append(out, in[i])
+			}
 			continue
 		}
 		if out == nil {
-			out = append([]Chunk(nil), in...)
+			out = append(make([]Chunk, 0, len(in)), in[:i]...)
 		}
-		out[i].Raw, out[i].Text = raw, text
+		if keep {
+			c := in[i]
+			c.Raw, c.Text = raw, text
+			out = append(out, c)
+		}
 	}
 	if out == nil {
 		return in

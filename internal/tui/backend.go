@@ -19,9 +19,9 @@ type Backend interface {
 
 	Resolve(ctx context.Context, input string) (links.Card, error)
 	Search(ctx context.Context, line string) ([]Item, error)
-	MyTasks(ctx context.Context) ([]Item, error)
-	OpenRequests(ctx context.Context) ([]Item, error)
-	Messages(ctx context.Context) ([]Item, error)
+	// List is one list of a mode: the project lists answer for the current
+	// folder's project, the inbox lists across every visible project.
+	List(ctx context.Context, kind ListKind) ([]Item, error)
 
 	// Open opens a web address in the browser of this machine when that is
 	// possible (no ssh, a display); why says what stood in the way.
@@ -33,7 +33,96 @@ type Backend interface {
 	Logout(ctx context.Context, server string) error
 	StartLogin(ctx context.Context, server, machine string) (LoginStart, error)
 	WaitLogin(ctx context.Context, start LoginStart) (LoginResult, error)
+
+	// CheckProject says whether the server knows a project the caller may see.
+	CheckProject(ctx context.Context, project string) (bool, error)
+	// Projects lists the projects the caller may see.
+	Projects(ctx context.Context) ([]ProjectInfo, error)
+	// ProjectPreview is the open requests and the caller's open tasks of one
+	// project.
+	ProjectPreview(ctx context.Context, project string) (requests, tasks []Item, err error)
+	// ClaimPlan says which remote would become a project and in which
+	// organizations; Claim makes it one (ctx project claim).
+	ClaimPlan(ctx context.Context) (ClaimPlan, error)
+	Claim(ctx context.Context, remote, org string) (ProjectInfo, error)
+	// RecentDirs are folders of this machine where sessions ran, newest first,
+	// that still exist; CompleteDir completes a typed path to folders; ChangeDir
+	// makes dir the folder the TUI works in.
+	RecentDirs(ctx context.Context) ([]string, error)
+	CompleteDir(input string) []string
+	ChangeDir(dir string) error
 }
+
+// ProjectInfo is one project as the server lists it.
+type ProjectInfo struct {
+	ID    string // remote or <org>/<name>
+	Org   string
+	Named bool
+}
+
+// OrgChoice is an organization a project could be put into.
+type OrgChoice struct {
+	Slug    string
+	Name    string
+	Role    string
+	Default bool
+}
+
+// ClaimPlan is what "create project from this folder" would do.
+type ClaimPlan struct {
+	Remote string
+	Orgs   []OrgChoice
+}
+
+// Problem is the kind of trouble a load ran into, in words a person can act
+// on, instead of an HTTP status.
+type Problem int
+
+const (
+	ProblemOther     Problem = iota
+	ProblemNoProject         // the folder has no project, or the server does not know it
+	ProblemForbidden         // the project exists, the account has no right to it
+	ProblemOffline           // the server did not answer
+	ProblemSignedOut         // no login, or the server refused it
+)
+
+// ProblemError carries a Problem; the backend wraps every failed call in it.
+// Detail is a cleaned short text for ProblemOther.
+type ProblemError struct {
+	Kind   Problem
+	Detail string
+}
+
+func (e *ProblemError) Error() string {
+	switch e.Kind {
+	case ProblemNoProject:
+		return "no project"
+	case ProblemForbidden:
+		return "forbidden"
+	case ProblemOffline:
+		return "server unreachable"
+	case ProblemSignedOut:
+		return "not signed in"
+	}
+	return e.Detail
+}
+
+// ListKind names a list of the home screen.
+type ListKind int
+
+const (
+	// Project mode: everything about the current folder's project.
+	ListRequests     ListKind = iota // open requests
+	ListPains                        // open pains
+	ListProjectTasks                 // open human tasks of the project
+	ListRoom                         // unread messages in the project's room
+	// Inbox mode: what waits for the caller, across projects.
+	ListMyTasks     // human tasks for the caller
+	ListQuestions   // decisions and questions or approvals for people
+	ListUnread      // unread messages in the rooms of visible projects
+	ListSuggestions // gardener suggestions waiting for review
+	listKindCount
+)
 
 // Item is one row of a list or of search results. Ref is a short form that
 // Resolve understands (REQ-12, TASK-3, #4295, room:7 ...).
@@ -90,8 +179,15 @@ type Local struct {
 	ClientVersion string
 	Project       string
 	Branch        string
-	Collector     Collector
-	ProfileURL    string
+	// Dir is the folder the TUI works in; Git says whether it lies in a git
+	// repository, Remote is its normalized origin ("" without one), Linked
+	// that the project comes from ctx project link.
+	Dir        string
+	Git        bool
+	Remote     string
+	Linked     bool
+	Collector  Collector
+	ProfileURL string
 }
 
 // DefaultServer is the server marked default, or the first one.

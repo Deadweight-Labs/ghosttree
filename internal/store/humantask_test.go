@@ -167,16 +167,17 @@ func TestMarkTasksDoneIsAllOrNothing(t *testing.T) {
 	b := w.task(t, "mia", humantask.CreateInput{RequestID: rid, Kind: "input", Title: "b", Assignee: "lena"})
 	gus := w.pa["gus"]
 	forGus := w.task(t, "mia", humantask.CreateInput{RequestID: rid, Kind: "input", Title: "c", Assignee: "gus"})
-	// Gus darf nur die ihm zugewiesene; die erste verbotene Id bricht alles ab und
-	// antwortet wie eine unbekannte.
-	if _, err := gus.MarkTasksDone([]int64{forGus.ID, a.ID}, "", humantask.Actor{AccountID: 5, Person: "gus", Web: true}); !errors.Is(err, ErrAccessNotFound) {
+	// Ein Gast liest nur (Robin, 2026-11-09): auch die ihm zugewiesene Aufgabe
+	// meldet er nicht als erledigt, und eine Id, die er nicht sieht, antwortet
+	// wie eine unbekannte.
+	if _, err := gus.MarkTasksDone([]int64{a.ID, forGus.ID}, "", humantask.Actor{AccountID: 5, Person: "gus", Web: true}); !errors.Is(err, ErrAccessNotFound) {
 		t.Errorf("hidden id: %v", err)
 	}
-	if got, _ := w.st.TaskByID(forGus.ID); got.State != humantask.Open {
-		t.Errorf("the allowed id was written despite the abort: %s", got.State)
-	}
-	if _, err := gus.MarkTasksDone([]int64{forGus.ID}, "erledigt", humantask.Actor{AccountID: 5, Person: "gus", Web: true}); err != nil {
+	if _, err := gus.MarkTasksDone([]int64{forGus.ID}, "erledigt", humantask.Actor{AccountID: 5, Person: "gus", Web: true}); !errors.Is(err, ErrAccessForbidden) {
 		t.Errorf("assigned guest marks done: %v", err)
+	}
+	if got, _ := w.st.TaskByID(forGus.ID); got.State != humantask.Open {
+		t.Errorf("a guest marked his task done: %s", got.State)
 	}
 	if _, err := gus.ConfirmHumanTask(forGus.ID, humantask.Actor{AccountID: 5}); err == nil {
 		t.Errorf("a guest confirmed")
@@ -309,7 +310,7 @@ func TestMatrixPainAndTask(t *testing.T) {
 		{"member marks a task assigned to another", member, ResTask, ActWork, other, false},
 		{"lead marks any task", lead, ResTask, ActWork, other, true},
 		{"owner marks any task", owner, ResTask, ActWork, other, true},
-		{"guest marks an assigned task", guest, ResTask, ActWork, assigned, true},
+		{"guest marks an assigned task", guest, ResTask, ActWork, assigned, false},
 		{"guest marks an unassigned task", guest, ResTask, ActWork, unassigned, false},
 		{"guest confirms", guest, ResTask, ActEdit, assigned, false},
 		{"member confirms own", member, ResTask, ActEdit, own, true},

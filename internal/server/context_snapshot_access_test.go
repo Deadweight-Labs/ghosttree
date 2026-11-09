@@ -128,10 +128,10 @@ func TestContextSnapshotLegacyMachineEntriesAreHiddenOnRead(t *testing.T) {
 	}
 	for _, who := range []string{"mia", "lena", "rex", "robin"} {
 		f.expect(t, who, 404, "GET", snapURL("old", accProject, "/entries")+"&domain=knowledge&key=9999", nil)
-		if _, out := f.call(t, who, "GET", snapURL("old", accProject, "/entries")+"&domain=knowledge", nil); strings.Contains(out, "9999") || strings.Contains(out, "legacy secret") {
+		if _, out := f.call(t, who, "GET", snapURL("old", accProject, "/entries")+"&domain=knowledge", nil); strings.Contains(out, `"key":"9999"`) || strings.Contains(out, "legacy secret") {
 			t.Errorf("%s list shows legacy machine entry: %s", who, out)
 		}
-		if _, out := f.call(t, who, "GET", snapURL("old", accProject, "/entries"), nil); strings.Contains(out, "9999") {
+		if _, out := f.call(t, who, "GET", snapURL("old", accProject, "/entries"), nil); strings.Contains(out, `"key":"9999"`) {
 			t.Errorf("%s unfiltered list shows legacy machine entry: %s", who, out)
 		}
 	}
