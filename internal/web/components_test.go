@@ -47,10 +47,10 @@ func TestAvatarsOfPersonAgentGardenerAndSystem(t *testing.T) {
 		t.Errorf("person: %s", person)
 	}
 	agent := string(avatarMarkup(langDE, avatarSpec{Kind: avClaude, Name: "claude", Owner: "Robin", Size: "lg"}))
-	if !strings.Contains(agent, "gav agent a-claude lg") || !strings.Contains(agent, `class="own"`) || !strings.Contains(agent, "Agent von Robin") {
+	if !strings.Contains(agent, "gav agent a-claude lg") || !strings.Contains(agent, `class="own hc-`) || !strings.Contains(agent, "Agent von Robin") {
 		t.Errorf("agent with owner badge: %s", agent)
 	}
-	if small := string(avatarMarkup(langDE, avatarSpec{Kind: avClaude, Owner: "Robin"})); strings.Contains(small, `class="own"`) {
+	if small := string(avatarMarkup(langDE, avatarSpec{Kind: avClaude, Owner: "Robin"})); strings.Contains(small, `class="own hc-`) {
 		t.Errorf("the small agent avatar has no badge: %s", small)
 	}
 	if g := string(avatarOfName("Gärtner")); !strings.Contains(g, "a-gardener") {

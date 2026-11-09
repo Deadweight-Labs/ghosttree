@@ -107,10 +107,6 @@ func (a *app) agentCards(r *http.Request, pa *store.ProjectAccess, rows []agentR
 			c.Machine = agentMachine(row.ExternalID)
 		}
 		c.MachineHref = machineLink(c.Machine)
-		if c.Branch != "" && strings.Contains(c.Name, c.Branch) {
-			// The name already ends in the branch; do not say it twice.
-			c.Branch = ""
-		}
 		if wk, ok := work[row.ExternalID]; ok {
 			if wk.RequestID != 0 {
 				c.ReqID = "REQ-" + strconv.FormatInt(wk.RequestID, 10)

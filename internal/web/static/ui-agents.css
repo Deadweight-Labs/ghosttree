@@ -12,7 +12,6 @@
   & .ahead { display: flex; gap: 12px; min-width: 0; }
   & .ahead .gav.lg { width: 28px; height: 28px; border-radius: 6px; margin-top: 2px; }
   & .ahead .gav.lg .i { width: 16px; height: 16px; }
-  & .ahead .gav.agent .own { width: 14px; height: 14px; right: -5px; bottom: -5px; }
   & .ainfo { min-width: 0; }
   & .at { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; line-height: 24px; }
   & .at .title { font-size: 14px; font-weight: 600; color: var(--fg-default); }

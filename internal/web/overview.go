@@ -475,11 +475,29 @@ func hostUnlessNamed(name, host string) string {
 // owner, machine). A name the person chose stays; an ID or the bare tool name
 // is replaced. The raw ID goes to the title of the row.
 func peerName(l lang, peer store.CoordAgent) string {
-	// A peer that reported its machine has a unique name: Person · Machine · Branch.
+	// A peer that reported its machine has a unique name: Person · Machine ·
+	// Branch. The tool (or its own name) goes first, so the agent is never
+	// called by its owner alone.
 	if peer.Label != "" && peer.Machine != "" {
-		return peer.Label
+		return agentTitle(l, peer) + agentLabelSep + peer.Label
 	}
 	return agentLabel(l, peer.DisplayName, peer.Provider, peer.ExternalID, peer.Owner)
+}
+
+// agentTitle is what an agent is called: the name it has of its own, unless that
+// is an ID, the tool or its owner, else the tool ("Claude", "Codex").
+func agentTitle(l lang, peer store.CoordAgent) string {
+	tool := providerLabel(l, peer.Provider, peer.ExternalID)
+	name := strings.TrimSpace(peer.DisplayName)
+	if name == "" || looksLikeIdentifier(name, peer.ExternalID) || strings.Contains(name, agentLabelSep) {
+		return tool
+	}
+	for _, same := range []string{peer.Provider, tool, peer.Owner, peer.Person, store.NormalizeAccountName(peer.Owner)} {
+		if same != "" && strings.EqualFold(name, same) {
+			return tool
+		}
+	}
+	return name
 }
 
 // agentLabel builds the readable name of an agent from what is known about it.

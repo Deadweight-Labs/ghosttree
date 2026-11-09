@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 var identityTagRE = regexp.MustCompile(`<[^>]*>`)
@@ -45,5 +47,52 @@ func TestAvatarKindsAndEscaping(t *testing.T) {
 	}
 	if out := string(avatarHTML(langDE, avHuman, "Robin", false)); !strings.Contains(out, ">RO<") {
 		t.Errorf("initials missing: %s", out)
+	}
+}
+
+// "Claude · Lena Berger · lena-laptop" is Claude of Lena, not a person called
+// Claude: the inbox shows the logo with Lena in the corner.
+func TestAgentLabelIsRecognisedAsHarnessWithOwner(t *testing.T) {
+	for label, want := range map[string]string{
+		"Claude · Lena Berger · lena-laptop":               avClaude,
+		"Codex · Robin":                                    avCodex,
+		"Claude · Robin · mainex · feat/git-native":        avClaude,
+		"claude-mainex · Robin · mainex · feat/git-native": avClaude,
+		"Agent":                       avSystem,
+		"Lena Berger":                 avHuman,
+		"Claude Berger · lena-laptop": avHuman,
+	} {
+		if got := actorKind(label); got != want {
+			t.Errorf("actorKind(%q) = %q, want %q", label, got, want)
+		}
+	}
+	out := string(avatarMarkup(langEN, avatarSpec{Name: "Claude · Lena Berger · lena-laptop", Size: "lg"}))
+	for _, want := range []string{"a-claude", `class="own hc-`, `data-av="Lena Berger"`, "Claude · agent of Lena Berger"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("avatar of the label lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "CL") || strings.Contains(out, "lena-laptop") {
+		t.Errorf("the label leaks into the avatar:\n%s", out)
+	}
+}
+
+// An agent is called by its tool or its own name, never by its owner alone.
+func TestPeerNameStartsWithToolNotOwner(t *testing.T) {
+	peer := store.CoordAgent{ExternalID: "claude:mainex:44444444-aaaa-4bbb-8ccc-000000000004", Provider: "claude", DisplayName: "robin", Owner: "Robin", Person: "Robin", Machine: "mainex", Branch: "feat/git-native", Label: "Robin · mainex · feat/git-native"}
+	if got := peerName(langEN, peer); got != "Claude · Robin · mainex · feat/git-native" {
+		t.Errorf("peerName = %q", got)
+	}
+	peer.Provider, peer.ExternalID = "codex", "codex:mainex:55555555-aaaa-4bbb-8ccc-000000000005"
+	if got := agentTitle(langEN, peer); got != "Codex" {
+		t.Errorf("agentTitle = %q", got)
+	}
+	peer.DisplayName = "reviewer"
+	if got := peerName(langEN, peer); got != "reviewer · Robin · mainex · feat/git-native" {
+		t.Errorf("own name lost: %q", got)
+	}
+	row := agentRow{BareName: peerName(langEN, peer)}
+	if row.ShortName() != "reviewer" {
+		t.Errorf("short name %q", row.ShortName())
 	}
 }

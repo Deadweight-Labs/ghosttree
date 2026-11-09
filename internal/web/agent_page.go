@@ -256,6 +256,6 @@ func (v agentsView) ActiveCount() int {
 
 // ShortName is the name an agent goes by: "Claude · Robin · laptop" is Claude.
 func (r agentRow) ShortName() string {
-	name, _, _ := strings.Cut(r.BareName, " · ")
+	name, _ := splitAgentLabel(r.BareName)
 	return name
 }

@@ -12,7 +12,7 @@
 {{if .HasAgents}}<div class="box gap agroup"><div class="box-h"><span class="t">{{mi "bot"}} {{t "machine.agents"}}</span><span class="sp"></span><span class="muted fw4">{{len .Agents}}</span></div>{{range .Agents}}{{template "agentrow" .}}{{end}}</div>{{end}}
 {{if .HasSessions}}<div class="box gap"><div class="box-h"><span class="t">{{mi "term"}} {{t "machine.sessions"}}</span><span class="sp"></span><a class="gbtn sm quiet" href="{{.SessionsHref}}">{{t "machine.all_sessions"}}</a></div>
 {{range .Sessions}}<div class="row srow"><span class="st {{if .Live}}open{{else}}closed{{end}}" role="img" aria-label="{{if .Live}}{{t "sessions.live"}}{{else}}{{t "sessions.state.done"}}{{end}}">{{if .Live}}{{mi "play"}}{{else}}{{mi "done"}}{{end}}</span>
-<div class="sbody">{{avatarX "lg" .Kind "" "" false}}<div class="sinfo"><div class="stt"><a class="title" href="{{.Href}}">{{.Title}}</a></div>
+<div class="sbody">{{avatarX "lg" .Kind "" .Owner false}}<div class="sinfo"><div class="stt"><a class="title" href="{{.Href}}">{{.Title}}</a></div>
 <div class="meta">{{if .Project}}<span class="rp">{{mi "repo"}}{{.Project}}</span>{{end}}{{if .Branch}}<span class="bn mono">{{mi "branch"}}{{.Branch}}</span>{{end}}{{if .Duration}}<span class="dur">{{mi "clock"}}{{.Duration}}</span>{{end}}</div></div></div>
 <div class="stime"><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></div></div>{{end}}</div>{{end}}
 {{if or .Shares .CanManage}}<div class="box gap" id="shares"><div class="box-h"><span class="t">{{mi "people"}} {{t "machine.shares"}}</span><span class="sp"></span><span class="muted fw4">{{len .Shares}}</span></div>
