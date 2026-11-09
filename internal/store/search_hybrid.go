@@ -78,6 +78,16 @@ type KnowledgeSearch struct {
 	// Origin filtert nach Zeitpunkt und Bereich des Entstehungskontexts der
 	// aktuellen Fassung (REQ-600); ohne Kontext zählt created_at.
 	Origin originctx.Filter
+	// Settled leaves out what is not settled knowledge: staged and quarantined
+	// entries and every note of the gardener. It is the agent view of search,
+	// the same rule delivery applies (see deliverable), so a proposal nobody has
+	// decided on cannot crowd out the entry it is about. It is part of the query
+	// of every ranking, not of Keep, because the full-text ranking ignores Keep.
+	Settled bool
+	// NoGardener leaves out the gardener's notes and nothing else. The web search
+	// uses it: a person may see a staged entry, but the gardener's suggestions
+	// belong to the review queue unless the search line asks for them.
+	NoGardener bool
 }
 
 // KnowledgePrefilter is a Prefilter on the table alias k of knowledge.
@@ -127,6 +137,12 @@ func (s *Store) searchKnowledgeWith(q string, o KnowledgeSearch) ([]Knowledge, e
 	if of, ofArgs := originWhere(o.Origin, "k.origin_id", "k.created_at"); of != "" {
 		where = "(" + where + ") AND " + of
 		args = append(slices.Clone(args), ofArgs...)
+	}
+	switch {
+	case o.Settled:
+		where = "(" + where + ") AND " + settled
+	case o.NoGardener:
+		where = "(" + where + ") AND " + notGardener
 	}
 	limit := o.Limit
 	if limit <= 0 {

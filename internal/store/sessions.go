@@ -629,7 +629,7 @@ func (s *Store) ftsSessionHits(q, excludeSession string, r readableSessions, pre
 	// snippet() liest den Text jeder Zeile, die es liefert: in der CTE liefe es
 	// für jeden Treffer des ganzen Index. Sie führt nur Zeile und Rang; den
 	// Ausschnitt gibt es danach für die höchstens limit Ergebniszeilen.
-	rows, err := s.db.Query(`WITH h AS MATERIALIZED (SELECT rowid AS cid, rank AS r FROM chunks_fts WHERE chunks_fts MATCH ?)
+	rows, err := s.db.QueryContext(s.ctx(), `WITH h AS MATERIALIZED (SELECT rowid AS cid, rank AS r FROM chunks_fts WHERE chunks_fts MATCH ?)
 		SELECT `+prefix(sessionCols, "se.")+`, c.seq, h.cid
 		FROM h
 		JOIN session_chunks c ON c.id = h.cid

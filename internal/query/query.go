@@ -144,6 +144,34 @@ var rawStates = map[string]bool{
 	"dropped": true, "met": true, "waived": true,
 	"active": true, "mitigated": true, "resolved": true, "obsolete": true,
 	"accepted": true, "dismissed": true, "confirmed": true, "retired": true,
+	// Vertrauensstufen eines Wissenseintrags. Die Agentensuche lässt
+	// unbestätigte Einträge weg, is:staged holt sie ausdrücklich.
+	"staged": true, "quarantined": true, "trusted": true, "verified": true,
+}
+
+// Gardener ist der Urheber der Gärtner-Notizen: author:gardener und
+// harness:gardener treffen sie, und beide heben den Ausschluss der Agentensuche auf.
+const Gardener = "gardener"
+
+// WantsUnsettled sagt, ob die Zeile ausdrücklich nach dem fragt, was die
+// Agentensuche sonst weglässt: unbestätigte Einträge (is:staged,
+// is:quarantined) oder die Notizen des Gärtners (author:gardener,
+// harness:gardener). Ohne eine solche Frage bleiben sie draußen.
+func (q Query) WantsUnsettled() bool {
+	for _, t := range q.Terms {
+		if t.Neg {
+			continue
+		}
+		for _, v := range t.Values {
+			switch {
+			case t.Key == KeyIs && (v == "staged" || v == "quarantined"):
+				return true
+			case (t.Key == KeyAuthor || t.Key == KeyHarness) && strings.EqualFold(v, Gardener):
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Schlüssel der Qualifier, kanonisch.
@@ -926,6 +954,20 @@ type Facts struct {
 	// Actor ist human oder agent, leer wenn unbekannt; Harness (claude-code,
 	// codex) und Model (claude-opus-5-5) nur bei einem Agenten (REQ-620).
 	Actor, Harness, Model string
+	// Confidence ist die Vertrauensstufe eines Wissenseintrags (staged,
+	// trusted, ...); is: trifft sie wie einen Zustand.
+	Confidence string
+}
+
+// WithKnowledge ergänzt, was nur ein Wissenseintrag hat: seine
+// Vertrauensstufe und das Harness, das ihn schrieb. Eine Notiz des Gärtners
+// trägt den Gärtner als Harness, auch wenn kein Akteur verzeichnet ist.
+func (f Facts) WithKnowledge(confidence, harness string) Facts {
+	f.Confidence = confidence
+	if f.Harness == "" || strings.EqualFold(harness, Gardener) {
+		f.Harness = harness
+	}
+	return f
 }
 
 func lowerAll(s []string) []string {
@@ -1058,7 +1100,7 @@ func matchTerm(t Term, f Facts) bool {
 					return true
 				}
 			default:
-				if f.State == v {
+				if f.State == v || (f.Confidence != "" && f.Confidence == v) {
 					return true
 				}
 			}
@@ -1111,6 +1153,9 @@ func matchTerm(t Term, f Facts) bool {
 		}
 		return anyNum([]int64{f.Number}, t.Nums)
 	case KeyAuthor:
+		if strings.EqualFold(f.Harness, Gardener) && contains(t.Values, Gardener) {
+			return true
+		}
 		return f.Author != "" && contains(t.Values, strings.ToLower(f.Author))
 	case KeyBy:
 		return f.Actor != "" && contains(t.Values, f.Actor)
