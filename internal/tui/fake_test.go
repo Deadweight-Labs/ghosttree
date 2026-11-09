@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"image/color"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,15 @@ type fakeBackend struct {
 	loginErr  error
 	waitErr   error
 	waitBlock bool // WaitLogin waits until it is cancelled
+
+	known     map[string]bool // projects the server knows and shows
+	checkErr  error
+	tasksErr  error
+	claimErr  error
+	claimed   []string
+	recent    []string
+	dirs      map[string]Local // what Local looks like after ChangeDir
+	changedTo []string
 }
 
 func newFake() *fakeBackend {
@@ -40,7 +50,108 @@ func newFake() *fakeBackend {
 		Branch:        "feat/tui",
 		Collector:     Collector{Running: true, State: "running", Detail: "pid 4242"},
 		ProfileURL:    "https://ghosttree.example.com/ui/profile",
-	}}
+		Dir:           "/home/robin/ghosttree",
+		Git:           true,
+		Remote:        "github.com/deadweight-labs/ghosttree",
+	}, known: map[string]bool{"github.com/deadweight-labs/ghosttree": true, "github.com/deadweight-labs/design-system": true}}
+}
+
+// inFolder makes the fake look like ctx was started in another folder: a
+// repository with a remote the server does not know, one without remote, a
+// plain folder, or a project without rights.
+func (f *fakeBackend) inFolder(kind string) *fakeBackend {
+	switch kind {
+	case "unknown":
+		f.local.Dir, f.local.Git, f.local.Remote, f.local.Project, f.local.Branch = "/home/robin/side", true, "github.com/someone/side", "github.com/someone/side", "main"
+	case "noremote":
+		f.local.Dir, f.local.Git, f.local.Remote, f.local.Project, f.local.Branch = "/home/robin/scratch", true, "", "", ""
+	case "nogit":
+		f.local.Dir, f.local.Git, f.local.Remote, f.local.Project, f.local.Branch = "/home/robin/Downloads", false, "", "", ""
+	case "forbidden":
+		f.local.Dir, f.local.Git, f.local.Remote, f.local.Project, f.local.Branch = "/home/robin/secret", true, "github.com/acme/secret", "github.com/acme/secret", "main"
+		f.known["github.com/acme/secret"] = true
+		f.tasksErr = &ProblemError{Kind: ProblemForbidden}
+	}
+	return f
+}
+
+func (f *fakeBackend) CheckProject(ctx context.Context, project string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.checkErr != nil {
+		return false, f.checkErr
+	}
+	return f.known[project], nil
+}
+
+func (f *fakeBackend) Projects(ctx context.Context) ([]ProjectInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []ProjectInfo
+	for _, id := range []string{"github.com/deadweight-labs/design-system", "github.com/deadweight-labs/ghosttree"} {
+		out = append(out, ProjectInfo{ID: id, Org: "deadweight-labs"})
+	}
+	for _, id := range f.claimed {
+		out = append(out, ProjectInfo{ID: id, Org: "deadweight-labs"})
+	}
+	return out, nil
+}
+
+func (f *fakeBackend) ProjectPreview(ctx context.Context, project string) ([]Item, []Item, error) {
+	if project == "github.com/deadweight-labs/design-system" {
+		return []Item{{Ref: "REQ-7", Title: "Look ghosttree freigeben"}}, nil, nil
+	}
+	reqs, _ := f.OpenRequests(ctx)
+	tasks, _ := f.MyTasks(ctx)
+	return reqs, tasks, nil
+}
+
+func (f *fakeBackend) ClaimPlan(ctx context.Context) (ClaimPlan, error) {
+	if f.local.Remote == "" {
+		return ClaimPlan{}, &ClaimError{Code: "no_remote"}
+	}
+	return ClaimPlan{Remote: f.local.Remote, Orgs: []OrgChoice{
+		{Slug: "side-org", Name: "Side Org", Role: "member"},
+		{Slug: "deadweight-labs", Name: "Deadweight Labs", Role: "owner", Default: true},
+	}}, nil
+}
+
+func (f *fakeBackend) Claim(ctx context.Context, remote, org string) (ProjectInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.claimErr != nil {
+		return ProjectInfo{}, f.claimErr
+	}
+	f.claimed = append(f.claimed, remote+"@"+org)
+	f.known[remote] = true
+	return ProjectInfo{ID: remote, Org: org}, nil
+}
+
+func (f *fakeBackend) RecentDirs(ctx context.Context) ([]string, error) { return f.recent, nil }
+
+func (f *fakeBackend) CompleteDir(input string) []string {
+	var out []string
+	for d := range f.dirs {
+		if strings.HasPrefix(d, input) {
+			out = append(out, d+"/")
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (f *fakeBackend) ChangeDir(dir string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	dir = strings.TrimSuffix(dir, "/")
+	l, ok := f.dirs[dir]
+	if !ok {
+		return errors.New("no such folder: " + dir)
+	}
+	f.changedTo = append(f.changedTo, dir)
+	f.local = l
+	f.tasksErr = nil
+	return nil
 }
 
 func (f *fakeBackend) Local() Local {
@@ -77,6 +188,9 @@ func (f *fakeBackend) Search(ctx context.Context, line string) ([]Item, error) {
 }
 
 func (f *fakeBackend) MyTasks(ctx context.Context) ([]Item, error) {
+	if f.tasksErr != nil {
+		return nil, f.tasksErr
+	}
 	return []Item{
 		{Ref: "TASK-133", Title: "Mocks v2 der GitHub-artigen Oberfläche freigeben", Meta: "REQ-599"},
 		{Ref: "TASK-124", Title: "Drei Entscheidungen zum Git-nativen ghosttree treffen", Meta: "REQ-602"},
@@ -154,7 +268,7 @@ func (f *fakeBackend) StartLogin(ctx context.Context, server, machine string) (L
 	if f.loginErr != nil {
 		return LoginStart{}, f.loginErr
 	}
-	return LoginStart{Server: server, Machine: machine, URL: server + "/device", CompleteURL: server + "/device?code=WDJB-MJHT", Code: "WDJB-MJHT", Expires: time.Date(2026, 11, 9, 14, 32, 0, 0, time.UTC)}, nil
+	return LoginStart{Server: server, Machine: machine, URL: server + "/device", CompleteURL: server + "/device?code=WDJB-MJHT", Code: "WDJB-MJHT", Expires: time.Now().Add(15 * time.Minute)}, nil
 }
 
 func (f *fakeBackend) WaitLogin(ctx context.Context, start LoginStart) (LoginResult, error) {
