@@ -46,9 +46,11 @@ func TestMarkSeveralTasksDoneFromTheInbox(t *testing.T) {
 	b := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Kind: "input", Title: "Second thing"})
 	c := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "Third thing"})
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/inbox")
-	// One row per task, leading to the issue it blocks.
-	if n := strings.Count(page, `/issues/`+strconv.FormatInt(req.Request.ID, 10)+`#task-`); n < 3 {
-		t.Fatalf("expected a link to the issue at each of three tasks, got %d", n)
+	// One row per task, leading to the page of the task.
+	for _, task := range []humantask.Task{a, b, c} {
+		if !strings.Contains(page, `href="/ui/x/shell/tasks/`+strconv.FormatInt(task.ID, 10)+`"`) {
+			t.Fatalf("no link to the page of task %d", task.ID)
+		}
 	}
 	if strings.Contains(page, `name="value"`) {
 		t.Error("a task form must not carry a value field")

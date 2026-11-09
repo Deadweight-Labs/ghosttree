@@ -354,3 +354,19 @@ func TestStringRoundTrip(t *testing.T) {
 		t.Fatalf("String = %q", got)
 	}
 }
+
+// Oberflächen nennen den unbekannten Qualifier in ihrer Sprache: der Fehler trägt
+// den Schlüssel, aber nur ein unbekannter Schlüssel setzt ihn.
+func TestUnknownQualifierErrorNamesTheKey(t *testing.T) {
+	_, err := Parse("is:open flavor:sweet", testNow)
+	e, ok := err.(*Error)
+	if !ok || e.Unknown != "flavor" {
+		t.Fatalf("unknown qualifier error = %#v", err)
+	}
+	for _, line := range []string{"is:oen", "-hello", "label:", "pr:x"} {
+		_, err := Parse(line, testNow)
+		if e, ok := err.(*Error); !ok || e.Unknown != "" {
+			t.Errorf("Parse(%q): a known key must not be reported unknown: %#v", line, err)
+		}
+	}
+}

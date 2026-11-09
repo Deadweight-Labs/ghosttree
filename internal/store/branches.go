@@ -29,8 +29,9 @@ func (s *Store) ProjectBranches(project string) ([]string, error) {
 		UNION SELECT a.branch FROM git_anchors a JOIN ghost_files g ON g.anchor_id=a.id
 			WHERE g.project=? AND a.branch<>''
 		UNION SELECT a.branch FROM git_anchors a JOIN knowledge k ON k.anchor_id=a.id
-			WHERE k.project=? AND a.branch<>''`,
-		project, project, project, project)
+			WHERE k.project=? AND a.branch<>''
+		UNION SELECT branch FROM ghost_branch_files WHERE project=?`,
+		project, project, project, project, project)
 	if err != nil {
 		return nil, err
 	}

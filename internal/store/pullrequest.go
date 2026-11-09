@@ -108,7 +108,8 @@ func insertAnchorWithPRTx(tx txExec, a *gitanchor.Anchor) (any, error) {
 
 // projectAnchorIDs ist die Teilabfrage der Anker eines Projekts. Ein Anker
 // trägt kein Projekt; er gehört dem Projekt der Zeilen, die auf ihn zeigen.
-// Koordinationsnachrichten fehlen: sie hängen an Räumen, nicht an Projekten.
+// Von den Koordinationsnachrichten zählen die des Projektraums; Direkt- und
+// Gruppenräume gehören zu keinem Projekt.
 const projectAnchorIDs = `
 	SELECT anchor_id FROM knowledge WHERE project=?1 AND anchor_id IS NOT NULL
 	UNION SELECT kv.anchor_id FROM knowledge_versions kv JOIN knowledge k ON k.id=kv.knowledge_id WHERE k.project=?1 AND kv.anchor_id IS NOT NULL
@@ -119,7 +120,8 @@ const projectAnchorIDs = `
 	UNION SELECT a.anchor_id FROM request_activity a JOIN requests r ON r.id=a.request_id WHERE r.project=?1 AND a.anchor_id IS NOT NULL
 	UNION SELECT pe.anchor_id FROM pain_events pe JOIN pains p ON p.id=pe.pain_id WHERE p.project=?1 AND pe.anchor_id IS NOT NULL
 	UNION SELECT anchor_id FROM ideas WHERE project=?1 AND anchor_id IS NOT NULL
-	UNION SELECT fv.anchor_id FROM feature_versions fv JOIN features f ON f.id=fv.feature_id WHERE f.project=?1 AND fv.anchor_id IS NOT NULL`
+	UNION SELECT fv.anchor_id FROM feature_versions fv JOIN features f ON f.id=fv.feature_id WHERE f.project=?1 AND fv.anchor_id IS NOT NULL
+	UNION SELECT anchor_id FROM coord_messages WHERE destination_kind='room' AND destination_id='project:'||?1 AND anchor_id IS NOT NULL`
 
 // RecordPullRequest nimmt ein PR-Ereignis auf (Kriterien 3 und 4 von REQ-597):
 //

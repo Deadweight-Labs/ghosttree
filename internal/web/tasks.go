@@ -25,13 +25,12 @@ var (
 	taskStateKeys = map[string]string{"done": "tasks.state.done", "confirmed": "tasks.state.confirmed", "dropped": "tasks.state.dropped"}
 )
 
-// taskHref is where a task leads: the issue it blocks, else the tasks of the inbox.
+// taskHref is where a task leads: its page in the repository (decision #4331).
 func taskHref(t humantask.Task) string {
-	anchor := "#task-" + strconv.FormatInt(t.ID, 10)
-	if t.RequestID != 0 && t.Project != "" {
-		return repoHref(t.Project) + "/issues/" + strconv.FormatInt(t.RequestID, 10) + anchor
+	if t.Project != "" {
+		return taskHrefOf(t)
 	}
-	return "/ui/inbox?f=aufgaben" + anchor
+	return "/ui/inbox?f=aufgaben#task-" + strconv.FormatInt(t.ID, 10)
 }
 
 // visibleProjects names the projects a list covers: the selected one, or every
@@ -73,6 +72,13 @@ func (a *app) tasksDone(w http.ResponseWriter, r *http.Request) {
 		a.taskFail(w, r, q, err)
 		return
 	}
+	// The form on the page of a task leads back to that page.
+	if len(ids) == 1 && r.FormValue("back") == "task" {
+		if t, err := a.store.TaskByID(ids[0]); err == nil && t.Project != "" {
+			http.Redirect(w, r, taskHrefOf(t), http.StatusSeeOther)
+			return
+		}
+	}
 	http.Redirect(w, r, back+queryOf(q), http.StatusSeeOther)
 }
 
@@ -113,6 +119,7 @@ func (a *app) registerPainTaskPages(mux *http.ServeMux) {
 	a.handle(mux, "GET /ui/pains", a.requirePerson(http.HandlerFunc(a.painsPage)))
 	a.handle(mux, "GET /ui/pains/{id}", a.requirePerson(http.HandlerFunc(a.painPage)))
 	a.handle(mux, "POST /ui/pains/{id}/state", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painState))))))
+	a.handle(mux, "POST /ui/pains/{id}/idea", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painIdea))))))
 }
 
 // taskFailKey maps the fail= value of a redirect to its message; anything else

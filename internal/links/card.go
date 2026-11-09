@@ -174,7 +174,7 @@ func (b Builder) CriterionCard(d requestdomain.Detail, number int) (Card, bool) 
 
 // TaskCard describes a human task.
 func (b Builder) TaskCard(t humantask.Task) Card {
-	c := Card{Kind: "Task", Ref: t.HumanID(), Title: t.Title, Status: t.State, URL: b.Task(t.ID)}
+	c := Card{Kind: "Task", Ref: t.HumanID(), Title: t.Title, Status: t.State, URL: b.WithProject(t.Project).Task(t.ID)}
 	who := t.Assignee
 	if who == "" {
 		who = "human"
@@ -410,7 +410,7 @@ func (b Builder) PackageCard(p requestdomain.PackageDetail) Card {
 		}
 	}
 	pb := b.WithProject(p.Project)
-	u := pb.Package(p.Branch)
+	u := pb.PackageN(p.ID)
 	if p.PR != 0 {
 		u = pb.PullChecklist(p.PR)
 	}

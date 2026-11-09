@@ -553,23 +553,25 @@ type pullView struct {
 	Verb, Into                 string
 	HeadChip, BaseChip         template.HTML
 	GitHub, GitHubTip          string
-	Tabs                       []pullTab
-	Tab                        string
-	Items                      []tlItem
-	Checks                     []pullCheck
-	Stat                       pullStat
-	Members                    []pullMember
-	HasPackage                 bool
-	Features                   []pullFeatureLine
-	Uncovered                  []pullUncovered
-	Know                       []pullKnowLine
-	KnowMore                   int
-	Ghosts                     []pullGhostLine
-	Commits                    []commitRow
-	CommitsTotal               int
-	Side                       pullSide
-	ChecklistHref              string
-	KnowledgeHref              string
+	// DoneHref is the quick filter "What was done here?" for this pull request.
+	DoneHref      string
+	Tabs          []pullTab
+	Tab           string
+	Items         []tlItem
+	Checks        []pullCheck
+	Stat          pullStat
+	Members       []pullMember
+	HasPackage    bool
+	Features      []pullFeatureLine
+	Uncovered     []pullUncovered
+	Know          []pullKnowLine
+	KnowMore      int
+	Ghosts        []pullGhostLine
+	Commits       []commitRow
+	CommitsTotal  int
+	Side          pullSide
+	ChecklistHref string
+	KnowledgeHref string
 }
 
 // pullDetail ist /ui/{org}/{repo}/pulls/{n}.
@@ -632,6 +634,7 @@ func (a *app) pullDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 	if view.External != "" {
 		v.GitHub, v.GitHubTip = view.External+"/pull/"+strconv.FormatInt(n, 10), l.msg("pulls.gh_pull", n)
 	}
+	v.DoneHref = pathWith("/ui/search", "project", remote, "preset", "pr-ergebnis", "pr", strconv.FormatInt(n, 10))
 
 	v.HasPackage = d.Checklist.HasPackage
 	a.pullChecklist(l, pa, view, d, v)
@@ -641,7 +644,7 @@ func (a *app) pullDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 			v.KnowMore = len(d.Brief.Knowledge) - len(v.Know)
 			break
 		}
-		v.Know = append(v.Know, pullKnowLine{TypeKey: knowTypeKey(k.Type), Class: knowTypeClass(k.Type), Title: k.Title, Href: "/ui/knowledge/" + strconv.FormatInt(k.ID, 10), Person: k.Person})
+		v.Know = append(v.Know, pullKnowLine{TypeKey: knowTypeKey(k.Type), Class: knowTypeClass(k.Type), Title: k.Title, Href: knowledgeHref(remote, k.ID), Person: k.Person})
 	}
 	for _, p := range d.Brief.Ghosts {
 		if len(v.Ghosts) >= pullKnowledgeMax {
@@ -656,6 +659,18 @@ func (a *app) pullDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 	}
 	v.CommitsTotal = len(v.Commits)
 	v.Items = a.pullItems(l, view, d, cl.Items, v)
+	// What was said in the project room at the pull request or at one of its
+	// commits stands between the events by time.
+	if said, err := pa.PullMessages(remote, n); err == nil && len(said) > 0 {
+		visible := a.branchRule(r2, pa, remote)
+		var msgs []tlItem
+		for _, e := range said {
+			it := commitItem(l, e, commitEntryHref(view, def, visible, e), now)
+			it.ID, it.at = "message-"+strconv.FormatInt(e.ID, 10), parseTime(e.At)
+			msgs = append(msgs, it)
+		}
+		v.Items = mergeTimeline(v.Items, msgs)
+	}
 
 	tab := r.URL.Query().Get("tab")
 	if !slices.Contains([]string{pullTabTalk, pullTabChecklist, pullTabKnowledge, pullTabCommits}, tab) {
@@ -768,7 +783,7 @@ func (a *app) pullChecklist(l lang, pa *store.ProjectAccess, view *repoView, d s
 		v.Side.Features = append(v.Side.Features, sideRef{N: f.Feature, Title: f.Name, Href: line.Href})
 	}
 	if d.Package != nil {
-		v.Side.Package = d.Package.Name
+		v.Side.Package = packageName(l, d.Package.Package)
 		v.Side.PackageNote = l.msg("pulls.side.package_note", len(v.Members), v.Stat.Done, v.Stat.Total)
 	}
 	for i, m := range v.Members {
@@ -795,7 +810,7 @@ func pullChecks(l lang, d store.PullDetail, v *pullView) []pullCheck {
 	}
 	c := d.Checklist
 	if c.HasPackage {
-		add(c.RequiredOpen == 0, d.Package.Name, l.msg("pulls.chk.criteria", v.Stat.Done, v.Stat.Total))
+		add(c.RequiredOpen == 0, packageName(l, d.Package.Package), l.msg("pulls.chk.criteria", v.Stat.Done, v.Stat.Total))
 		if c.RequiredTotal > 0 && c.RequiredOpen > 0 {
 			add(false, l.msg("pulls.chk.required"), l.msg("pulls.chk.required_open", c.RequiredOpen, c.RequiredTotal))
 		}
@@ -821,7 +836,7 @@ func pullChecks(l lang, d store.PullDetail, v *pullView) []pullCheck {
 func (a *app) pullItems(l lang, view *repoView, d store.PullDetail, commits []store.CommitInfo, v *pullView) []tlItem {
 	now := overviewNow().UTC()
 	var items []tlItem
-	open := tlItem{ID: "opened", Act: "pull.opened", Who: d.Author, Icon: "pr", Head: template.HTML(html.EscapeString(l.msg("pulls.ev.opened"))), Age: shortAgo(l, now, parseTime(d.OpenedAt))}
+	open := tlItem{ID: "opened", Act: "pull.opened", Who: d.Author, Icon: "pr", Head: template.HTML(html.EscapeString(l.msg("pulls.ev.opened"))), Age: shortAgo(l, now, parseTime(d.OpenedAt)), at: parseTime(d.OpenedAt)}
 	if d.Author == "" {
 		open.Tone = "ok"
 	}
@@ -859,7 +874,7 @@ func (a *app) pullItems(l lang, view *repoView, d store.PullDetail, commits []st
 			short := shortSHA(c.SHA)
 			head.WriteString(` <a class="chip sha" href="` + html.EscapeString(view.Href+"/commits/"+c.SHA) + `">` + html.EscapeString(short) + `</a>`)
 		}
-		it := tlItem{ID: "commits-" + strconv.Itoa(i), Act: "pull.commits", Who: g.who, Icon: "commit", Tone: "ok", Head: template.HTML(head.String())}
+		it := tlItem{ID: "commits-" + strconv.Itoa(i), Act: "pull.commits", Who: g.who, Icon: "commit", Tone: "ok", Head: template.HTML(head.String()), at: g.last}
 		if !g.last.IsZero() {
 			it.Age = shortAgo(l, now, g.last)
 		}
@@ -871,9 +886,9 @@ func (a *app) pullItems(l lang, view *repoView, d store.PullDetail, commits []st
 		if d.Base != "" {
 			head += " " + string(v.BaseChip)
 		}
-		items = append(items, tlItem{ID: "merged", Act: "pull.merged", Icon: "merge", Tone: "don", Head: template.HTML(head), Age: shortAgo(l, now, parseTime(firstNonEmpty(d.MergedAt, d.UpdatedAt)))})
+		items = append(items, tlItem{ID: "merged", Act: "pull.merged", Icon: "merge", Tone: "don", Head: template.HTML(head), Age: shortAgo(l, now, parseTime(firstNonEmpty(d.MergedAt, d.UpdatedAt))), at: parseTime(firstNonEmpty(d.MergedAt, d.UpdatedAt))})
 	case store.PullClosed:
-		items = append(items, tlItem{ID: "closed", Act: "pull.closed", Icon: "drop", Head: template.HTML(html.EscapeString(l.msg("pulls.ev.closed"))), Age: shortAgo(l, now, parseTime(d.UpdatedAt))})
+		items = append(items, tlItem{ID: "closed", Act: "pull.closed", Icon: "drop", Head: template.HTML(html.EscapeString(l.msg("pulls.ev.closed"))), Age: shortAgo(l, now, parseTime(d.UpdatedAt)), at: parseTime(d.UpdatedAt)})
 	}
 	return items
 }

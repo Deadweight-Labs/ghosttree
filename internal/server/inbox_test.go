@@ -48,7 +48,7 @@ func TestInboxRouteKeepsFinishedEntriesAndAnswersByRights(t *testing.T) {
 	}
 
 	code, open, _ := inboxOf(t, f, "mia", "")
-	if code != 200 || len(open) != 1 || open[0].Ref != fmt.Sprintf("TASK-%d", openID) || open[0].State != "open" || !strings.HasSuffix(open[0].Link, fmt.Sprintf("/ui/tasks/%d", openID)) {
+	if code != 200 || len(open) != 1 || open[0].Ref != fmt.Sprintf("TASK-%d", openID) || open[0].State != "open" || !strings.HasSuffix(open[0].Link, fmt.Sprintf("/tasks/%d", openID)) {
 		t.Fatalf("open: %d %+v", code, open)
 	}
 	_, done, _ := inboxOf(t, f, "mia", "?state=done")

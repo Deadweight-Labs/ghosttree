@@ -18,6 +18,10 @@ import (
 
 const sessionCookie = "gt_session"
 
+// multipartMemory is how much of a form with a file stays in memory; the rest
+// goes to a temporary file that net/http removes after the request.
+const multipartMemory = 1 << 20
+
 type personKey struct{}
 type csrfKey struct{}
 type browserSession struct {
@@ -136,10 +140,30 @@ func (a *app) notInteractive(w http.ResponseWriter, r *http.Request) {
 	a.renderBrowser(w, r, "interactive", pageData{Title: l.msg("adm.login.title"), OIDC: a.oidc != nil})
 }
 
-func (a *app) requireCSRF(next http.Handler) http.Handler {
+func (a *app) requireCSRF(next http.Handler) http.Handler { return a.csrfGate(next, false) }
+
+// requireCSRFMultipart is requireCSRF for the one kind of form that carries a
+// file (the image upload): its token is a field of the multipart body, which
+// ParseForm does not read. Only routes that wrap the body in limitBodyN first use
+// it; every other route never parses multipart, so a large multipart body cannot
+// reach the temporary files of net/http there. A body over the limit is 413.
+func (a *app) requireCSRFMultipart(next http.Handler) http.Handler { return a.csrfGate(next, true) }
+
+func (a *app) csrfGate(next http.Handler, multipart bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			if err := r.ParseForm(); err != nil ||
+			var err error
+			if multipart && strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+				err = r.ParseMultipartForm(multipartMemory)
+				var tooBig *http.MaxBytesError
+				if errors.As(err, &tooBig) {
+					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+					return
+				}
+			} else {
+				err = r.ParseForm()
+			}
+			if err != nil ||
 				subtle.ConstantTimeCompare([]byte(r.FormValue("csrf_token")), []byte(csrfOf(r))) != 1 ||
 				!a.sameOrigin(r) {
 				http.Error(w, "forbidden", http.StatusForbidden)

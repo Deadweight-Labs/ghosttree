@@ -73,6 +73,35 @@ func (a *ProjectAccess) BranchView(project, branch string) string {
 	return ""
 }
 
+// FactsView lässt von den Eigenschaften eines Objekts im Projekt nur stehen, was
+// der Betrachter dort auch lesen darf: ohne alle Branches nur den Standard-Branch,
+// keine Pakete. Die Suchsprache prüft branch: und package: gegen diese Sicht, nicht
+// gegen die Wahrheit; sonst ließen sich Namen und Nummern erraten. Die Rolle zählt
+// im Projekt des Objekts, nicht die höchste über alle.
+func (a *ProjectAccess) FactsView(project string, of ObjectFacts) ObjectFacts {
+	if a.SeesAllBranches(project) {
+		return of
+	}
+	def := a.DefaultBranch(project)
+	var kept []string
+	for _, b := range of.Branches {
+		if b == def {
+			kept = append(kept, b)
+		}
+	}
+	of.Branches, of.Packages = kept, nil
+	return of
+}
+
+// AssigneeView: den Zuständigen eines Objekts erfährt nur, wer im Projekt alle
+// Branches sehen darf (for: ist für Gäste kein Suchfilter).
+func (a *ProjectAccess) AssigneeView(project, assignee string) string {
+	if a.SeesAllBranches(project) {
+		return assignee
+	}
+	return ""
+}
+
 // AnchorView ist BranchView für einen Git-Anker; der Anker des Aufrufers bleibt
 // unberührt.
 func (a *ProjectAccess) AnchorView(project string, g *gitanchor.Anchor) *gitanchor.Anchor {

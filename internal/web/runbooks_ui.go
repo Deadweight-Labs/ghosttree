@@ -27,6 +27,8 @@ type runbookRow struct {
 type runbooksView struct {
 	Rows  []runbookRow
 	Empty bool
+	// NewHref is the button "New runbook", empty for who may not create one.
+	NewHref string
 }
 
 // runbookCmd is a command to copy with its caption.
@@ -58,6 +60,10 @@ type runbookPageView struct {
 	GiveHref               string
 	Touched                []string
 	Pitfalls               []runbook.PitfallRef
+	// EditHref is the button "Edit", empty for who may not change the runbook;
+	// Result says what the last save did.
+	EditHref string
+	Result   *requestResult
 }
 
 func (a *app) accountNumber(r *http.Request) int64 {
@@ -69,6 +75,10 @@ func (a *app) accountNumber(r *http.Request) int64 {
 func (a *app) runbooksPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	project := a.projectParam(r)
+	if rv := repoFrom(r); rv != nil {
+		// The repository in the address is the one project of the list.
+		project = rv.Project
+	}
 	pa := a.access(r)
 	hidden, stop := a.gateList(w, r, pa, project, store.ResRunbook)
 	if stop {
@@ -106,6 +116,9 @@ func (a *app) runbooksPage(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.SliceStable(v.Rows, func(i, j int) bool { return v.Rows[i].Name < v.Rows[j].Name })
 	v.Empty = len(v.Rows) == 0
+	if interactive(r) && project != "" && pa.CheckRunbookCreate(project, "") == nil {
+		v.NewHref = runbookHrefIn(project, runbookNew)
+	}
 	a.renderBrowser(w, r, "runbooks", pageData{Title: l.msg("repo.tab.runbooks"), Project: project, RunbooksV: v})
 }
 
@@ -137,6 +150,10 @@ func (a *app) runbookPage(w http.ResponseWriter, r *http.Request, remote, name s
 		http.NotFound(w, r)
 		return
 	}
+	if r.URL.Query().Get("edit") == "1" {
+		a.runbookEditPage(w, r, remote, *ref)
+		return
+	}
 	view, err := a.store.RunbookView(ref.ID, 0)
 	if err != nil {
 		http.NotFound(w, r)
@@ -146,6 +163,17 @@ func (a *app) runbookPage(w http.ResponseWriter, r *http.Request, remote, name s
 		Params: view.Spec.Params, Preconditions: view.Spec.Preconditions, Pitfalls: pa.RunbookTitles(view.Spec.Pitfalls)}
 	if pa.HidesMachines(remote) {
 		v.Machine = ""
+	}
+	if interactive(r) && pa.CheckRunbook(*ref, store.ActEdit) == nil {
+		v.EditHref = runbookHrefIn(remote, view.Name) + "?edit=1"
+	}
+	switch r.URL.Query().Get("done") {
+	case "saved":
+		v.Result = &requestResult{Text: l.msg("runbooks.result.saved", view.Version), Kind: "done"}
+	case "approved":
+		v.Result = &requestResult{Text: l.msg("runbooks.result.saved_approved", view.Version), Kind: "done"}
+	case "unchanged":
+		v.Result = &requestResult{Text: l.msg("runbooks.result.unchanged"), Kind: "done"}
 	}
 	if view.GitAnchor != nil && !view.GitAnchor.IsZero() {
 		v.Sha = shortSha(view.GitAnchor.Commit)

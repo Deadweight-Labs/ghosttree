@@ -91,7 +91,7 @@ func (a *app) painItems(l lang, pa *store.ProjectAccess, p pain.Pain, events []p
 		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
 	}
 	for _, e := range events {
-		it := tlItem{ID: "event-" + strconv.FormatInt(e.ID, 10), Act: "pain." + e.Kind, Who: e.Person, Icon: "pain", Age: now(e.CreatedAt), at: parseTime(e.CreatedAt)}
+		it := tlItem{ID: "event-" + strconv.FormatInt(e.ID, 10), Act: "pain." + e.Kind, Who: e.Person, Icon: "pain", Age: now(e.CreatedAt), Git: anchorViewOf(pa, p.Project, e.GitAnchor, e.Via), at: parseTime(e.CreatedAt)}
 		switch e.Kind {
 		case "created":
 			it.Icon, it.Head = "pain", sentence("pains.ev.created")

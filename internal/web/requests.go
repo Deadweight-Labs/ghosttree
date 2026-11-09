@@ -73,6 +73,8 @@ type evidenceLine struct {
 	Kind, Label, Ref, Href string
 	// Person is who gave the proof.
 	Person string
+	// Git is the anchor the proof was written at.
+	Git *anchorView
 }
 
 type criterionLine struct {
@@ -175,6 +177,8 @@ type requestView struct {
 	Opened string
 	// Live is who works on the issue right now (live.go).
 	Live []liveAgent
+	// LabelBox is the block "Labels" of the sidebar (issue page only).
+	LabelBox *labelBoxView
 	// MoveProjects sind die Projekte, in die der Betrachter den Auftrag legen
 	// darf; leer heißt: kein Formular.
 	MoveProjects []filterOption
@@ -243,7 +247,7 @@ var pubRefPattern = regexp.MustCompile(`^session:([A-Za-z0-9_-]+)(#.*)?$`)
 var sessionScrub = regexp.MustCompile(`session:[^\s#]+(#\S*)?`)
 
 func (a *app) evidenceLineFor(l lang, pa *store.ProjectAccess, project string, e requestdomain.Evidence) evidenceLine {
-	line := evidenceLine{Kind: e.Kind, Label: evidenceLabel(l, e.Kind), Ref: e.Ref, Person: e.Person}
+	line := evidenceLine{Kind: e.Kind, Label: evidenceLabel(l, e.Kind), Ref: e.Ref, Person: e.Person, Git: anchorViewOf(pa, project, e.GitAnchor, e.Via)}
 	switch e.Kind {
 	case "session":
 		line.Ref = ""
@@ -603,7 +607,9 @@ var activityKinds = map[string]string{
 	"relation.added": "requests.act.relation_added", "relation.removed": "requests.act.relation_removed",
 	"work.started": "requests.act.work_started", "work.resumed": "requests.act.work_resumed", "work.finished": "requests.act.work_finished",
 	"evidence.migrated": "requests.act.evidence_migrated",
-	"package.added":     "requests.act.package_added", "package.removed": "requests.act.package_removed", "package.role": "requests.act.package_role",
+	"request.reopened":  "requests.act.request_reopened", "criterion.reopened": "requests.act.criterion_reopened",
+	"relation.taken_over": "requests.act.relation_taken_over", "pr.merged": "requests.act.pr_merged",
+	"package.added": "requests.act.package_added", "package.removed": "requests.act.package_removed", "package.role": "requests.act.package_role",
 	"pain.linked": "requests.act.pain_linked", "pain.unlinked": "requests.act.pain_unlinked",
 	"task.created": "requests.act.task_created", "task.done": "requests.act.task_done", "task.confirmed": "requests.act.task_confirmed",
 	"task.reopened": "requests.act.task_reopened", "task.dropped": "requests.act.task_dropped",

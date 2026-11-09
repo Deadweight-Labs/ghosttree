@@ -1,5 +1,5 @@
 {{define "loginbrand"}}<a class="auth-logo" href="/ui/" aria-label="{{t "shell.brand"}}">{{template "ghostmark"}}</a>{{end}}
-{{define "authfoot"}}<footer class="gt-foot"><a href="https://github.com/Deadweight-Labs/ghosttree/blob/main/docs/operations.md#privacy-and-security" rel="noopener noreferrer">{{t "ui.footer.privacy"}}</a><span class="sep" aria-hidden="true">·</span><a href="https://github.com/Deadweight-Labs/ghosttree#readme" rel="noopener noreferrer">{{t "ui.footer.help"}}</a>{{if srvVersion}}<span class="sep" aria-hidden="true">·</span><span>{{t "ui.footer.version" srvVersion}}</span>{{end}}</footer>{{end}}
+{{define "authfoot"}}<footer class="gt-foot"><a href="https://github.com/Deadweight-Labs/ghosttree/blob/main/docs/operations.md#privacy-and-security" rel="noopener noreferrer">{{t "ui.footer.privacy"}}</a><a href="https://github.com/Deadweight-Labs/ghosttree#readme" rel="noopener noreferrer">{{t "ui.footer.help"}}</a>{{if srvVersion}}<span>{{t "ui.footer.version" srvVersion}}</span>{{end}}</footer>{{end}}
 
 {{define "login"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="/static/ui-auth.css"><div class="authbox">{{template "loginbrand"}}
 <h1>{{t "login.title"}}</h1>

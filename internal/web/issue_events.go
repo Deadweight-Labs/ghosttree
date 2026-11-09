@@ -40,6 +40,8 @@ type issueEvent struct {
 	Note string
 	// Commits go behind the sentence, the other proofs under the line.
 	Head, Body []evidenceLine
+	// Git is the anchor the entry was written at.
+	Git *anchorView
 }
 
 // sessionHandle is "claude@mainex": the harness and the machine it runs on. A
@@ -64,6 +66,8 @@ var (
 	taskData       = regexp.MustCompile(`^TASK-(\d+)(?: (\S+) (.*))?$`)
 	painData       = regexp.MustCompile(`PAIN-(\d+)`)
 	pkgData        = regexp.MustCompile(`^PKG-(\d+) branch:(\S*) role:(\S*)`)
+	reopenedData   = regexp.MustCompile(`^AC-\d+\.(\d+)(?: \(was \w+\))?(?: — (.*))?$`)
+	mergedData     = regexp.MustCompile(`^PR #(\d+)`)
 )
 
 // issueEvents turns the visible activity of a request into history entries,
@@ -154,6 +158,27 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			ev.Icon, ev.Sentence, ev.Quote = "pause", sentence("issue.ev.work_finished"), ellipsize(sessionScrub.ReplaceAllString(act.Data, l.msg("requests.session")), 200)
 		case "evidence.migrated":
 			ev.Icon, ev.Sentence = "check", sentence("issue.ev.evidence_migrated")
+		case "request.reopened":
+			ev.Icon, ev.Sentence = "issue", sentence("issue.ev.reopened")
+		case "criterion.reopened":
+			// "AC-<request>.<number> (was met) — <reason>": the number names the
+			// requirement, the reason (the person's words) is the quote.
+			ev.Icon = "issue"
+			ev.Sentence = sentence("issue.ev.criterion_reopened_any")
+			if m := reopenedData.FindStringSubmatch(act.Data); m != nil {
+				n, _ := strconv.Atoi(m[1])
+				ev.Sentence = sentence("issue.ev.criterion_reopened", crit(n))
+				ev.Criterion, ev.Quote = n, ellipsize(strings.TrimSpace(m[2]), 200)
+			}
+		case "relation.taken_over":
+			ev.Icon, ev.Sentence = "book", sentence("issue.ev.relation_taken_over")
+		case "pr.merged":
+			// The note is the store's English line ("PR #12 … merged into main …");
+			// the page names the pull request and says it in its own language.
+			ev.Icon, ev.Tone, ev.Sentence = "pr", "don", sentence("issue.ev.pr_merged_any")
+			if m := mergedData.FindStringSubmatch(act.Data); m != nil {
+				ev.Sentence = sentence("issue.ev.pr_merged", html.EscapeString("#"+m[1]))
+			}
 		case "package.added", "package.removed", "package.role":
 			ev.Icon = "book"
 			named := map[string][2]string{"package.added": {"issue.ev.package_added", "issue.ev.package_added_any"}, "package.removed": {"issue.ev.package_removed", "issue.ev.package_removed_any"},
@@ -347,7 +372,7 @@ func timelineItems(l lang, events []issueEvent) []tlItem {
 		if e.ID != 0 {
 			id = "event-" + strconv.FormatInt(e.ID, 10)
 		}
-		items = append(items, tlItem{ID: id, Act: e.Act, Who: e.By, Icon: e.Icon, Tone: tone, Head: head, Age: e.Age, Body: body, at: parseTime(e.At)})
+		items = append(items, tlItem{ID: id, Act: e.Act, Who: e.By, Icon: e.Icon, Tone: tone, Head: head, Age: e.Age, Body: body, Git: e.Git, at: parseTime(e.At)})
 	}
 	return items
 }

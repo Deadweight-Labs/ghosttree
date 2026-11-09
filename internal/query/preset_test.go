@@ -25,7 +25,7 @@ func TestBuiltinPresetsAreValidAndNamedForTheirArguments(t *testing.T) {
 		if strings.Join(p.Args, ",") != strings.Join(args, ",") {
 			t.Errorf("%s args = %v, want %v", p.Name, p.Args, args)
 		}
-		if err := CheckPreset(p.Name, p.Queries); err != nil {
+		if err := checkPreset(p.Name, p.Queries); err != nil {
 			t.Errorf("%s: %v", p.Name, err)
 		}
 		if p.Description == "" {
@@ -85,5 +85,16 @@ func TestCheckPresetRejectsWhatCannotRun(t *testing.T) {
 	}
 	if err := CheckPreset("ok-1", []string{"is:open label:bug", "pr:{pr} since:{since}"}); err != nil {
 		t.Errorf("valid: %v", err)
+	}
+}
+
+func TestCheckPresetRefusesTheNamesOfTheSuppliedSearches(t *testing.T) {
+	for _, p := range Builtin {
+		if err := CheckPreset(p.Name, p.Queries); err == nil {
+			t.Errorf("a saved search may not be named %s", p.Name)
+		}
+	}
+	if err := CheckPreset("pr-ergebnis-2", []string{"is:open"}); err != nil {
+		t.Errorf("a name next to a supplied one is refused: %v", err)
 	}
 }

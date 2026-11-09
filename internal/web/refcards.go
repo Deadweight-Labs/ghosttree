@@ -34,7 +34,7 @@ var (
 	refKeyRE = regexp.MustCompile(`data-ref="(REQ|PAIN|TASK|IDEA|DEC)-([0-9]{1,15})"`)
 	// hrefRefRE reads the reference an address stands for: .../issues/12,
 	// /ui/requests/12, .../pains/5, .../ideas/3.
-	hrefRefRE = regexp.MustCompile(`(?:^|/)(issues|requests|pains|ideas)/([0-9]{1,15})(?:[/?#].*)?$`)
+	hrefRefRE = regexp.MustCompile(`(?:^|/)(issues|requests|pains|ideas|tasks)/([0-9]{1,15})(?:[/?#].*)?$`)
 	hrefTask  = regexp.MustCompile(`#task-([0-9]{1,15})$`)
 )
 
@@ -48,7 +48,7 @@ func refKeyOf(href string) string {
 	if m == nil {
 		return ""
 	}
-	prefix := map[string]string{"issues": "REQ", "requests": "REQ", "pains": "PAIN", "ideas": "IDEA"}[m[1]]
+	prefix := map[string]string{"issues": "REQ", "requests": "REQ", "pains": "PAIN", "ideas": "IDEA", "tasks": "TASK"}[m[1]]
 	return prefix + "-" + m[2]
 }
 
@@ -143,8 +143,8 @@ func (a *app) resolveRefCard(l lang, pa *store.ProjectAccess, now time.Time, pre
 		card.Brief, card.When = links.Clean(t.Description, 180), when(t.CreatedAt)
 		card.Who = firstNonEmpty(t.Assignee, t.CreatedBy)
 		card.Note = a.taskNoteFor(l, id, t.Steps).forCard()
-		if t.RequestID != 0 && t.Project != "" {
-			href = repoHref(t.Project) + "/issues/" + strconv.FormatInt(t.RequestID, 10) + "#task-" + strconv.FormatInt(id, 10)
+		if t.Project != "" {
+			href = taskHrefOf(t)
 		}
 	case "IDEA":
 		i, err := pa.IdeaView(id)

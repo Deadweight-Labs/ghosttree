@@ -672,7 +672,7 @@ func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, n
 		lr.Title = l.msg("sessions.private")
 		return lr
 	}
-	lr.Href = "/ui/sessions/" + s.PublicID
+	lr.Href = sessionPageHref(s.Scope.Project, s.PublicID)
 	lr.Title = s.Title
 	if lr.Title == "" {
 		lr.Title = l.msg("sessions.untitled")
@@ -740,7 +740,7 @@ func (a *app) groupView(l lang, g store.SearchGroup, query, kind string, now tim
 		// Found by meaning: no word of the query is in it to be counted.
 		count = ""
 	}
-	gv := groupView{PID: s.PublicID, Href: "/ui/sessions/" + s.PublicID, Title: title, Meta: sessionMeta(s), Count: count, Time: dayAndClock(l, s.LastSeenAt, now)}
+	gv := groupView{PID: s.PublicID, Href: sessionPageHref(s.Scope.Project, s.PublicID), Title: title, Meta: sessionMeta(s), Count: count, Time: dayAndClock(l, s.LastSeenAt, now)}
 	for _, h := range g.Hits {
 		q := url.Values{"at": {strconv.Itoa(h.Seq)}, "q": {query}, "back": {"1"}}
 		if kind != "" {
@@ -803,6 +803,11 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	sess, ok := a.lookupSession(r, pa)
 	if !ok {
 		a.sessionMissing(w, r)
+		return
+	}
+	// The old address leads to the page in the repository of the session.
+	if r.PathValue("a") == "" && sess.Scope.Project != "" && a.canOpenRepo(r, pa, sess.Scope.Project) {
+		http.Redirect(w, r, withRawQuery(sessionPageHref(sess.Scope.Project, sess.PublicID), r), http.StatusFound)
 		return
 	}
 	r = a.repoScoped(r, sess.Scope.Project, "sessions")

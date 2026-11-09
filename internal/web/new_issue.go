@@ -113,7 +113,7 @@ func (a *app) newIssueDefaults(r *http.Request, pa *store.ProjectAccess, remote 
 	if v.HasPackage {
 		if pkgs, err := pa.PackagesOfProject(remote, requestdomain.PackageOpen); err == nil {
 			for _, p := range pkgs {
-				v.Packages = append(v.Packages, newPackageOption{ID: p.ID, Label: p.Name})
+				v.Packages = append(v.Packages, newPackageOption{ID: p.ID, Label: packageName(l, p.Package)})
 			}
 		}
 	}

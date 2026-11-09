@@ -77,6 +77,7 @@ func (a *app) registerNewPages(mux *http.ServeMux) {
 	a.handle(mux, "GET /ui/f/{n}", a.requirePerson(http.HandlerFunc(a.featureShort)))
 	a.registerMachinePages(mux)
 	a.registerWorkshopPages(mux)
+	a.registerTaskPages(mux)
 }
 
 // featuresPage ist /ui/{org}/{repo}/features.
@@ -132,7 +133,7 @@ func (a *app) featuresPage(w http.ResponseWriter, r *http.Request) {
 		{Icon: "feature", Label: "features.tab.active", Count: strconv.Itoa(active), Href: href(feature.Active), On: state == feature.Active},
 		{Icon: "drop", Label: "features.tab.retired", Count: strconv.Itoa(retired), Href: href(feature.Retired), On: state == feature.Retired},
 	}
-	pkgs := a.featurePackages(pa, project)
+	pkgs := a.featurePackages(l, pa, project)
 	now := overviewNow().UTC()
 	for _, f := range shown {
 		if (f.State == feature.Retired) != (state == feature.Retired) {
@@ -161,7 +162,7 @@ func (a *app) featureError(w http.ResponseWriter, r *http.Request, err error) {
 
 // featurePackages ordnet die Pull-Request-Nummern der Pakete des Projekts zu:
 // was der Betrachter an Paketen lesen darf, nicht mehr.
-func (a *app) featurePackages(pa *store.ProjectAccess, project string) map[int64]string {
+func (a *app) featurePackages(l lang, pa *store.ProjectAccess, project string) map[int64]string {
 	out := map[int64]string{}
 	list, err := pa.PackagesOfProject(project, "")
 	if err != nil {
@@ -169,7 +170,7 @@ func (a *app) featurePackages(pa *store.ProjectAccess, project string) map[int64
 	}
 	for _, p := range list {
 		if p.PR > 0 {
-			out[p.PR] = p.Name
+			out[p.PR] = packageName(l, p.Package)
 		}
 	}
 	return out
@@ -285,7 +286,7 @@ func (a *app) featureDetail(w http.ResponseWriter, r *http.Request, remote, id s
 		}
 	}
 	versions, _ := pa.FeatureVersions(n, false)
-	pkgs := a.featurePackages(pa, remote)
+	pkgs := a.featurePackages(l, pa, remote)
 	for _, pr := range featurePRs(versions) {
 		line := featurePR{Text: "#" + strconv.FormatInt(pr, 10), Title: pkgs[pr]}
 		if view.External != "" {
@@ -293,7 +294,7 @@ func (a *app) featureDetail(w http.ResponseWriter, r *http.Request, remote, id s
 		}
 		v.PRs = append(v.PRs, line)
 	}
-	v.Items = a.featureItems(l, view, versions, f, now)
+	v.Items = a.featureItems(l, pa, view, versions, f, now)
 	seen := map[string]bool{}
 	for _, ver := range versions {
 		if ver.Person != "" && !seen[ver.Person] {
@@ -306,11 +307,12 @@ func (a *app) featureDetail(w http.ResponseWriter, r *http.Request, remote, id s
 
 // featureItems ist die Zeitleiste: jede Fassung ein Eintrag, dahinter, wenn das
 // Feature eingestellt ist, das Einstellen.
-func (a *app) featureItems(l lang, view *repoView, versions []feature.Version, f feature.Feature, now time.Time) []tlItem {
+func (a *app) featureItems(l lang, pa *store.ProjectAccess, view *repoView, versions []feature.Version, f feature.Feature, now time.Time) []tlItem {
 	var items []tlItem
 	for _, ver := range versions {
 		it := tlItem{ID: "version-" + strconv.Itoa(ver.Revision), Act: "feature.version", Who: ver.Person, Icon: "pencil",
-			Age: shortAgo(l, now, parseTime(ver.CreatedAt)), Body: template.HTML(html.EscapeString(ver.Message))}
+			Age: shortAgo(l, now, parseTime(ver.CreatedAt)), Body: template.HTML(html.EscapeString(ver.Message)),
+			Git: anchorViewOf(pa, view.Project, ver.GitAnchor, originVia(ver.OriginContext))}
 		if ver.Revision <= 1 {
 			it.Icon, it.Head = "plus", template.HTML(html.EscapeString(l.msg("features.ev.created")))
 		} else {

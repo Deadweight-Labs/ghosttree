@@ -144,7 +144,7 @@ func TestSessionListShowsTitlesWithRandomAddressesToTheOwner(t *testing.T) {
 		t.Fatalf("status %d", code)
 	}
 	for _, name := range []string{"alice-private", "anna-project", "anna-guests", "hidden-project"} {
-		if !strings.Contains(page, `href="/ui/sessions/`+e.pid[name]+`"`) {
+		if !strings.Contains(page, `/sessions/`+e.pid[name]+`"`) {
 			t.Errorf("owner list lacks %s", name)
 		}
 	}
@@ -163,7 +163,7 @@ func TestSessionListHidesForeignPrivateSessionsCompletely(t *testing.T) {
 	e := seedSessions(t)
 	_, page := e.get(t, e.Member, "/ui/sessions")
 	for _, name := range []string{"anna-private", "anna-project", "anna-guests"} {
-		if !strings.Contains(page, `href="/ui/sessions/`+e.pid[name]+`"`) {
+		if !strings.Contains(page, `/sessions/`+e.pid[name]+`"`) {
 			t.Errorf("member lacks own/shared %s", name)
 		}
 	}
@@ -185,7 +185,7 @@ func TestSessionListForAGuestHasOnlyGuestSharedSessionsAndNoHostDetails(t *testi
 	if code != 200 {
 		t.Fatalf("status %d", code)
 	}
-	if !strings.Contains(page, `href="/ui/sessions/`+e.pid["anna-guests"]+`"`) {
+	if !strings.Contains(page, `/sessions/`+e.pid["anna-guests"]+`"`) {
 		t.Error("guest-shared session missing")
 	}
 	for _, name := range []string{"alice-private", "anna-private", "anna-project", "hidden-project"} {

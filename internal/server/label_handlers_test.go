@@ -346,9 +346,13 @@ func TestPresetFuerMich(t *testing.T) {
 	wantPreset(t, got, "T"+i64(w.taskC), "P"+i64(w.pain1), "P"+i64(w.pain3), "I"+i64(w.idea1), "R"+i64(w.reqC))
 	// Robin: nur seine offenen Dinge.
 	wantPreset(t, w.presetRun(t, "robin", 200, "fuer-mich"), "R"+i64(w.reqB))
-	// Eine eigene Suche gleichen Namens geht der mitgelieferten vor.
-	w.f.expect(t, "mia", 200, "POST", "/api/search-presets", map[string]any{"project": accProject, "name": "fuer-mich", "queries": []string{"kind:idea is:open"}})
-	wantPreset(t, w.presetRun(t, "mia", 200, "fuer-mich"), "I"+i64(w.idea1))
+	// Eine eigene Suche darf den Namen der mitgelieferten nicht tragen, und die
+	// mitgelieferte läuft weiter wie zuvor.
+	w.f.expect(t, "mia", 400, "POST", "/api/search-presets", map[string]any{"project": accProject, "name": "fuer-mich", "queries": []string{"kind:idea is:open"}})
+	wantPreset(t, w.presetRun(t, "mia", 200, "fuer-mich"), "T"+i64(w.taskC), "P"+i64(w.pain1), "P"+i64(w.pain3), "I"+i64(w.idea1), "R"+i64(w.reqC))
+	// Eine ältere Suche mit diesem Namen verdeckt sie auch nicht.
+	w.exec(t, `INSERT INTO search_presets(scope_kind,scope_ref,name,queries,created_by,created_at,updated_at) VALUES('project',?,'fuer-mich','kind:idea is:open','mia','2026-11-01T00:00:00Z','2026-11-01T00:00:00Z')`, accProject)
+	wantPreset(t, w.presetRun(t, "mia", 200, "fuer-mich"), "T"+i64(w.taskC), "P"+i64(w.pain1), "P"+i64(w.pain3), "I"+i64(w.idea1), "R"+i64(w.reqC))
 }
 
 func TestSavedPresetWithPlaceholdersRuns(t *testing.T) {

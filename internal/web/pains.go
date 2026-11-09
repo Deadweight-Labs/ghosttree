@@ -45,6 +45,7 @@ type painView struct {
 	Items         []tlItem
 	Composer      *composerView
 	Labels        []rowLabel
+	LabelBox      *labelBoxView
 	People        []string
 	Viewer, Base  string
 	StateTone     string
@@ -54,6 +55,8 @@ type painView struct {
 	Token, Back   string
 	Result        *requestResult
 	Explain       *explainView
+	// CanIdea shows the form "Create idea" (a solution idea this pain motivates).
+	CanIdea bool
 }
 
 func painURL(id int64) string { return "/ui/pains/" + strconv.FormatInt(id, 10) }
@@ -89,6 +92,7 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 		State: p.State, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining, Accepted: p.AcceptedReason, Age: shortAgo(l, overviewNow().UTC(), parseTime(p.CreatedAt)),
 		Blocks: bodyBlocks(p.Body, 0), Token: csrfOf(r), Back: "/ui/pains?project=" + url.QueryEscape(p.Project)}
 	v.CanWork = pa.CheckPain(p, store.ActWork) == nil
+	v.CanIdea = v.CanWork && interactive(r) && pa.Allow(p.Project, store.ResIdea, store.ActCreate, store.Object{Own: true})
 	v.Explain = a.explainFor(l, explain.KindPain, p.ID)
 	for _, s := range pain.States {
 		v.States = append(v.States, filterOption{Value: s, Label: label(l, painStateKeys, s), Selected: s == p.State})
@@ -105,6 +109,9 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 			line.Pill = refPillHTML(lg, "request", l.RequestID, line.Href)
 		case "knowledge":
 			line.Text, line.Href = ellipsize(l.Title, 80), "/ui/knowledge/"+strconv.FormatInt(l.KnowledgeID, 10)
+		case "idea":
+			line.Text, line.Href = ellipsize(l.Title, 80), repoHref(p.Project)+"/ideas/"+strconv.FormatInt(l.IdeaID, 10)
+			line.Pill = refPillHTML(lg, "idea", l.IdeaID, line.Href)
 		default:
 			line.Text = ellipsize(l.ExternalRef, 120)
 			if strings.HasPrefix(l.ExternalRef, "https://") || strings.HasPrefix(l.ExternalRef, "http://") {
@@ -128,6 +135,7 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 	if labels, err := a.store.LabelsFor("pain", []int64{p.ID}); err == nil {
 		v.Labels = rowLabels(labels[p.ID], v.Base+"/issues")
 	}
+	v.LabelBox = a.labelBox(r, pa, p.Project, store.CommentOnPain, p.ID, v.Labels)
 	v.Composer = a.painComposer(l, v, p.State, interactive(r) && pa.Allow(p.Project, store.ResComment, store.ActCreate, store.Object{Own: true}))
 	switch {
 	case commentResult(r, l) != nil:
@@ -136,6 +144,8 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 		v.Result = &requestResult{Text: l.msg(painFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
 	case r.URL.Query().Get("done") == "state":
 		v.Result = &requestResult{Text: l.msg("pains.result.state"), Kind: "done"}
+	case r.URL.Query().Get("done") == "idea":
+		v.Result = &requestResult{Text: l.msg("pains.result.idea_made"), Kind: "done"}
 	}
 	a.renderBrowser(w, r, "pain", pageData{Title: p.HumanID(), PainV: v})
 }
@@ -255,6 +265,8 @@ func painFailKey(code string) string {
 		return "pains.result.accepted_reason_required"
 	case "invalid_transition":
 		return "pains.result.invalid_transition"
+	case "idea_invalid":
+		return "pains.result.idea_invalid"
 	}
 	return "pains.result.failed"
 }

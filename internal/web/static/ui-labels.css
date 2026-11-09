@@ -29,3 +29,16 @@
   & .lb.lc-fef2c0 { background: #fef2c0; color: #1f2328; border-color: transparent; }
   & .lb.lc-none { background: var(--neutral-muted); color: var(--fg-default); }
 }
+
+/* Labels on an object: each label with a button that takes it off, and one row to add another. */
+:is(.g2) {
+  & .lbbox .v { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  & .lbbox .lbx { display: inline-flex; margin: 0; }
+  & .lbbox .lbx .lb { display: inline-flex; align-items: center; gap: 2px; padding-right: 2px; }
+  & .lbbox .lbx .lb a { color: inherit; text-decoration: none; }
+  & .lbbox .lbrm { display: inline-grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; opacity: .7; }
+  & .lbbox .lbrm:hover, & .lbbox .lbrm:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor 18%, transparent); }
+  & .lbbox .lbrm .i { width: 10px; height: 10px; }
+  & .lbbox .lbadd { display: flex; gap: 6px; width: 100%; margin: 0; }
+  & .lbbox .lbadd .gfield { flex: 1; min-width: 0; height: 28px; font-size: 13px; padding: 0 6px; }
+}

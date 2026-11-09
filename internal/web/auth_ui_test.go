@@ -5,10 +5,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 func TestRegisterAsksOnlyForTheInvitationLinkAndLeadsToTheInvitationPage(t *testing.T) {
-	srv, _, _ := testWeb(t)
+	srv, st, _, org, _ := joinWeb(t)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Get(srv.URL + "/ui/register")
 	if err != nil {
@@ -23,7 +25,7 @@ func TestRegisterAsksOnlyForTheInvitationLinkAndLeadsToTheInvitationPage(t *test
 	if strings.Contains(page, `name="name"`) || strings.Contains(page, `name="code"`) {
 		t.Error("the page asks for more than the link")
 	}
-	code := strings.Repeat("ab", joinCodeLen/2)
+	code := projectInvite(t, st, org, store.RoleMember)
 	res := sameOriginPostForm(t, client, srv.URL+"/ui/register", url.Values{"link": {"https://ghosttree.example/join/" + strings.ToUpper(code) + "?x=1"}})
 	res.Body.Close()
 	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/join/"+code {

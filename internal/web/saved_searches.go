@@ -25,9 +25,23 @@ func (a *app) searchSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pa := a.access(r)
-	if _, err := pa.SavePreset(project, "user", presetSlug(name), "", []string{q}); err != nil {
+	// Who gets the search: me (default), the project or the organization. The
+	// store decides whether the viewer's role allows it.
+	scopeKind := r.FormValue("scope")
+	if scopeKind == "" {
+		scopeKind = "user"
+	}
+	if _, ok := saveScopeKeys[scopeKind]; !ok {
+		http.Error(w, "unknown scope", http.StatusBadRequest)
+		return
+	}
+	if _, err := pa.SavePreset(project, scopeKind, presetSlug(name), "", []string{q}); err != nil {
 		if errors.Is(err, store.ErrAccessNotFound) || errors.Is(err, store.ErrAccessForbidden) {
 			a.accessDenied(w, r, err)
+			return
+		}
+		if errors.Is(err, store.ErrPresetConflict) {
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -36,6 +50,10 @@ func (a *app) searchSave(w http.ResponseWriter, r *http.Request) {
 	back := repoHref(project) + "/issues"
 	if b := r.FormValue("back"); b == back {
 		back = b
+	}
+	if r.FormValue("back") == "/ui/search" {
+		http.Redirect(w, r, "/ui/search?project="+url.QueryEscape(project)+"&q="+url.QueryEscape(q), http.StatusSeeOther)
+		return
 	}
 	http.Redirect(w, r, back+"?q="+url.QueryEscape(q), http.StatusSeeOther)
 }

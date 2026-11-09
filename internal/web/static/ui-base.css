@@ -126,6 +126,9 @@
   & a.chip.test { color: var(--fg-default); }
   & a.chip.test:hover { text-decoration: none; background: var(--accent-subtle); }
   & .chip.br { color: var(--accent-fg); background: var(--accent-subtle); }
+  & .chip.pr { color: var(--done-fg); background: var(--done-subtle); }
+  & a.chip.pr:hover { text-decoration: none; background: var(--done-muted); }
+  & .ganch { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; vertical-align: middle; }
   & a.chip.br:hover { text-decoration: none; background: var(--accent-muted); }
   & .chip.noproof { font-family: var(--ui-font); color: var(--attention-fg); background: var(--attention-subtle); border: 1px solid var(--attention-muted); }
   & kbd { display: inline-block; padding: 0 5px; font: 11px/18px var(--ui-mono); color: var(--fg-muted); background: var(--canvas-subtle); border: 1px solid var(--border-default); border-bottom-width: 2px; border-radius: 4px; }

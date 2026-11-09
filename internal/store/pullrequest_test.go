@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -400,5 +401,45 @@ func TestGhostBranchNamesFromTheOutsideAreRejected(t *testing.T) {
 		if _, err := st.PutGhostFile(GhostFile{Project: prProject, Path: "z.go", Description: "d", Branch: b}); err == nil {
 			t.Fatalf("branch %q accepted", b)
 		}
+	}
+}
+
+func TestBranchLineageFollowsThePullRequestChainAndStopsAtTheDefaultBranch(t *testing.T) {
+	st := prFixture(t)
+	pr := func(n int64, head, base string) {
+		t.Helper()
+		c := prEvent(n, "opened", "open", head)
+		c.Base = base
+		if res, err := st.RecordPullRequest(c); err != nil || !res.Applied {
+			t.Fatalf("pr %d: %+v %v", n, res, err)
+		}
+	}
+	pr(1, "feat/c", "feat/b")
+	pr(2, "feat/b", "feat/a")
+	pr(3, "feat/a", "main")
+	got, err := st.BranchLineage(prProject, "feat/c")
+	if err != nil || strings.Join(got, ",") != "feat/b,feat/a" {
+		t.Fatalf("chain up to the default branch: %v %v", got, err)
+	}
+	if got, _ = st.BranchLineage(prProject, "feat/a"); len(got) != 0 {
+		t.Fatalf("a branch cut from the default branch has no ancestors: %v", got)
+	}
+	if got, _ = st.BranchLineage(prProject, "nobranch"); len(got) != 0 {
+		t.Fatalf("an unknown branch: %v", got)
+	}
+	// Ein Zyklus (Fremddaten) endet, statt zu kreisen.
+	pr(4, "feat/a", "feat/c")
+	if got, err = st.BranchLineage(prProject, "feat/c"); err != nil || len(got) > maxLineageDepth {
+		t.Fatalf("cycle: %v %v", got, err)
+	}
+	// Ein anderes Projekt kennt die Kette nicht.
+	if got, _ = st.BranchLineage("github.com/deadweight-labs/other", "feat/c"); len(got) != 0 {
+		t.Fatalf("other project: %v", got)
+	}
+	// Branches, die nur Beschreibungen tragen, gehören zur Branch-Liste.
+	ghostOn(t, st, "feat/only-ghost", "src/g.go", "text", commitA)
+	known, _ := st.ProjectBranches(prProject)
+	if !slices.Contains(known, "feat/only-ghost") {
+		t.Fatalf("project branches: %v", known)
 	}
 }

@@ -57,7 +57,7 @@ func TestURLPerKind(t *testing.T) {
 		"repo":      repo,
 		"issue":     repo + "/issues/603",
 		"criterion": repo + "/issues/603#criterion-2",
-		"task":      srv + "/ui/tasks/124",
+		"task":      repo + "/tasks/124",
 		"pain":      repo + "/pains/57",
 		"idea":      repo + "/ideas/3",
 		"feature":   repo + "/features/2",
@@ -69,7 +69,7 @@ func TestURLPerKind(t *testing.T) {
 		"commit":    repo + "/commit/2d950bf",
 		"pull":      repo + "/pulls/155",
 		"checklist": repo + "/pulls/155/checkliste",
-		"package":   repo + "/package/feat/gn-603",
+		"package":   repo + "/packages?branch=feat%2Fgn-603",
 		"runbook":   repo + "/runbooks/deploy-prod",
 		"blob":      repo + "/blob/feat/x/internal/store/a%20b.go",
 		"tree":      repo + "/tree/main/internal/store",
@@ -181,10 +181,10 @@ func TestCardPerKind(t *testing.T) {
 	check("criterion", cc, "Criterion", "open", repo+"/issues/603#criterion-2", "AC-603.2")
 	task := humantask.Task{ID: 124, Project: project, Kind: "action", Title: "GitHub verbinden", State: "open", Assignee: "robin",
 		Steps: []humantask.Step{{Text: "Einstellungen öffnen", URL: "https://github.com/settings"}}}
-	check("task", b.TaskCard(task), "Task", "open", srv+"/ui/tasks/124", "TASK-124", "1. Einstellungen öffnen", "with: robin")
+	check("task", b.TaskCard(task), "Task", "open", repo+"/tasks/124", "TASK-124", "1. Einstellungen öffnen", "with: robin")
 	task.State = humantask.Done
 	task.CheckHint = "Eintrag da"
-	check("task done", b.TaskCard(task), "Task", "done", srv+"/ui/tasks/124", "agent checks (Eintrag da) and confirms")
+	check("task done", b.TaskCard(task), "Task", "done", repo+"/tasks/124", "agent checks (Eintrag da) and confirms")
 	check("pain", b.PainCard(pain.Pain{ID: 57, Project: project, Title: "Qual", State: "active"}), "Pain", "active", repo+"/pains/57", "PAIN-57")
 	check("idea", b.IdeaCard(idea.Idea{ID: 3, Project: project, Title: "Idee", State: "open"}), "Idea", "open", repo+"/ideas/3", "IDEA-3", "with: human")
 	feat := feature.Feature{ID: 2, Project: project, State: feature.Active, Revision: 3, Content: feature.Content{Name: "Arbeitspakete"}}
@@ -201,7 +201,7 @@ func TestCardPerKind(t *testing.T) {
 	check("session", b.SessionCard(store.Session{ID: 5, PublicID: "ab12", Title: "Sitzung", Harness: "claude-code", Scope: axes}), "Session", "claude-code", repo+"/sessions/ab12", "ab12")
 	pkg := requestdomain.PackageDetail{Package: requestdomain.Package{ID: 1, Project: project, Branch: "feat/x", Name: "Paket", State: "open"},
 		Members: []requestdomain.PackageMemberView{{PackageMember: requestdomain.PackageMember{Role: requestdomain.RolePflicht}, State: "open"}}}
-	check("package", b.PackageCard(pkg), "Checklist", "open", repo+"/package/feat/x", "PKG-1", "1 required issue(s) still open")
+	check("package", b.PackageCard(pkg), "Checklist", "open", repo+"/packages/1", "PKG-1", "1 required issue(s) still open")
 	pkg.PR = 155
 	check("package pr", b.PackageCard(pkg), "Checklist", "open", repo+"/pulls/155/checkliste")
 	check("decision", b.DecisionCard(idea.Decision{ID: 9, Project: project, Subject: "idea", SubjectID: 3, Question: "Welches Format", State: "open", Way: "human"}), "Decision", "open", repo+"/decisions/9", "DEC-9", "with: human", "a person decides")
@@ -321,13 +321,13 @@ func TestResolveEveryShortFormHasOneCanonicalURL(t *testing.T) {
 	want := map[string]string{
 		"REQ-596":                repo + "/issues/596",
 		"REQ-596#1":              "",
-		"TASK-124":               srv + "/ui/tasks/124",
+		"TASK-124":               repo + "/tasks/124",
 		"PAIN-57":                repo + "/pains/57",
 		"IDEA-3":                 repo + "/ideas/3",
 		"FEAT-2":                 repo + "/features/2",
 		"DEC-9":                  repo + "/decisions/9",
 		"#4295":                  repo + "/knowledge/4295",
-		"PKG-1":                  repo + "/package/b",
+		"PKG-1":                  repo + "/packages/1",
 		"room:7":                 repo + "/rooms/7",
 		"session:ab12":           repo + "/sessions/ab12",
 		"doc:plan":               repo + "/docs/plan",
@@ -335,7 +335,7 @@ func TestResolveEveryShortFormHasOneCanonicalURL(t *testing.T) {
 		"preset:pr-ergebnis 155": srv + "/ui/presets/repo/pr-ergebnis?pr=155&project=deadweight-labs%2Fghosttree",
 		"pr:155":                 repo + "/pulls/155",
 		"commit:2d950bf":         repo + "/commit/2d950bf",
-		"branch:feat/x":          repo + "/package/feat/x",
+		"branch:feat/x":          repo + "/packages?branch=feat%2Fx",
 		"internal/store/a.go":    repo + "/blob/feat/gn-603/internal/store/a.go",
 		"is:open label:bug":      repo + "/issues?q=is%3Aopen+label%3Abug",
 		"inbox":                  srv + "/ui/inbox",

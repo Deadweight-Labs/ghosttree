@@ -61,9 +61,7 @@ func TestRepoTabsRenderTheExistingPagesForThatProject(t *testing.T) {
 func TestRepoRedirectsToDetailPagesAndRooms(t *testing.T) {
 	e := ovEnv(t)
 	for path, want := range map[string]string{
-		"/ui/x/shell/knowledge/9": "/ui/knowledge/9",
-		"/ui/x/shell/sessions/ab": "/ui/sessions/ab",
-		"/ui/x/shell/rooms":       "/ui/coord?room=project%3Agithub.com%2Fx%2Fshell",
+		"/ui/x/shell/rooms": "/ui/coord?room=project%3Agithub.com%2Fx%2Fshell",
 	} {
 		resp, err := e.Owner.Get(e.Base + path)
 		if err != nil {

@@ -1,6 +1,6 @@
 {{define "runbooks"}}{{template "head" .}}{{template "nav" .}}<main class="g2 rb"><link rel="stylesheet" href="/static/ui-runbooks.css"><div class="wrap">
 {{with .RunbooksV}}
-<div class="sbar"><label class="gfield mono-in">{{mi "search"}}<input type="search" data-list-filter=".rbrow" placeholder="{{t "runbooks.search"}}" aria-label="{{t "runbooks.search"}}" autocomplete="off" spellcheck="false"></label></div>
+<div class="sbar"><label class="gfield mono-in">{{mi "search"}}<input type="search" data-list-filter=".rbrow" placeholder="{{t "runbooks.search"}}" aria-label="{{t "runbooks.search"}}" autocomplete="off" spellcheck="false"></label>{{with .NewHref}}<a class="gbtn pri" href="{{.}}">{{mi "plus"}}{{t "runbooks.new"}}</a>{{end}}</div>
 {{if .Empty}}<div class="box"><div class="box-empty">{{t "runbooks.empty"}}</div></div>
 {{else}}<div class="box"><div class="box-h lh"><span class="t">{{t "runbooks.n" (len .Rows)}}</span><span class="sp"></span><span class="muted fw4">{{t "runbooks.last_ok"}}</span></div>
 {{range .Rows}}<div class="row rbrow"><span class="st open">{{mi "play"}}</span><div class="rbmain"><a class="rbname mono" href="{{.Href}}">{{.Name}}</a>{{if .Machine}}<span class="lb out mono">{{.Machine}}</span>{{end}}<div class="rbpurpose">{{.Purpose}}</div></div>
@@ -12,8 +12,8 @@
 {{define "rbsteps"}}{{range .}}<div class="rbstep"><span class="rbn">{{.N}}</span><div><b>{{.Title}}</b>{{if .Command}}<pre class="cmd">{{.Command}}</pre>{{end}}{{if .Check}}<div class="rbcheck">{{mi "check"}}<span>{{t "runbooks.check"}}</span><code>{{.Check}}</code></div>{{end}}</div></div>{{end}}{{end}}
 
 {{define "runbook"}}{{template "head" .}}{{template "nav" .}}<main class="g2 rb"><link rel="stylesheet" href="/static/ui-runbooks.css"><div class="wrap">
-{{with .RunbookV}}
-<div class="dhead"><div class="dtitle"><h1 class="mono">{{.Name}}</h1>{{if .GiveHref}}<div class="gacts"><a class="gbtn sm" href="{{.GiveHref}}">{{mi "chat"}}{{t "runbooks.give"}}</a></div>{{end}}</div>
+{{with .RunbookV}}{{with .Result}}<div class="callout done" id="result" role="status">{{mi "check"}}<div class="tt">{{.Text}}</div></div>{{end}}
+<div class="dhead"><div class="dtitle"><h1 class="mono">{{.Name}}</h1><div class="gacts">{{if .EditHref}}<a class="gbtn sm" href="{{.EditHref}}">{{mi "pencil"}}{{t "runbooks.edit"}}</a>{{end}}{{if .GiveHref}}<a class="gbtn sm" href="{{.GiveHref}}">{{mi "chat"}}{{t "runbooks.give"}}</a>{{end}}</div></div>
 <div class="dmeta">{{if .LastRun}}<span class="ok rbrun">{{mi "done"}}{{t "runbooks.run_n" .LastRun}} · {{.LastAge}}</span>{{end}}{{if .Approved}}<span class="lb ok">{{if .ApprovedBy}}{{t "runbooks.approved_by" .ApprovedBy}}{{else}}{{t "runbooks.approved"}}{{end}}</span>{{else}}<span class="lb warn">{{t "runbooks.needs_approval"}}</span>{{end}}{{if .Sha}}<span class="chip sha">{{.Sha}}</span>{{end}}<span class="muted">{{.Purpose}}</span></div></div>
 <div class="dgrid"><div class="dmain">
 <div class="sec"><h2>{{t "runbooks.execute"}}</h2></div>
@@ -29,5 +29,35 @@
 {{if .Machine}}<div class="sblk"><h3>{{t "runbooks.machine"}}</h3><div class="v"><span class="mono">{{.Machine}}</span></div></div>{{end}}
 {{if .Pitfalls}}<div class="sblk"><h3>{{t "runbooks.pitfalls"}}</h3><div class="v">{{range .Pitfalls}}<a href="/ui/knowledge/{{.ID}}">{{mi "book"}}{{.Title}}</a>{{end}}</div></div>{{end}}
 </aside></div>
+{{end}}</div>
+{{template "foot" .}}{{end}}
+
+{{define "rbsteprows"}}{{$p := .Prefix}}{{range .Rows}}<div class="rbfrow"><input class="gfield" name="{{$p}}_title" value="{{.Title}}" maxlength="200" autocomplete="off" aria-label="{{t "runbooks.form.step_title"}}" placeholder="{{t "runbooks.form.step_title"}}"><input class="gfield mono" name="{{$p}}_command" value="{{.Command}}" maxlength="1000" autocomplete="off" spellcheck="false" aria-label="{{t "runbooks.form.step_command"}}" placeholder="{{t "runbooks.form.step_command"}}"><input class="gfield" name="{{$p}}_check" value="{{.Check}}" maxlength="200" autocomplete="off" aria-label="{{t "runbooks.form.step_check"}}" placeholder="{{t "runbooks.form.step_check"}}"></div>{{end}}{{end}}
+
+{{define "runbookform"}}{{template "head" .}}{{template "nav" .}}<main class="g2 rb"><link rel="stylesheet" href="/static/ui-runbooks.css"><div class="wrap">
+{{with .RunbookFormV}}{{if .Error}}<div class="callout" id="result" role="alert">{{mi "tri"}}<div class="tt">{{t .Error}}{{if .Detail}} {{.Detail}}{{end}}</div></div>{{end}}
+<div class="dhead"><div class="dtitle"><h1>{{if .New}}{{t "runbooks.form.title_new"}}{{else}}{{t "runbooks.form.title_edit" .Name}}{{end}}</h1></div></div>
+<form class="rbform" method="post" action="/ui/runbooks/write"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="project" value="{{.Project}}"><input type="hidden" name="machine" value="{{.Machine}}"><input type="hidden" name="mode" value="{{if .New}}new{{else}}edit{{end}}">{{if not .New}}<input type="hidden" name="base_version" value="{{.BaseVersion}}"><input type="hidden" name="base_hash" value="{{.BaseHash}}">{{end}}
+<label class="pfield"><span>{{t "runbooks.form.name"}}</span><input class="gfield mono" name="name" value="{{.Name}}" maxlength="64" required{{if not .New}} readonly{{end}} autocomplete="off" spellcheck="false" aria-describedby="rb-name-h"></label>{{if .New}}<p class="rbhint" id="rb-name-h">{{t "runbooks.form.name_hint"}}</p>{{end}}
+<label class="pfield"><span>{{t "runbooks.form.purpose"}}</span><input class="gfield" name="purpose" value="{{.Purpose}}" maxlength="500" required autocomplete="off"></label>
+<fieldset class="rbset"><legend>{{t "runbooks.params"}}</legend>
+{{range .Params}}<div class="rbfrow rbprow"><input class="gfield mono" name="param_name" value="{{.Name}}" maxlength="32" autocomplete="off" spellcheck="false" aria-label="{{t "runbooks.name"}}" placeholder="{{t "runbooks.name"}}">
+<select class="gfield" name="param_type" aria-label="{{t "runbooks.form.param_type"}}">{{$t := .Type}}{{range $.RunbookFormV.Types}}<option value="{{.}}"{{if eq . $t}} selected{{end}}>{{.}}</option>{{end}}</select>
+<input class="gfield" name="param_desc" value="{{.Description}}" maxlength="200" autocomplete="off" aria-label="{{t "runbooks.form.param_desc"}}" placeholder="{{t "runbooks.form.param_desc"}}">
+<select class="gfield" name="param_req" aria-label="{{t "runbooks.form.param_req"}}"><option value="required"{{if not .Optional}} selected{{end}}>{{t "runbooks.form.required"}}</option><option value="optional"{{if .Optional}} selected{{end}}>{{t "runbooks.optional"}}</option></select>
+<input class="gfield mono" name="param_default" value="{{.Default}}" maxlength="200" autocomplete="off" aria-label="{{t "runbooks.default"}}" placeholder="{{t "runbooks.default"}}">
+<input class="gfield mono" name="param_values" value="{{.Values}}" maxlength="400" autocomplete="off" aria-label="{{t "runbooks.form.param_values"}}" placeholder="{{t "runbooks.form.param_values"}}"></div>{{end}}</fieldset>
+<label class="pfield"><span>{{t "runbooks.form.preconditions"}}</span><textarea class="gfield" name="preconditions" rows="3">{{.Preconditions}}</textarea></label>
+<fieldset class="rbset"><legend>{{t "runbooks.steps"}}</legend>{{template "rbsteprows" (dict "Prefix" "step" "Rows" .Steps)}}</fieldset>
+<fieldset class="rbset"><legend>{{t "runbooks.rollback"}}</legend>{{template "rbsteprows" (dict "Prefix" "back" "Rows" .Rollback)}}</fieldset>
+<label class="pfield"><span>{{t "runbooks.form.pitfalls"}}</span><input class="gfield mono" name="pitfalls" value="{{.Pitfalls}}" maxlength="200" autocomplete="off"></label>
+<fieldset class="rbset"><legend>{{t "runbooks.form.triggers"}}</legend>
+<label class="pfield"><span>{{t "runbooks.form.keywords"}}</span><textarea class="gfield" name="keywords" rows="2">{{.Keywords}}</textarea></label>
+<label class="pfield"><span>{{t "runbooks.form.commands"}}</span><textarea class="gfield mono" name="commands" rows="2" spellcheck="false">{{.Cmds}}</textarea></label>
+<label class="pfield"><span>{{t "runbooks.form.paths"}}</span><textarea class="gfield mono" name="paths" rows="2" spellcheck="false">{{.Paths}}</textarea></label></fieldset>
+{{if .Targets}}<fieldset class="rbset rbtargets"><legend>{{t "runbooks.form.targets"}}</legend><p class="rbhint">{{t "runbooks.form.targets_note"}}</p>{{range .Targets}}<div class="rbtarget"><b class="mono">{{.Name}}</b> <span>{{.Comment}}</span>{{range .Commands}}<pre class="cmd">{{.}}</pre>{{end}}</div>{{end}}</fieldset>{{end}}
+<label class="pfield"><span>{{t "runbooks.form.note"}}</span><input class="gfield" name="note" value="{{.Note}}" maxlength="500" autocomplete="off"></label>
+{{if .CanApprove}}<label class="rbcheck2"><input type="checkbox" name="approve" value="1"{{if .Approve}} checked{{end}}><span>{{t "runbooks.form.approve"}}</span></label>{{else}}<p class="rbhint">{{t "runbooks.form.unapproved"}}</p>{{end}}
+<div class="rbact"><button class="gbtn pri">{{if .New}}{{t "runbooks.form.create"}}{{else}}{{t "runbooks.form.save"}}{{end}}</button><a class="gbtn" href="{{if .New}}{{.Base}}{{else}}{{.Base}}/{{.Name}}{{end}}">{{t "runbooks.form.cancel"}}</a></div></form>
 {{end}}</div>
 {{template "foot" .}}{{end}}

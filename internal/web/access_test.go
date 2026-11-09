@@ -202,9 +202,9 @@ func TestWebPagesFollowVisibility(t *testing.T) {
 	if out := page("gus", "/ui/sessions", 200); strings.Contains(out, `class="row srow`) {
 		t.Errorf("guest lists sessions")
 	}
-	page("mia", "/ui/sessions/"+sessions["mia"], 200)
+	page("mia", repoHref(project)+"/sessions/"+sessions["mia"], 200)
 	page("mia", "/ui/sessions/"+sessions["robin"], 404)
-	page("robin", "/ui/sessions/"+sessions["robin"], 200)
+	page("robin", repoHref(project)+"/sessions/"+sessions["robin"], 200)
 	page("robin", "/ui/sessions/"+sessions["mia"], 404) // private heißt privat, auch für den Owner
 	page("lena", "/ui/sessions/"+sessions["mia"], 404)
 	page("gus", "/ui/sessions/"+sessions["mia"], 404)

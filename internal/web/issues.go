@@ -219,6 +219,7 @@ type issuesView struct {
 	Presets []presetLink
 	CanSave bool
 	SaveQ   string
+	Scopes  []saveScope
 	Token   string
 	// New is the button above the list, the others its menu.
 	New      newItem
@@ -304,6 +305,9 @@ func (a *app) issuesPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		v.CanSave = !v.Guest && interactive(r)
+		if v.CanSave {
+			v.Scopes = a.saveScopes(l, r, pa, project)
+		}
 		v.SaveQ = q
 		if v.SaveQ == "" {
 			v.SaveQ = "is:issue is:open"

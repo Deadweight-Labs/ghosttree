@@ -4,6 +4,7 @@ import (
 	"html"
 	"html/template"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"time"
@@ -115,13 +116,15 @@ type commitView struct {
 	PRs                                 []commitPR
 	Branches                            []commitBranch
 	GitHub, GitHubTip                   string
-	Items                               []tlItem
-	Files                               []commitFile
-	FilesTotal                          int
-	Side                                commitSide
-	Empty                               bool
-	CommitsHref                         string
-	Entries                             int
+	// DoneHref is the quick filter "What was done here?" for this commit.
+	DoneHref    string
+	Items       []tlItem
+	Files       []commitFile
+	FilesTotal  int
+	Side        commitSide
+	Empty       bool
+	CommitsHref string
+	Entries     int
 }
 
 type commitFile struct{ Path, Href, Desc, Who string }
@@ -130,7 +133,7 @@ type commitFile struct{ Path, Href, Desc, Who string }
 func commitEntryHref(view *repoView, def string, visible branchVisible, e store.CommitEntry) string {
 	switch e.Kind {
 	case store.CommitKindKnowledge:
-		return "/ui/knowledge/" + strconv.FormatInt(e.ID, 10)
+		return knowledgeHref(view.Project, e.ID)
 	case store.CommitKindRequest:
 		return view.Href + "/issues/" + strconv.FormatInt(e.ID, 10)
 	case store.CommitKindPain:
@@ -147,6 +150,8 @@ func commitEntryHref(view *repoView, def string, visible branchVisible, e store.
 			}
 			return codeLinks{base: view.Href, def: def}.blob(branch, e.Path)
 		}
+	case store.CommitKindMessage:
+		return "/ui/coord?room=" + url.QueryEscape(store.RoomKeyForProject(view.Project))
 	case store.CommitKindComment:
 		switch e.ObjectKind {
 		case store.CommentOnRequest:
@@ -162,13 +167,13 @@ func commitEntryHref(view *repoView, def string, visible branchVisible, e store.
 
 // commitEvKeys are the sentences of an entry by its kind.
 var commitEvKeys = map[string]string{store.CommitKindKnowledge: "commit.ev.knowledge", store.CommitKindRequest: "commit.ev.request", store.CommitKindPain: "commit.ev.pain",
-	store.CommitKindIdea: "commit.ev.idea", store.CommitKindFeature: "commit.ev.feature", store.CommitKindComment: "commit.ev.comment", store.CommitKindGhost: "commit.ev.ghost"}
+	store.CommitKindIdea: "commit.ev.idea", store.CommitKindFeature: "commit.ev.feature", store.CommitKindComment: "commit.ev.comment", store.CommitKindGhost: "commit.ev.ghost", store.CommitKindMessage: "commit.ev.message"}
 
 var commitKindIcons = map[string]string{store.CommitKindKnowledge: "book", store.CommitKindRequest: "issue", store.CommitKindPain: "pain",
-	store.CommitKindIdea: "idea", store.CommitKindFeature: "feature", store.CommitKindGhost: "ghost", store.CommitKindComment: "chat"}
+	store.CommitKindIdea: "idea", store.CommitKindFeature: "feature", store.CommitKindGhost: "ghost", store.CommitKindComment: "chat", store.CommitKindMessage: "chat"}
 
 var commitKindTones = map[string]string{store.CommitKindKnowledge: "warn", store.CommitKindRequest: "ok", store.CommitKindPain: "warn",
-	store.CommitKindIdea: "warn", store.CommitKindFeature: "don", store.CommitKindGhost: "acc"}
+	store.CommitKindIdea: "warn", store.CommitKindFeature: "don", store.CommitKindGhost: "acc", store.CommitKindMessage: "acc"}
 
 // commitDetail ist /ui/{org}/{repo}/commits/{sha}.
 func (a *app) commitDetail(w http.ResponseWriter, r *http.Request, remote, sha string) {
@@ -193,6 +198,7 @@ func (a *app) commitDetail(w http.ResponseWriter, r *http.Request, remote, sha s
 	if view.External != "" {
 		v.GitHub, v.GitHubTip = view.External+"/commit/"+d.SHA, l.msg("commit.gh", row.Short)
 	}
+	v.DoneHref = pathWith("/ui/search", "project", remote, "preset", "pr-ergebnis", "commit", d.SHA)
 	reqSeen := map[int64]bool{}
 	for _, e := range d.Said {
 		href := commitEntryHref(view, def, visible, e)

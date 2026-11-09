@@ -32,7 +32,7 @@ func TestMemberOfTwoProjectsSeesAllSessionsIncludingOnesWithoutProject(t *testin
 	for _, path := range []string{"/ui/sessions", "/ui/sessions?q=zebrafish"} {
 		_, page := fetchPage(t, e.Member, e.Base+path)
 		for name, id := range pid {
-			if !strings.Contains(page, `href="/ui/sessions/`+id+`"`) {
+			if !strings.Contains(page, `/sessions/`+id+`"`) {
 				t.Errorf("GET %s lacks the session %s", path, name)
 			}
 		}

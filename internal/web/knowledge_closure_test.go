@@ -34,7 +34,7 @@ func TestKnowledgePageShowsWhyAnEntryWasRetiredOrReplaced(t *testing.T) {
 		}
 	}
 	replaced := page(old)
-	for _, want := range []string{"Replaced by", "Share removed again", `href="/ui/knowledge/` + strconv.FormatInt(fresh, 10) + `"`, "the share was removed"} {
+	for _, want := range []string{"Replaced by", "Share removed again", `/knowledge/` + strconv.FormatInt(fresh, 10) + `"`, "the share was removed"} {
 		if !strings.Contains(replaced, want) {
 			t.Errorf("page of the superseded entry lacks %q", want)
 		}

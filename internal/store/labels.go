@@ -89,8 +89,11 @@ CREATE INDEX IF NOT EXISTS idea_requests_request ON idea_requests(request_id);
 // ensureGitAnchors: ideas trägt wie die anderen Schreib-Tabellen anchor_id und
 // origin_id (siehe anchoredTables).
 func ensureLabelsAndIdeas(db *sql.DB) error {
-	_, err := db.Exec(labelsSchema)
-	return err
+	if _, err := db.Exec(labelsSchema); err != nil {
+		return err
+	}
+	// updated_by: wer eine gespeicherte Suche zuletzt geändert hat, additiv.
+	return addColumnIfMissing(db, "search_presets", "updated_by", "TEXT NOT NULL DEFAULT ''")
 }
 
 // Maße der Label-Texte.

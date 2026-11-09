@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/query"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -299,7 +300,19 @@ func (a *ProjectAccess) ListPresets(project string) ([]SearchPreset, error) {
 	if err := a.Check(project, ResLabel, ActRead, Object{}); err != nil {
 		return nil, err
 	}
-	return a.st.PresetsFor(a.account, project)
+	list, err := a.st.PresetsFor(a.account, project)
+	if err != nil {
+		return nil, err
+	}
+	// Eine ältere gespeicherte Suche mit dem Namen einer mitgelieferten verdeckt
+	// diese nicht (CheckPreset sperrt den Namen seither).
+	out := list[:0]
+	for _, p := range list {
+		if _, taken := query.BuiltinByName(strings.ToLower(p.Name)); !taken {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
 // SavePreset speichert eine Suche. Persönliche darf jeder speichern, der das
@@ -322,6 +335,7 @@ func (a *ProjectAccess) SavePreset(project, scopeKind, name, description string,
 			return SearchPreset{}, err
 		}
 		in.Ref = project
+		in.MayReplace = a.Check(project, ResLabel, ActEdit, Object{}) == nil
 	case "org":
 		p, ok := a.st.ProjectByRemote(project)
 		if !ok {
@@ -331,6 +345,7 @@ func (a *ProjectAccess) SavePreset(project, scopeKind, name, description string,
 			return SearchPreset{}, err
 		}
 		in.Ref = fmt.Sprint(p.OrgID)
+		in.MayReplace = true
 	default:
 		return SearchPreset{}, labelRule("preset_scope_invalid", fmt.Sprintf("unknown scope %q", scopeKind), "use user, project or org")
 	}
