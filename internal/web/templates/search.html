@@ -1,6 +1,6 @@
 {{define "search"}}{{template "head" .}}{{template "nav" .}}<main class="g2 sr"><div class="wrap">
 {{with .SearchV}}<form class="sform" method="get" action="/ui/search" role="search"><label class="gfield mono-in">{{mi "search"}}<input type="search" name="q" value="{{.Q}}" minlength="2" autofocus placeholder="{{t "search.placeholder"}}" aria-label="{{t "search.label"}}" autocomplete="off" spellcheck="false"></label><button class="gbtn pri">{{t "knowledge.search"}}</button></form>
-{{if .Notice}}<div class="callout {{if eq .NoticeKind "err"}}is-danger{{else}}neu{{end}}" role="{{if eq .NoticeKind "err"}}alert{{else}}note{{end}}">{{mi "tri"}}<div class="tt">{{.Notice}}</div></div>{{end}}
+{{if .Notice}}<div class="callout {{if eq .NoticeKind "err"}}is-danger{{else}}neu{{end}}" role="{{if eq .NoticeKind "err"}}alert{{else}}note{{end}}">{{mi "tri"}}<div>{{.Notice}}</div></div>{{end}}
 {{if .Preset}}<div class="pre-h"><span class="lb out">{{mi "filter"}}{{.PresetName}}</span>{{if .Lines}}<details class="pre-l"><summary class="muted">{{t "search.lines"}}</summary>{{range .Lines}}<code class="mono">{{.}}</code>{{end}}</details>{{end}}</div>{{end}}
 {{if .CanSave}}<details class="save-s"><summary class="gbtn sm">{{t "issues.save_search"}}</summary><form class="save-f" method="post" action="/ui/searches"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="project" value="{{.Project}}"><input type="hidden" name="q" value="{{.Q}}"><input type="hidden" name="back" value="/ui/search"><input class="gfield" name="name" maxlength="80" required placeholder="{{t "issues.save_name"}}" aria-label="{{t "issues.save_name"}}" autocomplete="off">{{template "uisavescope" .Scopes}}<button class="gbtn pri sm">{{t "issues.save_do"}}</button></form></details>{{end}}
 {{if .Groups}}<div class="slayout"><aside>
@@ -11,7 +11,7 @@
 </aside>
 <div class="box hits">{{range .Groups}}{{if or (not $.SearchV.Kind) (eq .Key $.SearchV.Kind)}}{{template "searchgroup" .}}{{end}}{{end}}</div></div>
 {{else if .Live}}{{template "searchlive" .}}
-{{else if .Searched}}<div class="slayout"><aside>{{template "quickfilters" .}}</aside><div class="box"><div class="box-empty"><span>{{t "search.none_for" .Q}}</span></div></div></div>
+{{else if .Searched}}<div class="slayout"><aside>{{template "quickfilters" .}}</aside><div class="box"><div class="box-empty"><span>{{if .Q}}{{t "search.none_for" .Q}}{{else}}{{t "search.none"}}{{end}}</span></div></div></div>
 {{else}}<div class="slayout"><aside>{{template "quickfilters" .}}</aside><div></div></div>{{end}}
 {{end}}</div>{{template "foot" .}}{{end}}
 {{define "searchkind"}}<a class="frow{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Mark}}<span class="nm">{{.Label}}</span><span class="counter">{{.Shown}}</span></a>{{end}}
