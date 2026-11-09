@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -70,6 +71,9 @@ func (c *Client) setAnchor(req *http.Request, method, path string) {
 	// auf den Routen, deren Handler ihn speichern.
 	if c.originSession != "" && originctx.ValidSession(c.originSession) && method != http.MethodGet && method != http.MethodHead {
 		req.Header.Set(originctx.SessionHeader, c.originSession)
+	}
+	if TerminalPerson && c.originSession == "" && method != http.MethodGet && method != http.MethodHead {
+		req.Header.Set(actor.ViaHeader, actor.ViaTerminal)
 	}
 }
 

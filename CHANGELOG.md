@@ -205,8 +205,11 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   every token call (MCP, hooks, CLI) is an agent, and the session counts only
   when it belongs to the calling account. No tool parameter sets or overrides it;
   a token can no longer store `origin: human` on a request or knowledge entry.
-  This includes `ctx` typed by hand in a terminal: it writes with a token and
-  counts as an agent (without harness when no agent session runs).
+  `ctx` typed by a person in a terminal (no agent session, no agent harness in
+  the environment, stdin and stdout a terminal) is recorded as "person
+  (terminal)", apart from "person (web)". It is the client's own word: it grants
+  no right, an agent could claim it, and a call with an agent session is always
+  an agent.
 - The model of a session is read from its uploaded transcript (Claude Code
   `message.model`, Codex `turn_context`), with every switch and its time; an
   entry gets the model that was active when it was written.

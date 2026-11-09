@@ -19,7 +19,7 @@ func browserActor(r *http.Request) actor.Actor {
 	p := browserPrincipal(r)
 	a := actor.Actor{Kind: actor.Agent, AccountID: store.AccountIDOf(p.ID), Person: p.Label, Machine: p.Machine}
 	if p.TokenKind == store.WebSessionKind {
-		a.Kind, a.Machine = actor.Human, ""
+		a.Kind, a.Machine, a.Via = actor.Human, "", actor.ViaWeb
 	}
 	return a
 }
@@ -46,9 +46,12 @@ type actorView struct {
 	// Label is what the page writes: the person, or "Robin’s Claude".
 	Label string
 	// Kind is the avatar kind (avatarSpec.Kind).
-	Kind   string
-	Detail string
-	Href   string
+	Kind string
+	// Terminal: a person who wrote through ctx in a terminal, by the client's
+	// own word (actor.ViaTerminal); shown as such, never as verified.
+	Terminal bool
+	Detail   string
+	Href     string
 }
 
 // Owner is the person shown in the corner of an agent's avatar.
@@ -91,7 +94,11 @@ func (a *app) actorViewOf(l lang, pa *store.ProjectAccess, kind string, id int64
 		return v
 	}
 	ea, ok, err := a.store.ActorOf(kind, id)
-	if err != nil || !ok || !ea.IsAgent() {
+	if err != nil || !ok {
+		return v
+	}
+	if !ea.IsAgent() {
+		v.Terminal = ea.Via == actor.ViaTerminal
 		return v
 	}
 	v.Agent, v.Kind = true, harnessKind(ea.Harness)
@@ -130,6 +137,9 @@ func actorHTML(l lang, v actorView) template.HTML {
 	}
 	if v.Agent {
 		b.WriteString(`<span class="lb out botmark">` + html.EscapeString(l.msg("agent.mark")) + `</span>`)
+	}
+	if v.Terminal {
+		b.WriteString(`<span class="lb out botmark" title="` + html.EscapeString(l.msg("agent.mark_terminal_title")) + `">` + html.EscapeString(l.msg("agent.mark_terminal")) + `</span>`)
 	}
 	if v.Detail != "" {
 		b.WriteString(`<span class="actor-d">` + html.EscapeString(v.Detail) + `</span>`)

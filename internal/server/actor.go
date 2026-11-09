@@ -17,12 +17,14 @@ import (
 // and counts only when it belongs to the calling account; harness and machine
 // come from that session, never from the body. Without a session the machine
 // of a device token stays, the harness is unknown, and a session id the
-// server does not know yet is kept to be resolved once it is uploaded.
+// server does not know yet is kept to be resolved once it is uploaded. A token
+// call without any agent session that carries actor.ViaHeader "terminal" is
+// stamped as a person in the terminal: a self-report, see actor.ViaTerminal.
 func (a *api) actorOf(r *http.Request, bodySession int64) actor.Actor {
 	p := principalOf(r)
 	act := actor.Actor{AccountID: store.AccountIDOf(p.ID), Person: p.Label}
 	if p.TokenKind == store.WebSessionKind {
-		act.Kind = actor.Human
+		act.Kind, act.Via = actor.Human, actor.ViaWeb
 		return act
 	}
 	act.Kind = actor.Agent
@@ -34,8 +36,25 @@ func (a *api) actorOf(r *http.Request, bodySession int64) actor.Actor {
 		}
 		return act
 	}
-	if ref := sessionHeader(r); ref != "" && !a.st.SessionForeignTo(ref, p.ID) {
-		act.SessionRef = ref
+	if ref := sessionHeader(r); ref != "" {
+		// Eine genannte Session ist immer ein Agent, auch mit dem Terminal-Flag.
+		if !a.st.SessionForeignTo(ref, p.ID) {
+			act.SessionRef = ref
+		}
+		return act
+	}
+	if bodySession > 0 {
+		// Eine Session im Body, die nicht dem Aufrufer gehört (oder unbekannt ist):
+		// genannt ist genannt, das bleibt ein Agent ohne Session.
+		return act
+	}
+	// Ohne jede Agenten-Session: sagt der Client, dass ein Mensch im Terminal
+	// tippt, steht der Stempel als Mensch (Terminal). Das ist eine
+	// Selbstauskunft des Clients, kein Recht: ein Agent, der ctx selbst aufruft,
+	// könnte sie fälschen. Was einen Menschen verlangt (human_only), bleibt der
+	// Websitzung vorbehalten. Das Konto des Gärtners ist nie ein Mensch.
+	if r.Header.Get(actor.ViaHeader) == actor.ViaTerminal && !a.st.IsGardenerPrincipal(p) {
+		act.Kind, act.Via, act.Machine = actor.Human, actor.ViaTerminal, ""
 	}
 	return act
 }
