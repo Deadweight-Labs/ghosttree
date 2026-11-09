@@ -67,3 +67,4 @@
 @media (prefers-reduced-motion: reduce) {
   :is(.g2.sr) .sprog .bar > span { transition: none; }
 }
+:is(.g2) .hit .hx { margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--fg-default); overflow-wrap: anywhere; }

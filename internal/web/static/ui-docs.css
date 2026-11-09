@@ -1,0 +1,50 @@
+/* Documents of a repository: the list, and one document with its revisions
+   and the comparison of two revisions. The Markdown body, pills and the tab
+   band are the shared parts (ui-md.js, ui-refs, the repository band). */
+
+:is(.g2.dc) {
+  & .sbar { margin-bottom: 16px; }
+  & .fw4 { font-weight: 400; }
+  & .dcrow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 16px; }
+  & .dcrow + .dcrow, & .dcrev + .dcrev { border-top: 1px solid var(--border-muted); }
+  & .dcrow .st { color: var(--fg-muted); }
+  & .dcname { font-size: 14px; font-weight: 600; color: var(--accent-fg); }
+  & .dcname + .lb { margin-left: 8px; }
+  & .dmeta .dcslug { background: none; padding: 0; font-size: 12px; }
+  & .dcslug { margin-top: 2px; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; }
+  & .dcmeta { display: flex; align-items: center; gap: 12px; font-size: 12px; }
+  & .dcage { white-space: nowrap; }
+  & .dcdoc { padding: 24px 32px; }
+  & .sec { display: flex; align-items: center; gap: 8px; margin: 24px 0 8px; }
+  & .sec h2 { margin: 0; font-size: 16px; }
+  & .dcrev { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 16px; }
+  & .dcrev.on { background: var(--accent-subtle); }
+  & .dcmsg { min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+  & .dcnodiff { display: inline-block; min-width: 44px; }
+  & .dccmp { gap: 8px; font-weight: 400; }
+  & .dccmp :is(select.gfield, .selx) { flex: 0 0 auto; width: 96px; }
+  & .dcdiff .box-h .add { color: var(--success-fg); font-weight: 500; }
+  & .dcdiff .box-h .del { color: var(--danger-fg); font-weight: 500; }
+  & .dlines { overflow-x: auto; font: 12px/20px var(--ui-mono); }
+  & .dl { display: grid; grid-template-columns: 44px 44px minmax(0, 1fr); min-width: max-content; }
+  & .dl .ln { padding: 0 8px; text-align: right; color: var(--fg-muted); user-select: none; }
+  & .dl .tx { padding: 0 12px 0 22px; white-space: pre; position: relative; }
+  & .dl.add { background: var(--success-subtle); }
+  & .dl.del { background: var(--danger-subtle); }
+  & .dl.add .tx::before, & .dl.del .tx::before { position: absolute; left: 8px; }
+  & .dl.add .tx::before { content: "+"; }
+  & .dl.del .tx::before { content: "−"; }
+  & .dl.skip { display: block; height: 20px; padding-left: 16px; background: var(--canvas-subtle); border-block: 1px solid var(--border-muted); color: var(--fg-muted); }
+  & .dl.skip::after { content: "⋯"; }
+  & .dl.skip:first-child { border-top: 0; }
+}
+
+@media (max-width: 768px) {
+  :is(.g2.dc) {
+    & .dcrow { grid-template-columns: 16px minmax(0, 1fr); }
+    & .dcrow .dcmeta { grid-column: 2; flex-wrap: wrap; }
+    & .dcrev { grid-template-columns: auto minmax(0, 1fr); }
+    & .dcrev .dcmeta { grid-column: 1 / -1; flex-wrap: wrap; }
+    & .dcdoc { padding: 16px; }
+  }
+}

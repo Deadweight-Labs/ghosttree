@@ -101,7 +101,7 @@ func (s *searchStreams) start(account, only string, cancel context.CancelFunc) f
 }
 
 // searchKindLabel is the message key of the heading of each kind.
-var searchKindLabel = map[string]string{"requests": "nav.requests", "ideas": "issues.seg.ideas", "knowledge": "nav.knowledge",
+var searchKindLabel = map[string]string{"docs": "repo.tab.docs", "requests": "nav.requests", "ideas": "issues.seg.ideas", "knowledge": "nav.knowledge",
 	"sessions": "nav.sessions", "tasks": "nav.tab_tasks", "pains": "nav.tab_pains"}
 
 // searchLive is the frame of the live page.

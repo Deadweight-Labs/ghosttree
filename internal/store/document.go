@@ -247,9 +247,19 @@ func (s *Store) PatchDocument(id int64, patch map[string]string) error {
 	if s.writer != nil {
 		return queueWrite(s, []any{id, patch}, func(d *Store, p []any) error { return d.PatchDocument(p[0].(int64), p[1].(map[string]string)) })
 	}
+	ts := now()
 	sets = append(sets, "updated_at=?")
-	args = append(args, now(), id)
-	res, err := s.db.Exec(`UPDATE documents SET `+strings.Join(sets, ", ")+` WHERE id=?`, args...)
+	args = append(args, ts, id)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var project, oldSlug string
+	if err := tx.QueryRow(`SELECT project, slug FROM documents WHERE id=?`, id).Scan(&project, &oldSlug); err != nil {
+		return err
+	}
+	res, err := tx.Exec(`UPDATE documents SET `+strings.Join(sets, ", ")+` WHERE id=?`, args...)
 	if err != nil {
 		return err
 	}
@@ -260,5 +270,68 @@ func (s *Store) PatchDocument(id int64, patch map[string]string) error {
 	if n != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	// A renamed document keeps its old address: links that were handed out
+	// before the rename lead to it (DocumentMovedFrom). The new slug is a live
+	// one now and no longer an old address of anything.
+	if newSlug, ok := patch["slug"]; ok && newSlug != oldSlug {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO document_slugs(project,slug,document_id,moved_at) VALUES(?,?,?,?)`, project, oldSlug, id, ts); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM document_slugs WHERE project=? AND slug=?`, project, newSlug); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// DocumentMovedFrom is the document that had this slug in the project before
+// it was renamed. A slug a live document carries is never an old address; the
+// caller asks DocumentBySlug first.
+func (s *Store) DocumentMovedFrom(project, slug string) (Document, error) {
+	if s.reader != nil {
+		return s.reader.DocumentMovedFrom(project, slug)
+	}
+	return scanDocument(s.db.QueryRow(`SELECT d.id,d.project,d.slug,d.kind,d.title,d.head_revision,d.status,d.person,d.created_at,d.updated_at
+		FROM document_slugs m JOIN documents d ON d.id=m.document_id WHERE m.project=? AND m.slug=?`, project, slug))
+}
+
+// DocumentHeads reads the head revision of each document, without its body: a
+// list of documents names who wrote the latest revision and when, and must not
+// pull every text into memory for that. A document without a readable head is
+// missing from the answer.
+func (s *Store) DocumentHeads(ids []int64) (map[int64]DocumentRevision, error) {
+	if s.reader != nil {
+		return s.reader.DocumentHeads(ids)
+	}
+	out := map[int64]DocumentRevision{}
+	for start := 0; start < len(ids); start += 500 {
+		chunk := ids[start:min(start+500, len(ids))]
+		marks := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := s.db.Query(`SELECT r.id,r.document_id,r.revision,r.digest,r.message,r.person,r.created_at
+			FROM documents d JOIN document_revisions r ON r.document_id=d.id AND r.revision=d.head_revision
+			WHERE d.id IN (`+marks+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var r DocumentRevision
+			if err := rows.Scan(&r.ID, &r.DocumentID, &r.Revision, &r.Digest, &r.Message, &r.Person, &r.CreatedAt); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[r.DocumentID] = r
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
