@@ -211,11 +211,13 @@ func (b cliBackend) Local() tui.Local {
 		}
 		g := currentGitContext(cfg.Machine)
 		l.Project, l.Branch = g.axes.Project, g.axes.Branch
+		l.Dir, l.Git, l.Remote, l.Linked = folderInfo()
 	} else if h, err := os.Hostname(); err == nil {
 		l.Machine = h
 	}
 	l.Collector = collectorState()
 	l.Machine, l.Project, l.Branch = links.Clean(l.Machine, 64), links.Clean(l.Project, 200), links.Clean(l.Branch, 120)
+	l.Dir, l.Remote = links.Clean(l.Dir, 300), links.Clean(l.Remote, 200)
 	l.Collector.Detail = links.Clean(l.Collector.Detail, 160)
 	for i := range l.Servers {
 		l.Servers[i].Machine = links.Clean(l.Servers[i].Machine, 64)
@@ -281,16 +283,16 @@ func (b cliBackend) CheckServer(ctx context.Context, url string) tui.Server {
 func (b cliBackend) Resolve(ctx context.Context, input string) (links.Card, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return links.Card{}, err
+		return links.Card{}, classifyErr(err)
 	}
 	ref, err := links.ParseRef(input)
 	if err != nil {
-		return links.Card{}, err
+		return links.Card{}, friendlyErr(err)
 	}
 	hctx := currentGitContext(cfg.Machine)
 	env := links.Env{Builder: cliBuilder(cfg, hctx.axes.Project), API: b.client(cfg), Project: hctx.axes.Project, Branch: hctx.axes.Branch, RepoRoot: hctx.root}
 	card, err := env.Resolve(ref)
-	return card.Sanitized(), err
+	return card.Sanitized(), friendlyErr(err)
 }
 
 // Search runs a search line of ctx search, or a saved search written as
@@ -298,23 +300,23 @@ func (b cliBackend) Resolve(ctx context.Context, input string) (links.Card, erro
 func (b cliBackend) Search(ctx context.Context, line string) ([]tui.Item, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, err
+		return nil, classifyErr(err)
 	}
 	c := b.client(cfg)
 	ax := requestProjectAxes(cfg.Machine)
 	if ref, err := links.ParseRef(line); err == nil && ref.Kind == links.KindPreset {
 		run, err := c.RunPreset(ax.Project, ref.Text, presetArgs(c, ax.Project, ref.Text, ref.Args), 15)
 		if err != nil {
-			return nil, err
+			return nil, friendlyErr(err)
 		}
 		return searchItems(cliBuilder(cfg, ax.Project), run.Result), nil
 	}
 	if _, err := query.Parse(line, time.Now()); err != nil {
-		return nil, err
+		return nil, friendlyErr(err)
 	}
 	res, err := c.SearchAnchored(line, "all", ax, 15, false, client.AnchorFilter{Agent: os.Getenv(agentIDEnv)})
 	if err != nil {
-		return nil, err
+		return nil, friendlyErr(err)
 	}
 	return searchItems(cliBuilder(cfg, ax.Project), res), nil
 }
@@ -401,14 +403,21 @@ func firstLine(s string) string {
 	return s
 }
 
+// MyTasks are the open tasks for the caller in the current project, or in
+// every visible project when the folder has none.
 func (b cliBackend) MyTasks(ctx context.Context) ([]tui.Item, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, err
+		return nil, classifyErr(err)
 	}
-	list, err := b.client(cfg).ListHumanTasks(requestProjectAxes(cfg.Machine).Project, "open", true, 0)
+	c := b.client(cfg)
+	project := requestProjectAxes(cfg.Machine).Project
+	if project == "" {
+		return b.myTasksEverywhere(c)
+	}
+	list, err := c.ListHumanTasks(project, "open", true, 0)
 	if err != nil {
-		return nil, err
+		return nil, classifyErr(err)
 	}
 	out := make([]tui.Item, 0, len(list))
 	for _, t := range list {
@@ -417,14 +426,20 @@ func (b cliBackend) MyTasks(ctx context.Context) ([]tui.Item, error) {
 	return cleanItems(out), nil
 }
 
+// OpenRequests are the open requests of the current project. Without a
+// project the answer is "no project", never the requests of every project.
 func (b cliBackend) OpenRequests(ctx context.Context) ([]tui.Item, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, err
+		return nil, classifyErr(err)
 	}
-	page, err := b.client(cfg).SearchRequests(requestdomain.SearchFilter{Scope: requestProjectAxes(cfg.Machine), State: "open", Limit: 50})
+	ax := requestProjectAxes(cfg.Machine)
+	if ax.Project == "" {
+		return nil, &tui.ProblemError{Kind: tui.ProblemNoProject}
+	}
+	page, err := b.client(cfg).SearchRequests(requestdomain.SearchFilter{Scope: ax, State: "open", Limit: 50})
 	if err != nil {
-		return nil, err
+		return nil, classifyErr(err)
 	}
 	out := make([]tui.Item, 0, len(page.Results))
 	for _, h := range page.Results {
@@ -443,7 +458,7 @@ func (b cliBackend) OpenRequests(ctx context.Context) ([]tui.Item, error) {
 func (b cliBackend) Messages(ctx context.Context) ([]tui.Item, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, err
+		return nil, classifyErr(err)
 	}
 	room, code := coordRoomKey(false, nil, cfg, io.Discard)
 	if code != 0 {
@@ -453,8 +468,11 @@ func (b cliBackend) Messages(ctx context.Context) ([]tui.Item, error) {
 	me := coordSession(cfg)
 	after, _ := c.CoordCursor(me, store.DestinationRoom, room)
 	msgs, err := c.CoordInbox(store.DestinationRoom, room, me, after, 30)
+	if messagesNotFound(err) {
+		return []tui.Item{}, nil // no room yet: no messages
+	}
 	if err != nil {
-		return nil, err
+		return nil, classifyErr(err)
 	}
 	builder := clientBuilder(c, "")
 	out := make([]tui.Item, 0, len(msgs))
