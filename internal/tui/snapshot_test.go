@@ -51,6 +51,30 @@ func TestWriteSnapshots(t *testing.T) {
 			}
 		}
 	}
+	for _, sw := range []SwitchStyle{SwitchBar, SwitchRail} {
+		for _, bg := range backgrounds {
+			m := ready(newFake(), Options{Switch: sw}, 104, 30, bg.msg)
+			write("mode-"+sw.String()+"-project-"+bg.name, m.View().Content)
+			m = ready(newFake().inFolder("unknown"), Options{Switch: sw}, 104, 30, bg.msg)
+			write("mode-"+sw.String()+"-noproject-"+bg.name, m.View().Content)
+			m = ready(newFake(), Options{Switch: sw}, 104, 30, bg.msg)
+			m.setMode(modeInbox)
+			write("mode-"+sw.String()+"-inbox-"+bg.name, m.View().Content)
+		}
+	}
+	for _, bg := range backgrounds {
+		f := newFake().inFolder("unknown")
+		m := ready(f, Options{}, 104, 36, bg.msg)
+		write("noproject-"+bg.name, m.View().Content)
+		m = drive(m, key("enter"))
+		write("claim-"+bg.name, m.View().Content)
+		f = newFake().inFolder("nogit")
+		m = ready(f, Options{}, 104, 36, bg.msg)
+		write("nogit-"+bg.name, m.View().Content)
+		m.moveButton(1)
+		m = drive(m, key("enter"))
+		write("projects-"+bg.name, m.View().Content)
+	}
 	for _, bg := range backgrounds {
 		f := newFake()
 		m := ready(f, Options{}, 104, 36, bg.msg)

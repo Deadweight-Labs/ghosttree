@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	actordomain "github.com/Deadweight-Labs/ghosttree/internal/actor"
+	"modernc.org/sqlite"
 )
 
 // ActorBackfillOptions steer the backfill of actors (REQ-620).
@@ -85,11 +87,13 @@ type actorBackfillSource struct {
 	tool *toolProof
 }
 
-// toolProof names how a session creates an entry of a kind: tool names and CLI
-// commands, and the prefix of the identifier the answer carries (PAIN-12).
+// toolProof names how a session creates an entry of a kind: tool names, CLI
+// subcommands (run as ctx or ghosttree, actordomain.CallsTool), and the prefix
+// of the identifier the answer carries (PAIN-12).
 type toolProof struct {
-	calls  []string
-	prefix string
+	tools    []string
+	commands []string
+	prefix   string
 }
 
 const personAccountExpr = `(SELECT CASE WHEN COUNT(*)=1 THEN MIN(p.id) ELSE 0 END FROM persons p WHERE trim(%s)<>'' AND lower(trim(p.name))=lower(trim(%s)))`
@@ -107,12 +111,12 @@ var actorBackfillSources = []actorBackfillSource{
 		COALESCE(o.session_ref,''), COALESCE(o.via,'')
 		FROM knowledge k LEFT JOIN origin_contexts o ON o.id=k.origin_id
 		WHERE k.id>? AND NOT EXISTS (SELECT 1 FROM entry_actors e WHERE e.kind='knowledge' AND e.entry_id=k.id) ORDER BY k.id LIMIT ?`},
-	{kind: actordomain.Pain, tool: &toolProof{calls: []string{"pain_record", "ctx pain add"}, prefix: "PAIN-"}, query: `SELECT p.id, p.created_at, COALESCE((SELECT a.account_id FROM pain_authors a WHERE a.pain_id=p.id),0),
+	{kind: actordomain.Pain, tool: &toolProof{tools: []string{"pain_record"}, commands: []string{"pain add"}, prefix: "PAIN-"}, query: `SELECT p.id, p.created_at, COALESCE((SELECT a.account_id FROM pain_authors a WHERE a.pain_id=p.id),0),
 		'', '', COALESCE(ev.session_id,0), p.session_ref, COALESCE(o.session_ref,''), COALESCE(o.via,'')
 		FROM pains p LEFT JOIN pain_events ev ON ev.id=(SELECT MIN(x.id) FROM pain_events x WHERE x.pain_id=p.id AND x.kind='created')
 		LEFT JOIN origin_contexts o ON o.id=ev.origin_id
 		WHERE p.id>? AND NOT EXISTS (SELECT 1 FROM entry_actors e WHERE e.kind='pain' AND e.entry_id=p.id) ORDER BY p.id LIMIT ?`},
-	{kind: actordomain.Idea, tool: &toolProof{calls: []string{"idea_record", "ctx idea add"}, prefix: "IDEA-"}, query: `SELECT i.id, i.created_at, COALESCE((SELECT a.account_id FROM idea_authors a WHERE a.idea_id=i.id),0),
+	{kind: actordomain.Idea, tool: &toolProof{tools: []string{"idea_record"}, commands: []string{"idea add"}, prefix: "IDEA-"}, query: `SELECT i.id, i.created_at, COALESCE((SELECT a.account_id FROM idea_authors a WHERE a.idea_id=i.id),0),
 		'', '', 0, i.session_ref, COALESCE(o.session_ref,''), COALESCE(o.via,'')
 		FROM ideas i LEFT JOIN origin_contexts o ON o.id=i.origin_id
 		WHERE i.id>? AND NOT EXISTS (SELECT 1 FROM entry_actors e WHERE e.kind='idea' AND e.entry_id=i.id) ORDER BY i.id LIMIT ?`},
@@ -142,9 +146,14 @@ var actorBackfillSources = []actorBackfillSource{
 		0, '', COALESCE(o.session_ref,''), COALESCE(o.via,'')
 		FROM coord_messages m LEFT JOIN origin_contexts o ON o.id=m.origin_id
 		WHERE m.id>? AND NOT EXISTS (SELECT 1 FROM entry_actors e WHERE e.kind='message' AND e.entry_id=m.id) ORDER BY m.id LIMIT ?`},
-	{kind: actordomain.Vote, query: `SELECT v.rowid, v.updated_at, ` + personAccount("v.voter") + `,
-		CASE v.by_agent WHEN 1 THEN 'agent' ELSE 'human' END, '', 0, '', '', ''
-		FROM decision_votes v WHERE v.rowid>? AND NOT EXISTS (SELECT 1 FROM entry_actors e WHERE e.kind='vote' AND e.entry_id=v.rowid) ORDER BY v.rowid LIMIT ?`},
+	// Stimmen: die Id des Stempels ist VoteEntryID (Hash aus Entscheidung und
+	// voter_key), die SQL-Funktion ghosttree_vote_entry rechnet dasselbe. Das
+	// Konto steht im voter_key (person:N), nicht im Anzeigenamen.
+	{kind: actordomain.Vote, query: `SELECT v.id, v.updated_at, v.account, v.hint, '', 0, '', '', '' FROM (
+		SELECT ghosttree_vote_entry(decision_id, voter_key) AS id, updated_at,
+			CASE WHEN voter_key LIKE 'person:%' THEN CAST(substr(voter_key, 8) AS INTEGER) ELSE 0 END AS account,
+			CASE by_agent WHEN 1 THEN 'agent' ELSE 'human' END AS hint FROM decision_votes) v
+		WHERE v.id>? AND NOT EXISTS (SELECT 1 FROM entry_actors e WHERE e.kind='vote' AND e.entry_id=v.id) ORDER BY v.id LIMIT ?`},
 }
 
 // BackfillActors stamps the actor of entries that have none, where it can be
@@ -349,6 +358,14 @@ func (s *Store) provenSession(c actorCandidate, owner int64) (Session, bool) {
 	return Session{}, false
 }
 
+func init() {
+	sqlite.MustRegisterDeterministicScalarFunction("ghosttree_vote_entry", 2, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		id, _ := args[0].(int64)
+		key, _ := args[1].(string)
+		return actordomain.VoteEntryID(id, key), nil
+	})
+}
+
 // actorBackfillQuiet: entries younger than this are left to the live stamp.
 const actorBackfillQuiet = 5 * time.Minute
 
@@ -383,7 +400,7 @@ func (s *Store) sessionByToolCall(c actorCandidate, tool *toolProof, owner int64
 	ref := tool.prefix + strconv.FormatInt(c.id, 10)
 	var called, named []Session
 	for _, sess := range cands {
-		call, name := s.sessionCalledTool(sess.ID, from, to, tool.calls, ref)
+		call, name := s.sessionCalledTool(sess.ID, from, to, tool, ref)
 		if call {
 			called = append(called, sess)
 			if name {
@@ -401,9 +418,13 @@ func (s *Store) sessionByToolCall(c actorCandidate, tool *toolProof, owner int64
 }
 
 // sessionCalledTool reads the lines of a session between from and to (by
-// their own times) and says whether one calls a tool and whether one names
-// ref as a whole identifier. At most toolScanLimit lines are read.
-func (s *Store) sessionCalledTool(sessionID int64, from, to string, calls []string, ref string) (called, named bool) {
+// their own times) and says whether one is a real call of the tool
+// (actordomain.CallsTool: a tool_use or function_call, or a shell command that
+// starts with the CLI command; a result or a prompt that only mentions it does
+// not count) and whether a tool result names ref as a whole identifier. Lines
+// without a time are not placed in the window and do not count. At most
+// toolScanLimit lines are read.
+func (s *Store) sessionCalledTool(sessionID int64, from, to string, tool *toolProof, ref string) (called, named bool) {
 	seq, ok := s.seqAtTime(sessionID, from)
 	if !ok {
 		return false, false
@@ -422,16 +443,18 @@ func (s *Store) sessionCalledTool(sessionID int64, from, to string, calls []stri
 			}
 			n++
 			read++
-			if at, ok := chunkTime(raw); ok && at > to {
+			at, ok := chunkTime(raw)
+			if !ok || at < from {
+				continue
+			}
+			if at > to {
 				past = true
 				break
 			}
-			for _, call := range calls {
-				if strings.Contains(raw, call) {
-					called = true
-				}
+			if actordomain.CallsTool(raw, tool.tools, tool.commands) {
+				called = true
 			}
-			if namesRef(raw, ref) {
+			if actordomain.IsToolResult(raw) && namesRef(raw, ref) {
 				named = true
 			}
 		}
@@ -479,9 +502,17 @@ func chunkTime(raw string) (string, bool) {
 }
 
 // timeFrom is the time of the first line at or after seq that has one,
-// looking at a few lines only.
+// looking at timeLookahead lines only.
 func (s *Store) timeFrom(sessionID int64, seq int) (string, bool) {
-	rows, err := s.db.Query(`SELECT raw FROM session_chunks WHERE session_id=? AND seq>=? ORDER BY seq LIMIT 20`, sessionID, seq)
+	return timeFromQ(s.db, sessionID, seq)
+}
+
+// timeLookahead: so many lines without a time in a row are rare (a long
+// tool output split into lines has none).
+const timeLookahead = 200
+
+func timeFromQ(q queryer, sessionID int64, seq int) (string, bool) {
+	rows, err := q.Query(`SELECT raw FROM session_chunks WHERE session_id=? AND seq>=? ORDER BY seq LIMIT ?`, sessionID, seq, timeLookahead)
 	if err != nil {
 		return "", false
 	}
@@ -499,8 +530,11 @@ func (s *Store) timeFrom(sessionID int64, seq int) (string, bool) {
 }
 
 // seqAtTime finds by binary search over seq the first line of a session at or
-// after the time at (lines are in time order). ok is false for a session
-// without lines or whose lines all lie before at.
+// after the time at (lines are in time order). A stretch without any time is
+// taken as before at, never as after it: the search then moves on and, at
+// worst, finds nothing, which leaves the entry unknown instead of reading the
+// wrong stretch. ok is false for a session without lines or whose lines all
+// lie before at.
 func (s *Store) seqAtTime(sessionID int64, at string) (int, bool) {
 	var maxSeq sql.NullInt64
 	if err := s.db.QueryRow(`SELECT MAX(seq) FROM session_chunks WHERE session_id=?`, sessionID).Scan(&maxSeq); err != nil || !maxSeq.Valid {
@@ -510,7 +544,7 @@ func (s *Store) seqAtTime(sessionID int64, at string) (int, bool) {
 	for lo < hi {
 		mid := (lo + hi) / 2
 		t, ok := s.timeFrom(sessionID, mid)
-		if !ok || t >= at {
+		if ok && t >= at {
 			hi = mid
 		} else {
 			lo = mid + 1
@@ -524,48 +558,96 @@ func (s *Store) seqAtTime(sessionID int64, at string) (int, bool) {
 // without role). A session whose history already begins near its first line
 // is left alone; one that ran when this version was deployed has only the
 // later part from the live upload and is read again in full, its rows
-// replaced. One session per transaction.
+// replaced. The lines are read without a lock; the replacing transaction
+// first takes the write lock and checks that no line came after the read,
+// so an upload in between is never lost (backfillSessionModelsOf).
 func (s *Store) backfillSessionModels(ids []int64, dryRun bool) (sessions, segments int, err error) {
 	for _, id := range ids {
-		var first sql.NullString
-		if err := s.db.QueryRow(`SELECT MIN(first_at) FROM session_models WHERE session_id=?`, id).Scan(&first); err != nil {
-			return sessions, segments, err
-		}
-		if first.Valid && s.modelsCoverStart(id, first.String) {
-			continue
-		}
-		obs, err := s.sessionObservations(id)
+		n, err := s.backfillSessionModelsOf(id, dryRun)
 		if err != nil {
 			return sessions, segments, err
 		}
-		segs := actordomain.Fold(nil, obs)
-		if len(segs) == 0 {
-			continue
-		}
-		sessions++
-		segments += len(segs)
-		if dryRun {
-			continue
-		}
-		tx, err := s.db.Begin()
-		if err != nil {
-			return sessions, segments, err
-		}
-		if _, err := tx.Exec(`DELETE FROM session_models WHERE session_id=?`, id); err != nil {
-			tx.Rollback()
-			return sessions, segments, err
-		}
-		for _, seg := range segs {
-			if _, err := tx.Exec(`INSERT OR IGNORE INTO session_models(session_id,first_at,model,last_at) VALUES(?,?,?,?)`, id, seg.FirstAt, seg.Model, seg.LastAt); err != nil {
-				tx.Rollback()
-				return sessions, segments, err
-			}
-		}
-		if err := tx.Commit(); err != nil {
-			return sessions, segments, err
+		if n > 0 {
+			sessions++
+			segments += n
 		}
 	}
 	return sessions, segments, nil
+}
+
+func (s *Store) backfillSessionModelsOf(id int64, dryRun bool) (int, error) {
+	// Lesen ohne Sperre (eine große Session hält sonst jeden Upload auf); in der
+	// Transaktion nur prüfen, dass seither keine Zeile dazukam, und ersetzen.
+	// Kam eine dazu, noch einmal von vorn; bewegt sich die Session dauernd,
+	// bleibt sie diesmal liegen und bekommt ihre Modelle vom Live-Upload.
+	for attempt := 0; attempt < 3; attempt++ {
+		top, err := maxChunkSeq(s.db, id)
+		if err != nil {
+			return 0, err
+		}
+		var first sql.NullString
+		if err := s.db.QueryRow(`SELECT MIN(first_at) FROM session_models WHERE session_id=?`, id).Scan(&first); err != nil {
+			return 0, err
+		}
+		if first.Valid && modelsCoverStart(s.db, id, first.String) {
+			return 0, nil
+		}
+		obs, err := sessionObservations(s.db, id, top)
+		if err != nil {
+			return 0, err
+		}
+		segs := actordomain.Fold(nil, obs)
+		if len(segs) == 0 || dryRun {
+			return len(segs), nil
+		}
+		done, err := s.replaceSessionModels(id, top, segs)
+		if err != nil || done {
+			return len(segs), err
+		}
+	}
+	return 0, nil
+}
+
+// replaceSessionModels writes the history of a session if no line was added
+// after top; done is false when one was (the caller reads again).
+func (s *Store) replaceSessionModels(id int64, top int64, segs []actordomain.Segment) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	// Die Schreibsperre zuerst: danach kann kein Upload mehr dazwischen.
+	if _, err := tx.Exec(`DELETE FROM session_models WHERE 0`); err != nil {
+		return false, err
+	}
+	now, err := maxChunkSeq(tx, id)
+	if err != nil {
+		return false, err
+	}
+	if now != top {
+		return false, nil
+	}
+	if _, err := tx.Exec(`DELETE FROM session_models WHERE session_id=?`, id); err != nil {
+		return false, err
+	}
+	for _, seg := range segs {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO session_models(session_id,first_at,model,last_at) VALUES(?,?,?,?)`, id, seg.FirstAt, seg.Model, seg.LastAt); err != nil {
+			return false, err
+		}
+	}
+	return true, tx.Commit()
+}
+
+// maxChunkSeq is the last line number of a session, -1 without lines.
+func maxChunkSeq(q queryer, id int64) (int64, error) {
+	var top sql.NullInt64
+	if err := q.QueryRow(`SELECT MAX(seq) FROM session_chunks WHERE session_id=?`, id).Scan(&top); err != nil {
+		return 0, err
+	}
+	if !top.Valid {
+		return -1, nil
+	}
+	return top.Int64, nil
 }
 
 // modelsStartSlack is how long after the first line of a session its first
@@ -574,8 +656,8 @@ const modelsStartSlack = 10 * time.Minute
 
 // modelsCoverStart says whether the stored history of a session begins near
 // its first transcript line.
-func (s *Store) modelsCoverStart(id int64, firstModel string) bool {
-	start, ok := s.timeFrom(id, 0)
+func modelsCoverStart(q queryer, id int64, firstModel string) bool {
+	start, ok := timeFromQ(q, id, 0)
 	if !ok {
 		return true
 	}
@@ -587,12 +669,13 @@ func (s *Store) modelsCoverStart(id int64, firstModel string) bool {
 	return m.Sub(t) <= modelsStartSlack
 }
 
-func (s *Store) sessionObservations(id int64) ([]actordomain.Observation, error) {
+// sessionObservations reads the model sightings of a session up to line top.
+func sessionObservations(q queryer, id int64, top int64) ([]actordomain.Observation, error) {
 	var out []actordomain.Observation
 	after := -1
 	for {
-		rows, err := s.db.Query(`SELECT seq, raw FROM session_chunks WHERE session_id=? AND seq>?
-			AND (role='assistant' OR (role='' AND instr(raw,'"turn_context"')>0)) ORDER BY seq LIMIT 1000`, id, after)
+		rows, err := q.Query(`SELECT seq, raw FROM session_chunks WHERE session_id=? AND seq>? AND seq<=?
+			AND (role='assistant' OR (role='' AND instr(raw,'"turn_context"')>0)) ORDER BY seq LIMIT 1000`, id, after, top)
 		if err != nil {
 			return nil, err
 		}

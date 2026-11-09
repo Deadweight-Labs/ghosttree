@@ -67,6 +67,11 @@ const (
 	envLanguage = "GHOSTTREE_LANGUAGE"
 )
 
+// indexGapDelay is how long after the index backfill the search for chunks
+// without an index row waits, so that it does not compete with the requests
+// that follow a start.
+var indexGapDelay = 2 * time.Minute
+
 type snapshotRootValues []string
 
 func (v *snapshotRootValues) String() string { return strings.Join(*v, ",") }
@@ -334,6 +339,23 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 			return
 		}
 		logger.Info("session_index_backfill", "state", "complete", "seconds", int(time.Since(started).Seconds()))
+		// Once per start, after serving has settled: chunks without an index
+		// row below the highest indexed one, which the cheap check at
+		// startup cannot see.
+		select {
+		case <-indexCtx.Done():
+			return
+		case <-time.After(indexGapDelay):
+		}
+		started = time.Now()
+		rep, err := st.RepairIndexGaps(indexCtx, store.IndexGapOptions{})
+		if err != nil {
+			if indexCtx.Err() == nil {
+				logger.Error("session_index_gaps", "error", err.Error())
+			}
+			return
+		}
+		logger.Info("session_index_gaps", "checked", rep.Checked, "missing", rep.Missing, "sessions", rep.Sessions, "repaired", rep.Repaired, "seconds", int(time.Since(started).Seconds()))
 	}()
 	// Hybrid search and the background job that feeds it are only started with an
 	// embedding server configured. The job begins late and works in small, paused

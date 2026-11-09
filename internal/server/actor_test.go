@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,7 +124,7 @@ func TestServerStampsTheActorOfEveryKind(t *testing.T) {
 		"subject": "idea", "id": i.ID, "question": "Welche Anzeige",
 		"variants": []map[string]any{{"title": "Name"}, {"title": "Name und Harness"}}}))
 	actorCall(t, f, "mia", s, 200, "POST", idPath("/api/decisions/%d/votes", dec.ID), map[string]any{"variant": "B", "reason": "sagt mehr"})
-	ids[actor.Vote] = f.st.VoteRowID(dec.ID, "person:3:agent")
+	ids[actor.Vote] = actor.VoteEntryID(dec.ID, "person:3:agent")
 	crit := d.Criteria[0].ID
 	actorCall(t, f, "mia", s, 200, "PATCH", idPath("/api/criteria/%d", crit), map[string]any{"state": "met", "evidence_kind": "test", "evidence_ref": "go test ./..."})
 	ids[actor.Criterion] = crit
@@ -362,5 +363,114 @@ func TestActorStatsHideTasksOfHiddenRequests(t *testing.T) {
 	}
 	if n := entries("mia"); n != 1 {
 		t.Errorf("the owner of the session does not count her task: %d", n)
+	}
+}
+
+// Robin tippt ctx selbst: ohne Agenten-Session und mit der Terminal-Markierung
+// steht der Stempel als Mensch (Terminal). Mit Session bleibt es ein Agent, und
+// Rechte entstehen daraus keine.
+func TestTerminalPersonIsASelfReportedHuman(t *testing.T) {
+	f := accessAPI(t, true)
+	codexSession(t, f)
+	call := func(session string, terminal bool, body map[string]any) int64 {
+		t.Helper()
+		b, _ := json.Marshal(body)
+		rq, _ := http.NewRequest("POST", f.srv.URL+"/api/ideas", bytes.NewReader(b))
+		rq.Header.Set("Authorization", "Bearer "+f.tok["mia"])
+		if session != "" {
+			rq.Header.Set(originctx.SessionHeader, session)
+		}
+		if terminal {
+			rq.Header.Set(actor.ViaHeader, actor.ViaTerminal)
+		}
+		resp, err := http.DefaultClient.Do(rq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var i idea.Idea
+		json.NewDecoder(resp.Body).Decode(&i)
+		if resp.StatusCode != 201 {
+			t.Fatalf("create idea: %d", resp.StatusCode)
+		}
+		return i.ID
+	}
+	byHand := call("", true, map[string]any{"project": accProject, "title": "Von Hand"})
+	if ea := stampOf(t, f.st, actor.Idea, byHand); ea.Kind != actor.Human || ea.Via != actor.ViaTerminal || ea.Harness != "" {
+		t.Errorf("terminal: %+v", ea)
+	}
+	withSession := call("codex-mia", true, map[string]any{"project": accProject, "title": "Mit Session"})
+	if ea := stampOf(t, f.st, actor.Idea, withSession); ea.Kind != actor.Agent || ea.Harness != "codex" {
+		t.Errorf("own session with the flag: %+v", ea)
+	}
+	unknown := call("not-uploaded-yet", true, map[string]any{"project": accProject, "title": "Unbekannte Session"})
+	if ea := stampOf(t, f.st, actor.Idea, unknown); ea.Kind != actor.Agent {
+		t.Errorf("a named session with the flag: %+v", ea)
+	}
+	plain := call("", false, map[string]any{"project": accProject, "title": "Ohne alles"})
+	if ea := stampOf(t, f.st, actor.Idea, plain); ea.Kind != actor.Agent {
+		t.Errorf("token call without flag: %+v", ea)
+	}
+	// Keine Rechte: was einen Menschen verlangt, bleibt der Websitzung.
+	rq, _ := http.NewRequest("POST", f.srv.URL+ideaPath("/api/ideas/%d/phase", byHand), strings.NewReader(`{"phase":"approved"}`))
+	rq.Header.Set("Authorization", "Bearer "+f.tok["mia"])
+	rq.Header.Set(actor.ViaHeader, actor.ViaTerminal)
+	resp, err := http.DefaultClient.Do(rq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Errorf("the terminal flag approved an idea: %d", resp.StatusCode)
+	}
+	// Statistik: eine eigene Zeile „Mensch (Terminal)“.
+	got := decode[struct {
+		Stats []store.ActorStat `json:"stats"`
+	}](t, f.expect(t, "mia", 200, "GET", "/api/stats/actors?project="+accProject, nil))
+	found := false
+	for _, st := range got.Stats {
+		if st.Actor == actor.Human && st.Via == actor.ViaTerminal && st.Entries == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("stats: %+v", got.Stats)
+	}
+}
+
+// Prüfbefund B2: eine Session-Id im Body, die einem anderen Konto gehört, macht
+// den Aufruf nie zum Menschen im Terminal, und der Gärtner ist nie ein Mensch.
+func TestForeignBodySessionAndGardenerAreNeverATerminalPerson(t *testing.T) {
+	f := accessAPI(t, true)
+	post := func(who string, body map[string]any) int64 {
+		t.Helper()
+		b, _ := json.Marshal(body)
+		rq, _ := http.NewRequest("POST", f.srv.URL+"/api/pains", bytes.NewReader(b))
+		rq.Header.Set("Authorization", "Bearer "+f.tok[who])
+		rq.Header.Set(actor.ViaHeader, actor.ViaTerminal)
+		resp, err := http.DefaultClient.Do(rq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var d struct {
+			Pain struct{ ID int64 } `json:"pain"`
+		}
+		json.NewDecoder(resp.Body).Decode(&d)
+		if resp.StatusCode != 201 {
+			t.Fatalf("%s create pain: %d", who, resp.StatusCode)
+		}
+		return d.Pain.ID
+	}
+	id := post("mia", map[string]any{"project": accProject, "title": "Fremde Session", "session_id": f.id["s-robin"]})
+	if ea := stampOf(t, f.st, actor.Pain, id); ea.Kind != actor.Agent || ea.SessionID != 0 {
+		t.Errorf("foreign body session: %+v", ea)
+	}
+	if err := f.st.SetGardenerAccount(3); err != nil {
+		t.Fatal(err)
+	}
+	g := post("mia", map[string]any{"project": accProject, "title": "Vom Gärtner"})
+	if ea := stampOf(t, f.st, actor.Pain, g); ea.Kind != actor.Agent {
+		t.Errorf("gardener: %+v", ea)
 	}
 }

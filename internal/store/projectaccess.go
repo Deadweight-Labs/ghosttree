@@ -138,6 +138,8 @@ type Decision struct {
 	// Hidden: bei Ablehnung 404 statt 403 (Lesen und Nicht-Mitglieder).
 	Hidden bool
 	Reason string
+	// Strict: die Ablehnung gilt auch im Log-Modus (strictDenial).
+	Strict bool
 }
 
 // matrixAllows ist die Matrix aus Spec 8.1 je Rolle, Ressource und Aktion für
@@ -233,7 +235,9 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 		case ActCreate:
 			return rank >= 2
 		case ActWork:
-			return rank >= 3 || (rank == 2 && (obj.Assigned || obj.Unassigned)) || (rank == 1 && obj.Assigned)
+			// Ein Gast liest nur, auch eine ihm zugewiesene Aufgabe meldet er
+			// nicht als erledigt (Robin, 2026-11-09).
+			return rank >= 3 || (rank == 2 && (obj.Assigned || obj.Unassigned))
 		case ActEdit:
 			return rank >= 3 || (rank == 2 && obj.Own)
 		}
@@ -254,7 +258,8 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 		}
 	case ResRunbook:
 		switch act {
-		case ActRead, ActCreate:
+		case ActRead, ActCreate, ActWork:
+			// ActWork: einen Lauf melden.
 			return rank >= 2
 		case ActEdit:
 			// Wie bei Wissen (#1444): wer es besser weiß, schreibt eine neue
@@ -371,7 +376,7 @@ func (c *accessConfig) apply(account, project string, res Resource, act Action, 
 	if d.Allowed {
 		return true
 	}
-	if c.enforce.Load() {
+	if c.enforce.Load() || d.Strict {
 		c.denied.Add(1)
 		return false
 	}
@@ -627,13 +632,32 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	if (res == ResTranscript || res == ResSessionMeta) && act == ActRead && obj.Own {
 		return Decision{Allowed: true}
 	}
-	d := Decision{Hidden: rank == 0 || act == ActRead}
+	d := Decision{Hidden: rank == 0 || act == ActRead, Strict: strictDenial(rank, act)}
 	if rank == 0 {
 		d.Reason = "not a member"
 	} else {
 		d.Reason = "role " + role.Role + " may not " + string(act) + " " + string(res)
 	}
 	return d
+}
+
+// strictDenial sagt, welche Ablehnungen auch im Log-Modus gelten (Robin,
+// 2026-11-09, nach der UI-Durchsicht auf einer Instanz ohne Durchsetzung):
+//
+//   - Ein Gast schreibt nichts, was die Matrix ihm nicht gibt. Gäste sind
+//     Außenstehende; der Log-Modus ist für die Umstellung der Mitglieder da,
+//     nicht dafür, dass ein Gast Aufgaben erledigt, Abläufe anlegt oder Wissen
+//     ändert.
+//   - Wissen freigeben (verified) ohne Prüfrecht. Die Freigabe ist wie die eines
+//     Ablaufs ein Sicherheitsmerkmal: freigegebenes Wissen bekommen Agenten als
+//     geprüft geliefert.
+//
+// Lesen bleibt im Log-Modus offen, wie bisher.
+func strictDenial(rank int, act Action) bool {
+	if act == ActVerify {
+		return true
+	}
+	return rank == 1 && act != ActRead
 }
 
 // decideGlobal: "global" heißt "überall für mich". Wissen, Aufträge und

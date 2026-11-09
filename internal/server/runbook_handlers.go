@@ -390,8 +390,18 @@ func (a *api) reportRunbookRun(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	if _, ok := a.runbookGate(w, r, id, store.ActRead); !ok {
+	// Einen Lauf melden schreibt (Lauf und womöglich einen Vorschlag): in einem
+	// Projekt ab Mitglied (ActWork), nicht schon mit dem Lesen. Ein Gast meldet
+	// keinen Lauf. Abläufe einer Maschine oder ohne Geltung behalten ihre
+	// eigene Regel (lesen dürfen genügt), dort gibt es keine Gäste.
+	ref, ok := a.runbookGate(w, r, id, store.ActRead)
+	if !ok {
 		return
+	}
+	if ref.Project != "" {
+		if _, ok := a.runbookGate(w, r, id, store.ActWork); !ok {
+			return
+		}
 	}
 	if body.Version == 0 {
 		head, err := a.st.RunbookView(id, 0)
