@@ -52,10 +52,13 @@ const (
 	// kennen, sind Projekt, Branch, Zeit, Urheber und (Nachrichten) Anker und Bereich.
 	KindMessage = "message"
 	KindSession = "session"
+	// Dokumente (Spezifikationen, Pläne, Berichte) kennen Projekt, Art (Type),
+	// Zustand active oder archived, Urheber und Zeit.
+	KindDocument = "document"
 )
 
 // Kinds sind alle Objektarten in fester Reihenfolge.
-var Kinds = []string{KindKnowledge, KindRequest, KindPain, KindIdea, KindFeature, KindCriterion, KindTask, KindFile, KindMessage, KindSession}
+var Kinds = []string{KindKnowledge, KindRequest, KindPain, KindIdea, KindFeature, KindCriterion, KindTask, KindFile, KindMessage, KindSession, KindDocument}
 
 var kindAlias = map[string]string{
 	"knowledge": KindKnowledge, "wissen": KindKnowledge,
@@ -65,6 +68,7 @@ var kindAlias = map[string]string{
 	"criterion": KindCriterion, "criteria": KindCriterion,
 	"task": KindTask, "tasks": KindTask, "file": KindFile, "files": KindFile, "ghost": KindFile,
 	"message": KindMessage, "messages": KindMessage, "nachricht": KindMessage, "session": KindSession, "sessions": KindSession,
+	"document": KindDocument, "documents": KindDocument, "doc": KindDocument, "docs": KindDocument, "dokument": KindDocument,
 }
 
 // StateClasses sind die Zustandsklassen von is:.

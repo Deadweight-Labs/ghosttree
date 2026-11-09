@@ -80,7 +80,7 @@ func (a *app) attachmentImage(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Length", strconv.Itoa(len(data)))
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Disposition", fmt.Sprintf(`inline; filename="attachment-%d.%s"`, meta.ID, ext))
-	h.Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'none'; sandbox")
+	h.Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'none'; sandbox; frame-ancestors 'none'")
 	h.Set("Cross-Origin-Resource-Policy", "same-origin")
 	h.Set("Cache-Control", "private, max-age=3600")
 	h.Set("ETag", `"`+meta.SHA256+`"`)

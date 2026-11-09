@@ -36,6 +36,8 @@ const (
 type searchHit struct {
 	Title, Sub, Href  string
 	Date, Stamp, Area string
+	// Snip is the line of a document the words were found in.
+	Snip string
 }
 
 // searchGroup is the hits of one kind. All is the link to the full list, empty
@@ -83,15 +85,15 @@ type searchView struct {
 }
 
 // searchKindMark is the icon of each kind of hit.
-var searchKindMark = map[string]string{"requests": "issue", "ideas": "idea", "knowledge": "book", "sessions": "term", "tasks": "pin", "pains": "pain"}
+var searchKindMark = map[string]string{"docs": "file", "requests": "issue", "ideas": "idea", "knowledge": "book", "sessions": "term", "tasks": "pin", "pains": "pain"}
 
-// searchPage searches requests, ideas, knowledge, sessions, tasks and pains in a
-// fixed order, one group each. The line is the search language of REQ-600
+// searchPage searches requests, ideas, knowledge, documents, sessions, tasks
+// and pains in a fixed order, one group each. The line is the search language of REQ-600
 // (internal/query): free text and qualifiers such as is:open or area:internal/store;
 // a quick filter (preset) runs its lines one after the other and joins the hits.
 // Every group asks the same store calls as its own list page and so sees exactly
-// what that page shows the viewer. A guest searches requests, ideas and knowledge
-// only, as the start page shows them nothing else. The groups are never mixed
+// what that page shows the viewer. A guest searches requests, ideas, knowledge
+// and documents only, as the start page shows them nothing else. The groups are never mixed
 // into one ranking, and the sessions group runs the sessions search as it is,
 // including its ranking for restricted viewers.
 //
@@ -175,7 +177,7 @@ func (a *app) planSearch(r *http.Request) *searchPlan {
 		return "/ui/search?" + qs.Encode()
 	}
 	v.AllHref = p.href("")
-	p.kinds = []string{"requests", "ideas", "knowledge"}
+	p.kinds = []string{"requests", "ideas", "knowledge", "docs"}
 	if !guest {
 		p.kinds = append(p.kinds, "sessions", "tasks", "pains")
 	}
@@ -288,6 +290,8 @@ func (a *app) searchOne(ctx context.Context, l lang, st *store.Store, pa *store.
 		return a.searchIdeas(l, st, pa, sl, line, now)
 	case "knowledge":
 		return a.searchKnowledge(l, st, pa, sl, line, now)
+	case "docs":
+		return a.searchDocs(l, st, pa, sl, line, now)
 	case "sessions":
 		return a.searchSessions(ctx, l, st, pa, sl, line, now)
 	case "tasks":

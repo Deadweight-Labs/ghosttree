@@ -196,13 +196,13 @@ func TestImportDocumentIsAtomicAndIdempotent(t *testing.T) {
 		Document: Document{Project: "p", Slug: "design", Kind: "spec", Title: "Design", Person: "alice"},
 		RunID:    run, Source: "docs/design.md", Digest: Digest(body), Body: body, Message: "import",
 	}
-	first, err := s.ImportDocument(in)
-	if err != nil {
-		t.Fatal(err)
+	first, created, err := s.ImportDocument(in)
+	if err != nil || !created {
+		t.Fatal(created, err)
 	}
-	second, err := s.ImportDocument(in)
-	if err != nil || second.ID != first.ID {
-		t.Fatalf("retry = %+v, %v; first = %+v", second, err, first)
+	second, created, err := s.ImportDocument(in)
+	if err != nil || second.ID != first.ID || created {
+		t.Fatalf("retry = %+v, created %v, %v; first = %+v", second, created, err, first)
 	}
 	var documents, revisions, evidence int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM documents`).Scan(&documents); err != nil {
@@ -229,7 +229,7 @@ func TestImportDocumentIsAtomicAndIdempotent(t *testing.T) {
 		Document: Document{Project: "p", Slug: "bad", Kind: "spec", Title: "Bad"},
 		RunID:    badRun, Source: "docs/bad.md", Digest: Digest("expected"), Body: "different",
 	}
-	if _, err := s.ImportDocument(bad); err == nil {
+	if _, _, err := s.ImportDocument(bad); err == nil {
 		t.Fatal("import accepted body whose digest differs from the artifact")
 	}
 	if _, err := s.DocumentBySlug("p", "bad"); err == nil {

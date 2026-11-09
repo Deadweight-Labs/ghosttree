@@ -384,6 +384,20 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   in the browser, "create idea" on a pain, images on ideas and variants with a
   larger view, and runbooks written in the browser (executable targets stay
   operator-approved).
+- Documents in the browser: a repository with documents gets a Docs tab with
+  title, kind, slug, latest revision and who wrote it (an agent as "Robin's
+  Claude"). A document has a fixed address, `/ui/{org}/{repo}/docs/{slug}`,
+  shows its Markdown like comments do (references as pills with hover cards,
+  no raw HTML, no `javascript:` links), every revision, the diff between any
+  two revisions, its raw text and "Copy link". Documents appear in the web
+  search and its live stream with the line that matched (`is:doc` narrows to
+  them). `ctx doc new` names the address the draft will have,
+  `ctx doc push` and `import` print it, and `ctx open` / `open_link` take
+  `doc:slug` and `doc:owner/repo/slug`. Reading follows the project's
+  knowledge: guests read, whoever has no role gets 404. A renamed document
+  keeps its old address (302 to the new slug). A revision may have at most
+  5 MB of text; the server answers 413 `document_too_large`, and `ctx doc push`
+  and `import` say so before sending.
 - `GHOSTTREE_LANGUAGE=de` (or `--language de`) switches the interface to German.
 - Every `/ui/` page sends a strict Content-Security-Policy.
 

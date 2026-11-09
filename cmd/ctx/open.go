@@ -28,6 +28,7 @@ what is one of
   pr:155           a pull request    commit:2d950bf          a commit
   room:12          a room thread     session:ID              a session
   doc:NAME         a document        runbook:NAME            a runbook
+  doc:OWNER/REPO/NAME                a document of another repository
   branch:NAME      the checklist of a branch
   preset:pr-ergebnis 155             a saved search with its values
   internal/store   a file or folder on the current branch

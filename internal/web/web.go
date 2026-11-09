@@ -103,6 +103,8 @@ type pageData struct {
 	ErrV                                                       *errorView
 	RunbooksV                                                  *runbooksView
 	RunbookV                                                   *runbookPageView
+	DocsV                                                      *docsView
+	DocV                                                       *docPageView
 	RunbookFormV                                               *runbookFormView
 	SettingsV                                                  *repoSettingsView
 	FeaturesV                                                  *featuresView

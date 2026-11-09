@@ -26,5 +26,7 @@ var pageAssets = map[string]struct{ CSS, JS []string }{
 	"commits":      {CSS: []string{"ui-pulls.css"}, JS: []string{"ui-pulls.js"}},
 	"commit":       {CSS: []string{"ui-pulls.css"}},
 	"search":       {CSS: []string{"ui-search.css"}},
+	"docs":         {CSS: []string{"ui-docs.css"}},
+	"doc":          {CSS: []string{"ui-docs.css"}},
 	"newissue":     {CSS: []string{"ui-labels.css", "ui-issues.css", "ui-newissue.css"}, JS: []string{"ui-newissue.js"}},
 }

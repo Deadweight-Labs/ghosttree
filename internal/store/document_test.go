@@ -160,3 +160,45 @@ func TestDocumentsListFiltersArchivedAndKind(t *testing.T) {
 		t.Fatalf("%d specs, erwartet 2", len(specs))
 	}
 }
+
+// A rename keeps the old slug as an address of the document; every earlier slug
+// leads to the current one, and a slug that is live again is no old address.
+func TestRenamedDocumentKeepsItsOldSlugs(t *testing.T) {
+	s := newDocStore(t)
+	d, err := s.CreateDocument(Document{Project: "p", Slug: "a", Kind: "spec", Title: "T"}, "x", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, slug := range []string{"b", "c"} {
+		if err := s.PatchDocument(d.ID, map[string]string{"slug": slug}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, old := range []string{"a", "b"} {
+		got, err := s.DocumentMovedFrom("p", old)
+		if err != nil || got.ID != d.ID || got.Slug != "c" {
+			t.Errorf("%s: %+v, %v", old, got, err)
+		}
+	}
+	if _, err := s.DocumentMovedFrom("p", "c"); err == nil {
+		t.Error("the live slug is an old address")
+	}
+	if _, err := s.DocumentMovedFrom("other", "a"); err == nil {
+		t.Error("an old slug leaks into another project")
+	}
+	if err := s.PatchDocument(d.ID, map[string]string{"slug": "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DocumentMovedFrom("p", "a"); err == nil {
+		t.Error("a slug that is live again still counts as moved")
+	}
+	if got, err := s.DocumentMovedFrom("p", "c"); err != nil || got.Slug != "a" {
+		t.Errorf("c after renaming back: %+v, %v", got, err)
+	}
+	if err := s.PatchDocument(d.ID, map[string]string{"title": "only the title"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DocumentMovedFrom("p", "only"); err == nil {
+		t.Error("a title change made an old slug")
+	}
+}

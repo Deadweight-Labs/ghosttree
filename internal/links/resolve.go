@@ -51,6 +51,9 @@ type Ref struct {
 	Num  int      // criterion number
 	Text string   // name, hash, path, branch, search line, session address
 	Args []string // positional values of a preset
+	// Project is the repository a reference names itself (doc:owner/repo/slug),
+	// as a normalized remote; empty means the current project.
+	Project string
 }
 
 var (
@@ -125,10 +128,15 @@ func ParseRef(input string) (Ref, error) {
 			}
 			return Ref{Kind: KindSession, Text: first}, nil
 		case "doc", "document":
-			if !nameRE.MatchString(first) || len(fields) != 1 {
-				return Ref{}, errors.New("doc: needs the document name (slug)")
+			repo, slug := "", first
+			if i := strings.LastIndex(first, "/"); i >= 0 {
+				repo, slug = first[:i], first[i+1:]
 			}
-			return Ref{Kind: KindDocument, Text: first}, nil
+			project := docRepo(repo)
+			if !nameRE.MatchString(slug) || len(fields) != 1 || (repo != "" && project == "") {
+				return Ref{}, errors.New("doc: needs the document name (slug), optionally after its repository: doc:owner/repo/slug")
+			}
+			return Ref{Kind: KindDocument, Text: slug, Project: project}, nil
 		case "runbook":
 			if !nameRE.MatchString(first) || len(fields) != 1 {
 				return Ref{}, errors.New("runbook: needs the runbook name")
@@ -160,6 +168,28 @@ func ParseRef(input string) (Ref, error) {
 		return Ref{Kind: KindPath, Text: in}, nil
 	}
 	return Ref{}, fmt.Errorf("cannot tell what %q is: use REQ-n, TASK-n, PAIN-n, IDEA-n, FEAT-n, DEC-n, #id, pr:n, commit:sha, preset:name, a path or a search line like is:open", in)
+}
+
+// docRepo reads the repository part of doc:owner/repo/slug: owner/repo on
+// github.com, or host/owner/repo. Anything else is "".
+func docRepo(repo string) string {
+	repo = strings.ToLower(repo)
+	parts := strings.Split(repo, "/")
+	switch {
+	case repo == "":
+		return ""
+	case len(parts) == 2:
+		repo = "github.com/" + repo
+	case len(parts) == 3 && strings.Contains(parts[0], "."):
+	default:
+		return ""
+	}
+	for _, p := range strings.Split(repo, "/") {
+		if !segmentRE.MatchString(p) {
+			return ""
+		}
+	}
+	return scope.NormalizeRemote(repo)
 }
 
 // API is what Resolve reads. *client.Client satisfies it; every method answers
@@ -285,10 +315,14 @@ func (e Env) Resolve(ref Ref) (Card, error) {
 		}
 		return Card{}, Unknown("session " + Clean(ref.Text, 40))
 	case KindDocument:
-		if err := needProject(); err != nil {
-			return Card{}, err
+		project := ref.Project
+		if project == "" {
+			if err := needProject(); err != nil {
+				return Card{}, err
+			}
+			project = e.Project
 		}
-		docs, err := e.API.Documents(e.Project, "", true)
+		docs, err := e.API.Documents(project, "", true)
 		if err == nil {
 			for _, d := range docs {
 				if d.Slug == ref.Text {
