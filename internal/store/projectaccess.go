@@ -863,6 +863,13 @@ func (a *ProjectAccess) CanSeeProject(project string, res Resource) bool {
 	return a.Allow(project, res, ActRead, Object{})
 }
 
+// CanReadProjectRoom: darf der Aufrufer lesen, was im Raum des Projekts gesagt wird?
+// Dieselbe Regel wie die Raum-Seite (Rang Mitglied aufwärts, nicht der Gast-Lesezugriff
+// ResRoom); sie gilt unabhängig vom Zugriffsmodus, wie der Raum selbst.
+func (a *ProjectAccess) CanReadProjectRoom(project string) bool {
+	return a.st.CanReadProjectRoom(project, a.principal.ID)
+}
+
 // RequestFilter begrenzt eine Auftragssuche auf die Projekte, die der Aufrufer
 // lesen darf. Die Begrenzung steckt in der Abfrage (Seitengröße und Cursor
 // bleiben richtig) und gilt nur bei Durchsetzung; im Log-Modus bleibt die Suche

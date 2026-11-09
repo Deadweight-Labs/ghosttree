@@ -164,6 +164,11 @@ func TestTheIdeaHeadEditsTitleAndTextAndTheHistoryKeepsTheOldWords(t *testing.T)
 	if resp := postForm(t, e, e.Guest, post, url.Values{"title": {"Mine"}, "reason": {"x"}}); strings.Contains(resp.Header.Get("Location"), "done=corrected") {
 		t.Error("a guest corrected the idea")
 	}
+	// Who corrected it is kept as the account, not only as a name.
+	edits, err := e.St.IdeaEditsOf(i.ID)
+	if err != nil || len(edits) != 1 || edits[0].AccountID != 1 || edits[0].Person != "alice" {
+		t.Errorf("the correction does not name its account: %+v %v", edits, err)
+	}
 }
 
 // "Make an issue of this" fills the form from where the issue comes from: the
@@ -220,5 +225,38 @@ func TestTheGhosttreeViewLeavesOutHeldBackKnowledge(t *testing.T) {
 	}
 	if !strings.Contains(page, "Plain entry") {
 		t.Error("the view lacks the ordinary entry")
+	}
+}
+
+// A question a session asked in the room of the project is shown by the ghosttree
+// view only to those who may read that room: from rank member, not to a guest, who
+// can read the session but not the room.
+func TestTheGhosttreeViewShowsRoomQuestionsOnlyToThoseWhoMayReadTheRoom(t *testing.T) {
+	e := seedSessions(t)
+	sid := e.id["anna-guests"]
+	res, err := e.St.DB().Exec(`INSERT INTO coord_messages(destination_kind,destination_id,sequence,sender_external_id,author_principal_id,author_kind,client_id,intent,body,created_at)
+		VALUES('room',?,1,'ext-anna-guests','person:2','agent','q1','question','Which database does the gardener use?',?)`, store.RoomKeyForProject(shellProject), "2026-11-10T10:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mid, _ := res.LastInsertId()
+	if err := e.St.RecordActor(actordomain.Message, mid, actordomain.Actor{Kind: actordomain.Agent, Harness: "claude-code", SessionID: sid, AccountID: 2}); err != nil {
+		t.Fatal(err)
+	}
+	path := "/ui/sessions/" + e.pid["anna-guests"]
+	for name, c := range map[string]*http.Client{"member": e.Member, "lead": e.Lead, "owner": e.Owner} {
+		if code, page := e.get(t, c, path); code != 200 || !strings.Contains(page, "Which database does the gardener use?") {
+			t.Errorf("%s (status %d) does not see the question the room shows them", name, code)
+		}
+	}
+	code, page := e.get(t, e.Guest, path)
+	if code != 200 {
+		t.Fatalf("guest status %d", code)
+	}
+	if strings.Contains(page, "Which database does the gardener use?") {
+		t.Error("a guest sees a room question, but the room does not open for a guest")
+	}
+	if e.St.CanReadProjectRoom(shellProject, "person:3") || !e.St.CanReadProjectRoom(shellProject, "person:2") {
+		t.Error("the store helper does not say what the room page does")
 	}
 }

@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS entry_actors(
   backfilled INTEGER NOT NULL DEFAULT 0 CHECK(backfilled IN (0,1)),
   PRIMARY KEY(kind, entry_id)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS entry_actors_pending ON entry_actors(session_ref) WHERE session_ref<>'';
+CREATE INDEX IF NOT EXISTS entry_actors_session ON entry_actors(session_id, kind, at) WHERE session_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS session_models(
   session_id INTEGER NOT NULL,
   first_at TEXT NOT NULL,

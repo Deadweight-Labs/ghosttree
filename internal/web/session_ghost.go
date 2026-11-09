@@ -144,7 +144,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 	var questions int
 	for _, q := range res.Questions {
 		remote, ok := strings.CutPrefix(q.RoomKey, "project:")
-		if !ok || !pa.CanSeeProject(remote, store.ResRoom) {
+		if !ok || !pa.CanReadProjectRoom(remote) {
 			continue
 		}
 		questions++

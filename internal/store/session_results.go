@@ -78,16 +78,20 @@ type SessionResults struct {
 	Requests  []SessionRequest
 }
 
-// stampOf is the condition "this entry was written by that session" on the alias
-// ea of entry_actors, with its arguments.
-func stampOf(sess Session, owner int64) (string, []any) {
-	cond := `(ea.session_id=?`
-	args := []any{sess.ID}
+// stampedBy is the common table expression "ea(at, entry_id)": the entries of one
+// kind that the session wrote, with the args for it. It is two selects and not one
+// with an OR, so that each can take its own index: the stamps of the session by its
+// id (entry_actors_session), and, for a session stamped before it was uploaded,
+// those that name it by its external id and its account (entry_actors_pending).
+// The branches cannot overlap: one has a session id, the other has none.
+func stampedBy(sess Session, owner int64, kind string) (string, []any) {
+	cte := `WITH ea(at, entry_id) AS (SELECT at, entry_id FROM entry_actors WHERE session_id=? AND kind=?`
+	args := []any{sess.ID, kind}
 	if sess.ExternalID != "" {
-		cond += ` OR (ea.session_id IS NULL AND ea.session_ref=? AND ea.account_id=?)`
-		args = append(args, sess.ExternalID, effectiveOwner(sess.AccountID, owner))
+		cte += ` UNION ALL SELECT at, entry_id FROM entry_actors WHERE session_ref<>'' AND session_ref=? AND session_id IS NULL AND account_id=? AND kind=?`
+		args = append(args, sess.ExternalID, effectiveOwner(sess.AccountID, owner), kind)
 	}
-	return cond + `)`, args
+	return cte + `) `, args
 }
 
 // SessionResults reads what the session wrote, from the author stamps. A viewer
@@ -100,12 +104,12 @@ func (s *Store) SessionResults(sess Session) (SessionResults, error) {
 	if sess.ID <= 0 {
 		return out, nil
 	}
-	cond, args := stampOf(sess, instanceOwnerID(s.db))
+	owner := instanceOwnerID(s.db)
 
-	rows, err := s.db.QueryContext(s.ctx(), `SELECT ea.at, c.id, c.number, c.description, c.state, c.request_id, r.project,
+	rows, err := s.stampedRows(sess, owner, "criterion", `SELECT ea.at, c.id, c.number, c.description, c.state, c.request_id, r.project,
 		COALESCE((SELECT ev.ref FROM request_evidence ev WHERE ev.criterion_id=c.id AND ev.kind='commit' ORDER BY ev.id DESC LIMIT 1),'')
-		FROM entry_actors ea JOIN request_criteria c ON c.id=ea.entry_id JOIN requests r ON r.id=c.request_id
-		WHERE ea.kind='criterion' AND c.state IN ('met','waived') AND `+cond+` ORDER BY ea.at DESC, c.id DESC`, args...)
+		FROM ea JOIN request_criteria c ON c.id=ea.entry_id JOIN requests r ON r.id=c.request_id
+		WHERE c.state IN ('met','waived') ORDER BY ea.at DESC, c.id DESC`)
 	if err != nil {
 		return out, err
 	}
@@ -121,9 +125,9 @@ func (s *Store) SessionResults(sess Session) (SessionResults, error) {
 		return out, err
 	}
 
-	rows, err = s.db.QueryContext(s.ctx(), `SELECT ea.at, k.id, k.type, k.title, k.project, k.branch, k.machine, k.confidence, k.status, k.person, k.origin, k.session_ref
-		FROM entry_actors ea JOIN knowledge k ON k.id=ea.entry_id
-		WHERE ea.kind='knowledge' AND `+cond+` ORDER BY ea.at DESC, k.id DESC`, args...)
+	rows, err = s.stampedRows(sess, owner, "knowledge", `SELECT ea.at, k.id, k.type, k.title, k.project, k.branch, k.machine, k.confidence, k.status, k.person, k.origin, k.session_ref
+		FROM ea JOIN knowledge k ON k.id=ea.entry_id
+		ORDER BY ea.at DESC, k.id DESC`)
 	if err != nil {
 		return out, err
 	}
@@ -139,9 +143,9 @@ func (s *Store) SessionResults(sess Session) (SessionResults, error) {
 		return out, err
 	}
 
-	rows, err = s.db.QueryContext(s.ctx(), `SELECT ea.at, t.id, t.title, t.project, t.request_id, COALESCE(p.name,''), t.assignee_account, t.created_by_account
-		FROM entry_actors ea JOIN human_tasks t ON t.id=ea.entry_id LEFT JOIN persons p ON p.id=t.assignee_account
-		WHERE ea.kind='task' AND `+cond+` ORDER BY ea.at DESC, t.id DESC`, args...)
+	rows, err = s.stampedRows(sess, owner, "task", `SELECT ea.at, t.id, t.title, t.project, t.request_id, COALESCE(p.name,''), t.assignee_account, t.created_by_account
+		FROM ea JOIN human_tasks t ON t.id=ea.entry_id LEFT JOIN persons p ON p.id=t.assignee_account
+		ORDER BY ea.at DESC, t.id DESC`)
 	if err != nil {
 		return out, err
 	}
@@ -157,9 +161,9 @@ func (s *Store) SessionResults(sess Session) (SessionResults, error) {
 		return out, err
 	}
 
-	rows, err = s.db.QueryContext(s.ctx(), `SELECT ea.at, m.id, m.body, m.destination_id, COALESCE(r.label,'')
-		FROM entry_actors ea JOIN coord_messages m ON m.id=ea.entry_id LEFT JOIN coord_rooms r ON r.room_key=m.destination_id
-		WHERE ea.kind='message' AND m.destination_kind='room' AND m.intent='question' AND `+cond+` ORDER BY ea.at DESC, m.id DESC`, args...)
+	rows, err = s.stampedRows(sess, owner, "message", `SELECT ea.at, m.id, m.body, m.destination_id, COALESCE(r.label,'')
+		FROM ea JOIN coord_messages m ON m.id=ea.entry_id LEFT JOIN coord_rooms r ON r.room_key=m.destination_id
+		WHERE m.destination_kind='room' AND m.intent='question' ORDER BY ea.at DESC, m.id DESC`)
 	if err != nil {
 		return out, err
 	}
@@ -175,9 +179,9 @@ func (s *Store) SessionResults(sess Session) (SessionResults, error) {
 		return out, err
 	}
 
-	rows, err = s.db.QueryContext(s.ctx(), `SELECT ea.at, r.id, r.title, r.project
-		FROM entry_actors ea JOIN requests r ON r.id=ea.entry_id
-		WHERE ea.kind='request' AND `+cond+` ORDER BY ea.at DESC, r.id DESC`, args...)
+	rows, err = s.stampedRows(sess, owner, "request", `SELECT ea.at, r.id, r.title, r.project
+		FROM ea JOIN requests r ON r.id=ea.entry_id
+		ORDER BY ea.at DESC, r.id DESC`)
 	if err != nil {
 		return out, err
 	}
@@ -193,6 +197,13 @@ func (s *Store) SessionResults(sess Session) (SessionResults, error) {
 		return out, err
 	}
 	return out, nil
+}
+
+// stampedRows runs query, which reads the stamps of one kind as the table ea (see
+// stampedBy), and so reads the entries of this session only.
+func (s *Store) stampedRows(sess Session, owner int64, kind, query string) (*sql.Rows, error) {
+	cte, args := stampedBy(sess, owner, kind)
+	return s.db.QueryContext(s.ctx(), cte+query, args...)
 }
 
 func closeRows(rows *sql.Rows) error {

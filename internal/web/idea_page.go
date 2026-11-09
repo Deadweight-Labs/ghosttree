@@ -261,7 +261,7 @@ func (a *app) ideaCorrect(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(body) != i.Body {
 		newBody = &body
 	}
-	if _, err := pa.CorrectIdea(id, newTitle, newBody, reason, personOf(r)); err != nil {
+	if _, err := pa.CorrectIdea(id, newTitle, newBody, reason, store.IdeaActorFor(browserPrincipal(r), "")); err != nil {
 		if errors.Is(err, store.ErrAccessForbidden) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return

@@ -275,6 +275,7 @@ var writerMethodClasses = map[string]string{
 	"BeginMigration":                "write",
 	"BilledTranscriptChars":         "read",
 	"BranchBoundKnowledge":          "read",
+	"CanReadProjectRoom":            "read",
 	"CanonicalizeScopes":            "write",
 	"Close":                         "administrative",
 	"CloseDistillBatch":             "write",

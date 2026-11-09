@@ -94,3 +94,42 @@ func TestSessionFilesCountTheLinesOfTheEditsOnRequest(t *testing.T) {
 		t.Errorf("without lines: %+v", without)
 	}
 }
+
+// The read of what a session wrote must not walk every stamp of a kind: both
+// branches (by session id, and by external id for a session stamped before its
+// upload) are looked up in an index of entry_actors. A plain OR over the two
+// conditions does not do that, which is why stampedBy is two selects.
+func TestSessionResultsReadTheStampsThroughTheirIndexes(t *testing.T) {
+	st := openTest(t)
+	for _, kind := range []string{actordomain.Criterion, actordomain.Knowledge, actordomain.Task, actordomain.Message, actordomain.Request} {
+		cte, args := stampedBy(Session{ID: 7, ExternalID: "ext", AccountID: 1}, 1, kind)
+		rows, err := st.db.Query(`EXPLAIN QUERY PLAN `+cte+`SELECT ea.at, ea.entry_id FROM ea ORDER BY ea.at DESC`, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plan []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			plan = append(plan, detail)
+		}
+		rows.Close()
+		all := strings.Join(plan, "\n")
+		if !strings.Contains(all, "entry_actors_session") || !strings.Contains(all, "entry_actors_pending") {
+			t.Errorf("%s: the plan does not use both indexes:\n%s", kind, all)
+		}
+		for _, line := range plan {
+			if strings.HasPrefix(line, "SCAN") || strings.Contains(line, "USING PRIMARY KEY") && strings.Contains(line, "entry_actors") {
+				t.Errorf("%s: the plan reads all stamps of a kind: %q\n%s", kind, line, all)
+			}
+		}
+	}
+	// A session without an external id has only the first branch.
+	cte, _ := stampedBy(Session{ID: 7}, 1, actordomain.Task)
+	if strings.Contains(cte, "UNION") {
+		t.Errorf("a session without external id looks for pending stamps: %s", cte)
+	}
+}
