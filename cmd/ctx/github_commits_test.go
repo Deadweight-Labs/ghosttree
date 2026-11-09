@@ -202,3 +202,33 @@ func TestSyncPullsFetchesTheCommitsAndStopsAtTheRateLimit(t *testing.T) {
 		t.Fatalf("permission: %d %s", code, out.String())
 	}
 }
+
+// sync-prs --commits holt die Commits bekannter PRs nach, zu denen noch keine
+// gespeichert sind (PRs von vor dem Speichern der Commits oder mit gescheitertem
+// Abruf), und lässt PRs mit Commits in Ruhe.
+func TestSyncPullCommitsFetchesWhatIsMissingOnce(t *testing.T) {
+	st := syncStore(t)
+	know(t, st, "feat/a")
+	f := &fakeCommitPulls{
+		fakePulls: fakePulls{byBranch: map[string][]forge.PullRequest{"feat/a": {{Number: 7, Title: "A", State: "merged", HeadRef: "feat/a", BaseRef: "main"}}}},
+		commits:   map[int64][]forge.PullCommit{7: {{SHA: sha40(1), Title: "eins"}}},
+		cerr:      errors.New("timeout"),
+	}
+	var out bytes.Buffer
+	_ = syncPulls(context.Background(), st, f, "", &out)
+	if got := prCommitsOf(t, st, 7); len(got) != 0 {
+		t.Fatalf("commits despite the failed fetch: %+v", got)
+	}
+	f.cerr = nil
+	out.Reset()
+	if code := syncPullCommits(context.Background(), st, f, "", &out); code != 0 || !strings.Contains(out.String(), "1 pull requests without stored commits fetched") {
+		t.Fatalf("code %d: %s", code, out.String())
+	}
+	if got := prCommitsOf(t, st, 7); len(got) != 1 {
+		t.Fatalf("commits after --commits: %+v", got)
+	}
+	out.Reset()
+	if code := syncPullCommits(context.Background(), st, f, "", &out); code != 0 || !strings.Contains(out.String(), "0 pull requests without stored commits fetched") {
+		t.Fatalf("second run: %d %s", code, out.String())
+	}
+}

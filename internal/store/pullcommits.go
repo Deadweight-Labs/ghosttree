@@ -168,3 +168,28 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// PullsWithoutCommits nennt die PRs eines Projekts, zu denen noch kein Commit
+// gespeichert ist: was ctx github sync-prs --commits nachholt (PRs, die vor dem
+// Speichern der Commits entstanden sind oder deren Abruf scheiterte).
+func (s *Store) PullsWithoutCommits(project string) ([]int64, error) {
+	if s.reader != nil {
+		return s.reader.PullsWithoutCommits(project)
+	}
+	rows, err := s.db.Query(`SELECT p.number FROM git_pull_requests p
+		WHERE p.project=? AND NOT EXISTS (SELECT 1 FROM git_pr_commits c WHERE c.project=p.project AND c.pr=p.number)
+		ORDER BY p.number`, scopeNormalize(project))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var n int64
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
