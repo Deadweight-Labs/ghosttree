@@ -226,6 +226,20 @@ func (a *ProjectAccess) CheckTask(t humantask.Task, act Action) error {
 	return a.Check(t.Project, ResTask, act, obj)
 }
 
+// checkTaskWorkable prüft, ob der Betrachter an der Aufgabe arbeiten darf, in
+// dieser Reihenfolge: Lesen und die Sicht über den Auftrag dahinter (beides
+// antwortet wie eine unbekannte Aufgabe), erst danach das Recht zu arbeiten, das
+// „verboten“ sagen darf. Sonst verriete „verboten“, dass es die Aufgabe gibt.
+func (a *ProjectAccess) checkTaskWorkable(t humantask.Task, cache map[int64]bool) error {
+	if err := a.CheckTask(t, ActRead); err != nil {
+		return ErrAccessNotFound
+	}
+	if !a.canSeeTaskVia(t, cache) {
+		return ErrAccessNotFound
+	}
+	return a.CheckTask(t, ActWork)
+}
+
 // -------- helpers shared by pain.go and humantask.go
 
 func idRef(prefix string, id int64) string { return prefix + strconv.FormatInt(id, 10) }

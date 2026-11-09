@@ -151,13 +151,28 @@ func (b Builder) Criterion(requestID int64, number int) string {
 	return u + "#criterion-" + strconv.Itoa(number)
 }
 
-// Task is TASK-n. It needs no project: the page leads to the anchor in the
-// inbox or at the issue.
+// Task is TASK-n: the page of the task in its repository when the builder has a
+// project (decision #4331), else the short form /ui/t/{n}, which finds the
+// repository and leads on.
 func (b Builder) Task(n int64) string {
 	if !b.Valid() {
 		return ""
 	}
-	return b.root() + "/tasks/" + num(n)
+	if b.HasProject() {
+		return b.repo("/tasks/" + num(n))
+	}
+	return b.root() + "/t/" + num(n)
+}
+
+// Tasks is the task list of the project.
+func (b Builder) Tasks() string { return b.repo("/tasks") }
+
+// MyTasks is the list of the viewer's own tasks over all repositories.
+func (b Builder) MyTasks() string {
+	if !b.Valid() {
+		return ""
+	}
+	return b.root() + "/u/tasks"
 }
 
 // Pain is PAIN-n.
@@ -213,8 +228,17 @@ func (b Builder) Pull(n int64) string { return b.repo("/pulls/" + num(n)) }
 // PullChecklist is the checklist tab of a pull request (the work package).
 func (b Builder) PullChecklist(n int64) string { return b.repo("/pulls/" + num(n) + "/checkliste") }
 
-// Package is the work package of a branch that has no pull request.
-func (b Builder) Package(branch string) string { return b.repo("/package/" + escPath(branch)) }
+// Package is the work package PKG-n: its board in the repository.
+func (b Builder) PackageN(n int64) string { return b.repo("/packages/" + num(n)) }
+
+// Packages is the list of the work packages of the project.
+func (b Builder) Packages() string { return b.repo("/packages") }
+
+// Package is the work package of a branch: the list of the packages of the
+// project, narrowed to that branch (a branch cut from it inherits the package).
+func (b Builder) Package(branch string) string {
+	return b.repo("/packages?branch=" + url.QueryEscape(branch))
+}
 
 // Runbook is a runbook by name.
 func (b Builder) Runbook(name string) string { return b.repo("/runbooks/" + esc(name)) }

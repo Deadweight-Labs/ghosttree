@@ -39,7 +39,8 @@ const (
 // anchoredRowsSQL ist die Teilabfrage aller Einträge eines Projekts, die einen
 // Anker tragen: (anchor_id, origin_id, kind, id, path). ?1 ist das Projekt. Die
 // Einträge sind die Tabellen von projectAnchorIDs, dazu die Fassungen der
-// Kommentare; Koordinationsnachrichten fehlen, sie hängen an Räumen. Eine Zeile je
+// Kommentare und die Nachrichten des Projektraums (Direkt- und Gruppenräume
+// gehören zu keinem Projekt und fehlen). Eine Zeile je
 // Fassung: ein Eintrag mit mehreren Fassungen erscheint mehrfach, die Aufrufer
 // zählen je (kind, id, path).
 const anchoredRowsSQL = `
@@ -53,7 +54,8 @@ const anchoredRowsSQL = `
 	UNION ALL SELECT pe.anchor_id, pe.origin_id, 'pain', p.id, '' FROM pains p CROSS JOIN pain_events pe ON pe.pain_id=p.id WHERE p.project=?1 AND +pe.anchor_id IS NOT NULL
 	UNION ALL SELECT anchor_id, origin_id, 'idea', id, '' FROM ideas WHERE project=?1 AND +anchor_id IS NOT NULL
 	UNION ALL SELECT fv.anchor_id, fv.origin_id, 'feature', f.id, '' FROM features f CROSS JOIN feature_versions fv ON fv.feature_id=f.id WHERE f.project=?1 AND +fv.anchor_id IS NOT NULL
-	UNION ALL SELECT cv.anchor_id, cv.origin_id, 'comment', c.id, '' FROM comments c CROSS JOIN comment_versions cv ON cv.comment_id=c.id WHERE c.project=?1 AND +cv.anchor_id IS NOT NULL`
+	UNION ALL SELECT cv.anchor_id, cv.origin_id, 'comment', c.id, '' FROM comments c CROSS JOIN comment_versions cv ON cv.comment_id=c.id WHERE c.project=?1 AND +cv.anchor_id IS NOT NULL
+	UNION ALL SELECT anchor_id, origin_id, 'message', id, '' FROM coord_messages WHERE destination_kind='room' AND destination_id='project:'||?1 AND +anchor_id IS NOT NULL`
 
 // ensureCommitQueryIndexes legt additiv die Indizes an, über die anchoredRowsSQL
 // beim Projekt anfängt statt bei allen Ankern der Instanz: Wissen, Issues und
@@ -88,6 +90,8 @@ const (
 	CommitKindIdea      = "idea"
 	CommitKindFeature   = "feature"
 	CommitKindComment   = "comment"
+	// CommitKindMessage ist eine Nachricht im Projektraum, die einen Anker trägt.
+	CommitKindMessage = "message"
 )
 
 // anchoredRow ist ein Eintrag an einem Commit, wie er in der Datenbank steht,
@@ -399,6 +403,23 @@ type entryResolver struct {
 	a       *ProjectAccess
 	project string
 	cache   map[entryKey]*CommitEntry
+	// roomRead merkt, ob der Betrachter den Projektraum lesen darf (einmal je
+	// Auflöser gefragt, erst bei der ersten Nachricht).
+	roomRead *bool
+}
+
+// canReadRoom sagt, ob der Betrachter den Projektraum lesen darf: dieselbe
+// Menge, die CoordAccess.Rooms() ihm zeigt, nicht mehr.
+func (e *entryResolver) canReadRoom() bool {
+	if e.roomRead == nil {
+		ok := false
+		key := RoomKeyForProject(e.project)
+		if rooms, err := e.a.st.CoordinationFor(e.a.principal, "").Rooms(); err == nil {
+			ok = slices.ContainsFunc(rooms, func(r CoordRoom) bool { return r.Key == key })
+		}
+		e.roomRead = &ok
+	}
+	return *e.roomRead
 }
 
 func (a *ProjectAccess) newEntryResolver(project string) *entryResolver {
@@ -460,6 +481,19 @@ func (e *entryResolver) load(r anchoredRow) *CommitEntry {
 			return nil
 		}
 		return &CommitEntry{Kind: r.Kind, ID: r.ID, Ref: fmt.Sprintf("FEAT-%d", r.ID), Title: oneLine(f.Name, 200), Person: f.Person}
+	case CommitKindMessage:
+		if !e.canReadRoom() {
+			return nil
+		}
+		m, ok := a.st.roomMessageForCommit(r.ID, RoomKeyForProject(project))
+		if !ok {
+			return nil
+		}
+		who := ""
+		if m.authorKind == AuthorHuman && !a.HidesMachines(project) {
+			who = a.st.personNameOf(m.principal)
+		}
+		return &CommitEntry{Kind: r.Kind, ID: r.ID, Ref: fmt.Sprintf("message:%d", r.ID), Title: oneLine(m.body, 200), Person: who}
 	case CommitKindComment:
 		c, err := a.st.commentByID(r.ID)
 		if err != nil || c.Deleted {
@@ -904,4 +938,96 @@ func (a *ProjectAccess) CommitsForPath(project, path string, limit, offset int) 
 
 func (a *ProjectAccess) pathRows(project string, origins []int64) ([]anchoredRow, error) {
 	return a.st.anchoredRowsFor(project, rowCond{Origins: origins})
+}
+
+// commitMessage ist, was die Commit-Seite von einer Raum-Nachricht braucht.
+type commitMessage struct {
+	body, authorKind, principal string
+}
+
+// roomMessageForCommit liest eine Nachricht des Projektraums. Das Leserecht am
+// Raum prüft der Aufrufer.
+func (s *Store) roomMessageForCommit(id int64, roomKey string) (commitMessage, bool) {
+	if s.reader != nil {
+		return s.reader.roomMessageForCommit(id, roomKey)
+	}
+	var m commitMessage
+	err := s.db.QueryRow(`SELECT body, author_kind, author_principal_id FROM coord_messages
+		WHERE id=? AND destination_kind='room' AND destination_id=?`, id, roomKey).Scan(&m.body, &m.authorKind, &m.principal)
+	return m, err == nil
+}
+
+// personNameOf ist der Kontoname eines Absenders "person:N", sonst "".
+func (s *Store) personNameOf(principal string) string {
+	n, ok := accountNumericID(principal)
+	if !ok {
+		return ""
+	}
+	if s.reader != nil {
+		return s.reader.personNameOf(principal)
+	}
+	var name string
+	if err := s.db.QueryRow(`SELECT name FROM persons WHERE id=?`, n).Scan(&name); err != nil {
+		return ""
+	}
+	return NormalizeAccountName(name)
+}
+
+// pullMessageRows liest die Nachrichten des Projektraums, deren Anker die Nummer
+// des PRs trägt oder auf einem seiner Commits sitzt, ohne Sichtprüfung.
+func (s *Store) pullMessageRows(project string, n int64, shas []string) ([]anchoredRow, error) {
+	if s.reader != nil {
+		return s.reader.pullMessageRows(project, n, shas)
+	}
+	rows, err := s.db.Query(`SELECT m.id, a.commit_sha, a.branch, a.captured_at, COALESCE(a.pr,0), COALESCE(m.origin_id,0)
+		FROM coord_messages m JOIN git_anchors a ON a.id=m.anchor_id
+		WHERE m.destination_kind='room' AND m.destination_id=?1 AND (a.pr=?2 OR a.commit_sha IN (SELECT value FROM json_each(?3)))
+		ORDER BY m.id LIMIT 1000`, RoomKeyForProject(project), n, jsonList(shas))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []anchoredRow
+	for rows.Next() {
+		r := anchoredRow{Kind: CommitKindMessage}
+		if err := rows.Scan(&r.ID, &r.SHA, &r.Branch, &r.At, &r.PR, &r.Origin); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// PullMessages liefert die Raum-Nachrichten, die zu einem PR gesagt wurden: die,
+// deren Anker die PR-Nummer trägt oder auf einem Commit des PRs sitzt. Es sind
+// die Nachrichten eines Raums, den der Betrachter lesen darf; sonst bleibt die
+// Liste leer. Ein PR, den es nicht gibt, und ein Projekt ohne Leserecht sind
+// sql.ErrNoRows.
+func (a *ProjectAccess) PullMessages(project string, n int64) ([]CommitEntry, error) {
+	if _, err := a.PullRequestView(project, n); err != nil {
+		return nil, err
+	}
+	project = scope.NormalizeRemote(strings.TrimSpace(project))
+	prs, err := a.st.prCommitsFor(project, "", n, nil)
+	if err != nil {
+		return nil, err
+	}
+	shas := make([]string, 0, len(prs))
+	for _, c := range prs {
+		shas = append(shas, c.SHA)
+	}
+	rows, err := a.st.pullMessageRows(project, n, shas)
+	if err != nil {
+		return nil, err
+	}
+	res := a.newEntryResolver(project)
+	out := []CommitEntry{}
+	for _, r := range rows {
+		if e := res.resolve(r); e != nil {
+			cp := *e
+			cp.At, cp.Branch = r.At, r.Branch
+			out = append(out, cp)
+		}
+	}
+	return out, nil
 }

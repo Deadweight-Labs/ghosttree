@@ -53,7 +53,7 @@ func isSeparator(s string) bool {
 // isTechnicalValue erlaubt Werte, die kein Text für Menschen sind.
 func isTechnicalValue(v string) bool {
 	switch v {
-	case "inbox", "resume", "pause", "interrupt", "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "all-agents", "withdraw", "met", "waived", "new", "pflicht", "optional", "share", "unshare", "discuss":
+	case "inbox", "resume", "pause", "interrupt", "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "all-agents", "withdraw", "met", "waived", "new", "pflicht", "optional", "share", "unshare", "discuss", "idea", "variant":
 		return true
 	}
 	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || strings.HasPrefix(v, "REQ-") || v == "on" || v == "shared" || v == "private" || v == "member" || v == "owner" || v == "guest" || v == "none" || v == "7" || v == "approve" || v == "reject" || v == "gardener" || v == "deny" || v == "member\x00owner" || regexp.MustCompile(`^[0-9]+$`).MatchString(v)
@@ -114,7 +114,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:register|err|runbooks|agents|room|shell|nav|inbox|repo|ui|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|context|search|cards|page|explain|usage|garden|home|review|ref|avatar|issues|issue|ideas|newissue|stub|live|settings|features|workshop|pulls|commits|commit|comments)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:register|err|runbooks|agents|room|shell|nav|inbox|repo|ui|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|context|search|cards|page|explain|usage|garden|home|review|ref|avatar|issues|issue|ideas|newissue|stub|live|settings|features|workshop|pulls|commits|commit|comments|packages|anchor)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).

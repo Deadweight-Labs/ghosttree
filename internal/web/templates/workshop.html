@@ -1,6 +1,9 @@
 {{define "wsdot"}}<span aria-hidden="true">·</span>{{end}}
 
+{{define "wsimage"}}<a class="ws-zoom" href="{{.Src}}" data-zoom data-alt="{{.Alt}}" target="_blank" rel="noopener" title="{{t "workshop.zoom"}}"><img src="{{.Src}}" alt="{{.Alt}}" width="{{.W}}" height="{{.H}}" loading="lazy"></a>{{end}}
+
 {{define "wsvariant"}}<div class="ws-vh"><b class="ws-vl">{{.Label}}</b><span class="ws-vt">{{.Title}}</span>{{if .Chosen}}<span class="lb p-ok ws-chosen">{{mi "check"}}{{t "workshop.chosen"}}</span>{{end}}</div>
+{{if .Images}}<div class="ws-imgs">{{range .Images}}{{template "wsimage" .}}{{end}}</div>{{end}}
 {{if .Text}}<div class="ws-vb prose">{{template "knbody" .Text}}</div>{{end}}
 {{if .Pro}}<div class="ws-pc ws-pro"><span class="ws-pk">{{mi "plus"}}{{t "workshop.pro"}}</span>{{template "knbody" .Pro}}</div>{{end}}
 {{if .Contra}}<div class="ws-pc ws-con"><span class="ws-pk">{{mi "x"}}{{t "workshop.contra"}}</span>{{template "knbody" .Contra}}</div>{{end}}
@@ -28,7 +31,12 @@
 <div class="ws-act">{{if .CanDecide}}<button class="gbtn pri">{{mi "check"}}{{t "workshop.decide"}}</button>{{end}}</div>{{end}}</form>
 {{else}}{{if .Variants}}<div class="ws-vars">{{range .Variants}}<div class="ws-var{{if .Chosen}} chosen{{end}}">{{template "wsvariant" .}}</div>{{end}}</div>{{end}}
 {{if not .Open}}<p class="ws-out">{{if .Answer}}<span>{{.Answer}}</span> {{end}}{{if .Reason}}<span class="muted">{{.Reason}}</span> {{end}}{{if .Trigger}}<span class="muted">{{t "workshop.trigger"}} {{.Trigger}}</span> {{end}}{{if .DecidedBy}}<span class="ws-meta">{{template "wsdot"}}<span>{{.DecidedBy}}</span><span>{{.DecidedAge}}</span></span>{{end}}</p>
-{{if .CanReopen}}<form method="post" class="ws-reopen" action="/ui/decisions/{{.ID}}/reopen"><input type="hidden" name="csrf_token" value="{{$ws.Token}}"><input class="gfield" name="reason" maxlength="500" required autocomplete="off" placeholder="{{t "workshop.why_reopen"}}" aria-label="{{t "workshop.why_reopen"}}"><button class="gbtn sm">{{t "workshop.reopen"}}</button></form>{{end}}{{end}}{{end}}</article>{{end}}
+{{if .CanReopen}}<form method="post" class="ws-reopen" action="/ui/decisions/{{.ID}}/reopen"><input type="hidden" name="csrf_token" value="{{$ws.Token}}"><input class="gfield" name="reason" maxlength="500" required autocomplete="off" placeholder="{{t "workshop.why_reopen"}}" aria-label="{{t "workshop.why_reopen"}}"><button class="gbtn sm">{{t "workshop.reopen"}}</button></form>{{end}}{{end}}{{end}}
+{{if .CanAttach}}<form class="ws-up" method="post" action="/ui/ideas/{{$ws.ID}}/attach" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{$ws.Token}}"><input type="hidden" name="owner" value="variant">
+<select class="gfield" name="variant" aria-label="{{t "workshop.img.to"}}">{{range .Variants}}<option value="{{.ID}}">{{.Label}} · {{.Title}}</option>{{end}}</select>
+<input class="gfield" type="file" name="file" accept="image/png,image/jpeg,image/webp" required aria-label="{{t "workshop.img.file"}}">
+<input class="gfield" name="alt" maxlength="200" autocomplete="off" placeholder="{{t "workshop.img.alt"}}" aria-label="{{t "workshop.img.alt"}}">
+<button class="gbtn sm">{{mi "plus"}}{{t "workshop.img.add"}}</button></form>{{end}}</article>{{end}}
 {{if or .CanDiscuss .CanApprove .CanWithdraw}}<div class="box-r ws-foot">{{if .CanDiscuss}}<form method="post" action="/ui/ideas/{{.ID}}/phase"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="mode" value="discuss"><button class="gbtn">{{mi "chat"}}{{t "workshop.discuss"}}</button></form>{{end}}
 {{if .CanApprove}}<form method="post" action="/ui/ideas/{{.ID}}/phase"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="mode" value="approve"><input type="hidden" name="revision" value="{{.Revision}}"><button class="gbtn pri">{{mi "check"}}{{t "workshop.approve" .Revision}}</button></form>{{end}}
 {{if .CanWithdraw}}<form method="post" action="/ui/ideas/{{.ID}}/phase"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="mode" value="withdraw"><button class="gbtn">{{t "workshop.withdraw"}}</button></form>{{end}}</div>{{end}}

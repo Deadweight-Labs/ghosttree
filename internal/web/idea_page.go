@@ -35,15 +35,23 @@ type ideaPageView struct {
 	Items                   []tlItem
 	Composer                *composerView
 	Labels                  []rowLabel
+	LabelBox                *labelBoxView
 	Pains, Issues           []ideaFact
 	People                  []string
 	Base, Token, Viewer     string
 	Result                  *requestResult
 	Phase                   string
+	// Git is the anchor the wish was written at.
+	Git *anchorView
 	// Reactions is the row under the wish.
 	Reactions *reactionsView
 	// Workshop is the idea workshop (workshop.go); nil until someone worked the idea out.
 	Workshop *workshopView
+	// Images are the pictures on the idea itself (and on answers); CanAttach shows
+	// the form that adds one.
+	Images    []attachImage
+	CanAttach bool
+	HasImages bool
 }
 
 var ideaStateTone = map[string]string{idea.Open: "p-ok", idea.Accepted: "p-done", idea.Dismissed: "p-mute"}
@@ -73,10 +81,12 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 	now := overviewNow().UTC()
 	age := func(at string) string { return shortAgo(l, now, parseTime(at)) }
 	v := &ideaPageView{ID: i.ID, Title: i.Title, Person: i.Person, Age: shortAgo(l, now, parseTime(i.CreatedAt)), State: i.State, StateLabel: label(l, ideaStateKeys, i.State),
-		Tone: ideaStateTone[i.State], Blocks: bodyBlocks(i.Body, 0), Reason: i.Reason, Base: view.Href, Token: csrfOf(r), Viewer: browserPrincipal(r).Label}
+		Tone: ideaStateTone[i.State], Blocks: bodyBlocks(i.Body, 0), Reason: i.Reason, Base: view.Href, Token: csrfOf(r), Viewer: browserPrincipal(r).Label,
+		Git: anchorViewOf(pa, remote, i.GitAnchor, originVia(i.OriginContext))}
 	for _, lb := range i.Labels {
 		v.Labels = append(v.Labels, rowLabel{Text: lb.Name, Class: labelClass(lb.Color), Href: view.Href + "/issues?q=" + url.QueryEscape("label:"+lb.Name)})
 	}
+	v.LabelBox = a.labelBox(r, pa, remote, store.CommentOnIdea, i.ID, v.Labels)
 	for _, p := range i.Pains {
 		v.Pains = append(v.Pains, ideaFact{Num: "#" + strconv.FormatInt(p.ID, 10), Title: p.Title, Brief: l.msg("ref.kind.pain"), Href: view.Href + "/pains/" + strconv.FormatInt(p.ID, 10)})
 	}
@@ -95,6 +105,14 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 		v.Reactions = a.reactionsFor(r, l, store.ReactOnIdea, i.ID, s)
 	}
 	a.attachWorkshop(l, r, pa, ws, v)
+	v.Images = attachImages(l, ws.Attachments, func(m idea.AttachmentMeta) bool { return m.Owner != idea.OwnerVariant })
+	if ph := idea.EffectivePhase(i.State, i.Phase); interactive(r) && ph != idea.PhaseDismissed && ph != idea.PhaseDone && pa.CheckIdea(i, store.ActWork) == nil {
+		v.CanAttach = true
+	}
+	for _, m := range ws.Attachments {
+		v.HasImages = v.HasImages || m.Owner == idea.OwnerVariant
+	}
+	v.HasImages = v.HasImages || len(v.Images) > 0
 	seen := map[string]bool{}
 	for _, p := range append([]string{i.Person}, peopleOf(ws)...) {
 		if p != "" && !seen[p] {
@@ -110,9 +128,24 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 		v.Result = commentResult(r, l)
 	case r.URL.Query().Get("fail") != "":
 		v.Result = &requestResult{Text: l.msg("ideas.result.failed"), Kind: "failed", Fail: true}
-		if r.URL.Query().Get("fail") == "reason_required" {
+		switch r.URL.Query().Get("fail") {
+		case "reason_required":
 			v.Result.Text = l.msg("ideas.result.reason_required")
+		case "pain_link":
+			v.Result.Text = l.msg("ideas.result.pain_link")
+		case "img_none":
+			v.Result.Text = l.msg("ideas.result.img_none")
+		case "img_type":
+			v.Result.Text = l.msg("ideas.result.img_type")
+		case "img_size":
+			v.Result.Text = l.msg("ideas.result.img_size")
+		case "img_bad":
+			v.Result.Text = l.msg("ideas.result.img_bad")
 		}
+	case r.URL.Query().Get("done") == "image":
+		v.Result = &requestResult{Text: l.msg("ideas.result.image"), Kind: "done"}
+	case r.URL.Query().Get("done") == "from_pain":
+		v.Result = &requestResult{Text: l.msg("ideas.result.from_pain"), Kind: "done"}
 	case r.URL.Query().Get("done") == "state":
 		v.Result = &requestResult{Text: l.msg("ideas.result.state"), Kind: "done"}
 	}

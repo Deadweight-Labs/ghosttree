@@ -164,7 +164,7 @@ func TestPullPageShowsConversationChecklistKnowledgeAndCommits(t *testing.T) {
 	mustContain(t, "checklist tab", list, `class="dstat"`, "of 2 criteria met", "Pull request tab", "Lists the pull requests", "Shows the checklist", `class="chip sha"`, "aaaaaaa",
 		`href="/ui/x/shell/commits/`+pullShaA+`"`, "cbx on", `href="/ui/x/shell/issues/`)
 	_, know := fetchPage(t, e.Owner, base+"?tab=knowledge")
-	mustContain(t, "knowledge tab", know, "Anchored pitfall", `href="/ui/knowledge/`, "Pitfall")
+	mustContain(t, "knowledge tab", know, "Anchored pitfall", `href="/ui/x/shell/knowledge/`, "Pitfall")
 	_, commits := fetchPage(t, e.Owner, base+"?tab=commits")
 	mustContain(t, "commits tab", commits, "2 commits", "feat(web): list of pull requests", "feat(web): page of a pull request", "aaaaaaa", "bbbbbbb")
 	// A tab that does not exist falls back to the conversation.
@@ -247,7 +247,7 @@ func TestCommitPageShowsWhatWasSaidAndAcceptsAPrefix(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("commit page = %d", code)
 	}
-	mustContain(t, "commit page", page, "feat(web): list of pull requests", "aaaaaaa", "alice-gh", "What was said about it", "wrote knowledge", "Anchored pitfall", `href="/ui/knowledge/`,
+	mustContain(t, "commit page", page, "feat(web): list of pull requests", "aaaaaaa", "alice-gh", "What was said about it", "wrote knowledge", "Anchored pitfall", `href="/ui/x/shell/knowledge/`,
 		`href="https://github.com/x/shell/commit/`+pullShaA+`"`, `aria-label="Open on GitHub: commit aaaaaaa"`, `class="chip br"`, "feat/x", `href="/ui/x/shell/pulls/12"`, "committed")
 	_, prefix := fetchPage(t, e.Owner, base+pullShaA[:8])
 	mustContain(t, "prefix", prefix, "feat(web): list of pull requests")

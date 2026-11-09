@@ -237,6 +237,16 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   interface is gone; its addresses redirect.
 - Guests see neither machine names nor branch names other than the default
   branch, and filters on branches are not offered to them.
+- Every entry links its Git anchor (commit, pull request, branch, or "web"); the
+  code tree follows the selected branch with what it inherits; commit and pull
+  request pages list the room messages written there. Tasks and work packages
+  have pages of their own (`/ui/{org}/{repo}/tasks`, `/packages`, short forms
+  `/ui/t/{n}`, `/ui/r/{n}`), and the steps of a task are ticked off one by one.
+- The web search understands the search language and shows date and main area
+  per hit; saved searches for oneself, a project or an organisation, labels set
+  in the browser, "create idea" on a pain, images on ideas and variants with a
+  larger view, and runbooks written in the browser (executable targets stay
+  operator-approved).
 - `GHOSTTREE_LANGUAGE=de` (or `--language de`) switches the interface to German.
 - Every `/ui/` page sends a strict Content-Security-Policy.
 

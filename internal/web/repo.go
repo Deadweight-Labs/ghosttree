@@ -53,7 +53,7 @@ type repoTab struct {
 }
 
 // repoTabIcons names the icon of each tab of the band.
-var repoTabIcons = map[string]string{"code": "code", "issues": "issue", "pulls": "pr", "knowledge": "book", "runbooks": "play", "rooms": "chat", "sessions": "term", "commits": "commit", "settings": "gear"}
+var repoTabIcons = map[string]string{"code": "code", "issues": "issue", "pulls": "pr", "knowledge": "book", "runbooks": "play", "rooms": "chat", "sessions": "term", "commits": "commit", "tasks": "tasks", "packages": "list", "settings": "gear"}
 
 // Band is the tab band under the header: the row, and behind the separator the
 // tabs of the second group.
@@ -237,6 +237,10 @@ func (a *app) repoRoute(w http.ResponseWriter, r *http.Request) {
 		h = a.commitsPage
 	case "runbooks":
 		h = a.runbooksPage
+	case "tasks":
+		h = a.repoTasksPage
+	case "packages":
+		h = a.repoPackagesPage
 	case "features":
 		h = a.featuresPage
 	case "knowledge":
@@ -284,7 +288,17 @@ func (a *app) repoDetail(w http.ResponseWriter, r *http.Request, remote, tab, id
 		a.issueDetail(w, r, remote, id)
 		return
 	case "runbooks":
+		if id == runbookNew {
+			a.runbookNewPage(w, r, remote)
+			return
+		}
 		a.runbookPage(w, r, remote, id)
+		return
+	case "tasks":
+		a.taskDetail(w, r, remote, id)
+		return
+	case "packages":
+		a.packageDetail(w, r, remote, id)
 		return
 	case "features":
 		a.featureDetail(w, r, remote, id)
@@ -302,9 +316,11 @@ func (a *app) repoDetail(w http.ResponseWriter, r *http.Request, remote, tab, id
 		a.ideaInRepo(w, r, remote, id)
 		return
 	case "knowledge":
-		target = "/ui/knowledge/"
+		a.knowledgeInRepo(w, r, remote, id)
+		return
 	case "sessions":
-		target = "/ui/sessions/"
+		a.sessionInRepo(w, r, remote, id)
+		return
 	case "rooms":
 		target = "/ui/coord/thread/"
 	default:
@@ -356,6 +372,8 @@ func (a *app) repoViewFor(r *http.Request, pa *store.ProjectAccess, kind viewerK
 	tab("sessions", "repo.tab.sessions", a.sessionCount(pa, remote), true)
 	tab("features", "repo.tab.features", a.featureCount(pa, remote), true)
 	tab("commits", "repo.tab.commits", a.commitCount(pa, remote), true)
+	tab("tasks", "repo.tab.tasks", a.tasksTabCount(pa, remote), true)
+	tab("packages", "repo.tab.packages", "", true)
 	if pa != nil && pa.Check(remote, store.ResLabel, store.ActEdit, store.Object{}) == nil {
 		tab("settings", "repo.tab.settings", "", true)
 	}

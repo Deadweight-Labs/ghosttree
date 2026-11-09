@@ -74,6 +74,7 @@ func (a *ProjectAccess) PackagesOfRequest(requestID int64) ([]requestdomain.Pack
 	out := list[:0]
 	for _, p := range list {
 		if p.Project == ref.Project {
+			p.Package = a.PackageNameView(p.Package)
 			out = append(out, p)
 		}
 	}
@@ -147,7 +148,7 @@ func (a *ProjectAccess) PackagesOfProject(project, state string) ([]requestdomai
 	}
 	out := make([]requestdomain.PackageSummary, 0, len(list))
 	for _, d := range list {
-		sum := requestdomain.PackageSummary{Package: d.Package}
+		sum := requestdomain.PackageSummary{Package: a.PackageNameView(d.Package)}
 		for _, m := range d.Members {
 			ref, err := a.st.RequestRef(RefRequest, m.RequestID)
 			if err != nil || !requestReadable(a, ref) {

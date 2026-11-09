@@ -105,9 +105,12 @@ type workshopVote struct{ Voter, Reason, Tip string }
 
 type workshopVariant struct {
 	Label, Title      string
+	ID                int64
 	Text, Pro, Contra []bodyBlock
 	Votes             []workshopVote
 	Chosen, Checked   bool
+	// Images are the pictures of the variant, shown above its text.
+	Images []attachImage
 }
 
 type workshopDecision struct {
@@ -122,6 +125,8 @@ type workshopDecision struct {
 	DecidedBy, DecidedAge, Chosen string
 	CanDecide, CanVote, CanReopen bool
 	MyVote                        string
+	// CanAttach shows the form that adds a picture to one of the variants.
+	CanAttach bool
 }
 
 type workshopView struct {
@@ -153,6 +158,9 @@ func (a *app) registerWorkshopPages(mux *http.ServeMux) {
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
+	// Images: the form carries a file, so its limit is that of an image.
+	a.handle(mux, "POST /ui/ideas/{id}/attach", a.requirePerson(a.requireInteractive(limitBodyN(maxUploadForm, a.requireCSRFMultipart(http.HandlerFunc(a.ideaAttach))))))
+	a.handle(mux, "GET /ui/attachments/{id}", a.requirePerson(http.HandlerFunc(a.attachmentImage)))
 }
 
 // datedItem ist ein Eintrag der Zeitleiste mit seiner Zeit, damit die Einträge der
@@ -247,7 +255,7 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		// Schließen darf, wer die Idee bearbeiten darf; abstimmen, wer mitarbeiten darf.
 		wd.CanDecide, wd.CanVote, wd.CanReopen = wd.Open && canEdit, wd.Open && canWork && len(d.Variants) > 0, !wd.Open && canWork
 		for _, vr := range d.Variants {
-			wv := workshopVariant{Label: vr.Label, Title: vr.Title, Text: bodyBlocks(vr.Text, 0), Pro: bodyBlocks(vr.Pro, 0), Contra: bodyBlocks(vr.Contra, 0), Chosen: d.ChosenVariant == vr.Label}
+			wv := workshopVariant{ID: vr.ID, Label: vr.Label, Title: vr.Title, Images: attachImages(l, vr.Attachments, func(idea.AttachmentMeta) bool { return true }), Text: bodyBlocks(vr.Text, 0), Pro: bodyBlocks(vr.Pro, 0), Contra: bodyBlocks(vr.Contra, 0), Chosen: d.ChosenVariant == vr.Label}
 			for _, vt := range d.Votes {
 				if vt.Variant == vr.Label {
 					wv.Votes = append(wv.Votes, workshopVote{Voter: vt.Voter, Reason: vt.Reason, Tip: vt.Voter + ": " + vt.Reason})
@@ -264,6 +272,7 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		for n := range wd.Variants {
 			wd.Variants[n].Checked = wd.Variants[n].Label == wd.MyVote
 		}
+		wd.CanAttach = canWork && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
 		w.Decisions = append(w.Decisions, wd)
 	}
 	// Die Wege der Phase: Diskussion anstoßen kann, wer mitarbeitet; freigeben und die Freigabe

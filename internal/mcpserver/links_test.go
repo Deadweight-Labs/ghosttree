@@ -79,7 +79,7 @@ func TestHumanTaskAnswersCarryStepsLinkAndCard(t *testing.T) {
 		"explanation": "Ohne die Verbindung kann der Server keine Pull Requests sehen. Du musst einmal die App freigeben. Ich empfehle, das heute zu tun.",
 	})
 	mustHave(t, "human_task_create", got, `"steps":[{"text":"Einstellungen öffnen","url":"https://github.com/settings/apps"},{"text":"App installieren"}]`,
-		"Task TASK-1: GitHub verbinden", "human does: 1. Einstellungen öffnen", "link: "+strings.TrimSuffix(base, "/x/y")+"/tasks/1")
+		"Task TASK-1: GitHub verbinden", "human does: 1. Einstellungen öffnen", "link: "+base+"/tasks/1")
 	if strings.Contains(got, `"hint"`) {
 		t.Errorf("a task with steps must not get the hint:\n%s", got)
 	}
@@ -107,7 +107,7 @@ func TestHumanTaskAnswersCarryStepsLinkAndCard(t *testing.T) {
 	}
 
 	list := wireText(t, s, "human_task_list", map[string]any{})
-	mustHave(t, "human_task_list", list, `"url":"`+strings.TrimSuffix(base, "/x/y")+`/tasks/1"`)
+	mustHave(t, "human_task_list", list, `"url":"`+base+`/tasks/1"`)
 
 	if _, err := s.client.MarkTasksDone([]int64{1}, "erledigt", 0); err != nil {
 		t.Fatal(err)
@@ -155,9 +155,9 @@ func TestPackageAndRunbookAnswersCarryLinkAndCard(t *testing.T) {
 	_ = st
 	s.SetLive(func() Live { return Live{Branch: "feat/gn", CWD: "/work/y"} })
 	got := wireText(t, s, "package_update", map[string]any{"action": "create", "name": "Kurzwege", "branch": "feat/gn", "requests": []map[string]any{{"request_id": rid, "role": "pflicht"}}})
-	mustHave(t, "package_update", got, "Checklist PKG-1: Kurzwege", "1 required issue(s) still open", "link: "+base+"/package/feat/gn")
+	mustHave(t, "package_update", got, "Checklist PKG-1: Kurzwege", "1 required issue(s) still open", "link: "+base+"/packages/1")
 	got = wireText(t, s, "package_get", map[string]any{"branch": "feat/gn"})
-	mustHave(t, "package_get", got, "Checklist PKG-1", "link: "+base+"/package/feat/gn")
+	mustHave(t, "package_get", got, "Checklist PKG-1", "link: "+base+"/packages/1")
 	got = wireText(t, s, "package_update", map[string]any{"action": "set", "package_id": 1, "pr": 155})
 	mustHave(t, "package_update with a PR", got, "link: "+base+"/pulls/155/checkliste")
 
@@ -198,7 +198,7 @@ func TestOpenLinkToolAnswersForEveryShortForm(t *testing.T) {
 		"REQ-1":                  {"Issue REQ-1: Kurzwege", base + "/issues/1"},
 		"AC-1.2":                 {"Criterion AC-1.2: zweites", base + "/issues/1#criterion-2"},
 		"REQ-1#1":                {"Criterion AC-1.1", base + "/issues/1#criterion-1"},
-		"TASK-1":                 {"Task TASK-1: Handgriff", root + "/tasks/1"},
+		"TASK-1":                 {"Task TASK-1: Handgriff", base + "/tasks/1"},
 		"PAIN-1":                 {"Pain PAIN-1: Qual", base + "/pains/1"},
 		"IDEA-1":                 {"Idea IDEA-1: Idee", base + "/ideas/1"},
 		"#1":                     {"Knowledge #1: Merke", base + "/knowledge/1"},

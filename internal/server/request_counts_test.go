@@ -27,7 +27,7 @@ func TestRequestCountAndPackageQueriesRespectAccess(t *testing.T) {
 	f.expect(t, "nora", 404, "GET", "/api/requests/count?project="+accProject, nil)
 
 	pk := decode[[]requestdomain.PackageOfRequest](t, f.expect(t, "gus", 200, "GET", idPath("/api/requests/%d/packages", robin), nil))
-	if len(pk) != 1 || pk[0].Role != "optional" || pk[0].Branch != "feat/c" {
+	if len(pk) != 1 || pk[0].Role != "optional" || pk[0].Branch != "" || !pk[0].NameHidden {
 		t.Fatalf("packages of a request: %+v", pk)
 	}
 	// Unbekannt und fremd antworten gleich.

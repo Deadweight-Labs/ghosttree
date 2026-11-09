@@ -305,6 +305,8 @@ var writerMethodClasses = map[string]string{
 	"GhostHistoryCount":             "read",
 	"GhostReviewsUnder":             "read",
 	"ProjectBranches":               "read",
+	"TaskStepMarks":                 "read",
+	"BranchLineage":                 "read",
 	"HandoffCoordRooms":             "write",
 	"JoinCoordRoom":                 "write",
 	"ImportDocument":                "write",

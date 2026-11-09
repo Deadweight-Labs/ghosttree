@@ -1,0 +1,12 @@
+/* Task page: the steps as a checklist and the form that marks the task done. */
+
+:is(.g2.tk) {
+  & .tstep { display: flex; align-items: flex-start; gap: 10px; }
+  & .tstep .tx { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  & .tstep.done .tx { color: var(--fg-muted); }
+  & .tstep form { margin: 0; }
+  & .tstep .tby { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 12px; }
+  & .twhere { margin-top: 8px; }
+  & .tdone .box-r { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  & .tdone .gfield { flex: 1; min-width: 200px; }
+}

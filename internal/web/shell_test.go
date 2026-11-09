@@ -91,8 +91,9 @@ func fetchPage(t *testing.T, c *http.Client, url string) (int, string) {
 	return status, body(t, resp)
 }
 
-// oldRequestAddress is /ui/requests/{id}, which now redirects to the repository.
-var oldRequestAddress = regexp.MustCompile(`/ui/requests/\d+(?:\?.*)?$`)
+// oldRequestAddress is /ui/requests/{id}, /ui/knowledge/{id} and /ui/sessions/{id},
+// which now redirect to the repository (decision #4331).
+var oldRequestAddress = regexp.MustCompile(`/ui/(?:requests|knowledge)/\d+(?:\?.*)?$|/ui/sessions/[a-z0-9]+(?:\?.*)?$`)
 
 var navKeyRE = regexp.MustCompile(`data-nav="([a-z-]+)"`)
 

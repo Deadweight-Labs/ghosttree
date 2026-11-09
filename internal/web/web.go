@@ -96,11 +96,16 @@ type pageData struct {
 	ErrV                                                       *errorView
 	RunbooksV                                                  *runbooksView
 	RunbookV                                                   *runbookPageView
+	RunbookFormV                                               *runbookFormView
 	SettingsV                                                  *repoSettingsView
 	FeaturesV                                                  *featuresView
 	FeatureV                                                   *featureView
 	MachineV                                                   *machinePageView
 	OrgMachinesV                                               *orgMachinesView
+	TasksV                                                     *tasksView
+	TaskV                                                      *taskPageView
+	PackagesV                                                  *packagesView
+	PackageV                                                   *packageView
 	// Styles and Scripts are the files of pageAssets for this page.
 	Styles, Scripts []string
 	// Repo is set on the pages of a repository (/ui/{org}/{repo}/…): the
@@ -204,6 +209,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	for suffix, h := range map[string]http.HandlerFunc{"create": a.labelCreate, "{id}/update": a.labelUpdate, "{id}/delete": a.labelDelete} {
 		a.handle(mux, "POST /ui/labels/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
+	a.handle(mux, "POST /ui/runbooks/write", a.requirePerson(a.requireInteractive(limitBodyN(maxRunbookForm, a.requireCSRF(http.HandlerFunc(a.runbookWrite))))))
+	a.handle(mux, "POST /ui/labels/assign", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.labelAssign))))))
 	a.registerPainTaskPages(mux)
 	a.handle(mux, "GET /ui/search", a.requirePerson(http.HandlerFunc(a.searchPage)))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
@@ -565,10 +572,13 @@ var webRoutes = map[string]webClass{
 	"GET /ui/pains":             webProject,
 	"GET /ui/pains/{id}":        webProject,
 	"POST /ui/pains/{id}/state": webAdmin,
+	"POST /ui/pains/{id}/idea":  webAdmin,
 
 	"POST /ui/labels/create":      webAdmin,
 	"POST /ui/labels/{id}/update": webAdmin,
 	"POST /ui/labels/{id}/delete": webAdmin,
+	"POST /ui/labels/assign":      webAdmin,
+	"POST /ui/runbooks/write":     webAdmin,
 }
 
 // handle registriert eine Route und bricht ab, wenn sie nicht klassifiziert ist.

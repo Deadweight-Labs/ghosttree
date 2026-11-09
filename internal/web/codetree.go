@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -23,10 +22,11 @@ import (
 // never shown, only what ghosttree knows about the path; "Code auf GitHub" leads
 // to the code itself.
 //
-// Ghost files have no branch axis yet: every branch shows the state of the
-// project, and the branch switch only changes the address. The tree is the
-// union of the paths that have a description; a folder without a ghost file of
-// its own is derived from the paths below it.
+// The tree follows the branch (REQ-597, criterion 8): the default branch shows
+// the project level, any other branch the descriptions written on it and on the
+// branches it was cut from (ghostsOnBranch). The tree is the union of the paths
+// that have a description; a folder without a ghost file of its own is derived
+// from the paths below it.
 
 // codeMaxKnow and codeMaxNav keep one page bounded.
 const (
@@ -76,6 +76,20 @@ func (a *app) codeBranches(r *http.Request, pa *store.ProjectAccess, remote stri
 	}
 	sort.Strings(rest)
 	return append([]string{def}, rest...), def
+}
+
+// ghostsOnBranch reads the descriptions as they stand on a branch: the default
+// branch is the project level, another branch adds its own descriptions and
+// those of the branches it descends from (as far as the pull requests tell).
+func (a *app) ghostsOnBranch(remote, branch, def string) ([]store.GhostFile, error) {
+	if branch == "" || branch == def {
+		return a.store.GhostFilesUnder(remote, "")
+	}
+	lineage, err := a.store.BranchLineage(remote, branch)
+	if err != nil {
+		return nil, err
+	}
+	return a.store.GhostFilesUnderAt(remote, "", branch, lineage)
 }
 
 // matchBranch splits "feat/git-native/internal/store" the way GitHub does: the
@@ -459,7 +473,7 @@ func (a *app) repoCode(w http.ResponseWriter, r *http.Request) {
 	}
 	links := codeLinks{base: view.Href, def: def}
 
-	ghosts, err := a.store.GhostFilesUnder(view.Project, "")
+	ghosts, err := a.ghostsOnBranch(view.Project, cp.Branch, def)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -628,6 +642,17 @@ func (a *app) codeBlobPage(r *http.Request, pa *store.ProjectAccess, view *repoV
 		curSHA = cur.GitAnchor.Commit
 	}
 	revs := []rev{{cur.Person, cur.Harness, cur.Description, cur.UpdatedAt, curSHA}}
+	if cur.Branch != "" {
+		// A description of the branch has no history of its own; the text of the
+		// project level is what it replaced there.
+		if base, err := a.store.GhostFileByPath(view.Project, cp.Path); err == nil && pa.CanSeeGhost(base) {
+			baseSHA := ""
+			if base.GitAnchor != nil {
+				baseSHA = base.GitAnchor.Commit
+			}
+			revs = append(revs, rev{base.Person, base.Harness, base.Description, base.UpdatedAt, baseSHA})
+		}
+	}
 	for _, p := range past {
 		// Every replaced text is held to the read rule of a description: a viewer
 		// who may only read his own does not get the texts of others here.
@@ -669,7 +694,7 @@ func (a *app) codeBlobPage(r *http.Request, pa *store.ProjectAccess, view *repoV
 		if !d && !ar {
 			continue
 		}
-		row := codeKnowRow{Type: k.K.Type, TypeKey: knowTypeKey(k.K.Type), Title: k.K.Title, Href: "/ui/knowledge/" + strconv.FormatInt(k.K.ID, 10),
+		row := codeKnowRow{Type: k.K.Type, TypeKey: knowTypeKey(k.K.Type), Title: k.K.Title, Href: knowledgeHref(k.K.Scope.Project, k.K.ID),
 			Updated: k.K.CreatedAt, Trigger: len(k.K.Activation.Paths) > 0 && d}
 		if !d {
 			row.Area = k.Areas[0]
@@ -757,7 +782,7 @@ func (a *app) codeWork(pa *store.ProjectAccess, remote, p string) []codeWorkRow 
 			row.Machine = ""
 		}
 		if view.PublicID != "" && pa.CanSeeTranscript(s) {
-			row.Href = "/ui/sessions/" + view.PublicID
+			row.Href = sessionPageHref(remote, view.PublicID)
 		}
 		out = append(out, row)
 		if len(out) >= 10 {

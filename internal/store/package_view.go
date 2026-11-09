@@ -1,9 +1,28 @@
 package store
 
 import (
+	"fmt"
+
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
+
+// PackageNameView zeigt einem Betrachter ohne alle Branches des Projekts den
+// Namen eines Pakets nur, wenn er nichts über einen Branch verrät: ist der Name
+// der Branch (so heißt ein Paket ohne eigenen Namen) oder liegt das Paket auf
+// einem anderen als dem Standard-Branch, steht „Package #n“ da und NameHidden ist
+// gesetzt, damit die Oberfläche ihr Wort in ihrer Sprache einsetzt. Auch der
+// Branch selbst folgt der Regel von BranchView.
+func (a *ProjectAccess) PackageNameView(p requestdomain.Package) requestdomain.Package {
+	if a.SeesAllBranches(p.Project) {
+		return p
+	}
+	if p.Name == p.Branch || p.Branch != a.DefaultBranch(p.Project) {
+		p.Name, p.NameHidden = fmt.Sprintf("Package #%d", p.ID), true
+	}
+	p.Branch = a.BranchView(p.Project, p.Branch)
+	return p
+}
 
 // PackageView füllt die Mitglieder eines Pakets mit dem, was der Betrachter vom
 // jeweiligen Request lesen darf: Titel, Stand, Kriterien-Zahlen und die
@@ -50,6 +69,10 @@ func (a *ProjectAccess) PackageView(d requestdomain.PackageDetail, full bool) re
 		viewed = append(viewed, m.RequestID)
 	}
 	d.Members = members
+	if d.InheritedFrom != "" {
+		d.InheritedFrom = a.BranchView(d.Project, d.InheritedFrom)
+	}
+	d.Package = a.PackageNameView(d.Package)
 	// Die Punkte „Feature X: Beschreibung angepasst?“ für den PR des Pakets
 	// (REQ-612).
 	d.Features = a.packageFeatureChecks(d.Project, d.PR)

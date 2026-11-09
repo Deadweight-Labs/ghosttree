@@ -171,6 +171,8 @@ type tlItem struct {
 	Head                      template.HTML
 	Age                       string
 	Body                      template.HTML
+	// Git is the anchor of the entry as links (commit, pull request, branch).
+	Git *anchorView
 	// Comment makes the entry a comment box instead of a line of the history;
 	// at is the moment the entry sorts by when comments are mixed in.
 	Comment *commentView

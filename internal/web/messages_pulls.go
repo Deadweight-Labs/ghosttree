@@ -142,6 +142,7 @@ var messagesPulls = map[string]string{
 	"commit.ev.idea":       "wrote on idea",
 	"commit.ev.feature":    "described a feature",
 	"commit.ev.comment":    "commented",
+	"commit.ev.message":    "said in the room",
 	"commit.ev.ghost":      "described a file",
 	"commit.ev.open":       "Open",
 }
@@ -279,6 +280,7 @@ var messagesPullsDE = map[string]string{
 	"commit.ev.idea":              "schrieb an Idee",
 	"commit.ev.feature":           "hat ein Feature beschrieben",
 	"commit.ev.comment":           "hat kommentiert",
+	"commit.ev.message":           "sagte im Raum",
 	"commit.ev.ghost":             "hat eine Datei beschrieben",
 	"commit.ev.open":              "Öffnen",
 }

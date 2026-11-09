@@ -15,7 +15,7 @@
 
 {{define "pull"}}{{template "head" .}}{{template "nav" .}}<main class="g2 pr"><div class="wrap">
 {{with .PullV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">#{{.N}}</span></h1></div>
-<div class="dmeta"><span class="state {{.Pill}}">{{mi .PillIcon}}{{.StateLabel}}</span>{{if .Author}}<span class="person">{{avatarOf .Author}}{{.Author}}</span>{{end}}<span>{{.Verb}}</span>{{.HeadChip}}{{if .BaseChip}}<span>{{.Into}}</span>{{.BaseChip}}{{end}}<span class="sp"></span>{{template "ghbtn" .}}</div>
+<div class="dmeta"><span class="state {{.Pill}}">{{mi .PillIcon}}{{.StateLabel}}</span>{{if .Author}}<span class="person">{{avatarOf .Author}}{{.Author}}</span>{{end}}<span>{{.Verb}}</span>{{.HeadChip}}{{if .BaseChip}}<span>{{.Into}}</span>{{.BaseChip}}{{end}}<span class="sp"></span>{{with .DoneHref}}<a class="gbtn" href="{{.}}">{{mi "check"}}<span>{{t "search.done_here"}}</span></a>{{end}}{{template "ghbtn" .}}</div>
 <div class="subnav" id="tabs"><nav class="utabs-nav" data-fit aria-label="{{t "pulls.tabs"}}"><ul class="utabs">{{range .Tabs}}<li data-tab="{{.Key}}"{{if .Current}} class="sel"{{end}}><a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{mi .Icon}}<span>{{t .Label}}</span>{{if .Count}}<span class="counter">{{.Count}}</span>{{end}}</a></li>{{end}}</ul></nav></div></div>
 <div class="dgrid"><div class="dmain">
 {{if eq .Tab "talk"}}{{template "uitimeline" .Items}}
@@ -59,7 +59,7 @@
 
 {{define "commit"}}{{template "head" .}}{{template "nav" .}}<main class="g2 cd"><div class="wrap">
 {{with .CommitV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}</h1></div>
-<div class="dmeta chead">{{if .Who}}<span class="person">{{avatarOf .Who}}{{.Who}}</span>{{end}}<span{{if .AtTitle}} title="{{.AtTitle}}"{{end}}>{{if .At}}{{t "commit.committed_at" .At}}{{else}}{{t "commit.committed"}}{{end}}</span><span class="chip sha" title="{{.SHA}}">{{.Short}}</span>{{range .Branches}}<a class="chip br" href="{{.Href}}">{{mi "branch"}}{{.Name}}</a>{{end}}{{range .PRs}}<a class="ref k-pr" href="{{.Href}}" title="{{.Title}}">{{mi "pr"}}<span class="num">{{.Text}}</span></a>{{end}}<span class="sp"></span>{{template "ghbtn" .}}</div></div>
+<div class="dmeta chead">{{if .Who}}<span class="person">{{avatarOf .Who}}{{.Who}}</span>{{end}}<span{{if .AtTitle}} title="{{.AtTitle}}"{{end}}>{{if .At}}{{t "commit.committed_at" .At}}{{else}}{{t "commit.committed"}}{{end}}</span><span class="chip sha" title="{{.SHA}}">{{.Short}}</span>{{range .Branches}}<a class="chip br" href="{{.Href}}">{{mi "branch"}}{{.Name}}</a>{{end}}{{range .PRs}}<a class="ref k-pr" href="{{.Href}}" title="{{.Title}}">{{mi "pr"}}<span class="num">{{.Text}}</span></a>{{end}}<span class="sp"></span>{{with .DoneHref}}<a class="gbtn" href="{{.}}">{{mi "check"}}<span>{{t "search.done_here"}}</span></a>{{end}}{{template "ghbtn" .}}</div></div>
 <div class="dgrid"><div class="dmain">
 <div class="sec" id="said"><h2>{{t "commit.said"}}</h2>{{if .Entries}}<span class="counter">{{.Entries}}</span>{{end}}</div>
 {{if .Items}}{{template "uitimeline" .Items}}{{else if not .Files}}<div class="box"><div class="box-empty"><span>{{t "commit.said_empty"}}</span></div></div>{{end}}

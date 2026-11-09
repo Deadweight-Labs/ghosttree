@@ -30,6 +30,8 @@ var (
 type blockerLine struct {
 	N                            int64
 	Kind, Title, Where, Assignee string
+	// Href is the page of the task in its repository.
+	Href string
 }
 
 // issueLink is another issue this one is related to.
@@ -87,6 +89,11 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 	l := a.langFor(r)
 	req := detail.Request
 	v.Base = base
+	var current []rowLabel
+	for _, lb := range detail.Labels {
+		current = append(current, rowLabel{Text: lb.Name, Class: labelClass(lb.Color), Href: base + "?q=" + url.QueryEscape("label:"+lb.Name)})
+	}
+	v.LabelBox = a.labelBox(r, pa, remote, store.CommentOnRequest, req.ID, current)
 	v.Back = v.Base
 	v.Panel = r.URL.Query().Get("panel")
 	if r.URL.Query().Get("edit") == "1" {
@@ -116,7 +123,7 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 	if tasks, err := a.store.ListHumanTasks(pa, store.TaskFilter{Project: remote, State: humantask.Open, RequestID: req.ID, Limit: 50}); err == nil {
 		for _, t := range tasks {
 			if t.State == humantask.Open {
-				v.Blockers = append(v.Blockers, blockerLine{N: t.ID, Kind: label(l, taskKindKeys, t.Kind), Title: t.Title, Where: t.Location, Assignee: firstNonEmpty(t.Assignee, req.Person)})
+				v.Blockers = append(v.Blockers, blockerLine{N: t.ID, Kind: label(l, taskKindKeys, t.Kind), Title: t.Title, Where: t.Location, Assignee: firstNonEmpty(t.Assignee, req.Person), Href: taskHref(t)})
 			}
 		}
 	}
@@ -135,11 +142,12 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 		b := &branchLine{Name: name}
 		if d, err := a.store.PackageForBranch(remote, name, nil); err == nil && slices.ContainsFunc(d.Members, func(m requestdomain.PackageMemberView) bool { return m.RequestID == req.ID }) {
 			done, total := 0, 0
-			for _, m := range pa.PackageView(d, false).Members {
+			view := pa.PackageView(d, false)
+			for _, m := range view.Members {
 				done += m.Met + m.Waived
 				total += m.Open + m.Met + m.Waived
 			}
-			b.HasPackage, b.Package = true, d.Name
+			b.HasPackage, b.Package = true, packageName(l, view.Package)
 			if total > 0 {
 				b.Percent, b.Progress = done*100/total, strconv.Itoa(done)+"/"+strconv.Itoa(total)
 			}
@@ -156,7 +164,15 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 		pkg = v.Branch.Package
 	}
 	ago := func(at string) string { return shortAgo(l, now, parseTime(at)) }
-	v.Events = issueEvents(l, a.visibleActivity(pa, detail), v.Criteria, assignees, pkg, ago)
+	acts := a.visibleActivity(pa, detail)
+	v.Events = issueEvents(l, acts, v.Criteria, assignees, pkg, ago)
+	anchors := map[int64]*anchorView{}
+	for _, act := range acts {
+		anchors[act.ID] = anchorViewOf(pa, remote, act.GitAnchor, act.Via)
+	}
+	for i := range v.Events {
+		v.Events[i].Git = anchors[v.Events[i].ID]
+	}
 	comments := a.commentTimeline(r, l, pa, store.CommentOnRequest, req.ID, req.Person, v.Base+"/"+strconv.FormatInt(req.ID, 10), editingComment(r), ago)
 	v.Timeline = mergeTimeline(timelineItems(l, withoutRepeatedNotes(v.Events, comments)), comments)
 	if v.Result == nil {

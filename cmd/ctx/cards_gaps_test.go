@@ -64,7 +64,7 @@ func TestPackageKnowledgeRunbookPresetAndSessionCommandsPrintTheCard(t *testing.
 		}
 	}
 	code, out := painTaskRun(t, "package", "create", "--project", cliHere, "--branch", "feat/cards", "--name", "Karten", "1")
-	have("package create", code, out, "Checklist PKG-1: Karten", "link: "+base+"/package/feat/cards")
+	have("package create", code, out, "Checklist PKG-1: Karten", "link: "+base+"/packages/1")
 	code, out = painTaskRun(t, "package", "show", "--package", "1", "--json")
 	have("package show json", code, out, `"card":{"kind":"Checklist","ref":"PKG-1"`)
 

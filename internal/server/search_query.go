@@ -103,7 +103,8 @@ func (e queryError) Error() string { return string(e) }
 const errSinceAfterUntil = queryError("since is after until")
 
 // factsOf baut die Eigenschaften eines Treffers für query.Match.
-func factsOf(kind string, number int64, state, typ, repo, author, assignee, created, updated string, of store.ObjectFacts) query.Facts {
+func factsOf(pa *store.ProjectAccess, kind string, number int64, state, typ, repo, author, assignee, created, updated string, of store.ObjectFacts) query.Facts {
+	of, assignee = pa.FactsView(repo, of), pa.AssigneeView(repo, assignee)
 	return query.Facts{
 		Kind: kind, State: state, Type: typ, Repo: repo, Number: number, Author: author, Assignee: assignee,
 		Branches: of.Branches, Commits: of.Commits, PRs: of.PRs, Packages: of.Packages, Labels: of.Labels,
@@ -255,7 +256,7 @@ func (a *api) qualifiedKnowledge(r *http.Request, res *searchResult, q query.Que
 		return err
 	}
 	kept := filterTo(ks, limit, func(k store.Knowledge) bool {
-		return q.Match(factsOf(query.KindKnowledge, k.ID, k.Status, k.Type, k.Scope.Project, k.Person, "", k.CreatedAt, k.UpdatedAt, facts[k.ID]))
+		return q.Match(factsOf(pa, query.KindKnowledge, k.ID, k.Status, k.Type, k.Scope.Project, k.Person, "", k.CreatedAt, k.UpdatedAt, facts[k.ID]))
 	})
 	a.st.RecordKnowledgeSearchHits(kept)
 	res.Knowledge = pa.KnowledgeViews(kept)
@@ -280,7 +281,7 @@ func (a *api) qualifiedRequests(r *http.Request, res *searchResult, q query.Quer
 	for _, h := range hits {
 		of := facts[h.Request.ID]
 		of.Parents, of.Blocks = readableReq(of.Parents), readableReq(of.Blocks)
-		f := factsOf(query.KindRequest, h.Request.ID, h.Request.State, h.Request.Type, h.Request.Scope.Project, h.Request.Person, "", h.Request.CreatedAt, h.Request.UpdatedAt, of)
+		f := factsOf(pa, query.KindRequest, h.Request.ID, h.Request.State, h.Request.Type, h.Request.Scope.Project, h.Request.Person, "", h.Request.CreatedAt, h.Request.UpdatedAt, of)
 		if !q.Match(f) {
 			continue
 		}
@@ -334,7 +335,7 @@ func (a *api) qualifiedPains(r *http.Request, res *searchResult, q query.Query, 
 		return err
 	}
 	res.Pains = filterTo(list, limit, func(p pain.Pain) bool {
-		return q.Match(factsOf(query.KindPain, p.ID, p.State, "", p.Project, p.Person, "", p.CreatedAt, p.UpdatedAt, facts[p.ID]))
+		return q.Match(factsOf(pa, query.KindPain, p.ID, p.State, "", p.Project, p.Person, "", p.CreatedAt, p.UpdatedAt, facts[p.ID]))
 	})
 	return nil
 }
@@ -353,7 +354,7 @@ func (a *api) qualifiedIdeas(r *http.Request, res *searchResult, q query.Query, 
 		return err
 	}
 	res.Ideas = filterTo(list, limit, func(i idea.Idea) bool {
-		return q.Match(factsOf(query.KindIdea, i.ID, i.State, "", i.Project, i.Person, "", i.CreatedAt, i.UpdatedAt, facts[i.ID]))
+		return q.Match(factsOf(pa, query.KindIdea, i.ID, i.State, "", i.Project, i.Person, "", i.CreatedAt, i.UpdatedAt, facts[i.ID]))
 	})
 	return nil
 }
@@ -374,7 +375,7 @@ func (a *api) qualifiedFeatures(r *http.Request, res *searchResult, q query.Quer
 		return err
 	}
 	res.Features = filterTo(list, limit, func(f feature.Feature) bool {
-		return q.Match(factsOf(query.KindFeature, f.ID, f.State, "", f.Project, f.Person, "", f.CreatedAt, f.UpdatedAt, facts[f.ID]))
+		return q.Match(factsOf(pa, query.KindFeature, f.ID, f.State, "", f.Project, f.Person, "", f.CreatedAt, f.UpdatedAt, facts[f.ID]))
 	})
 	return nil
 }
@@ -393,7 +394,7 @@ func (a *api) qualifiedCriteria(r *http.Request, res *searchResult, q query.Quer
 	res.Criteria = filterTo(list, limit, func(c store.CriterionHit) bool {
 		of := facts[c.ID]
 		of.Parents, of.Blocks = readableReq(of.Parents), readableReq(of.Blocks)
-		return q.Match(factsOf(query.KindCriterion, c.RequestID, c.State, "", project, "", "", "", c.UpdatedAt, of))
+		return q.Match(factsOf(pa, query.KindCriterion, c.RequestID, c.State, "", project, "", "", "", c.UpdatedAt, of))
 	})
 	return nil
 }
@@ -425,7 +426,7 @@ func (a *api) qualifiedTasks(r *http.Request, res *searchResult, q query.Query, 
 	res.Tasks = filterTo(list, limit, func(t humantask.Task) bool {
 		of := facts[t.ID]
 		of.Parents, of.Blocks = readableReq(of.Parents), readableReq(of.Blocks)
-		return q.Match(factsOf(query.KindTask, t.ID, t.State, t.Kind, project, t.CreatedBy, t.Assignee, t.CreatedAt, t.UpdatedAt, of))
+		return q.Match(factsOf(pa, query.KindTask, t.ID, t.State, t.Kind, project, t.CreatedBy, t.Assignee, t.CreatedAt, t.UpdatedAt, of))
 	})
 	return nil
 }
@@ -503,7 +504,8 @@ func (a *api) qualifiedSessions(r *http.Request, res *searchResult, q query.Quer
 
 // messageFacts: eine Raum-Nachricht als Treffer; Anker und Bereich kommen aus
 // dem, was beim Schreiben festgehalten wurde.
-func messageFacts(h store.MessageHit, of store.ObjectFacts) query.Facts {
+func messageFacts(pa *store.ProjectAccess, h store.MessageHit, of store.ObjectFacts) query.Facts {
+	of = pa.FactsView(h.Project, of)
 	return query.Facts{
 		Kind: query.KindMessage, Repo: h.Project, Author: h.Sender,
 		Branches: of.Branches, Commits: of.Commits, PRs: of.PRs, Areas: of.Areas,
@@ -526,7 +528,7 @@ func (a *api) qualifiedMessages(r *http.Request, res *searchResult, q query.Quer
 	if err != nil {
 		return err
 	}
-	res.Messages = filterTo(hits, limit, func(h store.MessageHit) bool { return q.Match(messageFacts(h, facts[h.ID])) })
+	res.Messages = filterTo(hits, limit, func(h store.MessageHit) bool { return q.Match(messageFacts(a.access(r), h, facts[h.ID])) })
 	return nil
 }
 

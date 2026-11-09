@@ -442,7 +442,7 @@ func writeRequestError(w http.ResponseWriter, err error) {
 			status = http.StatusNotFound
 		case "package_exists", "package_closed", "pr_taken", "label_exists", "idea_duplicate", "idea_changed",
 			"text_changed", "concept_changed", "decision_closed", "decision_changed", "decision_open", "idea_closed",
-			"feature_name_taken", "feature_changed", "feature_retired", "feature_exists", "version_changed", "idea_not_implemented":
+			"preset_conflict", "feature_name_taken", "feature_changed", "feature_retired", "feature_exists", "version_changed", "idea_not_implemented":
 			status = http.StatusConflict
 		case "attachment_too_large":
 			status = http.StatusRequestEntityTooLarge

@@ -251,6 +251,10 @@ type Query struct {
 type Error struct {
 	Token string
 	Msg   string
+	// Unknown ist der Schlüssel, wenn der Fehler ein unbekannter Qualifier ist
+	// (ohne Doppelpunkt, wie geschrieben), sonst leer. Oberflächen sagen damit
+	// in ihrer Sprache, welcher Qualifier es war.
+	Unknown string
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("search query: %s (at %q)", e.Msg, e.Token) }
@@ -361,7 +365,9 @@ func Parse(line string, now time.Time) (Query, error) {
 		}
 		canon, known := keyAlias[key]
 		if !known {
-			return Query{}, fail(w, "unknown qualifier %q; known qualifiers: %s", key+":", strings.Join(KnownKeys(), ", "))
+			e := fail(w, "unknown qualifier %q; known qualifiers: %s", key+":", strings.Join(KnownKeys(), ", ")).(*Error)
+			e.Unknown = key
+			return Query{}, e
 		}
 		t, err := parseTerm(canon, neg, value, w, now)
 		if err != nil {

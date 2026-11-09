@@ -58,6 +58,17 @@ var dummy = map[string]string{"pr": "1", "branch": "main", "area": "internal", "
 // steht ein unbekannter Qualifier beim Speichern im Fehler und nicht erst beim
 // ersten Aufruf.
 func CheckPreset(name string, queries []string) error {
+	// Eine gespeicherte Suche darf keine mitgelieferte verdecken: der Knopf
+	// „Was wurde hier erledigt?“ und die Schnellfilter meinen immer die mitgelieferte.
+	if _, ok := BuiltinByName(name); ok {
+		return fmt.Errorf("preset name %q is taken by a supplied search; choose another name", name)
+	}
+	return checkPreset(name, queries)
+}
+
+// checkPreset ist CheckPreset ohne die Sperre der mitgelieferten Namen; so lassen
+// sich die mitgelieferten Suchen selbst prüfen.
+func checkPreset(name string, queries []string) error {
 	if !ValidPresetName(name) {
 		return fmt.Errorf("preset name %q: use lower-case letters, digits and hyphens, at most 40 characters", name)
 	}
@@ -125,8 +136,8 @@ func listArgs(a []string) string {
 	return "{" + strings.Join(a, "}, {") + "}"
 }
 
-// Builtin sind die mitgelieferten Suchen. Eine gespeicherte Suche gleichen Namens
-// (persönlich, Projekt, Org) geht ihnen vor.
+// Builtin sind die mitgelieferten Suchen. Ihre Namen sind für gespeicherte Suchen
+// gesperrt (CheckPreset); eine ältere gespeicherte Suche gleichen Namens zählt nicht.
 var Builtin = []Preset{
 	{
 		Name:        "pr-ergebnis",

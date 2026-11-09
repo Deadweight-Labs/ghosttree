@@ -70,10 +70,10 @@ type KnowledgeRow struct {
 	// Old: the entry has waited a week or more for its decision.
 	Old bool
 	// Num is the number of the entry, Person who wrote it, Area the main area of
-	// its origin, Anchor "sha@branch" of the git state it was written at.
+	// its origin, Git the anchor (commit, pull request, branch) it was written at.
 	Num          int64
 	Person, Area string
-	Anchor       string
+	Git          *anchorView
 	// Stamp is the time of the entry as RFC 3339, for the relative time tag.
 	Stamp string
 	// Tone is the colour class of the type label.
@@ -330,7 +330,7 @@ func levelLabel(l lang, level string) string {
 func (a *app) knowledgeRowFor(l lang, pa *store.ProjectAccess, raw store.Knowledge, withProject bool) KnowledgeRow {
 	k := pa.KnowledgeView(raw)
 	row := KnowledgeRow{
-		ID: strconv.FormatInt(k.ID, 10), Href: "/ui/knowledge/" + strconv.FormatInt(k.ID, 10), Title: k.Title,
+		ID: strconv.FormatInt(k.ID, 10), Href: knowledgeHref(k.Scope.Project, k.ID), Title: k.Title,
 		Type: k.Type, TypeLabel: typeLabel(l, k.Type), Level: k.Confidence, LevelLabel: levelLabel(l, k.Confidence), LevelTitle: levelTitle(l, k.Confidence), TypeTitle: typeLabel(l, k.Type),
 		Stale: k.Status == "stale", Excerpt: excerpt(k.Body), Age: shortAge(l, overviewNow().UTC(), parseTime(firstNonEmpty(k.ObservedAt, k.CreatedAt))),
 		Old: olderThan(firstNonEmpty(k.ObservedAt, k.CreatedAt), overviewNow().UTC(), reviewOldAfter),
@@ -339,12 +339,7 @@ func (a *app) knowledgeRowFor(l lang, pa *store.ProjectAccess, raw store.Knowled
 	if k.OriginContext != nil {
 		row.Area = k.OriginContext.Main()
 	}
-	if k.GitAnchor != nil && !k.GitAnchor.IsZero() {
-		row.Anchor = shortSha(k.GitAnchor.Commit)
-		if k.GitAnchor.Branch != "" {
-			row.Anchor += "@" + k.GitAnchor.Branch
-		}
-	}
+	row.Git = anchorViewOf(pa, k.Scope.Project, k.GitAnchor, originVia(k.OriginContext))
 	if withProject && k.Scope.Project != "" {
 		row.Project = path.Base(k.Scope.Project)
 	}
@@ -655,6 +650,11 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The old address leads to the page in the repository of the entry.
+	if r.PathValue("a") == "" && k.Scope.Project != "" && a.canOpenRepo(r, a.access(r), k.Scope.Project) {
+		http.Redirect(w, r, withRawQuery(knowledgeHref(k.Scope.Project, k.ID), r), http.StatusFound)
+		return
+	}
 	r = a.repoScoped(r, k.Scope.Project, "knowledge")
 	pa := a.access(r)
 	card := a.cardFor(r, pa, k, true, 0, "item", "")
@@ -716,7 +716,7 @@ func (a *app) closureRowFor(l lang, pa *store.ProjectAccess, k store.Knowledge) 
 			return nil
 		}
 		row.Label = l.msg("knowledge.closure.superseded")
-		row.Href = "/ui/knowledge/" + strconv.FormatInt(next.ID, 10)
+		row.Href = knowledgeHref(next.Scope.Project, next.ID)
 		row.Title = pa.KnowledgeView(next).Title
 	}
 	return row

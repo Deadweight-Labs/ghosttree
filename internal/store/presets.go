@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -21,7 +22,9 @@ type SearchPreset struct {
 	Args        []string `json:"args,omitempty"`
 	CreatedBy   string   `json:"created_by,omitempty"`
 	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
+	// UpdatedBy ist, wer die Suche zuletzt geändert hat; CreatedBy bleibt der Anleger.
+	UpdatedBy string `json:"updated_by,omitempty"`
+	UpdatedAt string `json:"updated_at"`
 	// Builtin ist bei einer mitgelieferten Suche gesetzt; die steht nicht in der
 	// Datenbank.
 	Builtin bool `json:"builtin,omitempty"`
@@ -35,14 +38,21 @@ type PresetInput struct {
 	Description string
 	Queries     []string
 	By          string
+	// MayReplace sagt, dass der Aufrufer die Suche eines anderen im Projekt oder in
+	// der Org auch löschen dürfte (Lead, Org-Owner); nur dann ersetzt er sie.
+	MayReplace bool
 }
 
-const presetCols = `id,scope_kind,scope_ref,name,description,queries,created_by,created_at,updated_at`
+// ErrPresetConflict: unter dem Namen liegt die Suche eines anderen, und der Aufrufer
+// dürfte sie nicht löschen.
+var ErrPresetConflict = labelRule("preset_conflict", "a saved search of that name belongs to someone else", "choose another name, or ask a lead to change it")
+
+const presetCols = `id,scope_kind,scope_ref,name,description,queries,created_by,created_at,updated_by,updated_at`
 
 func scanPreset(row interface{ Scan(...any) error }) (SearchPreset, error) {
 	var p SearchPreset
 	var q string
-	if err := row.Scan(&p.ID, &p.Scope, &p.Ref, &p.Name, &p.Description, &q, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	if err := row.Scan(&p.ID, &p.Scope, &p.Ref, &p.Name, &p.Description, &q, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt); err != nil {
 		return p, err
 	}
 	p.Queries = strings.Split(q, "\n")
@@ -76,10 +86,26 @@ func (s *Store) SavePreset(in PresetInput) (SearchPreset, error) {
 		return queueValue(s, []any{in}, func(d *Store, p []any) (SearchPreset, error) { return d.SavePreset(p[0].(PresetInput)) })
 	}
 	ts := now()
-	_, err = s.db.Exec(`INSERT INTO search_presets(scope_kind,scope_ref,name,description,queries,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)
-		ON CONFLICT(scope_kind,scope_ref,lower(name)) DO UPDATE SET description=excluded.description, queries=excluded.queries, updated_at=excluded.updated_at`,
-		in.Scope, in.Ref, in.Name, in.Description, strings.Join(in.Queries, "\n"), in.By, ts, ts)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return SearchPreset{}, err
+	}
+	defer tx.Rollback()
+	var author string
+	switch err := tx.QueryRow(`SELECT created_by FROM search_presets WHERE scope_kind=? AND scope_ref=? AND lower(name)=lower(?)`, in.Scope, in.Ref, in.Name).Scan(&author); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return SearchPreset{}, err
+	case in.Scope != "user" && author != in.By && !in.MayReplace:
+		return SearchPreset{}, ErrPresetConflict
+	}
+	// Beim Ersetzen bleibt der Anleger; wer ersetzt, steht in updated_by.
+	if _, err = tx.Exec(`INSERT INTO search_presets(scope_kind,scope_ref,name,description,queries,created_by,created_at,updated_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(scope_kind,scope_ref,lower(name)) DO UPDATE SET description=excluded.description, queries=excluded.queries, updated_by=excluded.updated_by, updated_at=excluded.updated_at`,
+		in.Scope, in.Ref, in.Name, in.Description, strings.Join(in.Queries, "\n"), in.By, ts, in.By, ts); err != nil {
+		return SearchPreset{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return SearchPreset{}, err
 	}
 	return scanPreset(s.db.QueryRow(`SELECT `+presetCols+` FROM search_presets WHERE scope_kind=? AND scope_ref=? AND lower(name)=lower(?)`, in.Scope, in.Ref, in.Name))

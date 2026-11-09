@@ -131,7 +131,7 @@ func TestOpenResolvesEveryShortFormToItsCanonicalURL(t *testing.T) {
 	cases := map[string]string{
 		"REQ-1":                  base + "/issues/1",
 		"REQ-1#2":                base + "/issues/1#criterion-2",
-		"TASK-1":                 root + "/tasks/1",
+		"TASK-1":                 base + "/tasks/1",
 		"PAIN-1":                 base + "/pains/1",
 		"IDEA-1":                 base + "/ideas/1",
 		"#" + itoa(kid):          base + "/knowledge/" + itoa(kid),
@@ -181,17 +181,16 @@ func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 // ohne Schritte kommt der freundliche Hinweis.
 func TestTaskAddWithStepsPrintsCardAndWithoutStepsAHint(t *testing.T) {
 	_, base := openFixture(t)
-	root := strings.TrimSuffix(base, "/acme/ghosttree")
 	code, out := painTaskRun(t, "task", "add", "--project", cliHere, "--request", "REQ-1", "--kind", "action", "--title", "GitHub verbinden",
 		"--step", "Einstellungen öffnen | https://github.com/settings/apps", "--step", "App installieren")
-	if code != 0 || !strings.Contains(out, "Task TASK-1: GitHub verbinden") || !strings.Contains(out, "human does: 1. Einstellungen öffnen") || !strings.Contains(out, "link: "+root+"/tasks/1") {
+	if code != 0 || !strings.Contains(out, "Task TASK-1: GitHub verbinden") || !strings.Contains(out, "human does: 1. Einstellungen öffnen") || !strings.Contains(out, "link: "+base+"/tasks/1") {
 		t.Fatalf("add with steps: %d\n%s", code, out)
 	}
 	if strings.Contains(out, "hint:") {
 		t.Errorf("no hint expected with steps:\n%s", out)
 	}
 	code, out = painTaskRun(t, "task", "show", "1")
-	if code != 0 || !strings.Contains(out, "1. Einstellungen öffnen <https://github.com/settings/apps>") || !strings.Contains(out, "2. App installieren") || !strings.Contains(out, "link: "+root+"/tasks/1") {
+	if code != 0 || !strings.Contains(out, "1. Einstellungen öffnen <https://github.com/settings/apps>") || !strings.Contains(out, "2. App installieren") || !strings.Contains(out, "link: "+base+"/tasks/1") {
 		t.Errorf("show: %d\n%s", code, out)
 	}
 	code, out = painTaskRun(t, "task", "add", "--project", cliHere, "--request", "REQ-1", "--kind", "input", "--title", "Entscheiden")

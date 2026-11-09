@@ -82,3 +82,10 @@
     }
   });
 })();
+
+// The old address of a task was /ui/tasks#task-N, which leads to the inbox with
+// that anchor. A task has its own page now (/ui/t/N leads to it in its repository).
+(() => {
+  const m = /^#task-(\d+)$/.exec(location.hash);
+  if (m && location.pathname === "/ui/inbox") location.replace("/ui/t/" + m[1]);
+})();

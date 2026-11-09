@@ -275,13 +275,14 @@ func (a *ProjectAccess) MarkTasksDone(ids []int64, note string, actor humantask.
 	if len(uniq) == 0 {
 		return nil, requestdomain.NewRuleError("task_required", "no task named", "give at least one task id", nil)
 	}
+	cache := map[int64]bool{}
 	for _, id := range uniq {
 		t, err := a.st.TaskByID(id)
 		if err != nil {
 			a.Filtered()
 			return nil, err
 		}
-		if err := a.CheckTask(t, ActWork); err != nil {
+		if err := a.checkTaskWorkable(t, cache); err != nil {
 			return nil, err
 		}
 	}

@@ -353,8 +353,8 @@ func (a *api) deletePreset(w http.ResponseWriter, r *http.Request) {
 
 // runPreset führt eine gespeicherte oder mitgelieferte Suche mit Argumenten aus.
 // Die Zeilen laufen nacheinander durch dieselbe Suche wie /api/search; die
-// Treffer werden zusammengelegt. Eine gespeicherte Suche gleichen Namens geht der
-// mitgelieferten vor (persönlich vor Projekt vor Org).
+// Treffer werden zusammengelegt. Die Namen der mitgelieferten Suchen sind für
+// gespeicherte gesperrt; persönlich geht vor Projekt vor Org.
 func (a *api) runPreset(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	project := axesFromQuery(r).Project

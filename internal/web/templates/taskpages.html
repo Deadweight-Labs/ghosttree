@@ -1,0 +1,62 @@
+{{define "tasks"}}{{template "head" .}}{{template "nav" .}}<main class="g2 is ft"><div class="wrap">
+{{with .TasksV}}<div class="ilayout"><div class="imain">
+<div class="box"><div class="box-h lh">{{range .Tabs}}<a class="tab{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Icon}}<span><span class="n">{{.Count}}</span> {{t .Label}}</span></a>{{end}}</div>
+{{if .Rows}}{{range .Rows}}{{template "uirow" .}}
+{{end}}{{else}}<div class="empty"><span>{{t .EmptyKey}}</span></div>{{end}}</div>
+</div></div>
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "task"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id ft tk"><div class="wrap">
+{{with .TaskV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">#{{.ID}}</span></h1></div>
+<div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "tasks"}}{{.StateLabel}}</span><span class="lb neu">{{.KindLabel}}</span>{{if .Assignee}}<span>{{t "tasks.waits_for"}} <span class="person">{{avatarWait .Assignee}}{{.Assignee}}</span></span>{{end}}{{if .CreatedBy}}<span><span class="person">{{avatarOf .CreatedBy}}{{.CreatedBy}}</span> {{t "tasks.asked" .Age}}</span>{{end}}</div></div>
+<div class="dgrid"><div class="dmain">
+{{if .CheckHint}}<div class="callout" role="note">{{mi "check"}}<div><div class="k">{{t "tasks.check_hint"}}</div><div class="tt">{{.CheckHint}}</div></div></div>{{end}}
+{{if or .Blocks .Where}}<div class="cmt">{{avatarX "xl" "" .CreatedBy "" false}}<div class="cbox"><div class="ch"><b>{{.CreatedBy}}</b><span>{{t "tasks.asked_ch"}}</span></div>
+<div class="cb prose">{{template "knbody" .Blocks}}{{if .Where}}<p class="twhere"><span class="muted">{{t "tasks.where"}}</span> <span class="mono">{{.Where}}</span></p>{{end}}</div></div></div>{{end}}
+{{with .Note}}{{if .Text}}<div class="box fsec"><div class="box-h"><span class="t">{{mi "book"}} {{.Title}}</span></div><div class="box-r prose"><p>{{.Text}}</p></div></div>{{end}}{{end}}
+{{if .Steps}}<div class="box fsec" id="steps"><div class="box-h"><span class="t">{{mi "tasks"}} {{t "tasks.steps"}}</span><span class="sp"></span><span class="muted fw4">{{t "tasks.steps_done" .StepsDone (len .Steps)}}</span></div>
+{{range .Steps}}<div class="box-r tstep{{if .Done}} done{{end}}" id="step-{{.N}}"><span class="cbx{{if .Done}} on{{end}}" role="img" aria-label="{{if .Done}}{{t "tasks.step_done"}}{{else}}{{t "tasks.step_open"}}{{end}}">{{if .Done}}{{mi "check"}}{{end}}</span><div class="tx">{{if .URL}}<a href="{{.URL}}" rel="noopener noreferrer">{{.Text}}</a>{{else}}{{.Text}}{{end}}{{if .Done}}<span class="muted tby">{{if .By}}{{avatarOf .By}}{{.By}} {{end}}{{.Age}}</span>{{end}}</div>
+{{if .Action}}<form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{$.TaskV.Token}}"><input type="hidden" name="done" value="{{if .Done}}0{{else}}1{{end}}"><button class="gbtn sm quiet">{{if .Done}}{{t "tasks.step_undo"}}{{else}}{{t "tasks.step_tick"}}{{end}}</button></form>{{end}}</div>
+{{end}}</div>{{end}}
+{{if .DoneBy}}<div class="callout done" role="status">{{mi "done"}}<div><div class="k">{{t "tasks.done_by" .DoneBy .DoneAge}}</div>{{if .DoneNote}}<div class="tt">{{.DoneNote}}</div>{{end}}</div></div>{{end}}
+{{if .Reason}}<div class="callout" role="note">{{mi "drop"}}<div><div class="k">{{t "tasks.state_note"}}</div><div class="tt">{{.Reason}}</div></div></div>{{end}}
+{{if .CanDone}}<form method="post" action="{{.DoneAction}}" class="box fsec tdone"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="back" value="task">
+<div class="box-r"><label class="gfield"><input name="note" maxlength="500" placeholder="{{t "tasks.note_placeholder"}}" aria-label="{{t "tasks.note_placeholder"}}" autocomplete="off"></label><button class="gbtn pri">{{t "tasks.mark_done"}}</button></div></form>{{end}}
+</div>
+<aside class="side" aria-label="{{t "tasks.side.facts"}}">
+<div class="sblk"><h3>{{t "tasks.side.state"}}</h3><div class="v"><span class="lb {{.Tone}}">{{.StateLabel}}</span></div></div>
+{{if .Request}}<div class="sblk"><h3>{{t "tasks.side.issue"}}</h3><div class="v">{{with .Request}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
+<div class="sblk"><h3>{{t "tasks.side.list"}}</h3><div class="v"><a href="{{.Base}}">{{t "tasks.side.all"}}</a></div></div>
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "packages"}}{{template "head" .}}{{template "nav" .}}<main class="g2 is ft"><div class="wrap">
+{{with .PackagesV}}<div class="ilayout"><div class="imain">
+<div class="box"><div class="box-h lh">{{range .Tabs}}<a class="tab{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Icon}}<span><span class="n">{{.Count}}</span> {{t .Label}}</span></a>{{end}}{{if .Branch}}<span class="sp"></span><a class="chip br" href="{{.ClearHref}}" title="{{t "packages.clear_branch"}}">{{mi "branch"}}{{.Branch}}{{mi "x"}}</a>{{end}}</div>
+{{if .Rows}}{{range .Rows}}{{template "uirow" .}}
+{{end}}{{else}}<div class="empty"><span>{{t .EmptyKey}}</span></div>{{end}}</div>
+</div></div>
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "package"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id ft pk"><div class="wrap">
+{{with .PackageV}}<div class="dhead"><div class="dtitle"><h1>{{.Name}}<span class="n">#{{.ID}}</span></h1></div>
+<div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "list"}}{{.StateLabel}}</span>{{if .Branch}}<span class="chip br">{{mi "branch"}}{{.Branch}}</span>{{end}}{{if .PRText}}<a class="chip pr" href="{{.PRHref}}">{{mi "pr"}}{{.PRText}}</a>{{end}}{{if .Total}}<span class="prog wide"><span class="bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{t "packages.met_x_of_y" .Done .Total}}</span>{{end}}</div></div>
+<div class="dgrid"><div class="dmain">
+{{if .Members}}<div class="sec"><h2>{{t "packages.requests"}}</h2><span class="counter">{{len .Members}}</span></div>
+<div class="box">{{range $i, $m := .Members}}<details class="rq"{{if .Open}} open{{end}}><summary><span class="car">{{mi "chevr"}}</span><span class="nn">{{ref "request" .N .Href}}</span><span class="ell rqt">{{.Title}}</span><span class="rqs"><span class="lb {{if .Optional}}out{{else}}neu{{end}}">{{index $.PackageV.Roles $i}}</span><span class="prog{{if .Warn}} amber{{end}}" title="{{.Progress.Title}}"><span class="bar" aria-hidden="true"><i data-pct="{{.Progress.Percent}}"></i></span>{{.Progress.Text}}</span></span></summary>
+<div class="inner">{{range .Criteria}}<div class="crit{{if .Done}} done{{end}}"><span class="cbx{{if .Done}} on{{else if .Waived}} waived{{end}}" role="img" aria-label="{{if .Done}}{{t "pulls.crit.met"}}{{else if .Waived}}{{t "pulls.crit.waived"}}{{else}}{{t "pulls.crit.open"}}{{end}}">{{if .Done}}{{mi "check"}}{{end}}</span><div><div class="tx">{{.Text}}</div>{{if or .Evidence .NoProof .Waived}}<div class="pf">{{proofs .Evidence}}{{range .Evidence}}{{template "gitanchor" .Git}}{{end}}{{if .NoProof}}<span class="chip noproof">{{mi "tri"}}{{t "issue.no_proof"}}</span>{{end}}{{if .Waived}}<span class="lb neu">{{t "pulls.crit.waived"}}</span>{{end}}</div>{{end}}</div></div>
+{{end}}{{range .Tasks}}<div class="crit rqtask"><span class="rqti">{{mi "pin"}}</span><div><div class="tx">{{.Title}}</div><div class="pf"><span>{{t "pulls.waits_for_task"}}</span>{{refPill "task" .N ""}}</div></div></div>
+{{end}}</div></details>
+{{end}}</div>{{else}}<div class="box"><div class="box-empty"><span>{{t "packages.no_requests"}}</span></div></div>{{end}}
+{{if .Sessions}}<div class="sec"><h2>{{t "packages.sessions"}}</h2><span class="counter">{{len .Sessions}}</span></div>
+<div class="box">{{range .Sessions}}<div class="box-r psess">{{avatarX "lg" .Kind "" "" false}}<a class="ell" href="{{.Href}}">{{.Title}}</a>{{if .Handle}}<span class="muted mono">{{.Handle}}</span>{{end}}<span class="sp"></span><span class="lb {{if .Active}}ok{{else}}neu{{end}}">{{.StateLabel}}</span><span class="muted">{{.Age}}</span></div>
+{{end}}</div>{{end}}
+</div>
+<aside class="side" aria-label="{{t "packages.side.facts"}}">
+<div class="sblk"><h3>{{t "packages.side.state"}}</h3><div class="v"><span class="lb {{.Tone}}">{{.StateLabel}}</span></div></div>
+{{if .Branch}}<div class="sblk"><h3>{{t "packages.side.branch"}}</h3><div class="v"><span class="chip br">{{mi "branch"}}{{.Branch}}</span>{{if .Inherited}}<span class="muted">{{t "packages.inherited" .Inherited}}</span>{{end}}</div></div>{{end}}
+{{if .PRText}}<div class="sblk"><h3>{{t "packages.side.pull"}}</h3><div class="v"><a class="chip pr" href="{{.PRHref}}">{{mi "pr"}}{{.PRText}}</a>{{if .PRGitHub}}<a class="nchip" href="{{.PRGitHub}}" rel="noopener noreferrer">{{t "packages.on_github"}}</a>{{end}}</div></div>{{end}}
+{{if .Required}}<div class="sblk"><h3>{{t "packages.side.required"}}</h3><div class="v"><span>{{t "packages.required_open" .RequiredOpen .Required}}</span></div></div>{{end}}
+<div class="sblk"><h3>{{t "packages.side.list"}}</h3><div class="v"><a href="{{.Base}}">{{t "packages.side.all"}}</a></div></div>
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}

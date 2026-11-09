@@ -49,6 +49,8 @@ type commentView struct {
 	Token        string
 	// Reactions is the row under the text; nil when there is none to show.
 	Reactions *reactionsView
+	// Git is the anchor the comment was written at.
+	Git *anchorView
 }
 
 // commentTimeline turns the comments of an object into entries of the timeline.
@@ -63,6 +65,10 @@ func (a *app) commentTimeline(r *http.Request, l lang, pa *store.ProjectAccess, 
 	forms := interactive(r)
 	token := csrfOf(r)
 	reacted, _ := pa.CommentReactions(kind, objectID)
+	project := ""
+	if rv := repoFrom(r); rv != nil {
+		project = rv.Project
+	}
 	items := make([]tlItem, 0, len(list))
 	for _, c := range list {
 		at := parseTime(c.CreatedAt)
@@ -70,6 +76,9 @@ func (a *app) commentTimeline(r *http.Request, l lang, pa *store.ProjectAccess, 
 			Author: c.Person != "" && c.Person == author, Token: token}
 		v.Head = l.msg("comments.commented", age(c.CreatedAt))
 		v.Long = c.CreatedAt
+		if !c.Deleted {
+			v.Git = anchorViewOf(pa, project, c.GitAnchor, c.Via)
+		}
 		if c.Deleted {
 			items = append(items, tlItem{ID: v.Anchor, Act: "comment.deleted", Comment: v, at: at})
 			continue

@@ -43,7 +43,7 @@ func TestMachinePageOfTheOwnerShowsAgentsSessionsAndManagementForms(t *testing.T
 	if code != http.StatusOK {
 		t.Fatalf("machine page = %d", code)
 	}
-	for _, want := range []string{"mainex", "Your machine", "Knowledge", "Agents", "Sessions", "Fix the zebrafish login", `href="/ui/sessions/` + e.pid["alice-private"] + `"`,
+	for _, want := range []string{"mainex", "Your machine", "Knowledge", "Agents", "Sessions", "Fix the zebrafish login", `/sessions/` + e.pid["alice-private"] + `"`,
 		`href="/ui/sessions?machine=mainex"`, `action="/ui/m/mainex/share"`, `action="/ui/m/mainex/owner"`, "Hand over to an organization", `class="rp"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("machine page lacks %q", want)

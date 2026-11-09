@@ -51,7 +51,7 @@ func TestKnowledgeListShowsKindStatusExcerptAndFilters(t *testing.T) {
 	knInsert(t, e.St, store.Knowledge{Type: "note", Title: "Staged idea", Confidence: "staged"})
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/knowledge")
 	for _, want := range []string{"WAL grows unbounded", "Use SQLite", "Staged idea", "Pitfall", "Decision", "Verified", "Trusted", "Staged",
-		"First paragraph about the WAL.", `<div class="tt"><a href="/ui/knowledge/`, `/static/ui-knowledge.css`, `aria-current="page"`} {
+		"First paragraph about the WAL.", `<div class="tt"><a href="/ui/x/shell/knowledge/`, `/static/ui-knowledge.css`, `aria-current="page"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("member list lacks %q", want)
 		}
@@ -493,7 +493,7 @@ func TestReviewEditLinkOpensTheForm(t *testing.T) {
 	e := ovEnv(t)
 	id := knInsert(t, e.St, store.Knowledge{Title: "Fix me", Confidence: "staged"})
 	_, review := fetchPage(t, e.Owner, e.Base+"/ui/review")
-	link := "/ui/knowledge/" + strconv.FormatInt(id, 10) + "?edit=1#edit"
+	link := "/ui/x/shell/knowledge/" + strconv.FormatInt(id, 10) + "?edit=1#edit"
 	if !strings.Contains(review, `href="`+link+`"`) {
 		t.Fatalf("the review edit link is not %s", link)
 	}

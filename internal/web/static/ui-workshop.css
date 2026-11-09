@@ -90,3 +90,22 @@
   :is(.g2) .ws .ws-vars { grid-template-columns: minmax(0, 1fr); }
   :is(.g2) .ws .ws-act .gbtn, :is(.g2) .ws .ws-foot .gbtn { min-height: 44px; }
 }
+
+/* Pictures: thumbnails above a variant or the idea, one dialog to enlarge them. */
+:is(.g2) {
+  & .ws-imgs { display: flex; flex-wrap: wrap; gap: 8px; }
+  & .ws-imgs-idea { padding: 12px 16px; }
+  & .ws-zoom { display: block; max-width: 100%; border: 1px solid var(--border-default); border-radius: 6px; overflow: hidden; background: var(--canvas-subtle); cursor: zoom-in; line-height: 0; }
+  & .ws-zoom:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
+  & .ws-zoom img { display: block; max-width: 100%; max-height: 180px; width: auto; height: auto; object-fit: contain; }
+  & .ws-up { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 16px; }
+  & .ws-up .gfield { flex: 1 1 160px; min-width: 0; font-size: 13px; }
+  & .ws-up select.gfield { flex: 0 1 220px; }
+  & .ws-dec > .ws-up { margin: 12px 0 0; }
+  & .ws-lb { max-width: min(96vw, 1200px); max-height: 94vh; padding: 12px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--canvas-default); color: var(--fg-default); }
+  & .ws-lb::backdrop { background: rgb(0 0 0 / .6); }
+  & .ws-lb img { display: block; max-width: 100%; max-height: 78vh; margin: 0 auto; object-fit: contain; }
+  & .ws-lb-cap { margin: 8px 0 0; font-size: 13px; color: var(--fg-muted); text-align: center; overflow-wrap: anywhere; }
+  & .ws-lb form { position: absolute; top: 8px; right: 8px; margin: 0; }
+  & .ws-lb-x { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border-default); border-radius: 50%; background: var(--canvas-default); color: var(--fg-default); cursor: pointer; }
+}

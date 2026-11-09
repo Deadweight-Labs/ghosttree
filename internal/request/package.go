@@ -27,7 +27,10 @@ type Package struct {
 	Project string `json:"project"`
 	Branch  string `json:"branch"`
 	Name    string `json:"name"`
-	State   string `json:"state"`
+	// NameHidden: der Betrachter sieht statt des Namens eine neutrale Nummer, weil
+	// der Name den Branch verraten könnte; die Oberfläche setzt ihr eigenes Wort ein.
+	NameHidden bool   `json:"name_hidden,omitempty"`
+	State      string `json:"state"`
 	// PR ist die Nummer des Pull Requests, 0 solange keiner bekannt ist. Das
 	// Feld wird von Hand oder von der GitHub-Anbindung gesetzt; hier gibt es
 	// keinen Abgleich mit GitHub.

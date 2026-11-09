@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -126,5 +128,42 @@ func TestRenderGhostHitIsOneLineAndNamesThePath(t *testing.T) {
 	}
 	if !strings.Contains(got, "Zweite Zeile") {
 		t.Fatalf("the snippet must survive the newline: %q", got)
+	}
+}
+
+// context_get mit Pfaden folgt dem Branch der Sitzung: auf feat/a steht dessen
+// Beschreibung, auf einem anderen Branch die der Projektebene (REQ-597).
+func TestGetWithPathsFollowsTheBranchOfTheSession(t *testing.T) {
+	c, st := newTestClient(t)
+	project := "github.com/x/y"
+	for _, g := range []store.GhostFile{
+		{Project: project, Path: "internal/a.go", Description: "Beschreibung der Projektebene"},
+		{Project: project, Path: "internal/a.go", Description: "Beschreibung nur auf feat/a", Branch: "feat/a"},
+		{Project: project, Path: "internal/nur.go", Description: "Pfad nur auf feat/a", Branch: "feat/a"},
+	} {
+		if _, err := st.PutGhostFile(g); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := func(branch string, lineage []string) string {
+		t.Helper()
+		s := NewServer(c, scope.Axes{Project: project, Branch: branch, Lineage: lineage})
+		res, _, err := s.handleGet(context.Background(), nil, GetInput{Paths: []string{"internal/a.go", "internal/nur.go"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return text(t, res)
+	}
+	onBranch := get("feat/a", nil)
+	if !strings.Contains(onBranch, "Beschreibung nur auf feat/a") || !strings.Contains(onBranch, "Pfad nur auf feat/a") || strings.Contains(onBranch, "Beschreibung der Projektebene") {
+		t.Errorf("on the branch: %s", onBranch)
+	}
+	cut := get("feat/a-x", []string{"feat/a"})
+	if !strings.Contains(cut, "Beschreibung nur auf feat/a") {
+		t.Errorf("a branch cut from it inherits: %s", cut)
+	}
+	sibling := get("feat/b", nil)
+	if !strings.Contains(sibling, "Beschreibung der Projektebene") || strings.Contains(sibling, "feat/a") || strings.Contains(sibling, "Pfad nur auf feat/a") {
+		t.Errorf("a sibling reads the project level: %s", sibling)
 	}
 }
