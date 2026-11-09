@@ -6,6 +6,7 @@ import (
 	"embed"
 	"errors"
 	"github.com/Deadweight-Labs/ghosttree/internal/forge"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -47,6 +48,11 @@ type app struct {
 	avatarDir    string
 	avatarClient *http.Client
 	buildVersion string // ctx version of this server, for ServerVersion in pages
+	// The kinds searched at once on the server, and the running search stream of
+	// each account (search_stream.go).
+	searchSlots   searchLimiter
+	searchStreams searchStreams
+	logger        *slog.Logger // http_request lines and search failures; nil = slog.Default
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
@@ -607,6 +613,14 @@ func (a *app) handle(mux *http.ServeMux, pattern string, h any) {
 		panic("web: route " + pattern + " is not classified in webRoutes")
 	}
 	a.registered = append(a.registered, pattern)
+	if loggedRoutes[pattern] {
+		switch f := h.(type) {
+		case http.Handler:
+			h = a.observed(pattern, f)
+		case func(http.ResponseWriter, *http.Request):
+			h = a.observed(pattern, http.HandlerFunc(f))
+		}
+	}
 	switch h := h.(type) {
 	case http.Handler:
 		mux.Handle(pattern, h)

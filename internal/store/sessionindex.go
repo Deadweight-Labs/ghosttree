@@ -23,7 +23,7 @@ import (
 //
 // chunk_index_chunk ist die schmale Zuordnung Chunk → Session: Suchen, die von
 // Volltext-Treffern oder Embeddings ausgehen, schlagen die Session darin nach
-// statt in den breiten Zeilen von chunk_index (sessionChunkMap). Beim ersten
+// statt in den breiten Zeilen von chunk_index (hasChunkMap). Beim ersten
 // Start auf einem großen Bestand dauert ihr Aufbau einmalig etwa so lange wie
 // ein Lesen von chunk_index.
 
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS chunk_index(
   tool_input TEXT NOT NULL DEFAULT '',
   tool_output TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS chunk_index_session ON chunk_index(session_id, seq);
-CREATE INDEX IF NOT EXISTS chunk_index_chunk ON chunk_index(chunk_id, session_id, seq, role);
+CREATE INDEX IF NOT EXISTS chunk_index_chunk ON chunk_index(chunk_id, session_id, seq);
 CREATE VIRTUAL TABLE IF NOT EXISTS sess_fts USING fts5(text, thinking, tool_input, tool_output,
   content='chunk_index', content_rowid='chunk_id');
 CREATE TABLE IF NOT EXISTS index_state(key TEXT PRIMARY KEY, val INTEGER NOT NULL);

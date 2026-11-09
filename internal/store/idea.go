@@ -39,7 +39,7 @@ func (s *Store) IdeaByID(id int64) (idea.Idea, error) {
 	if s.reader != nil {
 		return s.reader.IdeaByID(id)
 	}
-	rows, err := s.db.Query(`SELECT `+ideaCols+ideaFrom+` WHERE i.id=?`, id)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+ideaCols+ideaFrom+` WHERE i.id=?`, id)
 	if err != nil {
 		return idea.Idea{}, err
 	}
@@ -84,7 +84,7 @@ func (s *Store) attachIdeaMeta(list []idea.Idea) error {
 	if err := s.attachIdeaWorkshopMeta(list, idx, args); err != nil {
 		return err
 	}
-	rows, err := s.db.Query(`SELECT idea_id, request_id FROM idea_requests WHERE idea_id IN (`+placeholders(len(ids))+`) ORDER BY request_id`, args...)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT idea_id, request_id FROM idea_requests WHERE idea_id IN (`+placeholders(len(ids))+`) ORDER BY request_id`, args...)
 	if err != nil {
 		return err
 	}
@@ -269,7 +269,7 @@ func (s *Store) openIdeasOf(project string) ([]idea.Idea, error) {
 	if s.reader != nil {
 		return s.reader.openIdeasOf(project)
 	}
-	rows, err := s.db.Query(`SELECT `+ideaCols+ideaFrom+` WHERE i.project=? AND i.state='open' ORDER BY i.id DESC LIMIT 500`, project)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+ideaCols+ideaFrom+` WHERE i.project=? AND i.state='open' ORDER BY i.id DESC LIMIT 500`, project)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +359,7 @@ func (s *Store) searchIdeas(f idea.Filter) ([]idea.Idea, error) {
 	}
 	q += ` ORDER BY i.id DESC LIMIT ?`
 	args = append(args, f.Limit*4)
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.db.QueryContext(s.ctx(), q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +511,7 @@ func (s *Store) ideasOfRequest(requestID int64) ([]idea.Idea, error) {
 	if s.reader != nil {
 		return s.reader.ideasOfRequest(requestID)
 	}
-	rows, err := s.db.Query(`SELECT `+ideaCols+ideaFrom+` JOIN idea_requests l ON l.idea_id=i.id WHERE l.request_id=? ORDER BY i.id`, requestID)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+ideaCols+ideaFrom+` JOIN idea_requests l ON l.idea_id=i.id WHERE l.request_id=? ORDER BY i.id`, requestID)
 	if err != nil {
 		return nil, err
 	}

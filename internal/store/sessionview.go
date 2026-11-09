@@ -89,7 +89,7 @@ func (a *ProjectAccess) matchFilter(s Session, f SessionFilter, skip int) bool {
 // allSessions liest alle Sessionzeilen, neueste zuerst. Die Tabelle trägt kein
 // raw und ist klein genug, um die lesbare Menge in Go zu bilden.
 func (s *Store) allSessions() ([]Session, error) {
-	rows, err := s.db.Query(`SELECT ` + sessionCols + ` FROM sessions ORDER BY last_seen_at DESC, id DESC`)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+sessionCols+` FROM sessions ORDER BY last_seen_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -468,6 +468,9 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	if q.Limit <= 0 || q.Limit > 100 {
 		q.Limit = 50
 	}
+	if q.Ctx == nil {
+		q.Ctx = s.ctx()
+	}
 	expr := matchExpr(q.Q, q.Kind)
 	if expr == "" {
 		return SearchPage{}, nil
@@ -504,13 +507,14 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	// was nicht lesbar ist, fällt danach in Go heraus (byID). Beide Wege liefern
 	// dieselben Zeilen.
 	var rows *sql.Rows
-	if len(readable) <= smallReadableSet {
+	switch {
+	case len(readable) <= smallReadableSet || !s.hasChunkMap():
 		rows, err = s.db.QueryContext(ctx, `WITH h AS MATERIALIZED (SELECT rowid AS rid, `+rankExpr+` AS r FROM sess_fts WHERE sess_fts MATCH ?)
 		SELECT ci.session_id, MIN(h.r), COUNT(*)
 		FROM h JOIN chunk_index ci ON ci.chunk_id = h.rid
 		WHERE ci.session_id IN (SELECT value FROM json_each(?))
 		GROUP BY ci.session_id`, expr, idsJSON(readable))
-	} else {
+	default:
 		rows, err = s.db.QueryContext(ctx, `WITH h AS MATERIALIZED (SELECT rowid AS rid, `+rankExpr+` AS r FROM sess_fts WHERE sess_fts MATCH ?)
 		SELECT ci.session_id, MIN(h.r), COUNT(*)
 		FROM h CROSS JOIN chunk_index ci INDEXED BY chunk_index_chunk ON ci.chunk_id = h.rid
@@ -795,14 +799,14 @@ func (s *Store) SessionWindow(id int64, from, around, limit int) (Window, error)
 	}
 	if from < 0 && around <= 0 {
 		var first sql.NullInt64
-		if err := s.db.QueryRow(`SELECT MIN(seq) FROM (SELECT seq FROM session_chunks WHERE session_id=? ORDER BY seq DESC LIMIT ?)`, id, limit).Scan(&first); err != nil {
+		if err := s.db.QueryRowContext(s.ctx(), `SELECT MIN(seq) FROM (SELECT seq FROM session_chunks WHERE session_id=? ORDER BY seq DESC LIMIT ?)`, id, limit).Scan(&first); err != nil {
 			return Window{}, err
 		}
 		from = int(first.Int64)
 	}
 	if around > 0 {
 		var first sql.NullInt64
-		if err := s.db.QueryRow(`SELECT MIN(seq) FROM (SELECT seq FROM session_chunks WHERE session_id=? AND seq < ? ORDER BY seq DESC LIMIT ?)`,
+		if err := s.db.QueryRowContext(s.ctx(), `SELECT MIN(seq) FROM (SELECT seq FROM session_chunks WHERE session_id=? AND seq < ? ORDER BY seq DESC LIMIT ?)`,
 			id, around, limit/2).Scan(&first); err != nil {
 			return Window{}, err
 		}
@@ -811,7 +815,7 @@ func (s *Store) SessionWindow(id int64, from, around, limit int) (Window, error)
 			from = int(first.Int64)
 		}
 	}
-	rows, err := s.db.Query(`SELECT seq, role, text, raw FROM session_chunks WHERE session_id=? AND seq >= ? ORDER BY seq LIMIT ?`, id, max(from, 0), limit)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT seq, role, text, raw FROM session_chunks WHERE session_id=? AND seq >= ? ORDER BY seq LIMIT ?`, id, max(from, 0), limit)
 	if err != nil {
 		return Window{}, err
 	}
@@ -828,18 +832,18 @@ func (s *Store) SessionWindow(id int64, from, around, limit int) (Window, error)
 	if err := rows.Err(); err != nil {
 		return Window{}, err
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM session_chunks WHERE session_id=?`, id).Scan(&w.Total); err != nil {
+	if err := s.db.QueryRowContext(s.ctx(), `SELECT COUNT(*) FROM session_chunks WHERE session_id=?`, id).Scan(&w.Total); err != nil {
 		return Window{}, err
 	}
 	if len(w.Chunks) > 0 {
 		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM session_chunks WHERE session_id=? AND seq < ?`, id, w.Chunks[0].Seq).Scan(&n); err != nil {
+		if err := s.db.QueryRowContext(s.ctx(), `SELECT COUNT(*) FROM session_chunks WHERE session_id=? AND seq < ?`, id, w.Chunks[0].Seq).Scan(&n); err != nil {
 			return Window{}, err
 		}
 		w.Earlier = n > 0
 		if w.Earlier {
 			var start sql.NullInt64
-			if err := s.db.QueryRow(`SELECT MIN(seq) FROM (SELECT seq FROM session_chunks WHERE session_id=? AND seq < ? ORDER BY seq DESC LIMIT ?)`,
+			if err := s.db.QueryRowContext(s.ctx(), `SELECT MIN(seq) FROM (SELECT seq FROM session_chunks WHERE session_id=? AND seq < ? ORDER BY seq DESC LIMIT ?)`,
 				id, w.Chunks[0].Seq, limit).Scan(&start); err != nil {
 				return Window{}, err
 			}
@@ -853,7 +857,7 @@ func (s *Store) SessionWindow(id int64, from, around, limit int) (Window, error)
 
 func (s *Store) maxSeq(id int64) int {
 	var m sql.NullInt64
-	_ = s.db.QueryRow(`SELECT MAX(seq) FROM session_chunks WHERE session_id=?`, id).Scan(&m)
+	_ = s.db.QueryRowContext(s.ctx(), `SELECT MAX(seq) FROM session_chunks WHERE session_id=?`, id).Scan(&m)
 	return int(m.Int64)
 }
 
@@ -870,7 +874,7 @@ func (s *Store) SessionHits(pa *ProjectAccess, sess Session, q, kind string) ([]
 	if expr == "" {
 		return nil, nil
 	}
-	rows, err := s.db.Query(`SELECT ci.seq FROM sess_fts JOIN chunk_index ci ON ci.chunk_id = sess_fts.rowid
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT ci.seq FROM sess_fts JOIN chunk_index ci ON ci.chunk_id = sess_fts.rowid
 		WHERE sess_fts MATCH ? AND ci.session_id = ? ORDER BY ci.seq`, expr, sess.ID)
 	if err != nil {
 		return nil, err
@@ -893,7 +897,7 @@ func (s *Store) SessionOutline(id int64) ([]transcript.Prompt, error) {
 	if s.reader != nil {
 		return s.reader.SessionOutline(id)
 	}
-	rows, err := s.db.Query(`SELECT seq, is_prompt, tool_calls, ts, CASE WHEN is_prompt=1 THEN text ELSE '' END
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT seq, is_prompt, tool_calls, ts, CASE WHEN is_prompt=1 THEN text ELSE '' END
 		FROM chunk_index WHERE session_id=? AND (is_prompt=1 OR tool_calls>0) ORDER BY seq`, id)
 	if err != nil {
 		return nil, err
@@ -940,7 +944,7 @@ func (s *Store) SessionLinks(pa *ProjectAccess, sessionIDs []int64) (map[int64][
 		project string
 	}
 	var reqs []reqLink
-	rows, err := s.db.Query(`SELECT sg.session_id, r.id, r.title, r.project, MIN(sg.chunk_seq)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT sg.session_id, r.id, r.title, r.project, MIN(sg.chunk_seq)
 		FROM request_sightings sg JOIN requests r ON r.id = sg.request_id
 		WHERE sg.session_id IN (SELECT value FROM json_each(?)) GROUP BY sg.session_id, r.id ORDER BY r.id`, string(ids))
 	if err != nil {
@@ -965,7 +969,7 @@ func (s *Store) SessionLinks(pa *ProjectAccess, sessionIDs []int64) (map[int64][
 		k    Knowledge
 	}
 	var knows []knowLink
-	krows, err := s.db.Query(`SELECT ev.session_id, k.id, k.title, k.project, k.machine, k.confidence, k.person, MIN(ev.chunk_seq)
+	krows, err := s.db.QueryContext(s.ctx(), `SELECT ev.session_id, k.id, k.title, k.project, k.machine, k.confidence, k.person, MIN(ev.chunk_seq)
 		FROM knowledge_evidence ev JOIN knowledge k ON k.id = ev.knowledge_id
 		WHERE ev.session_id IN (SELECT value FROM json_each(?)) GROUP BY ev.session_id, k.id ORDER BY k.id`, string(ids))
 	if err != nil {

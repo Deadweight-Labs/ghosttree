@@ -127,6 +127,8 @@ var writerMethodClasses = map[string]string{
 	"IndexProgress":                 "read",
 	"BrowseSessions":                "read",
 	"SearchTranscripts":             "read",
+	"ReadPoolSize":                  "read",
+	"WithContext":                   "administrative",
 	"SessionWindow":                 "read",
 	"SessionHits":                   "read",
 	"SessionOutline":                "read",

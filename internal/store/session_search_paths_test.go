@@ -58,3 +58,52 @@ func TestTranscriptSearchStopsWhenItsContextEnds(t *testing.T) {
 		}
 	}
 }
+
+// A database no server has migrated yet lacks chunk_index_chunk (a store opened
+// read-only on it): the search from the hits joins plainly instead of failing.
+func TestTranscriptSearchWithoutTheChunkMap(t *testing.T) {
+	f := newVisFixture(t)
+	if _, err := f.st.db.Exec(`DROP INDEX chunk_index_chunk`); err != nil {
+		t.Fatal(err)
+	}
+	old := smallReadableSet
+	t.Cleanup(func() { smallReadableSet = old })
+	pa := viewer(f.st, "person:1", "robin")
+	smallReadableSet = 1 << 30
+	want, err := f.st.SearchTranscripts(pa, SearchQuery{Q: "zebra", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	smallReadableSet = 0
+	got, err := f.st.SearchTranscripts(pa, SearchQuery{Q: "zebra", Limit: 10})
+	if err != nil {
+		t.Fatalf("without the index: %v", err)
+	}
+	a, _ := json.Marshal(want)
+	b, _ := json.Marshal(got)
+	if string(a) != string(b) {
+		t.Errorf("without the index:\n%s\nwant\n%s", b, a)
+	}
+}
+
+// The reads of a store view end with its context: every search kind of the web
+// page answers with the context's error instead of running on.
+func TestStoreViewStopsItsReadsWithItsContext(t *testing.T) {
+	f := newVisFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	v := f.st.WithContext(ctx)
+	if _, err := v.SearchKnowledgeWith("zebra", KnowledgeSearch{Limit: 5}); !errors.Is(err, context.Canceled) {
+		t.Errorf("knowledge: %v", err)
+	}
+	if _, err := v.ObjectFacts("request", []int64{1, 2}); !errors.Is(err, context.Canceled) {
+		t.Errorf("facts: %v", err)
+	}
+	if _, err := v.SearchTranscripts(viewer(v, "person:1", "robin"), SearchQuery{Q: "zebra", Limit: 5}); !errors.Is(err, context.Canceled) {
+		t.Errorf("transcripts: %v", err)
+	}
+	// The store itself is untouched.
+	if _, err := f.st.SearchTranscripts(viewer(f.st, "person:1", "robin"), SearchQuery{Q: "zebra", Limit: 5}); err != nil {
+		t.Errorf("the store after its view ended: %v", err)
+	}
+}

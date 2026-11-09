@@ -30,7 +30,7 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - The first start after the upgrade builds a narrow index from chunks to
   sessions (`chunk_index_chunk`). On a large database this takes about as long
   as reading `chunk_index` once (around a minute for three million chunks on
-  slow disks) and adds roughly 50 MB.
+  slow disks) and adds roughly 40 MB.
 
 ### Added
 
@@ -38,9 +38,16 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   hits (requests, ideas, knowledge, sessions, tasks, pains) as each kind is
   done, streamed from `/ui/search/stream`. Each kind has a time budget; one
   that runs over it is stopped and can be loaded again. Leaving the page, a new
-  search or Stop ends the search on the server, down to its SQL. Without
-  JavaScript the page searches before it is sent, as before, and now searches
-  the kinds at the same time.
+  search or Stop ends the search on the server: the queries of the search
+  paths are interrupted (the full-text, vector and fact reads of every kind;
+  helper reads such as the rendering of a hit run to their end). An account
+  has one running search; a new one ends the old. The kinds of all searches
+  together use one read connection less than the server has
+  (`--writer-read-connections`). Without JavaScript the page searches before
+  it is sent, as before, and now searches the kinds at the same time.
+- The search page and its stream write an `http_request` log line with route,
+  path (without the query, so no search text), status and duration, as the
+  API does.
 - Searching session transcripts no longer reads every chunk of every readable
   session: the full-text hits and the session embeddings look up their session
   in a narrow index, and the kinds of one search share a single embedding of the

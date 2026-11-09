@@ -63,7 +63,7 @@ func (s *Store) ideasMotivatedBy(painID int64) []idea.Idea {
 	if s.reader != nil {
 		return s.reader.ideasMotivatedBy(painID)
 	}
-	rows, err := s.db.Query(`SELECT `+ideaCols+ideaFrom+` JOIN entity_links l ON l.dst_kind='idea' AND l.dst_id=i.id
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+ideaCols+ideaFrom+` JOIN entity_links l ON l.dst_kind='idea' AND l.dst_id=i.id
 		WHERE l.src_kind='pain' AND l.src_id=? AND l.kind='motivates' ORDER BY i.id`, painID)
 	if err != nil {
 		return nil
@@ -194,7 +194,7 @@ func (s *Store) painRows(f pain.Filter) ([]pain.Pain, error) {
 		order += ` ELSE ` + strconv.Itoa(len(f.Projects)) + ` END, `
 	}
 	args = append(args, limit)
-	rows, err := s.db.Query(`SELECT `+painCols+painFrom+` WHERE `+strings.Join(where, ` AND `)+
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+painCols+painFrom+` WHERE `+strings.Join(where, ` AND `)+
 		` ORDER BY `+order+`CASE p.state WHEN 'active' THEN 0 WHEN 'mitigated' THEN 1 WHEN 'accepted' THEN 2 WHEN 'resolved' THEN 3 ELSE 4 END, p.id LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -208,7 +208,7 @@ func (s *Store) painsByID(ids []int64) (map[int64]pain.Pain, error) {
 	for i, id := range ids {
 		args[i] = id
 	}
-	rows, err := s.db.Query(`SELECT `+painCols+painFrom+` WHERE p.id IN (`+placeholders(len(ids))+`)`, args...)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+painCols+painFrom+` WHERE p.id IN (`+placeholders(len(ids))+`)`, args...)
 	if err != nil {
 		return nil, err
 	}

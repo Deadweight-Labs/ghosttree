@@ -276,3 +276,45 @@ func TestSearchLivePageIsTheFrame(t *testing.T) {
 		t.Errorf("the frames took %v", time.Since(start))
 	}
 }
+
+// A quick filter with a line that does not run shows no group at all, not the
+// hits of the lines before it, on the page, the frame and the stream alike.
+func TestSearchPresetWithABrokenLineShowsNothing(t *testing.T) {
+	e := seedSearchAll(t)
+	pa := e.St.Access(store.Principal{ID: "person:1", Label: "alice"})
+	if _, err := pa.SavePreset(shellProject, "user", "mixed", "", []string{"zebrafish", "zebrafish topic:nosuchtopic"}); err != nil {
+		t.Fatal(err)
+	}
+	base := "/ui/search?preset=mixed&project=" + url.QueryEscape(shellProject)
+	_, page := e.get(t, e.Owner, base)
+	if strings.Contains(page, `class="ht"`) || !strings.Contains(page, "nosuchtopic") {
+		t.Errorf("the page shows hits or no notice:\n%s", page)
+	}
+	if _, frame := e.get(t, e.Owner, base+"&live=1"); strings.Contains(frame, "data-search-live") {
+		t.Error("the frame opens a stream")
+	}
+	if events := readSearchStream(t, e.Owner, e.Base+strings.Replace(base, "/ui/search?", "/ui/search/stream?", 1)); len(events) != 1 {
+		t.Errorf("the stream searched: %+v", events)
+	}
+}
+
+// The live page narrowed to a kind marks that kind in the stream as the page does.
+func TestSearchStreamMarksTheNarrowedKind(t *testing.T) {
+	e := seedSearchAll(t)
+	_, frame := e.get(t, e.Owner, "/ui/search?q=zebrafish&live=1&kind=pains")
+	if !strings.Contains(frame, `data-search-live="/ui/search/stream?kind=pains&amp;q=zebrafish"`) {
+		t.Fatalf("the stream of the frame forgets the kind:\n%s", frame)
+	}
+	for _, ev := range readSearchStream(t, e.Owner, e.Base+"/ui/search/stream?kind=pains&q=zebrafish") {
+		if ev.Name != "group" || ev.Side == "" {
+			continue
+		}
+		if on := strings.Contains(ev.Side, `class="frow on"`); on != (ev.Key == "pains") {
+			t.Errorf("%s marked %v", ev.Key, on)
+		}
+	}
+	// A kind the viewer does not get marks nothing and is not passed on.
+	if _, frame := e.get(t, e.Guest, "/ui/search?q=zebrafish&live=1&kind=sessions"); strings.Contains(frame, "kind=sessions") {
+		t.Error("the guest's frame passes on a kind he does not get")
+	}
+}

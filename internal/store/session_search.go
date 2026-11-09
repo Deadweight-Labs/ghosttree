@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/embed"
@@ -87,9 +89,13 @@ func (s *Store) sessionVectorRanking(ctx context.Context, cfg *EmbedSearchConfig
 	// Chunks steht in der schmalen Zuordnung chunk_index_chunk. Ohne die
 	// erzwungene Reihenfolge ginge SQLite von der lesbaren Menge aus und läse alle
 	// Chunks aller lesbaren Sessions.
+	byChunk := ""
+	if s.hasChunkMap() {
+		byChunk = "INDEXED BY chunk_index_chunk"
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT ci.session_id, e.chunk_id, ci.seq, e.scale, e.vec
 		FROM session_embeddings e
-		CROSS JOIN chunk_index ci INDEXED BY chunk_index_chunk ON ci.chunk_id = e.chunk_id
+		CROSS JOIN chunk_index ci `+byChunk+` ON ci.chunk_id = e.chunk_id
 		CROSS JOIN sessions se ON se.id = ci.session_id
 		WHERE e.model = ? AND e.prefix_version = ? AND (? = '' OR se.external_id != ?) AND `+r.where,
 		append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion(), exclude, exclude}, r.args...)...)
@@ -160,7 +166,7 @@ func (s *Store) semanticText(harness string, b sessionBest) (snippet, kind strin
 	snippet = transcript.OneLine(cleanSessionText(harness, b.seq, raws[b.chunk]), semanticSnippetRunes)
 	kind = "assistant"
 	var role string
-	if err := s.db.QueryRow(`SELECT role FROM chunk_index WHERE chunk_id = ?`, b.chunk).Scan(&role); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := s.db.QueryRowContext(s.ctx(), `SELECT role FROM chunk_index WHERE chunk_id = ?`, b.chunk).Scan(&role); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", "", err
 	}
 	if role == "user" {
@@ -233,7 +239,7 @@ func (s *Store) hybridSessions(q string, o SessionSearch, qvec []float32, cfg *E
 		for i, id := range onlyVec {
 			args[i] = id
 		}
-		rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions WHERE id IN (`+placeholders(len(args))+`)`, args...)
+		rows, err := s.db.QueryContext(s.ctx(), `SELECT `+sessionCols+` FROM sessions WHERE id IN (`+placeholders(len(args))+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -342,6 +348,12 @@ func (s *Store) transcriptQueryVector(q SearchQuery) func() ([]float32, *EmbedSe
 	}
 	ch := make(chan answer, 1)
 	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				slog.Error("search_panic", "part", "transcript query vector", "panic", fmt.Sprint(v))
+				ch <- answer{}
+			}
+		}()
 		vec, cfg, _ := s.queryVectorCtx(q.ctx(), q.Q, SearchAuto, KindSession)
 		ch <- answer{vec, cfg}
 	}()
