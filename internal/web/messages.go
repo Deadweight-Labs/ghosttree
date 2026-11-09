@@ -1077,7 +1077,6 @@ var messages = map[string]string{
 	"ref.kind.idea":                 "Idea",
 	"ref.kind.task":                 "Task",
 	"issue.requirement_n":           "Requirement %d",
-	"issue.knowledge_n":             "Knowledge #%s",
 	"issue.ev.created":              "created this issue",
 	"issue.ev.corrected":            "edited the issue",
 	"issue.ev.moved":                "moved the issue",

@@ -117,9 +117,9 @@ func (a *app) painItems(l lang, pa *store.ProjectAccess, p pain.Pain, events []p
 		case "corrected":
 			it.Icon, it.Head, it.Body = "pencil", sentence("pains.ev.corrected"), mdText(e.Note)
 		case "link_added":
-			it.Icon, it.Head = "link", sentence("pains.ev.link_added", html.EscapeString(ellipsize(linkDataText(e.Data), 120)))
+			it.Icon, it.Head = "link", sentence("pains.ev.link_added", painLinkTarget(l, e.Data))
 		case "link_removed":
-			it.Icon, it.Head = "x", sentence("pains.ev.link_removed", html.EscapeString(ellipsize(linkDataText(e.Data), 120)))
+			it.Icon, it.Head = "x", sentence("pains.ev.link_removed", painLinkTarget(l, e.Data))
 		default:
 			it.Head = template.HTML(html.EscapeString(label(l, painEventKeys, e.Kind)))
 		}

@@ -144,6 +144,13 @@
     if (!done) return;
     if (!waits.length) done(); else Promise.all(waits).then(function () { done(); });
   }
+  // The long form of a pill (data-long) says its title: from the answer, or from
+  // the card the server wrote into the page.
+  function titleOf(key) {
+    if (remote[key] && remote[key].titel) return remote[key].titel;
+    var t = template(key), pt = t && t.content.querySelector(".pc-t");
+    return pt ? pt.textContent : "";
+  }
   // A pill the preview wrote as a plain span gets its address once it is known.
   function linkify(root) {
     for (var s of $$("span.ref[data-ref]", root)) {
@@ -152,13 +159,13 @@
       var a = node("a", s.className);
       a.setAttribute("href", href);
       a.setAttribute("data-ref", s.getAttribute("data-ref"));
+      if (s.hasAttribute("data-long")) a.setAttribute("data-long", "");
       while (s.firstChild) a.appendChild(s.firstChild);
       s.replaceWith(a);
     }
-    // A pill that asks for its title (data-long) gets it from the answer.
     for (var p of $$("[data-ref][data-long]", root)) {
-      var info = remote[p.getAttribute("data-ref")];
-      if (info && info.titel && window.GTPill) window.GTPill.setTitle(p, info.titel);
+      var title = titleOf(p.getAttribute("data-ref"));
+      if (title && window.GTPill) window.GTPill.setTitle(p, title);
     }
   }
   // resolve turns the marks a text wrote for a "#1970" (ui-md.js) into pills:
@@ -305,5 +312,7 @@
   scan(document);
   // ui-md.js ran before this script: its marks of "#1970" are resolved now.
   resolve(document);
+  // The long form of the pills in a sentence says its title (the page's card or /ui/refs).
+  if (document.querySelector("[data-ref][data-long]")) lookup();
   window.GTCards = { scan: scan, hide: hide };
 })();

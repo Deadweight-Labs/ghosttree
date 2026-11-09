@@ -1079,7 +1079,6 @@ var messagesDE = map[string]string{
 	"ref.kind.task":                 "Aufgabe",
 	"avatar.agent_of":               "%[1]s · Agent von %[2]s",
 	"issue.requirement_n":           "Anforderung %d",
-	"issue.knowledge_n":             "Wissen #%s",
 	"issue.ev.created":              "hat das Issue angelegt",
 	"issue.ev.corrected":            "hat das Issue bearbeitet",
 	"issue.ev.moved":                "hat das Issue verschoben",

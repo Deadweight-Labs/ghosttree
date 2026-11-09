@@ -84,6 +84,9 @@ type pillSpec struct {
 	Extra string
 	// Name is what a screen reader says instead of the text ("Issue 602").
 	Name string
+	// Long asks the script for the title: in a sentence of the history the pill
+	// is written out (ui-refs.js fills it from the card of the page or /ui/refs).
+	Long bool
 }
 
 // pillHTML writes one pill; with an empty Href it is a span, not a link. The
@@ -112,6 +115,9 @@ func pillHTML(s pillSpec) template.HTML {
 	}
 	if s.Ref != "" {
 		b.WriteString(` data-ref="` + html.EscapeString(s.Ref) + `"`)
+		if s.Long {
+			b.WriteString(` data-long`)
+		}
 	} else if !s.Card.empty() {
 		if raw, err := json.Marshal(s.Card); err == nil {
 			b.WriteString(` data-pc="` + html.EscapeString(string(raw)) + `"`)
@@ -132,12 +138,23 @@ func pillHTML(s pillSpec) template.HTML {
 // numberedPill is the pill of a numbered kind (request, pain, idea, task,
 // decision, feature): its short form "#602", with the title when it is known.
 func numberedPill(l lang, kind string, n int64, href, title string) template.HTML {
+	return numberedPillOf(l, kind, n, href, title, false)
+}
+
+// longPill is the pill of a numbered kind for a sentence: icon, number and the
+// title, which the script adds. A title too long for the line is cut with an
+// ellipsis; the card says it whole.
+func longPill(l lang, kind string, n int64, href string) template.HTML {
+	return numberedPillOf(l, kind, n, href, "", true)
+}
+
+func numberedPillOf(l lang, kind string, n int64, href, title string, long bool) template.HTML {
 	k, ok := refKinds[kind]
 	if !ok {
 		k = refKinds["request"]
 	}
 	return pillHTML(pillSpec{Class: k.Class, Icon: template.HTML(k.Icon), Text: "#" + strconv.FormatInt(n, 10),
-		Title: title, Href: href, Ref: k.Prefix + "-" + strconv.FormatInt(n, 10),
+		Title: title, Href: href, Ref: k.Prefix + "-" + strconv.FormatInt(n, 10), Long: long,
 		Name: strings.TrimSpace(l.msg(k.Key) + " " + strconv.FormatInt(n, 10) + " " + title)})
 }
 

@@ -328,10 +328,10 @@ func (a *app) featureItems(l lang, pa *store.ProjectAccess, view *repoView, vers
 		}
 		var pills strings.Builder
 		if ver.Idea > 0 {
-			pills.WriteString(" " + string(refPillHTML(l, "idea", ver.Idea, view.Href+"/ideas/"+strconv.FormatInt(ver.Idea, 10))))
+			pills.WriteString(" " + string(longPill(l, "idea", ver.Idea, view.Href+"/ideas/"+strconv.FormatInt(ver.Idea, 10))))
 		}
 		for _, req := range ver.Requests {
-			pills.WriteString(" " + string(refPillHTML(l, "request", req, view.Href+"/issues/"+strconv.FormatInt(req, 10))))
+			pills.WriteString(" " + string(longPill(l, "request", req, view.Href+"/issues/"+strconv.FormatInt(req, 10))))
 		}
 		it.Head += template.HTML(pills.String())
 		items = append(items, it)
