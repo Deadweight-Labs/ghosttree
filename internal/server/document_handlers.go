@@ -3,12 +3,14 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	docwork "github.com/Deadweight-Labs/ghosttree/internal/doc"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -29,8 +31,7 @@ type createDocumentRequest struct {
 
 func (a *api) createDocument(w http.ResponseWriter, r *http.Request) {
 	var req createDocumentRequest
-	if err := readJSON(r, &req); err != nil {
-		writeStoreError(w, http.StatusBadRequest, err)
+	if !readDocumentJSON(w, r, &req) {
 		return
 	}
 	d := req.Document
@@ -44,7 +45,7 @@ func (a *api) createDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateDocumentBody(req.Body); err != nil {
-		writeStoreError(w, http.StatusBadRequest, err)
+		writeDocumentBodyError(w, req.Body, err)
 		return
 	}
 	if !a.gateProject(w, r, d.Project) {
@@ -59,6 +60,7 @@ func (a *api) createDocument(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	a.stampDocumentRevision(r, saved.ID, 1)
 	writeJSON(w, 200, saved)
 }
 
@@ -69,8 +71,7 @@ func (a *api) importDocumentMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in store.MigratedDocument
-	if err := readJSON(r, &in); err != nil {
-		writeStoreError(w, http.StatusBadRequest, err)
+	if !readDocumentJSON(w, r, &in) {
 		return
 	}
 	in.RunID = runID
@@ -85,7 +86,7 @@ func (a *api) importDocumentMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateDocumentBody(in.Body); err != nil {
-		writeStoreError(w, http.StatusBadRequest, err)
+		writeDocumentBodyError(w, in.Body, err)
 		return
 	}
 	if !a.gateProject(w, r, in.Document.Project) {
@@ -94,10 +95,15 @@ func (a *api) importDocumentMigration(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).Check(in.Document.Project, store.ResDocument, store.ActCreate, store.Object{Own: true})) {
 		return
 	}
-	saved, err := a.st.ImportDocument(in)
+	saved, created, err := a.st.ImportDocument(in)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
+	}
+	// A repeated import writes nothing; its revision 1 belongs to whoever
+	// imported first and keeps that stamp.
+	if created {
+		a.stampDocumentRevision(r, saved.ID, 1)
 	}
 	writeJSON(w, http.StatusOK, saved)
 }
@@ -109,12 +115,11 @@ func (a *api) pushDocumentRevision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req documentRevisionRequest
-	if err := readJSON(r, &req); err != nil {
-		writeStoreError(w, http.StatusBadRequest, err)
+	if !readDocumentJSON(w, r, &req) {
 		return
 	}
 	if err := validateDocumentBody(req.Body); err != nil {
-		writeStoreError(w, http.StatusBadRequest, err)
+		writeDocumentBodyError(w, req.Body, err)
 		return
 	}
 	if !a.checkDocument(w, r, id, store.ActEdit) {
@@ -129,10 +134,53 @@ func (a *api) pushDocumentRevision(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	a.stampDocumentRevision(r, saved.ID, req.BaseRevision+1)
 	writeJSON(w, 200, saved)
 }
 
+// stampDocumentRevision records who wrote a revision that this request just
+// stored (REQ-620): every revision has its own writer, so the stamp is keyed by
+// the revision row, not by the document. Callers name the revision they wrote,
+// never "the head", which another writer may have moved meanwhile.
+func (a *api) stampDocumentRevision(r *http.Request, id int64, revision int) {
+	rev, err := a.st.DocumentRevision(id, revision)
+	if err != nil {
+		return
+	}
+	a.stampActor(r, actor.DocRevision, rev.ID, 0)
+}
+
+// readDocumentJSON reads the request of a write that carries a document text.
+// The request may be larger than the text by its JSON escapes, so the reader
+// stops at twice the text limit; the text itself is checked against the limit
+// in validateDocumentBody. Either way the answer is 413 document_too_large.
+func readDocumentJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 2*docwork.MaxBodyBytes+64<<10)
+	if err := readJSON(r, v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeCoded(w, http.StatusRequestEntityTooLarge, "document_too_large", fmt.Sprintf("the request is larger than a document may be (%d MB)", docwork.MaxBodyBytes>>20))
+			return false
+		}
+		writeStoreError(w, http.StatusBadRequest, err)
+		return false
+	}
+	return true
+}
+
+// writeDocumentBodyError answers a text validateDocumentBody refused.
+func writeDocumentBodyError(w http.ResponseWriter, body string, err error) {
+	if len(body) > docwork.MaxBodyBytes {
+		writeCoded(w, http.StatusRequestEntityTooLarge, "document_too_large", err.Error())
+		return
+	}
+	writeStoreError(w, http.StatusBadRequest, err)
+}
+
 func validateDocumentBody(body string) error {
+	if len(body) > docwork.MaxBodyBytes {
+		return docwork.TooLarge(len(body))
+	}
 	if !utf8.ValidString(body) {
 		return fmt.Errorf("body is not valid UTF-8")
 	}

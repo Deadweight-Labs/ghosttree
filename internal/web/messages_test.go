@@ -9,7 +9,7 @@ import (
 )
 
 // p1Templates sind die Vorlagen, deren Texte vollständig im Katalog liegen.
-var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html", "templates/coord.html", "templates/knowledge.html", "templates/orgs.html", "templates/device.html", "templates/profile.html", "templates/agentcontrol.html", "templates/agents.html", "templates/join.html", "templates/pages.html", "templates/inbox.html", "templates/repo.html", "templates/issues.html", "templates/issue.html", "templates/newissue.html", "templates/pain.html", "templates/idea.html", "templates/search.html", "templates/components.html", "templates/features.html", "templates/pulls.html", "templates/machines.html", "templates/workshop.html"}
+var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html", "templates/coord.html", "templates/knowledge.html", "templates/orgs.html", "templates/device.html", "templates/profile.html", "templates/agentcontrol.html", "templates/agents.html", "templates/join.html", "templates/pages.html", "templates/inbox.html", "templates/repo.html", "templates/issues.html", "templates/issue.html", "templates/newissue.html", "templates/pain.html", "templates/idea.html", "templates/search.html", "templates/components.html", "templates/features.html", "templates/pulls.html", "templates/machines.html", "templates/workshop.html", "templates/docs.html"}
 
 var (
 	scriptRE   = regexp.MustCompile(`(?s)<script>.*?</script>`)
@@ -118,7 +118,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:register|err|runbooks|agents|room|shell|nav|inbox|repo|ui|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|context|search|cards|page|explain|usage|garden|home|review|ref|avatar|issues|issue|ideas|newissue|stub|live|settings|features|workshop|pulls|commits|commit|comments|packages|anchor)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:register|err|runbooks|agents|room|shell|nav|inbox|repo|ui|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|context|search|cards|page|explain|usage|garden|home|review|ref|avatar|issues|issue|ideas|newissue|stub|live|settings|features|workshop|pulls|commits|commit|comments|packages|anchor|docs)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).

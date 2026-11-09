@@ -233,6 +233,9 @@ func TestParseRef(t *testing.T) {
 		{"room:12", Ref{Kind: KindRoom, ID: 12}},
 		{"session:ab12", Ref{Kind: KindSession, Text: "ab12"}},
 		{"doc:plan", Ref{Kind: KindDocument, Text: "plan"}},
+		{"doc:acmedev/voiceapp/voice-report", Ref{Kind: KindDocument, Text: "voice-report", Project: "github.com/acmedev/voiceapp"}},
+		{"doc:AcmeDev/VoiceApp/x", Ref{Kind: KindDocument, Text: "x", Project: "github.com/acmedev/voiceapp"}},
+		{"doc:gitlab.example.com/team/app/plan", Ref{Kind: KindDocument, Text: "plan", Project: "gitlab.example.com/team/app"}},
 		{"runbook:deploy-prod", Ref{Kind: KindRunbook, Text: "deploy-prod"}},
 		{"branch:feat/gn-603", Ref{Kind: KindBranch, Text: "feat/gn-603"}},
 		{"inbox", Ref{Kind: KindInbox}},
@@ -242,7 +245,7 @@ func TestParseRef(t *testing.T) {
 	}
 	for _, c := range cases {
 		got, err := ParseRef(c.in)
-		if err != nil || got.Kind != c.want.Kind || got.ID != c.want.ID || got.Num != c.want.Num || got.Text != c.want.Text {
+		if err != nil || got.Kind != c.want.Kind || got.ID != c.want.ID || got.Num != c.want.Num || got.Text != c.want.Text || got.Project != c.want.Project {
 			t.Errorf("ParseRef(%q) = %+v, %v; want %+v", c.in, got, err, c.want)
 		}
 	}
@@ -250,7 +253,7 @@ func TestParseRef(t *testing.T) {
 	if err != nil || p.Kind != KindPreset || p.Text != "pr-ergebnis" || len(p.Args) != 1 || p.Args[0] != "155" {
 		t.Errorf("preset: %+v %v", p, err)
 	}
-	for _, bad := range []string{"", "   ", "banane", "pr:", "pr:x", "commit:xyz", "#abc", "REQ-", "room:0", "preset:", "path:"} {
+	for _, bad := range []string{"", "   ", "banane", "pr:", "pr:x", "commit:xyz", "#abc", "REQ-", "room:0", "preset:", "path:", "doc:", "doc:voiceapp/x", "doc:a/b/c/d/e", "doc:owner/repo/"} {
 		if got, err := ParseRef(bad); err == nil {
 			t.Errorf("ParseRef(%q) = %+v, want an error", bad, got)
 		}
@@ -289,7 +292,10 @@ func (fakeAPI) GetDecision(id int64) (idea.Decision, error) {
 func (fakeAPI) KnowledgeByID(id int64) (store.Knowledge, error) {
 	return store.Knowledge{ID: id, Title: "K", Type: "note", Status: "active"}, nil
 }
-func (fakeAPI) Documents(string, string, bool) ([]store.Document, error) {
+func (fakeAPI) Documents(p string, _ string, _ bool) ([]store.Document, error) {
+	if p == "github.com/acmedev/voiceapp" {
+		return []store.Document{{Slug: "voice-report", Title: "Bericht", Project: p, Status: "active", HeadRevision: 2}}, nil
+	}
 	return []store.Document{{Slug: "plan", Title: "Plan", Project: project, Status: "active", HeadRevision: 1}}, nil
 }
 func (fakeAPI) ThreadByID(id int64, _ string) (store.Thread, error) {
@@ -319,26 +325,27 @@ func testEnv(t *testing.T) Env {
 func TestResolveEveryShortFormHasOneCanonicalURL(t *testing.T) {
 	e := testEnv(t)
 	want := map[string]string{
-		"REQ-596":                repo + "/issues/596",
-		"REQ-596#1":              "",
-		"TASK-124":               repo + "/tasks/124",
-		"PAIN-57":                repo + "/pains/57",
-		"IDEA-3":                 repo + "/ideas/3",
-		"FEAT-2":                 repo + "/features/2",
-		"DEC-9":                  repo + "/decisions/9",
-		"#4295":                  repo + "/knowledge/4295",
-		"PKG-1":                  repo + "/packages/1",
-		"room:7":                 repo + "/rooms/7",
-		"session:ab12":           repo + "/sessions/ab12",
-		"doc:plan":               repo + "/docs/plan",
-		"runbook:deploy":         repo + "/runbooks/deploy",
-		"preset:pr-ergebnis 155": srv + "/ui/presets/repo/pr-ergebnis?pr=155&project=deadweight-labs%2Fghosttree",
-		"pr:155":                 repo + "/pulls/155",
-		"commit:2d950bf":         repo + "/commit/2d950bf",
-		"branch:feat/x":          repo + "/packages?branch=feat%2Fx",
-		"internal/store/a.go":    repo + "/blob/feat/gn-603/internal/store/a.go",
-		"is:open label:bug":      repo + "/issues?q=is%3Aopen+label%3Abug",
-		"inbox":                  srv + "/ui/inbox",
+		"REQ-596":                           repo + "/issues/596",
+		"REQ-596#1":                         "",
+		"TASK-124":                          repo + "/tasks/124",
+		"PAIN-57":                           repo + "/pains/57",
+		"IDEA-3":                            repo + "/ideas/3",
+		"FEAT-2":                            repo + "/features/2",
+		"DEC-9":                             repo + "/decisions/9",
+		"#4295":                             repo + "/knowledge/4295",
+		"PKG-1":                             repo + "/packages/1",
+		"room:7":                            repo + "/rooms/7",
+		"session:ab12":                      repo + "/sessions/ab12",
+		"doc:plan":                          repo + "/docs/plan",
+		"doc:acmedev/voiceapp/voice-report": srv + "/ui/acmedev/voiceapp/docs/voice-report",
+		"runbook:deploy":                    repo + "/runbooks/deploy",
+		"preset:pr-ergebnis 155":            srv + "/ui/presets/repo/pr-ergebnis?pr=155&project=deadweight-labs%2Fghosttree",
+		"pr:155":                            repo + "/pulls/155",
+		"commit:2d950bf":                    repo + "/commit/2d950bf",
+		"branch:feat/x":                     repo + "/packages?branch=feat%2Fx",
+		"internal/store/a.go":               repo + "/blob/feat/gn-603/internal/store/a.go",
+		"is:open label:bug":                 repo + "/issues?q=is%3Aopen+label%3Abug",
+		"inbox":                             srv + "/ui/inbox",
 	}
 	for in, u := range want {
 		if in == "REQ-596#1" {

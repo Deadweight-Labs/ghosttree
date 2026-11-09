@@ -30,7 +30,7 @@ var guestQualifiers = []string{query.KeyBranch, query.KeyPackage, query.KeyFor}
 
 // webKinds sind die Arten, die die Seite in Gruppen zeigt; für die anderen
 // (Kriterien, Features, Dateien, Nachrichten) gibt es API, MCP und CLI.
-var webKinds = []string{query.KindRequest, query.KindIdea, query.KindPain, query.KindTask, query.KindKnowledge, query.KindSession}
+var webKinds = []string{query.KindRequest, query.KindIdea, query.KindPain, query.KindTask, query.KindKnowledge, query.KindSession, query.KindDocument}
 
 // searchLine ist eine Suchzeile, bereit zum Lauf.
 type searchLine struct {

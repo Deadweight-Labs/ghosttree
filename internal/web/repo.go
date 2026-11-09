@@ -53,7 +53,7 @@ type repoTab struct {
 }
 
 // repoTabIcons names the icon of each tab of the band.
-var repoTabIcons = map[string]string{"code": "code", "issues": "issue", "pulls": "pr", "knowledge": "book", "runbooks": "play", "rooms": "chat", "sessions": "term", "commits": "commit", "tasks": "tasks", "packages": "list", "settings": "gear"}
+var repoTabIcons = map[string]string{"code": "code", "issues": "issue", "pulls": "pr", "knowledge": "book", "docs": "file", "runbooks": "play", "rooms": "chat", "sessions": "term", "commits": "commit", "tasks": "tasks", "packages": "list", "settings": "gear"}
 
 // Band is the tab band under the header: the row, and behind the separator the
 // tabs of the second group.
@@ -245,6 +245,8 @@ func (a *app) repoRoute(w http.ResponseWriter, r *http.Request) {
 		h = a.featuresPage
 	case "knowledge":
 		h = a.knowledgePage
+	case "docs":
+		h = a.docsPage
 	case "review", "context":
 		// Pages of the knowledge tab: the tab stays open in the band.
 		h = a.reviewPage
@@ -318,6 +320,9 @@ func (a *app) repoDetail(w http.ResponseWriter, r *http.Request, remote, tab, id
 	case "knowledge":
 		a.knowledgeInRepo(w, r, remote, id)
 		return
+	case "docs":
+		a.docPage(w, r, remote, id)
+		return
 	case "sessions":
 		a.sessionInRepo(w, r, remote, id)
 		return
@@ -362,6 +367,10 @@ func (a *app) repoViewFor(r *http.Request, pa *store.ProjectAccess, kind viewerK
 	tab("issues", "repo.tab.issues", a.openIssues(pa, remote), false)
 	tab("pulls", "repo.tab.pulls", a.pullCount(pa, remote), false)
 	tab("knowledge", "repo.tab.knowledge", a.knowledgeCount(pa, remote), false)
+	// Documents: the tab shows once there is one the viewer may read.
+	if n := a.docCount(pa, remote); n > 0 || current == "docs" {
+		tab("docs", "repo.tab.docs", countText(n), false)
+	}
 	tab("runbooks", "repo.tab.runbooks", "", false)
 	// Behind the separator, as in the mock: rooms, then the lists that show as icon
 	// with their number (sessions, features, commits), settings last.

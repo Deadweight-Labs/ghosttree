@@ -633,6 +633,12 @@ CREATE TABLE IF NOT EXISTS document_revisions(
   person TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   UNIQUE(document_id,revision));
+CREATE TABLE IF NOT EXISTS document_slugs(
+  project TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  moved_at TEXT NOT NULL,
+  PRIMARY KEY(project,slug)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS coord_agents(
   id INTEGER PRIMARY KEY,
   external_id TEXT NOT NULL UNIQUE,
