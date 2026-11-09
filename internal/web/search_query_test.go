@@ -126,7 +126,7 @@ func TestSearchSaysWhichQualifierIsUnknownAndWhichGuestsDoNotGet(t *testing.T) {
 		t.Errorf("guest with the default branch is refused")
 	}
 	// A kind that the page does not show in groups is said, not dropped silently.
-	if p := searchPageOf(t, e.Owner, e, "kind:file Needle"); !strings.Contains(p, "file are searched with the API") {
+	if p := searchPageOf(t, e.Owner, e, "kind:file Needle"); !strings.Contains(p, "Not shown: files") {
 		t.Errorf("a kind without a group is not said")
 	}
 	// A topic needs a project, and an unknown one is an error, not an empty answer.

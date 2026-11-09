@@ -248,7 +248,7 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 	me := browserPrincipal(r).Label
 	for _, d := range ws.Decisions {
 		wd := workshopDecision{ID: d.ID, Num: d.HumanID(), Question: d.Question, Detail: bodyBlocks(d.Detail, 0), State: d.State, StateLabel: label(l, workshopDecisionKeys, d.State),
-			Tone: workshopDecisionTone[d.State], WayLabel: label(l, workshopWayKeys, d.Way), WayWhy: strings.Join(d.WayWhy, "; "), Open: d.State == idea.DecisionOpen,
+			Tone: workshopDecisionTone[d.State], WayLabel: label(l, workshopWayKeys, d.Way), WayWhy: workshopWhy(l, d.WayWhy), Open: d.State == idea.DecisionOpen,
 			Answer: d.Answer, Reason: d.Reason, Trigger: d.Trigger, DecidedBy: d.DecidedBy, DecidedAge: age(d.DecidedAt)}
 		if wd.Open {
 			w.OpenCount++
@@ -495,3 +495,28 @@ func (a *app) workshopReopen(w http.ResponseWriter, r *http.Request) {
 }
 
 var _ = time.Second
+
+// workshopWhyKeys names, in the reader's language, the reasons the idea package
+// gives for a question that a person has to decide.
+var workshopWhyKeys = map[string]string{
+	"not easily reversible":                                      "workshop.why.irreversible",
+	"touches security or permissions":                            "workshop.why.security",
+	"costs money or capacity":                                    "workshop.why.cost",
+	"reaches outside: third-party services or public interfaces": "workshop.why.external",
+	"breaks the data model":                                      "workshop.why.data_model",
+	"sets the product direction":                                 "workshop.why.product",
+	"people disagree":                                            "workshop.why.people",
+	"is not local":                                               "workshop.why.nonlocal",
+	"departs from existing conventions or decisions":             "workshop.why.convention",
+}
+
+func workshopWhy(l lang, reasons []string) string {
+	out := make([]string, 0, len(reasons))
+	for _, r := range reasons {
+		if key, ok := workshopWhyKeys[r]; ok {
+			r = l.msg(key)
+		}
+		out = append(out, r)
+	}
+	return strings.Join(out, "; ")
+}

@@ -15,7 +15,7 @@
 
 {{define "ctdesc"}}<section class="ct-box{{if .Page}} ct-readme{{end}}" aria-label="{{t "code.desc"}}">
 <div class="ct-bh">{{template "cticon" "ghost"}}<span class="ct-t">{{t "code.desc"}}</span>{{if and .By (not .Page)}}<span class="ct-by">{{t "code.by" .By}}{{if .Updated}}, {{ago .Updated}}{{end}}</span>{{else}}<span class="ct-pl ct-mono">{{.Label}}</span>{{end}}<span class="ct-sp"></span>{{if .Area}}<span class="ct-chip ct-nw">{{t "code.area" .Area}}</span>{{end}}
-<details class="ct-edit" id="ct-edit"{{if .Empty}} open{{end}}><summary class="gbtn{{if and .Page (not .Empty)}} ct-icon ct-quiet{{end}}"{{if and .Page (not .Empty)}} aria-label="{{t "code.edit"}}" title="{{t "code.edit"}}"{{end}}>{{if .Empty}}{{t "code.write"}}{{else}}{{template "cticon" "pencil"}}{{if not .Page}}{{t "code.edit"}}{{end}}{{end}}</summary><div class="ct-edit-b">{{template "gcmd" .Cmd}}</div></details></div>
+{{if .Empty}}</div><div class="ct-empty">{{template "gcmd" .Cmd}}</div>{{else}}<details class="ct-edit" id="ct-edit"><summary class="gbtn{{if .Page}} ct-icon ct-quiet{{end}}"{{if .Page}} aria-label="{{t "code.edit"}}" title="{{t "code.edit"}}"{{end}}>{{template "cticon" "pencil"}}{{if not .Page}}{{t "code.edit"}}{{end}}</summary><div class="ct-edit-b">{{template "gcmd" .Cmd}}</div></details></div>{{end}}
 {{if not .Empty}}<div class="ct-gb ct-prose">{{.HTML}}</div>{{end}}</section>{{end}}
 
 {{define "repocode"}}{{template "head" .}}{{template "nav" .}}<main class="g2 rc ct"><div class="wrap">

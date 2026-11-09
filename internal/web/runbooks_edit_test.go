@@ -41,7 +41,7 @@ func rbHead(t *testing.T, e shellEnv, name string) (runbook.View, store.RunbookR
 func TestARunbookIsCreatedAndEditedInTheWebAsVersionsAndOnlyOwnersAndLeadsApprove(t *testing.T) {
 	e := ovEnv(t)
 	_, list := fetchPage(t, e.Member, e.Base+"/ui/x/shell/runbooks")
-	if !strings.Contains(list, `href="/ui/x/shell/runbooks/new"`) || !strings.Contains(list, "New runbook") {
+	if !strings.Contains(list, `href="/ui/x/shell/runbooks/new"`) || !strings.Contains(list, "Create the first runbook") {
 		t.Error("a member gets no button for a new runbook")
 	}
 	if _, g := fetchPage(t, e.Guest, e.Base+"/ui/x/shell/runbooks"); strings.Contains(g, "/runbooks/new") {
@@ -66,7 +66,7 @@ func TestARunbookIsCreatedAndEditedInTheWebAsVersionsAndOnlyOwnersAndLeadsApprov
 		t.Fatalf("stored runbook: %+v", v)
 	}
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/x/shell/runbooks/rollout-thing?done=saved")
-	for _, want := range []string{"Version 1 saved", "not approved yet", "Edit", `href="/ui/x/shell/runbooks/rollout-thing?edit=1"`, "make check | tail -n 5", "Approval needed"} {
+	for _, want := range []string{"Version 1 saved", "becomes active after approval", "Edit", `href="/ui/x/shell/runbooks/rollout-thing?edit=1"`, "make check | tail -n 5", "Approval needed"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the runbook page lacks %q", want)
 		}

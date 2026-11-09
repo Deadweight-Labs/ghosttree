@@ -16,7 +16,7 @@
 
 {{define "agents"}}{{template "head" .}}{{template "nav" .}}<main class="g2 ag"><link rel="stylesheet" href="/static/ui-agents.css"><div class="wrap">
 {{with .Agents}}{{with $.Shell.Tabs}}{{if not $.Repo}}<div class="segrow"><nav class="gseg seg" aria-label="{{t $.Shell.TabsLabel}}">{{range .}}<a data-tab="{{.Key}}" href="{{.Href}}"{{if .Current}} class="on" aria-current="page"{{end}}>{{t .Label}}</a>{{end}}</nav></div>{{end}}{{end}}
-<div class="sbar"><label class="gfield mono-in">{{mi "search"}}<input type="search" data-list-filter=".arow" placeholder="{{t "agent.search"}}" aria-label="{{t "agent.search"}}" autocomplete="off" spellcheck="false"></label>{{if and .Cards .CanAdd}}<a class="gbtn" href="{{.Connect}}">{{mi "plus"}}{{t "ov.connect_another"}}</a>{{end}}</div>
+{{if .Sections.Any}}<div class="sbar"><label class="gfield mono-in">{{mi "search"}}<input type="search" data-list-filter=".arow" placeholder="{{t "agent.search"}}" aria-label="{{t "agent.search"}}" autocomplete="off" spellcheck="false"></label>{{if and .Cards .CanAdd}}<a class="gbtn" href="{{.Connect}}">{{mi "plus"}}{{t "ov.connect_another"}}</a>{{end}}</div>{{end}}
 {{if .Sections.Any}}<div class="agroups">{{template "agentsections" .Sections}}</div>
 {{else if .Guest}}<div class="box"><div class="box-empty">{{t "ov.nothing"}}</div></div>
 {{else if .Machines}}<div class="box"><div class="box-h"><span class="t">{{t "ov.start"}}</span></div><div class="box-r">{{template "uicmd" .Cmd}}</div></div>{{else}}<div class="box"><div class="box-empty"><span>{{t "ov.no_agents"}}</span>{{if .CanAdd}}<a class="gbtn pri" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}</div></div>{{end}}

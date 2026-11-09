@@ -58,7 +58,7 @@ func (a *app) inboxDecisions(l lang, pa *store.ProjectAccess, project string, no
 			row := forYouRow{Mark: "decision", Tone: "ask", Title: d.Question, Brief: links.Clean(d.Detail, 220), Href: decisionHref(d),
 				Rest: l.msg("inbox.dec.of", lastSegment(d.Project)), Action: l.msg("inbox.act.open"), rank: rankBlocks, at: created, decisionID: d.ID}
 			if !created.IsZero() {
-				row.Age = l.msg("home.waiting_since", shortAge(l, now, created))
+				row.Age = shortAgo(l, now, created)
 				row.AgeOld = olderThan(d.CreatedAt, now, taskOldAfter)
 			}
 			rows = append(rows, row)

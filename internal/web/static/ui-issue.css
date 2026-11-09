@@ -18,6 +18,7 @@
 
 :is(.g2.id) {
   & .cbox .reqs { border-top: 1px solid var(--border-default); }
+  & .cbox .ch + .reqs { border-top: 0; }
   & .cbox .reqs .rh { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-muted); font-size: 14px; }
   & .cbox .reqs .rh .sp { flex: 1; }
   & .cbox .reqs .rh .prog { margin-left: 0; }

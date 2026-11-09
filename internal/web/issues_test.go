@@ -222,7 +222,7 @@ func TestRepoTabsAreCodeIssuesPullsKnowledgeRunbooksAndAMenu(t *testing.T) {
 		t.Errorf("runbooks tab: status=%d or not its own page", status)
 	}
 	// Without anything reported yet both tabs are pages of their own with one empty line.
-	for tab, line := range map[string]string{"pulls": "No pull requests yet.", "commits": "No commits known yet."} {
+	for tab, line := range map[string]string{"pulls": "No pull requests yet.", "commits": "No commits yet."} {
 		status, empty := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/"+tab)
 		if status != http.StatusOK || !strings.Contains(empty, line) || !strings.Contains(empty, `data-tab="`+tab+`"`) || !strings.Contains(empty, "ui-pulls.css") {
 			t.Errorf("tab %s: status=%d or no empty line", tab, status)

@@ -395,7 +395,7 @@ func TestSessionDetailRendersBlocksReadably(t *testing.T) {
 		`class="diff"`,                                  // Diff
 		`class="dl dl-del"`,
 		`class="dl dl-add"`,
-		`class="tr is-bad">error`, // Fehler fällt im Ergebnis auf
+		`class="tr is-bad">failed`, // Fehler fällt im Ergebnis auf
 		`class="tool is-failed"`,
 		"Prompts",
 		"3 tool calls",

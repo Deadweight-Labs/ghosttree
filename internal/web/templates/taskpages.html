@@ -1,6 +1,6 @@
 {{define "tasks"}}{{template "head" .}}{{template "nav" .}}<main class="g2 is ft"><div class="wrap">
 {{with .TasksV}}<div class="ilayout"><div class="imain">
-<div class="box"><div class="box-h lh">{{range .Tabs}}<a class="tab{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Icon}}<span><span class="n">{{.Count}}</span> {{t .Label}}</span></a>{{end}}</div>
+<div class="box">{{if or .Rows (not .Mine)}}<div class="box-h lh">{{range .Tabs}}<a class="tab{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Icon}}<span><span class="n">{{.Count}}</span> {{t .Label}}</span></a>{{end}}</div>{{end}}
 {{if .Rows}}{{range .Rows}}{{template "uirow" .}}
 {{end}}{{else}}<div class="empty"><span>{{t .EmptyKey}}</span></div>{{end}}</div>
 </div></div>

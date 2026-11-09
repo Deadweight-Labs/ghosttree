@@ -54,7 +54,7 @@ func TestAdminTimeTagIsRelativeBothWays(t *testing.T) {
 		want  string
 	}{
 		{now.Add(-3 * 60 * 60 * 1e9).Format("2006-01-02T15:04:05Z"), "3h ago"},
-		{now.Add(5*24*60*60*1e9 + 60*1e9).Format("2006-01-02T15:04:05Z"), "in 5d"},
+		{now.Add(5*24*60*60*1e9 + 60*1e9).Format("2006-01-02T15:04:05Z"), "in 5 days"},
 		{now.Format("2006-01-02T15:04:05Z"), ">now<"},
 	} {
 		if got := string(timeTag(langEN, c.stamp)); !strings.Contains(got, c.want) {
