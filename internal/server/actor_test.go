@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -323,5 +324,43 @@ func TestSearchFiltersByActor(t *testing.T) {
 	}
 	if got := find("gus", "is:pain model:gpt"); len(got) != 0 {
 		t.Errorf("a guest filters by model: %v", got)
+	}
+}
+
+// Ein Task zählt in der Statistik nur, wenn sein Request lesbar ist, wie in den
+// Task-Listen: ein Task an einem zurückgehaltenen, distillierten Request aus
+// mias privater Session zählt für ein anderes Mitglied nicht, für mia schon.
+func TestActorStatsHideTasksOfHiddenRequests(t *testing.T) {
+	f := accessAPI(t, true)
+	d, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "bug", Title: "aus mias Session",
+		Scope: scope.Axes{Project: accProject}, Origin: "distilled", SessionRef: "session:" + strconv.FormatInt(f.id["s-mia"], 10)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.st.DB().Exec(`INSERT INTO human_tasks(project,request_id,kind,title,created_by_account,created_at,updated_at)
+		VALUES(?,?,'input','Antwort',3,'2026-11-01T00:00:00Z','2026-11-01T00:00:00Z')`, accProject, d.Request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tid, _ := res.LastInsertId()
+	if err := f.st.RecordActor(actor.Task, tid, actor.Actor{Kind: actor.Agent, AccountID: 3, Harness: "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	entries := func(who string) int {
+		t.Helper()
+		got := decode[struct {
+			Stats []store.ActorStat `json:"stats"`
+		}](t, f.expect(t, who, 200, "GET", "/api/stats/actors?project="+accProject, nil))
+		n := 0
+		for _, s := range got.Stats {
+			n += s.Entries
+		}
+		return n
+	}
+	if n := entries("rex"); n != 0 {
+		t.Errorf("a member counts the task of a hidden request: %d", n)
+	}
+	if n := entries("mia"); n != 1 {
+		t.Errorf("the owner of the session does not count her task: %d", n)
 	}
 }

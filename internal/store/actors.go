@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	actordomain "github.com/Deadweight-Labs/ghosttree/internal/actor"
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 )
 
 // actorSchema (REQ-620): who wrote an entry, one row per (kind, entry), and the
@@ -309,20 +310,22 @@ type ActorStat struct {
 // read filter of the lists needs, and when it still counts (a criterion only
 // while met, a request only while done, knowledge only while active or stale
 // and not quarantined). Columns: entry, request behind it, project, request
-// type, person, held session of a distilled request, and for knowledge
-// machine, confidence, origin and session_ref.
+// type, person, held session of a distilled request (for a task those of its
+// request), for knowledge machine, confidence, origin and session_ref, and for
+// a task its assignee and creator.
 var actorStatSources = []struct {
 	kind, sql string
 }{
-	{actordomain.Request, `SELECT e.entry_id, t.id, t.project, t.type, t.person, ` + heldColOf("t") + `, '', '', '', '' FROM entry_actors e JOIN requests t ON t.id=e.entry_id WHERE e.kind='request'`},
-	{actordomain.Pain, `SELECT e.entry_id, 0, t.project, '', '', '', '', '', '', '' FROM entry_actors e JOIN pains t ON t.id=e.entry_id WHERE e.kind='pain'`},
-	{actordomain.Idea, `SELECT e.entry_id, 0, t.project, '', '', '', '', '', '', '' FROM entry_actors e JOIN ideas t ON t.id=e.entry_id WHERE e.kind='idea'`},
-	{actordomain.Knowledge, `SELECT e.entry_id, 0, t.project, '', t.person, '', t.machine, t.confidence, t.origin, t.session_ref FROM entry_actors e JOIN knowledge t ON t.id=e.entry_id
+	{actordomain.Request, `SELECT e.entry_id, t.id, t.project, t.type, t.person, ` + heldColOf("t") + `, '', '', '', '', 0, 0 FROM entry_actors e JOIN requests t ON t.id=e.entry_id WHERE e.kind='request'`},
+	{actordomain.Pain, `SELECT e.entry_id, 0, t.project, '', '', '', '', '', '', '', 0, 0 FROM entry_actors e JOIN pains t ON t.id=e.entry_id WHERE e.kind='pain'`},
+	{actordomain.Idea, `SELECT e.entry_id, 0, t.project, '', '', '', '', '', '', '', 0, 0 FROM entry_actors e JOIN ideas t ON t.id=e.entry_id WHERE e.kind='idea'`},
+	{actordomain.Knowledge, `SELECT e.entry_id, 0, t.project, '', t.person, '', t.machine, t.confidence, t.origin, t.session_ref, 0, 0 FROM entry_actors e JOIN knowledge t ON t.id=e.entry_id
 		WHERE e.kind='knowledge' AND t.project<>'' AND t.status IN ('active','stale') AND t.confidence<>'quarantined'`},
-	{actordomain.Task, `SELECT e.entry_id, t.request_id, t.project, '', '', '', '', '', '', '' FROM entry_actors e JOIN human_tasks t ON t.id=e.entry_id WHERE e.kind='task'`},
-	{actordomain.Feature, `SELECT e.entry_id, 0, t.project, '', '', '', '', '', '', '' FROM entry_actors e JOIN features t ON t.id=e.entry_id WHERE e.kind='feature'`},
-	{actordomain.Criterion, `SELECT e.entry_id, r.id, r.project, r.type, r.person, ` + heldColOf("r") + `, '', '', '', '' FROM entry_actors e JOIN request_criteria c ON c.id=e.entry_id JOIN requests r ON r.id=c.request_id WHERE e.kind='criterion' AND c.state='met'`},
-	{actordomain.RequestDone, `SELECT e.entry_id, t.id, t.project, t.type, t.person, ` + heldColOf("t") + `, '', '', '', '' FROM entry_actors e JOIN requests t ON t.id=e.entry_id WHERE e.kind='request_done' AND t.state='done'`},
+	{actordomain.Task, `SELECT e.entry_id, t.request_id, t.project, '', r.person, ` + heldColOf("r") + `, '', '', '', '', t.assignee_account, t.created_by_account
+		FROM entry_actors e JOIN human_tasks t ON t.id=e.entry_id JOIN requests r ON r.id=t.request_id WHERE e.kind='task'`},
+	{actordomain.Feature, `SELECT e.entry_id, 0, t.project, '', '', '', '', '', '', '', 0, 0 FROM entry_actors e JOIN features t ON t.id=e.entry_id WHERE e.kind='feature'`},
+	{actordomain.Criterion, `SELECT e.entry_id, r.id, r.project, r.type, r.person, ` + heldColOf("r") + `, '', '', '', '', 0, 0 FROM entry_actors e JOIN request_criteria c ON c.id=e.entry_id JOIN requests r ON r.id=c.request_id WHERE e.kind='criterion' AND c.state='met'`},
+	{actordomain.RequestDone, `SELECT e.entry_id, t.id, t.project, t.type, t.person, ` + heldColOf("t") + `, '', '', '', '', 0, 0 FROM entry_actors e JOIN requests t ON t.id=e.entry_id WHERE e.kind='request_done' AND t.state='done'`},
 }
 
 func heldColOf(alias string) string {
@@ -342,7 +345,9 @@ type ActorStatHit struct {
 	// CanSeeKnowledge reads.
 	Ref       ObjectRef
 	Knowledge Knowledge
-	Actor     EntryActor
+	// Task carries what canSeeTaskVia reads.
+	Task  humantask.Task
+	Actor EntryActor
 }
 
 // ActorStatHits reads the stamps the statistics count in these projects, with
@@ -368,7 +373,7 @@ func (s *Store) ActorStatHits(projects []string) ([]ActorStatHit, error) {
 			h := ActorStatHit{Kind: src.kind}
 			k := &h.Knowledge
 			if err := rows.Scan(&h.EntryID, &h.RequestID, &h.Project, &h.Type, &h.Ref.Person, &h.Ref.HeldBy,
-				&k.Scope.Machine, &k.Confidence, &k.Origin, &k.SessionRef); err != nil {
+				&k.Scope.Machine, &k.Confidence, &k.Origin, &k.SessionRef, &h.Task.AssigneeAccount, &h.Task.CreatedByAccount); err != nil {
 				rows.Close()
 				return nil, err
 			}
@@ -377,6 +382,7 @@ func (s *Store) ActorStatHits(projects []string) ([]ActorStatHit, error) {
 			}
 			h.Ref.ID, h.Ref.Project = h.RequestID, h.Project
 			k.ID, k.Scope.Project, k.Person = h.EntryID, h.Project, h.Ref.Person
+			h.Task.ID, h.Task.Project, h.Task.RequestID = h.EntryID, h.Project, h.RequestID
 			byID[h.EntryID] = h
 		}
 		err = rows.Err()
@@ -670,8 +676,9 @@ func (a *ProjectAccess) ActorStats(project string) ([]ActorStat, []string, error
 	}
 	a.loadActorSessions(sessions)
 	kept := hits[:0]
+	tasks := map[int64]bool{}
 	for _, h := range hits {
-		if !a.actorStatVisible(h) {
+		if !a.actorStatVisible(h, tasks) {
 			continue
 		}
 		// Ein Modell aus einer Session, deren Metadaten der Betrachter nicht
@@ -686,8 +693,10 @@ func (a *ProjectAccess) ActorStats(project string) ([]ActorStat, []string, error
 
 // actorStatVisible is the read filter of the lists for one counted entry:
 // requests not held back from a foreign private session, knowledge the viewer
-// may read, the rest by its resource in the project.
-func (a *ProjectAccess) actorStatVisible(h ActorStatHit) bool {
+// may read, a task like in the task lists (its request must be readable unless
+// it is assigned to the viewer), the rest by its resource in the project.
+// tasks caches the answers per request.
+func (a *ProjectAccess) actorStatVisible(h ActorStatHit, tasks map[int64]bool) bool {
 	switch h.Kind {
 	case actordomain.Request, actordomain.Criterion, actordomain.RequestDone:
 		obj, visible := a.RequestObject(h.Ref)
@@ -699,7 +708,7 @@ func (a *ProjectAccess) actorStatVisible(h ActorStatHit) bool {
 	case actordomain.Idea:
 		return a.Allow(h.Project, ResIdea, ActRead, Object{})
 	case actordomain.Task:
-		return a.Allow(h.Project, ResTask, ActRead, Object{})
+		return a.canSeeTaskVia(h.Task, tasks)
 	case actordomain.Feature:
 		return a.Allow(h.Project, ResFeature, ActRead, Object{})
 	}
