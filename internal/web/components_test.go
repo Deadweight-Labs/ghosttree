@@ -189,7 +189,7 @@ func TestTimelineEntryHasTheAvatarOnTheLineAndASmallActionIcon(t *testing.T) {
 
 func TestComposerHasTabsToolbarFieldAndFooter(t *testing.T) {
 	page := renderPart(t, langDE, "uicomposer", composerView{Placeholder: "Kommentar schreiben"})
-	for _, want := range []string{`class="cx"`, `data-wtab="w"`, `data-wtab="p"`, `>Schreiben<`, `>Vorschau<`, `class="wtools"`, `aria-label="Fett"`, `<textarea name="body" placeholder="Kommentar schreiben"`, `class="cx-pv prose"`, `class="cx-hint"`, `Markdown, @ erwähnt`, `data-submit>Kommentieren</button>`} {
+	for _, want := range []string{`class="cx"`, `data-wtab="w"`, `data-wtab="p"`, `>Schreiben<`, `>Vorschau<`, `class="wtools js-only"`, `data-tool="bold"`, `aria-label="Fett"`, `<textarea name="body" placeholder="Kommentar schreiben"`, `class="cx-pv prose"`, `data-submit>Kommentieren</button>`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("composer lacks %q", want)
 		}
@@ -205,21 +205,49 @@ func TestComposerHasTabsToolbarFieldAndFooter(t *testing.T) {
 func TestComposerWithModesSignalAndFields(t *testing.T) {
 	c := composerView{Action: "/ui/x", Token: "tok", Placeholder: "Kommentar", Avatar: "Robin", ModeLabel: "Status",
 		Modes: []composerMode{
-			{Value: "open", Label: "Offen", Submit: "Kommentieren", Class: "pri", Selected: true},
-			{Value: "closed", Label: "Geschlossen", Submit: "Schließen", SubmitText: "Schließen und kommentieren", Class: "dangerf", Placeholder: "Grund"},
+			{Value: "comment", Label: "Offen", Current: true, Submit: "Kommentieren", Class: "pri", Selected: true},
+			{Value: "closed", Label: "Geschlossen", Submit: "Schließen", SubmitText: "Schließen und kommentieren", Class: "dangerf", Placeholder: "Grund", NeedsText: true},
+			{Value: "later", Label: "Später", Disabled: true, Hint: "Noch nicht"},
 		},
-		Fields: []composerField{{Name: "evidence", Label: "Nachweis", Kind: "text", Show: "closed", Wide: true}},
+		Fields: []composerField{{Name: "evidence", Label: "Nachweis", Kind: "text", Show: "closed", Wide: true, Required: true}},
 		Signal: &composerSelect{Name: "signal", Label: "Signal", Options: []composerOption{{Value: "none", Label: "Keins"}, {Value: "ask", Label: "Frage", Selected: true}}},
 	}
 	page := renderPart(t, langDE, "uicomposer", c)
-	for _, want := range []string{`<form method="post" action="/ui/x">`, `name="csrf_token" value="tok"`, `class="cmt cx-cmt"`, `data-mode="open"`, `data-cfg="`, `&#34;labelText&#34;:&#34;Schließen und kommentieren&#34;`,
-		`<span class="muted ddl">Status</span> <span class="ddv">Offen</span>`, `data-show="closed"`, `class="cx-fl wide"`, `<span class="muted ddl">Signal</span> <span class="ddv">Frage</span>`, `name="signal" value="ask"`, `name="mode" value="open"`, `class="gbtn pri" data-submit>Kommentieren`} {
+	for _, want := range []string{`<form method="post" action="/ui/x" data-draft>`, `name="csrf_token" value="tok"`, `class="cmt cx-cmt"`, `data-mode="comment"`, `data-cfg="`, `&#34;labelText&#34;:&#34;Schließen und kommentieren&#34;`, `&#34;need&#34;:true`,
+		`role="radiogroup" aria-label="Status"`, `<input type="radio" name="mode" value="comment" data-mode-input checked>`, `class="cx-opt cur"`, `<span class="cdot" aria-hidden="true"></span>Offen<span class="sr"> aktuell</span>`,
+		`value="later" data-mode-input disabled`, `title="Noch nicht"`, `data-show="closed"`, `class="cx-fl wide"`, `class="req"`, `data-need`, `<span class="muted ddl">Signal</span> <span class="ddv">Frage</span>`, `name="signal" value="ask"`, `class="gbtn pri" data-submit>Kommentieren`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("composer lacks %q: %s", want, page)
 		}
 	}
+	if strings.Contains(page, `class="cx-hint"`) {
+		t.Error("the hint stands next to the toolbar that already says it")
+	}
 	if !strings.Contains(c.Config(), `"cls":"dangerf"`) {
 		t.Errorf("config: %s", c.Config())
+	}
+}
+
+// One entry only is no choice: the state goes as a hidden field and no row is drawn. A decision's
+// composer starts without a choice, asks for one, and names its status field as the route wants it.
+func TestComposerStatusRowOnlyWithAChoiceAndAskingWhenUnset(t *testing.T) {
+	one := renderPart(t, langDE, "uicomposer", composerView{Action: "/ui/x", Modes: []composerMode{{Value: "comment", Label: "Offen", Submit: "Kommentieren", Selected: true}}})
+	if strings.Contains(one, `type="radio"`) || !strings.Contains(one, `<input type="hidden" name="mode" value="comment" data-mode-input>`) {
+		t.Errorf("a single state draws a row: %s", one)
+	}
+	two := renderPart(t, langDE, "uicomposer", composerView{Action: "/ui/x", ModeName: "option", Unset: true, Compact: true, NoHint: true, ModeLabel: "Wahl",
+		Modes: []composerMode{{Value: "A", Label: "A", Submit: "Entscheiden"}, {Value: "B", Label: "B", Submit: "Entscheiden"}}})
+	for _, want := range []string{`name="option" value="A" data-mode-input required`, `name="option" value="B" data-mode-input required`, ` data-unset`, `class="cx compact"`} {
+		if !strings.Contains(two, want) {
+			t.Errorf("composer lacks %q: %s", want, two)
+		}
+	}
+	if strings.Contains(two, ` checked`) || strings.Contains(two, `data-wtab`) {
+		t.Error("a decision is preset, or carries the tabs for a line of text")
+	}
+	plain := renderPart(t, langDE, "uicomposer", composerView{NoTools: true})
+	if !strings.Contains(plain, `class="cx-hint"`) {
+		t.Error("a composer without a toolbar keeps the Markdown hint")
 	}
 }
 

@@ -24,7 +24,7 @@ func TestAcceptedPainNeedsAReasonAndShowsItInListAndPage(t *testing.T) {
 	path := "/ui/pains/" + strconv.FormatInt(d.Pain.ID, 10) + "/state"
 
 	_, before := fetchPage(t, e.Member, e.Base+"/ui/x/shell/pains/"+strconv.FormatInt(d.Pain.ID, 10))
-	for _, want := range []string{`data-val="accepted"`, `name="why"`, `data-show="accepted obsolete"`} {
+	for _, want := range []string{`value="accepted"`, `name="note"`, `&#34;need&#34;:true`} {
 		if !strings.Contains(before, want) {
 			t.Errorf("composer lacks %q", want)
 		}

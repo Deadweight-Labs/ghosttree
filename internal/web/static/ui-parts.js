@@ -126,7 +126,8 @@
   });
 
   // Composer: write/preview. The preview renders the Markdown (ui-md.js) into
-  // nodes and takes the height of the text field while that is visible.
+  // nodes and takes the height of the text field while that is visible; the
+  // toolbar belongs to writing, so it goes while the preview is open.
   for (const tab of $$(".cx [data-wtab]")) {
     tab.addEventListener("click", (event) => {
       event.preventDefault();
@@ -148,6 +149,8 @@
       }
       w.hidden = preview;
       pv.hidden = !preview;
+      const tools = $(".wtools", cx);
+      if (tools) tools.hidden = preview;
       for (const x of $$("[data-wtab]", cx)) {
         const li = x.closest("li");
         li.classList.toggle("sel", x === tab);
@@ -156,8 +159,100 @@
     });
   }
 
-  // Composer with a mode (status, signal): button label, placeholder and the
-  // fields that belong to the mode follow the selection.
+  // Toolbar: every button works on the text that is marked (or on the line the cursor is in).
+  // The text goes in through the editing command of the browser, so Ctrl+Z takes a step back.
+  const put = (ta, from, to, text, selFrom, selTo) => {
+    ta.focus();
+    ta.setSelectionRange(from, to);
+    let done = false;
+    try { done = document.execCommand("insertText", false, text); } catch (_) { done = false; }
+    if (!done || ta.value.slice(from, from + text.length) !== text) {
+      ta.setRangeText(text, from, to, "end");
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    ta.setSelectionRange(selFrom, selTo);
+  };
+  // **text**, _text_, `text`: marks the text or, when it is marked already, takes the marks off.
+  const wrap = (ta, pre, post) => {
+    const a = ta.selectionStart, b = ta.selectionEnd, v = ta.value;
+    const text = v.slice(a, b);
+    if (v.slice(a - pre.length, a) === pre && v.slice(b, b + post.length) === post) {
+      put(ta, a - pre.length, b + post.length, text, a - pre.length, b - pre.length);
+    } else if (text.length >= pre.length + post.length && text.startsWith(pre) && text.endsWith(post)) {
+      const inner = text.slice(pre.length, text.length - post.length);
+      put(ta, a, b, inner, a, a + inner.length);
+    } else {
+      put(ta, a, b, pre + text + post, a + pre.length, a + pre.length + text.length);
+    }
+  };
+  // A marker at the start of every line the selection touches; all lines marked already: take it off.
+  const lines = (ta, mark, has) => {
+    const v = ta.value;
+    const a = ta.selectionStart;
+    let b = ta.selectionEnd;
+    if (b > a && v[b - 1] === "\n") b -= 1;
+    const from = v.lastIndexOf("\n", a - 1) + 1;
+    let to = v.indexOf("\n", b);
+    if (to < 0) to = v.length;
+    const rows = v.slice(from, to).split("\n");
+    const all = rows.every((r) => has.test(r));
+    const out = rows.map((r) => (all ? r.replace(has, "") : mark + r.replace(has, ""))).join("\n");
+    put(ta, from, to, out, from, from + out.length);
+  };
+  const TOOLS = {
+    bold: (ta) => wrap(ta, "**", "**"),
+    italic: (ta) => wrap(ta, "_", "_"),
+    quote: (ta) => lines(ta, "> ", /^> ?/),
+    list: (ta) => lines(ta, "- ", /^[-*] (?!\[[ xX]\] )/),
+    tasks: (ta) => lines(ta, "- [ ] ", /^[-*] \[[ xX]\] /),
+    code: (ta) => {
+      const a = ta.selectionStart, b = ta.selectionEnd, text = ta.value.slice(a, b);
+      if (text.includes("\n")) put(ta, a, b, "```\n" + text + "\n```", a + 4, a + 4 + text.length);
+      else wrap(ta, "`", "`");
+    },
+    link: (ta) => {
+      const a = ta.selectionStart, b = ta.selectionEnd, text = ta.value.slice(a, b);
+      if (/^https?:\/\/\S+$/.test(text)) put(ta, a, b, "[](" + text + ")", a + 1, a + 1);
+      else if (text) put(ta, a, b, "[" + text + "](url)", a + text.length + 3, a + text.length + 6);
+      else put(ta, a, b, "[](url)", a + 1, a + 1);
+    },
+    at: (ta) => {
+      const a = ta.selectionStart, b = ta.selectionEnd;
+      const lead = a > 0 && !/\s/.test(ta.value[a - 1]) ? " @" : "@";
+      put(ta, a, b, lead, a + lead.length, a + lead.length);
+    },
+  };
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest(".wtools [data-tool]");
+    if (!button) return;
+    const ta = $("textarea", button.closest(".cx"));
+    if (ta && TOOLS[button.dataset.tool]) TOOLS[button.dataset.tool](ta);
+  });
+  // One tab stop for the whole toolbar; the arrow keys move inside it.
+  document.addEventListener("keydown", (event) => {
+    const bar = event.target.closest && event.target.closest(".wtools");
+    if (!bar || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const all = $$("[data-tool]", bar);
+    const at = all.indexOf(event.target.closest("[data-tool]"));
+    if (at < 0) return;
+    event.preventDefault();
+    let next = event.key === "Home" ? 0 : event.key === "End" ? all.length - 1 : at + (event.key === "ArrowRight" ? 1 : -1);
+    next = (next + all.length) % all.length;
+    for (const x of all) x.tabIndex = x === all[next] ? 0 : -1;
+    all[next].focus();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+    const ta = event.target;
+    if (!ta.matches || !ta.matches(".cx textarea")) return;
+    const tool = { b: "bold", i: "italic", k: "link" }[event.key.toLowerCase()];
+    if (!tool) return;
+    event.preventDefault();
+    TOOLS[tool](ta);
+  });
+
+  // Composer with a mode (state, signal): the entry that is chosen sets the button label and
+  // class, the placeholder, whether the words are required and the fields that belong to it.
   for (const cx of $$(".cx[data-cfg]")) {
     let cfg = {};
     try { cfg = JSON.parse(cx.dataset.cfg); } catch (_) { continue; }
@@ -172,19 +267,62 @@
       if (!c) return;
       cx.dataset.mode = mode;
       if (btn) {
-        btn.className = "gbtn " + (c.cls || "pri");
+        btn.className = "gbtn " + (c.cls === undefined ? "pri" : c.cls);
         if (c.tip) btn.title = c.tip; else btn.removeAttribute("title");
       }
       label();
       if (c.ph) { ta.placeholder = c.ph; ta.setAttribute("aria-label", c.ph); }
-      for (const el of $$("[data-show]", cx)) el.hidden = el.dataset.show.split(" ").indexOf(mode) < 0;
-      const hidden = $("input[data-mode-input]", cx);
-      if (hidden) hidden.value = mode;
+      ta.required = !!c.need;
+      for (const el of $$("[data-show]", cx)) {
+        el.hidden = el.dataset.show.split(" ").indexOf(mode) < 0;
+        for (const f of $$("[data-need]", el)) f.required = !el.hidden;
+      }
+      for (const r of $$("input[data-mode-input]", cx)) {
+        if (r.type === "radio") r.checked = r.value === mode; else r.value = mode;
+      }
     };
-    const modeMenu = $(".dd[data-pick]", cx);
-    for (const opt of $$(".opt[data-val]", modeMenu || cx)) opt.addEventListener("click", () => set(opt.dataset.val));
+    cx.gtSetMode = set;
+    for (const r of $$("input[type=radio][data-mode-input]", cx)) r.addEventListener("change", () => { if (r.checked) set(r.value); });
     ta.addEventListener("input", label);
-    set(cx.dataset.mode);
+    if (cx.dataset.unset === undefined) set(cx.dataset.mode);
+  }
+
+  // A text that was written is never thrown away. While typing it is kept in this tab (with the mode and the
+  // fields); a send marks it as sent. When the page comes back from a refusal (?fail=, ?comment=failed) the text
+  // is put back, the way it was; when the send went through, the copy is dropped.
+  const draft = {
+    get: (k) => { try { return JSON.parse(sessionStorage.getItem(k) || "null"); } catch (_) { return null; } },
+    set: (k, v) => { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch (_) { /* full or blocked: the text stays in the field */ } },
+    drop: (k) => { try { sessionStorage.removeItem(k); } catch (_) { /* nothing to drop */ } },
+  };
+  const refused = /[?&](fail=|comment=(empty|too_long|failed))/.test(location.search);
+  for (const form of $$("form[data-draft]")) {
+    const cx = $(".cx", form);
+    const ta = cx && $("textarea", cx);
+    if (!ta) continue;
+    const key = "gt-draft:" + form.getAttribute("action") + ":" + $$("input[type=hidden]", form).filter((i) => i.name !== "csrf_token").map((i) => i.name + "=" + i.value).join("&");
+    const fields = () => $$(".cx-m input.gfield, .cx-m select.gfield", cx).filter((f) => f.name);
+    const snapshot = (sent) => ({ t: ta.value, m: cx.dataset.mode || "", f: Object.fromEntries(fields().map((f) => [f.name, f.value])), sent });
+    const saved = draft.get(key);
+    if (saved) {
+      if (saved.sent && !refused) {
+        draft.drop(key);
+      } else if (saved.t && ta.value !== saved.t) {
+        ta.value = saved.t;
+        if (saved.m && cx.gtSetMode) cx.gtSetMode(saved.m);
+        for (const f of fields()) {
+          if (saved.f && saved.f[f.name] !== undefined) { f.value = saved.f[f.name]; f.dispatchEvent(new Event("change", { bubbles: true })); }
+        }
+        ta.dispatchEvent(new Event("input"));
+        const closed = ta.closest("[hidden]");
+        if (closed) closed.hidden = false;
+        if (saved.sent) ta.focus();
+      }
+    }
+    const keep = () => { if (ta.value.trim()) draft.set(key, snapshot(false)); else draft.drop(key); };
+    ta.addEventListener("input", keep);
+    cx.addEventListener("change", keep);
+    form.addEventListener("submit", () => { if (ta.value.trim()) draft.set(key, snapshot(true)); });
   }
 
   // Selects that show their choice in the button: label, check mark, hidden field.
@@ -204,6 +342,25 @@
       });
     }
   }
+
+  // The remove card of a comment closes with its Cancel button, with Escape and with a click outside.
+  document.addEventListener("click", (event) => {
+    const cancel = event.target.closest("[data-cdel-close]");
+    if (cancel) {
+      const d = cancel.closest("details.cdel");
+      d.open = false;
+      $("summary", d).focus();
+      return;
+    }
+    for (const d of $$("details.cdel[open]")) if (!d.contains(event.target)) d.open = false;
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    for (const d of $$("details.cdel[open]")) {
+      d.open = false;
+      $("summary", d).focus();
+    }
+  });
 
   // Reactions: without script every button is a form that reloads the page. With
   // script the form is sent in the background; the answer is the row of reactions

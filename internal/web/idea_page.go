@@ -187,29 +187,39 @@ func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, age func(string) string) 
 	return items
 }
 
-// ideaComposer is the field at the foot: text alone is a comment; the status
-// select adds to it dismissing an open idea (the words are the reason and the
-// comment) or reopening a dismissed one. An accepted idea has nothing to change
-// here, only to comment on. edit says the viewer may change the idea, comment
-// that they may write comments.
+// ideaComposer is the field at the foot and the one place where the state of the
+// idea is changed: the status row names Open and Dismissed, the state the idea is
+// in carries the mark and only comments. Dismissing needs the words as the reason.
+// An accepted idea has nothing to change here, only to comment on. edit says the
+// viewer may change the idea, comment that they may write comments.
 func (a *app) ideaComposer(l lang, v *ideaPageView, from string, edit, comment bool) *composerView {
 	cv := &composerView{Action: "/ui/ideas/" + strconv.FormatInt(v.ID, 10) + "/state", Token: v.Token, Name: "reason", Avatar: v.Viewer, ModeLabel: l.msg("issue.cx.status"),
 		Placeholder: l.msg("ideas.cx.comment_ph")}
-	if comment {
-		cv.Modes = append(cv.Modes, composerMode{Value: "comment", Label: l.msg("comments.cx.comment"), Submit: l.msg("comments.cx.submit"), Class: "pri", Placeholder: l.msg("ideas.cx.comment_ph"), Selected: true})
+	here := func(name string) composerMode {
+		return composerMode{Value: "comment", Label: name, Current: true, Disabled: !comment, Selected: comment, Submit: l.msg("comments.cx.submit"), Class: "pri", Placeholder: l.msg("ideas.cx.comment_ph")}
 	}
-	if edit {
-		switch from {
-		case idea.Open:
-			cv.Modes = append(cv.Modes, composerMode{Value: idea.Dismissed, Label: l.msg("ideas.cx.dismiss"), Submit: l.msg("ideas.cx.dismiss"), SubmitText: l.msg("ideas.cx.dismiss_text"), Class: "dangerf",
-				Placeholder: l.msg("ideas.cx.why"), Selected: !comment})
-		case idea.Dismissed:
-			cv.Modes = append(cv.Modes, composerMode{Value: idea.Open, Label: l.msg("ideas.cx.reopen"), Submit: l.msg("ideas.cx.reopen"), SubmitText: l.msg("ideas.cx.reopen_text"), Class: "pri",
-				Placeholder: l.msg("ideas.cx.note"), Selected: !comment})
-		}
+	switch {
+	case edit && from == idea.Open:
+		cv.Modes = append(cv.Modes, here(l.msg("ideas.state.open")),
+			composerMode{Value: idea.Dismissed, Label: l.msg("ideas.state.dismissed"), Submit: l.msg("ideas.cx.dismiss"), SubmitText: l.msg("ideas.cx.dismiss_text"), Class: "dangerf",
+				Placeholder: l.msg("ideas.cx.why"), NeedsText: true})
+	case edit && from == idea.Dismissed:
+		cv.Modes = append(cv.Modes,
+			composerMode{Value: idea.Open, Label: l.msg("ideas.state.open"), Submit: l.msg("ideas.cx.reopen"), SubmitText: l.msg("ideas.cx.reopen_text"), Class: "pri", Placeholder: l.msg("ideas.cx.note")},
+			here(l.msg("ideas.state.dismissed")))
+	case comment:
+		cv.Modes = append(cv.Modes, here(""))
 	}
 	if len(cv.Modes) == 0 {
 		return nil
+	}
+	if !slices.ContainsFunc(cv.Modes, func(m composerMode) bool { return m.Selected }) {
+		for i := range cv.Modes {
+			if !cv.Modes[i].Disabled {
+				cv.Modes[i].Selected = true
+				break
+			}
+		}
 	}
 	return cv
 }

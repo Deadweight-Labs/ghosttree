@@ -29,7 +29,7 @@ func TestInboxShowsAnOpenDecisionWithItsVariantsToThoseWhoMayCloseIt(t *testing.
 	for _, want := range []string{
 		"DEC-" + itoa(d.ID), "Where does the speech turn into text?", "Privacy and cost differ.",
 		`name="kind" value="decision"`, `name="id" value="` + itoa(d.ID) + `"`, `name="option" value="A"`, `name="option" value="B"`,
-		">On the device</button>", ">On the server</button>", "With a reason", `name="option"`, "Pick a variant", "Decide", "Why? (optional)",
+		`<span>On the device</span></button>`, `<span>On the server</span></button>`, "With a reason", `name="option"`, "Choice", "Decide", "Why? (optional)",
 		`data-ref="DEC-` + itoa(d.ID) + `"`, `href="/ui/x/shell/ideas/` + itoa(i.ID) + `#decision-` + itoa(d.ID) + `"`,
 		`data-ref-card="DEC-` + itoa(d.ID) + `"`,
 	} {
