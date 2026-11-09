@@ -314,3 +314,35 @@ func TestWatchServiceUpgradesTheOnFailureUnit(t *testing.T) {
 		t.Fatalf("unit after the upgrade:\n%s", raw)
 	}
 }
+
+func TestRestartWatchServiceRestartsAfterInstall(t *testing.T) {
+	home := t.TempDir()
+	useCtx(t, fakeBinary(t, filepath.Join(home, "ctx")))
+	log := &ctlLog{}
+	defer SetServiceBackend("linux", log.run, 1000)()
+	changes, err := RestartWatchService(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := log.calls[len(log.calls)-1]; last != "systemctl --user restart ghosttree-watch.service" {
+		t.Fatalf("last call = %q, calls %v", last, log.calls)
+	}
+	if got := changes[len(changes)-1].Action; got != "collector restarted" {
+		t.Fatalf("last change = %q", got)
+	}
+}
+
+func TestRestartWatchServiceWithoutBusDoesNotRestart(t *testing.T) {
+	home := t.TempDir()
+	useCtx(t, fakeBinary(t, filepath.Join(home, "ctx")))
+	log := &ctlLog{fail: map[string]error{"daemon-reload": errors.New("exit status 1: Failed to connect to bus: No medium found")}}
+	defer SetServiceBackend("linux", log.run, 1000)()
+	if _, err := RestartWatchService(home); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range log.calls {
+		if strings.Contains(c, "restart") {
+			t.Fatalf("restarted without a bus: %v", log.calls)
+		}
+	}
+}

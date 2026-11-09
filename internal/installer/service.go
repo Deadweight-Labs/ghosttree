@@ -368,3 +368,24 @@ func SetServiceBackend(goos string, ctl func(name string, args ...string) error,
 	serviceGOOS, serviceControl, serviceUID = goos, ctl, func() int { return uid }
 	return func() { serviceGOOS, serviceControl, serviceUID = prevOS, prevCtl, prevUID }
 }
+
+// RestartWatchService installs the collector service where needed and then
+// restarts it, so a running collector picks up a new ctx binary or config.
+// Without a reachable service manager it behaves like InstallWatchService.
+func RestartWatchService(home string) ([]Change, error) {
+	changes, started, err := InstallWatchServiceStarted(home)
+	if err != nil || !started {
+		return changes, err
+	}
+	path := WatchServicePath(home)
+	switch serviceGOOS {
+	case "darwin":
+		err = serviceControl("launchctl", "kickstart", "-k", "gui/"+strconv.Itoa(serviceUID())+"/"+WatchLaunchdLabel)
+	default:
+		err = serviceControl("systemctl", "--user", "restart", WatchUnit)
+	}
+	if err != nil {
+		return append(changes, Change{Path: path, Action: "collector not restarted (" + err.Error() + ")"}), err
+	}
+	return append(changes, Change{Path: path, Action: "collector restarted"}), nil
+}
