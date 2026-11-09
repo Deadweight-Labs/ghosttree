@@ -51,6 +51,22 @@ func TestWriteSnapshots(t *testing.T) {
 			}
 		}
 	}
+	for _, bg := range backgrounds {
+		f := newFake()
+		f.recent = []string{"/home/robin/ghosttree", "/home/robin/design-system"}
+		m := ready(f, Options{}, 104, 30, bg.msg)
+		m = drive(m, tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+		m = typeText(m, "harn")
+		m = drive(m, key("enter"))
+		m = drive(m, key("esc"))
+		m = drive(m, tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+		write("palette-project-"+bg.name, m.View().Content)
+		m = drive(m, key("esc"))
+		m.setMode(modeInbox)
+		m = drive(m, tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+		m = typeText(m, "des")
+		write("palette-inbox-"+bg.name, m.View().Content)
+	}
 	for _, sw := range []SwitchStyle{SwitchBar, SwitchRail} {
 		for _, bg := range backgrounds {
 			m := ready(newFake(), Options{Switch: sw}, 104, 30, bg.msg)

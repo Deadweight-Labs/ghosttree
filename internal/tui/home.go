@@ -39,6 +39,9 @@ func (m Model) page(content block, footer string) block {
 		}
 	}
 	content.add("  " + flash)
+	if m.screen != ScreenLogin {
+		footer = m.keys("ctrl+k", m.lang.t("key.commands")) + "   " + footer
+	}
 	content.add("  " + footer)
 	return content
 }
