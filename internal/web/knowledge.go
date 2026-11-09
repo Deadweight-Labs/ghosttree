@@ -874,9 +874,10 @@ func (a *app) reviewHeld(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	back := r.FormValue("back")
-	if !strings.HasPrefix(back, "/ui/review") || strings.HasPrefix(back, "//") {
-		back = "/ui/review"
+	// The way back is one of two fixed addresses, never the form's value.
+	back := "/ui/review"
+	if r.FormValue("back") == "/ui/review#held" {
+		back = "/ui/review#held"
 	}
 	http.Redirect(w, r, back, http.StatusSeeOther)
 }
