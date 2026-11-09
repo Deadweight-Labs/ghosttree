@@ -179,56 +179,77 @@ func (a *api) qualifiedResult(w http.ResponseWriter, r *http.Request, q query.Qu
 	pa.Filtered()
 	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}, Requests: []requestdomain.SearchHit{}, Query: q.String()}
 
-	for _, kind := range searchKinds(kindParam, q) {
-		switch kind {
-		case query.KindKnowledge:
-			if err := a.qualifiedKnowledge(r, &res, q, text, ax, limit, fetchBase, anchor, origin); err != nil {
-				writeStoreError(w, http.StatusInternalServerError, err)
-				return searchResult{}, false
-			}
-		case query.KindRequest:
-			if err := a.qualifiedRequests(r, &res, q, text, ax, limit, fetchBase, anchor, origin); err != nil {
-				writeStoreError(w, http.StatusInternalServerError, err)
-				return searchResult{}, false
-			}
-		case query.KindSession:
-			if err := a.qualifiedSessions(r, &res, q, text, ax, limit, fetchBase); err != nil {
-				writeStoreError(w, http.StatusInternalServerError, err)
-				return searchResult{}, false
-			}
-		case query.KindMessage:
-			if err := a.qualifiedMessages(r, &res, q, text, project, limit, fetchBase); err != nil {
-				writeStoreError(w, http.StatusInternalServerError, err)
-				return searchResult{}, false
-			}
+	kinds := searchKinds(kindParam, q)
+	gaps := a.newSearchGaps(r, len(kinds) > 1)
+	// fail answers a failed area: as a gap when there are others, otherwise as
+	// the error of the request. false means the answer is already written.
+	fail := func(kind string, err error) bool {
+		if denyAccess(w, err) {
+			return false
 		}
-		if project == "" {
-			continue
+		if gaps.add(areaName(kind), err) {
+			return true
 		}
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return false
+	}
+	for _, kind := range kinds {
 		var err error
 		switch kind {
-		case query.KindPain:
-			err = a.qualifiedPains(r, &res, q, text, project, limit, fetchBase)
-		case query.KindIdea:
-			err = a.qualifiedIdeas(r, &res, q, text, project, limit, fetchBase)
-		case query.KindFeature:
-			err = a.qualifiedFeatures(r, &res, q, text, project, limit, fetchBase)
-		case query.KindCriterion:
-			err = a.qualifiedCriteria(r, &res, q, text, project, limit, fetchBase)
-		case query.KindTask:
-			err = a.qualifiedTasks(r, &res, q, text, project, limit)
-		case query.KindFile:
-			err = a.qualifiedFiles(r, &res, q, text, project, limit, fetchBase, anchor, origin)
+		case query.KindKnowledge:
+			err = a.qualifiedKnowledge(r, &res, q, text, ax, limit, fetchBase, anchor, origin)
+		case query.KindRequest:
+			err = a.qualifiedRequests(r, &res, q, text, ax, limit, fetchBase, anchor, origin)
+		case query.KindSession:
+			st, done := gaps.budget()
+			err = done(a.qualifiedSessions(st, r, &res, q, text, ax, limit, fetchBase))
+		case query.KindMessage:
+			err = a.qualifiedMessages(r, &res, q, text, project, limit, fetchBase)
+		default:
+			if project == "" {
+				continue
+			}
+			switch kind {
+			case query.KindPain:
+				err = a.qualifiedPains(r, &res, q, text, project, limit, fetchBase)
+			case query.KindIdea:
+				err = a.qualifiedIdeas(r, &res, q, text, project, limit, fetchBase)
+			case query.KindFeature:
+				err = a.qualifiedFeatures(r, &res, q, text, project, limit, fetchBase)
+			case query.KindCriterion:
+				err = a.qualifiedCriteria(r, &res, q, text, project, limit, fetchBase)
+			case query.KindTask:
+				err = a.qualifiedTasks(r, &res, q, text, project, limit)
+			case query.KindFile:
+				err = a.qualifiedFiles(r, &res, q, text, project, limit, fetchBase, anchor, origin)
+			}
 		}
 		if err != nil {
-			if denyAccess(w, err) {
+			if !fail(kind, err) {
 				return searchResult{}, false
 			}
-			writeStoreError(w, http.StatusInternalServerError, err)
-			return searchResult{}, false
+			continue
 		}
+		gaps.done()
 	}
+	if err := gaps.allFailed(); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return searchResult{}, false
+	}
+	res.Unavailable = gaps.list
 	return res, true
+}
+
+// areaName ist der Name einer Art, wie ihn der Parameter kind schreibt: unter
+// ihm lässt sich ein ausgefallener Bereich allein wiederholen.
+func areaName(kind string) string {
+	switch kind {
+	case query.KindKnowledge:
+		return "knowledge"
+	case query.KindCriterion:
+		return "criteria"
+	}
+	return kind + "s"
 }
 
 // idsOf sammelt Ids.
@@ -247,6 +268,8 @@ func (a *api) qualifiedKnowledge(r *http.Request, res *searchResult, q query.Que
 		Axes: ax, Union: r.URL.Query().Get("scope") == "union",
 		Limit: a.overfetch(fetchBase), Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
 		NoRecord: true, Anchor: anchor, Origin: origin,
+		// Wie ohne Qualifier: Unbestätigtes und Gärtner-Notizen nur auf Nachfrage.
+		Settled: !q.WantsUnsettled(),
 	})
 	if err != nil {
 		return err
@@ -257,7 +280,7 @@ func (a *api) qualifiedKnowledge(r *http.Request, res *searchResult, q query.Que
 		return err
 	}
 	kept := filterTo(ks, limit, func(k store.Knowledge) bool {
-		return q.Match(factsOf(pa, query.KindKnowledge, k.ID, k.Status, k.Type, k.Scope.Project, k.Person, "", k.CreatedAt, k.UpdatedAt, facts[k.ID]))
+		return q.Match(factsOf(pa, query.KindKnowledge, k.ID, k.Status, k.Type, k.Scope.Project, k.Person, "", k.CreatedAt, k.UpdatedAt, facts[k.ID]).WithKnowledge(k.Confidence, k.Harness))
 	})
 	a.st.RecordKnowledgeSearchHits(kept)
 	res.Knowledge = pa.KnowledgeViews(kept)
@@ -490,12 +513,12 @@ func sessionFacts(h store.SessionHit) query.Facts {
 // (dieselbe Regel wie die Suche ohne Qualifier: private Sessions bleiben dem
 // Besitzer). Ohne Suchwort gibt es keine Session-Treffer: das Transkript wird
 // über seinen Text gefunden, nicht aufgelistet.
-func (a *api) qualifiedSessions(r *http.Request, res *searchResult, q query.Query, text string, ax scope.Axes, limit, fetchBase int) error {
+func (a *api) qualifiedSessions(st *store.Store, r *http.Request, res *searchResult, q query.Query, text string, ax scope.Axes, limit, fetchBase int) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	pa := a.access(r)
-	hits, err := a.searchSessions(pa, text, ax, r.URL.Query().Get("exclude_session"), fetchBase, a.overfetch(fetchBase), store.SearchAuto)
+	hits, err := a.searchSessions(st, pa, text, ax, r.URL.Query().Get("exclude_session"), fetchBase, a.overfetch(fetchBase), store.SearchAuto)
 	if err != nil {
 		return err
 	}

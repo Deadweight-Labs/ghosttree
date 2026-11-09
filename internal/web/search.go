@@ -460,6 +460,9 @@ func (a *app) searchKnowledge(l lang, st *store.Store, pa *store.ProjectAccess, 
 	entries, err := st.SearchKnowledgeWith(sl.text, store.KnowledgeSearch{
 		Axes: scope.Axes{Project: project}, Operator: true, Anchor: sl.anchor, Origin: sl.origin,
 		Limit: a.overfetch(sl.fetch), Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
+		// Die Vorschläge des Gärtners gehören in die Prüfung; in der Suche
+		// erscheinen sie nur, wenn die Zeile nach ihnen fragt.
+		NoGardener: !(sl.qualified && sl.q.WantsUnsettled()),
 	})
 	if err != nil {
 		return g
@@ -472,7 +475,7 @@ func (a *app) searchKnowledge(l lang, st *store.Store, pa *store.ProjectAccess, 
 	facts := factsFor(st, "knowledge", ids)
 	if sl.qualified {
 		entries = keep(entries, 0, func(k store.Knowledge) bool {
-			return sl.q.Match(factsOf(pa, query.KindKnowledge, k.ID, k.Status, k.Type, k.Scope.Project, k.Person, "", k.CreatedAt, k.UpdatedAt, facts[k.ID]))
+			return sl.q.Match(factsOf(pa, query.KindKnowledge, k.ID, k.Status, k.Type, k.Scope.Project, k.Person, "", k.CreatedAt, k.UpdatedAt, facts[k.ID]).WithKnowledge(k.Confidence, k.Harness))
 		})
 	}
 	for i, k := range entries {

@@ -61,6 +61,8 @@ type SearchResult struct {
 	Messages []store.MessageHit   `json:"messages,omitempty"`
 	// Query ist die Suchzeile, wie der Server sie gelesen hat.
 	Query string `json:"query,omitempty"`
+	// Unavailable nennt die Bereiche, die ausfielen; die übrigen sind vollständig.
+	Unavailable []store.SearchGap `json:"unavailable,omitempty"`
 }
 
 type APIError struct {
@@ -620,6 +622,16 @@ func (c *Client) search(q, kind string, filter scope.Axes, excludeSession string
 }
 
 func (c *Client) searchWith(q, kind string, filter scope.Axes, excludeSession string, limit int, union bool, af AnchorFilter) (SearchResult, error) {
+	return c.searchContext(context.Background(), q, kind, filter, excludeSession, limit, union, af)
+}
+
+// SearchContext is one search that ends with ctx: an area of context_search
+// with a time budget of its own. excludeSession leaves out the asking session.
+func (c *Client) SearchContext(ctx context.Context, q, kind string, filter scope.Axes, excludeSession string, limit int, union bool, af AnchorFilter) (SearchResult, error) {
+	return c.searchContext(ctx, q, kind, filter, excludeSession, limit, union, af)
+}
+
+func (c *Client) searchContext(ctx context.Context, q, kind string, filter scope.Axes, excludeSession string, limit int, union bool, af AnchorFilter) (SearchResult, error) {
 	query := axesQuery(filter)
 	af.apply(query)
 	query.Set("q", q)
@@ -636,7 +648,7 @@ func (c *Client) searchWith(q, kind string, filter scope.Axes, excludeSession st
 		query.Set("limit", strconv.Itoa(limit))
 	}
 	var out SearchResult
-	err := c.do("GET", "/api/search", query, nil, &out)
+	err := c.doContext(ctx, "GET", "/api/search", query, nil, &out)
 	return out, err
 }
 

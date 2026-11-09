@@ -417,6 +417,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Changed
 
+- Agent search (`context_search`, `ctx search`, `/api/search`) leaves out
+  unconfirmed (staged) entries and the gardener's notes, as delivery already
+  did, so they no longer crowd out the entries they are about. `is:staged`,
+  `author:gardener` or `harness:gardener` bring them back. The web search
+  shows staged entries to people as before, the gardener's notes only when
+  the search line asks for them.
+- `tools/list` of `ctx mcp` sends each output schema as its root type only
+  (`{"type":"object"}`), and the longest tool and field descriptions are
+  shorter: the list drops from about 193,000 to about 101,000 bytes. Tools
+  still answer with structured content, which the server checks against the
+  full schema; none of Claude Code, Codex and OpenCode sends output schemas to
+  the model outside their code-execution modes.
 - Secrets typed into a prompt are redacted by their label (`Password: …`,
   `DB_PASSWORD=…`, `api key …`) before a transcript is stored, and by `ctx
   redact-sessions` in existing data. The server also redacts on arrival.
@@ -455,6 +467,17 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - Organization names may not contain control characters.
 
 ### Fixed
+
+- `context_search` without `kind` and `ctx search` no longer lose every hit
+  when one area fails. The areas run at the same time, each with a time
+  budget of its own (on the server, sessions get 8 seconds when other areas
+  are asked too); a failed area is named in one line (`sessions: timed out`)
+  and the hits of the others are returned. Asked for one area alone, its
+  failure is still the answer.
+- The hint line on a prompt no longer fires on everyday words such as
+  "wohin" or "hattest". Common German and English words never count as
+  codenames, and a word that more than three of the reader's sessions or the
+  project's requests use gets no hint either.
 
 - The server starts without reading every transcript line: the check for
   lines an older binary wrote without search index compares the two highest

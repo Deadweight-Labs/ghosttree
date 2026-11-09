@@ -217,7 +217,9 @@ func TestEveryQualifierOverTheSearchRoute(t *testing.T) {
 	want(t, w, "mia", "kind:request type:bug", c)
 	want(t, w, "mia", "kind:request type:feature", a, b)
 	want(t, w, "mia", "kind:request type:investigation")
-	want(t, w, "mia", "kind:knowledge type:pitfall", know, "K"+i64(w.f.id["k-robin-staged"]))
+	// Staged entries are left out of agent search unless the line asks for them.
+	want(t, w, "mia", "kind:knowledge type:pitfall", know)
+	want(t, w, "mia", "kind:knowledge type:pitfall is:staged", "K"+i64(w.f.id["k-robin-staged"]))
 	// repo:
 	want(t, w, "mia", "kind:request repo:dw/p", a, b, c)
 	want(t, w, "mia", "kind:request repo:github.com/dw/p -is:open", a)
