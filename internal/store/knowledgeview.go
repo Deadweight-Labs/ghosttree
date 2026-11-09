@@ -1,8 +1,11 @@
 package store
 
 import (
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 )
 
 // KnowledgeView formt einen Wissenseintrag für den Betrachter. Wer die laufenden
@@ -14,6 +17,8 @@ func (a *ProjectAccess) KnowledgeView(k Knowledge) Knowledge {
 	if a.HidesMachines(k.Scope.Project) {
 		k.Scope.Machine = ""
 	}
+	k.Scope.Branch = a.BranchView(k.Scope.Project, k.Scope.Branch)
+	k.GitAnchor = a.AnchorView(k.Scope.Project, k.GitAnchor)
 	if a.seesKnowledgeNumbers(k) {
 		return k
 	}
@@ -23,6 +28,60 @@ func (a *ProjectAccess) KnowledgeView(k Knowledge) Knowledge {
 		k.SessionRef = ""
 	}
 	return k
+}
+
+var defaultBranchNames = []string{"main", "master", "dev"}
+
+// PickDefaultBranch: der Server kennt den Standard-Branch des Hosts nicht. Er
+// nimmt den ersten von main, master, dev, den die Daten erwähnen, sonst main.
+func PickDefaultBranch(known []string) string {
+	for _, n := range defaultBranchNames {
+		if slices.Contains(known, n) {
+			return n
+		}
+	}
+	return "main"
+}
+
+// SeesAllBranches: die Rolle des Betrachters in genau diesem Projekt (nicht die
+// höchste über alle) ist mindestens member, oder es gibt keine Durchsetzung.
+func (a *ProjectAccess) SeesAllBranches(project string) bool {
+	if !a.st.AccessEnforced() || a.IsAdmin() {
+		return true
+	}
+	return RoleRank(a.Role(project).Role) >= RoleRank(RoleMember)
+}
+
+// DefaultBranch ist der Standard-Branch des Projekts nach PickDefaultBranch.
+func (a *ProjectAccess) DefaultBranch(project string) string {
+	if v, ok := a.defBranches.Load(project); ok {
+		return v.(string)
+	}
+	known, _ := a.st.ProjectBranches(project)
+	def := PickDefaultBranch(known)
+	a.defBranches.Store(project, def)
+	return def
+}
+
+// BranchView lässt einen Branch-Namen nur stehen, wenn der Betrachter alle
+// Branches des Projekts sehen darf oder es der Standard-Branch ist: ein Name
+// kann verraten, woran gearbeitet wird, was ein Gast nicht lesen darf.
+func (a *ProjectAccess) BranchView(project, branch string) string {
+	if branch == "" || a.SeesAllBranches(project) || branch == a.DefaultBranch(project) {
+		return branch
+	}
+	return ""
+}
+
+// AnchorView ist BranchView für einen Git-Anker; der Anker des Aufrufers bleibt
+// unberührt.
+func (a *ProjectAccess) AnchorView(project string, g *gitanchor.Anchor) *gitanchor.Anchor {
+	if g == nil || a.BranchView(project, g.Branch) == g.Branch {
+		return g
+	}
+	c := *g
+	c.Branch = ""
+	return &c
 }
 
 // HidesMachines: ein Gast des Projekts sieht keine Maschinennamen, wie bei

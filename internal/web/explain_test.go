@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
-	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
@@ -74,7 +73,7 @@ func TestReviewCardShowsProjectOriginAndTheExplanationBeforeTheOriginalText(t *t
 
 	for _, path := range []string{"/ui/review", "/ui/review?project=" + url.QueryEscape(shellProject)} {
 		_, page := fetchPage(t, e.Owner, e.Base+path)
-		for _, want := range []string{"Kurz erklärt", deNote, "vom Agenten", `class="ex-from ov-meta"`, ">shell<",
+		for _, want := range []string{"Kurz erklärt", deNote, "vom Agenten", `class="ex-from ov-meta"`,
 			"REQ-" + strconv.FormatInt(req.Request.ID, 10) + " Wächter scharf schalten", `href="/ui/requests/` + strconv.FormatInt(req.Request.ID, 10) + `"`,
 			"<code>internal/coordloop.go</code>", `href="https://github.com/o/r/pull/77" rel="noopener noreferrer"`} {
 			if !strings.Contains(page, want) {
@@ -143,15 +142,10 @@ func TestEveryObjectKindShowsTheBlockOnItsPage(t *testing.T) {
 	}
 	agentNote(t, e.St, explain.KindPain, d.Pain.ID, "Erklärung zum Problem: es ist langsam bei großen Texten. Empfehlung: Fenster einführen.")
 
-	task := tpTask(t, e, shellProject, rid, humantask.CreateInput{Kind: "secret", Title: "Schlüssel anlegen", Location: "Agent Vault: vendor/prod"})
-	agentNote(t, e.St, explain.KindTask, task.ID, "Erklärung zur Aufgabe: ohne den Schlüssel kann nichts bezahlt werden. Empfehlung: heute anlegen.")
-
 	for _, c := range []struct{ path, want string }{
-		{"/ui/requests/" + strconv.FormatInt(rid, 10), "Erklärung zum Auftrag"},
+		{repoHref(shellProject) + "/issues/" + strconv.FormatInt(rid, 10), "Erklärung zum Auftrag"},
 		{"/ui/knowledge/" + strconv.FormatInt(kid, 10), "Erklärung zur Entscheidung"},
-		{"/ui/pains/" + strconv.FormatInt(d.Pain.ID, 10), "Erklärung zum Problem"},
-		{"/ui/tasks", "Erklärung zur Aufgabe"},
-		{"/ui/overview", "Erklärung zur Aufgabe"},
+		{repoHref(shellProject) + "/pains/" + strconv.FormatInt(d.Pain.ID, 10), "Erklärung zum Problem"},
 	} {
 		_, page := fetchPage(t, e.Member, e.Base+c.path)
 		if !strings.Contains(page, c.want) || !strings.Contains(page, "Kurz erklärt") {
@@ -179,7 +173,7 @@ func TestExplanationIsShownOnlyWhereTheObjectIsShown(t *testing.T) {
 		}
 	}
 	// The owner of the hidden project sees it where the object is.
-	_, page := fetchPage(t, e.Owner, e.Base+"/ui/requests/"+strconv.FormatInt(hidden.Request.ID, 10))
+	_, page := fetchPage(t, e.Owner, e.Base+repoHref(shellHiddenProject)+"/issues/"+strconv.FormatInt(hidden.Request.ID, 10))
 	if !strings.Contains(page, "GEHEIME ERKLÄRUNG") {
 		t.Error("the owner does not see the explanation of the request")
 	}
@@ -300,7 +294,7 @@ func TestAdminBlockSaysWhenNoModelIsConfigured(t *testing.T) {
 
 func TestExplainScriptAndStylesAreServedAndPollOnlyWhileWaiting(t *testing.T) {
 	e := ovEnv(t)
-	for _, f := range []string{"explain.js", "explain.css"} {
+	for _, f := range []string{"explain.js", "ui-explain.css"} {
 		if status, _ := fetchPage(t, e.Owner, e.Base+"/static/"+f); status != http.StatusOK {
 			t.Errorf("%s: %d", f, status)
 		}

@@ -79,13 +79,14 @@ func TestUnusableQueryFallsBackToTheCookieForHeaderAndPageAlike(t *testing.T) {
 	if err := e.St.SetProjectRole("person:1", shellHiddenProject, "person:2", store.RoleMember, false, store.RoleViaCLI); err != nil {
 		t.Fatal(err)
 	}
-	rqMake(t, e.St, rqSpec{Title: "Shell request"})
-	rqMake(t, e.St, rqSpec{Title: "Hidden request", Project: shellHiddenProject})
+	ovKnowledge(t, e.St, shellProject, "Shell request", "trusted")
+	ovKnowledge(t, e.St, shellHiddenProject, "Hidden request", "trusted")
 	c := remembering(t, e.Base, e.Member)
-	fetchPage(t, c, e.Base+"/ui/overview?project="+shellProject)
-	_, page := fetchPage(t, c, e.Base+"/ui/requests?project=github.com/x/nowhere")
-	if got := selectedOption(page); got != shellProject {
-		t.Errorf("header shows %q, want the cookie's %q", got, shellProject)
+	fetchPage(t, c, e.Base+"/ui/knowledge?project="+shellProject)
+	_, page := fetchPage(t, c, e.Base+"/ui/knowledge?project=github.com/x/nowhere")
+	// A page of one project shows it as the repository in the header.
+	if !strings.Contains(page, `<a href="`+repoHref(shellProject)+`">`) {
+		t.Errorf("header does not show the cookie's project %q", shellProject)
 	}
 	if !strings.Contains(page, "Shell request") || strings.Contains(page, "Hidden request") {
 		t.Error("the page does not follow the header")
@@ -95,7 +96,7 @@ func TestUnusableQueryFallsBackToTheCookieForHeaderAndPageAlike(t *testing.T) {
 	}
 	// Without a cookie the same query means All projects, in header and page.
 	fresh := remembering(t, e.Base, e.Member)
-	_, page = fetchPage(t, fresh, e.Base+"/ui/requests?project=github.com/x/nowhere")
+	_, page = fetchPage(t, fresh, e.Base+"/ui/knowledge?project=github.com/x/nowhere")
 	if selectedOption(page) != "" || !strings.Contains(page, "Shell request") || !strings.Contains(page, "Hidden request") {
 		t.Error("an unusable query without a cookie is not All projects")
 	}

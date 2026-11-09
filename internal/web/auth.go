@@ -97,7 +97,10 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				ctx = context.WithValue(ctx, shellMemoKey{}, &shellMemo{})
 				r = r.WithContext(ctx)
 				a.rememberProject(w, r)
-				next.ServeHTTP(w, r)
+				// A plain 404 or 403 of a page becomes a page in the shell.
+				ew := &errorPageWriter{ResponseWriter: w, a: a, r: r}
+				next.ServeHTTP(ew, r)
+				ew.finish()
 				return
 			}
 		}
@@ -275,7 +278,7 @@ func (a *app) finishLogin(w http.ResponseWriter, r *http.Request, account store.
 // Konto kommt aus der Einladung, für das Konto entsteht die Join-Sitzung, und die
 // Seite danach zeigt den Paarungscode und später die Freigabe des Geräts.
 func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account store.Account) {
-	next := "/ui/requests"
+	next := "/ui/inbox"
 	if _, err := a.store.Join().Create(account.ID); err == nil {
 		next = "/join/pair"
 	}
@@ -285,7 +288,7 @@ func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account st
 // startSession vergibt immer eine neue Sitzungs-ID und verwirft eine
 // mitgebrachte (keine Session-Fixation).
 func (a *app) startSession(w http.ResponseWriter, r *http.Request, principal store.Principal) {
-	a.startSessionAt(w, r, principal, a.takeNext(w, r, "/ui/overview"))
+	a.startSessionAt(w, r, principal, a.takeNext(w, r, "/ui/inbox"))
 }
 
 func (a *app) startSessionAt(w http.ResponseWriter, r *http.Request, principal store.Principal, next string) {

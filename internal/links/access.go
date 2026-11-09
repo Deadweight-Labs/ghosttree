@@ -44,5 +44,7 @@ func (r AccessReader) PullRequest(project string, n int64) (store.PullRequestInf
 	if err != nil {
 		return p, sql.ErrNoRows
 	}
+	// Wie die PR-Seiten: ein Branch-Name nur für Mitglieder, der Standard-Branch für alle.
+	p.Head, p.Base = r.PA.BranchView(p.Project, p.Head), r.PA.BranchView(p.Project, p.Base)
 	return p, nil
 }

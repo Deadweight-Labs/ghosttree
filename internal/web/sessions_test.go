@@ -170,7 +170,7 @@ func TestSessionListHidesForeignPrivateSessionsCompletely(t *testing.T) {
 	if strings.Contains(page, e.pid["alice-private"]) {
 		t.Error("the foreign private session's address is rendered")
 	}
-	if n := strings.Count(page, `class="srow is-private"`); n != 0 {
+	if n := strings.Count(page, `class="row srow is-private"`); n != 0 {
 		t.Errorf("%d private rows, want none: foreign private sessions leave no row", n)
 	}
 	// Das Hidden-Projekt hat der Member nicht.
@@ -271,8 +271,8 @@ func TestSessionListPagesWithAnOlderLink(t *testing.T) {
 		_ = e.St.AppendChunks(id, chunks(uLine(fmt.Sprintf("bulk session number %d", i))))
 	}
 	_, page := e.get(t, e.Owner, "/ui/sessions")
-	if strings.Count(page, `class="srow`) != 50 {
-		t.Errorf("first page has %d rows", strings.Count(page, `class="srow`))
+	if strings.Count(page, `class="row srow`) != 50 {
+		t.Errorf("first page has %d rows", strings.Count(page, `class="row srow`))
 	}
 	m := regexp.MustCompile(`href="(/ui/sessions\?[^"]*cursor=[^"]+)"`).FindStringSubmatch(page)
 	if m == nil {
@@ -280,8 +280,8 @@ func TestSessionListPagesWithAnOlderLink(t *testing.T) {
 	}
 	next := strings.ReplaceAll(m[1], "&amp;", "&")
 	_, page2 := e.get(t, e.Owner, next)
-	if strings.Count(page2, `class="srow`) != 14 || strings.Contains(page2, "cursor=") {
-		t.Errorf("second page: rows=%d", strings.Count(page2, `class="srow`))
+	if strings.Count(page2, `class="row srow`) != 14 || strings.Contains(page2, "cursor=") {
+		t.Errorf("second page: rows=%d", strings.Count(page2, `class="row srow`))
 	}
 }
 
@@ -387,16 +387,16 @@ func TestSessionDetailRendersBlocksReadably(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Fix the zebrafish login",                       // Titel
-		`class="blk blk-user clay"`,                     // Nutzerprompt als Block
+		`class="blk blk-user"`,                          // Nutzerprompt als Block
 		"Please look at zebrafish in the login handler", // Text
-		`<details class="think clay"`,                   // Denkblock eingeklappt
+		`<details class="think"`,                        // Denkblock eingeklappt
 		`<details class="tool`,                          // Werkzeugaufruf eingeklappt
 		"Show all 30 lines",                             // Ergebnis gekürzt
-		`class="diff clay"`,                             // Diff
+		`class="diff"`,                                  // Diff
 		`class="dl dl-del"`,
 		`class="dl dl-add"`,
 		`class="tr is-bad">error`, // Fehler fällt im Ergebnis auf
-		`class="tool clay is-failed"`,
+		`class="tool is-failed"`,
 		"Prompts",
 		"3 tool calls",
 	} {
@@ -404,7 +404,7 @@ func TestSessionDetailRendersBlocksReadably(t *testing.T) {
 			t.Errorf("detail lacks %q", want)
 		}
 	}
-	if strings.Contains(page, `<details class="think clay" open`) || strings.Contains(page, `<details class="tool" open`) {
+	if strings.Contains(page, `<details class="think" open`) || strings.Contains(page, `<details class="tool" open`) {
 		t.Error("blocks are open in the resting state")
 	}
 	// Von den 30 Zeilen stehen 12 offen, der Rest hinter dem Schalter.

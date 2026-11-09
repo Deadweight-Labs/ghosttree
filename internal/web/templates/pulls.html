@@ -1,0 +1,75 @@
+{{/* Pull requests and commits of a repository (REQ-599): lists "pulls" and "commits", pages "pull" and "commit". Styles: ui-pulls.css, behaviour: ui-pulls.js. Mock: git-native-v2 pulls.html, pr.html, commits.html, commit.html. */}}
+{{define "ghbtn"}}{{if .GitHub}}<a class="gbtn ghb" href="{{.GitHub}}" rel="noopener noreferrer" title="{{.GitHubTip}}" aria-label="{{.GitHubTip}}">{{mi "ext"}}<span>{{t "repo.on_github"}}</span></a>{{end}}{{end}}
+
+{{define "pulls"}}{{template "head" .}}{{template "nav" .}}<main class="g2 is pl"><div class="wrap">
+{{with .PullsV}}<div class="sbarrow"><form class="sbar" method="get" action="{{.Base}}" role="search"><label class="gfield mono-in">{{mi "search"}}<input type="search" name="q" value="{{.Q}}" placeholder="{{t "pulls.search_hint"}}" aria-label="{{t "pulls.search_label"}}" autocomplete="off" spellcheck="false"></label><button class="sr">{{t "issues.search_go"}}</button></form>
+{{template "ghbtn" .}}{{if .NewHref}}<a class="gbtn pri" href="{{.NewHref}}" rel="noopener noreferrer">{{mi "plus"}}{{t "pulls.new"}}</a>{{end}}</div>
+{{if .Unsupported}}<div class="callout is-unsupported" role="status">{{mi "tri"}}<div>{{t "pulls.unsupported"}}{{range .Unsupported}} <code>{{.}}</code>{{end}}</div></div>{{end}}
+<div class="box"><div class="box-h lh">{{range .Tabs}}<a class="tab{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Icon}}<span><span class="n">{{.Count}}</span> {{t .Label}}</span></a>{{end}}<span class="sp"></span>
+<div class="gfilters">{{range .Menus}}<details class="dd top-menu"><summary class="gbtn sm quiet{{if .Active}} on{{end}}">{{.Label}}{{mi "chev"}}</summary><div class="pop r"><div class="ph">{{t "issues.filter_by" .Label}}</div>{{range .Items}}<a class="opt{{if .Current}} cur{{end}}" href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}><span class="chk{{if not .Current}} off{{end}}">{{mi "check"}}</span>{{.Label}}</a>{{end}}</div></details>{{end}}</div></div>
+{{if .Rows}}{{range .Rows}}{{template "uirow" .}}
+{{end}}{{else if .NoMatch}}<div class="empty"><span>{{t "pulls.no_matches"}}</span><a class="gbtn sm" href="{{.ClearHref}}">{{t "requests.clear"}}</a></div>
+{{else}}<div class="empty"><span>{{t .EmptyKey}}</span></div>{{end}}
+{{if .Older}}<a class="morelink" href="{{.Older}}">{{t "requests.older"}}</a>{{end}}</div>
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "pull"}}{{template "head" .}}{{template "nav" .}}<main class="g2 pr"><div class="wrap">
+{{with .PullV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">#{{.N}}</span></h1></div>
+<div class="dmeta"><span class="state {{.Pill}}">{{mi .PillIcon}}{{.StateLabel}}</span>{{if .Author}}<span class="person">{{avatarOf .Author}}{{.Author}}</span>{{end}}<span>{{.Verb}}</span>{{.HeadChip}}{{if .BaseChip}}<span>{{.Into}}</span>{{.BaseChip}}{{end}}<span class="sp"></span>{{template "ghbtn" .}}</div>
+<div class="subnav" id="tabs"><nav class="utabs-nav" data-fit aria-label="{{t "pulls.tabs"}}"><ul class="utabs">{{range .Tabs}}<li data-tab="{{.Key}}"{{if .Current}} class="sel"{{end}}><a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{mi .Icon}}<span>{{t .Label}}</span>{{if .Count}}<span class="counter">{{.Count}}</span>{{end}}</a></li>{{end}}</ul></nav></div></div>
+<div class="dgrid"><div class="dmain">
+{{if eq .Tab "talk"}}{{template "uitimeline" .Items}}
+{{if .Checks}}<div class="box merge">{{range .Checks}}<div class="mrow"><span class="{{.Tone}}">{{mi .Icon}}</span><span><b>{{.Label}}</b> <span class="soft">{{.Text}}</span></span><a href="{{.LinkHref}}">{{.LinkLabel}}</a></div>
+{{end}}</div>{{end}}
+{{else if eq .Tab "checklist"}}<div class="dstat">{{if .HasPackage}}<span><b>{{.Stat.Done}}</b>{{t "pulls.stat.criteria" .Stat.Total}}</span>{{end}}<span><b>{{.Stat.Knowledge}}</b><a href="{{.KnowledgeHref}}">{{t "pulls.stat.knowledge"}}</a></span></div>
+{{if .Members}}<div class="box">{{range .Members}}<details class="rq"{{if .Open}} open{{end}}><summary><span class="car">{{mi "chevr"}}</span><span class="nn">{{ref "request" .N .Href}}</span><span class="ell rqt">{{.Title}}</span><span class="rqs">{{if .Optional}}<span class="lb out">{{t "pulls.optional"}}</span>{{end}}<span class="prog{{if .Warn}} amber{{end}}" title="{{.Progress.Title}}"><span class="bar" aria-hidden="true"><i data-pct="{{.Progress.Percent}}"></i></span>{{.Progress.Text}}</span></span></summary>
+<div class="inner">{{range .Criteria}}<div class="crit{{if .Done}} done{{end}}"><span class="cbx{{if .Done}} on{{else if .Waived}} waived{{end}}" role="img" aria-label="{{if .Done}}{{t "pulls.crit.met"}}{{else if .Waived}}{{t "pulls.crit.waived"}}{{else}}{{t "pulls.crit.open"}}{{end}}">{{if .Done}}{{mi "check"}}{{end}}</span><div><div class="tx">{{.Text}}</div>{{if or .Evidence .NoProof .Waived}}<div class="pf">{{proofs .Evidence}}{{if .NoProof}}<span class="chip noproof">{{mi "tri"}}{{t "issue.no_proof"}}</span>{{end}}{{if .Waived}}<span class="lb neu">{{t "pulls.crit.waived"}}</span>{{end}}</div>{{end}}</div></div>
+{{end}}{{range .Tasks}}<div class="crit rqtask"><span class="rqti">{{mi "pin"}}</span><div><div class="tx">{{.Title}}</div><div class="pf"><span>{{t "pulls.waits_for_task"}}</span>{{refPill "task" .N ""}}</div></div></div>
+{{end}}</div></details>
+{{end}}</div>{{end}}
+{{if .Features}}<div class="sec"><h2>{{t "pulls.features"}}</h2><span class="counter">{{len .Features}}</span></div><div class="box">{{range .Features}}<div class="crit{{if .Done}} done{{end}}"><span class="cbx{{if .Done}} on{{end}}" role="img" aria-label="{{if .Done}}{{t "pulls.crit.met"}}{{else}}{{t "pulls.crit.open"}}{{end}}">{{if .Done}}{{mi "check"}}{{end}}</span><div><div class="tx"><a href="{{.Href}}">{{.Name}}</a> <span class="muted">{{t "pulls.feature.q"}}</span></div><div class="pf"><span class="lb {{.Tone}}">{{t .StateKey}}</span><span class="muted">{{t "features.rev" .Revision}}</span>{{if .Note}}<span>{{.Note}}</span>{{end}}</div></div></div>
+{{end}}</div>{{end}}
+{{if .Uncovered}}<div class="sec"><h2>{{t "pulls.uncovered"}}</h2><span class="counter">{{len .Uncovered}}</span></div><div class="box">{{range .Uncovered}}<div class="crit"><span class="cbx" role="img" aria-label="{{t "pulls.crit.open"}}"></span><div><div class="tx">{{.Text}}</div><div class="pf">{{refPill "idea" .Idea .Href}}<span>{{.Title}}</span><span class="lb warn">{{if .Open}}{{t "pulls.uncovered.open"}}{{else}}{{t "pulls.uncovered.none"}}{{end}}</span></div></div></div>
+{{end}}</div>{{end}}
+{{if not (or .Members .Features .Uncovered)}}<div class="box"><div class="box-empty"><span>{{t "pulls.checklist_empty"}}</span></div></div>{{end}}
+{{else if eq .Tab "knowledge"}}<div class="box">{{range .Know}}<div class="row k-row"><span class="lb {{.Class}}">{{t .TypeKey}}</span><div><div class="tt"><a href="{{.Href}}">{{.Title}}</a></div>{{if .Person}}<small>{{.Person}}</small>{{end}}</div></div>
+{{else}}<div class="box-empty"><span>{{t "pulls.know_empty"}}</span></div>{{end}}{{if .KnowMore}}<div class="row k-more muted">{{t "pulls.know_more" .KnowMore}}</div>{{end}}</div>
+{{if .Ghosts}}<div class="sec"><h2>{{t "pulls.ghosts"}}</h2><span class="counter">{{len .Ghosts}}</span></div><div class="box">{{range .Ghosts}}<div class="row grow"><span class="mono ell"><a href="{{.Href}}">{{.Path}}</a></span></div>
+{{end}}</div>{{end}}
+{{else}}<div class="box"><div class="box-h"><span class="t">{{if eq .CommitsTotal 1}}{{t "pulls.n_commit_one"}}{{else}}{{t "pulls.n_commits" .CommitsTotal}}{{end}}</span></div>
+{{range .Commits}}<div class="row crow">{{if .Who}}{{avatarOf .Who}}{{else}}<span></span>{{end}}<span class="t ell"><a href="{{.Href}}">{{if .Title}}{{.Title}}{{else}}{{t "commit.untitled" .Short}}{{end}}</a></span><a class="chip sha" href="{{.Href}}">{{.Short}}</a><span class="muted nw cwhen">{{ago .At}}</span></div>
+{{else}}<div class="box-empty"><span>{{t "pulls.commits_empty"}}</span></div>{{end}}</div>{{end}}
+</div>
+<aside class="side" aria-label="{{t "pulls.side"}}">
+{{if .Author}}<div class="sblk"><h3>{{t "pulls.side.author"}}</h3><div class="v"><span class="person">{{avatarOf .Author}}{{.Author}}</span></div></div>{{end}}
+{{if .Side.Package}}<div class="sblk"><h3>{{t "pulls.side.package"}}</h3><div class="v"><span>{{.Side.Package}}</span><span class="sub">{{.Side.PackageNote}}</span></div></div>{{end}}
+{{if .Side.Requests}}<div class="sblk"><h3>{{t "pulls.side.requests"}}</h3><div class="v">{{range .Side.Requests}}<span>{{ref "request" .N .Href}}<span class="ell">{{.Title}}</span></span>{{end}}{{if .Side.RequestsMore}}<a href="{{.ChecklistHref}}">{{t "pulls.side.more" .Side.RequestsMore}}</a>{{end}}</div></div>{{end}}
+{{if .Side.Features}}<div class="sblk"><h3>{{t "pulls.side.features"}}</h3><div class="v">{{range .Side.Features}}<a href="{{.Href}}">{{.Title}}</a>{{end}}</div></div>{{end}}
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "commits"}}{{template "head" .}}{{template "nav" .}}<main class="g2 cm"><div class="wrap">
+{{with .CommitsV}}<div class="toolbar"><details class="dd top-menu"><summary class="gbtn branchbtn" aria-label="{{t "code.branch_switch"}}">{{mi "branch"}}<span class="mono">{{.BranchLabel}}</span>{{mi "chev"}}</summary><div class="pop"><div class="ph">{{t "code.branch_switch"}}</div>{{range .Branches}}<a class="opt{{if .Current}} cur{{end}}" href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}><span class="chk{{if not .Current}} off{{end}}">{{mi "check"}}</span><span class="mono">{{.Name}}</span>{{if .Default}}<small>{{t "code.branch_default"}}</small>{{end}}</a>{{end}}</div></details><span class="sp"></span>{{template "ghbtn" .}}</div>
+{{if .Empty}}<div class="box"><div class="box-empty"><span>{{t "commits.empty"}}</span></div></div>{{else}}<div class="ctl4">{{range .Days}}<div class="cgrp"><div class="cgh">{{mi "commit"}}<span>{{.Label}}</span></div><div class="box">{{range .Rows}}<div class="row cmrow"><div class="cm"><div class="ct"><a class="title" href="{{.Href}}">{{if .Title}}{{.Title}}{{else}}{{t "commit.untitled" .Short}}{{end}}</a>{{range .PRs}}<a class="ref k-pr" href="{{.Href}}" title="{{.Title}}">{{mi "pr"}}<span class="num">{{.Text}}</span></a>{{end}}</div>
+<div class="meta">{{if .Who}}<span class="stack">{{avatarOf .Who}}</span><span><b>{{.Who}}</b> {{t "commits.committed"}} {{ago .At}}</span>{{else}}<span>{{t "commits.committed_plain"}} {{ago .At}}</span>{{end}}{{range .Branches}}<a class="chip br" href="{{.Href}}">{{mi "branch"}}{{.Name}}</a>{{end}}</div></div>
+<div class="cr">{{if .Entries}}<a class="said" href="{{.Href}}#said" title="{{t "commits.said_title" .Entries}}" aria-label="{{t "commits.said_title" .Entries}}"><span>{{mi "book"}}{{.Entries}}</span></a>{{end}}<span class="shag"><a class="chip sha" href="{{.Href}}" title="{{.SHA}}">{{.Short}}</a><button type="button" class="gbtn sm icon quiet" hidden data-copy-sha="{{.SHA}}" aria-label="{{t "commits.copy"}}" title="{{t "commits.copy"}}">{{mi "copy"}}{{mi "check"}}</button></span></div></div>
+{{end}}</div></div>{{end}}</div>
+<div class="pager">{{if .Newer}}<a class="gbtn" href="{{.Newer}}">{{t "commits.newer"}}</a>{{else}}<button class="gbtn" disabled>{{t "commits.newer"}}</button>{{end}}{{if .Older}}<a class="gbtn" href="{{.Older}}">{{t "commits.older"}}</a>{{else}}<button class="gbtn" disabled>{{t "commits.older"}}</button>{{end}}</div>{{end}}
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "commit"}}{{template "head" .}}{{template "nav" .}}<main class="g2 cd"><div class="wrap">
+{{with .CommitV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}</h1></div>
+<div class="dmeta chead">{{if .Who}}<span class="person">{{avatarOf .Who}}{{.Who}}</span>{{end}}<span{{if .AtTitle}} title="{{.AtTitle}}"{{end}}>{{if .At}}{{t "commit.committed_at" .At}}{{else}}{{t "commit.committed"}}{{end}}</span><span class="chip sha" title="{{.SHA}}">{{.Short}}</span>{{range .Branches}}<a class="chip br" href="{{.Href}}">{{mi "branch"}}{{.Name}}</a>{{end}}{{range .PRs}}<a class="ref k-pr" href="{{.Href}}" title="{{.Title}}">{{mi "pr"}}<span class="num">{{.Text}}</span></a>{{end}}<span class="sp"></span>{{template "ghbtn" .}}</div></div>
+<div class="dgrid"><div class="dmain">
+<div class="sec" id="said"><h2>{{t "commit.said"}}</h2>{{if .Entries}}<span class="counter">{{.Entries}}</span>{{end}}</div>
+{{if .Items}}{{template "uitimeline" .Items}}{{else if not .Files}}<div class="box"><div class="box-empty"><span>{{t "commit.said_empty"}}</span></div></div>{{end}}
+{{if .Files}}<div class="sec"><h2>{{t "commit.files"}}</h2><span class="counter">{{.FilesTotal}}</span></div><div class="box">{{range .Files}}<div class="row frow"><span class="p mono ell"><a href="{{.Href}}">{{.Path}}</a></span><span class="dsc ell">{{.Desc}}</span><span class="muted nw">{{.Who}}</span></div>
+{{end}}</div>{{end}}
+</div>
+<aside class="side" aria-label="{{t "commit.side"}}">
+{{if .Side.Requests}}<div class="sblk"><h3>{{t "commit.side.requests"}}</h3><div class="v">{{range .Side.Requests}}<span>{{ref "request" .N .Href}}<span class="ell">{{.Title}}</span></span>{{end}}</div></div>{{end}}
+{{if .Side.PRs}}<div class="sblk"><h3>{{t "commit.side.pulls"}}</h3><div class="v">{{range .Side.PRs}}<span><a class="ref k-pr" href="{{.Href}}" title="{{.Title}}">{{mi "pr"}}<span class="num">{{.Text}}</span></a></span>{{end}}</div></div>{{end}}
+{{if .Side.Branches}}<div class="sblk"><h3>{{t "commit.side.branches"}}</h3><div class="v">{{range .Side.Branches}}<span><a class="chip br" href="{{.Href}}">{{mi "branch"}}{{.Name}}</a></span>{{end}}</div></div>{{end}}
+<div class="sblk"><h3>{{t "commit.side.all"}}</h3><div class="v"><a href="{{.CommitsHref}}">{{t "commit.side.all_link"}}</a></div></div>
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}

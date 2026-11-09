@@ -1,0 +1,68 @@
+/* Markdown prose of the preview and the hover card of references. Mock:
+   git-native-v2 gh6.css. The card sits on <body> (ui-refs.js), so .pcard is in
+   the scope list of ui-base.css and ui-parts.css and gets the state pill, avatar
+   and progress bar from there. */
+
+:is(.g2, .pcard) {
+  & .state.amber4 { background: var(--attention-emphasis); }
+}
+
+/* Prose beyond paragraph, list and quote */
+:is(.g2) {
+  & .inreply .cx .cx-pv { min-height: 72px; }
+  & .prose h1, & .prose h2, & .prose h3 { line-height: 1.25; font-weight: 600; }
+  & .prose h1 { margin: 24px 0 16px; padding-bottom: .3em; font-size: 24px; border-bottom: 1px solid var(--border-muted); }
+  & .prose h3 { margin: 24px 0 16px; font-size: 16px; }
+  & .prose h1:first-child, & .prose h3:first-child { margin-top: 0; }
+  & .prose ol { margin: 0 0 16px; padding-left: 2em; }
+  & .prose li + li { margin-top: .25em; }
+  & .prose li > ul, & .prose li > ol { margin: .25em 0 0; }
+  & .prose li > p { margin: 0 0 8px; }
+  & .prose blockquote > :last-child { margin-bottom: 0; }
+  & .prose pre { margin: 0 0 16px; padding: 12px 16px; overflow: auto; font: 12px/1.5 var(--ui-mono); color: var(--fg-default); background: var(--canvas-subtle); border-radius: 6px; }
+  & .prose pre code { padding: 0; font-size: inherit; white-space: pre; background: none; border-radius: 0; }
+  & .prose li.task { position: relative; list-style: none; }
+  & .prose li.task > .cbx { position: absolute; left: -1.6em; top: 3px; margin: 0; }
+  & .prose a[href^="http"]:not(.ref) { text-decoration: none; }
+  & .prose a[href^="http"]:not(.ref):hover { text-decoration: underline; }
+  & .prose .ref.pill { vertical-align: baseline; }
+  & .prose .mention { font-weight: 500; }
+}
+
+/* Hover card: one card, set next to the pill by the script */
+.pcard { position: absolute; z-index: 60; display: flex; flex-direction: column; gap: 6px; width: 320px; max-width: calc(100vw - 16px); padding: 12px 14px; text-align: left; font: 12px/1.45 var(--ui-font); white-space: normal; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-pop); }
+.pcard[hidden] { display: none; }
+/* Bridge: an invisible strip towards the pill, so the card stays open when the pointer crosses over */
+.pcard::before { content: ""; position: absolute; }
+.pcard[data-pos="b"]::before { left: 0; right: 0; top: -10px; height: 10px; }
+.pcard[data-pos="t"]::before { left: 0; right: 0; bottom: -10px; height: 10px; }
+.pcard[data-pos="r"]::before { top: 0; bottom: 0; left: -10px; width: 10px; }
+.pcard[data-pos="l"]::before { top: 0; bottom: 0; right: -10px; width: 10px; }
+:is(.pcard) {
+  & .pc-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; }
+  & .pc-k { display: inline-flex; align-items: center; gap: 6px; font: 12px/16px var(--ui-mono); color: var(--fg-muted); }
+  & .pc-k .i { width: 14px; height: 14px; flex: none; }
+  & .pc-k.k-req .i { color: var(--success-fg); }
+  & .pc-k.k-pain .i { color: var(--danger-fg); }
+  & .pc-k.k-idea .i { color: var(--attention-fg); }
+  & .pc-k.k-task .i { color: var(--accent-fg); }
+  & .pc-k.k-dec .i { color: var(--attention-fg); }
+  & .state { flex: none; }
+  & .pc-t { font-size: 14px; font-weight: 600; line-height: 1.35; color: var(--fg-default); overflow-wrap: anywhere; }
+  & .pc-b { color: var(--fg-muted); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  & .pc-x { color: var(--fg-default); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+  & .pc-x .k { font-weight: 600; color: var(--fg-muted); }
+  & .pc-steps { margin: 0; padding: 0; list-style: none; counter-reset: pcs; color: var(--fg-default); }
+  & .pc-steps li { counter-increment: pcs; display: flex; align-items: baseline; gap: 6px; padding: 1px 0; min-width: 0; }
+  & .pc-steps li::before { content: counter(pcs) "."; flex: none; min-width: 14px; text-align: right; color: var(--fg-muted); }
+  & .pc-steps .pcb { flex: none; align-self: center; width: 12px; height: 12px; border: 1px solid var(--border-default); border-radius: 3px; background: var(--canvas-default); }
+  & .pc-steps span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .pc-steps li.more { color: var(--fg-muted); }
+  & .pc-steps li.more::before { content: ""; min-width: 0; }
+  & .pc-m { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 2px; padding-top: 8px; color: var(--fg-muted); border-top: 1px solid var(--border-muted); }
+  & .pc-by { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  & .pc-by .gav { width: 16px; height: 16px; font-size: 7px; flex: none; }
+  & .pc-by .gav .i { width: 10px; height: 10px; }
+  & .prog { flex: none; }
+  & .prog .bar { width: 72px; }
+}

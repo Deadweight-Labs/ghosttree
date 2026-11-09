@@ -190,6 +190,8 @@ type joinView struct {
 	Code, CSRFToken, Person                   string
 	Initial, Email                            string
 	SignedIn, OIDC, Signup                    bool
+	// Provider is the display name of the identity provider ("GitHub"), empty when unnamed.
+	Provider string
 	// Guest wählt den Satz, der sagt, was die Rolle sieht; Project ist der Name
 	// des Projekts darin.
 	Guest   bool
@@ -232,7 +234,7 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 	// ein bloßes Öffnen oder Neuladen erzeugt keinen Code.
 	view := joinView{Inviter: preview.Inviter, Target: preview.Project, Org: preview.Org, RoleText: roleLabel(l, preview.Role),
 		ExpiresAt: preview.ExpiresAt, Guest: preview.Role == store.RoleGuest, Project: firstNonEmpty(preview.Project, l.msg("join.shares.project")),
-		Code: code, OIDC: a.oidc != nil, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context())}
+		Code: code, OIDC: a.oidc != nil, Provider: a.oidcName, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context())}
 	if session, ok := a.joinSession(r); ok {
 		view.SignedIn, view.Person, view.CSRFToken = true, session.principal.Label, session.csrf
 		view.Initial = initialOf(view.Person)
@@ -252,7 +254,7 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 // new, with a way into the project. The invitation stays unused.
 func (a *app) joinAlreadyMember(l lang, w http.ResponseWriter, p store.InvitePreview) {
 	a.joinHeaders(w)
-	target := "/ui/overview"
+	target := "/ui/inbox"
 	if p.Remote != "" {
 		target = "/ui/knowledge?project=" + url.QueryEscape(p.Remote)
 	}
@@ -316,7 +318,7 @@ func (a *app) joinSignOut(w http.ResponseWriter, r *http.Request) {
 func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request) {
 	account := browserPrincipal(r).ID
 	if _, err := a.store.Join().Create(account); err != nil {
-		http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
+		http.Redirect(w, r, "/ui/inbox", http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/join/pair", http.StatusSeeOther)

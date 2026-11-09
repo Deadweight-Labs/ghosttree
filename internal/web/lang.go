@@ -105,12 +105,26 @@ func (l lang) dateTime(t time.Time) string {
 // Vorlagen sind an ihre Sprache gebunden.
 func parseTemplates(l lang) *template.Template {
 	return template.Must(template.New("").Funcs(template.FuncMap{
-		"t":    l.msg,
-		"ago":  func(stamp string) template.HTML { return timeTag(l, stamp) },
+		"t":   l.msg,
+		"ago": func(stamp string) template.HTML { return timeTag(l, stamp) },
+		// dict builds a map for a partial that needs the page and one row.
+		"dict": func(kv ...any) map[string]any {
+			m := map[string]any{}
+			for i := 0; i+1 < len(kv); i += 2 {
+				if k, ok := kv[i].(string); ok {
+					m[k] = kv[i+1]
+				}
+			}
+			return m
+		},
 		"lbl":  func(group, value string) string { return adminLabel(l, group, value) },
 		"lang": func() string { return string(l) },
 		"lead": func(s string) string { return leadSentence(s, 200) },
-	}).ParseFS(files, "templates/*.html"))
+		// lower writes an agent's name the way the mock does: claude, codex.
+		"lower": strings.ToLower,
+		// more is how many of n entries are left after the first k.
+		"more": func(n, k int) int { return n - k },
+	}).Funcs(identityFuncs(l)).ParseFS(files, "templates/*.html"))
 }
 
 var pages = map[lang]*template.Template{langEN: parseTemplates(langEN), langDE: parseTemplates(langDE)}

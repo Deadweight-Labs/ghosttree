@@ -72,6 +72,11 @@ type listRow struct {
 	Href, Title, Meta, Messages, Duration, Time, Stamp string
 	Private, Live                                      bool
 	Linked                                             []chip
+	// Kind is the avatar of the agent (claude, codex, system), Machine and Branch
+	// the second line, Project the repository's short name.
+	Kind, Machine, Branch, Project string
+	// MachineHref is the machine page, empty when the viewer cannot reach it.
+	MachineHref string
 }
 
 type dayGroup struct {
@@ -220,6 +225,10 @@ type sessionView struct {
 	WindowError         bool
 	RetryHref           string
 	Empty               bool
+	// The head of the page: avatar of the agent, machine, branch, how long it ran.
+	Kind, Machine, Branch, Project, Duration string
+	Messages                                 int
+	MachineHref                              string
 }
 
 // ------------------------------------------------------------------- Helfer
@@ -480,6 +489,7 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 	filter, keep := sessionFilterFromQuery(r, guest)
 	// Das Projekt kommt aus der Auswahl im Kopf, nicht aus einem eigenen Filter.
 	filter.Project = selectedProject(a.shellFor(r, "sessions"))
+	r = a.repoScoped(r, filter.Project, "sessions")
 	keep.Del("project")
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if utf8.RuneCountInString(query) > maxQueryRunes {
@@ -585,9 +595,11 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		links, _ := a.store.SessionLinks(pa, readableIDs)
+		machineLink := a.machineLinker(r)
 		var lastDay string
 		for _, row := range page.Rows {
 			lr := a.listRow(l, row, links[row.Session.ID], now)
+			lr.MachineHref = machineLink(lr.Machine)
 			v.HasLinked = v.HasLinked || len(lr.Linked) > 0
 			label := dayLabel(l, parseStamp(row.Session.LastSeenAt), now)
 			if label != lastDay || len(v.Days) == 0 {
@@ -650,6 +662,7 @@ func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, n
 		Time:     clock(s.LastSeenAt),
 		Stamp:    s.LastSeenAt,
 		Private:  !row.Readable,
+		Kind:     harnessKind(s.Harness), Machine: s.Scope.Machine, Branch: s.Scope.Branch, Project: projectName(s.Scope.Project),
 	}
 	if t := parseStamp(s.LastSeenAt); !t.IsZero() && now.Sub(t) < liveWindow {
 		lr.Live = true
@@ -792,6 +805,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 		a.sessionMissing(w, r)
 		return
 	}
+	r = a.repoScoped(r, sess.Scope.Project, "sessions")
 	qv := r.URL.Query()
 	q := strings.TrimSpace(qv.Get("q"))
 	if utf8.RuneCountInString(q) > maxQueryRunes {
@@ -822,6 +836,9 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	if v.Title == "" {
 		v.Title = l.msg("sessions.untitled")
 	}
+	v.Kind, v.Machine, v.Branch, v.Project = harnessKind(sess.Harness), view.Scope.Machine, view.Scope.Branch, projectName(sess.Scope.Project)
+	v.Duration, v.Messages = formatDuration(sess.StartedAt, sess.LastSeenAt), sess.Messages
+	v.MachineHref = a.machineLinker(r)(v.Machine)
 	if t := parseStamp(sess.LastSeenAt); !t.IsZero() && time.Since(t) < liveWindow {
 		v.Live = true
 	}
@@ -1053,20 +1070,15 @@ func linkChip(l lang, link store.SessionLink) chip {
 	return chip{Href: "/ui/knowledge", Text: l.msg("sessions.knowledge_ref", link.ID)}
 }
 
-// detailMeta is the line under the title of a session. Its start time is a
-// <time> element that app.js shows in the reader's zone, like every other time.
+// detailMeta is the start time of a session under the title, a <time> element
+// that localtime.js shows in the reader's zone. Agent, machine, branch and
+// duration are pills of their own and are not said again.
 func detailMeta(l lang, s store.Session) template.HTML {
-	parts := []string{html.EscapeString(sessionMeta(s))}
-	if t := parseStamp(s.StartedAt); !t.IsZero() {
-		parts = append(parts, `<time datetime="`+html.EscapeString(t.UTC().Format(time.RFC3339))+`" data-local="datetime">`+html.EscapeString(l.dateTime(t))+`</time>`)
+	t := parseStamp(s.StartedAt)
+	if t.IsZero() {
+		return ""
 	}
-	if d := formatDuration(s.StartedAt, s.LastSeenAt); d != "" {
-		parts = append(parts, html.EscapeString(d))
-	}
-	if s.Messages > 0 {
-		parts = append(parts, html.EscapeString(l.msg("sessions.n_messages", s.Messages)))
-	}
-	return template.HTML(strings.Join(parts, " · "))
+	return template.HTML(`<time datetime="` + html.EscapeString(t.UTC().Format(time.RFC3339)) + `" data-local="datetime">` + html.EscapeString(l.dateTime(t)) + `</time>`)
 }
 
 // sessionShare stellt die Freigabestufe ein (POST, CSRF, interaktive Sitzung).
@@ -1453,4 +1465,25 @@ func resultSummary(l lang, b transcript.Block) string {
 		return l.msg("sessions.one_line")
 	}
 	return l.msg("sessions.n_lines", n)
+}
+
+// Total is the number of sessions the list shows, LiveCount how many of them run.
+func (v sessionsView) Total() int {
+	n := 0
+	for _, d := range v.Days {
+		n += len(d.Rows)
+	}
+	return n
+}
+
+func (v sessionsView) LiveCount() int {
+	n := 0
+	for _, d := range v.Days {
+		for _, r := range d.Rows {
+			if r.Live {
+				n++
+			}
+		}
+	}
+	return n
 }

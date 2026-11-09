@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -147,17 +148,21 @@ func TestWebPagesFollowVisibility(t *testing.T) {
 		}
 		return out
 	}
-	reqPath := "/ui/requests/" + strconv.FormatInt(detail.Request.ID, 10)
+	reqPath := repoHref(project) + "/issues/" + strconv.FormatInt(detail.Request.ID, 10)
 	for _, who := range []string{"robin", "lena", "mia", "gus"} {
-		if out := page(who, "/ui/requests", 200); !strings.Contains(out, "visible request") {
+		if out := page(who, repoHref(project)+"/issues", 200); !strings.Contains(out, "visible request") {
 			t.Errorf("%s does not see the project's request", who)
 		}
 		page(who, reqPath, 200)
 	}
-	if out := page("nora", "/ui/requests", 200); strings.Contains(out, "visible request") {
-		t.Errorf("stranger sees the request list entry")
+	// The old list address leads a stranger nowhere near the project: not into its repository.
+	strangerClient := login(t, srv, tokens["nora"])
+	if resp, err := strangerClient.Get(srv.URL + "/ui/requests"); err != nil || resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/ui/inbox" {
+		t.Errorf("stranger GET /ui/requests = %v, want a redirect to the inbox", resp)
 	}
+	page("nora", repoHref(project)+"/issues", 404)
 	page("nora", reqPath, 404)
+	page("nora", "/ui/requests/"+strconv.FormatInt(detail.Request.ID, 10), 404)
 
 	know := "/ui/knowledge?project=" + project
 	// A hidden project filter answers like an unknown one (no existence oracle).
@@ -168,6 +173,7 @@ func TestWebPagesFollowVisibility(t *testing.T) {
 	}
 	csrfToken := regexp.MustCompile(`name="csrf[^"]*"(?: value="[^"]*")?`)
 	norm := func(s, proj string) string {
+		s = strings.ReplaceAll(s, url.QueryEscape(proj), "PROJECT")
 		s = strings.ReplaceAll(s, proj, "PROJECT")
 		return csrfToken.ReplaceAllString(s, `name="csrf" value="X"`)
 	}
@@ -190,10 +196,10 @@ func TestWebPagesFollowVisibility(t *testing.T) {
 		t.Errorf("member context preview lacks project knowledge")
 	}
 
-	if out := page("mia", "/ui/sessions", 200); strings.Count(out, `class="srow`) != 1 {
+	if out := page("mia", "/ui/sessions", 200); strings.Count(out, `class="row srow`) != 1 {
 		t.Errorf("member does not list sessions: %s", out)
 	}
-	if out := page("gus", "/ui/sessions", 200); strings.Contains(out, `class="srow`) {
+	if out := page("gus", "/ui/sessions", 200); strings.Contains(out, `class="row srow`) {
 		t.Errorf("guest lists sessions")
 	}
 	page("mia", "/ui/sessions/"+sessions["mia"], 200)

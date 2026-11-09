@@ -3,6 +3,7 @@ package web
 import (
 	"database/sql"
 	"errors"
+	"html/template"
 	"net/http"
 	"net/url"
 	"slices"
@@ -16,8 +17,6 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-const painsShown = 100
-
 var (
 	painStateKeys = map[string]string{"active": "pains.state.active", "mitigated": "pains.state.mitigated", "accepted": "pains.state.accepted", "resolved": "pains.state.resolved", "obsolete": "pains.state.obsolete"}
 	painEventKeys = map[string]string{"created": "pains.event.created", "state": "pains.event.state", "corrected": "pains.event.corrected",
@@ -26,96 +25,38 @@ var (
 		"decision": "requests.evidence.decision", "url": "requests.evidence.url", "session": "requests.evidence.session", "request": "requests.evidence.request"}
 )
 
-type painRow struct {
-	ID                 int64
-	Human, Title, Href string
-	State, StateLabel  string
-	Remaining, Project string
-	Age                string
-}
-
-// painGroup is the pains of one state, active first; resolved and obsolete
-// ones are one folded group.
-type painGroup struct {
-	State, Label string
-	Rows         []painRow
-	Folded       bool
-}
-
-type painsView struct {
-	Rows        []painRow
-	Groups      []painGroup
-	Project     string
-	Empty       bool
-	ShowProject bool
-}
-
 type painLinkLine struct {
 	Kind, Text, Href string
-}
-
-type painEventLine struct {
-	Label, Text, By, Age string
-	Evidence             *evidenceLine
+	// Pill is the identifier pill of a request: the sidebar says REQ-2, the title is in the hover card.
+	Pill template.HTML
 }
 
 type painView struct {
 	ID                                int64
 	Human, Title, Project, Person     string
 	State, StateLabel, Remaining, Age string
-	Blocks                            []bodyBlock
-	Motivates                         []painLinkLine
-	Events                            []painEventLine
-	CanWork                           bool
-	States                            []filterOption
-	EvidenceKinds                     []filterOption
-	Token, Back                       string
-	Result                            *requestResult
-	Explain                           *explainView
+	// Accepted is why one lives with the pain (state accepted).
+	Accepted  string
+	Blocks    []bodyBlock
+	Motivates []painLinkLine
+	// Items is the history as entries of the timeline (oldest first), Composer
+	// the field that changes the state, Labels the pills of the column of facts,
+	// People who took part, Viewer the signed-in person.
+	Items         []tlItem
+	Composer      *composerView
+	Labels        []rowLabel
+	People        []string
+	Viewer, Base  string
+	StateTone     string
+	CanWork       bool
+	States        []filterOption
+	EvidenceKinds []filterOption
+	Token, Back   string
+	Result        *requestResult
+	Explain       *explainView
 }
 
 func painURL(id int64) string { return "/ui/pains/" + strconv.FormatInt(id, 10) }
-
-func (a *app) painsPage(w http.ResponseWriter, r *http.Request) {
-	l := a.langFor(r)
-	w.Header().Set("Cache-Control", "no-store")
-	pa := a.access(r)
-	project := selectedProject(a.shellFor(r, "pains"))
-	// Every state, active and mitigated first: a resolved pain with its
-	// evidence has to stay findable.
-	state := "all"
-	v := &painsView{Project: project, ShowProject: project == ""}
-	for _, p := range visibleProjects(pa, project) {
-		list, err := pa.SearchPains(pain.Filter{Project: p, State: state, Limit: painsShown})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for _, p := range list {
-			row := painRow{ID: p.ID, Human: p.HumanID(), Title: p.Title, Href: painURL(p.ID), State: p.State, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining,
-				Age: shortAge(l, overviewNow().UTC(), parseTime(p.UpdatedAt)), Project: lastSegment(p.Project)}
-			if !v.ShowProject {
-				row.Project = ""
-			}
-			v.Rows = append(v.Rows, row)
-		}
-	}
-	byState := map[string][]painRow{}
-	for _, row := range v.Rows {
-		state := row.State
-		if state == "obsolete" {
-			state = "resolved"
-		}
-		byState[state] = append(byState[state], row)
-	}
-	for _, state := range []string{"active", "mitigated", "accepted", "resolved"} {
-		if rows := byState[state]; len(rows) > 0 {
-			v.Groups = append(v.Groups, painGroup{State: state, Label: label(l, painStateKeys, state), Rows: rows, Folded: state == "resolved"})
-		}
-	}
-	v.Empty = len(v.Rows) == 0
-	a.renderBrowser(w, r, "pains", pageData{Title: l.msg("pains.title"), PainsV: v})
-}
 
 func lastSegment(project string) string {
 	if i := strings.LastIndex(project, "/"); i >= 0 {
@@ -124,7 +65,8 @@ func lastSegment(project string) string {
 	return project
 }
 
-func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
+// painPageIn shows the pain; with a remote it must belong to that project.
+func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -139,8 +81,12 @@ func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := detail.Pain
+	if remote != "" && p.Project != remote {
+		http.NotFound(w, r)
+		return
+	}
 	v := &painView{ID: p.ID, Human: p.HumanID(), Title: p.Title, Project: lastSegment(p.Project), Person: p.Person,
-		State: p.State, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining, Age: shortAge(l, overviewNow().UTC(), parseTime(p.CreatedAt)),
+		State: p.State, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining, Accepted: p.AcceptedReason, Age: shortAgo(l, overviewNow().UTC(), parseTime(p.CreatedAt)),
 		Blocks: bodyBlocks(p.Body, 0), Token: csrfOf(r), Back: "/ui/pains?project=" + url.QueryEscape(p.Project)}
 	v.CanWork = pa.CheckPain(p, store.ActWork) == nil
 	v.Explain = a.explainFor(l, explain.KindPain, p.ID)
@@ -150,11 +96,13 @@ func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
 	for _, k := range pain.EvidenceKinds {
 		v.EvidenceKinds = append(v.EvidenceKinds, filterOption{Value: k, Label: label(l, painEvidenceKeys, k), Selected: k == "commit"})
 	}
+	lg := l
 	for _, l := range detail.Motivates {
 		line := painLinkLine{Kind: l.Kind}
 		switch l.Kind {
 		case "request":
 			line.Text, line.Href = "REQ-"+strconv.FormatInt(l.RequestID, 10)+" "+ellipsize(l.Title, 80), requestURL(l.RequestID)
+			line.Pill = refPillHTML(lg, "request", l.RequestID, line.Href)
 		case "knowledge":
 			line.Text, line.Href = ellipsize(l.Title, 80), "/ui/knowledge/"+strconv.FormatInt(l.KnowledgeID, 10)
 		default:
@@ -166,26 +114,24 @@ func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
 		v.Motivates = append(v.Motivates, line)
 	}
 	now := overviewNow().UTC()
-	for i := len(detail.Events) - 1; i >= 0; i-- {
-		e := detail.Events[i]
-		line := painEventLine{Label: label(l, painEventKeys, e.Kind), By: e.Person, Age: shortAge(l, now, parseTime(e.CreatedAt))}
-		switch e.Kind {
-		case "state":
-			line.Label = label(l, painStateKeys, e.ToState)
-			line.Text = firstNonEmpty(e.Remaining, e.Note)
-			if e.EvidenceKind != "" {
-				ev := a.evidenceLineFor(l, pa, p.Project, requestdomain.Evidence{Kind: e.EvidenceKind, Ref: e.EvidenceRef})
-				ev.Label = label(l, painEvidenceKeys, e.EvidenceKind)
-				line.Evidence = &ev
-			}
-		case "corrected":
-			line.Text = e.Note
-		case "link_added", "link_removed":
-			line.Text = ellipsize(linkDataText(e.Data), 120)
+	v.Viewer, v.StateTone = browserPrincipal(r).Label, painStateTone[p.State]
+	v.Base = repoHref(p.Project)
+	ago := func(at string) string { return shortAgo(l, now, parseTime(at)) }
+	v.Items = mergeTimeline(a.painItems(l, pa, p, detail.Events, ago), a.commentTimeline(r, l, pa, store.CommentOnPain, p.ID, p.Person, v.Base+"/pains/"+strconv.FormatInt(p.ID, 10), editingComment(r), ago))
+	seen := map[string]bool{}
+	for _, e := range detail.Events {
+		if e.Person != "" && !seen[e.Person] {
+			seen[e.Person] = true
+			v.People = append(v.People, e.Person)
 		}
-		v.Events = append(v.Events, line)
 	}
+	if labels, err := a.store.LabelsFor("pain", []int64{p.ID}); err == nil {
+		v.Labels = rowLabels(labels[p.ID], v.Base+"/issues")
+	}
+	v.Composer = a.painComposer(l, v, p.State, interactive(r) && pa.Allow(p.Project, store.ResComment, store.ActCreate, store.Object{Own: true}))
 	switch {
+	case commentResult(r, l) != nil:
+		v.Result = commentResult(r, l)
 	case r.URL.Query().Get("fail") != "":
 		v.Result = &requestResult{Text: l.msg(painFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
 	case r.URL.Query().Get("done") == "state":
@@ -215,12 +161,26 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// The composer sends the chosen state as "mode"; "state" is the older form field.
 	to := r.FormValue("state")
+	if to == "" {
+		to = r.FormValue("mode")
+	}
+	if to == "comment" {
+		pa := a.access(r)
+		c, err := pa.AddComment(store.CommentOnPain, id, r.FormValue("note"), a.commentActor(r))
+		if err != nil {
+			a.commentFail(w, r, a.objectPage(pa, store.CommentOnPain, id), err)
+			return
+		}
+		http.Redirect(w, r, commentPage(c)+"?comment=added#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
+		return
+	}
 	if !slices.Contains(pain.States, to) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
-	for _, f := range []string{"remaining", "evidence_ref", "note"} {
+	for _, f := range []string{"remaining", "evidence_ref", "note", "why"} {
 		if len(r.FormValue(f)) > maxFieldBytes {
 			http.Error(w, "invalid input", http.StatusBadRequest)
 			return
@@ -232,15 +192,36 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(ev.Ref) == "" {
 		ev = pain.Evidence{}
 	}
-	if _, err := a.access(r).SetPainState(id, to, r.FormValue("remaining"), ev, r.FormValue("note"), actor); err != nil {
+	if _, err := a.access(r).SetPainState(id, to, r.FormValue("remaining"), ev, painStateNote(to, r.FormValue("why"), r.FormValue("note")), actor); err != nil {
 		if code := requestdomain.Code(err); code != "" {
-			http.Redirect(w, r, painURL(id)+"?fail="+url.QueryEscape(code), http.StatusSeeOther)
+			http.Redirect(w, r, a.painHref(r, id)+"?fail="+url.QueryEscape(code), http.StatusSeeOther)
 			return
 		}
 		a.painFail(w, r, err)
 		return
 	}
-	http.Redirect(w, r, painURL(id)+"?done=state", http.StatusSeeOther)
+	q := "?done=state"
+	if text := strings.TrimSpace(r.FormValue("note")); text != "" {
+		if _, err := a.access(r).AddComment(store.CommentOnPain, id, text, a.commentActor(r)); err != nil {
+			q = "?comment=failed"
+		}
+	}
+	http.Redirect(w, r, a.painHref(r, id)+q, http.StatusSeeOther)
+}
+
+// painStateNote is the note the store gets: for an accepted or obsolete pain
+// the field "Warum" is the reason, and a comment beside it follows after a
+// blank line so that nothing the person wrote is lost. Without "Warum" the note
+// is the reason (older forms, the other states).
+func painStateNote(to, why, note string) string {
+	why, note = strings.TrimSpace(why), strings.TrimSpace(note)
+	if (to != pain.Accepted && to != pain.Obsolete) || why == "" {
+		return note
+	}
+	if note == "" {
+		return why
+	}
+	return why + "\n\n" + note
 }
 
 // linkDataText writes the target of a link event ("request:1", "knowledge:3",
@@ -270,6 +251,8 @@ func painFailKey(code string) string {
 		return "pains.result.evidence_invalid"
 	case "note_required":
 		return "pains.result.note_required"
+	case "accepted_reason_required":
+		return "pains.result.accepted_reason_required"
 	case "invalid_transition":
 		return "pains.result.invalid_transition"
 	}

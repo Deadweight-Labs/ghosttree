@@ -145,5 +145,16 @@ func (a *app) coordAgentControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(r.FormValue("room")), http.StatusSeeOther)
+	a.redirectAfterControl(w, r, agent)
+}
+
+// redirectAfterControl führt nach dem Steuern zurück: in den Raum, aus dem das
+// Formular kam, sonst auf die Seite des Agenten. Das Ziel wird gebaut, nie aus
+// dem Formular übernommen.
+func (a *app) redirectAfterControl(w http.ResponseWriter, r *http.Request, agent string) {
+	if room := strings.TrimSpace(r.FormValue("room")); room != "" || agent == "" {
+		http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, agentURL(agent), http.StatusSeeOther)
 }

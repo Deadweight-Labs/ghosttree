@@ -262,3 +262,24 @@ func TestRefsPullCardNamesTheAuthor(t *testing.T) {
 		t.Fatalf("pull cards: %+v", list)
 	}
 }
+
+// Die Hover-Karte eines PRs nennt den Branch nur, wem auch die PR-Seite ihn
+// zeigt: Mitglieder sehen "feat/x → main", ein Gast höchstens den Standard-Branch.
+func TestRefsPullSummaryHidesBranchesFromGuests(t *testing.T) {
+	f := accessAPI(t, true)
+	f.seedPull(t)
+	code, body := refsGet(t, f, "gus", "pr:12")
+	if code != 200 {
+		t.Fatalf("guest pr card = %d %s", code, body)
+	}
+	if strings.Contains(body, "feat/x") {
+		t.Errorf("guest card leaks the branch: %s", body)
+	}
+	if list := decodeRefs(t, body); len(list) != 1 || list[0].Kurzfassung != "main" {
+		t.Errorf("guest summary: %+v", list)
+	}
+	_, body = refsGet(t, f, "mia", "pr:12")
+	if list := decodeRefs(t, body); len(list) != 1 || list[0].Kurzfassung != "feat/x → main" {
+		t.Errorf("member summary: %+v", list)
+	}
+}

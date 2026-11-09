@@ -1,0 +1,59 @@
+/* Agents in the GitHub-like look: list grouped by machine, page of one agent with
+   its composer. Mock: git-native-v2 agents.html, agent.html. */
+
+:is(.g2.ag) {
+  & .sbar { margin-bottom: 16px; }
+  & .agroups { margin-top: 16px; }
+  & .agroup { margin-bottom: 16px; }
+  & .agroup .box-h .t { display: inline-flex; align-items: center; gap: 8px; }
+  & .mst { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 400; color: var(--fg-muted); }
+  & .arow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; padding: 12px 16px; }
+  & .arow.is-asking { box-shadow: inset 3px 0 0 var(--danger-fg); }
+  & .ahead { display: flex; gap: 12px; min-width: 0; }
+  & .ahead .gav.lg { width: 28px; height: 28px; border-radius: 6px; margin-top: 2px; }
+  & .ahead .gav.lg .i { width: 16px; height: 16px; }
+  & .ahead .gav.agent .own { width: 14px; height: 14px; right: -5px; bottom: -5px; }
+  & .ainfo { min-width: 0; }
+  & .at { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; line-height: 24px; }
+  & .at .title { font-size: 14px; font-weight: 600; color: var(--fg-default); }
+  & .at .title:hover { color: var(--accent-fg); }
+  & .at .mono { font-size: 12px; }
+  & .at .by { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--fg-muted); }
+  & .at .by .gav { width: 18px; height: 18px; font-size: 8px; }
+  & .aq { margin-top: 2px; color: var(--fg-default); }
+  & .arow .meta, & .box-r .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-size: 12px; color: var(--fg-muted); }
+  & .meta .fgd { color: var(--fg-default); }
+  & .meta .rp, & .meta .bn { display: inline-flex; align-items: center; gap: 4px; }
+  & .meta .bn { font: 12px var(--ui-mono); }
+  & .meta a { color: var(--fg-muted); }
+  & .meta a:hover { color: var(--accent-fg); }
+  & .meta a.ref.pill { color: var(--fg-default); }
+  & .apost { margin-top: 6px; padding-left: 12px; border-left: 3px solid var(--border-default); color: var(--fg-default); }
+  & .astate { display: flex; align-items: center; gap: 12px; align-self: start; padding-top: 2px; font-size: 12px; white-space: nowrap; }
+  & .ast { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+  & .ast.st-work { color: var(--success-fg); }
+  & .ast.st-wait_you, & .ast.st-stuck { color: var(--danger-fg); }
+  & .ast.st-wait_other { color: var(--attention-fg); }
+  & .ast.st-idle, & .ast.st-off { color: var(--fg-muted); }
+  & .ast .dot.pulse { animation: gpulse 1.8s ease-out infinite; }
+  & .mrow { display: flex; justify-content: space-between; gap: 16px; padding: 8px 16px; }
+  & .gap { margin-top: 24px; }
+  & .fw4 { font-weight: 400; }
+  & .dmeta .gav.lg { width: 28px; height: 28px; border-radius: 6px; }
+  & .dmeta .rp { display: inline-flex; align-items: center; gap: 4px; font-family: var(--ui-mono); font-size: 12px; }
+  & .ag-detail .sec h2 { font-size: 20px; }
+  & .ag-detail .cx-cmt, & .ag-detail .cx { margin-bottom: 16px; }
+  & .ag-detail .tlx { margin-top: 0; }
+  & .coord-agent-control { display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+  & .coord-agent-control form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  & .coord-agent-control input { height: 28px; padding: 0 8px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); flex: 1 1 12rem; }
+  & .coord-control-state { margin: 0; }
+  & .coord-note { font-size: 12px; color: var(--fg-muted); }
+}
+
+@media (max-width: 767px) {
+  :is(.g2.ag) {
+    & .arow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    & .astate { padding-left: 40px; }
+  }
+}

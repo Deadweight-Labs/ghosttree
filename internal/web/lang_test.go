@@ -78,7 +78,7 @@ func testWebLang(t *testing.T, language string) (*httptest.Server, string) {
 func TestGermanServerShowsGermanPagesAndEnglishStaysDefault(t *testing.T) {
 	de, token := testWebLang(t, "de")
 	loginPage := body(t, getURL(t, http.DefaultClient, de.URL+"/ui/login"))
-	for _, want := range []string{`<html lang="de"`, `<h1>Anmelden</h1>`, `Code oder Login-Link`} {
+	for _, want := range []string{`<html lang="de"`, `<h1>Bei ghosttree anmelden</h1>`, `Code oder Login-Link`} {
 		if !strings.Contains(loginPage, want) {
 			t.Errorf("German login page lacks %q", want)
 		}
@@ -88,10 +88,9 @@ func TestGermanServerShowsGermanPagesAndEnglishStaysDefault(t *testing.T) {
 	}
 	client := login(t, de, token)
 	for path, want := range map[string]string{
-		"/ui/overview": "Start",
-		"/ui/requests": "Requests",
-		"/ui/coord":    "Räume",
-		"/ui/orgs":     "Organisation",
+		"/ui/inbox": "Posteingang",
+		"/ui/coord": "Räume",
+		"/ui/orgs":  "Organisation",
 	} {
 		page := body(t, getURL(t, client, de.URL+path))
 		if !strings.Contains(page, `<html lang="de"`) || !strings.Contains(page, want) {
@@ -103,7 +102,7 @@ func TestGermanServerShowsGermanPagesAndEnglishStaysDefault(t *testing.T) {
 	}
 	en, _ := testWebLang(t, "")
 	page := body(t, getURL(t, http.DefaultClient, en.URL+"/ui/login"))
-	if !strings.Contains(page, `<html lang="en"`) || !strings.Contains(page, `<h1>Sign in</h1>`) {
+	if !strings.Contains(page, `<html lang="en"`) || !strings.Contains(page, `<h1>Sign in to ghosttree</h1>`) {
 		t.Error("the default server is not English")
 	}
 }
@@ -167,7 +166,7 @@ func TestGermanServerTranslatesPublicAndAccountPages(t *testing.T) {
 	deClient, enClient := login(t, de, token), login(t, en, enToken)
 	for _, path := range []string{
 		"/join/x", "/join/pair", "/ui/login/code", "/ui/device", "/ui/account/tokens",
-		"/ui/profile", "/ui/sessions", "/ui/agents", "/ui/requests",
+		"/ui/profile", "/ui/sessions", "/ui/agents", "/ui/inbox",
 	} {
 		deResp := getURL(t, deClient, de.URL+path)
 		enResp := getURL(t, enClient, en.URL+path)

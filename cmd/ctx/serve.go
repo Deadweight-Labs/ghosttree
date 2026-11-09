@@ -386,7 +386,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	if cfg.OIDC.Enabled() {
 		webOptions = append(webOptions, web.WithOIDC(cfg.OIDC))
 	}
-	webOptions = append(webOptions, web.WithLanguage(cfg.Language), web.WithBuildVersion(version))
+	webOptions = append(webOptions, web.WithLanguage(cfg.Language), web.WithAvatarCache(filepath.Join(filepath.Dir(cfg.DB), "avatars")), web.WithBuildVersion(version))
 	explainCfg := cfg.Explain
 	explainCfg.Language = cfg.Language
 	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))

@@ -226,11 +226,17 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 #### Web interface
 
-- A new look and app shell, an Overview start page, a Profile page, an Agents
-  page, rooms as a real chat, and redesigned pages for knowledge, review,
-  requests (with editing in the browser) and administration. Guided pages for
-  invitations and pairing new machines, and empty states that explain what
-  to do first.
+- A web interface modelled on how a code host works: the repository is the
+  starting point, with its code tree and the file descriptions next to it,
+  issues, pains, ideas, features, runbooks, pull requests and commits as tabs,
+  each with what was said about it. A personal inbox (where sign-in lands)
+  collects questions, open decisions and tasks, with the agent's suggested
+  answers as buttons and recently done items on request. Comments, reactions,
+  hover cards on every reference, a Markdown preview, machine pages with their
+  knowledge and sharing, and the idea workshop with its decisions. The previous
+  interface is gone; its addresses redirect.
+- Guests see neither machine names nor branch names other than the default
+  branch, and filters on branches are not offered to them.
 - `GHOSTTREE_LANGUAGE=de` (or `--language de`) switches the interface to German.
 - Every `/ui/` page sends a strict Content-Security-Policy.
 

@@ -212,7 +212,7 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 			t.Errorf("CSP %q lacks %s", csp, want)
 		}
 	}
-	if !strings.Contains(page, `href="/static/tokens.css"`) {
+	if !strings.Contains(page, `href="/static/ui-tokens.css"`) {
 		t.Error("join page does not load the self-hosted font faces")
 	}
 	if strings.Contains(csp, "script-src") || strings.Contains(csp, "unsafe") {
@@ -222,7 +222,8 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 	if cookies := h.Values("Set-Cookie"); len(cookies) != 0 {
 		t.Errorf("cookies: %v", cookies)
 	}
-	if regexp.MustCompile(`(?i)(src|href|action)="(https?:)?//`).MatchString(page) {
+	// The footer's links to the privacy note and the help leave the page; they load nothing.
+	if regexp.MustCompile(`(?i)(src|href|action)="(https?:)?//`).MatchString(regexp.MustCompile(`(?s)<footer.*?</footer>`).ReplaceAllString(page, "")) {
 		t.Errorf("page loads or links something external: %s", page)
 	}
 	if strings.Contains(page, "<script") {
@@ -605,7 +606,7 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`data-select>http://127\.0\.0\.1:[0-9]+/join/[0-9a-f]{64}<`).MatchString(page) {
 		t.Fatalf("link: %d %s", resp.StatusCode, page)
 	}
-	if !strings.Contains(page, `<span class="ov-name">`+joinProject+`</span><span class="ov-meta adm-parts"><span>Pending</span><span>guest</span>`) {
+	if !strings.Contains(page, `<b class="ov-name">`+joinProject+`</b><div class="mt muted"><span>Pending</span><span>guest</span>`) {
 		t.Fatalf("the invitation list does not show project and role: %s", page)
 	}
 }

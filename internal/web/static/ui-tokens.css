@@ -1,0 +1,152 @@
+/* Design tokens of the GitHub-like interface (REQ-599), the one place for colours,
+   fonts and the few measures the shell shares. Light is the base; dark follows the
+   system unless the account menu has set data-theme on <html> (shell.js).
+   Tokens sit on :root and carry no page scope: they are only read by ui-*.css.
+   The font tokens are called --ui-font and --ui-mono because Clay owns --font. */
+
+:root {
+  --ui-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --ui-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+  --fg-default: #1f2328;
+  --fg-muted: #59636e;
+  --fg-subtle: #818b98;
+  --canvas-default: #ffffff;
+  --canvas-subtle: #f6f8fa;
+  --canvas-inset: #f6f8fa;
+  --border-default: #d1d9e0;
+  --border-muted: #d1d9e0b3;
+  --neutral-muted: #818b982e;
+  --neutral-emphasis: #59636e;
+  --accent-fg: #0969da;
+  --accent-emphasis: #0969da;
+  --accent-subtle: #ddf4ff;
+  --accent-muted: #54aeff66;
+  --tab-accent: #0969da;
+  --success-fg: #1a7f37;
+  --success-emphasis: #1f883d;
+  --success-subtle: #dafbe1;
+  --success-muted: #4ac26b66;
+  --danger-fg: #d1242f;
+  --danger-emphasis: #cf222e;
+  --danger-subtle: #ffebe9;
+  --danger-muted: #ff818266;
+  --attention-fg: #9a6700;
+  --attention-emphasis: #9a6700;
+  --attention-subtle: #fff8c5;
+  --attention-muted: #d4a72c66;
+  --done-fg: #8250df;
+  --done-emphasis: #8250df;
+  --done-subtle: #fbefff;
+  --done-muted: #c297ff66;
+  --btn-bg: #f6f8fa;
+  --btn-hover: #eff2f5;
+  --btn-active: #e6eaef;
+  --btn-border: #d1d9e0;
+  --btn-pri-bg: #1f883d;
+  --btn-pri-hover: #1c8139;
+  --btn-pri-border: #1f232826;
+  --header-bg: #f6f8fa;
+  --row-hover: #f6f8fa;
+  --shadow-pop: 0 8px 24px #949ea340;
+  --logo: #0969da;
+  /* Active tab card: soft side shadow and the 6 px fillet under both corners. */
+  --tab-shade: rgb(31 35 40 / .07);
+  --fr: 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --fg-default: #f0f6fc;
+    --fg-muted: #9198a1;
+    --fg-subtle: #656c76;
+    --canvas-default: #0d1117;
+    --canvas-subtle: #151b23;
+    --canvas-inset: #010409;
+    --border-default: #3d444d;
+    --border-muted: #3d444db3;
+    --neutral-muted: #656c7633;
+    --neutral-emphasis: #656c76;
+    --accent-fg: #4493f8;
+    --accent-emphasis: #1f6feb;
+    --accent-subtle: #388bfd1a;
+    --accent-muted: #388bfd66;
+    --tab-accent: #4493f8;
+    --success-fg: #3fb950;
+    --success-emphasis: #238636;
+    --success-subtle: #2ea04326;
+    --success-muted: #2ea04366;
+    --danger-fg: #f85149;
+    --danger-emphasis: #da3633;
+    --danger-subtle: #f851491a;
+    --danger-muted: #f8514966;
+    --attention-fg: #d29922;
+    --attention-emphasis: #9e6a03;
+    --attention-subtle: #bb800926;
+    --attention-muted: #bb800966;
+    --done-fg: #ab7df8;
+    --done-emphasis: #8957e5;
+    --done-subtle: #a371f726;
+    --done-muted: #a371f766;
+    --btn-bg: #212830;
+    --btn-hover: #262c36;
+    --btn-active: #2a313c;
+    --btn-border: #3d444d;
+    --btn-pri-bg: #238636;
+    --btn-pri-hover: #2ea043;
+    --btn-pri-border: #f0f6fc1a;
+    --header-bg: #151b23;
+    --row-hover: #151b23;
+    --shadow-pop: 0 8px 24px #010409cc;
+    --logo: #4493f8;
+    --tab-shade: rgb(1 4 9 / .45);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --fg-default: #f0f6fc;
+  --fg-muted: #9198a1;
+  --fg-subtle: #656c76;
+  --canvas-default: #0d1117;
+  --canvas-subtle: #151b23;
+  --canvas-inset: #010409;
+  --border-default: #3d444d;
+  --border-muted: #3d444db3;
+  --neutral-muted: #656c7633;
+  --neutral-emphasis: #656c76;
+  --accent-fg: #4493f8;
+  --accent-emphasis: #1f6feb;
+  --accent-subtle: #388bfd1a;
+  --accent-muted: #388bfd66;
+  --tab-accent: #4493f8;
+  --success-fg: #3fb950;
+  --success-emphasis: #238636;
+  --success-subtle: #2ea04326;
+  --success-muted: #2ea04366;
+  --danger-fg: #f85149;
+  --danger-emphasis: #da3633;
+  --danger-subtle: #f851491a;
+  --danger-muted: #f8514966;
+  --attention-fg: #d29922;
+  --attention-emphasis: #9e6a03;
+  --attention-subtle: #bb800926;
+  --attention-muted: #bb800966;
+  --done-fg: #ab7df8;
+  --done-emphasis: #8957e5;
+  --done-subtle: #a371f726;
+  --done-muted: #a371f766;
+  --btn-bg: #212830;
+  --btn-hover: #262c36;
+  --btn-active: #2a313c;
+  --btn-border: #3d444d;
+  --btn-pri-bg: #238636;
+  --btn-pri-hover: #2ea043;
+  --btn-pri-border: #f0f6fc1a;
+  --header-bg: #151b23;
+  --row-hover: #151b23;
+  --shadow-pop: 0 8px 24px #010409cc;
+  --logo: #4493f8;
+  --tab-shade: rgb(1 4 9 / .45);
+}

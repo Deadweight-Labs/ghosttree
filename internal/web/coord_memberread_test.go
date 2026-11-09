@@ -20,7 +20,7 @@ func memberReadSeed(t *testing.T, e shellEnv) (room, hiddenRoom string) {
 	return store.RoomKeyForProject(shellProject), store.RoomKeyForProject(shellHiddenProject)
 }
 
-var regexpTabOn = regexp.MustCompile(`<a class="rtab on"[^>]*>.*?</a>`)
+var regexpTabOn = regexp.MustCompile(`<a class="rl on"[^>]*>.*?</a>`)
 
 func postRoom(t *testing.T, e shellEnv, c *http.Client, path, room string, extra url.Values) int {
 	t.Helper()
@@ -99,8 +99,8 @@ func TestRefusedRoomPagesAreDesignedAndLeadSomewhere(t *testing.T) {
 	if strings.Contains(page, `href="/ui/coord"`) && !strings.Contains(page, messages["coord.forbidden.back"]) {
 		t.Errorf("back link text does not match its target")
 	}
-	if !strings.Contains(page, `href="/ui/overview">`+messages["coord.forbidden.overview"]) {
-		t.Errorf("a guest without rooms is not sent to the overview")
+	if !strings.Contains(page, `href="/ui/inbox">`+messages["err.back_inbox"]) {
+		t.Errorf("a guest without rooms is not sent to the inbox")
 	}
 }
 
@@ -115,8 +115,10 @@ func TestOwnerWithoutAgentReadsTheRoomAndGetsTheComposer(t *testing.T) {
 		if len(on) != 1 || !strings.Contains(on[0], "x/shell") || !strings.Contains(on[0], `aria-current="page"`) {
 			t.Errorf("%s: active tab: %v", who, on)
 		}
-		if who == "owner" && !strings.Contains(page, `href="/ui/coord?room=`+url.QueryEscape(hidden)+`"`) {
-			t.Errorf("the other readable room is not a tab")
+		if who == "owner" {
+			if status, _ := fetchPage(t, c, e.Base+"/ui/coord?room="+url.QueryEscape(hidden)); status != http.StatusOK {
+				t.Errorf("the other readable room does not open: %d", status)
+			}
 		}
 		if strings.Contains(page, "coord-readonly") || strings.Contains(page, messages["coord.readonly"]) {
 			t.Errorf("%s: read-only line despite write access", who)
@@ -366,10 +368,6 @@ func TestAgentsPageShowsLastPostAndWorkingRoomLinkToOwnerWithoutRoomAgent(t *tes
 		if !strings.Contains(page, "migrating the roles table") || !strings.Contains(page, href) {
 			t.Errorf("%s: last post or room link missing", who)
 		}
-		_, overview := fetchPage(t, c, e.Base+"/ui/overview")
-		if !strings.Contains(overview, "feat/sess-a") {
-			t.Errorf("%s: overview lacks the agent", who)
-		}
 		if status, _ := fetchPage(t, c, e.Base+"/ui/coord?room="+url.QueryEscape(room)); status != 200 {
 			t.Errorf("%s: room link answers %d", who, status)
 		}
@@ -424,7 +422,7 @@ func TestOwnerWithoutAgentMentionsAnAgentInTheRoom(t *testing.T) {
 	e := ovEnv(t)
 	room, _ := memberReadSeed(t, e)
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/coord?room="+url.QueryEscape(room))
-	if !strings.Contains(page, `name="mentions" value="claude:laptop:aaaa"`) {
+	if !strings.Contains(page, `data-val="claude:laptop:aaaa"`) {
 		t.Fatal("the composer does not offer the room's agent")
 	}
 	if st := postRoom(t, e, e.Owner, "/ui/coord/send", room, url.Values{"body": {"look at this"}, "mentions": {"claude:laptop:aaaa"}}); st != http.StatusSeeOther {

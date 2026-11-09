@@ -20,6 +20,10 @@ func must(err error) {
 }
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: seedshots <new-database-path> [pain-tasks|rebuild]")
+		os.Exit(2)
+	}
 	if len(os.Args) > 2 && os.Args[2] == "rebuild" {
 		json.NewEncoder(os.Stdout).Encode(seedRebuild(os.Args[1]))
 		return
@@ -27,6 +31,10 @@ func main() {
 	st, err := store.Open(os.Args[1])
 	must(err)
 	defer st.Close()
+	if err := requireEmptyDatabase(st, os.Args[1]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	const project = "github.com/robin-e2e/gemeinsam"
 	for i, n := range []string{"Robin", "Lena Berger", "Ben Kraft", "Gus"} {
 		_, err := st.AddAccount(n, "", i == 0)
@@ -67,10 +75,25 @@ func main() {
 		must(err)
 		out[k] = c
 	}
+	var after func(path string)
 	if len(os.Args) > 2 && os.Args[2] == "pain-tasks" {
 		seedPainTasks(st, project, out)
+		seedInbox(st, room)
+		seedLists(st, project)
+		seedCode(st, project)
+		seedNeu(st, project)
+		seedComments(st, project)
+		seedReactions(st, project, room)
+		seedDecisions(st, project)
+		seedMaengel(st, project, room, org.ID, out)
+		after = seedPulls(st, project)
 	}
 	json.NewEncoder(os.Stdout).Encode(out)
+	if after != nil {
+		// Times are set back in a second connection, once the store is closed.
+		must(st.Close())
+		after(os.Args[1])
+	}
 	fmt.Fprintln(os.Stderr, "seeded")
 }
 

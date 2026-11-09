@@ -110,25 +110,28 @@ func coordHTTPError(l lang, w http.ResponseWriter, err error) {
 // viewer may not see (#2447): nothing on it depends on the room.
 func (a *app) roomPageError(w http.ResponseWriter, r *http.Request, err error) {
 	l := a.langFor(r)
-	page, status, title := "", 0, ""
+	var status int
+	v := &errorView{BackHref: "/ui/inbox", BackLabel: l.msg("err.back_inbox")}
 	switch {
 	case errors.Is(err, store.ErrCoordForbidden):
-		page, status, title = "roomforbidden", http.StatusForbidden, l.msg("coord.forbidden.title")
+		status = http.StatusForbidden
+		v.Icon, v.Title, v.Text = "lock", l.msg("coord.forbidden.title"), l.msg("coord.forbidden.body")
 	case errors.Is(err, store.ErrCoordNotFound):
-		page, status, title = "roomnotfound", http.StatusNotFound, l.msg("coord.notfound.title")
+		status = http.StatusNotFound
+		v.Icon, v.Title, v.Text = "search", l.msg("coord.notfound.title"), l.msg("coord.notfound.body")
 	default:
 		coordHTTPError(l, w, err)
 		return
 	}
+	v.Code = codeText(status)
 	// A way out that leads somewhere: the rooms when the viewer has any, the
-	// overview otherwise (a guest has no rooms to go back to).
-	back := "/ui/overview"
+	// inbox otherwise (a guest has no rooms to go back to).
 	if summaries, serr := a.browserCoord(r).RoomSummaries(); serr == nil && len(summaries) > 0 {
-		back = "/ui/coord"
+		v.BackHref, v.BackLabel = "/ui/coord", l.msg("coord.forbidden.back")
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	a.renderBrowser(w, r, page, pageData{Title: title, BackURL: back})
+	a.renderBrowser(w, r, "errorpage", pageData{Title: v.Title, ErrV: v})
 }
 
 func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool {
@@ -142,6 +145,12 @@ func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool
 func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	room := r.URL.Query().Get("room")
+	// The project choice is read before the band replaces the project selector.
+	selected := selectedProject(a.shellFor(r, "coord"))
+	// The room of a project stands in the band of that project.
+	if remote, ok := strings.CutPrefix(room, "project:"); ok {
+		r = a.repoScoped(r, remote, "rooms")
+	}
 	eventCursor, err := a.store.LatestCoordEventSequence()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -187,7 +196,15 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	a.explainAttention(l, incomingAttention, attention)
 	a.explainAttention(l, outgoingAttention, attention)
 	// Badge und Aufmerksamkeit zählen alle Räume; nur die Liste folgt dem Projekt.
-	sidebar = sidebar.inProject(selectedProject(a.shellFor(r, "coord")), room)
+	sidebar = sidebar.inProject(selected, room)
+	if rv := repoFrom(r); rv != nil {
+		// In the band of a repository its room is simply "General".
+		for i := range sidebar.Projects {
+			if sidebar.Projects[i].Key == "project:"+rv.Project {
+				sidebar.Projects[i].Name = l.msg("coord.general")
+			}
+		}
+	}
 	view := coordPageView{
 		Texts:             coordClientTexts(l),
 		EventCursor:       a.sealCoordCursor(browserPrincipal(r), eventCursor, time.Now()),
@@ -454,6 +471,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	detail.Draft = shortWords(r.URL.Query().Get("draft"), 500)
 	view.Active = detail
 	data := pageData{Title: l.msg("page.coordination"), Coord: view}
 	var firstSequence, lastSequence, before, after int64
@@ -735,7 +753,11 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: expiresAt,
 	}
 	msg.Mentions, msg.Body = coordBroadcastChip(splitCoordPrincipals(r.Form["mentions"]...), msg.Body)
-	msg.Intent = strings.TrimSpace(r.FormValue("intent"))
+	// The form may carry the kind twice: the select and the button "as a request"
+	// that submitted it. The button comes last and wins.
+	if kinds := r.Form["intent"]; len(kinds) > 0 {
+		msg.Intent = strings.TrimSpace(kinds[len(kinds)-1])
+	}
 	if !validCoordComposerIntent(msg.Intent) {
 		http.Error(w, "a valid intent is required", http.StatusBadRequest)
 		return
@@ -872,7 +894,7 @@ func (a *app) coordSetReadState(w http.ResponseWriter, r *http.Request, unread b
 		coordHTTPError(l, w, err)
 		return
 	}
-	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
+	http.Redirect(w, r, backTo(r, "/ui/coord?room="+url.QueryEscape(room)), http.StatusSeeOther)
 }
 
 // coordEndStanding beendet eine Vorgabe. Ausdrücklich und von einem

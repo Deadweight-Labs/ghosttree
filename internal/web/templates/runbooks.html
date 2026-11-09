@@ -1,0 +1,33 @@
+{{define "runbooks"}}{{template "head" .}}{{template "nav" .}}<main class="g2 rb"><link rel="stylesheet" href="/static/ui-runbooks.css"><div class="wrap">
+{{with .RunbooksV}}
+<div class="sbar"><label class="gfield mono-in">{{mi "search"}}<input type="search" data-list-filter=".rbrow" placeholder="{{t "runbooks.search"}}" aria-label="{{t "runbooks.search"}}" autocomplete="off" spellcheck="false"></label></div>
+{{if .Empty}}<div class="box"><div class="box-empty">{{t "runbooks.empty"}}</div></div>
+{{else}}<div class="box"><div class="box-h lh"><span class="t">{{t "runbooks.n" (len .Rows)}}</span><span class="sp"></span><span class="muted fw4">{{t "runbooks.last_ok"}}</span></div>
+{{range .Rows}}<div class="row rbrow"><span class="st open">{{mi "play"}}</span><div class="rbmain"><a class="rbname mono" href="{{.Href}}">{{.Name}}</a>{{if .Machine}}<span class="lb out mono">{{.Machine}}</span>{{end}}<div class="rbpurpose">{{.Purpose}}</div></div>
+<div class="rbmeta">{{if .LastAge}}<span class="rbrun">{{mi "done"}}{{t "runbooks.last_run" .LastAge}}</span>{{end}}{{if .Approved}}<span class="lb ok">{{t "runbooks.approved"}}</span>{{else}}<span class="lb warn">{{t "runbooks.needs_approval"}}</span>{{end}}<span class="rbsha">{{if .Sha}}<span class="chip sha">{{.Sha}}</span>{{end}}</span></div></div>
+{{end}}</div>{{end}}
+{{end}}</div><script src="/static/ui-list.js" defer></script>
+{{template "foot" .}}{{end}}
+
+{{define "rbsteps"}}{{range .}}<div class="rbstep"><span class="rbn">{{.N}}</span><div><b>{{.Title}}</b>{{if .Command}}<pre class="cmd">{{.Command}}</pre>{{end}}{{if .Check}}<div class="rbcheck">{{mi "check"}}<span>{{t "runbooks.check"}}</span><code>{{.Check}}</code></div>{{end}}</div></div>{{end}}{{end}}
+
+{{define "runbook"}}{{template "head" .}}{{template "nav" .}}<main class="g2 rb"><link rel="stylesheet" href="/static/ui-runbooks.css"><div class="wrap">
+{{with .RunbookV}}
+<div class="dhead"><div class="dtitle"><h1 class="mono">{{.Name}}</h1>{{if .GiveHref}}<div class="gacts"><a class="gbtn sm" href="{{.GiveHref}}">{{mi "chat"}}{{t "runbooks.give"}}</a></div>{{end}}</div>
+<div class="dmeta">{{if .LastRun}}<span class="ok rbrun">{{mi "done"}}{{t "runbooks.run_n" .LastRun}} · {{.LastAge}}</span>{{end}}{{if .Approved}}<span class="lb ok">{{if .ApprovedBy}}{{t "runbooks.approved_by" .ApprovedBy}}{{else}}{{t "runbooks.approved"}}{{end}}</span>{{else}}<span class="lb warn">{{t "runbooks.needs_approval"}}</span>{{end}}{{if .Sha}}<span class="chip sha">{{.Sha}}</span>{{end}}<span class="muted">{{.Purpose}}</span></div></div>
+<div class="dgrid"><div class="dmain">
+<div class="sec"><h2>{{t "runbooks.execute"}}</h2></div>
+<div class="box">{{range .Cmds}}<div class="box-r"><div class="rbcl">{{.Label}}</div>{{template "uicmd" .Block}}</div>{{end}}</div>
+{{if .Params}}<div class="sec"><h2>{{t "runbooks.params"}}</h2></div><div class="box"><div class="box-h"><span class="t">{{t "runbooks.name"}}</span><span class="sp"></span><span class="muted fw4">{{t "runbooks.default"}}</span></div>{{range .Params}}<div class="row rbparam"><span class="mono">{{.Name}}</span><span>{{.Description}}</span><span class="mono muted">{{if .Default}}{{.Default}}{{else if .Optional}}{{t "runbooks.optional"}}{{end}}</span></div>{{end}}</div>{{end}}
+{{if .Preconditions}}<div class="sec"><h2>{{t "runbooks.preconditions"}}</h2></div><div class="box">{{range .Preconditions}}<div class="box-r">{{.}}</div>{{end}}</div>{{end}}
+{{if .Steps}}<div class="sec"><h2>{{t "runbooks.steps"}}</h2><span class="counter">{{len .Steps}}</span></div><div class="box rbsteps">{{template "rbsteps" .Steps}}</div>{{end}}
+{{if .Rollback}}<div class="sec"><h2>{{t "runbooks.rollback"}}</h2></div><div class="box rbsteps">{{template "rbsteps" .Rollback}}</div>{{end}}
+</div>
+<aside class="side" aria-label="{{t "runbooks.about"}}">
+{{if .LastRun}}<div class="sblk"><h3>{{t "runbooks.last_run_h"}}</h3><div class="v"><span class="ok rbrun">{{mi "done"}}{{t "runbooks.run_n" .LastRun}}</span><span class="sub">{{.LastAge}}</span></div></div>{{end}}
+{{if .Approved}}<div class="sblk"><h3>{{t "runbooks.approval"}}</h3><div class="v"><span>{{if .ApprovedBy}}{{avatarOf .ApprovedBy}}{{.ApprovedBy}}{{else}}{{t "runbooks.approved"}}{{end}}</span><span class="sub">{{t "runbooks.version" .Version}}</span></div></div>{{end}}
+{{if .Machine}}<div class="sblk"><h3>{{t "runbooks.machine"}}</h3><div class="v"><span class="mono">{{.Machine}}</span></div></div>{{end}}
+{{if .Pitfalls}}<div class="sblk"><h3>{{t "runbooks.pitfalls"}}</h3><div class="v">{{range .Pitfalls}}<a href="/ui/knowledge/{{.ID}}">{{mi "book"}}{{.Title}}</a>{{end}}</div></div>{{end}}
+</aside></div>
+{{end}}</div>
+{{template "foot" .}}{{end}}

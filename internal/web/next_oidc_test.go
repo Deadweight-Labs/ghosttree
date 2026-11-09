@@ -42,8 +42,8 @@ func TestOIDCLoginReturnsToRequestedPage(t *testing.T) {
 	b2 := newBrowser(t)
 	again := env.callback(t, b2, env.startFlow(t, b2, ""))
 	again.Body.Close()
-	if got := again.Header.Get("Location"); got != "/ui/overview" {
-		t.Fatalf("login without a remembered page = %q, want /ui/overview", got)
+	if got := again.Header.Get("Location"); got != "/ui/inbox" {
+		t.Fatalf("login without a remembered page = %q, want /ui/inbox", got)
 	}
 }
 
@@ -55,9 +55,9 @@ func TestOIDCLoginTakesTheNextParameterOfTheLoginPageButOnlyInternalPaths(t *tes
 
 	for next, want := range map[string]string{
 		"/ui/inbox":                   "/ui/inbox",
-		"https://evil.example/ui/x":   "/ui/overview",
-		"//evil.example/ui/x":         "/ui/overview",
-		"/ui/login/oidc/callback?x=1": "/ui/overview",
+		"https://evil.example/ui/x":   "/ui/inbox",
+		"//evil.example/ui/x":         "/ui/inbox",
+		"/ui/login/oidc/callback?x=1": "/ui/inbox",
 	} {
 		b := newBrowser(t)
 		page, err := b.Get(env.web.URL + "/ui/login?next=" + url.QueryEscape(next))
@@ -85,7 +85,7 @@ func TestOIDCLoginIgnoresAForgedReturnCookie(t *testing.T) {
 		b.Jar.SetCookies(base, []*http.Cookie{{Name: nextCookie, Value: url.QueryEscape(evil), Path: "/ui/login"}})
 		done := env.callback(t, b, env.startFlow(t, b, ""))
 		done.Body.Close()
-		if got := done.Header.Get("Location"); got != "/ui/overview" {
+		if got := done.Header.Get("Location"); got != "/ui/inbox" {
 			t.Errorf("cookie %q led to %q, want the default page", evil, got)
 		}
 	}

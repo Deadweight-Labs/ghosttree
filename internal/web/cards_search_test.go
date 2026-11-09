@@ -3,7 +3,6 @@ package web
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,7 +13,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-var groupHeadRE = regexp.MustCompile(`<h2 class="g-group-head"><span>([^<]+)(?:</span|<span)`)
+var groupHeadRE = regexp.MustCompile(`<div class="box-h"><h2 class="t">([^<]+)</h2>`)
 
 func searchGroups(page string) []string {
 	var out []string
@@ -89,7 +88,7 @@ func TestSearchNeedsTwoCharactersShowsNoTotalsAndOffersAllOnlyBehindFiveHits(t *
 		rqMake(t, e.St, rqSpec{Title: fmt.Sprintf("Needle %d", i)})
 	}
 	_, many := fetchPage(t, e.Member, e.Base+"/ui/search?q=Needle")
-	if !strings.Contains(many, "Show all") || strings.Count(many, `class="g-row g-hit"`) != searchPerGroup {
+	if !strings.Contains(many, "Show all") || strings.Count(many, `class="hit"`) != searchPerGroup {
 		t.Errorf("six hits must show %d and offer Show all", searchPerGroup)
 	}
 	if regexp.MustCompile(`(?i)\b\d+ (matches|results|hits)`).MatchString(many) {
@@ -113,112 +112,21 @@ func TestSearchHonoursTheSelectedProjectAndNeverReachesAHiddenOne(t *testing.T) 
 	}
 }
 
-func TestTaskCardsShowPathAndCheckAsCommandsAndTheWholeDescription(t *testing.T) {
-	e := ovEnv(t)
-	req := rqMake(t, e.St, rqSpec{Title: "Ship it"})
-	tail := "and then run make release-check twice"
-	desc := "Create the restricted key in the dashboard. " + strings.Repeat("Keep the scope as small as it goes. ", 12) + tail
-	tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Kind: "file", Title: "Put the dump in place", Description: desc,
-		Location: "/srv/arkon/import/2026-10/schema-dump.sql", CheckHint: "test -s /srv/arkon/import/2026-10/schema-dump.sql\nsha256sum -c schema-dump.sha256"})
-	tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "Nothing to point at"})
-	for _, path := range []string{"/ui/tasks"} {
-		_, page := fetchPage(t, e.Member, e.Base+path)
-		if strings.Count(page, `class="g-card clay"`) != 2 {
-			t.Fatalf("%s: want two cards", path)
-		}
-		if strings.Count(page, `class="g-cmd"`) != 3 {
-			t.Errorf("%s: want one path and two check lines in a trough, got %d", path, strings.Count(page, `class="g-cmd"`))
-		}
-		if !strings.Contains(page, "/srv/arkon/import/2026-10/schema-dump.sql</code>") || !strings.Contains(page, "sha256sum -c schema-dump.sha256</code>") {
-			t.Errorf("%s: path or check line is not whole", path)
-		}
-		if !strings.Contains(page, tail) {
-			t.Errorf("%s: the description is cut", path)
-		}
-		if strings.Contains(page, `<p class="tk-desc">`) || strings.Contains(page, "…</p>") {
-			t.Errorf("%s: still the old truncated description", path)
-		}
-		if !strings.Contains(page, "<b>Ship it</b>") {
-			t.Errorf("%s: the card does not say which request it is for", path)
-		}
-	}
-	_, page := fetchPage(t, e.Member, e.Base+"/ui/tasks")
-	cards := strings.Split(page, `<li class="g-card clay"`)
-	if len(cards) != 3 || strings.Contains(cards[2], `class="g-cmd"`) && strings.Contains(cards[2], "Nothing to point at") {
-		t.Error("a task without a place must not get a trough")
-	}
-}
-
-func TestDoneTasksSitBehindOneLine(t *testing.T) {
-	e := ovEnv(t)
-	req := rqMake(t, e.St, rqSpec{Title: "Ship it"})
-	task := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "Already done"})
-	open := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "Still open"})
-	_ = open
-	resp := tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {fmt.Sprint(task.ID)}})
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("done status %d", resp.StatusCode)
-	}
-	_, page := fetchPage(t, e.Member, e.Base+"/ui/tasks")
-	if !strings.Contains(page, `<summary>Show done (1)</summary>`) || strings.Count(page, `class="g-card clay"`) != 1 {
-		t.Error("the finished task is not behind its line, or the open one is missing")
-	}
-}
-
-func TestPainsAreGroupedByStateWithoutIdsInTheList(t *testing.T) {
-	e := ovEnv(t)
-	pa := tpOwner(e)
-	actor := pain.Actor{AccountID: 1, Person: "alice"}
-	mk := func(title string) int64 {
-		d, err := pa.CreatePain(store.CreatePainInput{Project: shellProject, Title: title, Actor: actor})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return d.Pain.ID
-	}
-	mk("Still burning")
-	mit := mk("Half solved")
-	done := mk("Gone again")
-	ev := pain.Evidence{Kind: "commit", Ref: "abc123"}
-	if _, err := pa.SetPainState(mit, "mitigated", "Dry run exists for arkon, not for pixelworks.", ev, "", actor); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pa.SetPainState(done, "resolved", "", ev, "", actor); err != nil {
-		t.Fatal(err)
-	}
-	_, page := fetchPage(t, e.Member, e.Base+"/ui/pains")
-	if got := strings.Join(searchGroups(page), ","); got != "Active,Mitigated" {
-		t.Errorf("groups = %q", got)
-	}
-	for _, want := range []string{"Closed (1)", "Dry run exists for arkon", "Still burning", "Gone again"} {
-		if !strings.Contains(page, want) {
-			t.Errorf("pains page lacks %q", want)
-		}
-	}
-	if strings.Contains(page, ">PAIN-") {
-		t.Error("the list shows the pain number as text")
-	}
-	if strings.Count(page, `class="g-dot is-`) != 3 {
-		t.Error("every pain has one status dot")
-	}
-}
-
-func TestReviewGroupsByProjectAndFoldsFromTheFifthEntry(t *testing.T) {
+func TestReviewListsEveryProposalAsOneOpenableRow(t *testing.T) {
 	e := ovEnv(t)
 	for i := 0; i < 5; i++ {
 		knInsert(t, e.St, store.Knowledge{Type: "pitfall", Title: fmt.Sprintf("Proposal %d", i), Body: "Check the lock.", Confidence: "staged"})
 	}
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/review")
-	if got := strings.Join(searchGroups(page), ","); !strings.HasPrefix(got, "shell") {
-		t.Errorf("groups = %q, want the project", got)
+	if strings.Count(page, `<details class="rvd">`) != 5 {
+		t.Error("all five proposals must be rows of the one list")
 	}
-	if !strings.Contains(page, "2 more in shell") {
-		t.Error("the fourth and fifth card are not behind one line")
+	for i := 0; i < 5; i++ {
+		if !strings.Contains(page, fmt.Sprintf("Proposal %d", i)) {
+			t.Errorf("proposal %d is missing", i)
+		}
 	}
-	if strings.Count(page, `class="g-card g-card--tight clay"`) != 5 {
-		t.Error("all five cards must be in the page, the last two folded")
-	}
-	if strings.Contains(page, `class="kn-card`) {
+	if strings.Contains(page, `class="kn-card`) || strings.Contains(page, "g-card--tight") {
 		t.Error("the old card is still there")
 	}
 }
@@ -228,7 +136,7 @@ func TestDetailPagesHaveNoProjectSelectorThatCouldSayTheWrongProject(t *testing.
 	req := rqMake(t, e.St, rqSpec{Title: "Somewhere"})
 	for _, path := range []string{fmt.Sprintf("/ui/requests/%d", req.Request.ID), "/ui/search?q=zz"} {
 		_, page := fetchPage(t, e.Owner, e.Base+path)
-		if path[:10] == "/ui/reques" && strings.Contains(page, `id="shell-project"`) {
+		if path[:10] == "/ui/reques" && strings.Contains(page, `class="scope"`) {
 			t.Errorf("%s shows a project selector", path)
 		}
 	}
@@ -245,8 +153,8 @@ func TestNavigationHasFiveEntriesAndTabsForTheRest(t *testing.T) {
 	for path, want := range map[string][]string{
 		"/ui/agents":   {`data-tab="agents"`, `data-tab="sessions"`},
 		"/ui/sessions": {`data-tab="agents"`, `data-tab="sessions"`},
-		"/ui/review":   {`data-tab="search"`, `data-tab="review"`, `data-tab="context"`},
-		"/ui/orgs":     {`data-tab="team"`, `data-tab="devices"`},
+		"/ui/review":   {`data-seg="entries"`, `data-seg="review"`, `data-seg="context"`},
+		"/ui/orgs":     {`class="box snav"`, `href="/ui/account/tokens"`},
 	} {
 		_, p := fetchPage(t, e.Owner, e.Base+path)
 		for _, w := range want {
@@ -257,12 +165,12 @@ func TestNavigationHasFiveEntriesAndTabsForTheRest(t *testing.T) {
 	}
 }
 
-func TestGermanTasksAndSearchSpeakGerman(t *testing.T) {
+func TestGermanInboxAndSearchSpeakGerman(t *testing.T) {
 	srv, token := testWebLang(t, "de")
 	c := login(t, srv, token)
-	_, tasks := fetchPage(t, c, srv.URL+"/ui/tasks")
-	if !strings.Contains(tasks, "Nichts offen für dich") {
-		t.Errorf("empty tasks page is not German: %s", tasks)
+	_, inbox := fetchPage(t, c, srv.URL+"/ui/inbox")
+	if !strings.Contains(inbox, "Nichts wartet auf dich.") || !strings.Contains(inbox, "Erledigte zeigen") {
+		t.Errorf("empty inbox is not German: %s", inbox)
 	}
 	_, search := fetchPage(t, c, srv.URL+"/ui/search?q=zzzzqq")
 	if !strings.Contains(search, "Keine Treffer") || !strings.Contains(search, "Alles durchsuchen") {

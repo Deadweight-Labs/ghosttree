@@ -2,3 +2,5 @@
 /dist/
 /.ghosttree/
 /cmd/ctx/ctx
+/seedshots
+.impeccable/

@@ -82,6 +82,14 @@ type orgsView struct {
 	Garden *gardenAdminView
 }
 
+// People are the members that are no guests, Guests the others.
+func (v orgsView) People() []orgMemberRow {
+	return keep(v.Members, 0, func(m orgMemberRow) bool { return !m.Guest })
+}
+func (v orgsView) Guests() []orgMemberRow {
+	return keep(v.Members, 0, func(m orgMemberRow) bool { return m.Guest })
+}
+
 // orgsPage zeigt Mitglieder, Einladungen und Projekte einer Organisation.
 // Wer in mehreren ist, wählt über ?org=<slug>; sonst die Standard-Organisation.
 func (a *app) orgsPage(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +202,11 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}
-	a.renderBrowser(w, r, "orgs", pageData{Title: l.msg("adm.org.title"), Error: errMsg, Orgs: v})
+	data := pageData{Title: l.msg("adm.org.title"), Error: errMsg, Orgs: v}
+	if v.Selected.ID != 0 {
+		data.OrgBand, data.OrgName = a.orgBandFor(r, v.Selected, "settings"), v.Selected.Name
+	}
+	a.renderBrowser(w, r, "orgs", data)
 }
 
 // orgError übersetzt Store-Fehler in eine Meldung und einen Statuscode.

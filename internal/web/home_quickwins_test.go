@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,33 +13,6 @@ import (
 )
 
 var badgeRE = regexp.MustCompile(`class="shell-badge"[^>]*>(\d+)</b>`)
-
-func requestsNavIsCurrent(page string) bool {
-	return regexp.MustCompile(`class="shell-link clay" href="/ui/requests" data-nav="requests" aria-current="page"`).MatchString(page)
-}
-
-// Tasks and pains get their entry: tabs Requests | Tasks | Pains on all three
-// pages, and the navigation keeps "Requests" lit on each of them.
-func TestRequestsTasksAndPainsShareTabsAndTheNavigationStaysOnRequests(t *testing.T) {
-	e := ovEnv(t)
-	for path, current := range map[string]string{"/ui/requests": "/ui/requests", "/ui/tasks": "/ui/tasks", "/ui/pains": "/ui/pains"} {
-		_, page := fetchPage(t, e.Member, e.Base+path)
-		if !requestsNavIsCurrent(page) {
-			t.Errorf("%s: the navigation does not mark Requests", path)
-		}
-		for _, tab := range []string{"/ui/requests", "/ui/tasks", "/ui/pains"} {
-			if !strings.Contains(page, `class="g-tab"`) || !strings.Contains(page, `href="`+tab+`"`) {
-				t.Errorf("%s lacks the tab %s", path, tab)
-			}
-		}
-		if !regexp.MustCompile(`class="g-tab" data-tab="[a-z]+" href="` + current + `" aria-current="page"`).MatchString(page) {
-			t.Errorf("%s: the current tab is not marked", path)
-		}
-		if strings.Count(page, `aria-current="page"`) != 2 {
-			t.Errorf("%s: exactly the nav entry and the tab are current, got %d", path, strings.Count(page, `aria-current="page"`))
-		}
-	}
-}
 
 // The number beside Requests counts the open tasks for the viewer, through the
 // same visibility as the list: not the ones for somebody else, not a hidden
@@ -63,25 +35,21 @@ func TestOpenTasksForMeShowAsABadgeAndCountOnlyWhatIsVisible(t *testing.T) {
 		}
 		return m[1]
 	}
-	if got := count(e.Member, "/ui/overview"); got != "2" {
+	if got := count(e.Member, "/ui/inbox"); got != "2" {
 		t.Errorf("anna's badge = %q, want 2 (hers and the one for everyone)", got)
 	}
-	if got := count(e.Guest, "/ui/overview"); got != "1" {
+	if got := count(e.Guest, "/ui/inbox"); got != "1" {
 		t.Errorf("gina's badge = %q, want 1 (only what is assigned to her)", got)
 	}
-	if got := count(e.Owner, "/ui/overview"); got != "2" {
+	if got := count(e.Owner, "/ui/inbox"); got != "2" {
 		t.Errorf("alice's badge = %q, want 2 (the two for everyone, one of them in the project only she is in)", got)
 	}
-	if got := count(e.Reviewer, "/ui/requests"); got != "1" {
+	if got := count(e.Reviewer, "/ui/inbox"); got != "1" {
 		t.Errorf("rita's badge = %q, want 1", got)
-	}
-	_, tasks := fetchPage(t, e.Member, e.Base+"/ui/tasks")
-	if !strings.Contains(tasks, `class="g-n">2</span>`) {
-		t.Error("the Tasks tab does not carry the number")
 	}
 	// Nothing open: no badge at all.
 	none := ovEnv(t)
-	if got := count2(t, none, none.Member, "/ui/overview"); got != "" {
+	if got := count2(t, none, none.Member, "/ui/inbox"); got != "" {
 		t.Errorf("badge without tasks = %q", got)
 	}
 }
@@ -93,166 +61,6 @@ func count2(t *testing.T, e shellEnv, c *http.Client, path string) string {
 		return m[1]
 	}
 	return ""
-}
-
-// Tasks: "Mine" is what is assigned to the viewer plus what is for everyone;
-// "Everyone" is everything the viewer may see.
-func TestTasksPageMineAndEveryone(t *testing.T) {
-	e := ovEnv(t)
-	req := rqMake(t, e.St, rqSpec{Title: "Ship it"})
-	tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "For everyone"})
-	tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "For anna", Assignee: "anna"})
-	tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "For lars", Assignee: "lars"})
-
-	_, mine := fetchPage(t, e.Member, e.Base+"/ui/tasks")
-	if !strings.Contains(mine, "For everyone") || !strings.Contains(mine, "For anna") || strings.Contains(mine, "For lars") {
-		t.Errorf("Mine = %s", mine)
-	}
-	if !strings.Contains(mine, `href="/ui/tasks" aria-current="true">Mine`) {
-		t.Error("Mine is not the marked filter")
-	}
-	_, all := fetchPage(t, e.Member, e.Base+"/ui/tasks?who=all")
-	for _, want := range []string{"For everyone", "For anna", "For lars"} {
-		if !strings.Contains(all, want) {
-			t.Errorf("Everyone lacks %q", want)
-		}
-	}
-	if !strings.Contains(all, `href="/ui/tasks?who=all" aria-current="true">Everyone`) {
-		t.Error("Everyone is not the marked filter")
-	}
-}
-
-// Home: "Next" puts the questions agents wait on before the proposals, and
-// folds every proposal into one line that links to the review.
-func TestNextShowsQuestionsBeforeProposalsAndBundlesThem(t *testing.T) {
-	e := ovEnv(t)
-	for _, title := range []string{"P one", "P two", "P three"} {
-		ovKnowledge(t, e.St, shellProject, title, "staged")
-	}
-	ovAgent(t, e.St, shellProject, "claude:asker", "asker", "person:2")
-	if _, err := e.St.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: store.RoomKeyForProject(shellProject),
-		SenderExternalID: "claude:asker", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorAgent, ClientID: "q1",
-		Body: "Which of the two schemas?", Intent: store.IntentQuestion, Mentions: []string{"person:5"}}); err != nil {
-		t.Fatal(err)
-	}
-	_, page := fetchPage(t, e.Reviewer, e.Base+"/ui/overview")
-	q, p := strings.Index(page, "Which of the two schemas?"), strings.Index(page, "3 knowledge proposals are waiting for you")
-	if q < 0 || p < 0 || q > p {
-		t.Fatalf("question at %d, proposals at %d: the question must come first", q, p)
-	}
-	for _, title := range []string{"P one", "P two", "P three"} {
-		if strings.Contains(page, title) {
-			t.Errorf("proposal %q is listed on its own", title)
-		}
-	}
-	if strings.Count(page, `href="/ui/review"`) != 1 {
-		t.Errorf("the proposals must be one row linking to the review, got %d links", strings.Count(page, `href="/ui/review"`))
-	}
-}
-
-// Home names what an agent works on, not its hash: the request title first, the
-// work note next, the branch last; the id stays in the tooltip.
-func TestHomeAgentRowsSayWhatTheAgentWorksOn(t *testing.T) {
-	e := ovEnv(t)
-	agentsSeed(t, e.St, shellProject, "claude:laptop:aaaa1111", "sess-a", "Roles first", "migrating")
-	ovAgent(t, e.St, shellProject, "claude:laptop:bbbb2222", "twin-b", "person:2")
-	ovAgent(t, e.St, shellProject, "claude:laptop:cccc3333", "twin-c", "person:2")
-	if _, err := e.St.SetCoordWorkNote("claude:laptop:bbbb2222", "person:2", "Reading the audit"); err != nil {
-		t.Fatal(err)
-	}
-	_, page := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	// The headline links to the session of the agent, so the way in is one click.
-	if !strings.Contains(page, `<h3 class="g-title"><a href="/ui/sessions/`) || !strings.Contains(page, `>Roles first</a></h3>`) {
-		t.Errorf("the request title is not the headline, linked to the session: %s", page)
-	}
-	if !strings.Contains(page, `<h3 class="g-title">Reading the audit</h3>`) {
-		t.Error("the work note is not the headline of an agent without a request")
-	}
-	if !strings.Contains(page, `title="claude:laptop:aaaa1111"`) {
-		t.Error("the id is not in the tooltip")
-	}
-	visible := regexp.MustCompile(`title="[^"]*"`).ReplaceAllString(page, "")
-	if strings.Contains(visible, "aaaa1111") || strings.Contains(visible, "#aaaa") {
-		t.Error("the hash id is visible outside a tooltip")
-	}
-}
-
-// Home and the room read the same presence: an agent that waits for a person
-// is "Waiting on you" in both, even when its last sign of life is old.
-func TestHomeAndRoomAgreeThatTheAgentWaitsOnAPerson(t *testing.T) {
-	e := ovEnv(t)
-	ovAgent(t, e.St, shellProject, "claude:waiter", "waiter", "person:2")
-	if _, err := e.St.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: store.RoomKeyForProject(shellProject),
-		SenderExternalID: "claude:waiter", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorAgent, ClientID: "w1",
-		Body: "Shall I drop the column?", Intent: store.IntentQuestion, Mentions: []string{"person:1"}}); err != nil {
-		t.Fatal(err)
-	}
-	_, home := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	row := home[strings.Index(home, `title="claude:waiter"`):]
-	row = row[:strings.Index(row, "</li>")]
-	if !strings.Contains(row, "Waiting on you") || !strings.Contains(row, `class="g-dot is-wait"`) || strings.Contains(row, "is-work") {
-		t.Errorf("home row: text and dot must say the same: %s", row)
-	}
-	_, room := fetchPage(t, e.Owner, e.Base+"/ui/coord?room="+url.QueryEscape(store.RoomKeyForProject(shellProject)))
-	if !strings.Contains(room, "Waiting on you") {
-		t.Error("the room does not say the same")
-	}
-	if strings.Contains(room, "Waiting for you") || strings.Contains(home, "Waiting for you") {
-		t.Error("the old wording is still there")
-	}
-}
-
-// "Stuck?": an agent in the middle of a turn with no hook event for ten
-// minutes. A finished turn is never stuck, and a subagent's call is a sign of
-// life.
-func TestHomeShowsAStuckAgentOnlyMidTurn(t *testing.T) {
-	e := ovEnv(t)
-	room := store.RoomKeyForProject(shellProject)
-	register := func(id, event string) {
-		t.Helper()
-		if _, err := e.St.RegisterCoordAgent(store.CoordAgent{ExternalID: id, PrincipalID: "person:2", Person: "anna", Provider: "claude",
-			DisplayName: id, RoomKey: room, HookActivity: true, HookEvent: event}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	silence := func(id string) {
-		t.Helper()
-		past := time.Now().UTC().Add(-(store.StuckAfter + time.Minute)).Format(time.RFC3339)
-		if _, err := e.St.DB().Exec(`UPDATE coord_agents SET last_hook_at=? WHERE external_id=?`, past, id); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, id := range []string{"claude:midturn", "claude:finished", "claude:subagent"} {
-		register(id, store.HookTurnStart)
-		register(id, store.HookTurnEnd)
-		register(id, store.HookTurnStart)
-	}
-	register("claude:finished", store.HookTurnEnd)
-	for _, id := range []string{"claude:midturn", "claude:finished", "claude:subagent"} {
-		silence(id)
-	}
-	register("claude:subagent", store.HookTouch)
-
-	_, page := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	rowOf := func(id string) string {
-		i := strings.Index(page, `title="`+id+`"`)
-		if i < 0 {
-			t.Fatalf("no row for %s", id)
-		}
-		row := page[i:]
-		return row[:strings.Index(row, "</li>")]
-	}
-	if row := rowOf("claude:midturn"); !strings.Contains(row, "Stuck?") || !strings.Contains(row, "is-stuck") {
-		t.Errorf("a silent agent mid-turn: %s", row)
-	}
-	for _, id := range []string{"claude:finished", "claude:subagent"} {
-		if row := rowOf(id); strings.Contains(row, "Stuck?") {
-			t.Errorf("%s must not be stuck: %s", id, row)
-		}
-	}
-	if strings.Index(page, `title="claude:midturn"`) > strings.Index(page, `title="claude:finished"`) {
-		t.Error("the stuck agent must be listed before the ones that are fine")
-	}
 }
 
 func trackSince(t *testing.T, st *store.Store, at string) {
@@ -332,7 +140,7 @@ func TestTeamAndDevicesAreOneMenuEntryWithItsOwnIcon(t *testing.T) {
 	e := ovEnv(t)
 	const fallback = `cx="9" cy="8"`
 	for name, c := range map[string]*http.Client{"owner": e.Owner, "member": e.Member} {
-		_, page := fetchPage(t, c, e.Base+"/ui/overview")
+		_, page := fetchPage(t, c, e.Base+"/ui/inbox")
 		i := strings.Index(page, `data-account="team"`)
 		if i < 0 {
 			t.Fatalf("%s has no Team & devices entry", name)
@@ -345,7 +153,7 @@ func TestTeamAndDevicesAreOneMenuEntryWithItsOwnIcon(t *testing.T) {
 			t.Errorf("%s: Team & devices must be a single entry", name)
 		}
 	}
-	_, guest := fetchPage(t, e.Guest, e.Base+"/ui/overview")
+	_, guest := fetchPage(t, e.Guest, e.Base+"/ui/inbox")
 	if strings.Contains(guest, `data-account="team"`) {
 		t.Error("a guest is offered Team & devices")
 	}
@@ -409,53 +217,5 @@ func TestRevokeUnusedRefusesWithoutCSRFAndGuardsForeignTokens(t *testing.T) {
 	}
 	if info, _ := e.St.TokenByID(foreign); info.RevokedAt == "" {
 		t.Error("the administrator's revoke did not reach the foreign unused token")
-	}
-}
-
-// Ticking a task keeps the Everyone filter: the person lands where they were.
-func TestTickingATaskKeepsTheEveryoneFilter(t *testing.T) {
-	e := ovEnv(t)
-	req := rqMake(t, e.St, rqSpec{Title: "Pay the vendor"})
-	task := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "For lars", Assignee: "lars"})
-	_, page := fetchPage(t, e.Owner, e.Base+"/ui/tasks?who=all")
-	if !strings.Contains(page, `name="who" value="all"`) {
-		t.Fatalf("the form does not carry the filter: %s", page)
-	}
-	resp := tpPost(t, e, e.Owner, "/ui/tasks/done", url.Values{"id": {strconv.FormatInt(task.ID, 10)}, "who": {"all"}, "back": {"tasks"}})
-	if loc := resp.Header.Get("Location"); !strings.Contains(loc, "who=all") {
-		t.Errorf("redirect = %q, want who=all kept", loc)
-	}
-}
-
-// "Waiting on you" belongs to the person asked. For anyone else the same agent
-// reads "Waiting for a person", on Home and in the room, and is not flagged.
-func TestWaitingOnYouIsRelativeToTheViewer(t *testing.T) {
-	e := ovEnv(t)
-	ovAgent(t, e.St, shellProject, "claude:waiter", "waiter", "person:2")
-	room := store.RoomKeyForProject(shellProject)
-	if _, err := e.St.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room,
-		SenderExternalID: "claude:waiter", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorAgent, ClientID: "w1",
-		Body: "Shall I drop the column?", Intent: store.IntentQuestion, Mentions: []string{"person:1"}}); err != nil {
-		t.Fatal(err)
-	}
-	rowOf := func(c *http.Client) string {
-		_, home := fetchPage(t, c, e.Base+"/ui/overview")
-		i := strings.Index(home, `title="claude:waiter"`)
-		if i < 0 {
-			t.Fatal("no row for the waiting agent")
-		}
-		row := home[i:]
-		return row[:strings.Index(row, "</li>")]
-	}
-	if row := rowOf(e.Owner); !strings.Contains(row, "Waiting on you") || !strings.Contains(row, `class="g-dot is-wait"`) || strings.Contains(row, "is-work") {
-		t.Errorf("the person asked: %s", row)
-	}
-	row := rowOf(e.Member)
-	if strings.Contains(row, "Waiting on you") || !strings.Contains(row, "Waiting for person") {
-		t.Errorf("someone else: %s", row)
-	}
-	_, theirRoom := fetchPage(t, e.Member, e.Base+"/ui/coord?room="+url.QueryEscape(room))
-	if strings.Contains(theirRoom, "Waiting on you") {
-		t.Error("the room tells someone else that the agent waits on them")
 	}
 }

@@ -1,0 +1,40 @@
+/* Search page: one field with one icon, kinds on the left, the hits as a list.
+   Mock: git-native-v2 search.html. */
+
+:is(.g2.sr) {
+  & .sform { display: flex; gap: 8px; margin-bottom: 16px; }
+  & .sform .gfield { flex: 1; min-width: 0; }
+  & .sform .mono-in input { font-family: var(--ui-mono); font-size: 14px; }
+  & .sform .mono-in input::placeholder { font-family: var(--ui-font); }
+  & details.save-s { margin: -4px 0 16px; }
+  & details.save-s > summary { list-style: none; display: inline-flex; cursor: pointer; }
+  & details.save-s > summary::-webkit-details-marker { display: none; }
+  & .save-f { display: flex; gap: 8px; margin-top: 8px; max-width: 28rem; }
+  & .save-f .gfield { flex: 1; min-width: 0; }
+  & .slayout { display: grid; grid-template-columns: 252px minmax(0, 1fr); gap: 16px; align-items: start; }
+  & .facets { margin-bottom: 16px; }
+  & .facets { padding-bottom: 8px; }
+  & .facets .box-h { min-height: 0; padding: 12px 16px 4px; background: none; border-bottom: 0; }
+  & .facets .box-h .t { font-size: 12px; color: var(--fg-muted); }
+  & .frow { display: flex; align-items: center; gap: 8px; min-height: 32px; margin: 0 8px; padding: 6px 8px; border-radius: 6px; color: var(--fg-default); font-size: 14px; }
+  & .frow .i { color: var(--fg-muted); flex: none; }
+  & .frow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .frow:hover { background: var(--neutral-muted); text-decoration: none; }
+  & .frow.on { background: var(--neutral-muted); font-weight: 600; }
+  & .hits .box-h { border-top: 1px solid var(--border-default); }
+  & .hits .box-h:first-child { border-top: 0; }
+  & .hit { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
+  & .hit + .hit { border-top: 1px solid var(--border-muted); }
+  & .hit .hm { color: var(--fg-muted); padding-top: 2px; }
+  & .hit .ht { font-size: 16px; font-weight: 600; color: var(--fg-default); overflow-wrap: anywhere; }
+  & .hit .ht:hover { color: var(--accent-fg); }
+  & .hit .hs { margin-top: 2px; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; }
+}
+
+@media (max-width: 1011px) {
+  :is(.g2.sr) .slayout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 767px) {
+  :is(.g2.sr) .sform { flex-wrap: wrap; }
+  :is(.g2.sr) .sform .gfield { flex-basis: 100%; }
+}

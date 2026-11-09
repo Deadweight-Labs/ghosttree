@@ -51,7 +51,7 @@ func TestKnowledgeListShowsKindStatusExcerptAndFilters(t *testing.T) {
 	knInsert(t, e.St, store.Knowledge{Type: "note", Title: "Staged idea", Confidence: "staged"})
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/knowledge")
 	for _, want := range []string{"WAL grows unbounded", "Use SQLite", "Staged idea", "Pitfall", "Decision", "Verified", "Trusted", "Staged",
-		"First paragraph about the WAL.", `class="kn-title" href="/ui/knowledge/`, `/static/knowledge.css`, `aria-current="page"`} {
+		"First paragraph about the WAL.", `<div class="tt"><a href="/ui/knowledge/`, `/static/ui-knowledge.css`, `aria-current="page"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("member list lacks %q", want)
 		}
@@ -226,7 +226,7 @@ func TestReviewApproveRejectUndoAndEdit(t *testing.T) {
 		t.Errorf("after edit: %+v", k)
 	}
 	_, detail := fetchPage(t, e.Owner, e.Base+resp.Header.Get("Location"))
-	for _, want := range []string{"Reject me, better", "Saved: Reject me, better", "New body", "History", "Reject me", `id="edit"`} {
+	for _, want := range []string{"Reject me, better", "Saved: Reject me, better", "New body", `id="revisions"`, "Reject me", `id="edit"`} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("detail lacks %q", want)
 		}
@@ -472,16 +472,16 @@ func TestHistoryIsForMembersAndShowsTheAuthorOfEachVersion(t *testing.T) {
 	if !strings.Contains(guest, "Public body") {
 		t.Fatal("guest does not see the released entry")
 	}
-	for _, leak := range []string{"SECRET-DRAFT", "Draft title", "History", "kn-history"} {
+	for _, leak := range []string{"SECRET-DRAFT", "Draft title", `id="revisions"`} {
 		if strings.Contains(guest, leak) {
 			t.Errorf("guest detail leaks the earlier version: %q", leak)
 		}
 	}
 	_, member := fetchPage(t, e.Member, path)
-	if !strings.Contains(member, "SECRET-DRAFT body") || !strings.Contains(member, "History") {
+	if !strings.Contains(member, "SECRET-DRAFT body") || !strings.Contains(member, `id="revisions"`) {
 		t.Error("a member does not see the history")
 	}
-	if !strings.Contains(member, `<span class="ov-meta">alice</span>`) || strings.Contains(member, `<span class="ov-meta">lars</span>`) {
+	if !strings.Contains(member, `<span class="rby">alice</span>`) || strings.Contains(member, `<span class="rby">lars</span>`) {
 		t.Error("the history names the replacer instead of the author of the version")
 	}
 	if !strings.Contains(member, "replaced by lars") {
@@ -569,20 +569,20 @@ func TestHistoryNamesTheAuthorOfEachVersionAndSkipsStatusOnlySteps(t *testing.T)
 	up("lena", map[string]string{"status": "deprecated"})
 	up("lena", map[string]string{"title": "V-LENA", "body": "body-lena", "status": "active"})
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/knowledge/"+strconv.FormatInt(id, 10))
-	h := page[strings.Index(page, "kn-history"):]
+	h := page[strings.Index(page, `id="revisions"`):]
 	if n := strings.Count(h, "V-LARS"); n != 1 {
 		t.Errorf("version of lars shown %d times, want once (status-only steps hidden)", n)
 	}
-	if n := strings.Count(h, `<span class="ov-meta">lars</span>`); n != 1 {
+	if n := strings.Count(h, `<span class="rby">lars</span>`); n != 1 {
 		t.Errorf("lars named %d times as author", n)
 	}
-	if n := strings.Count(h, `<span class="ov-meta">alice</span>`); n != 1 {
+	if n := strings.Count(h, `<span class="rby">alice</span>`); n != 1 {
 		t.Errorf("alice named %d times as author", n)
 	}
-	if strings.Contains(h, `<span class="ov-meta">lena</span>`) {
+	if strings.Contains(h, `<span class="rby">lena</span>`) {
 		t.Error("lena is named as author of a replaced version")
 	}
-	if i, j := strings.Index(h, "V-LARS"), strings.Index(h, `<span class="ov-meta">lars</span>`); i < 0 || j < 0 {
+	if i, j := strings.Index(h, "V-LARS"), strings.Index(h, `<span class="rby">lars</span>`); i < 0 || j < 0 {
 		t.Error("lars version or author missing")
 	}
 }

@@ -1,0 +1,76 @@
+{{define "issue"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id"{{with .IssueV}} data-live-ids="{{.ID}}"{{end}}><div class="wrap">
+{{with .IssueV}}{{with .Result}}<div class="callout{{if not .Fail}} done{{end}}" id="result" role="status">{{if .Fail}}{{mi "tri"}}{{else}}{{mi "check"}}{{end}}<div class="tt">{{.Text}}</div></div>{{end}}
+<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n" title="{{.Human}}">#{{.ID}}</span></h1>
+{{if .CanEdit}}<div class="gacts"><a class="gbtn sm hide-m" href="{{.Base}}/{{.ID}}?panel=edit#edit">{{mi "pencil"}}{{t "issue.action.edit"}}</a>
+<a class="gbtn sm pri hide-m" href="{{.Base}}/new">{{mi "plus"}}{{t "issues.new_issue"}}</a>
+<details class="dd top-menu"><summary class="gbtn sm icon" aria-label="{{t "issue.more"}}" title="{{t "issue.more"}}">{{mi "kebab"}}</summary><div class="pop r">
+<a class="opt" href="{{.Base}}/{{.ID}}?panel=edit#edit">{{mi "pencil"}}{{t "issue.action.edit"}}</a>
+{{if .MoveProjects}}<a class="opt" href="{{.Base}}/{{.ID}}?panel=move#move">{{mi "folder"}}{{t "issue.action.move"}}</a>{{end}}
+{{if .Open}}{{if .CanComplete}}<a class="opt" href="{{.Base}}/{{.ID}}?panel=complete#complete">{{mi "done"}}{{t "issue.action.complete"}}</a>{{end}}<hr><a class="opt" href="{{.Base}}/{{.ID}}?panel=drop#drop">{{mi "drop"}}{{t "issue.action.drop"}}</a>{{end}}
+</div></details></div>{{end}}</div>
+<div class="dmeta"><span class="state {{if eq .State "open"}}open{{else if eq .State "done"}}done{{else}}gray{{end}}">{{template "issuestate" .State}}{{.StateLabel}}</span>{{if .Person}}<span><span class="person">{{avatarOf .Person}}{{.Person}}</span> {{.Opened}}</span>{{end}}<span>· {{.TypeLabel}}</span>{{if .Priority}}<span class="lb out">{{.Priority}}</span>{{end}}{{if .Total}}<span class="prog" title="{{t "requests.progress"}}"><span class="bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{t "issue.met_of" .Progress}}</span>{{end}}</div>
+<div class="livebar" data-live-head="{{.ID}}" aria-live="polite">{{range .Live}}{{liveBox .}}{{end}}</div></div>
+
+{{if .CanEdit}}<div id="panel">
+<details class="panel box newbox" id="edit"{{if eq .Panel "edit"}} open{{end}}><summary class="box-h"><span class="t">{{t "requests.edit"}}</span><span class="sp"></span><a class="gbtn sm icon quiet" href="{{.Base}}/{{.ID}}" aria-label="{{t "issue.close_panel"}}">{{mi "x"}}</a></summary><div class="cb write">
+<form method="post" action="/ui/requests/{{.ID}}/correct" class="pform"><input type="hidden" name="csrf_token" value="{{.Token}}">
+<label class="pfield"><span>{{t "requests.field_title"}}</span><input class="gfield" name="title" value="{{.RawTitle}}" required maxlength="500"></label>
+<label class="pfield"><span>{{t "requests.field_kind"}}</span><select class="gfield" name="type">{{range .Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<label class="pfield"><span>{{t "requests.field_priority"}}</span><input class="gfield" name="priority" value="{{.Priority}}" maxlength="64" list="rq-priorities" autocomplete="off"><datalist id="rq-priorities">{{range .Priorities}}<option value="{{.}}">{{end}}</datalist></label>
+<label class="pfield"><span>{{t "requests.field_description"}}</span><textarea name="description" rows="10">
+{{.RawDescription}}</textarea></label>
+<label class="pfield"><span>{{t "requests.field_reason"}}</span><input class="gfield" name="reason" required maxlength="2000" autocomplete="off"></label>
+<div class="wf"><button class="gbtn pri">{{t "requests.save"}}</button></div></form></div></details>
+{{if .MoveProjects}}<details class="panel box newbox" id="move"{{if eq .Panel "move"}} open{{end}}><summary class="box-h"><span class="t">{{t "move.title"}}</span><span class="sp"></span><a class="gbtn sm icon quiet" href="{{.Base}}/{{.ID}}" aria-label="{{t "issue.close_panel"}}">{{mi "x"}}</a></summary><div class="cb write">
+<form method="post" action="/ui/requests/{{.ID}}/move" class="pform"><input type="hidden" name="csrf_token" value="{{.Token}}">
+<label class="pfield"><span>{{t "move.field_project"}}</span><select class="gfield" name="project">{{range .MoveProjects}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<label class="pfield"><span>{{t "move.field_reason"}}</span><input class="gfield" name="reason" required maxlength="2000" autocomplete="off"></label>
+<div class="wf"><button class="gbtn pri">{{t "move.title"}}</button></div></form></div></details>{{end}}
+{{if .Open}}{{if .CanComplete}}<details class="panel box newbox" id="complete"{{if eq .Panel "complete"}} open{{end}}><summary class="box-h"><span class="t">{{t "requests.complete"}}</span><span class="sp"></span><a class="gbtn sm icon quiet" href="{{.Base}}/{{.ID}}" aria-label="{{t "issue.close_panel"}}">{{mi "x"}}</a></summary><div class="cb write">
+<form method="post" action="/ui/requests/{{.ID}}/complete" class="pform"><input type="hidden" name="csrf_token" value="{{.Token}}">
+<label class="pfield"><span>{{t "requests.field_evidence_kind"}}</span><select class="gfield" name="evidence_kind">{{range .Kinds}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<label class="pfield"><span>{{t "requests.field_evidence"}}</span><input class="gfield" name="evidence_ref" required maxlength="2000" autocomplete="off"></label>
+<div class="wf"><button class="gbtn pri">{{t "requests.complete"}}</button></div></form></div></details>{{end}}
+<details class="panel box newbox" id="drop"{{if eq .Panel "drop"}} open{{end}}><summary class="box-h"><span class="t">{{t "requests.drop"}}</span><span class="sp"></span><a class="gbtn sm icon quiet" href="{{.Base}}/{{.ID}}" aria-label="{{t "issue.close_panel"}}">{{mi "x"}}</a></summary><div class="cb write">
+<form method="post" action="/ui/requests/{{.ID}}/drop" class="pform"><input type="hidden" name="csrf_token" value="{{.Token}}">
+<label class="pfield"><span>{{t "requests.field_drop_reason"}}</span><input class="gfield" name="reason" required maxlength="2000" autocomplete="off"></label>
+<div class="wf"><button class="gbtn">{{t "requests.drop"}}</button></div></form></div></details>{{end}}
+</div>{{end}}
+
+<div class="dgrid"><div class="dmain">
+{{range .Blockers}}<div class="callout" id="task-{{.N}}" role="group" aria-label="{{t "issues.blocker"}}">{{mi "pin"}}<div><div class="k">{{t "issue.waits_for" .Assignee}} {{refPill "task" .N ""}}</div><div class="tt">{{.Title}}</div>{{if .Where}}<div class="k mono">{{.Where}}</div>{{end}}<div class="gacts"><a class="gbtn sm" href="/ui/inbox">{{t "issue.open_inbox"}}</a></div></div></div>
+{{end}}
+{{if or .Blocks .Explain .Criteria .CanEdit}}<div class="cmt">{{avatarX "xl" "" .Person "" false}}<div class="cbox"><div class="ch"><b>{{.Person}}</b><span>{{t "issue.commented"}}</span><span class="sp"></span><span class="lb out">{{t "issue.author"}}</span>{{if .CanEdit}}<a class="gbtn sm icon quiet" href="{{.Base}}/{{.ID}}?panel=edit#edit" aria-label="{{t "issue.action.edit"}}">{{mi "pencil"}}</a>{{end}}</div>
+{{if or .Blocks .Explain}}<div class="cb prose">{{template "explain" .Explain}}{{template "knbody" .Blocks}}</div>{{end}}
+{{if or .Criteria .CanEdit}}<div class="reqs"><div class="rh"><b>{{t "issues.requirements"}}</b>{{if .Total}}<span class="counter">{{.Progress}}</span><span class="sp"></span><span class="prog wide"><span class="bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{t "issue.met_x_of_y" .Done .Total}}</span>{{end}}</div>
+{{range .Criteria}}<div class="crit num{{if eq .State "met"}} done{{end}}" id="criterion-{{.Number}}" data-crit="{{.State}}"><span class="no">{{.Number}}</span><span class="cbx{{if eq .State "met"}} on{{else if eq .State "waived"}} waived{{end}}" role="img" aria-label="{{.StateLabel}}">{{if eq .State "met"}}{{mi "check"}}{{end}}</span><div><div class="tx">{{.Text}}</div>
+{{if or .Evidence (eq .State "met") (eq .State "waived")}}<div class="pf">{{range $i, $e := .Evidence}}{{if eq $i 0}}{{if $e.Person}}{{avatarOf $e.Person}}{{end}}{{end}}{{end}}{{proofs .Evidence}}{{if and (eq .State "met") (not .Evidence)}}<span class="chip noproof">{{mi "tri"}}{{t "issue.no_proof"}}</span>{{end}}{{if eq .State "waived"}}<span class="lb neu">{{.StateLabel}}</span>{{end}}</div>{{end}}
+{{if .CanResolve}}<details class="resolve"><summary class="gbtn sm">{{t "issue.resolve"}}</summary>
+<form method="post" action="/ui/requests/{{$.IssueV.ID}}/criteria/{{.ID}}" class="resolve-form"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<select class="gfield" name="evidence_kind" aria-label="{{t "requests.field_evidence_kind"}}">{{range $.IssueV.Kinds}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+<input class="gfield" name="evidence_ref" required maxlength="2000" placeholder="{{t "requests.field_evidence"}}" aria-label="{{t "requests.field_evidence"}}" autocomplete="off">
+<button class="gbtn sm pri" name="state" value="met">{{t "requests.met"}}</button><button class="gbtn sm" name="state" value="waived">{{t "requests.waive"}}</button></form></details>{{end}}</div>
+{{if .Event}}<a class="jump" href="#{{.Event}}" title="{{t "issue.jump"}}" aria-label="{{t "issue.jump"}}">{{mi "chat"}}</a>{{else}}<span></span>{{end}}</div>
+{{end}}
+{{if and .Open .CanEdit}}<form method="post" action="/ui/requests/{{.ID}}/criteria" class="lnew"><input type="hidden" name="csrf_token" value="{{.Token}}"><label class="gfield"><input name="description" required maxlength="2000" placeholder="{{t "issues.add_requirement"}}" aria-label="{{t "issues.add_requirement"}}" autocomplete="off"></label><button class="gbtn">{{t "requests.add"}}</button></form>{{end}}
+</div>{{end}}
+{{with .Reactions}}<div class="cf">{{template "uireactions" .}}</div>{{end}}</div></div>{{end}}
+
+{{if .Timeline}}{{template "uitimeline" .Timeline}}{{end}}
+{{with .Composer}}{{template "uicomposer" .}}{{end}}
+</div>
+
+<aside class="side" aria-label="{{t "issues.manage"}}">
+<div class="sblk live-side" data-live-side="{{.ID}}" aria-live="polite"{{if not .Live}} hidden{{end}}>{{range .Live}}{{liveBox .}}{{end}}</div>
+{{if or .Pains .Ideas}}<div class="sblk"><h3>{{t "issue.source"}}</h3>{{range .Ideas}}<div class="v"><div class="origin">{{template "uihc" (hc .Num .Title .Brief .Href)}}</div></div>{{end}}{{range .Pains}}<div class="v"><div class="origin">{{template "uihc" (hc (printf "#%d" .ID) .Title (t "ref.kind.pain") .Href)}}</div></div>{{end}}</div>{{end}}
+{{with .Branch}}{{if .HasPackage}}<div class="sblk"><h3>{{t "issues.side.package"}}</h3><div class="v"><span>{{.Package}}</span>{{if .Progress}}<span class="prog"><span class="bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{.Progress}}</span>{{end}}</div></div>{{end}}
+<div class="sblk"><h3>{{t "issues.side.branch"}}</h3><div class="v"><span><a class="chip br" href="{{$.IssueV.Base}}?q=branch%3A{{.Name}}">{{mi "branch"}}{{.Name}}</a></span></div></div>{{end}}
+{{range .Links}}{{if eq .Rel "parent"}}<div class="sblk"><h3>{{t "issues.side.parent"}}</h3><div class="v"><span>{{template "uihc" (hc (printf "#%d" .N) .Title .Label .Href)}}</span></div></div>{{end}}{{end}}
+{{if .Blockers}}<div class="sblk"><h3>{{t "issues.side.blocked_by"}}</h3><div class="v">{{range .Blockers}}<span>{{template "uihc" (hc (printf "#%d" .N) .Title .Where (printf "#task-%d" .N))}}</span>{{avatarWait .Assignee}}{{end}}</div></div>{{end}}
+{{range .Links}}{{if ne .Rel "parent"}}<div class="sblk"><h3>{{.Label}}</h3><div class="v"><span>{{template "uihc" (hc (printf "#%d" .N) .Title .Label .Href)}}</span></div></div>{{end}}{{end}}
+{{if .Work}}<div class="sblk"><h3>{{t "issues.side.sessions"}}</h3><div class="v">{{range .Work}}{{if .Href}}<a href="{{.Href}}">{{avatarX "" .Kind .Handle .Owner .LiveNow}}<span>{{if .Handle}}{{.Handle}}{{else}}{{.Title}}{{end}}</span>{{if .Active}}<span class="dot push{{if not .LiveNow}} idle{{end}}" title="{{.StateLabel}}"></span>{{end}}</a>{{end}}{{end}}</div></div>{{end}}
+{{if .Threads}}<div class="sblk"><h3>{{t "issues.side.discussion"}}</h3><div class="v">{{range .Threads}}<a href="{{.URL}}">{{mi "chat"}}{{.Title}}</a>{{end}}</div></div>{{end}}
+{{$src := false}}{{range .Relations}}{{if or (eq .Kind "knowledge") (eq .Kind "external")}}{{$src = true}}{{end}}{{end}}
+{{if $src}}<div class="sblk"><h3>{{t "issues.side.sources"}}</h3><div class="v">{{range .Relations}}{{if or (eq .Kind "knowledge") (eq .Kind "external")}}{{if .Href}}<a href="{{.Href}}"{{if eq .Kind "external"}} rel="noopener noreferrer"{{end}}>{{.Text}}</a>{{else}}<span>{{.Text}}</span>{{end}}{{end}}{{end}}</div></div>{{end}}
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}

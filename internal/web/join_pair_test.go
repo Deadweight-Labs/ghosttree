@@ -241,7 +241,7 @@ func TestJoinLoginFirstThenInstaller(t *testing.T) {
 	}
 	e.claimLoop(t, strings.ToLower(pair), "annas-laptop")
 	text = e.pairPage(t, b)
-	for _, want := range []string{"annas-laptop", "wants to connect", `value="approve"`, `value="deny"`, "same network as this browser"} {
+	for _, want := range []string{"annas-laptop", "wants to connect", `value="approve"`, `value="deny"`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("approval page lacks %q: %s", want, text)
 		}
@@ -268,7 +268,8 @@ func TestJoinSameNetworkLineSaysNoForAnotherNetwork(t *testing.T) {
 	if _, err := e.st.Join().Claim(loopClaim(pair, "box", "203.0.113.5")); err != nil {
 		t.Fatal(err)
 	}
-	if text := e.pairPage(t, b); !strings.Contains(text, "This is a different network") || !strings.Contains(text, "203.0.113.5") {
+	// The page says nothing about the network of the other computer.
+	if text := e.pairPage(t, b); strings.Contains(text, "different network") || strings.Contains(text, "same network") {
 		t.Fatalf("page: %s", text)
 	}
 }
@@ -545,7 +546,7 @@ func TestJoinSignInThroughTheJoinPageMakesOneSessionForThatAccountOnly(t *testin
 	other := projectInvite(t, e.st, e.org, store.RoleMember)
 	resp = sameOriginPostForm(t, anonClient(), e.srv+"/ui/login/code", url.Values{"code": {other}, "name": {"paula"}})
 	resp.Body.Close()
-	if resp.Header.Get("Location") != "/ui/overview" || e.st.Join().Sessions() != 1 {
+	if resp.Header.Get("Location") != "/ui/inbox" || e.st.Join().Sessions() != 1 {
 		t.Fatalf("without marker: %s sessions=%d", resp.Header.Get("Location"), e.st.Join().Sessions())
 	}
 	// Ein zweiter Eingeladener bekommt seine eigene Sitzung und einen anderen Code.
@@ -656,7 +657,7 @@ func TestJoinSameNetworkLineStaysWithPublicURLAndTrustedProxies(t *testing.T) {
 	e.accept(t, b, e.code)
 	pair := pairRE.FindString(e.pairPage(t, b))
 	e.claimLoop(t, pair, "box")
-	if text := e.pairPage(t, b); !strings.Contains(text, "same network as this browser") {
+	if text := e.pairPage(t, b); strings.Contains(text, "same network") {
 		t.Fatalf("page: %s", text)
 	}
 }
@@ -672,10 +673,8 @@ func TestJoinCodeFallbackWarnsOnAnotherNetworkAndNamesTheTerminal(t *testing.T) 
 		t.Fatal(err)
 	}
 	text := e.pairPage(t, b)
-	for _, want := range []string{"This is a different network", "This is a different network.", "Code from your terminal"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("page lacks %q: %s", want, text)
-		}
+	if !strings.Contains(text, "Code from your terminal") || strings.Contains(text, "different network") {
+		t.Errorf("page: %s", text)
 	}
 }
 

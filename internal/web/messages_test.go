@@ -9,7 +9,7 @@ import (
 )
 
 // p1Templates sind die Vorlagen, deren Texte vollständig im Katalog liegen.
-var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html", "templates/coord.html", "templates/knowledge.html", "templates/requests.html", "templates/orgs.html", "templates/device.html", "templates/profile.html", "templates/tasks.html", "templates/pains.html", "templates/agentcontrol.html", "templates/agents.html", "templates/join.html", "templates/pages.html"}
+var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html", "templates/coord.html", "templates/knowledge.html", "templates/orgs.html", "templates/device.html", "templates/profile.html", "templates/agentcontrol.html", "templates/agents.html", "templates/join.html", "templates/pages.html", "templates/inbox.html", "templates/repo.html", "templates/issues.html", "templates/issue.html", "templates/newissue.html", "templates/pain.html", "templates/idea.html", "templates/search.html", "templates/components.html", "templates/features.html", "templates/pulls.html", "templates/machines.html", "templates/workshop.html"}
 
 var (
 	scriptRE   = regexp.MustCompile(`(?s)<script>.*?</script>`)
@@ -44,7 +44,7 @@ func TestP1TemplatesCarryNoTextOutsideTheCatalog(t *testing.T) {
 // isSeparator erlaubt Zeichen, die in keiner Sprache übersetzt werden.
 func isSeparator(s string) bool {
 	switch s {
-	case "·", "@", "1", "2", "3":
+	case "·", "···", "@", "1", "2", "3", "#":
 		return true
 	}
 	return false
@@ -53,7 +53,7 @@ func isSeparator(s string) bool {
 // isTechnicalValue erlaubt Werte, die kein Text für Menschen sind.
 func isTechnicalValue(v string) bool {
 	switch v {
-	case "resume", "pause", "interrupt", "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "all-agents", "withdraw", "met", "waived":
+	case "inbox", "resume", "pause", "interrupt", "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "all-agents", "withdraw", "met", "waived", "new", "pflicht", "optional", "share", "unshare", "discuss":
 		return true
 	}
 	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || strings.HasPrefix(v, "REQ-") || v == "on" || v == "shared" || v == "private" || v == "member" || v == "owner" || v == "guest" || v == "none" || v == "7" || v == "approve" || v == "reject" || v == "gardener" || v == "deny" || v == "member\x00owner" || regexp.MustCompile(`^[0-9]+$`).MatchString(v)
@@ -114,7 +114,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|context|search|cards|page|explain|usage|garden|home|review)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:register|err|runbooks|agents|room|shell|nav|inbox|repo|ui|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|context|search|cards|page|explain|usage|garden|home|review|ref|avatar|issues|issue|ideas|newissue|stub|live|settings|features|workshop|pulls|commits|commit|comments)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).
@@ -128,7 +128,7 @@ func goMessageKeys(t *testing.T) []string {
 	var keys []string
 	for _, e := range entries {
 		name := e.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == "messages.go" || name == "messages_de.go" {
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || strings.HasPrefix(name, "messages") {
 			continue
 		}
 		raw, err := os.ReadFile(name)

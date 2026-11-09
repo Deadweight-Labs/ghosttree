@@ -1,0 +1,43 @@
+{{define "machine"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id sess ag mh"><div class="wrap">
+{{with .MachineV}}{{with .Result}}<div class="callout{{if not .Fail}} done{{end}}" id="result" role="status">{{if .Fail}}{{mi "tri"}}{{else}}{{mi "check"}}{{end}}<div class="tt">{{.Text}}</div></div>{{end}}
+<div class="dhead"><div class="dtitle"><h1><span class="mono">{{.Name}}</span></h1></div>
+<div class="dmeta"><span class="lb pillbig {{.RelationTone}}">{{mi "server"}}{{.RelationLabel}}</span>{{if .Owner}}<span><span class="person">{{avatarOf .Owner}}{{.Owner}}</span></span>{{end}}{{if .OwnerOrg}}<a class="chip" href="{{.OwnerOrgHref}}">{{mi "people"}}{{.OwnerOrg}}</a>{{end}}<span class="muted">{{t "machine.seen" .LastSeen}}</span></div></div>
+<div class="dgrid"><div class="dmain">
+<div class="box"><div class="box-h"><span class="t">{{mi "book"}} {{t "machine.entries"}}</span><span class="sp"></span><span class="muted fw4">{{len .Entries}}</span></div>
+{{range .Entries}}<div class="row irow merow"><span class="st" role="img" aria-label="{{.Type}}">{{mi .Icon}}</span>
+<div><div class="ti">{{if .Href}}<a class="title" href="{{.Href}}">{{.Title}}</a>{{else}}<span class="title">{{.Title}}</span>{{end}}</div>
+<div class="meta"><span class="art">{{.Type}}</span>{{if .Project}}<span class="rp">{{mi "repo"}}{{.Project}}</span>{{end}}{{if not .CanShare}}{{range .Shared}}<span class="lb neu">{{mi "people"}}{{.}}</span>{{end}}{{end}}</div></div>
+<div class="rt">{{if .CanShare}}{{$e := .}}{{range .Shared}}<form class="eshare" method="post" action="{{$.MachineV.Base}}/entry"><input type="hidden" name="csrf_token" value="{{$.MachineV.Token}}"><input type="hidden" name="kind" value="{{$e.Kind}}"><input type="hidden" name="id" value="{{$e.ID}}"><input type="hidden" name="do" value="unshare"><input type="hidden" name="org" value="{{.}}"><button class="gbtn sm" title="{{t "machine.unshare_entry" .}}" aria-label="{{t "machine.unshare_entry" .}}">{{mi "people"}}{{.}}{{mi "x"}}</button></form>{{end}}{{if .Free}}<form class="eshare" method="post" action="{{$.MachineV.Base}}/entry"><input type="hidden" name="csrf_token" value="{{$.MachineV.Token}}"><input type="hidden" name="kind" value="{{.Kind}}"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="do" value="share"><select class="gfield" name="org" aria-label="{{t "machine.share_entry"}}">{{range .Free}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select><button class="gbtn sm">{{t "machine.share_entry"}}</button></form>{{end}}{{end}}</div></div>
+{{else}}<div class="empty"><span>{{t "machine.no_entries"}}</span></div>{{end}}</div>
+{{if .HasAgents}}<div class="box gap agroup"><div class="box-h"><span class="t">{{mi "bot"}} {{t "machine.agents"}}</span><span class="sp"></span><span class="muted fw4">{{len .Agents}}</span></div>{{range .Agents}}{{template "agentrow" .}}{{end}}</div>{{end}}
+{{if .HasSessions}}<div class="box gap"><div class="box-h"><span class="t">{{mi "term"}} {{t "machine.sessions"}}</span><span class="sp"></span><a class="gbtn sm quiet" href="{{.SessionsHref}}">{{t "machine.all_sessions"}}</a></div>
+{{range .Sessions}}<div class="row srow"><span class="st {{if .Live}}open{{else}}closed{{end}}" role="img" aria-label="{{if .Live}}{{t "sessions.live"}}{{else}}{{t "sessions.state.done"}}{{end}}">{{if .Live}}{{mi "play"}}{{else}}{{mi "done"}}{{end}}</span>
+<div class="sbody">{{avatarX "lg" .Kind "" "" false}}<div class="sinfo"><div class="stt"><a class="title" href="{{.Href}}">{{.Title}}</a></div>
+<div class="meta">{{if .Project}}<span class="rp">{{mi "repo"}}{{.Project}}</span>{{end}}{{if .Branch}}<span class="bn mono">{{mi "branch"}}{{.Branch}}</span>{{end}}{{if .Duration}}<span class="dur">{{mi "clock"}}{{.Duration}}</span>{{end}}</div></div></div>
+<div class="stime"><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></div></div>{{end}}</div>{{end}}
+{{if or .Shares .CanManage}}<div class="box gap" id="shares"><div class="box-h"><span class="t">{{mi "people"}} {{t "machine.shares"}}</span><span class="sp"></span><span class="muted fw4">{{len .Shares}}</span></div>
+{{range .Shares}}<div class="row mshare"><div class="mshare-n"><a class="title" href="{{.OrgHref}}">{{.Org}}</a><span class="lb {{if eq .Role "write"}}p-warn{{else}}p-mute{{end}}">{{.RoleLabel}}</span>{{if .OSUser}}<span class="mono muted" title="{{t "machine.os_user"}}">{{.OSUser}}</span>{{end}}{{if .PathPrefix}}<span class="mono muted" title="{{t "machine.path_prefix"}}">{{.PathPrefix}}</span>{{end}}</div>
+<div class="mshare-r">{{if .By}}<span class="muted">{{.By}} · {{.Age}}</span>{{else}}<span class="muted">{{.Age}}</span>{{end}}{{if $.MachineV.CanManage}}<form method="post" action="{{$.MachineV.Base}}/unshare"><input type="hidden" name="csrf_token" value="{{$.MachineV.Token}}"><input type="hidden" name="org" value="{{.Org}}"><button class="gbtn sm">{{t "machine.unshare"}}</button></form>{{end}}</div></div>
+{{else}}<div class="empty"><span>{{t "machine.no_shares"}}</span></div>{{end}}
+{{if and .CanManage .ShareOrgs}}<form class="box-r mform" method="post" action="{{.Base}}/share"><input type="hidden" name="csrf_token" value="{{.Token}}">
+<label class="cx-fl"><span>{{t "machine.org"}}</span><select class="gfield" name="org">{{range .ShareOrgs}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select></label>
+<label class="cx-fl"><span>{{t "machine.role"}}</span><select class="gfield" name="role">{{range .Roles}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<label class="cx-fl"><span>{{t "machine.os_user"}}</span><input class="gfield" name="os_user" maxlength="64" autocomplete="off"></label>
+<label class="cx-fl"><span>{{t "machine.path_prefix"}}</span><input class="gfield" name="path_prefix" maxlength="200" autocomplete="off"></label>
+<button class="gbtn pri">{{t "machine.share"}}</button></form>{{end}}
+{{if and .CanManage .PersonOwned .OwnerOrgs}}<details class="box-r mowner"><summary class="gbtn sm">{{mi "people"}}{{t "machine.to_org"}}</summary><form method="post" action="{{.Base}}/owner"><input type="hidden" name="csrf_token" value="{{.Token}}"><select class="gfield" name="org" aria-label="{{t "machine.org"}}">{{range .OwnerOrgs}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select><button class="gbtn">{{t "machine.to_org_do"}}</button></form></details>{{end}}</div>{{end}}
+{{if .Items}}<div class="sec"><h2>{{t "machine.log"}}</h2></div>{{template "uitimeline" .Items}}{{end}}
+</div>
+<aside class="side" aria-label="{{t "machine.side"}}">
+<div class="sblk"><h3>{{t "machine.side.relation"}}</h3><div class="v"><span class="lb {{.RelationTone}}">{{.RelationLabel}}</span></div></div>
+{{if .Owner}}<div class="sblk"><h3>{{t "machine.side.owner"}}</h3><div class="v"><span class="person">{{avatarOf .Owner}}<span>{{.Owner}}</span></span></div></div>{{end}}
+{{if .OwnerOrg}}<div class="sblk"><h3>{{t "machine.side.org"}}</h3><div class="v"><a class="chip" href="{{.OwnerOrgHref}}">{{mi "people"}}{{.OwnerOrg}}</a></div></div>{{end}}
+{{if .Shares}}<div class="sblk"><h3>{{t "machine.side.shared"}}</h3><div class="v">{{range .Shares}}<a class="chip" href="{{.OrgHref}}">{{mi "people"}}{{.Org}}</a>{{end}}</div></div>{{end}}
+<div class="sblk"><h3>{{t "machine.side.seen"}}</h3><div class="v"><span class="muted">{{.LastSeen}}</span></div></div>
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "orgmachines"}}{{template "head" .}}{{template "nav" .}}<main class="g2 mh"><div class="wrap">
+{{with .OrgMachinesV}}<div class="box">{{range .Rows}}{{template "uirow" .}}
+{{else}}<div class="empty"><span>{{t "machine.org_empty"}}</span></div>{{end}}</div>{{end}}
+</div>{{template "foot" .}}{{end}}
