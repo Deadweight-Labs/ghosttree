@@ -238,7 +238,7 @@
   & .rthread > .rbody { border-top: 1px solid var(--border-default); }
   & .rside, & .rtside { min-width: 0; }
   & .rtside .coord-participant { padding: 6px 0; }
-  & .rtside .coord-participants { max-height: 340px; overflow-y: auto; }
+  & .rtside .coord-participants { max-height: 460px; overflow-y: auto; }
   & .rtside .rwho-find { position: static; margin: 0 0 8px; padding: 0; }
   & .rtside .sblk h3 { font-weight: 600; }
   & .sblk { padding: 12px 16px; }

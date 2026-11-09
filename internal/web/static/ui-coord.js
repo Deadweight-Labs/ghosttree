@@ -719,7 +719,8 @@
         location.assign(response.url || "/ui/coord");
         return;
       }
-      setActionStatus(text("done"));
+      // The message is in the chat: that is the confirmation. Screen readers are told.
+      quietSuccess(text("done"));
     } catch (error) {
       if (error?.name === "AbortError" || !applyCoordinator.current(lease)) {
         return;
