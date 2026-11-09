@@ -169,6 +169,8 @@ type issueMenu struct {
 }
 
 type issueRow struct {
+	// Actor is who wrote it, when an agent did (REQ-620); a person stays Person.
+	Actor                   actorView
 	Kind, State, StateLabel string
 	N                       int64
 	Href, Title             string
@@ -314,6 +316,7 @@ func (a *app) issuesPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	v.New, v.NewMenu = issueNewMenu(v.Base, iq.Segment)
+	a.rowActors(l, v.Rows)
 	a.renderBrowser(w, r, "issues", pageData{Title: l.msg("repo.tab.issues"), Project: project, IssuesV: v})
 }
 

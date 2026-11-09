@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 	"strings"
@@ -54,6 +55,11 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Ein Token-Aufruf ist nie ein Mensch (REQ-620): "human" als Herkunft gibt es
+	// nur aus der Weboberfläche, die den Store direkt ruft.
+	if body.Origin == "human" && principalOf(r).TokenKind != store.WebSessionKind {
+		body.Origin = "agent"
+	}
 	links, err := a.access(r).ResolveRequestLinks(scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project, body.Parent, body.DerivedFrom)
 	if err != nil {
 		if denyAccess(w, err) {
@@ -78,6 +84,7 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 	if !detail.Replayed {
 		a.saveExplanation(explain.KindRequest, detail.Request.ID, explanation)
 	}
+	a.stampActor(r, actor.Request, detail.Request.ID, 0)
 	writeJSON(w, http.StatusCreated, a.access(r).RequestDetailView(detail))
 }
 
@@ -153,6 +160,7 @@ func (a *api) completeRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
+	a.stampActor(r, actor.RequestDone, id, 0)
 	detail, err := a.st.RequestByID(id)
 	if err != nil {
 		writeRequestError(w, err)
@@ -319,6 +327,9 @@ func (a *api) setRequestCriterion(w http.ResponseWriter, r *http.Request) {
 	if err := a.st.SetCriterionState(criterionID, body.State, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r), GitAnchor: anchorFromRequest(r), Origin: a.originFor(r, "")}); err != nil {
 		writeRequestError(w, err)
 		return
+	}
+	if body.State == "met" {
+		a.stampActor(r, actor.Criterion, criterionID, 0)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"criterion_id": criterionID, "state": body.State})
 }

@@ -443,6 +443,9 @@ type ProjectAccess struct {
 
 	defBranches sync.Map // Projekt -> Standard-Branch, je Betrachter gemerkt
 
+	// actorSess merkt, welche Sessions hinter Akteur-Stempeln sichtbar sind.
+	actorSess actorSessions
+
 	checks atomic.Int32
 	loads  atomic.Int32
 }

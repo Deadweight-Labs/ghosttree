@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -763,7 +764,10 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = a.browserCoord(r).Send(msg)
+	mid, err := a.browserCoord(r).Send(msg)
+	if err == nil {
+		a.stampActor(r, actor.Message, mid)
+	}
 	if errors.Is(err, store.ErrAttentionRecipientRequired) && store.BodyHasBroadcast(msg.Body) {
 		// Frage oder Blocker an "alle aktiven Agenten", aber niemand ist aktiv:
 		// nichts wurde gesendet. Das ist ein Hinweis unter dem Raum, keine Fehlerseite.

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 
@@ -97,6 +98,7 @@ func (a *api) createFeature(w http.ResponseWriter, r *http.Request) {
 		writeIdeaError(w, err)
 		return
 	}
+	a.stampActor(r, actor.Feature, f.ID, body.SessionID)
 	writeJSON(w, http.StatusCreated, f)
 }
 

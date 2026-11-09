@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
 	"net/http"
@@ -29,6 +30,7 @@ type ideaFact struct{ Num, Title, Brief, Href string }
 type ideaPageView struct {
 	ID                      int64
 	Title, Person, Age      string
+	Actor                   actorView
 	State, StateLabel, Tone string
 	Blocks                  []bodyBlock
 	Reason                  string
@@ -83,6 +85,7 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 	v := &ideaPageView{ID: i.ID, Title: i.Title, Person: i.Person, Age: shortAgo(l, now, parseTime(i.CreatedAt)), State: i.State, StateLabel: label(l, ideaStateKeys, i.State),
 		Tone: ideaStateTone[i.State], Blocks: bodyBlocks(i.Body, 0), Reason: i.Reason, Base: view.Href, Token: csrfOf(r), Viewer: browserPrincipal(r).Label,
 		Git: anchorViewOf(pa, remote, i.GitAnchor, originVia(i.OriginContext))}
+	v.Actor = a.actorViewOf(l, pa, actor.Idea, i.ID, i.Person, true)
 	for _, lb := range i.Labels {
 		v.Labels = append(v.Labels, rowLabel{Text: lb.Name, Class: labelClass(lb.Color), Href: view.Href + "/issues?q=" + url.QueryEscape("label:"+lb.Name)})
 	}
@@ -246,6 +249,7 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 			a.commentFail(w, r, a.objectPage(pa, store.CommentOnIdea, id), err)
 			return
 		}
+		a.stampActor(r, actor.Comment, c.ID)
 		http.Redirect(w, r, commentPage(c)+"?comment=added#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
 		return
 	}
@@ -266,8 +270,10 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 	}
 	q := "?done=state"
 	if text := strings.TrimSpace(r.FormValue("reason")); text != "" {
-		if _, err := pa.AddComment(store.CommentOnIdea, id, text, a.commentActor(r)); err != nil {
+		if c, err := pa.AddComment(store.CommentOnIdea, id, text, a.commentActor(r)); err != nil {
 			q = "?comment=failed"
+		} else {
+			a.stampActor(r, actor.Comment, c.ID)
 		}
 	}
 	http.Redirect(w, r, repoHref(i.Project)+"/ideas/"+strconv.FormatInt(id, 10)+q, http.StatusSeeOther)

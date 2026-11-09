@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 	"strings"
@@ -57,6 +58,7 @@ func (a *api) addComment(w http.ResponseWriter, r *http.Request) {
 		writePainError(w, err)
 		return
 	}
+	a.stampActor(r, actor.Comment, c.ID, body.SessionID)
 	writeJSON(w, http.StatusCreated, c)
 }
 

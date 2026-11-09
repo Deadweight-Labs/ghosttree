@@ -1,11 +1,11 @@
 {{define "pain"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id pn"><div class="wrap">
 {{with .PainV}}{{with .Result}}<div class="callout{{if not .Fail}} done{{end}}" id="result" role="status">{{if .Fail}}{{mi "tri"}}{{else}}{{mi "check"}}{{end}}<div class="tt">{{.Text}}</div></div>{{end}}
 <div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n" title="{{.Human}}">#{{.ID}}</span></h1></div>
-<div class="dmeta"><span class="lb pillbig {{.StateTone}}">{{mi "pain"}}{{.StateLabel}}</span>{{if .Person}}<span><span class="person">{{avatarOf .Person}}{{.Person}}</span> {{t "pains.recorded" .Age}}</span>{{end}}</div></div>
+<div class="dmeta"><span class="lb pillbig {{.StateTone}}">{{mi "pain"}}{{.StateLabel}}</span>{{if .Person}}<span>{{actor .Actor .Person}} {{t "pains.recorded" .Age}}</span>{{end}}</div></div>
 <div class="dgrid"><div class="dmain">
 {{if and .Remaining (eq .State "mitigated")}}<div class="callout" role="note">{{mi "tri"}}<div><div class="k">{{t "pains.stays_open"}}</div><div class="tt">{{.Remaining}}</div></div></div>{{end}}
 {{if and .Accepted (eq .State "accepted")}}<div class="callout neu" role="note">{{mi "pain"}}<div><div class="k">{{t "pains.why"}}</div><div class="tt">{{.Accepted}}</div></div></div>{{end}}
-{{if or .Blocks .Explain}}<div class="cmt">{{avatarX "xl" "" .Person "" false}}<div class="cbox"><div class="ch"><b>{{.Person}}</b><span>{{t "pains.recorded_ch"}}</span><span class="sp"></span><span class="lb out">{{t "issue.author"}}</span></div>
+{{if or .Blocks .Explain}}<div class="cmt">{{if .Actor.Label}}{{avatarX "xl" .Actor.Kind .Actor.Label .Actor.Owner false}}{{else}}{{avatarX "xl" "" .Person "" false}}{{end}}<div class="cbox"><div class="ch"><b>{{or .Actor.Label .Person}}</b><span>{{t "pains.recorded_ch"}}</span><span class="sp"></span><span class="lb out">{{t "issue.author"}}</span></div>
 <div class="cb prose">{{template "explain" .Explain}}{{template "knbody" .Blocks}}</div></div></div>{{end}}
 {{if .Items}}{{template "uitimeline" .Items}}{{end}}
 {{with .Composer}}{{template "uicomposer" .}}{{end}}

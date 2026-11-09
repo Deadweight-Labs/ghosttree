@@ -110,6 +110,7 @@ func factsOf(pa *store.ProjectAccess, kind string, number int64, state, typ, rep
 		Branches: of.Branches, Commits: of.Commits, PRs: of.PRs, Packages: of.Packages, Labels: of.Labels,
 		Areas: of.Areas, Parents: of.Parents, Blocks: of.Blocks, Features: of.Features,
 		Created: created, Updated: updated, OriginAt: of.OriginAt,
+		Actor: of.Actor, Harness: of.Harness, Model: of.Model,
 	}
 }
 
@@ -510,6 +511,7 @@ func messageFacts(pa *store.ProjectAccess, h store.MessageHit, of store.ObjectFa
 		Kind: query.KindMessage, Repo: h.Project, Author: h.Sender,
 		Branches: of.Branches, Commits: of.Commits, PRs: of.PRs, Areas: of.Areas,
 		Created: h.CreatedAt, Updated: h.CreatedAt, OriginAt: of.OriginAt,
+		Actor: of.Actor, Harness: of.Harness, Model: of.Model,
 	}
 }
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 	"strings"
@@ -194,6 +195,7 @@ func (a *api) sendCoordMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.saveExplanation(explain.KindQuestion, id, explanation)
+	a.stampActor(r, actor.Message, id, 0)
 	if len(options) > 0 {
 		if err := a.st.SaveAnswerOptions(store.AnswerOnMessage, id, options); err != nil {
 			a.logger.Warn("answer_options_not_stored", "message", id, "error", err.Error())

@@ -243,11 +243,19 @@ func avatarHTML(l lang, kind, name string, waiting bool) template.HTML {
 // identityFuncs are the template functions of this file, bound to a language.
 func identityFuncs(l lang) template.FuncMap {
 	return template.FuncMap{
-		"refPill":    func(kind string, n int64, href string) template.HTML { return refPillHTML(l, kind, n, href) },
-		"waitStack":  func(names []string) template.HTML { return waitStack(l, names) },
-		"join":       strings.Join,
-		"ref":        func(kind string, n int64, href string) template.HTML { return refHTML(l, kind, n, href) },
-		"avatar":     func(kind, name string) template.HTML { return avatarHTML(l, kind, name, false) },
+		"refPill":   func(kind string, n int64, href string) template.HTML { return refPillHTML(l, kind, n, href) },
+		"waitStack": func(names []string) template.HTML { return waitStack(l, names) },
+		"join":      strings.Join,
+		"ref":       func(kind string, n int64, href string) template.HTML { return refHTML(l, kind, n, href) },
+		"avatar":    func(kind, name string) template.HTML { return avatarHTML(l, kind, name, false) },
+		// actor is who wrote an entry (REQ-620): a person, or "Robin’s Claude".
+		// Without a stamp built for the page, person stands as before.
+		"actor": func(v actorView, person string) template.HTML {
+			if v.Label == "" {
+				v = actorView{Person: person, Label: person, Kind: avHuman}
+			}
+			return actorHTML(l, v)
+		},
 		"avatarOf":   func(name string) template.HTML { return avatarHTML(l, "", name, false) },
 		"avatarWait": func(name string) template.HTML { return avatarHTML(l, avHuman, name, true) },
 		// avatarX is the full form: size, kind ("" guesses it), name, owner and live.

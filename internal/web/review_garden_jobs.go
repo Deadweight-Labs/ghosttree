@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -263,6 +264,7 @@ func (a *app) reviewCriterion(w http.ResponseWriter, r *http.Request) {
 	err = a.store.SetCriterionState(plan.criterion.ID, "met", requestdomain.Evidence{Kind: plan.kind, Ref: evidence, Person: person, GitAnchor: gitanchor.Web()})
 	switch {
 	case err == nil:
+		a.stampActor(r, actor.Criterion, plan.criterion.ID)
 	case requestdomain.Code(err) != "", errors.Is(err, sql.ErrNoRows):
 		http.Error(w, "nothing to change", http.StatusConflict)
 		return

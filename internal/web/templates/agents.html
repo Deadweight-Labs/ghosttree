@@ -42,3 +42,10 @@
 </aside></div>
 {{end}}{{end}}</div>
 {{template "foot" .}}{{end}}
+
+{{define "agentmodels"}}{{template "head" .}}{{template "nav" .}}<main class="g2 ag"><link rel="stylesheet" href="/static/ui-agents.css"><div class="wrap">
+{{with $.Shell.Tabs}}{{if not $.Repo}}<div class="segrow"><nav class="gseg seg" aria-label="{{t $.Shell.TabsLabel}}">{{range .}}<a data-tab="{{.Key}}" href="{{.Href}}"{{if .Current}} class="on" aria-current="page"{{end}}>{{t .Label}}</a>{{end}}</nav></div>{{end}}{{end}}
+{{with .AgentModels}}{{if .Rows}}<div class="box"><table class="mstats"><thead><tr><th>{{t "agents.models_agent"}}</th><th>{{t "agents.models_model"}}</th><th class="n">{{t "agents.models_entries"}}</th><th class="n">{{t "agents.models_criteria"}}</th><th class="n">{{t "agents.models_requests"}}</th><th class="n">{{t "agents.models_features"}}</th></tr></thead><tbody>
+{{range .Rows}}<tr{{if .Human}} class="people"{{end}}><td><span class="person">{{avatar .Kind .Name}}<span>{{.Name}}</span></span></td><td{{if .Raw}} title="{{.Raw}}"{{end}}>{{if .Model}}{{.Model}}{{else if not .Human}}<span class="muted">{{t "agents.models_unknown"}}</span>{{end}}</td><td class="n">{{.Entries}}</td><td class="n">{{.Criteria}}</td><td class="n">{{.Requests}}</td><td class="n">{{.Features}}</td></tr>{{end}}
+</tbody></table></div>{{else}}<div class="box"><div class="box-empty">{{t "ov.nothing"}}</div></div>{{end}}{{end}}
+</div></main>{{template "foot" .}}{{end}}
