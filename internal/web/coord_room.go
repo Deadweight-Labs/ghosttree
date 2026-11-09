@@ -120,3 +120,144 @@ func coordPeerOnly(authorKind, intent string, mentions []string) bool {
 	}
 	return true
 }
+
+// coordHereView is one line of "who is here": a person, or an agent with all its
+// sessions in this room. Sessions are listed beneath the agent, live ones first.
+type coordHereView struct {
+	// Human is the person (Sessions is empty); else Agent is the one agent line.
+	Human    bool
+	Person   coordParticipantView
+	Provider string
+	Title    string
+	Owner    string
+	// Sub says whose agent and on which machine, "Robin · mainex".
+	Sub      string
+	Sessions []coordParticipantView
+	// Dot and Status are the most pressing state among the sessions; Count is the
+	// number of sessions. Ask is the link to an open question one of them has.
+	Dot, Status string
+	Count       int
+	AskURL      string
+	Key         string
+}
+
+// coordAgentKey says which sessions are one agent: same owner, same tool, same
+// machine. A session without an owner stands alone.
+func coordAgentKey(p coordParticipantView) string {
+	owner, machine := p.agentOwnerMachine()
+	if owner == "" {
+		return "id:" + p.ID
+	}
+	return strings.ToLower(p.Provider + "|" + owner + "|" + machine)
+}
+
+// agentOwnerMachine reads the owner and machine of an agent from what the peer
+// reported, else from its label "Claude · Robin · mainex · feat/x".
+func (p coordParticipantView) agentOwnerMachine() (owner, machine string) {
+	owner, machine = p.Person, p.Machine
+	parts := strings.Split(p.Label, " · ")
+	if owner == "" && len(parts) > 1 {
+		owner = strings.TrimSpace(parts[1])
+	}
+	if machine == "" && len(parts) > 2 {
+		machine = strings.TrimSpace(parts[2])
+	}
+	return owner, machine
+}
+
+var coordDotRank = map[string]int{"wait": 0, "bad": 1, "active": 2, "quiet": 3, "off": 4, "": 5}
+
+// groupParticipantsHere turns the ordered participants into the lines of the
+// list. The order of the input is kept: the group stands where its first member stood.
+func groupParticipantsHere(l lang, parts []coordParticipantView) []coordHereView {
+	var out []coordHereView
+	at := map[string]int{}
+	for _, p := range parts {
+		if p.Human {
+			out = append(out, coordHereView{Human: true, Person: p, Key: p.ID})
+			continue
+		}
+		key := coordAgentKey(p)
+		i, ok := at[key]
+		if !ok {
+			owner, machine := p.agentOwnerMachine()
+			title := p.Provider
+			if kind := harnessKind(p.Provider); kind == avClaude || kind == avCodex {
+				title = l.msg(avatarKeys[kind])
+			} else if first, _, _ := strings.Cut(p.Label, " · "); first != "" {
+				title = first
+			}
+			sub := owner
+			if machine != "" {
+				if sub != "" {
+					sub += " · "
+				}
+				sub += machine
+			}
+			out = append(out, coordHereView{Provider: p.Provider, Title: title, Owner: owner, Sub: sub, Key: key})
+			i = len(out) - 1
+			at[key] = i
+		}
+		out[i].Sessions = append(out[i].Sessions, p)
+	}
+	for i := range out {
+		if out[i].Human {
+			continue
+		}
+		g := &out[i]
+		sort.SliceStable(g.Sessions, func(a, b int) bool {
+			ra, rb := coordDotRank[g.Sessions[a].Dot], coordDotRank[g.Sessions[b].Dot]
+			if ra != rb {
+				return ra < rb
+			}
+			return g.Sessions[a].LastSeen > g.Sessions[b].LastSeen
+		})
+		g.Count = len(g.Sessions)
+		best := g.Sessions[0]
+		g.Dot, g.Status = best.Dot, best.StatusLabel
+		for _, s := range g.Sessions {
+			if s.AskURL != "" {
+				g.AskURL = s.AskURL
+				break
+			}
+		}
+		if g.Count > 1 {
+			g.Status = l.msg("coord.sessions", g.Count)
+		}
+	}
+	return out
+}
+
+// stackHere puts the people first and the agents after them, for the few
+// avatars in the head of a room.
+func stackHere(in []coordHereView) []coordHereView {
+	out := make([]coordHereView, 0, len(in))
+	for _, h := range in {
+		if h.Human {
+			out = append(out, h)
+		}
+	}
+	for _, h := range in {
+		if !h.Human {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// firstUnreadSequence is the sequence of the first message in the window that
+// the viewer has not read and did not write: the divider "New" stands above it.
+// Zero when everything on the page is read, or when only the viewer's own
+// messages follow the read mark.
+func firstUnreadSequence(messages []coordMessageView, readThrough, manualFrom int64) int64 {
+	from := readThrough
+	if manualFrom > 0 && manualFrom-1 < from {
+		from = manualFrom - 1
+	}
+	for _, m := range messages {
+		if m.Sequence > from && !m.Own && !m.System {
+			return m.Sequence
+		}
+	}
+	return 0
+}

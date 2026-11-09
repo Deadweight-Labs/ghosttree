@@ -400,11 +400,11 @@ func TestOwnerWithoutAgentGetsReplyControls(t *testing.T) {
 		if target == roomURL && !strings.Contains(page, "coord-reply-action") {
 			t.Errorf("owner without an agent has no reply link on %s", target)
 		}
-		if target == threadURL && !strings.Contains(page, "/ui/coord/thread/state") {
+		if target == threadURL && !strings.Contains(page, `name="state_was"`) {
 			t.Errorf("owner (lead and up) has no state form on %s", target)
 		}
 	}
-	if _, page := fetchPage(t, e.Reviewer, threadURL); strings.Contains(page, "/ui/coord/thread/state") {
+	if _, page := fetchPage(t, e.Reviewer, threadURL); strings.Contains(page, `name="state_was"`) {
 		t.Error("a member who did not author the thread sees the state form")
 	}
 	_, page := fetchPage(t, e.Member, roomURL)
@@ -412,7 +412,7 @@ func TestOwnerWithoutAgentGetsReplyControls(t *testing.T) {
 		t.Error("member with an agent has no reply link")
 	}
 	_, page = fetchPage(t, e.Member, threadURL)
-	if !strings.Contains(page, "/ui/coord/thread/state") {
+	if !strings.Contains(page, `name="state_was"`) {
 		t.Error("member who authored the thread has no thread state form")
 	}
 }

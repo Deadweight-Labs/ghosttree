@@ -4,28 +4,34 @@
    page script (app.js) swaps #coord-rooms, .coord-conversation and
    #coord-context, so these three stay in every layout. */
 
+/* The chat: the page does not scroll as a whole. The shell takes the height that
+   is left of the window (--coord-top is set by ui-coord.js, the fallback fits the
+   usual head), the messages scroll inside it and the composer stays below them. */
 :is(.g2.rooms) {
-  & .coord-shell { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; align-items: start; }
-  /* Two columns as in the mock: rooms, conversation. The room details sit under the
-     conversation as a fold. */
-  & #coord-rooms { grid-column: 1; grid-row: 1 / span 2; }
+  & .coord-shell { display: grid; grid-template-columns: 240px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 16px; align-items: stretch; height: calc(100dvh - var(--coord-top, 190px)); min-height: 460px; }
+  & #coord-rooms { grid-column: 1; grid-row: 1; align-self: start; max-height: 100%; }
   & .coord-conversation { grid-column: 2; grid-row: 1; }
-  & #coord-context { grid-column: 2; grid-row: 2; }
+  & #coord-context { grid-column: 3; grid-row: 1; min-height: 0; overflow-y: auto; }
   & #coord-context:not(:has(*)) { display: none; }
+  /* The threads and directives of a room stand beside the conversation. */
+  & .coord-shell:has(#coord-context > *) { grid-template-columns: 240px minmax(0, 1fr) 296px; }
   /* The thread is a view of its own: no room list, the main column wide. */
-  & .coord-shell:has(.coord-thread-detail) { grid-template-columns: minmax(0, 1fr) 296px; }
+  & .coord-shell:has(#coord-context):has(.coord-thread-detail) { grid-template-columns: minmax(0, 1fr) 296px; }
   & .coord-shell:has(.coord-thread-detail) .coord-conversation { grid-column: 1; }
-  & .coord-shell:has(.coord-thread-detail) #coord-context { grid-column: 2; grid-row: 1; }
+  & .coord-shell:has(.coord-thread-detail) #coord-context { grid-column: 2; }
   & .coord-shell:has(.coord-thread-detail) #coord-rooms { display: none; }
   & .coord-live-status { font-size: 12px; color: var(--fg-muted); }
-  & .coord-action-status { margin-bottom: 8px; }
+  /* A short message about what just happened, over the lower edge of the chat: nothing moves. */
+  & .coord-action-status { position: absolute; z-index: 6; left: 16px; right: 16px; bottom: 12px; margin: 0; background: var(--canvas-default); border-color: var(--border-default); box-shadow: var(--shadow-pop); }
+  & .coord-action-status[data-error="true"] { background: linear-gradient(var(--danger-subtle), var(--danger-subtle)), var(--canvas-default); border-color: var(--danger-muted); color: var(--danger-fg); }
   & .coord-backdrop { display: none; }
   & .coord-nojs-status { margin-top: 16px; font-size: 12px; color: var(--fg-muted); }
 
   /* Rail */
-  & .rsb { overflow: visible; }
+  & .rsb { position: relative; display: flex; flex-direction: column; overflow: visible; }
+  & .rsb .dd.rstart { position: static; }
   & .rsb .box-h .gbtn { margin-right: -8px; }
-  & .rlist { padding: 8px; }
+  & .rlist { min-height: 0; padding: 8px; overflow-y: auto; }
   & .rsec { margin: 16px 8px 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
   & .rl { display: flex; align-items: center; gap: 8px; min-height: 32px; margin: 2px 0; padding: 4px 8px; border-radius: 6px; color: var(--fg-default); font-size: 14px; }
   & .rl:hover { background: var(--neutral-muted); text-decoration: none; }
@@ -33,37 +39,60 @@
   & .rl > .i { color: var(--fg-muted); }
   & .rl .coord-room-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   & .rl .gav { width: 20px; height: 20px; }
-  & .rstart-pop { min-width: 300px; padding: 12px 16px; }
+  & .rstart-pop { top: 44px; left: 8px; width: 300px; max-width: calc(100% - 16px); padding: 12px 16px; }
+  & .rstart-pop .pfield { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .rstart-pop .pfield .gfield { width: 100%; }
+  & .rstart-pop .wf { display: flex; justify-content: flex-end; }
   & .rstart-pop hr { margin: 12px 0; }
   & .coord-pick { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 0; padding: 0; border: 0; }
   & .coord-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
 
   /* Conversation */
-  & .rmain { overflow: visible; min-width: 0; }
+  & .rmain { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: visible; }
+  & .rmain > .rhead, & .rmain > .coord-paging, & .rmain > .coord-composer, & .rmain > .coord-readonly { flex: none; }
+  & .rbody { position: relative; display: flex; flex: 1 1 0; flex-direction: column; min-height: 0; }
+  & .rnone { margin: 0; padding: 24px 16px; text-align: center; }
+  & .rskip { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; font-size: 12px; }
+  & .rskip:focus { position: static; width: auto; height: auto; clip-path: none; }
+  /* The pill that says there is more below while the reader is further up. */
+  & .rnew { position: absolute; z-index: 5; left: 50%; bottom: 12px; transform: translateX(-50%); border-radius: 2em; color: #fff; background: var(--accent-emphasis); border-color: transparent; box-shadow: var(--shadow-pop); }
+  & .rnew:hover { background: var(--accent-emphasis); filter: brightness(1.1); }
+  & .rnew .i { color: #fff; margin-right: 4px; }
   & .rhead { display: flex; align-items: center; gap: 12px; min-height: 45px; padding: 8px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); border-radius: 6px 6px 0 0; }
   & .rhead > .i { color: var(--fg-muted); }
   & .rhead h2 { font-size: 14px; font-weight: 600; }
   & .rhead .lb .i { margin-right: 4px; }
   & .rsearch { margin: 0; width: min(100%, 280px); }
   & .rsearch .gfield { height: 28px; }
-  & .stackav { display: inline-flex; align-items: center; padding-left: 6px; }
-  & .stackav .gav { margin-left: -6px; box-shadow: 0 0 0 2px var(--canvas-subtle); }
+  & .stackav { display: inline-flex; align-items: center; }
+  & .stackav .gav { margin-left: 2px; }
   & .stackmore::before { content: "+"; }
   & .stackmore { margin-left: 4px; font-size: 12px; color: var(--fg-muted); }
   & .wstack-btn { display: inline-flex; cursor: pointer; border-radius: 16px; }
-  & .rwho-pop { min-width: 340px; padding: 8px 0; }
+  & .rwho-pop { width: 380px; max-width: calc(100vw - 32px); max-height: min(460px, calc(100dvh - 160px)); padding: 8px 0; overflow-y: auto; }
+  & .rwho-find { position: sticky; top: -8px; z-index: 2; width: auto; margin: -8px 0 4px; padding: 8px 12px; background: var(--canvas-default); }
+  & .rwho-none { margin: 0; padding: 8px 16px; font-size: 13px; }
   & .rwho-pop .coord-wait-cycles { margin: 8px; }
   & .coord-participants { margin: 0; padding: 0; list-style: none; }
-  & .coord-participant { padding: 6px 16px; }
-  & .pp-row, & .pp-more > summary { display: flex; align-items: center; gap: 8px; list-style: none; cursor: default; }
+  & .coord-participant { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 16px; }
+  & .coord-participant > details { flex: 1; min-width: 0; }
+  & .pp-row, & .pp-more > summary { display: flex; align-items: center; gap: 10px; list-style: none; cursor: default; }
   & .pp-more > summary { cursor: pointer; }
   & .pp-more > summary::-webkit-details-marker { display: none; }
+  & .pp-more > summary::after { content: ""; flex: none; width: 6px; height: 6px; margin: -3px 2px 0 4px; border: solid var(--fg-muted); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); transition: transform .1s; }
+  & .pp-more[open] > summary::after { margin-top: 3px; transform: rotate(-135deg); }
+  & .pp-av { display: inline-flex; flex: none; }
+  & .pp-av .gav { width: 28px; height: 28px; font-size: 11px; }
+  & .pp-av .gav .own { width: 14px; height: 14px; font-size: 6px; }
+  & .pp-sessions { display: flex; flex-direction: column; gap: 10px; margin: 8px 0 4px 38px; padding: 0; list-style: none; }
+  & .pp-sess-h { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; font-size: 13px; }
+  & .pp-note { display: block; margin-top: 2px; }
+  & .pp-session .coord-participant-meta { margin-top: 2px; }
   & .pp-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
   & .pp-title { font-weight: 600; font-size: 14px; }
   & .pp-sub { font-size: 12px; }
   & .pp-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
   & .pp-state .dot.pulse { animation: gpulse 1.8s ease-out infinite; }
-  & .pp-detail { padding: 8px 0 4px 28px; }
   & .pp-detail small, & .coord-participant-meta { font-size: 12px; }
   & .coord-participant-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; }
   & .coord-agent-control { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
@@ -72,38 +101,65 @@
   & .coord-paging { display: flex; gap: 8px; padding: 8px 16px; }
   & .coord-paging:not(:has(*)) { display: none; }
 
-  /* Messages */
-  & .coord-messages { margin: 0; padding: 0; list-style: none; }
-  & .coord-messages > li { margin: 0; }
+  /* Messages. A new author starts a group (a hairline above it, the avatar, name and time);
+     what the same author writes next stands close under it, its time shows on hover. */
+  & .coord-messages { flex: 1 1 0; min-height: 0; margin: 0; padding: 4px 0 8px; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
+  & .coord-messages > li { position: relative; margin: 0; }
+  & .coord-message-group-start:not(:first-child) { margin-top: 6px; border-top: 1px solid var(--border-muted); }
+  & .cm-new + .coord-message-group-start { margin-top: 0; border-top: 0; }
   & .coord-empty { display: flex; align-items: center; gap: 12px; padding: 24px; color: var(--fg-muted); }
-  & .rm-msg { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 8px 16px; }
+  & .cm-new { display: flex; align-items: center; gap: 12px; margin: 10px 16px 4px; font-size: 12px; font-weight: 600; color: var(--danger-fg); }
+  & .cm-new::before, & .cm-new::after { content: ""; flex: 1; height: 1px; background: currentColor; opacity: .45; }
+  & .rm-msg { position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 4px 16px 6px; }
+  & .coord-message-group-start .rm-msg { padding-top: 12px; }
   & .rm-msg:hover, & .rm-msg:focus-within { background: var(--row-hover); }
   & .rm-msg > .gav { width: 32px; height: 32px; font-size: 12px; }
   & .rm-msg > .gav .i { width: 18px; height: 18px; }
+  & .rm-msg > .gav .own { width: 16px; height: 16px; font-size: 7px; }
   & .coord-message-mentioned > .rm-msg { background: var(--accent-subtle); box-shadow: inset 3px 0 0 var(--accent-emphasis); }
-  & .coord-message-continuation .rm-msg { padding-top: 0; }
-  & .coord-message-continuation .rm-msg > .gav { visibility: hidden; height: 0; }
-  & .rm-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-height: 24px; line-height: 24px; }
-  & .rm-head strong { font-size: 14px; font-weight: 700; }
+  & .cm-gutter { padding-top: 1px; font-size: 11px; line-height: 20px; text-align: right; color: var(--fg-muted); opacity: 0; }
+  & .rm-msg:hover .cm-gutter, & .rm-msg:focus-within .cm-gutter { opacity: 1; }
+  & .rm-main { min-width: 0; }
+  & .rm-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; min-height: 20px; line-height: 20px; }
+  & .rm-head strong { font-size: 14px; font-weight: 600; }
+  & .rm-head .lb { align-self: center; line-height: 16px; }
   & .cm-time { font-size: 12px; color: var(--fg-muted); }
   & .rm-to, & .cm-host, & .cm-note { font-size: 12px; color: var(--fg-muted); }
-  & .cm-row { display: flex; align-items: flex-start; gap: 8px; }
-  & .cm-bubble { margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  & .cm-tools { display: flex; align-items: center; gap: 4px; opacity: 0; transition: opacity .1s; }
-  & .rm-msg:hover .cm-tools, & .rm-msg:focus-within .cm-tools { opacity: 1; }
+  /* The quiet second line: role, machine, branch, addressee, what the agent works on. */
+  & .cm-meta { display: flex; flex-wrap: wrap; gap: 0 8px; margin: 0; font-size: 12px; line-height: 18px; color: var(--fg-muted); }
+  & .cm-meta > span + span::before { content: "·"; margin-right: 8px; }
+  /* What a message answers, one line above it. */
+  & .cm-quote { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 4px 0; padding-left: 10px; border-left: 2px solid var(--border-default); font-size: 12px; line-height: 18px; color: var(--fg-muted); }
+  & .cm-quote .i { flex: none; width: 12px; height: 12px; }
+  & .cm-quote b { flex: none; font-weight: 600; color: var(--fg-default); }
+  & .cm-quote span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & a.cm-quote:hover { color: var(--fg-default); text-decoration: none; border-left-color: var(--accent-fg); }
+  & .cm-bubble { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  /* Text of a chat is tighter than a document: paragraphs, lists and code 8 px apart. */
+  & .cm-bubble .prose, & .ask-t .prose { font-size: 14px; }
+  & .cm-bubble .prose > :is(p, ul, ol, pre, blockquote, table), & .ask-t .prose > :is(p, ul, ol, pre, blockquote, table) { margin: 0 0 8px; }
+  & .cm-bubble .prose > :first-child, & .ask-t .prose > :first-child { margin-top: 0; }
+  & .cm-bubble .prose > :last-child, & .ask-t .prose > :last-child { margin-bottom: 0; }
+  /* Reply and start a thread: only where the pointer or the keyboard is. */
+  & .cm-tools { position: absolute; z-index: 3; top: -14px; right: 16px; display: flex; align-items: center; gap: 2px; padding: 2px; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-pop); opacity: 0; pointer-events: none; transition: opacity .1s; }
+  & .rm-msg:hover .cm-tools, & .rm-msg:focus-within .cm-tools { opacity: 1; pointer-events: auto; }
+  & .cm-tools:has(details[open]) { opacity: 1; pointer-events: auto; }
+  & .cm-tools > .gbtn, & .cm-tools > details > summary { border-color: transparent; background: transparent; }
+  & .cm-tools > .gbtn:hover, & .cm-tools > details > summary:hover { background: var(--neutral-muted); }
+  & .cm-tools > .gbtn .i, & .cm-tools > details > summary .i { margin-right: 4px; color: var(--fg-muted); }
   & .mention { padding: 0 4px; color: var(--accent-fg); background: var(--accent-subtle); border-radius: 6px; }
-  & .replyq, & .replyto { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; font-size: 12px; color: var(--fg-muted); }
-  & .replyq span, & .replyto p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; }
-  & .replyto { padding: 8px 12px; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; margin-bottom: 8px; }
-  & .cm-meta { margin-top: 4px; font-size: 12px; }
-  & .coord-refs { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 0; list-style: none; }
-  & .cm-thread { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 13px; }
+  & .replyto { display: flex; align-items: center; gap: 6px; padding: 6px 12px; margin-bottom: 8px; font-size: 12px; color: var(--fg-muted); background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; }
+  & .replyto b { flex: none; font-weight: 600; color: var(--fg-default); }
+  & .replyto span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .replyto a { flex: none; display: inline-flex; color: var(--fg-muted); }
+  & .coord-refs { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--fg-muted); }
+  & .cm-thread { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px; }
   & .cm-thread b { font-weight: 600; }
-  & .coord-reply-count { display: inline-block; margin-top: 4px; }
-  & .cm-event { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 4px 0; font-size: 12px; color: var(--fg-muted); }
+  & .coord-reply-count { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; }
+  & .cm-event { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 4px 0; padding: 4px 16px; font-size: 12px; color: var(--fg-muted); }
 
   /* Request cards: question, approval, blocker, handoff */
-  & .rq4 { margin-top: 4px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); overflow: hidden; }
+  & .rq4 { margin-top: 6px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); overflow: hidden; }
   & .rq4-h { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-muted); }
   & .rq-handoff .rq4-h { background: var(--attention-subtle); }
   & .rq-approval .rq4-h { background: var(--done-subtle); }
@@ -112,8 +168,21 @@
   & .rqk-approval { color: var(--done-fg); background: var(--done-subtle); border-color: var(--done-muted); }
   & .rqk-handoff { color: var(--attention-fg); background: var(--attention-subtle); border-color: var(--attention-muted); }
   & .rq4 .lb .i { margin-right: 4px; }
+  & .rq-open { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--attention-fg); }
+  & .rq-open::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
   & .rq4 .ask-t { margin: 0; padding: 12px; overflow-wrap: anywhere; }
-  & .rq4 .rm-fold { margin: 0 12px 8px; }
+  /* "Kurz erklärt": title and first sentence side by side with room between them,
+     the opened text under them; it never touches the text before or the card after it. */
+  & .rm-fold { margin: 0 12px 12px; }
+  & .rm-fold > summary { display: flex; align-items: baseline; gap: 4px 12px; min-width: 0; padding: 4px 0; cursor: pointer; list-style: none; font-size: 13px; }
+  & .rm-fold > summary::-webkit-details-marker { display: none; }
+  & .rm-fold > summary::before { content: ""; flex: none; align-self: center; width: 6px; height: 6px; border: solid var(--fg-muted); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); transition: transform .1s; }
+  & .rm-fold[open] > summary::before { transform: rotate(45deg); }
+  & .rm-fold-t { flex: none; font-weight: 600; color: var(--fg-default); }
+  & .rm-fold-p { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+  & .rm-fold[open] .rm-fold-p { display: none; }
+  & .rm-fold-b { margin: 4px 0 0; }
+  & .rm-fold-b .ex { margin: 0; }
   & .rq4-n { margin: 0 12px 8px; font-size: 12px; color: var(--fg-muted); }
   & .rq4-f { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 8px 12px; background: var(--canvas-subtle); border-top: 1px solid var(--border-muted); }
   & .rq4-f:not(:has(*)) { display: none; }
@@ -129,10 +198,13 @@
   & .slab-s form { margin: 0; }
 
   /* Composer */
-  & .coord-composer, & .coord-thread-composer { padding: 12px 16px 16px; border-top: 1px solid var(--border-default); }
+  & .coord-composer, & .coord-thread-composer { flex: none; padding: 12px 16px 16px; border-top: 1px solid var(--border-default); }
+  & .cx-state { padding: 8px 12px; border-top: 1px solid var(--border-muted); }
+  /* A chat input starts small; the area above it keeps the room. */
+  & .coord-composer .cx textarea, & .coord-thread-composer .cx textarea { min-height: 56px; }
   & .coord-readonly { padding: 12px 16px; border-top: 1px solid var(--border-default); }
   & .coord-composer .cx, & .coord-thread-composer .cx { border-color: var(--border-default); }
-  & .comp-suggest { position: absolute; z-index: 40; left: 12px; bottom: -8px; min-width: 260px; margin: 0; padding: 4px; list-style: none; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-pop); }
+  & .comp-suggest { position: absolute; z-index: 40; left: 12px; bottom: calc(100% + 4px); min-width: 260px; margin: 0; padding: 4px; list-style: none; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-pop); }
   & .comp-suggest li { display: flex; justify-content: space-between; gap: 16px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
   & .comp-suggest li[aria-selected="true"], & .comp-suggest li:hover { background: var(--accent-subtle); }
   & .comp-suggest small { color: var(--fg-muted); }
@@ -144,8 +216,7 @@
   & .cm-note { color: var(--fg-muted); }
   & .cm-role { display: inline-block; padding: 0 7px; font-size: 12px; font-weight: 500; line-height: 18px; color: var(--fg-muted); border: 1px solid var(--border-default); border-radius: 2em; }
   & .ask-state { display: inline-block; padding: 0 7px; font-size: 12px; font-weight: 500; line-height: 18px; color: var(--success-fg); background: var(--success-subtle); border: 1px solid var(--success-muted); border-radius: 2em; }
-  & .coord-private-hint { margin: 0 0 8px; font-size: 12px; }
-  & .cx-f { flex-wrap: nowrap; }
+  & .cx-f { flex-wrap: wrap; }
   & .cx-f .cx-hint { flex: 0 1 auto; min-width: 0; }
   & .cx-f .cx-hint span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   & .cx-h .dd { align-self: center; }
@@ -153,57 +224,94 @@
   & .cx-f .dd > .gbtn { white-space: nowrap; }
 
   /* Thread */
-  & .rthread { min-width: 0; }
-  & .rthead { padding: 16px 16px 0; }
+  & .rthread { display: flex; flex: 1 1 0; flex-direction: column; min-height: 0; min-width: 0; }
+  & .rthead { flex: none; padding: 12px 16px 0; }
   & .rback .i { transform: rotate(90deg); }
   & .rback { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; color: var(--fg-muted); }
   & .rttl { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 4px; }
-  & .rttl h3 { font-size: 20px; font-weight: 600; }
-  & .rdetails > summary { display: flex; align-items: center; gap: 8px; list-style: none; cursor: pointer; padding: 8px 16px; font-weight: 600; background: var(--canvas-subtle); border-radius: 6px; }
-  & .rdetails > summary::-webkit-details-marker { display: none; }
-  & .rdetails > summary .i { transition: transform .1s; }
-  & .rdetails[open] > summary { border-bottom: 1px solid var(--border-default); border-radius: 6px 6px 0 0; }
-  & .rdetails[open] > summary .i { transform: rotate(180deg); }
+  & .rttl h3 { font-size: 20px; font-weight: 600; overflow-wrap: anywhere; }
   & .rtmeta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0 0; color: var(--fg-muted); }
-  & .rlead { margin: 12px 0 16px; padding: 8px 16px; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; }
+  & .rtanchor { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+  & .rlead { margin: 12px 0 8px; padding: 8px 16px; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; }
   & .rlead b { font-size: 12px; color: var(--fg-muted); }
   & .rlead p { margin: 0; }
-  & .rthread .coord-messages { border-top: 1px solid var(--border-default); }
+  & .rthread > .rbody { border-top: 1px solid var(--border-default); }
   & .rside, & .rtside { min-width: 0; }
   & .rtside .coord-participant { padding: 6px 0; }
+  & .rtside .coord-participants { max-height: 340px; overflow-y: auto; }
+  & .rtside .rwho-find { position: static; margin: 0 0 8px; padding: 0; }
   & .rtside .sblk h3 { font-weight: 600; }
+  & .sblk { padding: 12px 16px; }
   & .coord-standing { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
   & .coord-standing p { margin: 0; }
-  & .tlist { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+  & .tlist { margin: 0 0 8px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
   & .tlist li { display: flex; gap: 8px; align-items: flex-start; }
-  & .tlist li > .i { margin-top: 3px; color: var(--fg-muted); }
-  & .tlist small { display: block; }
-  & .coord-new-thread, & .coord-manage { margin-top: 8px; }
+  & .tlist li > .i { flex: none; margin-top: 3px; color: var(--fg-muted); }
+  & .tlist small { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin-top: 2px; }
+  & .tlist .tnone { padding: 0; font-size: 13px; }
+  & .tstate { font-size: 12px; font-weight: 500; }
+  & .tstate.open { color: var(--success-fg); }
+  & .tstate.done { color: var(--done-fg); }
+  & .tstate.gray { color: var(--fg-muted); }
+  & .coord-threads h3 .counter { margin-left: 6px; }
   & .coord-new-thread > summary, & .coord-manage > summary { display: inline-flex; list-style: none; cursor: pointer; }
   & .coord-new-thread > summary::-webkit-details-marker, & .coord-manage > summary::-webkit-details-marker { display: none; }
+  & .rctx .sblk + .sblk, & .rctx > div + .sblk, & .rctx > .sblk + .sblk { border-top: 1px solid var(--border-muted); }
+  & .rctx .coord-manage form { margin-top: 8px; }
   & .coord-welcome { flex-direction: column; }
   & .rside .box { min-width: 0; }
-  & .rside .sblk { padding: 12px 16px; }
-  & .rside .sblk:first-of-type { padding-top: 12px; }
-  & .rside .box > .sblk + .sblk { border-top: 1px solid var(--border-muted); }
-  & .rside .coord-leave { border-bottom: 0; }
+  /* The forms of the pop-ups and the side column: label above field, room around them. */
+  & .pop.pform { width: 320px; padding: 12px 16px; }
+  & .pform .pfield { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .pform .pfield .gfield { width: 100%; }
+  & .pform .wf { display: flex; justify-content: flex-end; }
 }
 
-@media (max-width: 1011px) {
+@media (max-width: 1279px) {
   :is(.g2.rooms) {
-    & .coord-shell, & .coord-shell:has(.coord-thread-detail) { grid-template-columns: minmax(0, 1fr); }
+    /* One column: the rooms as a row of chips on top, the chat of the height that is left,
+       the threads and the people below it (the page scrolls to them). */
+    & .coord-shell, & .coord-shell:has(#coord-context > *), & .coord-shell:has(#coord-context):has(.coord-thread-detail) { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; height: auto; min-height: 0; gap: 12px; }
     & #coord-rooms, & .coord-conversation, & #coord-context, & .coord-shell:has(.coord-thread-detail) .coord-conversation, & .coord-shell:has(.coord-thread-detail) #coord-context { grid-column: 1; grid-row: auto; }
+    & .coord-conversation { height: calc(100dvh - var(--coord-top, 190px) - 68px); min-height: 440px; }
+    & .coord-shell:has(.coord-thread-detail) .coord-conversation { height: calc(100dvh - var(--coord-top, 190px)); }
     & .coord-shell:has(.coord-thread-detail) #coord-rooms { display: none; }
+    & #coord-context { overflow-y: visible; }
+    & #coord-rooms { flex-direction: row-reverse; align-items: center; align-self: stretch; }
+    & #coord-rooms .box-h { flex: none; padding: 0 8px 0 0; background: none; border: 0; }
+    & #coord-rooms .box-h .t { display: none; }
+    & #coord-rooms .rlist { display: flex; flex: 1; gap: 4px; padding: 6px 8px; overflow-x: auto; overflow-y: hidden; white-space: nowrap; }
+    & #coord-rooms .rsec { display: none; }
+    & #coord-rooms .rl { flex: none; margin: 0; }
   }
 }
 @media (max-width: 767px) {
   :is(.g2.rooms) {
     & .cx-f { flex-wrap: wrap; }
+    & .cx-f .cx-hint { display: none; }
     & .rhead { flex-wrap: wrap; }
-    & .rsearch { width: 100%; order: 9; }
+    & .rhead .rsearch { flex: 1 1 120px; width: auto; min-width: 0; }
+    & .rttl .rsearch { display: none; }
+    & .rlead { margin: 8px 0; padding: 6px 12px; }
+    & .rlead p { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    /* The footer of the composer in two rows: the two pickers side by side, the buttons beneath. */
+    & .cx-f { gap: 6px; }
+    & .cx-f > .dd { flex: 1 1 45%; min-width: 0; }
+    & .cx-f > .dd > .gbtn { width: 100%; justify-content: space-between; }
+    & .cx-f > .sp { flex: 1 0 100%; height: 0; }
+    & .cx-f > .rm-ask { margin-left: auto; }
     & .rttl { flex-direction: column; align-items: stretch; }
-    & .cm-tools { opacity: 1; }
-    & .rm-msg { gap: 8px; padding: 8px 12px; }
-    & .rwho-pop { min-width: 0; width: calc(100vw - 32px); }
+    & .rm-msg { gap: 8px; padding-left: 12px; padding-right: 12px; }
+    & .coord-composer, & .coord-thread-composer { padding: 8px 12px 12px; }
+    & .rwho-pop { width: calc(100vw - 32px); }
+    & .rstart-pop { width: calc(100% - 16px); }
+  }
+}
+/* Where there is no pointer to hover with, the tools of a message stand under it. */
+@media (hover: none), (max-width: 767px) {
+  :is(.g2.rooms) {
+    & .cm-tools { position: static; width: fit-content; margin-top: 4px; padding: 0; background: none; border: 0; box-shadow: none; opacity: 1; pointer-events: auto; }
+    & .cm-tools > .gbtn, & .cm-tools > details > summary { height: 28px; font-size: 12px; }
+    & .cm-gutter { visibility: hidden; }
   }
 }

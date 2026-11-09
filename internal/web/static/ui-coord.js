@@ -62,14 +62,10 @@
     returnFocus = null;
     if (focus && focus.isConnected) focus.focus();
   };
+  // The context column (threads, who is here) is never taken away: below the
+  // chat on a narrow screen, beside it on a wide one.
   const sync = () => {
     close();
-    for (const id of ["coord-context"]) {
-      const panel = document.getElementById(id);
-      if (!panel) continue;
-      panel.hidden = media.matches;
-      panel.inert = media.matches;
-    }
   };
   const open = (button) => {
     close();
@@ -113,18 +109,75 @@
     if (contextButton) open(contextButton);
   };
   bindDrawers();
+  // The chat is a scroll area of its own with the composer fixed beneath it. It
+  // opens at the newest message (or at the one a link names).
+  const chatOf = () => document.querySelector(".coord-messages");
   const scrollFlowToEnd = () => {
-    const flow = document.querySelector(".coord-messages");
+    const flow = chatOf();
     const target = location.hash && document.getElementById(location.hash.slice(1));
-    if (target) target.scrollIntoView({block: "center"});
+    if (target && flow && flow.contains(target)) target.scrollIntoView({block: "center"});
     else if (flow) flow.scrollTop = flow.scrollHeight;
   };
+  // The page itself does not scroll: the shell gets the height of what is left of the window.
+  const fitShell = () => {
+    const shell = document.querySelector(".coord-shell");
+    if (!shell) return;
+    // Everything on the page that is not the shell: what lies above it and what follows (footer, margins).
+    const box = shell.getBoundingClientRect();
+    const above = box.top + window.scrollY;
+    let below = 0;
+    for (let node = shell; node && node !== document.body; node = node.parentElement) {
+      for (let next = node.nextElementSibling; next; next = next.nextElementSibling) {
+        const style = getComputedStyle(next);
+        if (/^(SCRIPT|STYLE|LINK)$/.test(next.tagName) || /^(fixed|absolute)$/.test(style.position)) continue;
+        below += next.offsetHeight + parseFloat(style.marginTop) + parseFloat(style.marginBottom);
+      }
+      const parent = getComputedStyle(node.parentElement || node);
+      below += parseFloat(parent.paddingBottom) + parseFloat(parent.borderBottomWidth) + parseFloat(getComputedStyle(node).marginBottom);
+    }
+    document.documentElement.style.setProperty("--coord-top", `${Math.max(0, Math.round(above + below))}px`);
+  };
+  fitShell();
+  addEventListener("resize", fitShell);
   scrollFlowToEnd();
-  const syncFlowFade = (flow) => flow.classList.toggle("is-scrolled", flow.scrollTop > 2);
+  const newPill = () => document.querySelector("[data-chat-new]");
+  const nearEnd = (flow) => flow.scrollHeight - flow.scrollTop - flow.clientHeight < 80;
+  const lastSeq = (flow) => {
+    const items = flow ? flow.querySelectorAll(":scope > li[data-seq]") : [];
+    return items.length ? Number(items[items.length - 1].dataset.seq) : 0;
+  };
+  const syncFlowFade = (flow) => {
+    flow.classList.toggle("is-scrolled", flow.scrollTop > 2);
+    const pill = newPill();
+    if (pill && nearEnd(flow)) pill.hidden = true;
+  };
   document.addEventListener("scroll", (event) => {
     if (event.target instanceof Element && event.target.matches(".coord-messages")) syncFlowFade(event.target);
   }, true);
-  const initialFlow = document.querySelector(".coord-messages");
+  document.addEventListener("click", (event) => {
+    const pill = event.target.closest?.("[data-chat-new]");
+    if (!pill) return;
+    const flow = chatOf();
+    if (flow) flow.scrollTo({top: flow.scrollHeight, behavior: "smooth"});
+    pill.hidden = true;
+  });
+  // The divider "New" stays where it was drawn while the room is open: the
+  // read mark moves on as soon as the messages are seen, the divider does not.
+  let unreadFrom = 0;
+  let dividerNode = null;
+  const rememberDivider = () => {
+    const flow = chatOf();
+    unreadFrom = Number(flow?.dataset.unreadFrom || 0);
+    dividerNode = flow?.querySelector(":scope > .cm-new")?.cloneNode(true) || null;
+  };
+  const applyDivider = () => {
+    const flow = chatOf();
+    if (!flow || !unreadFrom || !dividerNode || flow.querySelector(":scope > .cm-new")) return;
+    const first = [...flow.querySelectorAll(":scope > li[data-seq]")].find((item) => Number(item.dataset.seq) >= unreadFrom);
+    if (first) flow.insertBefore(dividerNode.cloneNode(true), first);
+  };
+  rememberDivider();
+  const initialFlow = chatOf();
   if (initialFlow) syncFlowFade(initialFlow);
   addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
@@ -251,7 +304,8 @@
 
   const liveStatus = document.querySelector("[data-coord-live-status]");
   const announce = document.getElementById("coord-status");
-  const actionStatus = document.querySelector("[data-coord-action-status]");
+  // The message lives inside the conversation, which is swapped: look it up each time.
+  const actionStatusEl = () => document.querySelector("[data-coord-action-status]");
   const setLive = (state, label, announcement = "") => {
     document.documentElement.dataset.coordLive = state;
     if (liveStatus) liveStatus.textContent = label;
@@ -259,6 +313,7 @@
   };
   let actionTimer = null;
   const setActionStatus = (message, error = false) => {
+    const actionStatus = actionStatusEl();
     if (actionStatus) {
       actionStatus.textContent = message;
       actionStatus.hidden = !message;
@@ -266,7 +321,7 @@
       clearTimeout(actionTimer);
       // Progress and confirmations fade; errors stay until the next action.
       if (message && !error) {
-        actionTimer = setTimeout(() => { actionStatus.hidden = true; }, 3000);
+        actionTimer = setTimeout(() => { const el = actionStatusEl(); if (el) el.hidden = true; }, 3000);
       }
     }
     if (message && announce) announce.textContent = message;
@@ -282,6 +337,8 @@
   const pageParams = () => new URLSearchParams(location.search);
   const currentRoom = () => pageParams().get("room") || "";
   const currentThread = () => pageParams().get("thread") || "";
+  const incomingRoomOf = (target) => new URL(target.href).searchParams.get("room") || "";
+  const threadKey = () => `${currentRoom()}#${currentThread()}`;
   const anchorState = () => {
     const params = pageParams();
     const roomAround = params.get("around");
@@ -295,6 +352,7 @@
     const container = threadAround ? context : messages;
     return {
       id,
+      threadKey: threadKey(),
       top: element && container
         ? element.getBoundingClientRect().top -
           container.getBoundingClientRect().top
@@ -340,7 +398,9 @@
     const current = document.querySelector(selector);
     const incoming = incomingDocument.querySelector(selector);
     if (!current || !incoming) return;
-    current.replaceChildren(...incoming.childNodes);
+    // Copies: one element may be named by two surfaces (the messages of a thread
+    // are both), and the nodes of the incoming page can only move once.
+    current.replaceChildren(...[...incoming.childNodes].map((node) => node.cloneNode(true)));
   };
   const focusIdentity = (element) => ({
     key: element?.dataset?.coordFocusKey || "",
@@ -485,6 +545,9 @@
     const drafts = captureDrafts().filter(
       (draft) => draft.key !== options.discardDraftKey,
     );
+    if (oldRoom === incomingRoomOf(target) && scroll.threadKey === `${incomingRoomOf(target)}#${new URL(target.href).searchParams.get("thread") || ""}`) {
+      incoming.querySelectorAll(".coord-messages > .cm-new").forEach((node) => node.remove());
+    }
     selectors.forEach((selector) => replaceSurface(selector, incoming));
     const incomingWorkspace = incoming.querySelector(".coord-workspace");
     if (incomingWorkspace?.dataset.coordEventCursor) {
@@ -521,12 +584,17 @@
       }
     }
     const newRoom = currentRoom();
-    if (oldRoom === newRoom) restoreAnchor(scroll);
+    const sameThread = scroll.threadKey === threadKey();
+    if (oldRoom === newRoom && sameThread && !options.toEnd) restoreAnchor(scroll);
     else {
-      const messages = document.querySelector(".coord-messages");
+      const messages = chatOf();
       if (messages) messages.scrollTop = messages.scrollHeight;
     }
+    if (oldRoom !== newRoom || !sameThread) rememberDivider();
+    else applyDivider();
     restoreDrafts(drafts);
+    syncThreadSends();
+    fitShell();
     const hashTarget = target.hash && document.getElementById(target.hash.slice(1));
     if (hashTarget) {
       hashTarget.scrollIntoView({block: "nearest"});
@@ -588,6 +656,17 @@
       applyCoordinator.finish(lease);
     }
   };
+  // The server says in a sentence what was wrong (a name that fits several, a
+  // request without addressee): that sentence is shown, not a bare status.
+  const refusal = async (response) => {
+    try {
+      if (!/^text\/plain/.test(response.headers.get("Content-Type") || "")) return "";
+      const body = (await response.text()).trim();
+      return body && body.length < 400 ? body : "";
+    } catch (_) {
+      return "";
+    }
+  };
   const postCoordForm = async (form, target, submitter) => {
     if (postingForms.has(form)) return;
     const body = coordFormBody(form, submitter);
@@ -621,8 +700,9 @@
         return;
       }
       if (!response.ok) {
+        const reason = response.status < 500 ? await refusal(response) : "";
         setActionStatus(
-          text("failed").replace("%s", response.status),
+          reason ? `${reason} ${text("kept")}` : text("failed").replace("%s", response.status),
           true,
         );
         return;
@@ -633,6 +713,7 @@
       const incoming = coordPageDocument(html);
       if (!canonical || !applyCoordPage(incoming, canonical, {
         history: "push",
+        toEnd: true,
         discardDraftKey: draftContainer?.dataset.coordDraftKey || "",
       })) {
         location.assign(response.url || "/ui/coord");
@@ -676,7 +757,37 @@
     const target = coordFormTarget(form, location.origin, event.submitter);
     if (!target) return;
     event.preventDefault();
+    // A request goes to someone: say so before anything is sent.
+    if (event.submitter?.matches?.("[data-needs-to]")) {
+      const to = form.querySelector('input[name="mentions"]');
+      if (!to || !to.value) {
+        setActionStatus(text("need_to"), true);
+        form.querySelector("[data-pick] [data-dd]")?.focus();
+        return;
+      }
+    }
     postCoordForm(form, target, event.submitter);
+  });
+  // The status row of a thread: a different status makes the send button say
+  // what it will do, and the words become optional.
+  const syncThreadSend = (form) => {
+    const picked = form.querySelector("input[data-state-input]:checked");
+    const area = form.querySelector("textarea[name='body']");
+    const button = form.querySelector("button.comp-send");
+    if (!picked || !area || !button) return;
+    const was = form.querySelector("input[name='state_was']")?.value;
+    const changed = picked.value !== was;
+    area.required = !changed;
+    button.textContent = changed
+      ? (area.value.trim() ? picked.dataset.labelText : picked.dataset.label)
+      : button.dataset.sendLabel;
+  };
+  const syncThreadSends = () => document.querySelectorAll("form.coord-thread-composer").forEach(syncThreadSend);
+  document.addEventListener("change", (event) => {
+    if (event.target.matches?.("input[data-state-input]")) syncThreadSend(event.target.form);
+  });
+  document.addEventListener("input", (event) => {
+    if (event.target.matches?.("textarea[name='body']") && event.target.form?.classList.contains("coord-thread-composer")) syncThreadSend(event.target.form);
   });
   // Composer: the mode pill picks what a post becomes. A request needs a kind,
   // anything else carries none.
@@ -809,10 +920,23 @@
           const html = await response.text();
           if (!applyCoordinator.current(lease)) return;
           const incoming = new DOMParser().parseFromString(html, "text/html");
+          // The divider "New" is ours (it stays where it was drawn); the server's would move with the read mark.
+          incoming.querySelectorAll(".coord-messages > .cm-new").forEach((node) => node.remove());
+          const flowBefore = chatOf();
+          const seenBefore = lastSeq(flowBefore);
+          const wasAtEnd = flowBefore ? nearEnd(flowBefore) : true;
           selectors.forEach((selector) => replaceSurface(selector, incoming));
           bindDrawers();
           restoreAnchor(scroll);
+          applyDivider();
+          const flowAfter = chatOf();
+          // At the end the chat goes along with what comes; elsewhere a pill says there is more.
+          if (flowAfter && lastSeq(flowAfter) > seenBefore) {
+            if (wasAtEnd) flowAfter.scrollTop = flowAfter.scrollHeight;
+            else if (newPill()) newPill().hidden = false;
+          }
           restoreDrafts(drafts);
+          syncThreadSends();
           restoreFocus(focus);
           markHighestRenderedRead();
           refreshRetry.success();

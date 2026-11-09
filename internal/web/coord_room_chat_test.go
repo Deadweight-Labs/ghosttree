@@ -86,10 +86,10 @@ func TestCoordRoomGroupsConsecutiveMessagesOfOneSender(t *testing.T) {
 	}
 	// An agent shows as name plus @machine; a person as a round avatar.
 	first := messageItem(t, page, "1")
-	if !strings.Contains(first, "<strong>claude</strong>") || !strings.Contains(first, `<span class="cm-host">@apps-vm</span>`) || !strings.Contains(first, "gav agent") {
+	if !strings.Contains(first, "<strong>claude</strong>") || !strings.Contains(first, `<span>apps-vm</span>`) || !strings.Contains(first, "gav agent") {
 		t.Errorf("agent identity: %s", first)
 	}
-	if own := messageItem(t, page, "3"); !strings.Contains(own, "<strong>You</strong>") || !strings.Contains(own, "to everyone") {
+	if own := messageItem(t, page, "3"); !strings.Contains(own, "<strong>You</strong>") || strings.Contains(own, "to everyone") {
 		t.Errorf("own message: %s", own)
 	}
 }
@@ -128,7 +128,7 @@ func TestCoordRoomShowsARequestToThePersonAsAnAnswerableCard(t *testing.T) {
 	appendAgent(t, st, room, "q1", "Roles first or column first?", store.IntentQuestion, "person:1")
 	page := get("/ui/coord?room=" + url.QueryEscape(room))
 	card := messageItem(t, page, "1")
-	for _, want := range []string{`class="rm-msg is-ask"`, "Asks robin", "Roles first or column first?", `name="action" value="answer"`, "Answered", ">Reply<", "just asked", `name="attention_id"`} {
+	for _, want := range []string{`class="rm-msg is-ask"`, ">Question<", "to robin", "Roles first or column first?", `name="action" value="answer"`, "Mark as answered", "<span>Reply</span>", "just asked", `name="attention_id"`} {
 		if !strings.Contains(card, want) {
 			t.Errorf("request card missing %q: %s", want, card)
 		}

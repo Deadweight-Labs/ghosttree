@@ -57,6 +57,19 @@ func (a *app) browserCoord(r *http.Request) store.CoordAccess {
 	return a.store.CoordinationFor(browserPrincipal(r), "")
 }
 
+// coordCandidateLabel makes one candidate of an ambiguous @name readable: a bare
+// identifier in front of the bracket becomes a neutral name.
+func coordCandidateLabel(l lang, candidate string) string {
+	name, rest, hasRest := strings.Cut(candidate, " (")
+	if looksLikeIdentifier(name, "") || strings.Contains(name, ":") {
+		name = neutralIdentityLabel(l, name)
+	}
+	if hasRest {
+		return name + " (" + rest
+	}
+	return name
+}
+
 func coordHTTPError(l lang, w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrCoordNotFound):
@@ -76,21 +89,25 @@ func coordHTTPError(l lang, w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrCoordInvalidSequence):
 		http.Error(w, "invalid coordination sequence", http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordUnknownRecipient):
-		http.Error(w, "coordination recipient is not available", http.StatusBadRequest)
+		http.Error(w, l.msg("coord.err.recipient_unknown"), http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordAmbiguousMention):
 		var ambiguous *store.AmbiguousMentionError
 		errors.As(err, &ambiguous)
-		http.Error(w, l.msg("coord.mention_ambiguous", ambiguous.Token, strings.Join(ambiguous.Candidates, ", ")), http.StatusBadRequest)
+		names := make([]string, len(ambiguous.Candidates))
+		for i, c := range ambiguous.Candidates {
+			names[i] = coordCandidateLabel(l, c)
+		}
+		http.Error(w, l.msg("coord.mention_ambiguous", ambiguous.Token, strings.Join(names, ", ")), http.StatusBadRequest)
 	case errors.Is(err, store.ErrBroadcastLimited):
 		var limited *store.BroadcastLimitedError
 		errors.As(err, &limited)
 		http.Error(w, l.msg("coord.broadcast_limited", int(limited.Wait.Minutes())+1), http.StatusTooManyRequests)
 	case errors.Is(err, store.ErrInvalidAttentionAction):
-		http.Error(w, "invalid coordination attention action", http.StatusBadRequest)
+		http.Error(w, l.msg("coord.err.action_invalid"), http.StatusBadRequest)
 	case errors.Is(err, store.ErrAttentionRecipientRequired):
-		http.Error(w, "coordination attention requires a recipient", http.StatusBadRequest)
+		http.Error(w, l.msg("coord.err.recipient_required"), http.StatusBadRequest)
 	case errors.Is(err, store.ErrAttentionClosed):
-		http.Error(w, "coordination attention item is already closed", http.StatusConflict)
+		http.Error(w, l.msg("coord.err.closed"), http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -301,7 +318,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		Standing:     buildCoordStandingViews(l, standing, labels), HighWater: page.HighWater,
 		HasOlder: page.HasOlder, HasNewer: page.HasNewer,
 		CanLeave: activeRoom.Kind == store.RoomGroup,
-		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(), Threads: buildCoordThreadViews(roomThreads),
+		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(), Threads: buildCoordThreadViews(l, roomThreads),
 	}
 	detail.Room.Name = coordShortRoomName(detail.Room.Kind, detail.Room.Label)
 	for _, tab := range sidebar.Projects {
@@ -320,6 +337,8 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	detail.Broadcast = coordCanBroadcast(activeRoom.Kind, detail.Participants)
 	applyParticipantRoles(l, a.store, activeRoom.Key, detail.Participants)
 	a.applyParticipantControls(r, activeRoom.Key, detail.Participants)
+	detail.Here = groupParticipantsHere(l, detail.Participants)
+	detail.Stack = stackHere(detail.Here)
 	applyMessageRoles(l, a.store, activeRoom.Key, current.ID, detail.Messages, presentations)
 	markViewerMentions(detail.Messages, presentations, current.ID)
 	detail.CanDirect = true
@@ -339,6 +358,14 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	decorateCoordMessages(l, detail.Messages, presentations, current.ID, activeRoom.Key, detail.Room.Label, detail.Standing, append(append([]coordAttentionView{}, incomingAttention...), outgoingAttention...), roleRoom, time.Now())
 	a.explainMessages(l, detail.Messages)
 	applyRequestStates(l, detail.Messages, presentations, activeRoom.Key, attention, attentionLabels)
+	for _, summary := range summaries {
+		if summary.Room.Key == room {
+			detail.UnreadFrom = firstUnreadSequence(detail.Messages, summary.ReadThrough, summary.ManualUnreadFrom)
+		}
+	}
+	for i := range detail.Messages {
+		detail.Messages[i].NewFrom = detail.UnreadFrom > 0 && detail.Messages[i].Sequence == detail.UnreadFrom
+	}
 	detail.ReplyTo, detail.ReplyTarget, err = coordReplyTarget(l, presentations, r.URL.Query().Get("reply_to"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -370,7 +397,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		if thread, ok := threadByAnchor[detail.Messages[i].ID]; ok && thread.URL != "" {
 			detail.Messages[i].ThreadURL = thread.URL
 			detail.Messages[i].ThreadTitle = thread.Title
-			detail.Messages[i].ThreadMeta = thread.State
+			detail.Messages[i].ThreadMeta = thread.StateText
 		} else {
 			detail.Messages[i].CanPromote = detail.CanPost
 		}
@@ -422,11 +449,16 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			ClearReplyURL: coordThreadComposerURL(room, selectedID),
 		}
 		markViewerMentions(threadDetail.Messages, presentations, current.ID)
+		applyMessageRoles(l, a.store, activeRoom.Key, current.ID, threadDetail.Messages, presentations)
+		allAttention := append(append([]coordAttentionView{}, incomingAttention...), outgoingAttention...)
+		decorateCoordMessages(l, threadDetail.Messages, presentations, current.ID, activeRoom.Key, detail.Room.Label, detail.Standing, allAttention, roleRoom, time.Now(), selectedID)
+		a.explainMessages(l, threadDetail.Messages)
+		applyRequestStatesIn(l, threadDetail.Messages, presentations, store.DestinationDiscussion, store.ThreadDestinationID(selectedID), attention, attentionLabels)
 		for i := range threadDetail.Messages {
-			message := presentations[i].Message
 			threadDetail.Messages[i].CanReply = detail.CanPost
-			threadDetail.Messages[i].Own = message.AuthorKind == store.AuthorHuman && message.AuthorPrincipalID == current.ID
+			threadDetail.Messages[i].CSRFToken = csrfOf(r)
 		}
+		threadDetail.Anchor = a.coordThreadAnchor(r, l, access, room, selected, detail, labels, attention, attentionLabels, allAttention, roleRoom)
 		threadDetail.ReplyTo, threadDetail.ReplyTarget, parseErr = coordReplyTarget(l, presentations, r.URL.Query().Get("thread_reply_to"))
 		if parseErr != nil {
 			http.Error(w, parseErr.Error(), http.StatusBadRequest)
@@ -557,8 +589,23 @@ func (a *app) coordPostThread(w http.ResponseWriter, r *http.Request) {
 	}
 	threadID, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("thread_id")), 10, 64)
 	body := strings.TrimSpace(r.FormValue("body"))
-	if err != nil || threadID <= 0 || body == "" {
-		http.Error(w, "thread and body are required", http.StatusBadRequest)
+	// The status row of the composer: a change of state may come with a reply or alone.
+	state := strings.TrimSpace(r.FormValue("state"))
+	if state == strings.TrimSpace(r.FormValue("state_was")) {
+		state = ""
+	}
+	if err != nil || threadID <= 0 || (body == "" && state == "") {
+		http.Error(w, l.msg("coord.thread_need_text"), http.StatusBadRequest)
+		return
+	}
+	if state != "" {
+		if err := a.browserCoord(r).SetThreadState(threadID, state, gitanchor.Web()); err != nil {
+			coordHTTPError(l, w, err)
+			return
+		}
+	}
+	if body == "" {
+		a.redirectToThread(w, r, l, threadID)
 		return
 	}
 	replyTo, err := coordOptionalReplyTo(r)
@@ -607,6 +654,11 @@ func (a *app) coordSetThreadState(w http.ResponseWriter, r *http.Request) {
 		coordHTTPError(l, w, err)
 		return
 	}
+	a.redirectToThread(w, r, l, threadID)
+}
+
+// redirectToThread sends the browser back to the thread it came from.
+func (a *app) redirectToThread(w http.ResponseWriter, r *http.Request, l lang, threadID int64) {
 	home, err := a.browserCoord(r).ThreadHome(threadID)
 	if err != nil {
 		coordHTTPError(l, w, err)
@@ -731,7 +783,7 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 	room := strings.TrimSpace(r.FormValue("room"))
 	body := strings.TrimSpace(r.FormValue("body"))
 	if room == "" || body == "" {
-		http.Error(w, "room and body are required", http.StatusBadRequest)
+		http.Error(w, l.msg("coord.err.body_required"), http.StatusBadRequest)
 		return
 	}
 	if !a.mayEnter(w, r, room) {
@@ -1079,4 +1131,42 @@ func coordCanBroadcast(kind string, participants []coordParticipantView) bool {
 		}
 	}
 	return false
+}
+
+// coordThreadAnchor is the message a thread was started from, shown at its top.
+// It is taken from the window of the room when it is there, else loaded on its
+// own: an old anchor must not vanish from its thread.
+func (a *app) coordThreadAnchor(r *http.Request, l lang, access store.CoordAccess, room string, thread *coordThreadView, detail *coordRoomDetailView, labels map[string]string, attention []store.AttentionItem, attentionLabels map[string]string, allAttention []coordAttentionView, roleRoom bool) *coordMessageView {
+	if thread.AnchorMessageID == 0 {
+		return nil
+	}
+	var anchor *coordMessageView
+	for i := range detail.Messages {
+		if detail.Messages[i].ID == thread.AnchorMessageID {
+			copyOf := detail.Messages[i]
+			anchor = &copyOf
+		}
+	}
+	if anchor == nil && thread.AnchorSequence > 0 {
+		_, pres, err := access.MessagePresentationWindow(store.DestinationRoom, room, store.BeforeWindow(thread.AnchorSequence+1, 1))
+		if err != nil || len(pres) != 1 || pres[0].Message.ID != thread.AnchorMessageID {
+			return nil
+		}
+		views := buildCoordMessageViews(l, pres, room, labels)
+		current := browserPrincipal(r)
+		applyMessageRoles(l, a.store, room, current.ID, views, pres)
+		markViewerMentions(views, pres, current.ID)
+		decorateCoordMessages(l, views, pres, current.ID, room, detail.Room.Label, detail.Standing, allAttention, roleRoom, time.Now())
+		a.explainMessages(l, views)
+		applyRequestStates(l, views, pres, room, attention, attentionLabels)
+		views[0].CSRFToken = csrfOf(r)
+		anchor = &views[0]
+	}
+	if anchor == nil {
+		return nil
+	}
+	anchor.ThreadAnchor, anchor.GroupStart = true, true
+	anchor.DOMID = "thread-anchor-" + strconv.FormatInt(anchor.Sequence, 10)
+	anchor.ReplyCount, anchor.ThreadURL, anchor.CanReply, anchor.CanPromote = 0, "", false, false
+	return anchor
 }
