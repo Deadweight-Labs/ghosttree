@@ -56,6 +56,43 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   upgrade"), and private means private: a session that is not shared is read by
   its owner alone.
 
+#### Terminal interface
+
+- `ctx` without arguments opens a terminal interface in a terminal (`ctx tui`
+  does the same; in pipes and without a terminal `ctx` still prints its help).
+  A quick search line jumps straight to `REQ-n`, `PAIN-n`, `TASK-n`, `IDEA-n`,
+  `FEAT-n`, `#id` or `pr:n` and shows the card; anything else runs as a
+  `ctx search` line, `preset:NAME` included. Enter opens the web page, `c`
+  copies the link. Three lists: your open tasks, open requests of the current
+  repository and unread room messages.
+- Local settings in the interface: servers (as a list, ready for several
+  server profiles), the login per server (account, machine, whether the token
+  is valid; never the token), update channel, harness state from `ctx doctor`
+  with repair, the collector service with restart, the machine name, and a
+  link to the web profile for account connections. Each has its own command:
+  `ctx login`, `ctx logout`, `ctx config set channel`, `ctx doctor [--fix]`,
+  `ctx install watch --restart`.
+- `ctx login` in a terminal runs the device login in the interface (server and
+  machine, code, browser, waiting, result); `--plain` and runs without a
+  terminal keep the text flow.
+- New `ctx logout`: the server revokes the token and frees the machine name,
+  the client keeps server, machine and channel; exit code 3 when the token was
+  removed locally but the server did not confirm the revocation. Signing in on
+  another server revokes the login on the previous one, or says it could not.
+  New `ctx install watch --restart` restarts the collector, for example after
+  an update.
+- Text from the server (accounts, codes, addresses, error messages) is
+  filtered before it reaches the terminal, in the interface and in the text
+  output of `ctx login` and `ctx logout`; only http(s) addresses are opened,
+  and the login page only on the server that was confirmed.
+- The interface uses what the terminal offers and falls back without it:
+  synchronized output, true colour reduced to the terminal's palette, light or
+  dark from the terminal background, `NO_COLOR`, clickable links (OSC 8),
+  copying over OSC 52, mouse, window title. The logo is drawn in text and
+  moves for about a second at start; `--look mark|tree|lines` (or
+  `GHOSTTREE_TUI_LOOK`, f2 inside) picks one of three looks,
+  `GHOSTTREE_TUI_STILL=1` keeps it still.
+
 #### Short ways between agent and human
 
 - Every answer about one object (issue, requirement, task, pain, idea, knowledge

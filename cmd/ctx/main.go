@@ -15,6 +15,9 @@ var version = "0.1.0-dev"
 func run(args []string, stdout io.Writer) int {
 	client.ClientVersion = version
 	if len(args) == 0 {
+		if interactiveTerminal(stdout) {
+			return cmdTUI(nil, stdout)
+		}
 		fmt.Fprintln(stdout, usage)
 		return 2
 	}
@@ -124,6 +127,10 @@ func run(args []string, stdout io.Writer) int {
 		return cmdUpdate(rest, stdout)
 	case "login":
 		return cmdLogin(rest, stdout)
+	case "logout":
+		return cmdLogout(rest, stdout)
+	case "tui":
+		return cmdTUI(rest, stdout)
 	case "join":
 		return cmdJoin(rest, stdout)
 	case "pain":
@@ -158,6 +165,10 @@ func run(args []string, stdout io.Writer) int {
 
 const usage = `usage: ctx <command>
 
+  ctx without a command opens the terminal interface (in a terminal)
+
+  tui      the terminal interface: quick search, lists, settings, sign-in
+
   serve    run the ghosttree server
   watch    run the session collector daemon
   mcp      run the MCP server (stdio)
@@ -169,7 +180,8 @@ const usage = `usage: ctx <command>
   setup    write client config (server URL + token)
   config   get or set client settings (channel stable|dev)
   update   update ctx from the stable release or the dev build (--check shows only)
-  login    sign this machine in through the browser (device login)
+  login    sign this machine in through the browser (device login; --plain without the interface)
+  logout   sign this machine out (revokes the token, keeps server and machine name)
   join     pair this machine with a pairing code from an invitation page
   person   manage persons/tokens (server-side; deprecated alias, see account)
   account  manage accounts and their tokens (server-side)
