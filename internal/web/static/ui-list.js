@@ -1,6 +1,7 @@
 // Filter of a list: the text of the field and the choices of the menus narrow
 // the rows named in data-list-filter (a selector); a group (data-list-group) with
-// no row left is hidden. A menu is a details.dd[data-pick="<key>"] whose buttons
+// no row left is hidden, its [data-list-count] shows how many rows are left, and a
+// folded details group opens while a hit is in it. A menu is a details.dd[data-pick="<key>"] whose buttons
 // carry data-value; a row matches when its data-<key> equals the chosen value.
 // No inline script, no inline style.
 (() => {
@@ -19,7 +20,17 @@
       row.hidden = !show;
     }
     for (const group of document.querySelectorAll("[data-list-group]")) {
-      group.hidden = !group.querySelector(`${selector}:not([hidden])`);
+      const shown = group.querySelectorAll(`${selector}:not([hidden])`).length;
+      group.hidden = shown === 0;
+      const count = group.querySelector("[data-list-count]");
+      if (count) count.textContent = String(shown);
+      // A folded group (details) with a hit opens while the list is narrowed and
+      // goes back to what it was when the narrowing ends.
+      if (group.tagName === "DETAILS") {
+        const narrowed = q !== "" || Object.values(chosen).some((v) => v !== "");
+        if (group.dataset.wasOpen === undefined) group.dataset.wasOpen = String(group.open);
+        group.open = narrowed ? shown > 0 : group.dataset.wasOpen === "true";
+      }
     }
   };
   if (input) input.addEventListener("input", refresh);

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -27,7 +28,7 @@ const (
 
 type agentsView struct {
 	Cards     []agentCard
-	Groups    []agentGroup
+	Sections  agentSections
 	Cmd       cmdBlock
 	Machines  []machineRow
 	Example   string
@@ -41,7 +42,10 @@ type agentCard struct {
 	agentRow
 	RoomHref, SessionHref string
 	// MachineHref is the machine page, empty when the viewer cannot reach it.
-	MachineHref              string
+	MachineHref string
+	// CSRFToken and Back belong to the check "seen" of a row that waits on the
+	// viewer: the token of the form and the page it returns to.
+	CSRFToken, Back          string
 	ReqID, ReqTitle, ReqHref string
 	Post, PostAge            string
 }
@@ -82,7 +86,7 @@ func (a *app) agentsPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view.Machines, view.Example = ownMachines(l, tokens, now), l.msg("setup.example")
-		view.Groups = groupAgents(view.Cards, view.Machines)
+		view.Sections = sectionAgents(view.Cards, csrfOf(r), r.URL.RequestURI())
 		view.Cmd = cmdBlock{ID: "agents-cmd", Mac: view.Example, Linux: view.Example}
 	}
 	a.renderBrowser(w, r, "agents", pageData{Title: l.msg("agents.title"), Agents: view})
@@ -151,4 +155,76 @@ func (a *app) lastPosts(r *http.Request, rows []agentRow, now time.Time) map[str
 		}
 	}
 	return out
+}
+
+// agentSections is the list of agents the way a person reads it: first those
+// that wait on the viewer, then those at work, and the dormant ones apart (the
+// page folds them), so thousands of resting agents do not bury the few that
+// matter.
+type agentSections struct {
+	Waiting, Active, Inactive []agentCard
+}
+
+// sectionAgents sorts cards (already ordered by listAgents) into the sections:
+// "wait_you" is waiting on the viewer, "work", "wait_other" and "stuck" are
+// active, "idle" and "off" are inactive. Rows that wait carry the form of the
+// check "seen" (token and the page to return to).
+func sectionAgents(cards []agentCard, token, back string) agentSections {
+	var s agentSections
+	for _, c := range cards {
+		switch c.Presence {
+		case "wait_you":
+			c.CSRFToken, c.Back = token, back
+			s.Waiting = append(s.Waiting, c)
+		case "idle", "off":
+			s.Inactive = append(s.Inactive, c)
+		default:
+			s.Active = append(s.Active, c)
+		}
+	}
+	return s
+}
+
+// Any says whether the page has an agent to show.
+func (s agentSections) Any() bool {
+	return len(s.Waiting)+len(s.Active)+len(s.Inactive) > 0
+}
+
+// agentSeen quits the wait of an agent on the viewer without an answer. It
+// closes the viewer's open questions, approvals and blockers from that agent as
+// dismissed, the same step as the check in the inbox (ResolveAttention); the
+// agent's wait ends with them. Nothing but the viewer's own items is touched:
+// Attention lists only those, and the store checks the recipient again.
+func (a *app) agentSeen(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	id := r.PathValue("id")
+	access := a.browserCoord(r)
+	items, err := access.Attention()
+	if err != nil {
+		coordHTTPError(l, w, err)
+		return
+	}
+	for _, item := range items {
+		if !item.IsRecipient || item.State != store.AttentionOpen || item.SenderID != id {
+			continue
+		}
+		if err := access.ResolveAttention(item.ID, store.AttentionActionDismiss); err != nil && !errors.Is(err, store.ErrAttentionClosed) {
+			coordHTTPError(l, w, err)
+			return
+		}
+	}
+	http.Redirect(w, r, localBack(r.FormValue("back"), "/ui/agents"), http.StatusSeeOther)
+}
+
+// localBack is a page of this interface to return to: a path under /ui/ and
+// nothing else, so a form cannot send a person elsewhere.
+func localBack(back, fallback string) string {
+	if strings.HasPrefix(back, "/ui/") && !strings.ContainsAny(back, "\\\r\n") && !strings.HasPrefix(back, "//") {
+		return back
+	}
+	return fallback
 }

@@ -195,6 +195,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/agents", a.requirePerson(http.HandlerFunc(a.agentsPage)))
 	a.handle(mux, "GET /ui/agents/{id}", a.requirePerson(http.HandlerFunc(a.agentPage)))
 	a.handle(mux, "GET /ui/agents/models", a.requirePerson(http.HandlerFunc(a.agentModelsPage)))
+	a.handle(mux, "POST /ui/agents/{id}/seen", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.agentSeen))))))
 	a.handle(mux, "POST /ui/agents/{id}/signal", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.agentSignal))))))
 	a.handle(mux, "GET /ui/rooms", a.requirePerson(http.HandlerFunc(a.roomsAlias)))
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
@@ -496,6 +497,7 @@ var webRoutes = map[string]webClass{
 	"GET /ui/agents":                        webCoord,
 	"GET /ui/agents/{id}":                   webCoord,
 	"GET /ui/agents/models":                 webAccount,
+	"POST /ui/agents/{id}/seen":             webAdmin,
 	"POST /ui/agents/{id}/signal":           webAdmin,
 	"GET /ui/rooms":                         webCoord,
 	"POST /ui/logout":                       webAccount,

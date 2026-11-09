@@ -1409,4 +1409,9 @@ var messages = map[string]string{
 	"ui.cx.task_open":                       "Open",
 	"pains.cx.why_accepted":                 "Why do we live with it?",
 	"pains.why":                             "Why",
+
+	// Sections of the agent list.
+	"agents.section.active":   "Active",
+	"agents.section.inactive": "Inactive",
+	"agents.seen":             "Seen: stop waiting without an answer",
 }
