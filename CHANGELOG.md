@@ -93,6 +93,19 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   `GHOSTTREE_TUI_LOOK`, f2 inside) picks one of three looks,
   `GHOSTTREE_TUI_STILL=1` keeps it still.
 
+- `ctx` in a folder without a project no longer shows a raw `HTTP 400`. The
+  terminal interface says what is missing (no git repository, no git remote,
+  a remote ghosttree does not know) and offers three ways on: create the
+  project from this folder (only with a git remote, after a confirmation with
+  the name and the organization; `ctx project claim`), choose another folder
+  (typed path with tab completion or the recent folders of this machine's
+  sessions; `cd … && ctx`), or show the projects you can see with their open
+  requests and your tasks (`ctx project list`). Failed loads read as no
+  project, no access, server not reachable or not signed in; search,
+  settings and your tasks across all projects keep working. Open requests are
+  no longer listed for every project when the folder has none, and an
+  unknown room reads as no messages.
+
 #### Short ways between agent and human
 
 - Every answer about one object (issue, requirement, task, pain, idea, knowledge
