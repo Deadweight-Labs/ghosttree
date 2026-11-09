@@ -30,11 +30,16 @@
   & .seg { display: inline-flex; gap: 2px; max-width: 100%; padding: 2px; overflow-x: auto; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; }
   & .seg a { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 4px; color: var(--fg-default); font-size: 14px; white-space: nowrap; }
   & .seg a:hover { background: var(--neutral-muted); text-decoration: none; }
+  & .seg a:focus-visible, & .seg button:focus-visible { outline-offset: -2px; }
   & .seg a.on { background: var(--canvas-default); font-weight: 600; box-shadow: 0 0 0 1px var(--border-default); }
   & .seg a[data-seg=issue] .i { color: var(--success-fg); }
   & .seg a[data-seg=idea] .i { color: var(--attention-fg); }
   & .seg a[data-seg=pain] .i { color: var(--danger-fg); }
   & .seg .counter { margin-left: 2px; }
+  /* A row of segments that does not fit scrolls; "+n" stays at its end (ui-tabs.js) and counts what is out of sight. */
+  & .seg > .seg-more { position: sticky; right: -3px; flex: none; align-self: center; display: inline-flex; align-items: center; height: 24px; margin-left: -6px; padding: 0 8px; border: 1px solid var(--border-default); border-radius: 2em; background: var(--canvas-default); color: var(--fg-default); font: 600 12px/22px var(--ui-font); cursor: pointer; box-shadow: -14px 0 10px 4px var(--canvas-subtle); }
+  & .seg > .seg-more[hidden] { display: none; }
+  & .seg > .seg-more:hover { background: var(--neutral-muted); }
   & .segrow { margin-bottom: 16px; }
   & .sbar { display: flex; gap: 8px; margin-bottom: 16px; }
   & .sbar .gfield { flex: 1; }

@@ -112,6 +112,25 @@ func TestBandPutsActiveAndMentionedTabsBehindTheSeparatorAndTheRestAsIcons(t *te
 	}
 }
 
+// A band can scroll: the row stands in a box with the fades and the "+n" mark at its
+// ends (ui-tabs.js fills them), and every tab carries its name for the tooltip it
+// gets when it shrinks to an icon.
+func TestBandHasABoxWithFadesAndAMoreMarkAndEveryTabNamesItself(t *testing.T) {
+	b := &bandView{Label: "repo.tabs", Tabs: []bandTab{
+		{Key: "code", Label: "repo.tab.code", Href: "/c", Icon: "code", Current: true},
+		{Key: "issues", Label: "repo.tab.issues", Href: "/i", Icon: "issue", Count: "9"},
+	}}
+	page := renderPart(t, langDE, "uiband", b)
+	for _, want := range []string{`<div class="utabs-box"><nav class="utabs-nav" data-fit`, `class="utabs-fade l" aria-hidden="true" hidden`, `class="utabs-fade r" hidden><button type="button" class="utabs-more" data-more>`, `href="/i" data-tip="Issues"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("band lacks %q: %s", want, page)
+		}
+	}
+	if strings.Index(page, `</nav>`) > strings.Index(page, `utabs-fade r`) || strings.Index(page, `utabs-fade r`) > strings.Index(page, `</div></div>`) {
+		t.Errorf("the fades stand behind the nav and inside the box: %s", page)
+	}
+}
+
 func TestOrgBandHasTheTabsOfAnOrganisation(t *testing.T) {
 	b := orgBand("/ui/acme", "agents", map[string]int{"repos": 5, "agents": 3}, true)
 	page := renderPart(t, langDE, "uiband", b)

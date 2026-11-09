@@ -1225,6 +1225,7 @@ var messages = map[string]string{
 	"ui.band.mentions_one":          "1 mention for you",
 	"ui.band.mentions":              "%d mentions for you",
 	"ui.band.icon_count":            "%[1]s, %[2]s",
+	"ui.band.more":                  "More: %s",
 	"ui.org.tabs":                   "Organization",
 	"ui.org.tab.repos":              "Repositories",
 	"ui.org.tab.agents":             "Agents",

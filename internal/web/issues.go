@@ -279,7 +279,17 @@ func (a *app) issuesPage(w http.ResponseWriter, r *http.Request) {
 		}
 		v.Segments = append(v.Segments, issueSegment{Kind: s.kind, Label: s.label, Count: strconv.Itoa(counts[s.kind]), Href: href(withQualifier(next, dropIs(isStates...), "is:open")), Current: s.kind == iq.Segment})
 	}
+	// The number beside a state tab is what the list behind it shows. While the
+	// search narrows the list down (text, label, author, ...) that is counted for
+	// each state with the same query, otherwise it is the whole of the project.
+	narrowed := iq.narrowed()
 	tab := func(icon, label, count, state string, on bool) {
+		if narrowed {
+			count = a.hitsInState(r, l, pa, project, iq, q, state, v.Base)
+		}
+		if count == "" {
+			count = "0"
+		}
 		v.Tabs = append(v.Tabs, issueStateTab{Icon: icon, Label: label, Count: count, Href: href(withQualifier(q, dropIs(isStates...), "is:"+state)), On: on})
 	}
 	closed := iq.State == "closed" || iq.State == "done" || iq.State == "dropped"
@@ -320,6 +330,35 @@ func (a *app) issuesPage(w http.ResponseWriter, r *http.Request) {
 	v.New, v.NewMenu = issueNewMenu(v.Base, iq.Segment)
 	a.rowActors(l, v.Rows)
 	a.renderBrowser(w, r, "issues", pageData{Title: l.msg("repo.tab.issues"), Project: project, IssuesV: v})
+}
+
+// narrowed says whether the search does more than pick a state.
+func (q issueQuery) narrowed() bool {
+	return q.Text != "" || q.Type != "" || q.Branch != "" || q.Priority != "" || q.Commit != "" || q.Label != "" || q.Author != "" || q.Status != "" || q.PR != 0
+}
+
+// hitsInState is the number of entries the list shows for the query in the
+// given state; "n+" when there are more than one page of them.
+func (a *app) hitsInState(r *http.Request, l lang, pa *store.ProjectAccess, project string, iq issueQuery, q, state, base string) string {
+	tmp := &issuesView{Base: base}
+	iq.State = state
+	var err error
+	switch iq.Segment {
+	case segPain:
+		err = a.issuePainRows(l, pa, project, iq, tmp)
+	case segIdea:
+		err = a.issueIdeaRows(l, pa, project, iq, tmp)
+	default:
+		err = a.issueRequestRows(r, pa, project, iq, "", q, tmp)
+	}
+	if err != nil {
+		return ""
+	}
+	n := strconv.Itoa(len(tmp.Rows))
+	if tmp.Older != "" {
+		n += "+"
+	}
+	return n
 }
 
 // issueNewMenu is the button for the segment on show and the other two in the

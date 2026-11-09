@@ -55,9 +55,22 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .rband { background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); font: 14px/1.5 var(--ui-font); color: var(--fg-default); }
 .rband.slim { padding-top: 8px; }
 .rband .wrap { display: flex; align-items: flex-end; gap: 16px; }
-.rband .utabs-nav { position: relative; flex: 1 1 auto; min-width: 0; }
-.rband .band-ext { align-self: center; margin-bottom: 4px; flex: none; }
-.utabs-nav.scroll { overflow-x: auto; scrollbar-width: none; }
+/* The row stands in a box. The nav inside is 12 px wider on each side (padding and
+   negative margin cancel out) and 1 px taller at the bottom, so that the folder card
+   of the open tab, its side shadow and its cover over the band line stay inside the
+   scrolling row and are not cut off. */
+.rband .utabs-box { position: relative; flex: 1 1 auto; min-width: 0; }
+.rband .utabs-nav { position: relative; margin: 0 -12px -1px; padding: 0 12px 1px; }
+.rband .band-ext { position: relative; z-index: 2; align-self: center; margin-bottom: 4px; flex: none; }
+.utabs-nav.scroll { overflow: auto hidden; scrollbar-width: none; overscroll-behavior-x: contain; }
+.utabs-nav.scroll::-webkit-scrollbar { display: none; }
+/* End of a scrolling row: a fade and, at the right, the number of tabs out of sight */
+.utabs-fade { position: absolute; z-index: 3; top: 0; bottom: 0; display: flex; align-items: center; width: 96px; pointer-events: none; }
+.utabs-fade[hidden] { display: none; }
+.utabs-fade.l { left: -12px; width: 40px; background: linear-gradient(to right, var(--canvas-subtle) 30%, transparent); }
+.utabs-fade.r { right: -12px; justify-content: flex-end; padding-right: 12px; background: linear-gradient(to left, var(--canvas-subtle) 60%, transparent); }
+.rband .utabs-more { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border: 1px solid var(--border-default); border-radius: 2em; background: var(--canvas-default); color: var(--fg-default); font: 600 12px/22px var(--ui-font); cursor: pointer; pointer-events: auto; }
+.rband .utabs-more:hover { background: var(--neutral-muted); }
 .utabs { display: flex; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .utabs li { position: relative; padding: 8px 0; flex: none; }
 .utabs li > a, .utabs li button { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; color: var(--fg-default); font-size: 14px; font-weight: 400; line-height: 30px; background: transparent; border: 0; border-radius: 6px; cursor: pointer; white-space: nowrap; }
@@ -70,12 +83,17 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .utabs li.tsep { align-self: center; width: 1px; height: 20px; padding: 0; margin: 0 2px; background: var(--border-default); }
 .utabs li.aux > a { color: var(--fg-muted); }
 .utabs li.aux.sel > a, .utabs li.aux.att > a { color: var(--fg-default); }
-.utabs li.icx > a { position: relative; gap: 4px; min-width: 36px; justify-content: center; padding: 0 8px; color: var(--fg-muted); }
-.utabs li.icx > a .i { color: inherit; }
-.utabs li.icx > a:hover, .utabs li.icx > a:focus-visible { color: var(--fg-default); }
-.utabs li.icx.att > a { color: var(--fg-default); }
-.utabs li.icx > a[data-tip]::after { content: attr(data-tip); display: none; position: absolute; z-index: 80; top: calc(100% + 2px); left: 50%; transform: translateX(-50%); padding: 4px 8px; border-radius: 6px; background: var(--fg-default); color: var(--canvas-default); font-size: 12px; font-weight: 500; line-height: 16px; white-space: nowrap; pointer-events: none; }
-.utabs li.icx > a[data-tip]:hover::after, .utabs li.icx > a[data-tip]:focus-visible::after { display: block; }
+.utabs li.icx > a, .utabs li.ico > a { position: relative; gap: 4px; min-width: 36px; justify-content: center; padding: 0 8px; color: var(--fg-muted); }
+.utabs li.icx > a .i, .utabs li.ico > a .i { color: inherit; }
+.utabs li.icx > a:hover, .utabs li.icx > a:focus-visible, .utabs li.ico > a:hover, .utabs li.ico > a:focus-visible { color: var(--fg-default); }
+.utabs li.icx.att > a, .utabs li.ico.att > a { color: var(--fg-default); }
+/* the name of an icon tab stays for screen readers and is shown by the tooltip (ui-tabs.js) */
+.utabs li.ico > a > .tl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* The label reserves the room of its bold form, so the neighbours do not move when a tab opens. */
+.tl { display: inline-flex; flex-direction: column; align-items: center; }
+.tl::after { content: attr(data-t); height: 0; overflow: hidden; visibility: hidden; font-weight: 600; white-space: nowrap; user-select: none; pointer-events: none; }
+.utip { position: fixed; z-index: 200; padding: 4px 8px; border-radius: 6px; background: var(--fg-default); color: var(--canvas-default); font: 500 12px/16px var(--ui-font); white-space: nowrap; pointer-events: none; }
+.utip[hidden] { display: none; }
 
 /* The active tab of a band is a borderless folder card: 2 px accent edge on top,
    elliptical corner radius, soft side shadow (light .07, dark .45) and a 6 px
@@ -100,8 +118,10 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .rband .utabs li.sel > a::before { right: calc(100% + 4px); border-bottom-right-radius: var(--fr); box-shadow: calc(var(--fr) / 2) calc(var(--fr) / 2) 0 calc(var(--fr) / 2) var(--canvas-default); clip-path: inset(0 calc(var(--fr) * -1) -1px 0); }
 .rband .utabs li.sel > a::after { left: calc(100% + 4px); border-bottom-left-radius: var(--fr); box-shadow: calc(var(--fr) / -2) calc(var(--fr) / 2) 0 calc(var(--fr) / 2) var(--canvas-default); clip-path: inset(0 0 -1px calc(var(--fr) * -1)); }
 
-/* Underlined tabs inside a page (write/preview of the composer, sub navigation) */
-.utabs-nav.plain .utabs li.sel::after, .cx-h .utabs li.sel::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; border-radius: 6px 6px 0 0; background: var(--tab-accent); }
+/* Tabs inside a page (write/preview of the composer, pull request, session): a small U
+   under the open tab, as wide as the tab, 2 px accent, the sides rise 6 px. It sits on
+   the line of the row and covers it. */
+.utabs-nav.plain .utabs li.sel::after, .cx-h .utabs li.sel::after, .subnav .utabs li.sel::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 8px; box-sizing: border-box; border: 2px solid var(--tab-accent); border-top: 0; border-radius: 0 0 6px 6px; pointer-events: none; }
 
 /* Footer */
 .gt-foot { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 16px; margin: 0; padding: 24px 20px 32px; border-top: 1px solid var(--border-muted); font: 12px/20px var(--ui-font); color: var(--fg-muted); }

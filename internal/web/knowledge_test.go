@@ -44,6 +44,21 @@ func knPost(t *testing.T, c *http.Client, base, page, action string, form url.Va
 	return sameOriginPostForm(t, c, base+action, form)
 }
 
+// The Knowledge tab of the band, the segment "Entries" and the list count the same
+// entries, proposals waiting for review among them.
+func TestKnowledgeTabSegmentAndListCountTheSameEntries(t *testing.T) {
+	e := ovEnv(t)
+	knInsert(t, e.St, store.Knowledge{Type: "pitfall", Title: "Counted one", Confidence: "verified"})
+	knInsert(t, e.St, store.Knowledge{Type: "decision", Title: "Counted two", Confidence: "trusted"})
+	knInsert(t, e.St, store.Knowledge{Type: "note", Title: "Counted three", Confidence: "staged"})
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/knowledge")
+	tab := regexp.MustCompile(`data-tab="knowledge"[^>]*>.*?<span class="counter">(\d+)</span>`).FindStringSubmatch(page)
+	seg := regexp.MustCompile(`data-seg="entries"[^>]*>.*?<span class="counter">(\d+)</span>`).FindStringSubmatch(page)
+	if tab == nil || seg == nil || tab[1] != seg[1] || tab[1] != "3" {
+		t.Errorf("tab %v and segment %v should both count the three entries", tab, seg)
+	}
+}
+
 func TestKnowledgeListShowsKindStatusExcerptAndFilters(t *testing.T) {
 	e := ovEnv(t)
 	knInsert(t, e.St, store.Knowledge{Type: "pitfall", Title: "WAL grows unbounded", Body: "First paragraph about the WAL.\n\n```go\nrows.Close()\n```\n\nSecond paragraph.", Confidence: "verified"})
