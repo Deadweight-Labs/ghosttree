@@ -51,6 +51,17 @@ func TestWriteSnapshots(t *testing.T) {
 			}
 		}
 	}
+	for _, sw := range []SwitchStyle{SwitchBar, SwitchRail} {
+		for _, bg := range backgrounds {
+			m := ready(newFake(), Options{Switch: sw}, 104, 30, bg.msg)
+			write("mode-"+sw.String()+"-project-"+bg.name, m.View().Content)
+			m = ready(newFake().inFolder("unknown"), Options{Switch: sw}, 104, 30, bg.msg)
+			write("mode-"+sw.String()+"-noproject-"+bg.name, m.View().Content)
+			m = ready(newFake(), Options{Switch: sw}, 104, 30, bg.msg)
+			m.setMode(modeInbox)
+			write("mode-"+sw.String()+"-inbox-"+bg.name, m.View().Content)
+		}
+	}
 	for _, bg := range backgrounds {
 		f := newFake().inFolder("unknown")
 		m := ready(f, Options{}, 104, 36, bg.msg)

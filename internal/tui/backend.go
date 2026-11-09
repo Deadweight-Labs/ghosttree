@@ -19,9 +19,9 @@ type Backend interface {
 
 	Resolve(ctx context.Context, input string) (links.Card, error)
 	Search(ctx context.Context, line string) ([]Item, error)
-	MyTasks(ctx context.Context) ([]Item, error)
-	OpenRequests(ctx context.Context) ([]Item, error)
-	Messages(ctx context.Context) ([]Item, error)
+	// List is one list of a mode: the project lists answer for the current
+	// folder's project, the inbox lists across every visible project.
+	List(ctx context.Context, kind ListKind) ([]Item, error)
 
 	// Open opens a web address in the browser of this machine when that is
 	// possible (no ssh, a display); why says what stood in the way.
@@ -106,6 +106,23 @@ func (e *ProblemError) Error() string {
 	}
 	return e.Detail
 }
+
+// ListKind names a list of the home screen.
+type ListKind int
+
+const (
+	// Project mode: everything about the current folder's project.
+	ListRequests     ListKind = iota // open requests
+	ListPains                        // open pains
+	ListProjectTasks                 // open human tasks of the project
+	ListRoom                         // unread messages in the project's room
+	// Inbox mode: what waits for the caller, across projects.
+	ListMyTasks     // human tasks for the caller
+	ListQuestions   // decisions and questions or approvals for people
+	ListUnread      // unread messages in the rooms of visible projects
+	ListSuggestions // gardener suggestions waiting for review
+	listKindCount
+)
 
 // Item is one row of a list or of search results. Ref is a short form that
 // Resolve understands (REQ-12, TASK-3, #4295, room:7 ...).

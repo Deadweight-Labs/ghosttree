@@ -112,6 +112,19 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   no longer listed for every project when the folder has none, and an
   unknown room reads as no messages.
 
+- The terminal interface has two working modes instead of one crowded
+  screen, switched with shift+tab and shown on a rail at the left (or in the
+  header line with `--switch bar`, `GHOSTTREE_TUI_SWITCH=bar` or f3).
+  Project: the folder's project with open requests, pains, tasks and room
+  messages, one list at a time (tab switches); without a project only the
+  "no project" state and its three actions. Inbox: what waits for you across
+  projects, each row with its project: your tasks, decisions and questions
+  or approvals for people, messages of the last seven days, and suggestions
+  to review when there are any; the switch shows a number once something
+  waits. The big logo only shows at the start and gives way to a compact
+  header line. Room messages are read through the search where this
+  terminal never joined the room, so reading never writes.
+
 #### Short ways between agent and human
 
 - Every answer about one object (issue, requirement, task, pain, idea, knowledge
