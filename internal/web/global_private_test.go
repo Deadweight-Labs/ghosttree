@@ -22,7 +22,7 @@ func TestGlobalEntriesAreHiddenFromEveryoneButTheirAuthorInTheWeb(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	pages := []string{"/ui", "/ui/knowledge", "/ui/requests", "/ui/knowledge/" + strconv.FormatInt(kid, 10), rqPath(d.Request.ID, "")}
+	pages := []string{"/ui", "/ui/knowledge", "/ui/search?q=private", "/ui/knowledge/" + strconv.FormatInt(kid, 10), rqPath(d.Request.ID, "")}
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest, "lead": e.Lead, "reviewer": e.Reviewer} {
 		for _, p := range pages {
 			_, page := fetchPage(t, c, e.Base+p)
@@ -41,8 +41,31 @@ func TestGlobalEntriesAreHiddenFromEveryoneButTheirAuthorInTheWeb(t *testing.T) 
 	if !strings.Contains(list, "Alices private lesson") {
 		t.Error("the author lost his entry")
 	}
-	_, reqs := fetchPage(t, e.Owner, e.Base+"/ui/requests")
+	_, reqs := fetchPage(t, e.Owner, e.Base+"/ui/search?q=private+wish")
 	if !strings.Contains(reqs, "Alices private wish") {
 		t.Error("the author lost his request")
+	}
+}
+
+// A request without a project has no repository: its page is the issue page on
+// the new base, without the repository band, with its actions under
+// /ui/requests/{id}, and without comments (a comment needs a project).
+func TestAnIssueWithoutAProjectUsesTheIssuePageWithoutARepository(t *testing.T) {
+	e := ovEnv(t)
+	d, err := e.St.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "Alices loose wish", Description: "No project yet.", Person: "alice"}, Criteria: []string{"One"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, page := fetchPage(t, e.Owner, e.Base+rqPath(d.Request.ID, ""))
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	for _, want := range []string{"Alices loose wish", "No project yet.", `class="dgrid"`, `action="/ui/requests/` + strconv.FormatInt(d.Request.ID, 10) + `/close"`, `href="/ui/requests/` + strconv.FormatInt(d.Request.ID, 10) + `?panel=edit#edit"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+	if strings.Contains(page, `class="rband`) || strings.Contains(page, `data-val="comment"`) || strings.Contains(page, "clay") {
+		t.Error("the page shows a repository band, a comment mode or the old surface")
 	}
 }

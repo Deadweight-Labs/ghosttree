@@ -177,7 +177,7 @@ func TestTheLastOwnerIsOfferedNeitherDemotionNorLeaving(t *testing.T) {
 func TestTheDefaultOrganisationIsMarkedByWhatItDoes(t *testing.T) {
 	base, _, alice, _, _ := orgWeb(t)
 	page := getOrgs(t, alice, base, "?org=alpha")
-	if !regexp.MustCompile(`<span class="adm-pill is-soft">For new projects</span>`).MatchString(page) {
+	if !regexp.MustCompile(`<span>For new projects</span><span class="ok">`).MatchString(page) {
 		t.Fatalf("the default badge is not explained: %s", page)
 	}
 	if regexp.MustCompile(`adm-pill is-soft">Default<`).MatchString(page) {

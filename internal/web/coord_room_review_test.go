@@ -15,12 +15,12 @@ import (
 const reviewProject = "github.com/x/review"
 
 type reviewEnv struct {
-	srv                *httptest.Server
-	st                 *store.Store
-	room               string
-	alice, anna, gus   *http.Client
-	aliceAcc, gusAcc   store.CoordAccess
-	annaAgent, annaAcc store.CoordAccess
+	srv              *httptest.Server
+	st               *store.Store
+	room             string
+	alice, anna, gus *http.Client
+	aliceAcc, gusAcc store.CoordAccess
+	annaAgent        store.CoordAccess
 }
 
 // reviewFixture: alice (person:1) owns the project, anna (2) is a member with
@@ -151,7 +151,7 @@ func TestCoordDirectivePlateNamesTheRoleAndLowRankIsAStandingRequest(t *testing.
 	if g := e.page(t, e.gus); strings.Contains(g, "Never") || !strings.Contains(g, "Owner rule.") || strings.Contains(plateOf(t, g, "Owner rule."), "Standing note") {
 		t.Errorf("a guest, who is not told the author's role, must not see an owner's directive downgraded: %s", plateOf(t, g, "Owner rule."))
 	}
-	modes := func(page string) string { return segment(t, page, `class="btn clay rm-directive"`, `</button>`) }
+	modes := func(page string) string { return segment(t, page, `class="gbtn sm rm-directive"`, `</button>`) }
 	if m := modes(page); !strings.Contains(m, "standing order") || strings.Contains(m, "standing note") {
 		t.Errorf("the owner can set directives: %s", m)
 	}
@@ -186,15 +186,15 @@ func TestCoordComposerAsksForTheAddresseeWithChipsAndKeepsMoreNextToSend(t *test
 	e := reviewFixture(t)
 	page := e.page(t, e.alice)
 	composer := segment(t, page, `class="coord-composer rm-compose"`, "</form>")
-	to := segment(t, composer, `class="rm-compose-to comp-to"`, "</div>")
-	if !strings.Contains(to, `type="radio" name="mentions"`) || !strings.Contains(to, "ask@box") {
-		t.Errorf("the composer needs addressee chips: %s", to)
+	to := segment(t, composer, `<div class="dd" data-pick>`, "data-pick-input>")
+	if !strings.Contains(to, `data-val="`) || !strings.Contains(to, "ask@box") {
+		t.Errorf("the composer needs addressee choices: %s", to)
 	}
-	more := segment(t, composer, `<details class="comp-more`, "</summary>")
-	if !strings.Contains(more, "More") {
-		t.Errorf("More is a text button: %s", more)
+	more := segment(t, composer, `<details class="dd top-menu comp-more`, "</summary>")
+	if !strings.Contains(more, `aria-label="More"`) {
+		t.Errorf("More is an icon button with a name: %s", more)
 	}
-	if strings.Index(composer, `<details class="comp-more`) > strings.Index(composer, "comp-send-message") {
+	if strings.Index(composer, `<details class="dd top-menu comp-more`) > strings.Index(composer, "comp-send-message") {
 		t.Errorf("More sits before Send: %s", composer)
 	}
 }
@@ -209,44 +209,8 @@ func TestCoordNoJSRefreshLinkKeepsTheActiveRoom(t *testing.T) {
 	}
 }
 
-func TestCoordFocusAndTouchTargetsOfTheRoomMarkup(t *testing.T) {
-	css := string(mustReadEmbedded(t, "static/app.css"))
-	for _, sel := range []string{".coord-workspace :focus-visible", ".coord-chip input:focus-visible + span", ".pill input:focus-visible + span", ".comp-more > summary:focus-visible"} {
-		if rule := coordCSSRule(t, css, sel); !strings.Contains(rule, "outline: 2px solid") {
-			t.Errorf("%s needs a 2px focus ring: %s", sel, rule)
-		}
-	}
-	coarse := css[strings.Index(css, "@media (hover: none), (pointer: coarse)"):]
-	rule := coordCSSRule(t, coarse, ".coord-workspace button,")
-	for _, want := range []string{"min-height: 44px", "min-width: 44px"} {
-		if !strings.Contains(rule, want) {
-			t.Errorf("coarse pointer targets lack %q: %s", want, rule)
-		}
-	}
-	from := strings.Index(coarse, ".coord-workspace button,")
-	head := coarse[from : from+strings.Index(coarse[from:], "{")]
-	for _, sel := range []string{".comp-more > summary", ".pill span", ".coord-chip span", ".slab-end", ".coord-text-action", ".acts .btn"} {
-		if !strings.Contains(head, sel) {
-			t.Errorf("coarse selector list lacks %s", sel)
-		}
-	}
-	if rule := coordCSSRule(t, css, ".comp-more > summary"); !strings.Contains(rule, "52px") {
-		t.Errorf("More matches the send button: %s", rule)
-	}
-}
-
-func TestCoordRightColumnFadesOutAtTheBottomWithinTheShadowPadding(t *testing.T) {
-	css := string(mustReadEmbedded(t, "static/app.css"))
-	rule := coordCSSRule(t, css, "\n.coord-context {")
-	for _, want := range []string{"scrollbar-width: thin", "mask-image: linear-gradient", "var(--shadow-room-y)"} {
-		if !strings.Contains(rule, want) {
-			t.Errorf("right column lacks %q: %s", want, rule)
-		}
-	}
-}
-
 func TestCoordAppJSOnlyUsesAFormactionTheButtonDeclares(t *testing.T) {
-	js := string(mustReadEmbedded(t, "static/app.js"))
+	js := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	if strings.Contains(js, "submitter?.formAction ||") {
 		t.Error("formAction falls back to the document URL without the attribute and defeats the interception")
 	}

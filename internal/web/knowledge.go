@@ -69,15 +69,41 @@ type KnowledgeRow struct {
 	Source                   string
 	// Old: the entry has waited a week or more for its decision.
 	Old bool
+	// Num is the number of the entry, Person who wrote it, Area the main area of
+	// its origin, Anchor "sha@branch" of the git state it was written at.
+	Num          int64
+	Person, Area string
+	Anchor       string
+	// Stamp is the time of the entry as RFC 3339, for the relative time tag.
+	Stamp string
+	// Tone is the colour class of the type label.
+	Tone string
+}
+
+// knowledgeTones colours the type label of an entry in the list and on the page.
+var knowledgeTones = map[string]string{"pitfall": "warn", "decision": "acc", "note": "neu", "plan": "don", "instruction": "ok"}
+
+// knSeg is one entry of the segment "Entries | Review | Agent context".
+type knSeg struct {
+	Kind, Label, Href, Count string
+	Current                  bool
+}
+
+// knTab is one type tab of the list head: "All 48", "Pitfall 12".
+type knTab struct {
+	Label, Href, Count string
+	Current            bool
 }
 
 type knowledgeView struct {
 	Q, Type, Level, Project string
-	Selects                 []filterSelect
 	Rows                    []KnowledgeRow
 	Guest, Reviewer         bool
 	Empty, NoMatch          bool
 	ClearHref               string
+	Segs                    []knSeg
+	Tabs                    []knTab
+	Menus                   []issueMenu
 }
 
 type evidenceRow struct {
@@ -87,6 +113,8 @@ type evidenceRow struct {
 type historyRow struct {
 	Title, By, ReplacedBy, Age string
 	Blocks                     []bodyBlock
+	// Sha and Branch are the git anchor the version had while it held.
+	Sha, Branch string
 }
 
 // closureRow says how and why an entry left circulation: the label (retired,
@@ -157,6 +185,12 @@ type reviewView struct {
 	// Garden is the gardener's morning report; OnlyGarden narrows the page to it.
 	Garden     *gardenView
 	OnlyGarden bool
+	// Rows are notes and proposals as one list; Tabs and Segs the tabs of its head
+	// and the segment above it; Source is the tab that is open ("", gardener, agents).
+	Rows   []rvRow
+	Tabs   []knTab
+	Segs   []knSeg
+	Source string
 }
 
 type knowledgeItemView struct {
@@ -175,6 +209,12 @@ type knowledgeItemView struct {
 	Closure *closureRow
 	// Pains are the pains this entry motivates, as far as the viewer may read them.
 	Pains []requestPainLine
+	// The page of the new look: revisions, timeline and the side column.
+	Revs     []knRevision
+	Timeline []tlItem
+	Side     knSide
+	// Panel names the form that is open ("move"), from ?panel=.
+	Panel string
 }
 
 // ----------------------------------------------------------------- Textblöcke
@@ -294,6 +334,16 @@ func (a *app) knowledgeRowFor(l lang, pa *store.ProjectAccess, raw store.Knowled
 		Type: k.Type, TypeLabel: typeLabel(l, k.Type), Level: k.Confidence, LevelLabel: levelLabel(l, k.Confidence), LevelTitle: levelTitle(l, k.Confidence), TypeTitle: typeLabel(l, k.Type),
 		Stale: k.Status == "stale", Excerpt: excerpt(k.Body), Age: shortAge(l, overviewNow().UTC(), parseTime(firstNonEmpty(k.ObservedAt, k.CreatedAt))),
 		Old: olderThan(firstNonEmpty(k.ObservedAt, k.CreatedAt), overviewNow().UTC(), reviewOldAfter),
+		Num: k.ID, Person: k.Person, Tone: knowledgeTones[k.Type], Stamp: firstNonEmpty(k.ObservedAt, k.CreatedAt),
+	}
+	if k.OriginContext != nil {
+		row.Area = k.OriginContext.Main()
+	}
+	if k.GitAnchor != nil && !k.GitAnchor.IsZero() {
+		row.Anchor = shortSha(k.GitAnchor.Commit)
+		if k.GitAnchor.Branch != "" {
+			row.Anchor += "@" + k.GitAnchor.Branch
+		}
 	}
 	if withProject && k.Scope.Project != "" {
 		row.Project = path.Base(k.Scope.Project)
@@ -392,6 +442,7 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	typ, level := r.URL.Query().Get("type"), r.URL.Query().Get("level")
+	area, author := r.URL.Query().Get("area"), r.URL.Query().Get("author")
 	if !slices.Contains(knowledgeTypes, typ) {
 		typ = ""
 	}
@@ -399,50 +450,153 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 		level = ""
 	}
 	project := a.projectParam(r)
+	r = a.repoScoped(r, project, "knowledge")
 	pa := a.access(r)
 	hidden, stop := a.gateList(w, r, pa, project, store.ResKnowledge)
 	if stop {
 		return
 	}
-	readable := func(k store.Knowledge) bool {
-		return pa.CanSeeKnowledge(k) && (k.Status == "active" || k.Status == "stale") &&
-			(typ == "" || k.Type == typ) && (level == "" || k.Confidence == level)
+	live := func(k store.Knowledge) bool {
+		return pa.CanSeeKnowledge(k) && (k.Status == "active" || k.Status == "stale")
 	}
-	var entries []store.Knowledge
-	var err error
-	if hidden {
-		// Wie ein unbekanntes Projekt: keine Abfrage, leere Liste.
-	} else if q != "" {
-		entries, err = a.store.SearchKnowledgeWith(q, store.KnowledgeSearch{
-			Axes: scope.Axes{Project: project}, Operator: true,
-			Limit: a.overfetch(knowledgeShown), Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
-		})
-	} else {
-		entries, err = a.store.BrowseKnowledge(project, typ, level, a.overfetch(knowledgeShown), pa.Viewer())
+	fetch := func(typ, level string) ([]store.Knowledge, error) {
+		if hidden {
+			// Wie ein unbekanntes Projekt: keine Abfrage, leere Liste.
+			return nil, nil
+		}
+		keepFn := func(k store.Knowledge) bool {
+			return live(k) && (typ == "" || k.Type == typ) && (level == "" || k.Confidence == level)
+		}
+		var found []store.Knowledge
+		var err error
+		if q != "" {
+			found, err = a.store.SearchKnowledgeWith(q, store.KnowledgeSearch{
+				Axes: scope.Axes{Project: project}, Operator: true,
+				Limit: a.overfetch(knowledgeShown), Viewer: pa.Viewer(), Keep: keepFn, Prefilter: pa.KnowledgePrefilter(),
+			})
+		} else {
+			found, err = a.store.BrowseKnowledge(project, typ, level, a.overfetch(knowledgeShown), pa.Viewer())
+		}
+		return keep(found, knowledgeShown, keepFn), err
 	}
+	all, err := fetch("", "")
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	entries = keep(entries, knowledgeShown, readable)
+	entries := all
+	if typ != "" || level != "" {
+		if entries, err = fetch(typ, level); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
 	who := a.shellBaseFor(r).who
 	v := &knowledgeView{Q: q, Type: typ, Level: level, Project: project, Guest: who.kind == viewerGuest, Reviewer: who.reviewer}
+	rows := make([]KnowledgeRow, 0, len(entries))
+	// The list read does not carry the git anchor and the origin; the entry read does.
+	enrich := func(k store.Knowledge) store.Knowledge {
+		if full, err := a.store.KnowledgeByID(k.ID); err == nil {
+			k.GitAnchor, k.OriginContext = full.GitAnchor, full.OriginContext
+		}
+		return k
+	}
 	for _, k := range entries {
-		v.Rows = append(v.Rows, a.knowledgeRowFor(l, pa, k, project == ""))
+		rows = append(rows, a.knowledgeRowFor(l, pa, enrich(k), project == ""))
 	}
-	typeSel := filterSelect{Name: "type", Label: l.msg("knowledge.all_types"), Options: typeOptions(l, typ)}
-	levelSel := filterSelect{Name: "level", Label: l.msg("knowledge.all_levels")}
+	allRows := rows
+	if typ != "" || level != "" {
+		allRows = allRows[:0:0]
+		for _, k := range all {
+			allRows = append(allRows, a.knowledgeRowFor(l, pa, enrich(k), project == ""))
+		}
+	}
+	// Bereich und Autor wählen aus dem, was die Liste kennt.
+	var areas, authors []string
+	for _, row := range allRows {
+		if row.Area != "" && !slices.Contains(areas, row.Area) {
+			areas = append(areas, row.Area)
+		}
+		if row.Person != "" && !slices.Contains(authors, row.Person) {
+			authors = append(authors, row.Person)
+		}
+	}
+	slices.Sort(areas)
+	slices.Sort(authors)
+	for _, row := range rows {
+		if (area == "" || row.Area == area) && (author == "" || row.Person == author) {
+			v.Rows = append(v.Rows, row)
+		}
+	}
+	// Tabs: every type with its count among the entries the page knows.
+	counts := map[string]int{}
+	for _, row := range allRows {
+		counts[row.Type]++
+	}
+	v.Tabs = append(v.Tabs, knTab{Label: l.msg("knowledge.tab.all"), Href: withQuery(r, map[string]string{"type": ""}), Count: countText(len(allRows)), Current: typ == ""})
+	for _, t := range knowledgeTypes {
+		v.Tabs = append(v.Tabs, knTab{Label: typeLabel(l, t), Href: withQuery(r, map[string]string{"type": t}), Count: countText(counts[t]), Current: typ == t})
+	}
+	status := issueMenu{Label: l.msg("knowledge.menu.level"), Active: level != ""}
+	status.Items = append(status.Items, issueMenuItem{Label: l.msg("knowledge.all_levels"), Href: withQuery(r, map[string]string{"level": ""}), Current: level == ""})
 	for _, lv := range knowledgeLevel {
-		levelSel.Options = append(levelSel.Options, filterOption{Value: lv, Label: levelLabel(l, lv), Selected: lv == level})
+		status.Items = append(status.Items, issueMenuItem{Label: levelLabel(l, lv), Href: withQuery(r, map[string]string{"level": lv}), Current: level == lv})
 	}
-	v.Selects = []filterSelect{typeSel, levelSel}
-	filtered := q != "" || typ != "" || level != ""
+	v.Menus = append(v.Menus, status)
+	if len(areas) > 0 {
+		m := issueMenu{Label: l.msg("knowledge.menu.area"), Active: area != ""}
+		m.Items = append(m.Items, issueMenuItem{Label: l.msg("knowledge.menu.any_area"), Href: withQuery(r, map[string]string{"area": ""}), Current: area == ""})
+		for _, name := range areas {
+			m.Items = append(m.Items, issueMenuItem{Label: name, Href: withQuery(r, map[string]string{"area": name}), Current: area == name})
+		}
+		v.Menus = append(v.Menus, m)
+	}
+	if len(authors) > 0 {
+		m := issueMenu{Label: l.msg("knowledge.menu.author"), Active: author != ""}
+		m.Items = append(m.Items, issueMenuItem{Label: l.msg("knowledge.menu.any_author"), Href: withQuery(r, map[string]string{"author": ""}), Current: author == ""})
+		for _, name := range authors {
+			m.Items = append(m.Items, issueMenuItem{Label: name, Href: withQuery(r, map[string]string{"author": name}), Current: author == name})
+		}
+		v.Menus = append(v.Menus, m)
+	}
+	filtered := q != "" || typ != "" || level != "" || area != "" || author != ""
 	v.Empty, v.NoMatch = len(v.Rows) == 0 && !filtered, len(v.Rows) == 0 && filtered
-	v.ClearHref = "/ui/knowledge"
-	if project != "" {
-		v.ClearHref += "?project=" + url.QueryEscape(project)
-	}
+	v.ClearHref = knowledgeBase(r, project)
+	v.Segs = a.knowledgeSegs(r, pa, l, project, "entries", countText(len(allRows)))
 	a.renderBrowser(w, r, "knowledge", pageData{Title: l.msg("nav.knowledge"), Project: project, KnowledgeV: v})
+}
+
+// knowledgeBase is the address of the entry list: in the repository path when the
+// page stands in one, else with the project as query.
+func knowledgeBase(r *http.Request, project string) string {
+	return knowledgeSub(r, project, "/ui/knowledge", "/knowledge")
+}
+
+func knowledgeSub(r *http.Request, project, global, sub string) string {
+	if rv := repoFrom(r); rv != nil {
+		return rv.Href + sub
+	}
+	return pathWith(global, "project", project)
+}
+
+// knowledgeSegs is the segment above the three knowledge pages. The count of the
+// entries comes from the caller (it already has them); the number waiting for
+// review is the one the viewer may see.
+func (a *app) knowledgeSegs(r *http.Request, pa *store.ProjectAccess, l lang, project, current, entries string) []knSeg {
+	// Only who may review has the other two pages; for everyone else the list stands alone.
+	if !a.shellBaseFor(r).who.reviewer {
+		return nil
+	}
+	pending := countText(a.pendingFor(pa, project))
+	segs := []knSeg{
+		{Kind: "entries", Label: l.msg("knowledge.seg.entries"), Href: knowledgeBase(r, project), Count: entries},
+		{Kind: "review", Label: l.msg("knowledge.seg.review"), Href: knowledgeSub(r, project, "/ui/review", "/review"), Count: pending},
+		{Kind: "context", Label: l.msg("knowledge.seg.context"), Href: knowledgeSub(r, project, "/ui/context", "/context")},
+	}
+	for i := range segs {
+		segs[i].Current = segs[i].Kind == current
+	}
+	return segs
 }
 
 // --------------------------------------------------------------------- Detail
@@ -501,6 +655,7 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	r = a.repoScoped(r, k.Scope.Project, "knowledge")
 	pa := a.access(r)
 	card := a.cardFor(r, pa, k, true, 0, "item", "")
 	v := &knowledgeItemView{Card: card, Types: typeOptions(l, k.Type), Back: "/ui/knowledge", EditOpen: card.CanEdit && r.URL.Query().Get("edit") == "1"}
@@ -536,10 +691,16 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 			if unchanged || len(v.History) >= historyShown {
 				continue
 			}
-			v.History = append(v.History, historyRow{Title: h.Title, By: by, ReplacedBy: h.ChangedBy, Age: shortAge(l, now, parseTime(h.ChangedAt)), Blocks: bodyBlocks(h.Body, 0)})
+			row := historyRow{Title: h.Title, By: by, ReplacedBy: h.ChangedBy, Age: shortAge(l, now, parseTime(h.ChangedAt)), Blocks: bodyBlocks(h.Body, 0)}
+			if h.GitAnchor != nil && !h.GitAnchor.IsZero() {
+				row.Sha, row.Branch = h.GitAnchor.Short(), pa.BranchView(k.Scope.Project, h.GitAnchor.Branch)
+			}
+			v.History = append(v.History, row)
 		}
 	}
 	v.Result = a.resultFor(r, pa, "item", "")
+	v.Panel = r.URL.Query().Get("panel")
+	a.fillKnowledgeItem(l, pa.KnowledgeView(k), v)
 	a.renderBrowser(w, r, "knowledgeitem", pageData{Title: k.Title, KnowledgeItemV: v})
 }
 
@@ -607,6 +768,7 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	pa := a.access(r)
 	project := a.projectParam(r)
+	r = a.repoScoped(r, project, "knowledge")
 	hidden, stop := a.gateList(w, r, pa, project, store.ResKnowledge)
 	if stop {
 		return
@@ -636,9 +798,14 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	entries = rest
-	v.OnlyGarden = r.URL.Query().Get("source") == "gardener"
+	gardenN, agentN := len(notes), len(entries)
+	v.Source = r.URL.Query().Get("source")
+	v.OnlyGarden = v.Source == "gardener"
 	if v.OnlyGarden {
 		entries = nil
+	}
+	if v.Source == "agents" {
+		notes = nil
 	}
 	// Oldest first: what has waited longest is on top of its project.
 	slices.SortStableFunc(entries, func(x, y store.Knowledge) int {
@@ -674,6 +841,9 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	slices.SortStableFunc(v.Groups, func(x, y reviewGroup) int { return strings.Compare(x.Label, y.Label) })
 	v.Titled = len(v.Groups) > 1 || project == ""
 	v.Empty = len(v.Cards) == 0 && v.Garden == nil
+	v.Rows = reviewRows(l, v.Garden, v.Cards)
+	v.Tabs = reviewTabs(r, l, gardenN, agentN, v.Source)
+	v.Segs = a.knowledgeSegs(r, pa, l, project, "review", a.knowledgeCountText(pa, project))
 	a.renderBrowser(w, r, "review", pageData{Title: l.msg("nav.review"), Project: project, ReviewV: v})
 }
 

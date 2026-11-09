@@ -117,8 +117,9 @@ func TestAMemberReadsAgentsAsToolOwnerAndSeesWhoIsInTheProject(t *testing.T) {
 	if strings.Contains(page, `name="mentions" value="person:3"`) {
 		t.Error("a listed-only person is offered as a recipient")
 	}
-	agents := visibleText(namesGet(t, srv, st, "Mia", "/ui/agents"))
-	if !strings.Contains(agents, "Claude · Robin") || rawIDRE.MatchString(agents) {
+	agentsPage := namesGet(t, srv, st, "Mia", "/ui/agents")
+	agents := visibleText(agentsPage)
+	if !strings.Contains(agentsPage, `title="Claude · Robin`) || !strings.Contains(strings.ToLower(agents), "claude") || rawIDRE.MatchString(agents) {
 		t.Errorf("agents page: %s", agents)
 	}
 }

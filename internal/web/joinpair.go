@@ -243,3 +243,8 @@ func (a *app) joinPairDecide(w http.ResponseWriter, r *http.Request) {
 		a.joinPairMessage(l, w, http.StatusInternalServerError, l.msg("join.msg_setup_t"), l.msg("join.msg_setup"))
 	}
 }
+
+// Cmd is the command of the pairing for the block with the tabs of the two systems.
+func (v joinPairView) Cmd() cmdBlock {
+	return cmdBlock{ID: "join-cmd", Mac: v.Command, Linux: v.Command}
+}

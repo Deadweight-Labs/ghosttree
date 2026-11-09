@@ -26,10 +26,13 @@ func (a *app) inboxAnswer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
-	res, err := a.access(r).QuickAnswer(a.browserCoord(r), store.QuickAnswerInput{Kind: r.FormValue("kind"), ID: id, Option: r.FormValue("option")})
+	res, err := a.access(r).QuickAnswer(a.browserCoord(r), store.QuickAnswerInput{Kind: r.FormValue("kind"), ID: id, Option: r.FormValue("option"), Reason: r.FormValue("reason")})
 	if err != nil {
 		var rule *requestdomain.RuleError
 		switch {
+		case errors.As(err, &rule) && r.FormValue("kind") == store.AnswerOnDecision && r.FormValue("next") != "":
+			// A composer without script: back to the inbox with the reason in a line.
+			inboxFailRedirect(w, r, decisionFailCode(rule.ErrorCode))
 		case errors.As(err, &rule):
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)

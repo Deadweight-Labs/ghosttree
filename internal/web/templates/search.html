@@ -1,0 +1,14 @@
+{{define "search"}}{{template "head" .}}{{template "nav" .}}<main class="g2 sr"><div class="wrap">
+{{with .SearchV}}<form class="sform" method="get" action="/ui/search" role="search"><label class="gfield mono-in">{{mi "search"}}<input type="search" name="q" value="{{.Q}}" minlength="2" autofocus placeholder="{{t "search.placeholder"}}" aria-label="{{t "search.label"}}" autocomplete="off" spellcheck="false"></label><button class="gbtn pri">{{t "knowledge.search"}}</button></form>
+{{if .CanSave}}<details class="save-s"><summary class="gbtn sm">{{t "issues.save_search"}}</summary><form class="save-f" method="post" action="/ui/searches"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="project" value="{{.Project}}"><input type="hidden" name="q" value="{{.Q}}"><input class="gfield" name="name" maxlength="80" required placeholder="{{t "issues.save_name"}}" aria-label="{{t "issues.save_name"}}" autocomplete="off"><button class="gbtn pri sm">{{t "issues.save_do"}}</button></form></details>{{end}}
+{{if .Groups}}<div class="slayout"><aside>
+<section class="box facets" aria-labelledby="kinds-h"><div class="box-h"><h2 class="t" id="kinds-h">{{t "search.kinds"}}</h2></div>
+<a class="frow{{if not .Kind}} on{{end}}" href="{{.AllHref}}">{{mi "list"}}<span class="nm">{{t "search.kind_all"}}</span></a>
+{{range .Groups}}<a class="frow{{if eq .Key $.SearchV.Kind}} on{{end}}" href="{{.Href}}">{{mi .Mark}}<span class="nm">{{.Label}}</span><span class="counter">{{.Shown}}</span></a>{{end}}</section>
+{{if .Presets}}<section class="box facets" aria-labelledby="sv-h"><div class="box-h"><h2 class="t" id="sv-h">{{t "issues.saved"}}</h2></div>{{range .Presets}}<a class="frow" href="{{.Href}}">{{mi "filter"}}<span class="nm">{{.Name}}</span></a>{{end}}</section>{{end}}
+</aside>
+<div class="box hits">{{range .Groups}}{{if or (not $.SearchV.Kind) (eq .Key $.SearchV.Kind)}}{{$g := .}}<div class="box-h"><h2 class="t">{{.Label}}</h2>{{if .All}}<span class="sp"></span><a href="{{.All}}">{{t "search.all"}}</a>{{end}}</div>
+{{range .Hits}}<div class="hit"><span class="hm">{{mi $g.Mark}}</span><div><a class="ht" href="{{.Href}}">{{.Title}}</a>{{if .Sub}}<div class="hs">{{.Sub}}</div>{{end}}</div></div>
+{{end}}{{end}}{{end}}</div></div>
+{{else if .Searched}}<div class="box"><div class="box-empty"><span>{{t "search.none"}}</span></div></div>{{end}}
+{{end}}</div>{{template "foot" .}}{{end}}

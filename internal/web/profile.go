@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -12,7 +13,14 @@ type profileView struct {
 	Name   string
 	Notice string
 	Locked bool // guests cannot rename themselves
+	// Agents are the agents of this account, by machine.
+	Agents     []agentGroup
+	AgentCount int
+	// Devices are the device tokens of the account, newest contact first.
+	Devices []profileDevice
 }
+
+type profileDevice struct{ Name, Seen string }
 
 // profilePage shows the account's display name and, in an interactive session,
 // the form to change it.
@@ -32,6 +40,26 @@ func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, 
 	v := profileView{Name: acct.Name, Locked: a.store.NameLocked(me.ID)}
 	if typed != "" {
 		v.Name = typed
+	}
+	if who := a.shellBaseFor(r).who; who.kind != viewerGuest {
+		v.Agents = a.ownAgentGroups(r, acct.Name)
+		for _, g := range v.Agents {
+			v.AgentCount += len(g.Cards)
+		}
+		if tokens, err := a.deviceTokens(r); err == nil {
+			now := overviewNow().UTC()
+			for _, t := range tokens {
+				name := t.Label
+				if name == "" {
+					name = t.Machine
+				}
+				at := parseTime(t.LastUsedAt)
+				if at.IsZero() {
+					at = parseTime(t.CreatedAt)
+				}
+				v.Devices = append(v.Devices, profileDevice{Name: name, Seen: shortAgo(l, now, at)})
+			}
+		}
 	}
 	if r.URL.Query().Get("notice") == "saved" {
 		v.Notice = l.msg("profile.saved")
@@ -63,4 +91,26 @@ func (a *app) profileSave(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, l.msg("adm.err.generic"), http.StatusInternalServerError)
 	}
+}
+
+// ownAgentGroups are the agents that run for this account, whatever project they
+// work at, by machine.
+func (a *app) ownAgentGroups(r *http.Request, name string) []agentGroup {
+	pa := a.access(r)
+	now := overviewNow().UTC()
+	rows, err := a.listAgents(r, pa, "", now, agentsMax*4)
+	if err != nil {
+		return nil
+	}
+	var own []agentRow
+	for _, row := range rows {
+		if strings.EqualFold(row.Owner, name) {
+			own = append(own, row)
+		}
+	}
+	cards, err := a.agentCards(r, pa, own, now)
+	if err != nil {
+		return nil
+	}
+	return groupAgents(cards, nil)
 }

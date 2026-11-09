@@ -1,0 +1,92 @@
+/* The workshop on the page of an idea: progress, summary, concept, today versus wanted,
+   and the open questions whose variants stand side by side. A choice is a radio card; the
+   chosen one carries the green edge. */
+
+:is(.g2) {
+  & .ws { margin-top: 16px; }
+  & .ws .box-h .lb { font-size: 12px; font-weight: 500; }
+  & .ws .wsteps { display: flex; flex-wrap: wrap; gap: 4px 0; margin: 0; padding: 12px 16px; list-style: none; border-bottom: 1px solid var(--border-muted); }
+  & .ws .wsteps li { display: inline-flex; align-items: center; gap: 8px; margin-right: 8px; font-size: 13px; color: var(--fg-muted); }
+  & .ws .wsteps li + li::before { content: ""; width: 20px; height: 1px; margin-right: 0; background: var(--border-default); }
+  & .ws .wsteps .wdot { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; border: 1px solid var(--border-default); border-radius: 50%; color: #fff; }
+  & .ws .wsteps .wdot .i { width: 10px; height: 10px; stroke-width: 2.4; }
+  & .ws .wsteps .done .wdot { background: var(--success-emphasis); border-color: var(--success-emphasis); }
+  & .ws .wsteps .cur { color: var(--fg-default); font-weight: 600; }
+  & .ws .wsteps .cur .wdot { border-color: var(--accent-fg); box-shadow: inset 0 0 0 4px var(--accent-fg); }
+  & .ws .ws-sec + .ws-sec, & .ws .ws-dec { border-top: 1px solid var(--border-muted); }
+  & .ws .ws-sec, & .ws .ws-dec { padding: 12px 16px; }
+  & .ws .ws-k { margin-bottom: 8px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .ws .ws-k .i { vertical-align: -3px; }
+  & .ws .ws-meta { display: inline-flex; gap: 4px; margin-left: 4px; font-weight: 400; color: var(--fg-muted); }
+  & .ws .prose { font-size: 14px; line-height: 1.5; }
+  & .ws .prose .kn-body p { margin: 0 0 8px; }
+  & .ws .ws-cs + .ws-cs { margin-top: 12px; }
+  & .ws .ws-cs h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+  & .ws .ws-req { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+  & .ws .ws-req li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px; align-items: start; font-size: 14px; }
+  & .ws .ws-rn { color: var(--fg-muted); font-size: 12px; line-height: 20px; text-align: right; font-variant-numeric: tabular-nums; }
+  & .ws .ws-rn::after { content: "."; }
+  & .ws .ws-rs { font-size: 12px; line-height: 20px; color: var(--fg-muted); white-space: nowrap; }
+  & .ws .ws-rs.ok { color: var(--success-fg); }
+  & .ws .ws-rs.warn { color: var(--attention-fg); }
+
+  /* today versus wanted */
+  & .ws .ws-cmp { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  & .ws .ws-cmp + .ws-cmp { margin-top: 12px; }
+  & .ws .ws-side { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; font-size: 14px; }
+  & .ws .ws-side p { margin: 0; line-height: 1.5; }
+  & .ws .ws-side .title { font-weight: 600; }
+  & .ws .ws-side .title .i { margin-right: 4px; color: var(--done-fg); vertical-align: -3px; }
+  & .ws .ws-want { background: var(--accent-subtle); border-color: var(--accent-muted); }
+  & .ws .ws-kk { font-size: 12px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .04em; }
+
+  /* an open question */
+  & .ws .ws-dh { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  & .ws .ws-dh h3 { margin: 0; min-width: 0; flex: 1 1 16rem; font-size: 14px; font-weight: 600; line-height: 20px; overflow-wrap: anywhere; }
+  & .ws .ws-dd { margin-top: 8px; color: var(--fg-muted); }
+  & .ws .ws-vars { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; align-items: stretch; }
+  & .ws .ws-var { position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; font-size: 14px; }
+  & .ws label.ws-var { cursor: pointer; }
+  & .ws label.ws-var:hover { background: var(--row-hover); }
+  & .ws label.ws-var:has(input:checked) { border-color: var(--accent-fg); box-shadow: 0 0 0 1px var(--accent-fg); background: var(--accent-subtle); }
+  & .ws label.ws-var:has(input:focus-visible) { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
+  & .ws .ws-var input[type=radio] { position: absolute; top: 14px; right: 12px; margin: 0; accent-color: var(--accent-fg); }
+  & .ws .ws-var.chosen { border-color: var(--success-emphasis); box-shadow: 0 0 0 1px var(--success-emphasis); }
+  & .ws .ws-vh { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding-right: 24px; }
+  & .ws .ws-vl { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none; border-radius: 50%; background: var(--neutral-muted); font-size: 12px; font-weight: 600; align-self: center; }
+  & .ws .ws-vt { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+  & .ws .ws-chosen { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+  & .ws .ws-chosen .i { width: 12px; height: 12px; }
+  & .ws .ws-vb { color: var(--fg-default); }
+  & .ws .ws-pc { padding: 6px 8px; border-radius: 6px; font-size: 13px; }
+  & .ws .ws-pc .kn-body p { margin: 0; }
+  & .ws .ws-pk { display: flex; align-items: center; gap: 4px; margin-bottom: 2px; font-size: 12px; font-weight: 600; }
+  & .ws .ws-pk .i { width: 12px; height: 12px; }
+  & .ws .ws-pro { background: var(--success-subtle); }
+  & .ws .ws-pro .ws-pk { color: var(--success-fg); }
+  & .ws .ws-con { background: var(--danger-subtle); }
+  & .ws .ws-con .ws-pk { color: var(--danger-fg); }
+  & .ws .ws-votes { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: auto; padding-top: 4px; font-size: 12px; }
+  & .ws .ws-vote { display: inline-flex; }
+  & .ws .ws-vote .gav { width: 20px; height: 20px; font-size: 10px; }
+  & .ws .ws-form { display: flex; flex-direction: column; gap: 8px; }
+  & .ws .ws-row .gfield { width: 100%; }
+  & .ws .ws-row textarea.gfield { min-height: 4.5rem; padding: 8px 12px; font: 400 14px/1.5 var(--ui-font); }
+  & .ws .ws-own > summary { display: inline-flex; cursor: pointer; font-size: 13px; color: var(--accent-fg); }
+  & .ws .ws-own textarea { display: block; width: 100%; margin-top: 8px; padding: 8px 12px; font: 400 14px/1.5 var(--ui-font); }
+  & .ws .ws-act { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+  & .ws .ws-act .gbtn .i { margin-right: 4px; }
+  & .ws .ws-out { margin: 12px 0 0; font-size: 14px; }
+  & .ws .ws-reopen { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  & .ws .ws-reopen .gfield { flex: 1 1 14rem; height: 28px; font-size: 13px; }
+  & .ws .ws-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--border-default); background: var(--canvas-subtle); }
+  & .ws .ws-foot form { margin: 0; }
+  & .ws .ws-foot .gbtn .i { margin-right: 4px; }
+  & .ws .ws-dec.is-open { background: linear-gradient(var(--attention-subtle), var(--attention-subtle)) left / 3px 100% no-repeat; }
+}
+
+@media (max-width: 767px) {
+  :is(.g2) .ws .ws-cmp { grid-template-columns: minmax(0, 1fr); }
+  :is(.g2) .ws .ws-vars { grid-template-columns: minmax(0, 1fr); }
+  :is(.g2) .ws .ws-act .gbtn, :is(.g2) .ws .ws-foot .gbtn { min-height: 44px; }
+}

@@ -1,0 +1,20 @@
+{{define "issuestate"}}<svg class="i" viewBox="0 0 16 16" aria-hidden="true">{{if eq . "open"}}<circle cx="8" cy="8" r="6.25"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/>{{else if eq . "done"}}<circle cx="8" cy="8" r="6.25"/><path d="m5.2 8.3 2 2 3.6-4"/>{{else if eq . "dropped"}}<circle cx="8" cy="8" r="6.25"/><path d="M5.4 10.6l5.2-5.2"/>{{else if eq . "active"}}<circle cx="8" cy="8" r="6.25"/><path d="M8 4.7v3.9"/><circle cx="8" cy="11.1" r=".95" fill="currentColor" stroke="none"/>{{else}}<circle cx="8" cy="8" r="6.25"/><path d="m5.2 8.3 2 2 3.6-4"/>{{end}}</svg>{{end}}
+
+
+{{define "issues"}}{{template "head" .}}{{template "nav" .}}<main class="g2 is"{{with .IssuesV}}{{if .LiveIDs}} data-live-ids="{{.LiveIDs}}"{{end}}{{end}}><div class="wrap">
+{{with .IssuesV}}<div class="segrow"><nav class="gseg seg" aria-label="{{t "issues.segments"}}">{{range .Segments}}<a data-seg="{{.Kind}}" href="{{.Href}}"{{if .Current}} class="on" aria-current="page"{{end}}>{{mi .Kind}}{{t .Label}}<span class="counter">{{.Count}}</span></a>{{end}}</nav></div>
+<div class="ilayout{{if .HasAside}} with-aside{{end}}">
+{{if .HasAside}}<aside class="box saved" aria-labelledby="saved-h"><div class="box-h"><h2 class="t" id="saved-h">{{t "issues.saved"}}</h2></div>
+{{range .Presets}}<a class="srow" href="{{.Href}}">{{mi "filter"}}<span class="nm">{{.Name}}</span></a>{{end}}
+{{if .CanSave}}<details class="save"><summary class="srow add">{{mi "plus"}}<span>{{t "issues.save_search"}}</span></summary><form class="save-f" method="post" action="/ui/searches"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="project" value="{{$.Project}}"><input type="hidden" name="q" value="{{.SaveQ}}"><input type="hidden" name="back" value="{{.Base}}"><input class="gfield" name="name" maxlength="80" required placeholder="{{t "issues.save_name"}}" aria-label="{{t "issues.save_name"}}" autocomplete="off"><button class="gbtn pri sm">{{t "issues.save_do"}}</button></form></details>{{end}}</aside>{{end}}
+<div class="imain">
+<div class="sbarrow"><form class="sbar" method="get" action="{{.Base}}" role="search"><label class="gfield mono-in">{{mi "search"}}<input type="search" name="q" value="{{.Q}}" placeholder="{{t "issues.search_hint"}}" aria-label="{{t "issues.search_label"}}" autocomplete="off" spellcheck="false"></label><button class="sr">{{t "issues.search_go"}}</button></form>
+{{if not .Guest}}<div class="dd split"><a class="gbtn pri" href="{{.New.Href}}">{{mi "plus"}}{{t .New.Label}}</a><button type="button" class="gbtn pri caret" data-dd aria-expanded="false" aria-label="{{t "issues.new_menu"}}">{{mi "chev"}}</button><div class="pop r">{{range .NewMenu}}<a class="opt" href="{{.Href}}">{{t .Label}}</a>{{end}}</div></div>{{end}}</div>
+{{if .Unsupported}}<div class="callout is-unsupported" role="status">{{mi "tri"}}<div>{{t "issues.unsupported"}}{{range .Unsupported}} <code>{{.}}</code>{{end}}</div></div>{{end}}
+<div class="box"><div class="box-h lh">{{range .Tabs}}<a class="tab{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Icon}}<span>{{if .Count}}<span class="n">{{.Count}}</span> {{end}}{{t .Label}}</span></a>{{end}}<span class="sp"></span>
+<div class="gfilters">{{range .Menus}}<details class="dd top-menu"><summary class="gbtn sm quiet{{if .Active}} on{{end}}">{{.Label}}{{mi "chev"}}</summary><div class="pop r"><div class="ph">{{t "issues.filter_by" .Label}}</div>{{range .Items}}<a class="opt{{if .Current}} cur{{end}}" href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}><span class="chk{{if not .Current}} off{{end}}">{{mi "check"}}</span>{{.Label}}</a>{{end}}</div></details>{{end}}</div></div>
+{{if .Rows}}{{range .Rows}}{{template "uirow" (issueRow .)}}{{end}}
+{{else if .NoMatch}}<div class="empty"><span>{{t "issues.no_matches"}}</span><a class="gbtn sm" href="{{.ClearHref}}">{{t "requests.clear"}}</a></div>
+{{else}}<div class="empty"><span>{{t .EmptyKey}}</span></div>{{end}}
+{{if .Older}}<a class="morelink" href="{{.Older}}">{{t "requests.older"}}</a>{{end}}</div></div></div>
+{{end}}</div>{{template "foot" .}}{{end}}

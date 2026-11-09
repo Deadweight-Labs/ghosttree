@@ -86,7 +86,7 @@ func TestCoordRoomGroupsConsecutiveMessagesOfOneSender(t *testing.T) {
 	}
 	// An agent shows as name plus @machine; a person as a round avatar.
 	first := messageItem(t, page, "1")
-	if !strings.Contains(first, "<strong>claude</strong>") || !strings.Contains(first, `<span class="cm-host">@apps-vm</span>`) || !strings.Contains(first, "av agent") {
+	if !strings.Contains(first, "<strong>claude</strong>") || !strings.Contains(first, `<span class="cm-host">@apps-vm</span>`) || !strings.Contains(first, "gav agent") {
 		t.Errorf("agent identity: %s", first)
 	}
 	if own := messageItem(t, page, "3"); !strings.Contains(own, "<strong>You</strong>") || !strings.Contains(own, "to everyone") {
@@ -104,7 +104,7 @@ func TestCoordRoomShowsADirectiveAsAPinnedPlateWithEnd(t *testing.T) {
 	appendAgent(t, st, room, "a2", "after", "")
 	page := get("/ui/coord?room=" + url.QueryEscape(room))
 	plate := messageItem(t, page, "2")
-	for _, want := range []string{`class="slab clay"`, "Standing order", "Never push to main.", "All agents in x/chat", "until ended", `action="/ui/coord/standing/end"`, ">End<"} {
+	for _, want := range []string{`class="slab"`, "Standing order", "Never push to main.", "All agents in x/chat", "until ended", `action="/ui/coord/standing/end"`, ">End<"} {
 		if !strings.Contains(plate, want) && !strings.Contains(plate, strings.ReplaceAll(want, "x/chat", "github.com/x/chat")) {
 			t.Errorf("directive plate missing %q: %s", want, plate)
 		}
@@ -162,9 +162,9 @@ func TestCoordComposerAddressesWithChipsAndKeepsItsSubmits(t *testing.T) {
 	_, _, room, get := chatFixture(t)
 	page := get("/ui/coord?room=" + url.QueryEscape(room))
 	for _, want := range []string{
-		`name="mentions" value="" checked`, `name="mentions" value="all-agents"`,
+		`name="mentions"`, `data-val="all-agents"`,
 		`formaction="/ui/coord/standing/create" name="confirm_scope" value="1"`,
-		`name="intent" value="question"`, `<textarea id="coord-message-body" name="body"`, `class="btn ghost rm-ask"`,
+		`name="intent" value="question"`, `<textarea id="coord-message-body" name="body"`, `class="gbtn rm-ask"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("composer missing %q", want)

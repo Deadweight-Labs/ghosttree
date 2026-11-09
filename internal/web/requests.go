@@ -40,7 +40,6 @@ const (
 
 var (
 	requestTypes   = []string{"feature", "change", "bug", "investigation"}
-	requestStates  = []string{"done", "dropped", "all"}
 	evidenceKinds  = []string{"commit", "test", "file", "decision", "url"}
 	requestDoneMsg = map[string]string{
 		"added": "requests.done.added", "met": "requests.done.met", "waived": "requests.done.waived",
@@ -57,7 +56,7 @@ var (
 	roleKeys         = map[string]string{"primary": "requests.role.primary", "related": "requests.role.related"}
 	workKeys         = map[string]string{"active": "requests.work.active", "paused": "requests.work.paused", "completed": "requests.work.completed", "abandoned": "requests.work.abandoned"}
 	relationKeys     = map[string]string{"parent": "requests.rel.parent", "related": "requests.rel.related", "blocks": "requests.rel.blocks", "duplicates": "requests.rel.duplicates",
-		"supersedes": "requests.rel.supersedes", "knowledge": "requests.rel.knowledge", "external": "requests.rel.external"}
+		"supersedes": "requests.rel.supersedes", "derived": "requests.rel.derived", "knowledge": "requests.rel.knowledge", "external": "requests.rel.external"}
 	evidenceKeys = map[string]string{"commit": "requests.evidence.commit", "test": "requests.evidence.test", "file": "requests.evidence.file", "decision": "requests.evidence.decision",
 		"url": "requests.evidence.url", "session": "requests.evidence.session", "request": "requests.evidence.request"}
 )
@@ -70,32 +69,14 @@ func label(l lang, keys map[string]string, v string) string {
 	return v
 }
 
-type requestListRow struct {
-	Href, ID, Title, Project string
-	Type, TypeLabel          string
-	Priority                 string
-	State, StateLabel        string
-	Done, Total, Percent     int
-	Progress                 string
-	Working                  []chip
-	Age                      string
-}
-
-type requestsView struct {
-	Q, Project              string
-	Selects                 []filterSelect
-	Rows                    []requestListRow
-	Older                   string
-	Guest, Empty, NoMatch   bool
-	ClearHref               string
-	ShowProject, HasFilters bool
-}
-
 type evidenceLine struct {
 	Kind, Label, Ref, Href string
+	// Person is who gave the proof.
+	Person string
 }
 
 type criterionLine struct {
+	Number     int
 	ID         int64
 	Human      string
 	Text       string
@@ -103,11 +84,23 @@ type criterionLine struct {
 	StateLabel string
 	Evidence   []evidenceLine
 	CanResolve bool
+	// Event is the anchor of the history entry that met or waived the
+	// requirement ("event-12"), empty while it is open.
+	Event string
 }
 
 type workLine struct {
 	Href, Title, Role, State, StateLabel, Summary, Age string
-	Active                                             bool
+	// Kind is the avatar of the session's harness.
+	Kind   string
+	Active bool
+	// LiveNow: active work and a fresh sign of life (live.go).
+	LiveNow bool
+	// Handle is "claude@mainex" (harness at machine), Owner the person the
+	// session belongs to. Both stay empty for a session the viewer may not read.
+	Handle, Owner string
+	// Started is when the work began, External the id the agent reports as.
+	Started, External string
 }
 
 type relationLine struct {
@@ -115,6 +108,7 @@ type relationLine struct {
 }
 
 type requestPainLine struct {
+	ID                                 int64
 	Href, Title, StateLabel, Remaining string
 }
 
@@ -133,6 +127,8 @@ type requestResult struct {
 }
 
 type requestView struct {
+	// Reactions is the row under the text of the issue page.
+	Reactions                      *reactionsView
 	Explain                        *explainView
 	ID                             int64
 	Human, Title, Project          string
@@ -145,18 +141,40 @@ type requestView struct {
 	Work                           []workLine
 	Relations                      []relationLine
 	Pains                          []requestPainLine
-	Tasks                          []requestTaskLine
-	Threads                        []coordThreadView
-	Activity                       []activityLine
-	Result                         *requestResult
-	Open, CanEdit, CanWork         bool
-	CanComplete                    bool
-	RawTitle, RawDescription       string
-	Types, Kinds                   []filterOption
-	Priorities                     []string
-	EditOpen                       bool
-	Back                           string
-	Token                          string
+	// Ideas are the ideas the issue came out of; the issue page shows them as its source.
+	Ideas                    []ideaFact
+	Tasks                    []requestTaskLine
+	Threads                  []coordThreadView
+	Activity                 []activityLine
+	Result                   *requestResult
+	Open, CanEdit, CanWork   bool
+	CanComplete              bool
+	RawTitle, RawDescription string
+	Types, Kinds             []filterOption
+	Priorities               []string
+	EditOpen                 bool
+	Back                     string
+	Token                    string
+	// ProjectRemote ist das ganze Projekt, Repo das Ziel der Rücklinks.
+	ProjectRemote string
+	// Nur die Issue-Seite füllt diese Felder (fillIssue).
+	Blockers []blockerLine
+	Links    []issueLink
+	Branch   *branchLine
+	Base     string
+	// Events is the history as sentences; Panel the open action panel (edit,
+	// move, complete, drop), "" for none.
+	Events []issueEvent
+	// Timeline is Events as entries of the timeline component.
+	Timeline []tlItem
+	// Composer is the field under the history that closes the issue (nil when the
+	// viewer cannot).
+	Composer *composerView
+	Panel    string
+	// Opened is "opened this 3 d ago", the line under the title.
+	Opened string
+	// Live is who works on the issue right now (live.go).
+	Live []liveAgent
 	// MoveProjects sind die Projekte, in die der Betrachter den Auftrag legen
 	// darf; leer heißt: kein Formular.
 	MoveProjects []filterOption
@@ -173,180 +191,6 @@ func requestObject(pa *store.ProjectAccess, id int64) store.Object {
 }
 
 // ----------------------------------------------------------------------- Liste
-
-func requestListHref(q url.Values, cursor string) string {
-	v := url.Values{}
-	for k, vals := range q {
-		v[k] = vals
-	}
-	if cursor != "" {
-		v.Set("cursor", cursor)
-	} else {
-		v.Del("cursor")
-	}
-	if len(v) == 0 {
-		return "/ui/requests"
-	}
-	return "/ui/requests?" + v.Encode()
-}
-
-func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
-	l := a.langFor(r)
-	query := r.URL.Query()
-	q := strings.TrimSpace(query.Get("q"))
-	state := query.Get("state")
-	if !slices.Contains(requestStates, state) {
-		state = ""
-	}
-	typ := query.Get("type")
-	if !slices.Contains(requestTypes, typ) {
-		typ = ""
-	}
-	priority := strings.TrimSpace(query.Get("priority"))
-	if len(priority) > maxPriority {
-		priority = ""
-	}
-	project := a.projectParam(r)
-	pa := a.access(r)
-	// Ein verborgenes Projekt läuft durch dieselbe Abfrage wie ein unbekanntes:
-	// RequestFilter schließt seine Zeilen aus, übrig bleiben globale Aufträge.
-	_, stop := a.gateList(w, r, pa, project, store.ResRequest)
-	if stop {
-		return
-	}
-	filter := requestdomain.SearchFilter{Scope: scope.Axes{Project: project}, Query: q, Type: typ, Limit: requestsShown, Cursor: query.Get("cursor")}
-	switch state {
-	case "":
-		filter.State = "open"
-	case "all":
-	default:
-		filter.State = state
-	}
-	// The cursor is the id of a request, or, in a search ranked by meaning, a
-	// position (~N).
-	if !store.ValidRequestCursor(filter.Cursor) {
-		filter.Cursor = ""
-	}
-	filter.Priority = priority
-	var page requestdomain.SearchPage
-	priorities := map[string]bool{}
-	progress := map[int64]store.CriteriaProgress{}
-	var work map[int64][]store.ActiveRequestWork
-	var err error
-	if page, err = a.store.SearchRequestsWith(pa.RequestFilter(filter), store.SearchAuto); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	pa.NoteRequestHits(page.Results)
-	// Die Auswahl hängt nicht von der Seite ab: alle Prioritäten der lesbaren Menge.
-	known, err := a.store.RequestPriorities(pa.RequestFilter(requestdomain.SearchFilter{Scope: scope.Axes{Project: project}}))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	for _, p := range known {
-		priorities[p] = true
-	}
-	if priority != "" {
-		priorities[priority] = true
-	}
-	ids, openIDs := make([]int64, len(page.Results)), []int64{}
-	for i, h := range page.Results {
-		ids[i] = h.Request.ID
-		if h.Request.State == "open" {
-			openIDs = append(openIDs, h.Request.ID)
-		}
-	}
-	if progress, err = a.store.CriteriaProgress(ids); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if work, err = a.store.ActiveWorkOnRequests(pa, openIDs); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	now := overviewNow().UTC()
-	v := &requestsView{Q: q, Project: project, ShowProject: project == "", Guest: a.shellBaseFor(r).who.kind == viewerGuest}
-	for _, raw := range page.Results {
-		h := pa.RequestHitView(raw)
-		row := requestListRow{
-			Href: requestURL(h.Request.ID), ID: h.Request.HumanID(), Title: h.Request.Title,
-			Type: h.Request.Type, TypeLabel: requestTypeLabel(l, h.Request.Type), Priority: h.Request.Priority,
-			State: h.Request.State, StateLabel: requestStateLabel(l, h.Request.State),
-			Age: shortAge(l, now, parseTime(h.Request.CreatedAt)),
-		}
-		if project == "" && h.Request.Scope.Project != "" {
-			row.Project = path.Base(h.Request.Scope.Project)
-		}
-		if p := progress[h.Request.ID]; p.Total > 0 {
-			row.Done, row.Total, row.Percent = p.Done, p.Total, p.Done*100/p.Total
-			row.Progress = strconv.Itoa(p.Done) + "/" + strconv.Itoa(p.Total)
-		}
-		if h.Request.State == "open" {
-			row.Working = workingChips(l, work[h.Request.ID])
-		}
-		v.Rows = append(v.Rows, row)
-	}
-	if page.NextCursor != "" {
-		v.Older = requestListHref(query, page.NextCursor)
-	}
-	v.Selects = requestSelects(l, state, typ, priority, priorities)
-	v.HasFilters = q != "" || state != "" || typ != "" || priority != ""
-	v.Empty, v.NoMatch = len(v.Rows) == 0 && !v.HasFilters && filter.Cursor == "", len(v.Rows) == 0 && (v.HasFilters || filter.Cursor != "")
-	v.ClearHref = "/ui/requests"
-	if project != "" {
-		v.ClearHref += "?project=" + url.QueryEscape(project)
-	}
-	a.renderBrowser(w, r, "requests", pageData{Title: l.msg("nav.requests"), Project: project, RequestsV: v})
-}
-
-func requestSelects(l lang, state, typ, priority string, priorities map[string]bool) []filterSelect {
-	stateSel := filterSelect{Name: "state", Label: requestStateLabel(l, "open")}
-	for _, s := range requestStates {
-		stateSel.Options = append(stateSel.Options, filterOption{Value: s, Label: requestStateLabel(l, s), Selected: s == state})
-	}
-	typeSel := filterSelect{Name: "type", Label: l.msg("requests.all_types")}
-	for _, t := range requestTypes {
-		typeSel.Options = append(typeSel.Options, filterOption{Value: t, Label: requestTypeLabel(l, t), Selected: t == typ})
-	}
-	sels := []filterSelect{stateSel, typeSel}
-	delete(priorities, "")
-	if len(priorities) > 0 {
-		list := make([]string, 0, len(priorities))
-		for p := range priorities {
-			list = append(list, p)
-		}
-		slices.Sort(list)
-		prSel := filterSelect{Name: "priority", Label: l.msg("requests.all_priorities")}
-		for _, p := range list {
-			prSel.Options = append(prSel.Options, filterOption{Value: p, Label: p, Selected: p == priority})
-		}
-		sels = append(sels, prSel)
-	}
-	return sels
-}
-
-// workingChips nennt die Sessions, die gerade an einem Auftrag arbeiten; die
-// Abfrage hat schon nur lesbare Transkripte geliefert, per Adresse.
-func workingChips(l lang, work []store.ActiveRequestWork) []chip {
-	var out []chip
-	more := 0
-	for _, wk := range work {
-		if len(out) >= requestWorkChip {
-			more++
-			continue
-		}
-		title := l.msg("requests.session")
-		if wk.Title != "" {
-			title = ellipsize(wk.Title, 36)
-		}
-		out = append(out, chip{Href: "/ui/sessions/" + wk.SessionPublicID, Text: title})
-	}
-	if more > 0 {
-		out = append(out, chip{Text: "+" + strconv.Itoa(more)})
-	}
-	return out
-}
 
 // --------------------------------------------------------------------- Detail
 
@@ -399,7 +243,7 @@ var pubRefPattern = regexp.MustCompile(`^session:([A-Za-z0-9_-]+)(#.*)?$`)
 var sessionScrub = regexp.MustCompile(`session:[^\s#]+(#\S*)?`)
 
 func (a *app) evidenceLineFor(l lang, pa *store.ProjectAccess, project string, e requestdomain.Evidence) evidenceLine {
-	line := evidenceLine{Kind: e.Kind, Label: evidenceLabel(l, e.Kind), Ref: e.Ref}
+	line := evidenceLine{Kind: e.Kind, Label: evidenceLabel(l, e.Kind), Ref: e.Ref, Person: e.Person}
 	switch e.Kind {
 	case "session":
 		line.Ref = ""
@@ -426,11 +270,50 @@ func (a *app) evidenceLineFor(l lang, pa *store.ProjectAccess, project string, e
 
 func evidenceLabel(l lang, kind string) string { return label(l, evidenceKeys, kind) }
 
+// requestPage is the old address of a request. A request of a project the
+// viewer can open leads on to its page in the repository; the old page stays
+// for the others (requests without a project).
 func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
+	if remote := a.requestRepo(r); remote != "" {
+		target := repoHref(remote) + "/issues/" + url.PathEscape(r.PathValue("id"))
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusFound)
+		return
+	}
+	a.issueGlobal(w, r)
+}
+
+// requestRepo is the project a request belongs to when the viewer can read the
+// request and open the project's repository page; "" otherwise.
+func (a *app) requestRepo(r *http.Request) string {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		return ""
+	}
+	pa := a.access(r)
+	if !a.requestReadable(pa, id) {
+		return ""
+	}
+	ref, err := a.store.RequestRef(store.RefRequest, id)
+	if err != nil || ref.Project == "" {
+		return ""
+	}
+	opts, _ := a.projectOptions(r, pa)
+	if !slices.ContainsFunc(opts, func(o projectOption) bool { return o.Remote == ref.Project }) {
+		return ""
+	}
+	return ref.Project
+}
+
+// buildRequestView reads a request for the viewer and fills everything both
+// pages show. It answers the failure cases itself (ok is false then).
+func (a *app) buildRequestView(w http.ResponseWriter, r *http.Request) (*requestView, requestdomain.Detail, bool) {
 	l := a.langFor(r)
 	detail, ok := a.lookupRequest(w, r, store.ActRead)
 	if !ok {
-		return
+		return nil, detail, false
 	}
 	pa := a.access(r)
 	req := detail.Request
@@ -439,7 +322,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 	linked, err := a.browserCoord(r).ThreadsForObject("request", req.HumanID())
 	if err != nil {
 		coordHTTPError(l, w, err)
-		return
+		return nil, detail, false
 	}
 	var threads []coordThreadView
 	for _, thread := range linked {
@@ -475,7 +358,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 	open := 0
 	humans := map[int64]string{}
 	for _, c := range detail.Criteria {
-		line := criterionLine{ID: c.ID, Human: c.HumanID(), Text: c.Description, State: c.State, StateLabel: criterionStateLabel(l, c.State),
+		line := criterionLine{Number: c.Number, ID: c.ID, Human: c.HumanID(), Text: c.Description, State: c.State, StateLabel: criterionStateLabel(l, c.State),
 			CanResolve: v.Open && v.CanWork && c.State == "open"}
 		humans[c.ID] = c.HumanID()
 		if c.State == "open" {
@@ -494,10 +377,10 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 		v.Progress = strconv.Itoa(v.Done) + "/" + strconv.Itoa(v.Total)
 	}
 	v.CanComplete = v.Open && v.CanEdit && open == 0
-	v.Work = a.workLines(l, detail.Work, now)
+	v.Work = a.workLines(l, pa, detail.Work, now)
 	v.Relations = a.relationLines(l, pa, detail.Relations)
 	for _, p := range detail.Pains {
-		v.Pains = append(v.Pains, requestPainLine{Href: painURL(p.ID), Title: p.Title, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining})
+		v.Pains = append(v.Pains, requestPainLine{ID: p.ID, Href: painURL(p.ID), Title: p.Title, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining})
 	}
 	for _, t := range detail.Tasks {
 		line := requestTaskLine{KindLabel: label(l, taskKindKeys, t.Kind), Title: t.Title, Where: t.Location}
@@ -508,7 +391,8 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 	}
 	v.Activity = activityLines(l, a.visibleActivity(pa, detail), humans, now)
 	v.Result = a.requestResult(r, raw)
-	a.renderBrowser(w, r, "request", pageData{Title: req.HumanID(), RequestV: v})
+	v.ProjectRemote = project
+	return v, detail, true
 }
 
 func criterionStateLabel(l lang, state string) string { return label(l, criterionKeys, state) }
@@ -548,7 +432,11 @@ func (a *app) knownPriorities(pa *store.ProjectAccess, project, current string) 
 	return out
 }
 
-func (a *app) workLines(l lang, work []requestdomain.Work, now time.Time) []workLine {
+// workLines names the sessions behind the work of a request. The detail has
+// already dropped the sessions the viewer may not read (RequestDetailView); the
+// check here repeats that rule, so no handle, owner or title of a session leaks
+// if a caller ever passes an unfiltered detail.
+func (a *app) workLines(l lang, pa *store.ProjectAccess, work []requestdomain.Work, now time.Time) []workLine {
 	var out []workLine
 	for _, wk := range work {
 		line := workLine{Role: label(l, roleKeys, wk.Role), State: wk.State, StateLabel: label(l, workKeys, wk.State),
@@ -557,8 +445,16 @@ func (a *app) workLines(l lang, work []requestdomain.Work, now time.Time) []work
 		if wk.SessionPublicID != "" {
 			line.Href = "/ui/sessions/" + wk.SessionPublicID
 			line.Title = l.msg("requests.session")
-			if sess, err := a.store.SessionByPublicID(wk.SessionPublicID); err == nil && strings.TrimSpace(sess.Title) != "" {
-				line.Title = ellipsize(sess.Title, 80)
+			if sess, err := a.store.SessionByPublicID(wk.SessionPublicID); err == nil && pa.CanSeeTranscript(sess) {
+				line.Kind = harnessKind(sess.Harness)
+				line.Handle = sessionHandle(pa, sess)
+				line.External, line.Started = sess.ExternalID, wk.StartedAt
+				if acct, err := a.store.AccountByPrincipalID("person:" + strconv.FormatInt(sess.AccountID, 10)); err == nil {
+					line.Owner = acct.Name
+				}
+				if strings.TrimSpace(sess.Title) != "" {
+					line.Title = ellipsize(sess.Title, 80)
+				}
 			}
 		}
 		out = append(out, line)
@@ -702,7 +598,8 @@ var activityKinds = map[string]string{
 	"relation.added": "requests.act.relation_added", "relation.removed": "requests.act.relation_removed",
 	"work.started": "requests.act.work_started", "work.resumed": "requests.act.work_resumed", "work.finished": "requests.act.work_finished",
 	"evidence.migrated": "requests.act.evidence_migrated",
-	"pain.linked":       "requests.act.pain_linked", "pain.unlinked": "requests.act.pain_unlinked",
+	"package.added":     "requests.act.package_added", "package.removed": "requests.act.package_removed", "package.role": "requests.act.package_role",
+	"pain.linked": "requests.act.pain_linked", "pain.unlinked": "requests.act.pain_unlinked",
 	"task.created": "requests.act.task_created", "task.done": "requests.act.task_done", "task.confirmed": "requests.act.task_confirmed",
 	"task.reopened": "requests.act.task_reopened", "task.dropped": "requests.act.task_dropped",
 }
@@ -817,8 +714,10 @@ func (a *app) requestFormTooLarge(next http.Handler) http.Handler {
 			var tooBig *http.MaxBytesError
 			if errors.As(err, &tooBig) {
 				w.Header().Set("Cache-Control", "no-store")
+				l := a.langFor(r)
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
-				a.renderBrowser(w, r, "requesttoolarge", pageData{Title: a.langFor(r).msg("requests.toolarge.title"), BackURL: "/ui/requests"})
+				a.renderBrowser(w, r, "requesttoolarge", pageData{Title: l.msg("requests.toolarge.title"), BackURL: "/ui/requests",
+					ErrV: &errorView{Code: "413", Icon: "file", Title: l.msg("requests.toolarge.title"), Text: l.msg("requests.toolarge.body"), BackHref: r.URL.Path, BackLabel: l.msg("requests.toolarge.back_issue"), AltHref: "/ui/requests", AltLabel: l.msg("requests.toolarge.back")}})
 				return
 			}
 		}
@@ -968,7 +867,7 @@ func (a *app) requestComplete(w http.ResponseWriter, r *http.Request) {
 		a.requestFail(w, r, detail.Request.ID, err)
 		return
 	}
-	a.requestDone(w, r, detail.Request.ID, "completed", nil)
+	a.requestDone(w, r, detail.Request.ID, "completed", a.alsoComment(r, detail.Request.ID))
 }
 
 func (a *app) requestDrop(w http.ResponseWriter, r *http.Request) {
@@ -985,5 +884,5 @@ func (a *app) requestDrop(w http.ResponseWriter, r *http.Request) {
 		a.requestFail(w, r, detail.Request.ID, err)
 		return
 	}
-	a.requestDone(w, r, detail.Request.ID, "dropped", nil)
+	a.requestDone(w, r, detail.Request.ID, "dropped", a.alsoComment(r, detail.Request.ID))
 }

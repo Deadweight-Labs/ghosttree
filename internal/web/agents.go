@@ -27,6 +27,8 @@ const (
 
 type agentsView struct {
 	Cards     []agentCard
+	Groups    []agentGroup
+	Cmd       cmdBlock
 	Machines  []machineRow
 	Example   string
 	Connect   string
@@ -37,7 +39,9 @@ type agentsView struct {
 
 type agentCard struct {
 	agentRow
-	RoomHref, SessionHref    string
+	RoomHref, SessionHref string
+	// MachineHref is the machine page, empty when the viewer cannot reach it.
+	MachineHref              string
 	ReqID, ReqTitle, ReqHref string
 	Post, PostAge            string
 }
@@ -78,6 +82,8 @@ func (a *app) agentsPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view.Machines, view.Example = ownMachines(l, tokens, now), l.msg("setup.example")
+		view.Groups = groupAgents(view.Cards, view.Machines)
+		view.Cmd = cmdBlock{ID: "agents-cmd", Mac: view.Example, Linux: view.Example}
 	}
 	a.renderBrowser(w, r, "agents", pageData{Title: l.msg("agents.title"), Agents: view})
 }
@@ -94,8 +100,13 @@ func (a *app) agentCards(r *http.Request, pa *store.ProjectAccess, rows []agentR
 	}
 	posts := a.lastPosts(r, rows, now)
 	cards := make([]agentCard, len(rows))
+	machineLink := a.machineLinker(r)
 	for i, row := range rows {
 		c := agentCard{agentRow: row, RoomHref: "/ui/coord?room=" + url.QueryEscape(row.RoomKey)}
+		if c.Machine == "" {
+			c.Machine = agentMachine(row.ExternalID)
+		}
+		c.MachineHref = machineLink(c.Machine)
 		if c.Branch != "" && strings.Contains(c.Name, c.Branch) {
 			// The name already ends in the branch; do not say it twice.
 			c.Branch = ""

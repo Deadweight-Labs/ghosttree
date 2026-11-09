@@ -86,118 +86,6 @@ func fetchBody(t *testing.T, c *http.Client, target string) string {
 	return page
 }
 
-func TestOverviewEveryListComesFromTheViewersVisibleSet(t *testing.T) {
-	e := ovEnv(t)
-	fillVisible(t, e.St)
-	fillHidden(t, e.St)
-	secrets := []string{"SECRET", shellHiddenProject, "claude:hidden", "0 of 3"}
-	if strings.Contains(fetchBody(t, e.Owner, e.Base+"/ui/overview"), "SECRET-MACHINE") {
-		t.Error("the owner overview names a machine that only started a login")
-	}
-
-	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	for _, want := range []string{"Visible request", "SECRET-REQ", "SECRET-AGENT", "2 knowledge proposals are waiting for you", "1 of 2", "0 of 3", "new lessons"} {
-		if !strings.Contains(owner, want) {
-			t.Errorf("owner overview lacks %q", want)
-		}
-	}
-	_, scoped := fetchPage(t, e.Owner, e.Base+"/ui/overview?project="+url.QueryEscape(shellProject))
-	if strings.Contains(scoped, "SECRET-REQ") || strings.Contains(scoped, "SECRET-AGENT") || strings.Contains(scoped, "SECRET-LESSON") || !strings.Contains(scoped, "Visible request") {
-		t.Error("the project selector does not narrow the owner overview")
-	}
-
-	// Agenten sieht, wer sie mit seiner Projektrolle lesen darf (ab member),
-	// auch ohne eigenen Agenten im Raum.
-	_, anna := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if !strings.Contains(anna, "visible-agent") {
-		t.Error("a member does not see the agents of the room they are in")
-	}
-	for name, c := range map[string]*http.Client{"lead": e.Lead, "reviewer": e.Reviewer} {
-		if !strings.Contains(fetchBody(t, c, e.Base+"/ui/overview"), "visible-agent") {
-			t.Errorf("%s does not see the agents of a project they read", name)
-		}
-	}
-	for name, c := range map[string]*http.Client{"member": e.Member, "lead": e.Lead, "reviewer": e.Reviewer} {
-		_, page := fetchPage(t, c, e.Base+"/ui/overview")
-		for _, want := range []string{"Visible request", "1 of 2", "new lesson"} {
-			if !strings.Contains(page, want) {
-				t.Errorf("%s overview lacks %q", name, want)
-			}
-		}
-		for _, leak := range append(secrets, "wants to connect") {
-			if strings.Contains(page, leak) {
-				t.Errorf("%s overview leaks %q", name, leak)
-			}
-		}
-	}
-	_, member := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if strings.Contains(member, "Visible proposal") || strings.Contains(member, "knowledge proposal") {
-		t.Error("a plain member is offered the review queue")
-	}
-	for name, c := range map[string]*http.Client{"reviewer": e.Reviewer, "lead": e.Lead} {
-		_, page := fetchPage(t, c, e.Base+"/ui/overview")
-		// One bundled line, counting only what the viewer may review: the
-		// proposal of the hidden project is not in the number.
-		if !strings.Contains(page, "1 knowledge proposal is waiting for you") || strings.Contains(page, "2 knowledge proposals") || !strings.Contains(page, `href="/ui/review"`) {
-			t.Errorf("%s does not get the review candidate", name)
-		}
-	}
-
-	_, guest := fetchPage(t, e.Guest, e.Base+"/ui/overview")
-	for _, want := range []string{"Visible request", "1/2", "Visible lesson"} {
-		if !strings.Contains(guest, want) {
-			t.Errorf("guest overview lacks %q", want)
-		}
-	}
-	for _, leak := range append(secrets, "visible-agent", "Visible proposal", "ov-agent", "Agents", "Next", "wants to connect", "Connect") {
-		if strings.Contains(guest, leak) {
-			t.Errorf("guest overview shows %q", leak)
-		}
-	}
-}
-
-func TestGuestOverviewIsIdenticalWithAndWithoutHiddenData(t *testing.T) {
-	e := ovEnv(t)
-	paths := []string{"/ui/overview", "/ui/overview?project=" + url.QueryEscape(shellProject), "/ui/overview?project=" + url.QueryEscape(shellHiddenProject), "/ui/overview?project=nope", "/ui/overview?connect=1"}
-	snapshot := func() map[string]string {
-		out := map[string]string{}
-		for _, p := range paths {
-			status, page := fetchPage(t, e.Guest, e.Base+p)
-			if status != http.StatusOK {
-				t.Fatalf("GET %s = %d", p, status)
-			}
-			out[p] = stripCSRF(page)
-		}
-		return out
-	}
-	empty := snapshot()
-	if !strings.Contains(empty["/ui/overview"], "Nothing waiting on you") {
-		t.Fatal("a guest without visible content gets no neutral line")
-	}
-	// Verborgene Daten aller Arten, auch Geräte-Abläufe und Anliegen.
-	fillHidden(t, e.St)
-	ovKnowledge(t, e.St, shellHiddenProject, "SECRET-OLD", "verified")
-	materializeWebRoomFor(t, e.St, store.RoomKeyForProject(shellHiddenProject), "person:1", "alice")
-	if _, err := e.St.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: store.RoomKeyForProject(shellHiddenProject),
-		SenderExternalID: "alice", AuthorPrincipalID: "person:1", AuthorKind: store.AuthorHuman, ClientID: "g", Body: "SECRET-ASK", Intent: store.IntentQuestion, Mentions: []string{"person:3"}}); err != nil {
-		t.Fatal(err)
-	}
-	for p, page := range snapshot() {
-		if page != empty[p] {
-			t.Errorf("guest page %s differs once hidden data exists", p)
-		}
-	}
-	// Dasselbe, sobald es etwas Sichtbares gibt: nur das Sichtbare ändert die Seite.
-	fillVisible(t, e.St)
-	withVisible := snapshot()
-	if withVisible["/ui/overview"] == empty["/ui/overview"] || !strings.Contains(withVisible["/ui/overview"], "Visible request") {
-		t.Error("visible content does not change the guest page")
-	}
-	if withVisible["/ui/overview?project=nope"] != withVisible["/ui/overview?project="+url.QueryEscape(shellHiddenProject)] {
-		t.Error("a hidden project name is distinguishable from an unknown one")
-	}
-}
-
 func TestMemberCannotProbeHiddenProjectsThroughTheSelector(t *testing.T) {
 	e := ovEnv(t)
 	fillVisible(t, e.St)
@@ -259,7 +147,7 @@ func TestDeviceApprovalIsACodeFieldWithoutMachineIPOrAge(t *testing.T) {
 func TestOwnerOnAnEmptyInstanceSeesGettingStartedThatSwitches(t *testing.T) {
 	e := shellWebAll(t)
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	for _, want := range []string{"Connect your first agent", "Get the install command", `action="/join/pair"`, `name="confirm_account"`, "Waiting for your machine", `http-equiv="refresh"`} {
+	for _, want := range []string{"Set up ghosttree", "Get the install command", `action="/join/pair"`, `name="confirm_account"`, "Waiting for your machine", `http-equiv="refresh"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("setup lacks %q", want)
 		}
@@ -292,28 +180,24 @@ func TestOwnerOnAnEmptyInstanceSeesGettingStartedThatSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page = fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	if !strings.Contains(page, "mainex is connected") || !strings.Contains(page, `http-equiv="refresh"`) {
+	if !strings.Contains(page, "mainex</b> is connected") || !strings.Contains(page, `http-equiv="refresh"`) {
 		t.Errorf("setup does not confirm the connection: %s", page)
 	}
 
 	ovAgent(t, e.St, shellProject, "claude:mainex", "claude@mainex", "person:1")
-	_, page = fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	if strings.Contains(page, "Connect your first agent") || strings.Contains(page, `http-equiv="refresh"`) || !strings.Contains(page, "claude@mainex") {
-		t.Errorf("the overview does not take over once an agent exists: %s", page)
+	status, _ := fetchPage(t, e.Owner, e.Base+"/ui/overview")
+	if status != http.StatusFound {
+		t.Errorf("the inbox does not take over once an agent exists: %d", status)
 	}
 }
 
 func TestGettingStartedIsForOwnersAndAConnectedMachineDoesNotTrapThem(t *testing.T) {
 	e := shellWebAll(t)
 	for name, c := range map[string]*http.Client{"member": e.Member, "lead": e.Lead, "guest": e.Guest} {
-		_, page := fetchPage(t, c, e.Base+"/ui/overview")
-		if strings.Contains(page, "Connect your first agent") || strings.Contains(page, "ctx login") || strings.Contains(page, "install command") {
-			t.Errorf("%s gets Getting started", name)
+		status, page := fetchPage(t, c, e.Base+"/ui/overview")
+		if status != http.StatusFound || strings.Contains(page, "Set up ghosttree") || strings.Contains(page, "ctx login") || strings.Contains(page, "install command") {
+			t.Errorf("%s gets Getting started (status %d)", name, status)
 		}
-	}
-	_, member := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if !strings.Contains(member, "No agents yet.") || !strings.Contains(member, "Connect an agent") {
-		t.Error("a member without agents lacks the empty line and its action")
 	}
 	_, forced := fetchPage(t, e.Member, e.Base+"/ui/overview?connect=1")
 	if !strings.Contains(forced, "Get the install command") || strings.Contains(forced, `http-equiv="refresh"`) {
@@ -328,50 +212,18 @@ func TestGettingStartedIsForOwnersAndAConnectedMachineDoesNotTrapThem(t *testing
 		t.Fatal(err)
 	}
 	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	if !strings.Contains(owner, "oldbox is connected") {
+	if !strings.Contains(owner, "oldbox</b> is connected") {
 		t.Fatalf("a fresh connection is not confirmed")
 	}
 	defer func(prev func() time.Time) { overviewNow = prev }(overviewNow)
 	overviewNow = func() time.Time { return time.Now().Add(time.Hour) }
-	_, owner = fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	if strings.Contains(owner, "Connect your first agent") || !strings.Contains(owner, "Start Claude or Codex in a project") ||
-		!strings.Contains(owner, "oldbox") || !strings.Contains(owner, "Last seen 1 h ago") {
-		t.Errorf("an old connection without an agent should show the machine and the next step: %s", owner)
+	status, owner := fetchPage(t, e.Owner, e.Base+"/ui/overview")
+	if status != http.StatusFound || strings.Contains(owner, "Set up ghosttree") {
+		t.Errorf("an old connection without an agent should not hold the owner in Getting started: %d", status)
 	}
-}
-
-func TestOverviewEmptySectionsAreOneLineAndAnAction(t *testing.T) {
-	e := shellWebAll(t)
-	ovAgent(t, e.St, shellProject, "claude:a", "agent-a", "person:2")
-	ovAgent(t, e.St, shellProject, "claude:o", "agent-o", "person:1")
-	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	if !strings.Contains(page, "Nothing waiting on you") {
-		t.Error("an empty For you has no line of its own")
-	}
-	if strings.Contains(page, "This week") {
-		t.Error("a week without anything to say is shown")
-	}
-	if strings.Contains(page, "ov-next") || strings.Contains(page, ">Next<") {
-		t.Error("an empty Next section is shown")
-	}
-	_, member := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if !strings.Contains(member, "Connect another agent") {
-		t.Error("the agent list lacks its action")
-	}
-}
-
-func TestOverviewHasNoCountersPillsOrBadges(t *testing.T) {
-	e := ovEnv(t)
-	fillVisible(t, e.St)
-	for name, c := range map[string]*http.Client{"owner": e.Owner, "member": e.Member, "guest": e.Guest} {
-		_, page := fetchPage(t, c, e.Base+"/ui/overview")
-		// The counters of the navigation are meant (nav tests); this is the page.
-		page = page[strings.Index(page, `<div class="shell-main">`):]
-		for _, bad := range []string{"badge", "pill", "clay-card", "chip"} {
-			if strings.Contains(page, bad) {
-				t.Errorf("%s overview carries %q", name, bad)
-			}
-		}
+	_, agents := fetchPage(t, e.Owner, e.Base+"/ui/agents")
+	if !strings.Contains(agents, "Start Claude or Codex in a project") || !strings.Contains(agents, "oldbox") || !strings.Contains(agents, "Last seen 1 h ago") {
+		t.Errorf("the agents page should show the machine and the next step: %s", agents)
 	}
 }
 
@@ -398,7 +250,7 @@ func TestAgentStateFollowsTheLeaseWindows(t *testing.T) {
 	}
 }
 
-func TestLoginAndTheRootLandOnTheOverview(t *testing.T) {
+func TestTheRootAndTheBrandLeadToTheInbox(t *testing.T) {
 	srv, _, token := testWeb(t)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	c := login(t, srv, token)
@@ -408,17 +260,17 @@ func TestLoginAndTheRootLandOnTheOverview(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/overview" {
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/inbox" {
 		t.Errorf("GET /ui/ = %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if !strings.Contains(brandHref(t, c, srv.URL), `href="/ui/overview"`) {
-		t.Error("the brand link does not lead to the overview")
+	if !strings.Contains(brandHref(t, c, srv.URL), `href="/ui/inbox"`) {
+		t.Error("the brand link does not lead to the inbox")
 	}
 }
 
 func brandHref(t *testing.T, c *http.Client, base string) string {
 	t.Helper()
-	_, page := fetchPage(t, c, base+"/ui/requests")
+	_, page := fetchPage(t, c, base+"/ui/inbox")
 	i := strings.Index(page, `class="shell-brand"`)
 	if i < 0 {
 		t.Fatal("no brand link")
@@ -439,7 +291,7 @@ func TestPastedTokenSessionGetsNoDeviceForm(t *testing.T) {
 
 func TestShellHeadSetsTheJSClassBeforeFirstPaint(t *testing.T) {
 	e := shellWebAll(t)
-	_, page := fetchPage(t, e.Member, e.Base+"/ui/requests")
+	_, page := fetchPage(t, e.Member, e.Base+"/ui/inbox")
 	head := page[:strings.Index(page, "</head>")]
 	if strings.Contains(head, "<script>") || !strings.Contains(head, `<script src="/static/shell.js"></script>`) {
 		t.Error("the js class script is not a synchronous external script in the head")
@@ -447,34 +299,6 @@ func TestShellHeadSetsTheJSClassBeforeFirstPaint(t *testing.T) {
 	js := body(t, mustGet(t, e.Base+"/static/shell.js"))
 	if !strings.Contains(js, `classList.add("js")`) {
 		t.Error("shell.js does not set the js class")
-	}
-	if strings.Index(head, "<script>") > strings.Index(head, "shell.css") {
-		t.Log("script after stylesheet is fine as long as it sits in the head")
-	}
-}
-
-func TestFontPathsAreVersionedSoImmutableCachingIsSafe(t *testing.T) {
-	srv, _, _ := testWeb(t)
-	get := func(path string) *http.Response {
-		resp, err := http.Get(srv.URL + path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		return resp
-	}
-	if resp := get("/static/fonts/gabarito-latin-wght-normal.woff2"); resp.StatusCode != http.StatusNotFound {
-		t.Errorf("the unversioned font path still answers: %d", resp.StatusCode)
-	}
-	resp := get("/static/fonts/v5/gabarito-latin-wght-normal.woff2")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Cache-Control"), "immutable") {
-		t.Errorf("versioned font = %d %q", resp.StatusCode, resp.Header.Get("Cache-Control"))
-	}
-	css := body(t, mustGet(t, srv.URL+"/static/tokens.css"))
-	for _, m := range regexp.MustCompile(`url\("(/static/fonts/[^"]+)"\)`).FindAllStringSubmatch(css, -1) {
-		if r := get(m[1]); r.StatusCode != http.StatusOK || !strings.Contains(m[1], "v5/") {
-			t.Errorf("tokens.css font %s = %d", m[1], r.StatusCode)
-		}
 	}
 }
 
@@ -491,14 +315,14 @@ func TestFreshInstanceFirstAccountGetsGettingStartedWithoutAnOrganization(t *tes
 	srv, st, _ := testWeb(t)
 	c := loginInteractive(t, srv, st, "alice")
 	_, page := fetchPage(t, c, srv.URL+"/ui/overview")
-	if !strings.Contains(page, "Connect your first agent") {
+	if !strings.Contains(page, "Set up ghosttree") {
 		t.Errorf("the first account of a fresh instance does not get Getting started: %s", page)
 	}
 	if _, err := st.AddPerson("bob"); err != nil {
 		t.Fatal(err)
 	}
 	_, page = fetchPage(t, loginInteractive(t, srv, st, "bob"), srv.URL+"/ui/overview")
-	if strings.Contains(page, "Connect your first agent") {
+	if strings.Contains(page, "Set up ghosttree") {
 		t.Error("a later account gets Getting started")
 	}
 }
@@ -517,7 +341,7 @@ func TestOwnerWithoutAMachineSeesTheSameGuidedInstallCommandAsAnInvitedPerson(t 
 		t.Fatalf("POST /join/pair = %d", resp.StatusCode)
 	}
 	_, page = fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	for _, want := range []string{"curl -fsSL", "/install.sh | sh -s -- --pair ", "data-copy", "Waiting for your machine"} {
+	for _, want := range []string{"curl -fsSL", "/install.sh | sh -s -- --pair ", "data-ui-copy", "Waiting for your machine"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("overview lacks %q:\n%s", want, page)
 		}

@@ -3,6 +3,12 @@
 (() => {
   // Loaded from the head: the js class must be set before first paint.
   document.documentElement.classList.add("js");
+  // The chosen theme is applied before first paint; without a choice the page
+  // follows the system setting.
+  try {
+    const theme = localStorage.getItem("gt-theme");
+    if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+  } catch (_) {}
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
   } else {
@@ -41,13 +47,23 @@
       });
     });
   }
-  const account = document.querySelector("details.account");
-  if (account) {
+  const menus = document.querySelectorAll("details.top-menu, details.rh-more");
+  if (menus.length) {
     addEventListener("keydown", (event) => {
-      if (event.key === "Escape") account.open = false;
+      if (event.key === "Escape") for (const menu of menus) menu.open = false;
     });
     document.addEventListener("click", (event) => {
-      if (account.open && !account.contains(event.target)) account.open = false;
+      for (const menu of menus) if (menu.open && !menu.contains(event.target)) menu.open = false;
+    });
+  }
+  const themeButton = document.querySelector("[data-theme-toggle]");
+  if (themeButton) {
+    themeButton.addEventListener("click", () => {
+      const root = document.documentElement;
+      const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+      const next = dark ? "light" : "dark";
+      root.dataset.theme = next;
+      try { localStorage.setItem("gt-theme", next); } catch (_) {}
     });
   }
   // The greeting follows the visitor's clock, so the server renders a neutral

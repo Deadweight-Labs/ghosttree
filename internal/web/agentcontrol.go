@@ -145,5 +145,10 @@ func (a *app) coordAgentControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// The page of the agent asks to come back to itself; nothing else is followed.
+	if back := r.FormValue("back"); strings.HasPrefix(back, "/ui/agents/") && !strings.ContainsAny(back, "\\\r\n") && !strings.HasPrefix(back, "//") {
+		http.Redirect(w, r, back, http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(r.FormValue("room")), http.StatusSeeOther)
 }

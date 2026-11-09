@@ -1,9 +1,14 @@
-{{define "profile"}}{{template "head" .}}{{template "nav" .}}<main class="adm adm-narrow">
-<div class="ov-head"><h1>{{t "profile.title"}}</h1></div>
-{{if .Error}}<p class="adm-flash is-error" role="alert">{{.Error}}</p>{{end}}{{if .Profile.Notice}}<p class="adm-flash" role="status">{{.Profile.Notice}}</p>{{end}}
-{{if and .Interactive .Profile.Locked}}<p class="adm-flash" role="status">{{t "profile.err.locked"}}</p>{{end}}
-{{if and .Interactive (not .Profile.Locked)}}<form class="adm-forms clay" method="post" action="/ui/profile"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<label class="adm-f"><span>{{t "profile.name"}}</span><input class="clay-field" name="name" value="{{.Profile.Name}}" maxlength="64" autocomplete="name" required></label>
-<button class="ov-btn ov-btn-primary clay adm-save">{{t "profile.save"}}</button></form>
-{{else}}{{if not .Interactive}}<p class="adm-flash" role="status">{{t "adm.readonly"}}</p>{{end}}<ul class="ov-list adm-deck clay"><li class="adm-row"><div class="adm-body"><span class="ov-meta">{{t "profile.name"}}</span><span class="ov-name">{{.Profile.Name}}</span></div></li></ul>{{end}}
-{{template "foot" .}}{{end}}
+{{define "profile"}}{{template "head" .}}{{template "nav" .}}<main class="g2 set ag pf"><div class="wrap"><div class="pgrid">
+<aside class="pfside"><div class="pav">{{avatarX "xl" "human" .Profile.Name "" false}}</div>
+<h1 class="pn">{{.Profile.Name}}</h1>
+{{if and .Interactive (not .Profile.Locked)}}<details class="pedit"{{if or .Error .Profile.Notice}} open{{end}}><summary class="gbtn blk">{{t "profile.edit"}}</summary><form class="dform" method="post" action="/ui/profile"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><label class="fl"><span>{{t "profile.name"}}</span><span class="gfield"><input name="name" value="{{.Profile.Name}}" maxlength="64" autocomplete="name" required></span></label><div><button class="gbtn pri">{{t "profile.save"}}</button></div></form></details>{{end}}
+{{if .Error}}<div class="flash err" role="alert">{{mi "tri"}}<div>{{.Error}}</div></div>{{end}}{{if .Profile.Notice}}<div class="flash" role="status">{{mi "check"}}<div>{{.Profile.Notice}}</div></div>{{end}}
+{{if and .Interactive .Profile.Locked}}<div class="flash info" role="status">{{mi "lock"}}<div>{{t "profile.err.locked"}}</div></div>{{end}}
+{{if not .Interactive}}<div class="flash info" role="status">{{mi "lock"}}<div>{{t "adm.readonly"}}</div></div>{{end}}
+{{with .Shell.Orgs}}<h2 class="ph3">{{t "adm.account.orgs"}}</h2><ul class="porgs">{{range .Items}}<li><a href="{{.Href}}"><span class="gav org" aria-hidden="true">{{mi "repo"}}</span><span>{{.Label}}</span></a></li>{{end}}</ul>{{end}}
+</aside>
+<div class="pmain">
+{{if .Profile.Agents}}<div class="sh2"><h2>{{t "profile.agents"}}</h2><span class="counter">{{.Profile.AgentCount}}</span></div><div class="ag">{{template "agentgroups" .Profile.Agents}}</div>{{end}}
+<div class="sh2"><h2>{{t "adm.tokens.title"}}</h2><span class="sp"></span><a class="gbtn sm" href="/ui/account/tokens">{{mi "term"}}{{t "profile.manage"}}</a></div>
+<div class="box">{{range .Profile.Devices}}<div class="row devrow"><span class="gav lg org" aria-hidden="true">{{mi "term"}}</span><div><b>{{.Name}}</b><div class="muted">{{.Seen}}</div></div></div>{{else}}<div class="row"><span class="muted">{{t "adm.tokens.empty"}}</span></div>{{end}}</div>
+</div></div></div>{{template "foot" .}}{{end}}

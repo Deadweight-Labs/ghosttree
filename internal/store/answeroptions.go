@@ -412,6 +412,10 @@ type QuickAnswerInput struct {
 	ID   int64
 	// Option ist der Schlüssel des Vorschlags (siehe AnswerOption.Key).
 	Option string
+	// Reason ist bei einer Entscheidung die Begründung des Menschen (eine Zeile,
+	// höchstens idea.MaxReasonLine Zeichen); leer heißt „per Schnellantwort“.
+	// Bei einer Frage oder Aufgabe zählt sie nicht.
+	Reason string
 }
 
 // QuickAnswerResult sagt, was geschrieben wurde.
@@ -458,7 +462,7 @@ func (a *ProjectAccess) QuickAnswer(ca CoordAccess, in QuickAnswerInput) (QuickA
 	case AnswerOnTask:
 		return a.quickAnswerTask(in.ID, key)
 	case AnswerOnDecision:
-		return a.quickAnswerDecision(in.ID, key)
+		return a.quickAnswerDecision(in.ID, key, in.Reason)
 	}
 	return QuickAnswerResult{}, requestdomain.NewRuleError("invalid_answer_subject", "answer a question in a room, a task or a decision", "use kind attention, task or decision", nil)
 }
@@ -556,7 +560,7 @@ func (a *ProjectAccess) quickAnswerTask(id int64, key string) (QuickAnswerResult
 	return QuickAnswerResult{Kind: AnswerOnTask, ID: id, Option: opt}, nil
 }
 
-func (a *ProjectAccess) quickAnswerDecision(id int64, key string) (QuickAnswerResult, error) {
+func (a *ProjectAccess) quickAnswerDecision(id int64, key, reason string) (QuickAnswerResult, error) {
 	d, err := a.DecisionView(id)
 	if err != nil {
 		return QuickAnswerResult{}, err
@@ -568,8 +572,17 @@ func (a *ProjectAccess) quickAnswerDecision(id int64, key string) (QuickAnswerRe
 	if !ok {
 		return QuickAnswerResult{}, optionNotFound(key)
 	}
+	// Die Begründung steht im Wissen, wie der Mensch sie schrieb (Leerraum zu einem
+	// Leerzeichen); zu lang wird abgewiesen, nicht gekürzt.
+	why := cleanLine(reason, 10*idea.MaxReasonLine)
+	if utf8.RuneCountInString(why) > idea.MaxReasonLine {
+		return QuickAnswerResult{}, requestdomain.NewRuleError("reason_too_long", fmt.Sprintf("the reason is longer than %d characters", idea.MaxReasonLine), "shorten the reason", nil)
+	}
+	if why == "" {
+		why = quickAnswerReason
+	}
 	actor := idea.Actor{AccountID: a.account, Person: cleanLine(a.principal.Label, 100), Agent: false, GitAnchor: gitanchor.Web()}
-	if _, err := a.CloseDecision(CloseDecisionInput{ID: id, Outcome: idea.DecisionDecided, Variant: opt.Key, Reason: quickAnswerReason, Actor: actor}); err != nil {
+	if _, err := a.CloseDecision(CloseDecisionInput{ID: id, Outcome: idea.DecisionDecided, Variant: opt.Key, Reason: why, Actor: actor}); err != nil {
 		return QuickAnswerResult{}, err
 	}
 	if err := a.st.commitQuickMark(AnswerOnDecision, id, opt.Key, opt.Text, a.account, cleanLine(a.principal.Label, 100)); err != nil {

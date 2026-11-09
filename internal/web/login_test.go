@@ -28,16 +28,16 @@ func TestLoginPageWithoutOIDCHasCodeFieldAndNoProviderButton(t *testing.T) {
 	srv, _, _ := testWeb(t)
 	page := loginPageOf(t, srv)
 	for _, want := range []string{
-		`class="login"`, `<h1>Sign in</h1>`, `name="code"`, `action="/ui/login/code"`,
+		`class="g2 auth"`, `<h1>Sign in to ghosttree</h1>`, `name="code"`, `action="/ui/login/code"`,
 		`Code or login link`, `placeholder="e.g. 4f9k-2m7q-x8dp"`,
-		`Paste a person token`, `name="token"`, `action="/ui/login"`,
-		`href="/static/tokens.css"`,
+		`Sign in with a token`, `name="token"`, `action="/ui/login"`,
+		`href="/static/ui-auth.css"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("login page lacks %q", want)
 		}
 	}
-	for _, bad := range []string{"/ui/login/oidc", "Continue with", " or<", `class="login-divider"`, "ZITADEL"} {
+	for _, bad := range []string{"/ui/login/oidc", "Continue with", " or<", `class="auth-or"`, "ZITADEL"} {
 		if strings.Contains(page, bad) {
 			t.Errorf("login page without OIDC shows %q", bad)
 		}
@@ -56,7 +56,7 @@ func TestLoginPageWithOIDCOffersProviderAndCodeFieldTogether(t *testing.T) {
 	page := body(t, resp)
 	for _, want := range []string{
 		`formaction="/ui/login/oidc"`, `formnovalidate`, `Continue with your identity provider`,
-		`name="code"`, `class="login-divider"`, `Code or login link`,
+		`name="code"`, `class="auth-or"`, `Code or login link`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("OIDC login page lacks %q", want)
@@ -201,7 +201,7 @@ func TestLoginWithAWrongCodeShowsTheErrorInsideTheForm(t *testing.T) {
 	page := body(t, resp)
 	for _, want := range []string{
 		`role="alert"`, "That code isn&#39;t valid. Check it and try again, or ask for a new link.",
-		`name="code"`, `<h1>Sign in</h1>`,
+		`name="code"`, `<h1>Sign in to ghosttree</h1>`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("error state lacks %q: %s", want, page)
@@ -220,7 +220,7 @@ func TestLoginWithAWrongTokenShowsTheSameErrorState(t *testing.T) {
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp := sameOriginPostForm(t, client, srv.URL+"/ui/login", url.Values{"token": {"nope"}})
 	page := body(t, resp)
-	if !strings.Contains(page, `role="alert"`) || !strings.Contains(page, `<h1>Sign in</h1>`) {
+	if !strings.Contains(page, `role="alert"`) || !strings.Contains(page, `<h1>Sign in to ghosttree</h1>`) {
 		t.Errorf("token error state: %s", page)
 	}
 }

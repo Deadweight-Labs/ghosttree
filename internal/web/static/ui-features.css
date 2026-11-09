@@ -1,0 +1,28 @@
+/* Features: the list rows of a repository and the page of one feature. Everything
+   else (head, rows, side column, timeline) is the base of issues and ideas. */
+
+:is(.g2.ft) {
+  & .st.feat { color: var(--done-fg); }
+  & .irow .meta .fm { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-muted); }
+  & .irow .meta a.fm:hover { color: var(--accent-fg); text-decoration: none; }
+  & .irow .meta .fm .i { width: 14px; height: 14px; }
+
+  /* page of a feature: lead sentence, the boxes under the description */
+  & .fsum { font-size: 16px; line-height: 24px; font-weight: 600; color: var(--fg-default); }
+  & .fsec { margin-top: 16px; }
+  & .fuse { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; align-items: start; }
+  & .fuse + .fuse { border-top: 1px solid var(--border-muted); }
+  & .fuse .uk { padding-top: 2px; font-size: 12px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .04em; }
+  & .fuse .prose { min-width: 0; font-size: 14px; }
+  & .farea { display: flex; align-items: center; gap: 8px; color: var(--fg-default); font-size: 14px; }
+  & .farea + .farea { border-top: 1px solid var(--border-muted); }
+  & .farea .i { color: var(--fg-muted); flex: none; }
+  & .farea .mono { min-width: 0; overflow-wrap: anywhere; }
+  & .farea:hover { background: var(--row-hover); text-decoration: none; }
+  & .farea:hover .mono { color: var(--accent-fg); }
+  & .tlx { margin-top: 24px; }
+}
+
+@media (max-width: 767px) {
+  :is(.g2.ft) .fuse { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}

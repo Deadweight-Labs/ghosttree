@@ -35,7 +35,7 @@ func TestAgentsPageShowsTheViewersOwnAgentWithoutAProjectRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, nora, e.Base+"/ui/agents")
-	if !strings.Contains(page, "Claude · nora · nora-laptop") {
+	if !strings.Contains(page, `title="Claude · nora · nora-laptop"`) {
 		t.Fatalf("own agent missing or unreadable: %s", page)
 	}
 	if !strings.Contains(page, `title="claude:nora-laptop:aaaaaaaa-1111"`) {
@@ -43,10 +43,6 @@ func TestAgentsPageShowsTheViewersOwnAgentWithoutAProjectRole(t *testing.T) {
 	}
 	if strings.Contains(page, "alices-box") || strings.Contains(page, "CLI ·") {
 		t.Error("somebody else's agent is listed")
-	}
-	_, ov := fetchPage(t, nora, e.Base+"/ui/overview")
-	if !strings.Contains(ov, "Claude · nora · nora-laptop") {
-		t.Error("the overview lacks the own agent")
 	}
 }
 
@@ -86,10 +82,10 @@ func TestAgentIsActiveOnlyWithASignOfLife(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/agents")
-	if strings.Contains(page, "is-active") && strings.Contains(page, `ag-card is-active`) {
+	if strings.Contains(page, `arow is-active`) {
 		t.Errorf("an agent that only posted a message counts as active: %s", page)
 	}
-	if !strings.Contains(page, `ag-card is-idle`) {
+	if !strings.Contains(page, `arow is-idle`) {
 		t.Error("a recently registered silent agent should be idle")
 	}
 }
@@ -100,15 +96,6 @@ func TestOverviewShowsConnectedMachinesAndTheNextStep(t *testing.T) {
 	if _, _, err := e.St.CreateDeviceToken("person:2", "anna-laptop"); err != nil {
 		t.Fatal(err)
 	}
-	_, page := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	for _, want := range []string{"anna-laptop", "Connected", "Start Claude or Codex in a project", "claude"} {
-		if !strings.Contains(page, want) {
-			t.Errorf("overview lacks %q", want)
-		}
-	}
-	if strings.Contains(page, "No agents yet.") {
-		t.Error("a connected machine still reads as no agents")
-	}
 	_, agents := fetchPage(t, e.Member, e.Base+"/ui/agents")
 	if !strings.Contains(agents, "anna-laptop") || !strings.Contains(agents, "Start Claude or Codex in a project") {
 		t.Error("the agents page lacks the machine or the next step")
@@ -117,12 +104,12 @@ func TestOverviewShowsConnectedMachinesAndTheNextStep(t *testing.T) {
 	if _, _, err := e.St.CreateDeviceToken("person:1", "alice-box"); err != nil {
 		t.Fatal(err)
 	}
-	_, again := fetchPage(t, e.Member, e.Base+"/ui/overview")
+	_, again := fetchPage(t, e.Member, e.Base+"/ui/overview?connect=1")
 	if strings.Contains(again, "alice-box") {
 		t.Error("another person's machine is listed")
 	}
 	_, forced := fetchPage(t, e.Member, e.Base+"/ui/overview?connect=1")
-	if !strings.Contains(forced, "anna-laptop is connected") || strings.Contains(forced, "Waiting for your machine") {
+	if !strings.Contains(forced, "anna-laptop</b> is connected") || strings.Contains(forced, "Waiting for your machine") {
 		t.Error("the connect page does not switch to connected")
 	}
 }
@@ -174,7 +161,7 @@ func TestKnowledgeStatusIsReadableAndExplainedInATitle(t *testing.T) {
 	ovKnowledge(t, e.St, shellProject, "Proposed", "staged")
 	ovKnowledge(t, e.St, shellProject, "Settled", "trusted")
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/knowledge")
-	for _, want := range []string{"Waiting for review", `class="kn-level" title="`, `class="kn-ico"`} {
+	for _, want := range []string{"Waiting for review", `class="lv" title="`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("knowledge list lacks %q", want)
 		}
@@ -322,7 +309,7 @@ func TestOwnAgentWithoutRoleShowsNoWaitState(t *testing.T) {
 	_, _ = me.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room,
 		ClientID: "q1", Body: "ping", Intent: store.IntentQuestion, Mentions: []string{"claude:hidden-peer:bbbb"}})
 	_, page := fetchPage(t, nora, e.Base+"/ui/agents")
-	if !strings.Contains(page, "Claude · nora · nora-laptop") {
+	if !strings.Contains(page, `title="Claude · nora · nora-laptop"`) {
 		t.Fatalf("own agent missing: %s", page)
 	}
 	if strings.Contains(page, "Waiting for") {

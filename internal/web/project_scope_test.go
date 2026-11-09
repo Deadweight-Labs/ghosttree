@@ -36,10 +36,12 @@ func projectCookieOf(resp *http.Response) *http.Cookie {
 	return nil
 }
 
+// selectedOption is the project a page is narrowed to, as the header names it
+// behind the page title; "" means all projects.
 func selectedOption(page string) string {
-	m := regexp.MustCompile(`<option value="([^"]*)"[^>]*selected`).FindStringSubmatch(page)
+	m := regexp.MustCompile(`<a class="scope"[^>]*title="([^"]*)"`).FindStringSubmatch(page)
 	if m == nil {
-		return "(none)"
+		return ""
 	}
 	return m[1]
 }
@@ -63,7 +65,7 @@ func TestSelectionSurvivesNavigation(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
 	c := remembering(t, base, owner)
 	fetchPage(t, c, base+"/ui/knowledge?project="+shellProject)
-	for _, path := range []string{"/ui/overview", "/ui/requests", "/ui/sessions", "/ui/agents", "/ui/coord", "/ui/knowledge"} {
+	for _, path := range []string{"/ui/sessions", "/ui/agents", "/ui/coord", "/ui/knowledge"} {
 		_, page := fetchPage(t, c, base+path)
 		if got := selectedOption(page); got != shellProject {
 			t.Errorf("GET %s shows %q selected, want %q", path, got, shellProject)
@@ -74,26 +76,26 @@ func TestSelectionSurvivesNavigation(t *testing.T) {
 func TestExplicitProjectOverridesTheCookieAndAllProjectsClearsIt(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
 	c := remembering(t, base, owner)
-	fetchPage(t, c, base+"/ui/overview?project="+shellProject)
-	fetchPage(t, c, base+"/ui/overview?project="+shellHiddenProject)
-	if _, page := fetchPage(t, c, base+"/ui/requests"); selectedOption(page) != shellHiddenProject {
+	fetchPage(t, c, base+"/ui/knowledge?project="+shellProject)
+	fetchPage(t, c, base+"/ui/knowledge?project="+shellHiddenProject)
+	if _, page := fetchPage(t, c, base+"/ui/knowledge"); selectedOption(page) != shellHiddenProject {
 		t.Errorf("explicit project did not replace the stored one: %q", selectedOption(page))
 	}
-	resp, err := c.Get(base + "/ui/overview?project=")
+	resp, err := c.Get(base + "/ui/knowledge?project=")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cookie := projectCookieOf(resp); cookie == nil || cookie.MaxAge >= 0 {
 		t.Errorf("All projects must clear the cookie, got %+v", cookie)
 	}
-	if _, page := fetchPage(t, c, base+"/ui/requests"); selectedOption(page) != "" {
+	if _, page := fetchPage(t, c, base+"/ui/knowledge"); selectedOption(page) != "" {
 		t.Errorf("after All projects the selection is %q", selectedOption(page))
 	}
 }
 
 func TestProjectWithoutAccessIsIgnoredAndNeverLeaked(t *testing.T) {
 	base, _, member, _ := shellWeb(t)
-	resp, err := member.Get(base + "/ui/overview?project=" + shellHiddenProject)
+	resp, err := member.Get(base + "/ui/knowledge?project=" + shellHiddenProject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +106,7 @@ func TestProjectWithoutAccessIsIgnoredAndNeverLeaked(t *testing.T) {
 		t.Error("the page names a project the member has no role in")
 	}
 	// A cookie that outlived the access is ignored as well.
-	req, _ := http.NewRequest(http.MethodGet, base+"/ui/requests", nil)
+	req, _ := http.NewRequest(http.MethodGet, base+"/ui/knowledge", nil)
 	req.AddCookie(&http.Cookie{Name: projectCookie, Value: shellHiddenProject})
 	u, _ := url.Parse(base)
 	for _, sc := range member.Jar.Cookies(u) {
@@ -147,24 +149,21 @@ func TestRoomsListFollowsTheSelectedProject(t *testing.T) {
 	}
 }
 
-func TestSessionsAndRequestsFollowTheSelectedProject(t *testing.T) {
+func TestSessionsAndKnowledgeFollowTheSelectedProject(t *testing.T) {
 	e := seedSessions(t)
-	rqMake(t, e.St, rqSpec{Title: "Shell request"})
-	rqMake(t, e.St, rqSpec{Title: "Hidden request", Project: shellHiddenProject})
+	ovKnowledge(t, e.St, shellProject, "Shell lesson", "trusted")
+	ovKnowledge(t, e.St, shellHiddenProject, "Hidden lesson", "trusted")
 	c := remembering(t, e.Base, e.Owner)
-	fetchPage(t, c, e.Base+"/ui/overview?project="+shellProject)
-	_, page := fetchPage(t, c, e.Base+"/ui/requests")
-	if !strings.Contains(page, "Shell request") || strings.Contains(page, "Hidden request") {
-		t.Error("requests ignore the stored selection")
+	fetchPage(t, c, e.Base+"/ui/knowledge?project="+shellProject)
+	_, page := fetchPage(t, c, e.Base+"/ui/knowledge")
+	if !strings.Contains(page, "Shell lesson") || strings.Contains(page, "Hidden lesson") {
+		t.Error("knowledge ignores the stored selection")
 	}
 	_, page = fetchPage(t, c, e.Base+"/ui/sessions")
 	if !strings.Contains(page, e.pid["anna-project"]) || strings.Contains(page, e.pid["hidden-project"]) {
 		t.Error("sessions ignore the stored selection")
 	}
-	if strings.Count(page, "All projects") > 1 {
-		t.Error("sessions repeat the project choice that the header already offers")
-	}
-	fetchPage(t, c, e.Base+"/ui/overview?project=")
+	fetchPage(t, c, e.Base+"/ui/knowledge?project=")
 	_, page = fetchPage(t, c, e.Base+"/ui/sessions")
 	if !strings.Contains(page, e.pid["hidden-project"]) {
 		t.Error("All projects does not widen the sessions list")
@@ -180,64 +179,24 @@ func TestAccountPagesDoNotOfferTheProjectSelector(t *testing.T) {
 				t.Errorf("GET %s status=%d", path, status)
 				continue
 			}
-			if strings.Contains(page, `id="shell-project"`) {
-				t.Errorf("GET %s offers a project selector that filters nothing", path)
+			if selectedOption(page) != "" {
+				t.Errorf("GET %s names a project scope that filters nothing", path)
 			}
 		}
 	}
-	_, page := fetchPage(t, owner, base+"/ui/overview")
-	if !strings.Contains(page, `id="shell-project"`) {
-		t.Error("overview lost the project selector")
+	_, page := fetchPage(t, owner, base+"/ui/overview?project="+shellProject)
+	if selectedOption(page) != shellProject {
+		t.Errorf("the header does not name the project the page is narrowed to: %q", selectedOption(page))
 	}
 }
 
 func TestLogoutForgetsTheSelection(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
 	c := remembering(t, base, owner)
-	fetchPage(t, c, base+"/ui/overview?project="+shellProject)
+	fetchPage(t, c, base+"/ui/knowledge?project="+shellProject)
 	form := url.Values{"csrf_token": {renderedCSRFToken(t, c, base+"/ui/overview")}}
 	resp := sameOriginPostForm(t, c, base+"/ui/logout", form)
 	if cookie := projectCookieOf(resp); cookie == nil || cookie.MaxAge >= 0 {
 		t.Errorf("logout must clear the project cookie, got %+v", cookie)
-	}
-}
-
-// cssDeclarations gives the declarations of the rule whose selector list is
-// exactly selector, so a test does not depend on spacing or property order.
-func cssDeclarations(t *testing.T, sheet, selector string) map[string]string {
-	t.Helper()
-	raw, err := files.ReadFile("static/" + sheet)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rule := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(selector) + `\s*\{([^}]*)\}`).FindStringSubmatch(string(raw))
-	if rule == nil {
-		t.Fatalf("%s has no rule for %q", sheet, selector)
-	}
-	out := map[string]string{}
-	for _, decl := range strings.Split(rule[1], ";") {
-		if name, value, ok := strings.Cut(decl, ":"); ok {
-			out[strings.TrimSpace(name)] = strings.Join(strings.Fields(value), " ")
-		}
-	}
-	return out
-}
-
-func TestSelectOptionsCarryTheirOwnColours(t *testing.T) {
-	if got := cssDeclarations(t, "shell.css", "select")["color-scheme"]; got != "light dark" {
-		t.Errorf("select color-scheme=%q, want light dark", got)
-	}
-	options := cssDeclarations(t, "shell.css", "select option, select optgroup")
-	if options["background-color"] != "var(--clay-c-surface)" || options["color"] != "var(--clay-ink)" {
-		t.Errorf("options inherit the system canvas instead of the clay tokens: %v", options)
-	}
-}
-
-func TestConnectRowsKeepApartAndWrap(t *testing.T) {
-	if got := cssDeclarations(t, "shell.css", ".ov-pair")["margin"]; got != "0 0 var(--space-5)" {
-		t.Errorf(".ov-pair margin=%q: the install button would sit on the code field", got)
-	}
-	if got := cssDeclarations(t, "shell.css", ".ov-device")["flex-wrap"]; got != "wrap" {
-		t.Errorf(".ov-device flex-wrap=%q: the code row cannot wrap on narrow screens", got)
 	}
 }

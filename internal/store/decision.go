@@ -72,6 +72,13 @@ func (a *ProjectAccess) canSeeDecisionSubject(kind string, id int64) bool {
 	return err == nil
 }
 
+// CanCloseDecision sagt, ob der Betrachter die Entscheidung schließen darf: wer am
+// Gegenstand (Idee, Issue) Bearbeitungsrecht hat. Der Posteingang zeigt nur solche.
+func (a *ProjectAccess) CanCloseDecision(d idea.Decision) bool {
+	_, err := a.decisionSubject(d.Subject, d.SubjectID, ActEdit)
+	return err == nil
+}
+
 // ---- Lesen
 
 const decisionCols = `id,project,subject_kind,subject_id,question,detail,way,way_why,aspects,state,answer,reason,trigger_text,

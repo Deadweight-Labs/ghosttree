@@ -1,0 +1,29 @@
+/* Organisation page in the GitHub-like look: the repositories (with the sign for
+   public or private knowledge), agents, people and rooms behind the band.
+   Mock: git-native-v2 org.html. */
+
+:is(.g2.org) {
+  & .sbar { display: flex; gap: 8px; margin-bottom: 16px; }
+  & .sbar .gfield { flex: 1; }
+  & .sbar-repos .gfield { flex: 0 1 290px; }
+  & .sbar .gbtn.pri { margin-left: auto; }
+  & .orow { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; }
+  & .orow .nm { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  & .orow .nm a { font-size: 14px; font-weight: 600; }
+  & .orow .nm .lb { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; }
+  & .orow .nm .lb .i { width: 12px; height: 12px; margin: 0; }
+  & .ometa { display: flex; align-items: center; gap: 16px; font-size: 14px; color: var(--fg-muted); }
+  & .onum { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-muted); }
+  & .onum:hover { color: var(--accent-fg); text-decoration: none; }
+  & .prow { display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: var(--fg-default); }
+  & .prow > div { flex: 1; min-width: 0; }
+  & .prow:hover { text-decoration: none; }
+  & a.prow:hover { background: var(--row-hover); }
+  & .prow > .i { color: var(--fg-muted); }
+  & .gfilters .dd.on > summary { color: var(--fg-default); font-weight: 600; }
+  & .pop .opt[aria-pressed=false] .chk { visibility: hidden; }
+  & .box-h.lh .sp { flex: 1; }
+}
+@media (max-width: 767px) {
+  :is(.g2.org) .orow { flex-direction: column; align-items: flex-start; gap: 4px; }
+}

@@ -1,0 +1,80 @@
+/* Sign-in, registration, invitation and pairing pages: a centred column with the
+   ghost, a heading and a card; the old class names of the invitation and pairing
+   pages are mapped on the same look. Mock: git-native-v2 login.html (R2),
+   register.html, join*.html. */
+
+:is(.g2.auth) {
+  & .authbox { max-width: 372px; margin: 0 auto; padding: 40px 16px 0; display: flex; flex-direction: column; align-items: stretch; }
+  & .auth-logo { align-self: center; display: inline-flex; color: var(--logo); }
+  & .auth-logo svg { width: 48px; height: 48px; }
+  & h1 { margin: 16px 0; text-align: center; font-size: 24px; font-weight: 300; line-height: 1.25; }
+  & .auth-card { padding: 16px; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; display: flex; flex-direction: column; gap: 16px; }
+  & .auth-card form { display: flex; flex-direction: column; gap: 16px; margin: 0; }
+  & .pfield { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 14px; }
+  & .pfield .gfield { font-weight: 400; background: var(--canvas-default); }
+  & .pfield small { font-weight: 400; font-size: 12px; }
+  & .auth-or { display: flex; align-items: center; gap: 16px; color: var(--fg-muted); font-size: 14px; }
+  & .auth-or::before, & .auth-or::after { content: ""; flex: 1; height: 1px; background: var(--border-default); }
+  & .auth-error { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 12px; color: var(--danger-fg); background: var(--danger-subtle); border: 1px solid var(--danger-muted); border-radius: 6px; }
+  & .auth-flash { margin-bottom: 16px; padding: 12px 16px; }
+  & .auth-hint { margin: -8px 0 0; font-size: 13px; text-align: center; }
+  & .auth-token summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; list-style: none; color: var(--accent-fg); font-size: 14px; }
+  & .auth-token summary::-webkit-details-marker { display: none; }
+  & .auth-token[open] summary .i { transform: rotate(180deg); }
+  & .auth-token form { margin-top: 12px; }
+  & .auth-alt { margin: 24px 0 0; text-align: center; color: var(--fg-muted); font-size: 16px; }
+  & .gt-foot { margin-top: 48px; border-top: 0; }
+  & .muted { color: var(--fg-muted); }
+  & .join-facts { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--fg-muted); }
+
+  /* Invitation and pairing pages (join.html) */
+  & .join-card { background: var(--canvas-default); }
+  & .join-card .pfield, & .join-card label.fl { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+  & .auth-card label.field { display: flex; flex-direction: column; gap: 4px; font-size: 14px; font-weight: 600; }
+  & .auth-card label.field input { height: 32px; padding: 0 12px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; font: 400 14px var(--ui-font); }
+  & .auth-card label.field input:focus { outline: 2px solid var(--accent-emphasis); outline-offset: -1px; }
+  & .join-card ul.join-shares { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); }
+  & .join-card ul.join-shares > li { padding: 12px 16px; }
+  & .join-card ul.join-shares > li + li { border-top: 1px solid var(--border-muted); }
+  & .authbox.wide { max-width: 640px; }
+  & .join-steps { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); }
+  & .join-step { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 16px; }
+  & .join-step + .join-step { border-top: 1px solid var(--border-muted); }
+  & .join-num { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 1px solid var(--border-default); border-radius: 50%; font-weight: 600; background: var(--canvas-subtle); }
+  & .join-step.is-active .join-num { color: var(--accent-fg); border-color: var(--accent-emphasis); }
+  & .join-step p { margin: 4px 0 0; color: var(--fg-muted); }
+  & .join-wait { display: flex; align-items: center; gap: 8px; }
+  & .join-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--attention-fg); box-shadow: 0 0 0 4px var(--attention-subtle); }
+  & .join-cmd { display: flex; align-items: center; gap: 8px; }
+  & .join-cmd code, & .join-msg { flex: 1; min-width: 0; padding: 8px 12px; font: 13px/1.5 var(--ui-mono); background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; overflow-wrap: anywhere; white-space: pre-wrap; }
+  & .join-url { color: var(--accent-fg); }
+  & .join-tok { white-space: nowrap; }
+  & .join-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  & .join-confirm { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; cursor: pointer; }
+  & .join-confirm input { margin: 3px 0 0; width: 14px; height: 14px; accent-color: var(--accent-emphasis); }
+  & .join-confirm-hint, & .join-from, & .join-lead { margin: 0; color: var(--fg-muted); font-size: 14px; }
+  & .join-codefield { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
+  & .join-code { height: 40px; padding: 0 12px; font: 20px var(--ui-mono); letter-spacing: .2em; text-transform: uppercase; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; }
+  & .join-done { display: flex; align-items: center; gap: 12px; }
+  & .join-done h1 { margin: 0; text-align: left; }
+  & .join-check { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; color: #fff; background: var(--success-emphasis); border-radius: 50%; }
+  & .join-check .i { width: 22px; height: 22px; }
+  & .join-newcode { margin-top: 8px; text-align: center; }
+  & .join-mobile { display: none; }
+  & .join-paste code { cursor: pointer; }
+  & .ostabs { margin: 4px 0 0; }
+  & .btn, & a.btn { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 12px; font: 500 14px/20px var(--ui-font); color: var(--fg-default); background: var(--btn-bg); border: 1px solid var(--btn-border); border-radius: 6px; cursor: pointer; text-decoration: none; }
+  & .btn-primary { background: var(--btn-pri-bg); border-color: var(--btn-pri-border); color: #fff; }
+  & .btn.ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
+  & .btn[disabled] { opacity: .5; cursor: not-allowed; }
+  & .login-error { margin: 0; padding: 8px 12px; color: var(--danger-fg); background: var(--danger-subtle); border: 1px solid var(--danger-muted); border-radius: 6px; }
+  & .join-newcode .btn { background: transparent; border-color: transparent; color: var(--fg-muted); }
+}
+@media (max-width: 767px) {
+  :is(.g2.auth) {
+    & .authbox { padding-top: 32px; }
+    & .join-mobile { display: block; }
+    & .join-desktop { display: none; }
+    & .btn, & .gbtn { min-height: 44px; }
+  }
+}

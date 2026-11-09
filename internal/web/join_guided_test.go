@@ -23,7 +23,7 @@ func TestJoinGuidedPairPageStatesAndNewCodeEverywhere(t *testing.T) {
 	pair := pairRE.FindString(e.pairPage(t, b))
 
 	resp, text := e.get(t, b, "/join/pair")
-	for _, want := range []string{"Open a terminal on your computer", "Copy this command and run it", "Confirm here", "Waiting for your computer", "Send this to your computer", `data-join-state="waiting"`, `data-copy="#join-cmd"`, "mailto:?subject=", "| sh -s -- --pair " + pair, "New code"} {
+	for _, want := range []string{"Open a terminal on your computer", "Copy this command and run it", "Confirm here", "Waiting for your computer", "Send this to your computer", `data-join-state="waiting"`, `data-ui-copy="#join-cmd-lin"`, "mailto:?subject=", "| sh -s -- --pair " + pair, "New code"} {
 		if !strings.Contains(text, want) && !strings.Contains(plainText(text), want) {
 			t.Errorf("waiting page lacks %q", want)
 		}
@@ -43,7 +43,7 @@ func TestJoinGuidedPairPageStatesAndNewCodeEverywhere(t *testing.T) {
 	// Code-Weg: großes Feld, sprechende Bestätigung ohne Kennung.
 	claim := e.claimCode(t, pair, "annas-laptop")
 	text = e.pairPage(t, b)
-	for _, want := range []string{"annas-laptop wants to connect", "Code from your terminal", `class="clay join-code"`, "This is me, anna", "Connect annas-laptop", "New code"} {
+	for _, want := range []string{"annas-laptop wants to connect", "Code from your terminal", `class="join-code"`, "This is me, anna", "Connect annas-laptop", "New code"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("claimed page lacks %q", want)
 		}
@@ -137,11 +137,11 @@ func TestJoinCommandWrapsOnlyAtSpaces(t *testing.T) {
 		t.Error("no break hint after the pipe")
 	}
 	want := "curl -fsSL " + e.srv + "/install.sh | sh -s -- --pair " + pair
-	m := regexp.MustCompile(`(?s)<code id="join-cmd">(.*?)</code>`).FindStringSubmatch(page)
+	m := regexp.MustCompile(`(?s)<pre class="cmd" id="join-cmd-lin">(.*?)</pre>`).FindStringSubmatch(page)
 	if m == nil || plainText(m[1]) != want {
 		t.Fatalf("copied text differs from the command: %q", plainText(m[1]))
 	}
-	css, err := os.ReadFile("static/shell.css")
+	css, err := os.ReadFile("static/ui-auth.css")
 	if err != nil {
 		t.Fatal(err)
 	}

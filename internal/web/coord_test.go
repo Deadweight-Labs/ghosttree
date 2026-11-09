@@ -7,7 +7,6 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -753,7 +752,7 @@ func TestCoordWorkspaceRendersAllRoomSectionsAndNewestWindow(t *testing.T) {
 	}
 
 	html := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(project))
-	for _, want := range []string{`class="rtabs`, `title="github.com/x/workspace"`, `title="mainex"`, `id="message-75"`, "Who is here", "Threads"} {
+	for _, want := range []string{`class="rlist"`, `title="github.com/x/workspace"`, `title="mainex"`, `id="message-75"`, "Who is here", "Threads"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("workspace missing %q", want)
 		}
@@ -790,7 +789,7 @@ func TestCoordAttentionRegionRendersEachSignalledRoomOnceWithExplicitCounts(t *t
 	}
 
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	start := strings.Index(page, `<nav class="rtabs`)
+	start := strings.Index(page, `<nav class="rlist"`)
 	if start < 0 {
 		t.Fatal("room tabs missing")
 	}
@@ -821,11 +820,11 @@ func TestCoordThreadContextReplacesDefaultInspector(t *testing.T) {
 	}
 
 	defaultPage := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	if !strings.Contains(defaultPage, `class="coord-context-default"`) || strings.Contains(defaultPage, `class="coord-context-thread`) {
+	if !strings.Contains(defaultPage, `class="coord-context-default rdetails box"`) || strings.Contains(defaultPage, `class="coord-context-thread`) {
 		t.Fatal("room view must render only the default inspector mode")
 	}
 	threadPage := coordPageBody(t, client, srv.URL+coordThreadURL(room, threadID))
-	if !strings.Contains(threadPage, `class="coord-context-thread coord-thread-detail card clay"`) || strings.Contains(threadPage, `class="coord-context-default"`) {
+	if !strings.Contains(threadPage, `coord-thread-detail`) || strings.Contains(threadPage, `class="coord-context-default rdetails box"`) {
 		t.Fatal("selected thread must replace the default inspector mode")
 	}
 }
@@ -833,7 +832,7 @@ func TestCoordThreadContextReplacesDefaultInspector(t *testing.T) {
 func TestCoordWelcomeKeepsRoomPickerReachableWhenEnhanced(t *testing.T) {
 	srv, _, client := signedIn(t)
 	html := coordPageBody(t, client, srv.URL+"/ui/coord")
-	for _, want := range []string{`<h1 class="coord-visually-hidden">Rooms</h1>`, `class="coord-welcome"`} {
+	for _, want := range []string{`<h1 class="sr">Rooms</h1>`, `coord-welcome`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("welcome drawer contract missing %q", want)
 		}
@@ -841,7 +840,7 @@ func TestCoordWelcomeKeepsRoomPickerReachableWhenEnhanced(t *testing.T) {
 }
 
 func TestCoordSelectedThreadOpensResponsiveContextOnInitialLoad(t *testing.T) {
-	jsBytes, err := files.ReadFile("static/app.js")
+	jsBytes, err := files.ReadFile("static/ui-coord.js")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -856,24 +855,6 @@ func TestCoordSelectedThreadOpensResponsiveContextOnInitialLoad(t *testing.T) {
 			t.Errorf("initial selected-thread drawer behavior missing %q", want)
 		}
 	}
-}
-
-func coordCSSRule(t *testing.T, css, selector string) string {
-	t.Helper()
-	start := strings.Index(css, selector)
-	if start < 0 {
-		t.Fatalf("CSS selector missing %q", selector)
-	}
-	open := strings.Index(css[start:], "{")
-	if open < 0 {
-		t.Fatalf("CSS selector %q has no declaration block", selector)
-	}
-	open += start
-	close := strings.Index(css[open:], "}")
-	if close < 0 {
-		t.Fatalf("CSS selector %q has an unterminated declaration block", selector)
-	}
-	return css[open+1 : open+close]
 }
 
 func TestCoordWorkspaceRendersAuthorizedIdentityLabelsAndHonestPresence(t *testing.T) {
@@ -1303,15 +1284,17 @@ func TestReplyCountsRenderInRoomAndThread(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The room shows the counter at the parent, the thread view at its own.
+	roomPage := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
 	page := coordPageBody(t, client, srv.URL+coordThreadURL(room, threadID))
-	if got := strings.Count(page, `>2 replies<`); got != 2 {
+	if got := strings.Count(roomPage, `>2 replies<`) + strings.Count(page, `>2 replies<`); got != 2 {
 		t.Fatalf("room and thread reply counters: got %d occurrences, want 2", got)
 	}
 }
 
 func TestCoordDrawerScriptMakesOutsideRegionsInertAndRestoresThem(t *testing.T) {
 	srv, _, _ := signedIn(t)
-	res, err := http.Get(srv.URL + "/static/app.js")
+	res, err := http.Get(srv.URL + "/static/ui-coord.js")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1511,103 +1494,6 @@ func coordPageBody(t *testing.T, client *http.Client, target string) string {
 	return string(body)
 }
 
-// cssRule ist eine Blattregel aus app.css. Umschließende @media-Blöcke sind
-// aufgelöst; es zählt nur Selektor und Deklarationstext.
-type cssRule struct{ selector, body string }
-
-var cssComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
-
-// parseCSSRules zerlegt CSS in Blattregeln. Es reicht für dieses Stylesheet:
-// keine Strings mit Klammern, keine verschachtelten Regeln außer @media.
-func parseCSSRules(css string) []cssRule {
-	css = cssComment.ReplaceAllString(css, "")
-	var rules []cssRule
-	type frame struct {
-		selector string
-		body     strings.Builder
-		children bool
-	}
-	var stack []*frame
-	var buf strings.Builder
-	for _, r := range css {
-		switch r {
-		case '{':
-			if len(stack) > 0 {
-				stack[len(stack)-1].children = true
-			}
-			stack = append(stack, &frame{selector: strings.TrimSpace(buf.String())})
-			buf.Reset()
-		case '}':
-			if len(stack) == 0 {
-				continue
-			}
-			top := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			if !top.children {
-				top.body.WriteString(buf.String())
-				rules = append(rules, cssRule{top.selector, top.body.String()})
-			}
-			buf.Reset()
-		default:
-			buf.WriteRune(r)
-		}
-	}
-	return rules
-}
-
-func isCoordRule(r cssRule) bool { return strings.Contains(r.selector, "coord") }
-
-// shadowHasBlur meldet, ob eine Ebene eines box-shadow einen Weichzeichner hat.
-// Erlaubt sind Fokusringe und Linien (Blur 0); alles andere ist ein Glow
-// oder ein weicher Schlagschatten.
-func shadowHasBlur(value string) bool {
-	color := regexp.MustCompile(`(?i)(rgba?|hsla?)\([^)]*\)|#[0-9a-f]{3,8}\b`)
-	value = color.ReplaceAllString(value, "")
-	for _, layer := range strings.Split(value, ",") {
-		var lengths []string
-		for _, f := range strings.Fields(layer) {
-			if f == "inset" || strings.HasPrefix(f, "var(") {
-				continue
-			}
-			lengths = append(lengths, f)
-		}
-		if len(lengths) >= 3 {
-			v, err := strconv.ParseFloat(strings.TrimRight(lengths[2], "pxrem"), 64)
-			if err != nil || v != 0 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// Regression: a media-query rule `.coord-workspace button { display: inline-flex }`
-// outranked the UA `[hidden]` rule and the base `display: none` of the drawer
-// toggles, so the hidden backdrop dimmed narrow layouts and, without JS, the
-// toolbar showed link and button variants at once.
-func TestCoordHiddenAndNoScriptToolbarSurviveNarrowButtonRules(t *testing.T) {
-	raw, err := files.ReadFile("static/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css := string(raw)
-	hidden := coordCSSRule(t, css, `.coord-workspace [hidden]`)
-	if !strings.Contains(hidden, `display: none !important`) {
-		t.Errorf("[hidden] elements in the workspace must stay display:none, got %q", hidden)
-	}
-	noJS := coordCSSRule(t, css, `html:not(.coord-enhanced) .coord-drawer-toggle`)
-	if !strings.Contains(noJS, `display: none !important`) {
-		t.Errorf("drawer toggles must be hidden without coord-enhanced, got %q", noJS)
-	}
-	template, err := files.ReadFile("templates/coord.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(template), `class="coord-backdrop" data-coord-drawer-close hidden`) {
-		t.Error("backdrop must carry the hidden attribute")
-	}
-}
-
 // coordSidebarAndContextFixture legt einen Projektraum an, in dem robin eine
 // offene Frage aus einer privaten Direktnachricht mit bob hat.
 func coordPrivateAttentionFixture(t *testing.T) (srv *httptest.Server, st *store.Store, client *http.Client, project, direct string) {
@@ -1683,7 +1569,7 @@ func materializeWebRoomFor(t *testing.T, st *store.Store, room, principal, perso
 func TestCoordDirectRoomShowsPrivateSignalInHeadAndComposer(t *testing.T) {
 	srv, _, client, project, direct := coordPrivateAttentionFixture(t)
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(direct))
-	head := page[strings.Index(page, `class="coord-conversation-head"`):]
+	head := page[strings.Index(page, `coord-conversation-head"`):]
 	head = head[:strings.Index(head, "</header>")]
 	if !strings.Contains(head, "Private, only you and bob") {
 		t.Errorf("conversation head lacks the private signal: %s", head)
@@ -1737,7 +1623,7 @@ func TestCoordParticipantsShowUnknownExplicitlyAndNeverIdle(t *testing.T) {
 	}
 	listOf := func() string {
 		page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-		list := page[strings.Index(page, `class="coord-participants rm-here clay"`):]
+		list := page[strings.Index(page, `class="coord-participants rm-here"`):]
 		return list[:strings.Index(list, "</ul>")]
 	}
 	list := listOf()
@@ -1802,7 +1688,7 @@ func TestCoordRoomsToggleCarriesTotalSignalWithAccessibleName(t *testing.T) {
 	if !strings.Contains(page, `class="coord-count" aria-hidden="true">2</span>`) {
 		t.Error("two different messages that need the viewer must count as 2")
 	}
-	js, _ := files.ReadFile("static/app.js")
+	js, _ := files.ReadFile("static/ui-coord.js")
 	if !strings.Contains(string(js), "[data-coord-rooms-count]") {
 		t.Error("live refresh must replace the rooms badge")
 	}

@@ -1,0 +1,31 @@
+/* Label colours: a label's own colour is snapped to the nearest of these (labelClass in
+   labels_ui.go), because a style attribute is not allowed. Text is white on dark
+   fills and near-black on light ones. */
+:is(.g2) {
+  & .lb.lc-0075ca { background: #0075ca; color: #fff; border-color: transparent; }
+  & .lb.lc-008672 { background: #008672; color: #fff; border-color: transparent; }
+  & .lb.lc-0969da { background: #0969da; color: #fff; border-color: transparent; }
+  & .lb.lc-0e8a16 { background: #0e8a16; color: #fff; border-color: transparent; }
+  & .lb.lc-1a7f37 { background: #1a7f37; color: #fff; border-color: transparent; }
+  & .lb.lc-1d76db { background: #1d76db; color: #fff; border-color: transparent; }
+  & .lb.lc-5319e7 { background: #5319e7; color: #fff; border-color: transparent; }
+  & .lb.lc-7057ff { background: #7057ff; color: #fff; border-color: transparent; }
+  & .lb.lc-8250df { background: #8250df; color: #fff; border-color: transparent; }
+  & .lb.lc-a2eeef { background: #a2eeef; color: #1f2328; border-color: transparent; }
+  & .lb.lc-b60205 { background: #b60205; color: #fff; border-color: transparent; }
+  & .lb.lc-bfd4f2 { background: #bfd4f2; color: #1f2328; border-color: transparent; }
+  & .lb.lc-bfdadc { background: #bfdadc; color: #1f2328; border-color: transparent; }
+  & .lb.lc-c2e0c6 { background: #c2e0c6; color: #1f2328; border-color: transparent; }
+  & .lb.lc-c5def5 { background: #c5def5; color: #1f2328; border-color: transparent; }
+  & .lb.lc-cfd3d7 { background: #cfd3d7; color: #1f2328; border-color: transparent; }
+  & .lb.lc-d4c5f9 { background: #d4c5f9; color: #1f2328; border-color: transparent; }
+  & .lb.lc-d73a4a { background: #d73a4a; color: #fff; border-color: transparent; }
+  & .lb.lc-d876e3 { background: #d876e3; color: #fff; border-color: transparent; }
+  & .lb.lc-e4e669 { background: #e4e669; color: #1f2328; border-color: transparent; }
+  & .lb.lc-e99695 { background: #e99695; color: #1f2328; border-color: transparent; }
+  & .lb.lc-ededed { background: #ededed; color: #1f2328; border-color: transparent; }
+  & .lb.lc-f9d0c4 { background: #f9d0c4; color: #1f2328; border-color: transparent; }
+  & .lb.lc-fbca04 { background: #fbca04; color: #1f2328; border-color: transparent; }
+  & .lb.lc-fef2c0 { background: #fef2c0; color: #1f2328; border-color: transparent; }
+  & .lb.lc-none { background: var(--neutral-muted); color: var(--fg-default); }
+}

@@ -441,6 +441,8 @@ type ProjectAccess struct {
 	entryAuthors   map[int64]int64
 	requestAuthors map[int64]int64
 
+	defBranches sync.Map // Projekt -> Standard-Branch, je Betrachter gemerkt
+
 	checks atomic.Int32
 	loads  atomic.Int32
 }

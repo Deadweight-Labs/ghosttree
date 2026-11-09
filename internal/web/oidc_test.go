@@ -337,7 +337,7 @@ func (e *oidcEnv) callback(t *testing.T, b *http.Client, cb *url.URL) *http.Resp
 
 func (e *oidcEnv) signedIn(t *testing.T, b *http.Client) bool {
 	t.Helper()
-	resp, err := b.Get(e.web.URL + "/ui/requests")
+	resp, err := b.Get(e.web.URL + "/ui/inbox")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestOIDCClaimFlowBindsPerson1ThenSignsInWithoutCode(t *testing.T) {
 	env := newOIDCEnv(t, true)
 	b := newBrowser(t)
 	resp := env.callback(t, b, env.startFlow(t, b, env.claimCode(t, "alice")))
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/overview" {
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/inbox" {
 		t.Fatalf("callback status=%d body=%s", resp.StatusCode, body(t, resp))
 	}
 	var session *http.Cookie
@@ -600,7 +600,7 @@ func TestLoginLinkIsConfirmedByPostAndSingleUse(t *testing.T) {
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/requests" {
 		t.Fatalf("post status=%d location=%q", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if resp, _ := b.Get(srv.URL + "/ui/requests"); resp.StatusCode != http.StatusOK {
+	if resp, _ := b.Get(srv.URL + "/ui/inbox"); resp.StatusCode != http.StatusOK {
 		t.Fatalf("session after link: %d", resp.StatusCode)
 	}
 	b2 := newBrowser(t)
@@ -642,7 +642,7 @@ func TestLocalBootstrapCodeCreatesFirstAccountWithoutIdP(t *testing.T) {
 	if a, err := st.AccountByName("owner"); err != nil || !a.Admin {
 		t.Fatalf("a=%+v err=%v", a, err)
 	}
-	if resp, _ := b.Get(srv.URL + "/ui/requests"); resp.StatusCode != http.StatusOK {
+	if resp, _ := b.Get(srv.URL + "/ui/inbox"); resp.StatusCode != http.StatusOK {
 		t.Fatalf("session: %d", resp.StatusCode)
 	}
 }

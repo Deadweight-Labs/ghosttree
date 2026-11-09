@@ -20,6 +20,11 @@ const accountUsage = `usage: ctx account add <name> [--email E] [--admin] --db <
        ctx account login-link <name> [--url https://host] --db <path>
        ctx account set-gardener <name|person:N|N> --db <path>
        ctx account set-gardener --clear --db <path>
+       ctx account link-github <name|person:N|N> --login <github login> [--id N] --db <path>
+
+link-github records the GitHub account of a person; the web interface shows its
+profile picture (fetched by the server, never by the browser). Only someone with
+the host can set it from here; the number is optional.
 
 set-gardener makes one account the gardener's, once and for good: the number of
 the account is stored (name, or person:N, or the bare number is looked up once),
@@ -49,6 +54,8 @@ func cmdAccount(args []string, stdout io.Writer) int {
 		return cmdAccountLoginLink(args[1:], stdout)
 	case "set-gardener":
 		return cmdAccountSetGardener(args[1:], stdout)
+	case "link-github":
+		return cmdAccountLinkGitHub(args[1:], stdout)
 	case "token":
 		if len(args) > 1 && args[1] == "create" {
 			return cmdAccountTokenCreate(args[2:], stdout)
@@ -185,6 +192,37 @@ func cmdAccountSetGardener(args []string, stdout io.Writer) int {
 	if wasSet && before.ID != acct.ID {
 		fmt.Fprintf(stdout, "it was %s (%s); that account may not write gardener entries any more\n", before.ID, before.Name)
 	}
+	return 0
+}
+
+// cmdAccountLinkGitHub links an account to a GitHub login for the profile
+// picture. Like the other account commands it needs the database, not a token.
+func cmdAccountLinkGitHub(args []string, stdout io.Writer) int {
+	var login *string
+	var number *int64
+	_, who, db, ok := accountFlags("account link-github", args, stdout, func(fs *flag.FlagSet) {
+		login = fs.String("login", "", "the GitHub login")
+		number = fs.Int64("id", 0, "the GitHub user number, if known (gives a stable picture address)")
+	})
+	if !ok || who == "" || *login == "" {
+		fmt.Fprintln(stdout, "usage: ctx account link-github <name|person:N|N> --login <github login> [--id N] --db <path>")
+		return 2
+	}
+	st, ok := openAccountStore(*db, stdout)
+	if !ok {
+		return 1
+	}
+	defer st.Close()
+	acct, err := resolveAccountRef(st, who)
+	if err != nil {
+		fmt.Fprintf(stdout, "%v\n", err)
+		return 1
+	}
+	if err := st.SetAccountGitHub(acct.ID, *login, *number); err != nil {
+		fmt.Fprintf(stdout, "link github: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "%s (%s) is linked to the GitHub login %s\n", acct.ID, acct.Name, *login)
 	return 0
 }
 

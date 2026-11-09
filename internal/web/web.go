@@ -10,12 +10,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
-	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/Deadweight-Labs/ghosttree/internal/version"
 )
@@ -44,7 +42,11 @@ type app struct {
 	gardenLimits  llmusage.Limits  // caps of the gardener, shown to administrators
 	prover        forge.Prover     // proof behind "connect GitHub"; nil = off
 	sourceFlows   *sourceFlows
-	buildVersion  string // ctx version of this server, for ServerVersion in pages
+	// Profile pictures of people with a linked GitHub account (avatars.go).
+	avatars      *avatarCache
+	avatarDir    string
+	avatarClient *http.Client
+	buildVersion string // ctx version of this server, for ServerVersion in pages
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
@@ -55,10 +57,12 @@ type pageData struct {
 	UnusedTokens                                               int
 	UnusedForeign                                              bool
 	TokenResult                                                string
-	RequestsV                                                  *requestsView
-	RequestV                                                   *requestView
-	TasksV                                                     *tasksView
-	PainsV                                                     *painsView
+	PullsV                                                     *pullsView
+	PullV                                                      *pullView
+	CommitsV                                                   *commitsView
+	CommitV                                                    *commitView
+	IssuesV                                                    *issuesView
+	IssueV                                                     *requestView
 	SearchV                                                    *searchView
 	PainV                                                      *painView
 	KnowledgeV                                                 *knowledgeView
@@ -81,6 +85,27 @@ type pageData struct {
 	Overview                                                   overviewView
 	Agents                                                     agentsView
 	Profile                                                    profileView
+	InboxV                                                     *inboxView
+	NewIssueV                                                  *newIssueView
+	IdeaV                                                      *ideaPageView
+	CodeV                                                      *repoCodeView
+	AgentV                                                     *agentPageView
+	OrgName                                                    string
+	OrgBand                                                    *bandView
+	OrgV                                                       *orgPageView
+	ErrV                                                       *errorView
+	RunbooksV                                                  *runbooksView
+	RunbookV                                                   *runbookPageView
+	SettingsV                                                  *repoSettingsView
+	FeaturesV                                                  *featuresView
+	FeatureV                                                   *featureView
+	MachineV                                                   *machinePageView
+	OrgMachinesV                                               *orgMachinesView
+	// Styles and Scripts are the files of pageAssets for this page.
+	Styles, Scripts []string
+	// Repo is set on the pages of a repository (/ui/{org}/{repo}/…): the
+	// breadcrumb and the tab row above the page.
+	Repo *repoView
 	// ServerVersion: Version dieses Servers (vX.Y.Z bzw. 0.1.0-dev+sha), leer = unbekannt.
 	ServerVersion string
 	// Refresh: Sekunden bis zum automatischen Neuladen (0 = nie).
@@ -121,6 +146,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	for _, opt := range opts {
 		opt(a)
 	}
+	a.avatars = newAvatarCache(st, a.avatarClient, a.avatarDir)
+	serverVersionText.Store(version.Label(a.buildVersion))
 	mux := http.NewServeMux()
 	a.handle(mux, "GET /static/", a.staticFiles())
 	a.handle(mux, "GET /{$}", a.rootRedirect)
@@ -129,6 +156,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/login", a.requireSameOrigin(http.HandlerFunc(a.loginSubmit)))
 	a.handle(mux, "POST /ui/login/oidc", a.requireSameOrigin(http.HandlerFunc(a.oidcStart)))
 	a.handle(mux, "GET /ui/login/oidc/callback", a.oidcCallback)
+	a.handle(mux, "GET /ui/register", a.registerPage)
+	a.handle(mux, "POST /ui/register", a.requireSameOrigin(http.HandlerFunc(a.registerSubmit)))
 	a.handle(mux, "GET /ui/login/code", a.codePage)
 	a.handle(mux, "POST /ui/login/code", a.requireSameOrigin(http.HandlerFunc(a.codeSubmit)))
 	a.handle(mux, "GET /install.sh", a.installSh)
@@ -146,8 +175,20 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
 	a.handle(mux, "POST /join/{code}/signout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.joinSignOut)))))
 	a.handle(mux, "POST /ui/logout", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.logout))))
+	a.handle(mux, "GET /ui/inbox", a.requirePerson(http.HandlerFunc(a.inboxPage)))
+	a.handle(mux, "POST /ui/issues/create", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.issueCreate))))))
+	a.handle(mux, "POST /ui/ideas/{id}/state", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.ideaState))))))
+	a.handle(mux, "POST /ui/comments/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.commentEdit))))))
+	a.handle(mux, "POST /ui/reactions", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reactionToggle))))))
+	a.handle(mux, "POST /ui/comments/{id}/delete", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.commentDelete))))))
+	a.handle(mux, "GET /ui/refs", a.requirePerson(http.HandlerFunc(a.refsLookup)))
+	a.handle(mux, "POST /ui/searches", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.searchSave))))))
+	a.handle(mux, "POST /ui/inbox/reply", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxReply))))))
+	a.handle(mux, "POST /ui/inbox/done", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxDone))))))
 	a.handle(mux, "GET /ui/overview", a.requirePerson(http.HandlerFunc(a.overviewPage)))
 	a.handle(mux, "GET /ui/agents", a.requirePerson(http.HandlerFunc(a.agentsPage)))
+	a.handle(mux, "GET /ui/agents/{id}", a.requirePerson(http.HandlerFunc(a.agentPage)))
+	a.handle(mux, "POST /ui/agents/{id}/signal", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.agentSignal))))))
 	a.handle(mux, "GET /ui/rooms", a.requirePerson(http.HandlerFunc(a.roomsAlias)))
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	a.handle(mux, "GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
@@ -157,8 +198,12 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	} {
 		a.handle(mux, "POST /ui/requests/{id}/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
+	a.handle(mux, "POST /ui/requests/{id}/close", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestClose))))))
 	a.handle(mux, "POST /ui/requests/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestMove))))))
 	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBodyN(requestCorrectForm, a.requestFormTooLarge(a.requireCSRF(http.HandlerFunc(a.requestCorrect)))))))
+	for suffix, h := range map[string]http.HandlerFunc{"create": a.labelCreate, "{id}/update": a.labelUpdate, "{id}/delete": a.labelDelete} {
+		a.handle(mux, "POST /ui/labels/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+	}
 	a.registerPainTaskPages(mux)
 	a.handle(mux, "GET /ui/search", a.requirePerson(http.HandlerFunc(a.searchPage)))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
@@ -178,6 +223,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/context", a.requirePerson(http.HandlerFunc(a.contextPage)))
 	a.handle(mux, "GET /ui/coord", a.requirePerson(http.HandlerFunc(a.coordRoomPage)))
 	a.handle(mux, "GET /ui/coord/events", a.requirePerson(http.HandlerFunc(a.coordEvents)))
+	a.handle(mux, "GET /ui/live", a.requirePerson(http.HandlerFunc(a.liveEvents)))
+	a.handle(mux, "GET /ui/avatar/{id}", a.requirePerson(http.HandlerFunc(a.avatarImage)))
 	a.handle(mux, "GET /ui/coord/thread/{id}", a.requirePerson(http.HandlerFunc(a.coordThreadPage)))
 	a.handle(mux, "POST /ui/coord/send", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordSend))))
 	a.handle(mux, "POST /ui/coord/thread/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateThread))))
@@ -221,18 +268,36 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(limitBody(a.requireCSRF(h))))
 	}
-	a.handle(mux, "GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/overview", http.StatusSeeOther) })
+	a.handle(mux, "GET /ui/{$}", a.uiRoot)
+	a.registerRepoPages(mux)
+	a.registerNewPages(mux)
 	return &appHandler{Handler: mux, app: a}
 }
 
 func (a *app) render(l lang, w http.ResponseWriter, name string, data pageData) {
+	a.renderPost(l, w, name, data, nil)
+}
+
+// renderPost is render with a step between the finished page and the avatars:
+// post may append to the page (the hover cards of the references, refcards.go).
+func (a *app) renderPost(l lang, w http.ResponseWriter, name string, data pageData, post func([]byte) []byte) {
+	if data.ServerVersion == "" {
+		data.ServerVersion = version.Label(a.buildVersion)
+	}
 	var output bytes.Buffer
 	if err := l.page().ExecuteTemplate(&output, name, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = output.WriteTo(w)
+	page := output.Bytes()
+	if post != nil {
+		page = post(page)
+	}
+	if a.avatars != nil {
+		page = a.avatars.withPhotos(page)
+	}
+	_, _ = w.Write(page)
 }
 func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string, data pageData) {
 	l := a.langFor(r)
@@ -242,8 +307,12 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	data.Interactive = interactive(r)
 	data.ServerVersion = version.Label(a.buildVersion)
 	data.Shell = a.shellFor(r, name)
+	data.Repo = repoFrom(r)
+	data.Styles, data.Scripts = pageAssets[name].CSS, pageAssets[name].JS
 	switch name {
-	case "overview":
+	case "inbox":
+		data.NavSection = "inbox"
+	case "overview", "setup":
 		data.NavSection = "overview"
 	case "agents":
 		data.NavSection = "agents"
@@ -255,7 +324,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 		data.NavSection = "review"
 	case "sessions", "session":
 		data.NavSection = "sessions"
-	case "coord", "roomforbidden", "roomnotfound":
+	case "coord":
 		data.NavSection = "coord"
 	case "context":
 		data.NavSection = "context"
@@ -266,7 +335,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	case "profile":
 		data.NavSection = "profile"
 	}
-	a.render(l, w, name, data)
+	a.renderPost(l, w, name, data, func(page []byte) []byte { return a.refCards(r, l, page) })
 }
 
 // sessionLinks nennt zu Sessionnummern aus Verweisen die Adresse in der
@@ -296,55 +365,6 @@ func (a *app) projectParam(r *http.Request) string {
 		return p
 	}
 	return selectedProject(a.shellFor(r, "knowledge"))
-}
-
-// contextView is the Agent context page: what a project's agents are given,
-// optionally with what still waits for review.
-type contextView struct {
-	Project string
-	Preview bool
-	Output  string
-	// Choices are the projects to pick from while none is chosen.
-	Choices []projectOption
-}
-
-func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
-	l := a.langFor(r)
-	project := a.projectParam(r)
-	preview := r.URL.Query().Get("preview") == "1"
-	view := &contextView{Project: project, Preview: preview}
-	if project == "" {
-		view.Choices = a.shellFor(r, "context").Projects
-		// Wer nur ein Projekt sieht, braucht keine Auswahl.
-		if len(view.Choices) == 1 {
-			q := r.URL.Query()
-			q.Set("project", view.Choices[0].Remote)
-			http.Redirect(w, r, "/ui/context?"+q.Encode(), http.StatusSeeOther)
-			return
-		}
-		a.renderBrowser(w, r, "context", pageData{Title: l.msg("context.title"), ContextV: view})
-		return
-	}
-	var entries []store.Knowledge
-	var err error
-	pa := a.access(r)
-	if preview {
-		entries, err = a.store.KnowledgeForActivatedPreview(scope.Axes{Project: project}, activation.Context{}, pa.Viewer())
-	} else {
-		entries, err = a.store.KnowledgeForContext(scope.Axes{Project: project}, pa.Viewer())
-	}
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	entries = keep(entries, 0, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
-	if len(entries) > 0 {
-		view.Output = server.RenderBootstrap(entries, 12000)
-		if preview {
-			view.Output = server.RenderBootstrapPreview(entries, 12000)
-		}
-	}
-	a.renderBrowser(w, r, "context", pageData{Title: l.msg("context.title"), ContextV: view})
 }
 
 // access ist die Zugriffsprüfung der Browser-Sitzung. Sie nutzt denselben Store
@@ -440,12 +460,31 @@ var webRoutes = map[string]webClass{
 	"POST /ui/login/oidc":                   webPublic,
 	"GET /ui/login/oidc/callback":           webPublic,
 	"GET /ui/login/code":                    webPublic,
+	"GET /ui/register":                      webPublic,
+	"POST /ui/register":                     webPublic,
 	"POST /ui/login/code":                   webPublic,
 	"GET /{$}":                              webPublic,
 	"GET /favicon.ico":                      webPublic,
 	"GET /ui/{$}":                           webPublic,
+	"GET /ui/inbox":                         webAccount,
+	"POST /ui/searches":                     webProject,
+	"GET /ui/refs":                          webProject,
+	"POST /ui/comments/{id}/edit":           webProject,
+	"POST /ui/comments/{id}/delete":         webProject,
+	"POST /ui/reactions":                    webProject,
+	"POST /ui/ideas/{id}/state":             webProject,
+	"POST /ui/issues/create":                webProject,
+	"POST /ui/inbox/reply":                  webCoord,
+	"POST /ui/inbox/done":                   webCoord,
+	"GET /ui/{a}":                           webAccount,
+	"GET /ui/{a}/{b}":                       webProject,
+	"GET /ui/{a}/{b}/{c}":                   webProject,
+	"GET /ui/{a}/{b}/{c}/{d}":               webProject,
+	"GET /ui/{a}/{b}/{c}/{d}/{rest...}":     webProject,
 	"GET /ui/overview":                      webAccount,
 	"GET /ui/agents":                        webCoord,
+	"GET /ui/agents/{id}":                   webCoord,
+	"POST /ui/agents/{id}/signal":           webAdmin,
 	"GET /ui/rooms":                         webCoord,
 	"POST /ui/logout":                       webAccount,
 	"GET /ui/requests":                      webProject,
@@ -454,6 +493,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/requests/{id}/criteria/{cid}": webAdmin,
 	"POST /ui/requests/{id}/correct":        webAdmin,
 	"POST /ui/requests/{id}/move":           webAdmin,
+	"POST /ui/requests/{id}/close":          webAdmin,
 	"POST /ui/requests/{id}/complete":       webAdmin,
 	"POST /ui/requests/{id}/drop":           webAdmin,
 	"GET /ui/knowledge":                     webProject,
@@ -474,6 +514,8 @@ var webRoutes = map[string]webClass{
 	"GET /ui/context":                       webProject,
 	"GET /ui/coord":                         webCoord,
 	"GET /ui/coord/events":                  webCoord,
+	"GET /ui/live":                          webAccount,
+	"GET /ui/avatar/{id}":                   webAccount,
 	"GET /ui/coord/thread/{id}":             webCoord,
 	"POST /ui/coord/send":                   webCoord,
 	"POST /ui/coord/thread/create":          webCoord,
@@ -523,6 +565,10 @@ var webRoutes = map[string]webClass{
 	"GET /ui/pains":             webProject,
 	"GET /ui/pains/{id}":        webProject,
 	"POST /ui/pains/{id}/state": webAdmin,
+
+	"POST /ui/labels/create":      webAdmin,
+	"POST /ui/labels/{id}/update": webAdmin,
+	"POST /ui/labels/{id}/delete": webAdmin,
 }
 
 // handle registriert eine Route und bricht ab, wenn sie nicht klassifiziert ist.

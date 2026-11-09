@@ -173,6 +173,8 @@ type coordRoomDetailView struct {
 	PrivatePeers           string
 	// UnreachedNote: the @names of the last post that reached no one.
 	UnreachedNote string
+	// Draft is the text the composer starts with (a link may bring one).
+	Draft string
 }
 
 type coordThreadView struct {

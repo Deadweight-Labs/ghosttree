@@ -1,0 +1,155 @@
+/* Layout of the pages that already stand on the new base: inbox, issue list,
+   issue page. Phase 2 adds the rules of the other pages here (or in files of
+   their own named ui-<page>.css). Mock: git-native-v2 gh.css. */
+
+:is(.g2) {
+  /* ---- Inbox ---- */
+  & .ntools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 16px; }
+  & .ntools .dd { position: relative; }
+  & .nrow { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 0 12px; padding: 12px 16px; align-items: start; cursor: pointer; transition: opacity .3s; }
+  & .nrow:hover, & .nrow:focus-within { background: var(--row-hover); }
+  & .nrow > .gav { margin-top: 2px; }
+  & .nrow .top2 { font-size: 12px; color: var(--fg-muted); line-height: 20px; }
+  & .nrow .top2 b { color: var(--fg-default); font-weight: 600; }
+  & .nrow .top2 .tmr { margin-left: 4px; }
+  & .nrow .top2 .tmr.warn { color: var(--attention-fg); }
+  & .nrow .t { margin-top: 2px; font-size: 14px; font-weight: 600; line-height: 20px; }
+  & .nrow .t .ref { margin-right: 6px; font-weight: 400; }
+  & .nrow .t .ib-num { margin-right: 6px; color: var(--fg-muted); font-weight: 400; }
+  & .nrow .acts { display: flex; align-items: center; justify-content: flex-end; align-self: center; gap: 8px; }
+  & .nrow form { display: inline-flex; margin: 0; }
+  & .nrow .rt-live { display: inline-flex; align-items: center; vertical-align: middle; margin-left: 8px; }
+  & .nrow .rt-live .gav { width: 18px; height: 18px; }
+  & .nrow .gav.mk { background: var(--canvas-subtle); color: var(--fg-muted); }
+  & .nrow .gav.mk.ask { color: var(--accent-fg); }
+  & .nrow .gav.mk .i { width: 16px; height: 16px; }
+  & .gap { margin-top: 24px; }
+  & h2.t { margin: 0; font-size: 14px; }
+
+  /* ---- Lists: Issues | Ideas | Pains, search, header of the list ---- */
+  & .seg { display: inline-flex; gap: 2px; max-width: 100%; padding: 2px; overflow-x: auto; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; }
+  & .seg a { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 4px; color: var(--fg-default); font-size: 14px; white-space: nowrap; }
+  & .seg a:hover { background: var(--neutral-muted); text-decoration: none; }
+  & .seg a.on { background: var(--canvas-default); font-weight: 600; box-shadow: 0 0 0 1px var(--border-default); }
+  & .seg a[data-seg=issue] .i { color: var(--success-fg); }
+  & .seg a[data-seg=idea] .i { color: var(--attention-fg); }
+  & .seg a[data-seg=pain] .i { color: var(--danger-fg); }
+  & .seg .counter { margin-left: 2px; }
+  & .segrow { margin-bottom: 16px; }
+  & .sbar { display: flex; gap: 8px; margin-bottom: 16px; }
+  & .sbar .gfield { flex: 1; }
+  & .lh { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; }
+  & .lh .tab { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-muted); font-weight: 400; }
+  & .lh .tab:hover { color: var(--fg-default); text-decoration: none; }
+  & .lh .tab.on { color: var(--fg-default); font-weight: 600; }
+  & .lh .tab .i { color: inherit; }
+  & .lh .tab.on .i { color: var(--fg-default); }
+  & .lh .gfilters { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  & .lh .gfilters .gbtn { color: var(--fg-muted); }
+  & .lh .gfilters .gbtn:hover { color: var(--fg-default); }
+  & .lh .gfilters .gbtn.on { color: var(--fg-default); font-weight: 600; }
+  & .lh .gfilters .dd { position: relative; }
+
+  /* ---- Detail pages: title, meta line, main column and sidebar ---- */
+  & .dhead { padding-bottom: 16px; margin-bottom: 24px; border-bottom: 1px solid var(--border-default); }
+  & .dtitle { display: flex; align-items: flex-start; gap: 16px; }
+  & .dtitle h1 { min-width: 0; font-size: 32px; line-height: 1.25; font-weight: 400; letter-spacing: 0; overflow-wrap: anywhere; }
+  & .dtitle h1 .n { font-weight: 300; color: var(--fg-muted); margin-left: 8px; }
+  & .gacts { margin-left: auto; display: flex; gap: 8px; flex: none; padding-top: 2px; }
+  & .callout .gacts { margin: 8px 0 0; padding: 0; }
+  & .dmeta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--fg-muted); font-size: 14px; }
+  & .dmeta b, & .dmeta .person { color: var(--fg-default); font-weight: 600; }
+  & .dgrid { display: grid; grid-template-columns: minmax(0, 1fr) 256px; gap: 24px; align-items: start; }
+  & .dmain, & .side { min-width: 0; }
+  & .side { font-size: 12px; }
+  & .sblk { padding: 16px 0; border-bottom: 1px solid var(--border-muted); }
+  & .sblk:first-child { padding-top: 0; }
+  & .sblk h3 { margin-bottom: 8px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .sblk .v { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+  & .sblk .v > * { display: flex; align-items: center; gap: 8px; }
+  & .sblk .v .sub, & .sblk .sub { font-size: 12px; color: var(--fg-muted); display: block; }
+  & .sblk .origin { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; }
+  & .sblk .v .waits { margin-right: 0; }
+  & .sblk .v .dot.push { margin-left: auto; }
+  & .live-box { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 12px; background: var(--success-subtle); border: 1px solid var(--success-muted); border-radius: 6px; }
+  & .livebar { margin-top: 12px; }
+  & .livebar:empty { display: none; }
+  & .live-av { display: inline-flex; flex: none; }
+  & .live-tx { display: flex; flex-direction: column; min-width: 0; flex: 1 1 14rem; }
+  & .live-tx small { font-size: 12px; overflow-wrap: anywhere; }
+  & .side .live-side { padding-top: 0; }
+  & .side .live-box { flex-direction: column; align-items: flex-start; gap: 8px; padding: 0; background: none; border: 0; }
+  & .side .live-box .gbtn { align-self: stretch; }
+  & .side .live-tx { flex: 0 1 auto; }
+  & .rt-live { display: inline-flex; align-items: center; }
+
+  /* ---- Requirements (criteria) ---- */
+  & .crit { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px 12px; padding: 8px 16px; align-items: start; }
+  & .crit.num { grid-template-columns: 20px 16px minmax(0, 1fr); }
+  & .crit .tx { line-height: 20px; }
+  & .crit .no { color: var(--fg-muted); font-size: 12px; line-height: 20px; text-align: right; font-variant-numeric: tabular-nums; }
+  & .crit .no::after { content: "."; }
+  & .crit .pf { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 4px; font-size: 12px; color: var(--fg-muted); }
+  & .crit .pf .gav { width: 20px; height: 20px; }
+  & .crit .pf .chip.sha { text-decoration: none; }
+  & .crit.done .tx { color: var(--fg-default); }
+  & .crit:target { background: var(--accent-subtle); }
+  & .box > .crit + .crit { border-top: 1px solid var(--border-muted); }
+  & .cbx { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-top: 2px; border: 1px solid var(--border-default); border-radius: 3px; background: var(--canvas-default); color: #fff; }
+  & .cbx .i { width: 12px; height: 12px; stroke-width: 2; }
+  & .cbx.on { background: var(--success-emphasis); border-color: var(--success-emphasis); }
+  & .cbx.wip { border-color: var(--attention-fg); }
+  & .cbx.wip::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--attention-fg); }
+  & .cbx.waived { background: var(--neutral-muted); }
+  & .cbx.waived::after { content: ""; width: 8px; height: 2px; border-radius: 1px; background: var(--fg-muted); }
+  & .resolve { margin-top: 8px; }
+  & .resolve > summary { list-style: none; display: inline-flex; cursor: pointer; }
+  & .resolve > summary::-webkit-details-marker { display: none; }
+  & .resolve-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  & .resolve-form .gfield { height: 28px; padding: 0 8px; font: 13px/20px var(--ui-font); }
+  & .resolve-form input.gfield { flex: 1 1 14rem; }
+  & .lnew { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px; background: var(--canvas-subtle); border-top: 1px solid var(--border-muted); }
+  & .lnew .gfield { flex: 1; }
+  & .lnew label.gfield { margin: 0; }
+
+  /* ---- Forms in panels (edit, move, complete, drop) ---- */
+  & .newbox { margin-bottom: 16px; }
+  & .newbox .cb { display: flex; flex-direction: column; gap: 8px; padding: 16px; }
+  & .panel:not([open]) { display: none; }
+  & .panel > summary { list-style: none; border-bottom: 1px solid var(--border-default); }
+  & .panel > summary::-webkit-details-marker { display: none; }
+  & .panel .box-h { border-bottom: 0; }
+  & .pform { display: flex; flex-direction: column; gap: 12px; }
+  & .pfield { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 13px; }
+  & .pfield > span { color: var(--fg-default); }
+  & .pfield .gfield { font-weight: 400; font-size: 14px; }
+  & .pfield textarea { width: 100%; min-height: 8rem; padding: 8px 12px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; font: 400 14px/1.5 var(--ui-font); resize: vertical; }
+  & .pform .wf { display: flex; justify-content: flex-end; gap: 8px; }
+  /* A line break in the text stays one (decision lines, "Question: … Decision: …") */
+  & .kn-body p { white-space: pre-line; }
+  & .prose .kn-body p { margin: 0 0 16px; }
+  & .prose .kn-body > :last-child { margin-bottom: 0; }
+  & .cbox .ex, & .cb > .ex { margin: 0 0 16px; }
+}
+
+@media (max-width: 1011px) {
+  :is(.g2) .ilayout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 767px) {
+  :is(.g2) {
+    & .dgrid { grid-template-columns: minmax(0, 1fr); }
+    & .side { order: 2; }
+    & .dtitle h1 { font-size: 24px; }
+    & .dtitle { flex-wrap: wrap; }
+    & .dtitle h1 { flex: 1 1 0; }
+    & .dtitle .gacts { flex-wrap: wrap; max-width: 100%; }
+    & .dtitle .gacts:has(.share) { flex-basis: 100%; margin-left: 0; }
+    & .dtitle .share { flex-wrap: wrap; max-width: 100%; }
+    & .hide-m { display: none !important; }
+    & .nrow { grid-template-columns: 32px minmax(0, 1fr); }
+    & .nrow .acts { grid-column: 2; margin-top: 8px; justify-content: flex-start; flex-wrap: wrap; align-self: start; }
+    & .seg a { height: 44px; }
+    & .lh .tab { min-height: 44px; }
+    & .ntools .seg { width: 100%; }
+  }
+}

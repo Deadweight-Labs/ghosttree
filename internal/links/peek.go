@@ -138,7 +138,10 @@ func Peek(b Builder, r Reader, ref Ref, project string) (Info, error) {
 		}
 		c := Card{Kind: "Pull request", Ref: "#" + num(p.Number), Title: p.Title, Status: p.State, URL: b.Pull(p.Number)}.Sanitized()
 		summary := p.Head
-		if p.Base != "" {
+		switch {
+		case p.Head == "":
+			summary = p.Base
+		case p.Base != "":
 			summary += " → " + p.Base
 		}
 		return infoOf(c, p.Number, summary, p.Author, p.OpenedAt), nil

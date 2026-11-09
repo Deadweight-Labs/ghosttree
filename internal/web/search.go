@@ -32,6 +32,10 @@ type searchGroup struct {
 	Key, Label, Icon string
 	Hits             []searchHit
 	All              string
+	// Mark is the icon of the kind, Href the link that narrows the page to it.
+	Mark, Href string
+	// Shown is how many hits the group shows ("5+" when more lie behind them).
+	Shown string
 }
 
 type searchView struct {
@@ -39,7 +43,19 @@ type searchView struct {
 	Groups []searchGroup
 	// Searched: the query was long enough to run.
 	Searched bool
+	// Kind is the group the page is narrowed to ("" = all), AllHref the link
+	// back to all of them.
+	Kind, AllHref string
+	// Presets are the saved searches of the project, CanSave the form that keeps
+	// this search (a project has to be chosen); Project and Token belong to it.
+	Presets []presetLink
+	CanSave bool
+	Project string
+	Token   string
 }
+
+// searchKindMark is the icon of each kind of hit.
+var searchKindMark = map[string]string{"requests": "issue", "knowledge": "book", "sessions": "term", "tasks": "pin", "pains": "pain"}
 
 // searchPage searches requests, knowledge, sessions, tasks and pains in a fixed
 // order, one group each. Every group asks the same store calls as its own list
@@ -57,10 +73,23 @@ func (a *app) searchPage(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
 	guest := a.viewerOf(r, pa).kind == viewerGuest
 	project := selectedProject(a.shellFor(r, "search"))
-	v := &searchView{Q: q, Searched: utf8.RuneCountInString(q) >= minSearchRunes}
+	v := &searchView{Q: q, Searched: utf8.RuneCountInString(q) >= minSearchRunes, Project: project, Token: csrfOf(r)}
+	kind := r.URL.Query().Get("kind")
+	href := func(k string) string {
+		qs := url.Values{"q": {q}}
+		if k != "" {
+			qs.Set("kind", k)
+		}
+		return "/ui/search?" + qs.Encode()
+	}
+	v.AllHref = href("")
 	if v.Searched {
 		add := func(g searchGroup) {
 			if len(g.Hits) > 0 {
+				g.Mark, g.Href, g.Shown = searchKindMark[g.Key], href(g.Key), strconv.Itoa(len(g.Hits))
+				if g.All != "" {
+					g.Shown += "+"
+				}
 				v.Groups = append(v.Groups, g)
 			}
 		}
@@ -71,6 +100,41 @@ func (a *app) searchPage(w http.ResponseWriter, r *http.Request) {
 			add(a.searchTasks(l, pa, project, q))
 			add(a.searchPains(l, pa, project, q))
 		}
+	}
+	if kind != "" {
+		for _, g := range v.Groups {
+			if g.Key == kind {
+				v.Kind = kind
+			}
+		}
+	}
+	// The saved searches of the project, or of every project the viewer can see when
+	// the search is not narrowed to one. Each leads to its project's issue list.
+	projects := []string{project}
+	if project == "" {
+		projects = nil
+		opts, _ := a.projectOptions(r, pa)
+		for _, o := range opts {
+			projects = append(projects, o.Remote)
+		}
+	}
+	for _, remote := range projects {
+		presets, err := pa.ListPresets(remote)
+		if err != nil {
+			continue
+		}
+		for _, p := range presets {
+			if len(p.Queries) > 0 {
+				name := p.Name
+				if project == "" && len(projects) > 1 {
+					name += " · " + projectLabel(remote)
+				}
+				v.Presets = append(v.Presets, presetLink{Name: name, Query: p.Queries[0], Href: repoHref(remote) + "/issues?q=" + url.QueryEscape(p.Queries[0])})
+			}
+		}
+	}
+	if project != "" {
+		v.CanSave = !guest && interactive(r) && v.Searched
 	}
 	a.renderBrowser(w, r, "search", pageData{Title: l.msg("search.title"), Project: project, SearchV: v})
 }
@@ -88,7 +152,9 @@ func (a *app) searchRequests(l lang, pa *store.ProjectAccess, project, q string)
 	pa.NoteRequestHits(page.Results)
 	for i, raw := range page.Results {
 		if i == searchPerGroup {
-			g.All = "/ui/requests?state=all&q=" + url.QueryEscape(q)
+			if projects := visibleProjects(pa, project); len(projects) > 0 {
+				g.All = repoHref(projects[0]) + "/issues?q=" + url.QueryEscape(q)
+			}
 			break
 		}
 		h := pa.RequestHitView(raw)
@@ -173,14 +239,14 @@ func (a *app) searchTasks(l lang, pa *store.ProjectAccess, project, q string) se
 				continue
 			}
 			if len(g.Hits) == searchPerGroup {
-				g.All = "/ui/tasks?who=all"
+				g.All = "/ui/inbox?f=aufgaben&done=1"
 				return g
 			}
 			sub := lastSegment(t.Project)
 			if t.State != humantask.Open {
 				sub += " · " + label(l, taskStateKeys, t.State)
 			}
-			g.Hits = append(g.Hits, searchHit{Title: t.Title, Sub: sub, Href: "/ui/tasks?who=all#task-" + strconv.FormatInt(t.ID, 10)})
+			g.Hits = append(g.Hits, searchHit{Title: t.Title, Sub: sub, Href: taskHref(t)})
 		}
 	}
 	return g

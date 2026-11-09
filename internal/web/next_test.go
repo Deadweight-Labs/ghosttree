@@ -64,7 +64,7 @@ func TestLoginReturnsToRequestedPage(t *testing.T) {
 	client2 := &http.Client{CheckRedirect: client.CheckRedirect}
 	second := sameOriginPostForm(t, client2, srv.URL+"/ui/login", url.Values{"token": {token}})
 	second.Body.Close()
-	if got := second.Header.Get("Location"); got != "/ui/overview" {
+	if got := second.Header.Get("Location"); got != "/ui/inbox" {
 		t.Fatalf("login without remembered page = %q", got)
 	}
 }
@@ -79,7 +79,7 @@ func TestLoginNextParameterNeverLeavesTheSite(t *testing.T) {
 		resp.Body.Close()
 		login := sameOriginPostForm(t, client, srv.URL+"/ui/login", url.Values{"token": {token}})
 		login.Body.Close()
-		if got := login.Header.Get("Location"); got != "/ui/overview" {
+		if got := login.Header.Get("Location"); got != "/ui/inbox" {
 			t.Errorf("next=%q led to %q, want the default page", evil, got)
 		}
 	}
@@ -99,7 +99,7 @@ func TestLoginDoesNotRememberPostRequests(t *testing.T) {
 	post.Body.Close()
 	login := sameOriginPostForm(t, client, srv.URL+"/ui/login", url.Values{"token": {token}})
 	login.Body.Close()
-	if got := login.Header.Get("Location"); got != "/ui/overview" {
+	if got := login.Header.Get("Location"); got != "/ui/inbox" {
 		t.Fatalf("a POST must not become a return target, got %q", got)
 	}
 }

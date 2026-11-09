@@ -7,7 +7,7 @@ import (
 )
 
 func TestCoordRoomsDrawerClosesAfterProgressiveNavigation(t *testing.T) {
-	source := string(mustReadEmbedded(t, "static/app.js"))
+	source := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	start := strings.Index(source, "  const shouldCloseRoomsDrawer =")
 	end := strings.Index(source, "  const bindDrawerCloseControls =")
 	if start < 0 || end <= start {

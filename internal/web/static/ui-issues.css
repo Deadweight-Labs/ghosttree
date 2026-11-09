@@ -1,0 +1,54 @@
+/* Lists of issues, ideas and pains: saved searches on the left, search field with
+   the "New" button, list head with state tabs and filters. Mock: git-native-v2
+   issues.html, ideas.html, pains.html. */
+
+:is(.g2) {
+  & .ilayout.with-aside { display: grid; grid-template-columns: 252px minmax(0, 1fr); gap: 0 16px; align-items: start; }
+  & .ilayout .imain { min-width: 0; }
+  /* Plain rows as in the mock: a small head, rows without lines that light up on hover */
+  & .saved { padding-bottom: 8px; }
+  & .saved .box-h { min-height: 0; padding: 12px 16px 4px; background: none; border-bottom: 0; }
+  & .saved .box-h .t { font-size: 12px; color: var(--fg-muted); }
+  & .saved .srow { display: flex; align-items: center; gap: 8px; min-height: 32px; margin: 0 8px; padding: 6px 8px; border-radius: 6px; color: var(--fg-default); font-size: 14px; }
+  & .saved .srow .i { color: var(--fg-muted); flex: none; }
+  & .saved .srow .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .saved a.srow:hover, & .saved summary.srow:hover { background: var(--neutral-muted); text-decoration: none; }
+  & .saved details.save { margin-top: 4px; }
+  & .saved summary.srow { list-style: none; cursor: pointer; color: var(--accent-fg); }
+  & .saved summary.srow::-webkit-details-marker { display: none; }
+  & .saved summary.srow .i { color: inherit; }
+  & .saved .save-f { display: flex; gap: 8px; padding: 0 16px 8px; }
+  & .saved .save-f .gfield { flex: 1; min-width: 0; }
+
+  & .sbarrow { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+  & .sbarrow .sbar { flex: 1; margin-bottom: 0; min-width: 0; }
+  & .sbarrow .sbar .mono-in input { font-family: var(--ui-mono); font-size: 14px; }
+  & .sbarrow .sbar .mono-in input::placeholder { font-family: var(--ui-font); }
+  & .dd.split { display: inline-flex; position: relative; flex: none; }
+  & .dd.split > .gbtn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  & .dd.split > .gbtn.caret { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255, 255, 255, .35); padding: 0 8px; }
+  & .dd.split .pop { top: calc(100% + 4px); }
+  & .box-h.lh .tab .n { font-weight: 600; }
+  /* The head is as tall as the mock's (45 px) also when there is no filter menu to make it so. */
+  & .box-h.lh { min-height: 45px; box-sizing: border-box; }
+
+  /* what an idea or a pain adds to a list row: an extra line and a state word */
+  & .irow .xt { margin-top: 2px; font-size: 14px; line-height: 20px; color: var(--fg-default); overflow-wrap: anywhere; }
+  & .irow .xt .xtl { color: var(--attention-fg); font-weight: 600; }
+  & .irow .rt .lb.p-ok { color: #fff; background: var(--success-emphasis); }
+  & .irow .rt .lb.p-warn { color: #fff; background: var(--attention-emphasis); }
+  & .irow .rt .lb.p-done { color: #fff; background: var(--done-emphasis); }
+  & .irow .rt .lb.p-mute { color: var(--fg-muted); background: var(--neutral-muted); }
+  & .irow .rt .ichip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--fg-muted); }
+  & .irow .rt .rw:empty, & .irow .rt .rp:empty { display: none; }
+  & .st.warn { color: var(--attention-fg); }
+}
+
+@media (max-width: 1011px) {
+  :is(.g2) .ilayout.with-aside { grid-template-columns: minmax(0, 1fr); }
+  :is(.g2) .ilayout .saved { margin-bottom: 16px; }
+}
+@media (max-width: 767px) {
+  :is(.g2) .sbarrow { flex-wrap: wrap; }
+  :is(.g2) .sbarrow .sbar { flex-basis: 100%; }
+}

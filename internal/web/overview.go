@@ -36,7 +36,6 @@ const (
 	// Agent in einem Projekt erscheint.
 	connectedShownFor = 15 * time.Minute
 
-	overviewMaxNext = 6
 	// overviewMaxProposals: how far the count of proposals waiting for review
 	// is taken; beyond it the row says "100+".
 	overviewMaxProposals = 100
@@ -178,78 +177,65 @@ func selectedProject(sh shellView) string {
 	return ""
 }
 
+// overviewPage is /ui/overview. For an owner whose instance has nothing in it
+// yet, or who asked to connect a machine (?connect=1), it is the setup page with
+// the command to run; otherwise the inbox is home and the address leads there.
 func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	now := overviewNow().UTC()
 	pa := a.access(r)
 	who := a.shellBaseFor(r).who
-	shell := a.shellFor(r, "overview")
-	project := selectedProject(shell)
-	view := overviewView{Guest: who.kind == viewerGuest, CSRFToken: csrfOf(r)}
+	if who.kind == viewerGuest || (who.kind != viewerOwner && r.URL.Query().Get("connect") == "") {
+		http.Redirect(w, r, "/ui/inbox", http.StatusFound)
+		return
+	}
+	project := selectedProject(a.shellFor(r, "overview"))
+	hasContent := false
+	if r.URL.Query().Get("connect") == "" {
+		var err error
+		if hasContent, err = a.hasAnyContent(r, pa, project, now); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	setup, err := a.setupFor(r, who, hasContent, now)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if setup == nil {
+		http.Redirect(w, r, "/ui/inbox", http.StatusFound)
+		return
+	}
 	data := pageData{Title: l.msg("overview.title")}
+	if r.URL.Query().Get("connect") == "" {
+		data.Refresh = setupRefreshSeconds
+	}
+	a.renderBrowser(w, r, "setup", data.withOverview(overviewView{Setup: setup, CSRFToken: csrfOf(r)}))
+}
 
-	var agents []agentRow
-	var err error
-	if !view.Guest {
-		if agents, err = a.overviewAgents(r, pa, project, now); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+// hasAnyContent says whether the instance has anything the viewer can see: an
+// agent, an issue, something learned or knowledge. Nothing at all is the case
+// the setup page is for.
+func (a *app) hasAnyContent(r *http.Request, pa *store.ProjectAccess, project string, now time.Time) (bool, error) {
+	l := a.langFor(r)
+	agents, err := a.overviewAgents(r, pa, project, now)
+	if err != nil {
+		return false, err
 	}
-	if view.Requests, err = a.overviewRequests(pa, project); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	requests, err := a.overviewRequests(pa, project)
+	if err != nil {
+		return false, err
 	}
-	if view.Learned, err = a.overviewLearned(l, pa, project, now); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	learned, err := a.overviewLearned(l, pa, project, now)
+	if err != nil {
+		return false, err
 	}
-	if !view.Guest {
-		hasContent := len(agents) > 0 || len(view.Requests) > 0 || len(view.Learned) > 0
-		if !hasContent && r.URL.Query().Get("connect") == "" {
-			if hasContent, err = a.overviewHasKnowledge(pa, project); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-		setup, err := a.setupFor(r, who, hasContent, now)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if setup != nil {
-			view.Setup = setup
-			if r.URL.Query().Get("connect") == "" {
-				data.Refresh = setupRefreshSeconds
-			}
-			a.renderBrowser(w, r, "overview", data.withOverview(overviewView{Setup: setup, CSRFToken: view.CSRFToken}))
-			return
-		}
+	if len(agents) > 0 || len(requests) > 0 || len(learned) > 0 {
+		return true, nil
 	}
-	if view.ForYou, err = a.homeForYou(r, pa, who, project, now); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if view.Guest {
-		view.NoContent = len(view.Requests) == 0 && len(view.Learned) == 0
-		a.renderBrowser(w, r, "overview", data.withOverview(view))
-		return
-	}
-	if view.Run, err = a.homeRunning(r, pa, project, now); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if view.Week, err = a.homeWeek(l, pa, project, now, view.Requests); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if tokens, terr := a.deviceTokens(r); terr == nil {
-		view.Machines = ownMachines(l, tokens, now)
-		view.Example = l.msg("setup.example")
-	}
-	view.Connect = "/ui/overview?connect=1"
-	a.renderBrowser(w, r, "overview", data.withOverview(view))
+	return a.overviewHasKnowledge(pa, project)
 }
 
 func (d pageData) withOverview(v overviewView) pageData {
