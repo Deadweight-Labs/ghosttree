@@ -48,10 +48,10 @@ func TestUIRefsAnswersLikeTheAPIAndHidesWhatTheViewerMayNotRead(t *testing.T) {
 	if strings.Contains(body, "SECRET-ISSUE") {
 		t.Error("the title of a forbidden issue left the server")
 	}
-	// Only unreadable ones: always the same 404.
+	// Only unreadable ones: always the same 200 with an empty list.
 	c1, b1 := getRefs(t, e, e.Member, url.Values{"ref": {href}})
 	c2, b2 := getRefs(t, e, e.Member, url.Values{"ref": {"REQ-99999"}})
-	if c1 != http.StatusNotFound || c2 != http.StatusNotFound || b1 != b2 {
+	if c1 != http.StatusOK || c2 != http.StatusOK || b1 != b2 || !strings.Contains(b1, `"refs":[]`) {
 		t.Errorf("forbidden %d %q and unknown %d %q differ", c1, b1, c2, b2)
 	}
 	// A guest reads what a guest may read, not the idea of the members.
@@ -92,7 +92,7 @@ func TestHoverCardScriptAsksTheServerForUnknownReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"/ui/refs", "lookup", "textContent"} {
+	for _, want := range []string{"/ui/refs", "lookup", "textContent", "inflight"} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("ui-refs.js lacks %q", want)
 		}

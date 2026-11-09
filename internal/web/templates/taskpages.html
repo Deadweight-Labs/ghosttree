@@ -18,8 +18,8 @@
 {{range .Steps}}<div class="box-r tstep{{if .Done}} done{{end}}" id="step-{{.N}}"><span class="cbx{{if .Done}} on{{end}}" role="img" aria-label="{{if .Done}}{{t "tasks.step_done"}}{{else}}{{t "tasks.step_open"}}{{end}}">{{if .Done}}{{mi "check"}}{{end}}</span><div class="tx">{{if .URL}}<a href="{{.URL}}" rel="noopener noreferrer">{{.Text}}</a>{{else}}{{.Text}}{{end}}{{if .Done}}<span class="muted tby">{{if .By}}{{avatarOf .By}}{{.By}} {{end}}{{.Age}}</span>{{end}}</div>
 {{if .Action}}<form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{$.TaskV.Token}}"><input type="hidden" name="done" value="{{if .Done}}0{{else}}1{{end}}"><button class="gbtn sm quiet">{{if .Done}}{{t "tasks.step_undo"}}{{else}}{{t "tasks.step_tick"}}{{end}}</button></form>{{end}}</div>
 {{end}}</div>{{end}}
-{{if .DoneBy}}<div class="callout" role="status">{{mi "done"}}<div><div class="k">{{t "tasks.done_by" .DoneBy .DoneAge}}</div>{{if .DoneNote}}<div class="tt">{{.DoneNote}}</div>{{end}}</div></div>{{end}}
-{{if .Reason}}<div class="callout neu" role="note">{{mi "drop"}}<div><div class="k">{{t "tasks.state_note"}}</div><div class="tt">{{.Reason}}</div></div></div>{{end}}
+{{if .DoneBy}}<div class="callout" role="status">{{mi "done"}}<div><div class="k">{{t "tasks.done_by" .DoneBy .DoneAge}}</div>{{if .DoneNote}}<div class="tt">{{md .DoneNote}}</div>{{end}}</div></div>{{end}}
+{{if .Reason}}<div class="callout neu" role="note">{{mi "drop"}}<div><div class="k">{{t "tasks.state_note"}}</div><div class="tt">{{md .Reason}}</div></div></div>{{end}}
 {{if .CanDone}}<form method="post" action="{{.DoneAction}}" class="box fsec tdone"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="back" value="task">
 <div class="box-r"><label class="gfield"><input name="note" maxlength="500" placeholder="{{t "tasks.note_placeholder"}}" aria-label="{{t "tasks.note_placeholder"}}" autocomplete="off"></label><button class="gbtn pri">{{t "tasks.mark_done"}}</button></div></form>{{end}}
 </div>

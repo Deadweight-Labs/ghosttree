@@ -94,7 +94,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 	sentence := func(key string, args ...any) template.HTML {
 		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
 	}
-	reqLink := func(n int64) string { return string(refPillHTML(l, "request", n, requestURL(n))) }
+	reqLink := func(n int64) string { return string(longPill(l, "request", n, requestURL(n))) }
 	var out []issueEvent
 	for i := len(acts) - 1; i >= 0 && len(out) < activityShown; i-- {
 		act := acts[i]
@@ -203,7 +203,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			link := html.EscapeString("#")
 			if m := painData.FindStringSubmatch(act.Data); m != nil {
 				n, _ := strconv.ParseInt(m[1], 10, 64)
-				link = string(refPillHTML(l, "pain", n, painURL(n)))
+				link = string(longPill(l, "pain", n, painURL(n)))
 			}
 			ev.Sentence = sentence(map[string]string{"pain.linked": "issue.ev.pain_linked", "pain.unlinked": "issue.ev.pain_unlinked"}[act.Kind], link)
 		case "task.created", "task.done", "task.confirmed", "task.reopened", "task.dropped":
@@ -213,7 +213,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			link := ""
 			if m != nil {
 				n, _ = strconv.ParseInt(m[1], 10, 64)
-				link = string(refPillHTML(l, "task", n, "#task-"+m[1]))
+				link = string(longPill(l, "task", n, "#task-"+m[1]))
 			}
 			switch act.Kind {
 			case "task.created":
@@ -298,9 +298,10 @@ func relationSentence(l lang, act requestdomain.Activity, reqLink func(int64) st
 		if base != "" {
 			href = base + "/ideas/" + m[3]
 		}
-		target = string(refPillHTML(l, "idea", n, href))
+		target = string(longPill(l, "idea", n, href))
 	case m[4] != "":
-		target = `<a href="/ui/knowledge/` + m[4] + `">` + html.EscapeString(l.msg("issue.knowledge_n", m[4])) + `</a>`
+		n, _ := strconv.ParseInt(m[4], 10, 64)
+		target = string(longPill(l, "knowledge", n, "/ui/knowledge/"+m[4]))
 	default:
 		target = html.EscapeString(ellipsize(m[5], 120))
 		if strings.HasPrefix(m[5], "https://") || strings.HasPrefix(m[5], "http://") {

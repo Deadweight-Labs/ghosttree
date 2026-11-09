@@ -36,6 +36,7 @@
   & .sgroup { padding-bottom: 8px; }
   & .sgroup + .sgroup { border-top: 1px solid var(--border-muted); }
   & .shit { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 12px; padding: 4px 16px; color: var(--fg-default); font-size: 13px; }
+  & .shit code { padding: .1em .3em; font-family: var(--ui-mono); font-size: 90%; background: var(--neutral-muted); border-radius: 4px; }
   & .shit:hover { background: var(--row-hover); text-decoration: none; }
   & .sh-who { color: var(--fg-muted); }
   & .sh-seq { font: 11px var(--ui-mono); color: var(--fg-subtle); }

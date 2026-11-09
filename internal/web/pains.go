@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
+	"html"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -244,6 +245,25 @@ func painStateNote(to, why, note string) string {
 
 // linkDataText writes the target of a link event ("request:1", "knowledge:3",
 // "external:text") the way the rest of the page names it.
+// painLinkTarget writes what a link event of a pain points at ("request:3",
+// "idea:5", "knowledge:7", "external:https://…") as the long pill it is; what
+// it does not know stays text.
+func painLinkTarget(l lang, data string) string {
+	kind, rest, _ := strings.Cut(data, ":")
+	n, err := strconv.ParseInt(rest, 10, 64)
+	switch {
+	case kind == "request" && err == nil:
+		return string(longPill(l, "request", n, requestURL(n)))
+	case kind == "idea" && err == nil:
+		return string(longPill(l, "idea", n, ""))
+	case kind == "knowledge" && err == nil:
+		return string(longPill(l, "knowledge", n, "/ui/knowledge/"+rest))
+	case kind == "external" && (strings.HasPrefix(rest, "https://") || strings.HasPrefix(rest, "http://")):
+		return string(urlPill(l, rest))
+	}
+	return html.EscapeString(ellipsize(linkDataText(data), 120))
+}
+
 func linkDataText(data string) string {
 	kind, rest, _ := strings.Cut(data, ":")
 	switch kind {

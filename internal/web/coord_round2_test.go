@@ -99,7 +99,7 @@ func TestCoordShortRoomName(t *testing.T) {
 // contains needle.
 func attentionCard(t *testing.T, page, needle string) string {
 	t.Helper()
-	at := strings.Index(page, `<p class="ask-t">`+needle+`</p>`)
+	at := strings.Index(page, `<div class="ask-t"><div class="kn-body prose" data-md="`+needle+`"><p>`+needle+`</p></div></div>`)
 	if at < 0 {
 		t.Fatalf("no attention card for %q", needle)
 	}

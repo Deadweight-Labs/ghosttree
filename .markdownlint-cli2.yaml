@@ -9,3 +9,4 @@ globs:
   - "!vendor/**"
   - "!.ghosttree/**"
   - "!.superpowers/**"
+  - "!**/testdata/**"

@@ -179,16 +179,16 @@ func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, age func(string) string) 
 		if t.Revision <= 1 {
 			continue
 		}
-		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-raw-" + strconv.Itoa(t.Revision), Act: "idea.raw", Who: t.Person, Icon: "pencil", Head: sentence("ideas.ev.raw", t.Revision), Age: age(t.CreatedAt), Body: template.HTML(html.EscapeString(t.Message))}})
+		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-raw-" + strconv.Itoa(t.Revision), Act: "idea.raw", Who: t.Person, Icon: "pencil", Head: sentence("ideas.ev.raw", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}})
 	}
 	if s := ws.Summary; s != nil {
-		all = append(all, datedItem{s.CreatedAt, tlItem{ID: "text-summary", Act: "idea.summary", Who: s.Person, Icon: "list", Head: sentence("ideas.ev.summary"), Age: age(s.CreatedAt), Body: template.HTML(html.EscapeString(s.Message))}})
+		all = append(all, datedItem{s.CreatedAt, tlItem{ID: "text-summary", Act: "idea.summary", Who: s.Person, Icon: "list", Head: sentence("ideas.ev.summary"), Age: age(s.CreatedAt), Body: mdText(s.Message)}})
 	}
 	for _, t := range ws.ConceptRevs {
-		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Who: t.Person, Icon: "book", Head: sentence("ideas.ev.concept", t.Revision), Age: age(t.CreatedAt), Body: template.HTML(html.EscapeString(t.Message))}})
+		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Who: t.Person, Icon: "book", Head: sentence("ideas.ev.concept", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}})
 	}
 	for _, d := range ws.Decisions {
-		all = append(all, datedItem{d.CreatedAt, tlItem{ID: "decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Who: d.Person, Icon: "chat", Head: sentence("ideas.ev.decision"), Age: age(d.CreatedAt), Body: template.HTML(html.EscapeString(d.Question))}})
+		all = append(all, datedItem{d.CreatedAt, tlItem{ID: "decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Who: d.Person, Icon: "chat", Head: sentence("ideas.ev.decision"), Age: age(d.CreatedAt), Body: mdText(d.Question)}})
 	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].at < all[j].at })
 	items := make([]tlItem, len(all))

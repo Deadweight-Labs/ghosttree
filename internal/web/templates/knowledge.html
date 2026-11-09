@@ -1,4 +1,4 @@
-{{define "knbody"}}<div class="kn-body">{{range .}}{{if .Code}}<pre class="kn-code"><code>{{.Text}}</code></pre>{{else}}<p>{{range .Parts}}{{if .Code}}<code>{{.Text}}</code>{{else}}{{.Text}}{{end}}{{end}}</p>{{end}}{{end}}</div>{{end}}
+{{define "knbody"}}{{mdblocks .}}{{end}}
 
 {{define "knsegs"}}{{if .}}<div class="segrow"><nav class="gseg seg kseg" aria-label="{{t "knowledge.seg.label"}}">{{range .}}<a data-seg="{{.Kind}}" href="{{.Href}}"{{if .Current}} class="on" aria-current="page"{{end}}>{{if eq .Kind "entries"}}{{mi "book"}}{{else if eq .Kind "review"}}{{mi "check"}}{{else}}{{mi "ghost"}}{{end}}{{t (printf "knowledge.seg.%s" .Kind)}}{{if .Count}}<span class="counter">{{.Count}}</span>{{end}}</a>{{end}}</nav></div>{{end}}{{end}}
 

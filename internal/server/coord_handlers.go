@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
@@ -35,6 +36,8 @@ func writeCoordAccessError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrCoordUnknownRecipient):
 		// Fester Text: die Antwort darf die geprüfte Id nicht zurückgeben.
 		writeErr(w, http.StatusBadRequest, "coordination recipient is not available")
+	case errors.Is(err, store.ErrCoordBodyTooLong):
+		writeCoded(w, http.StatusRequestEntityTooLarge, "body_too_long", fmt.Sprintf("the message body is too long: at most %d bytes", store.CoordMaxBody))
 	case errors.Is(err, store.ErrCoordAmbiguousMention):
 		// Only members reach this: a guest never gets an error for a name.
 		writeErr(w, http.StatusBadRequest, err.Error())

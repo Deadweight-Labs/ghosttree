@@ -306,7 +306,7 @@ func (a *app) workshopDated(l lang, ws store.IdeaWorkshop, age func(string) stri
 	for _, d := range ws.Decisions {
 		for _, vt := range d.Votes {
 			out = append(out, datedItem{vt.At, tlItem{ID: "vote-" + strconv.FormatInt(d.ID, 10) + "-" + url.QueryEscape(vt.Voter), Act: "idea.vote", Who: vt.Voter, Icon: "thumb",
-				Head: template.HTML(sentence("workshop.ev.vote", vt.Variant) + " <span class=\"rn\">" + html.EscapeString(d.HumanID()) + "</span>"), Age: age(vt.At), Body: template.HTML(html.EscapeString(vt.Reason))}})
+				Head: template.HTML(sentence("workshop.ev.vote", vt.Variant) + " <span class=\"rn\">" + html.EscapeString(d.HumanID()) + "</span>"), Age: age(vt.At), Body: mdText(vt.Reason)}})
 		}
 		if d.State == idea.DecisionOpen || d.DecidedAt == "" {
 			continue
@@ -322,17 +322,17 @@ func (a *app) workshopDated(l lang, ws store.IdeaWorkshop, age func(string) stri
 		if d.ChosenVariant != "" {
 			for _, vr := range d.Variants {
 				if vr.Label == d.ChosenVariant {
-					body = append(body, "<b>"+html.EscapeString(vr.Label+" · "+vr.Title)+"</b>")
+					body = append(body, "<p><b>"+html.EscapeString(vr.Label+" · "+vr.Title)+"</b></p>")
 				}
 			}
 		}
 		for _, s := range []string{d.Answer, d.Reason, d.Trigger} {
 			if s != "" {
-				body = append(body, html.EscapeString(s))
+				body = append(body, string(mdText(s)))
 			}
 		}
 		out = append(out, datedItem{d.DecidedAt, tlItem{ID: "decided-" + strconv.FormatInt(d.ID, 10), Act: "idea.decided", Who: d.DecidedBy, Icon: icon, Tone: tone,
-			Head: template.HTML(sentence(key) + " <span class=\"rn\">" + html.EscapeString(d.HumanID()) + "</span>"), Age: age(d.DecidedAt), Body: template.HTML(strings.Join(body, "<br>"))}})
+			Head: template.HTML(sentence(key) + " <span class=\"rn\">" + html.EscapeString(d.HumanID()) + "</span>"), Age: age(d.DecidedAt), Body: template.HTML(strings.Join(body, ""))}})
 	}
 	return out
 }

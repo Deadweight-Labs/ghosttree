@@ -932,6 +932,9 @@ type CoordSent struct {
 // Bei einer Wiederholung (gleiche Client-Id oder gleiche origin_event_id
 // desselben Absenders) ist created false und die Id die der ersten Nachricht.
 func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
+	if len(message.Body) > CoordMaxBody {
+		return 0, false, ErrCoordBodyTooLong
+	}
 	if a.Store != nil && a.Store.writer != nil {
 		r, err := queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, message}, func(d *Store, p []any) (CoordSent, error) {
 			id, created, err := queuedCoordAccess(d, p).SendNew(p[3].(CoordMessage))
