@@ -48,7 +48,7 @@ func TestJoinOffersAnAccountWhenTheIdPCanCreateOne(t *testing.T) {
 		t.Fatalf("no way to create an account: %s", page)
 	}
 	// The sign-in path stays next to it.
-	if !strings.Contains(page, "Continue and join") {
+	if !strings.Contains(page, "Join with your identity provider") {
 		t.Fatalf("sign-in path gone: %s", page)
 	}
 }
@@ -109,15 +109,18 @@ func TestSignupStartsTheFlowWithPromptCreateAndJoinsOnReturn(t *testing.T) {
 	}
 }
 
-func TestLoginPagesSayAnInvitationLinkCreatesAnAccount(t *testing.T) {
+// The pages do not explain it in a sentence; they offer the way: "Create an
+// account" leads to the field for the invitation link.
+func TestLoginPagesOfferTheWayToCreateAnAccountFromAnInvitationLink(t *testing.T) {
 	env, _ := signupEnv(t, []string{"create"}, "")
 	for _, path := range []string{"/ui/login", "/ui/login/code"} {
 		resp, err := newBrowser(t).Get(env.web.URL + path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if page := body(t, resp); !strings.Contains(page, "No account yet?") {
-			t.Errorf("%s lacks the hint: %s", path, page)
+		page := body(t, resp)
+		if !strings.Contains(page, `href="/ui/register"`) || strings.Contains(page, "No account yet?") {
+			t.Errorf("%s: no way to register, or the explaining sentence is back: %s", path, page)
 		}
 	}
 }

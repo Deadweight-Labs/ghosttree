@@ -86,3 +86,57 @@ func TestCombiningMarksAreLimited(t *testing.T) {
 		}
 	}
 }
+
+// Die Einladungsseite fragt InviteNameFree, bevor sie anlegt; was dort frei ist,
+// muss inviteName danach unverändert vergeben (kein stilles "…-2" bei 61 bis 64 Zeichen).
+func TestInviteNameFreeAndInviteNameAgreeOnLongNames(t *testing.T) {
+	st := orgStore(t, "robin")
+	for _, n := range []int{59, 60, 61, 62, 63, 64} {
+		wanted := strings.Repeat("x", n)
+		if !st.InviteNameFree(wanted) {
+			t.Errorf("%d characters: reported taken or not allowed", n)
+		}
+		tx, err := st.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := inviteName(tx, wanted, 0)
+		tx.Rollback()
+		if err != nil || got != wanted {
+			t.Errorf("%d characters: inviteName = %q, %v; want the wish unchanged", n, got, err)
+		}
+	}
+	// Länger als erlaubt wird nicht still gekürzt, sondern abgelehnt.
+	if st.InviteNameFree(strings.Repeat("x", MaxDisplayNameRunes+1)) {
+		t.Error("an over-long wish is reported free although it would be cut")
+	}
+	// Ersatznamen sind nie der Wunsch.
+	for _, wanted := range []string{"", "   ", "Ｒоbin"} {
+		if st.InviteNameFree(wanted) {
+			t.Errorf("%q reported free although inviteName would replace it", wanted)
+		}
+	}
+}
+
+func TestInviteNameFreeIsFalseWhenTheWishIsTakenAtAnyLength(t *testing.T) {
+	st := orgStore(t, "robin")
+	for _, n := range []int{61, 64} {
+		wanted := strings.Repeat("y", n)
+		if _, err := st.AddAccount(wanted, "", false); err != nil {
+			t.Fatalf("%d characters: %v", n, err)
+		}
+		if st.InviteNameFree(wanted) {
+			t.Errorf("%d characters: a taken name is reported free", n)
+		}
+		tx, err := st.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := inviteName(tx, wanted, 0)
+		tx.Rollback()
+		want := strings.Repeat("y", MaxDisplayNameRunes-4) + "-2"
+		if err != nil || got != want || len([]rune(got)) > MaxDisplayNameRunes {
+			t.Errorf("%d characters taken: inviteName = %q, %v; want %q", n, got, err, want)
+		}
+	}
+}

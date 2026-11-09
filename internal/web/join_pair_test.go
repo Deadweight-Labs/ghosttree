@@ -458,7 +458,7 @@ func TestJoinConnectThisMachineForASignedInAccount(t *testing.T) {
 	}
 	waiting := e.pairPage(t, b)
 	first := pairRE.FindString(waiting)
-	for _, want := range []string{"| sh -s -- --pair " + first, "Open a terminal", "Waiting for your computer", "Send this to your computer", "New code"} {
+	for _, want := range []string{"| sh -s -- --pair " + first, "Run this command in a terminal", "Waiting for your computer", "New code"} {
 		if !strings.Contains(plainText(waiting), want) {
 			t.Errorf("waiting page lacks %q", want)
 		}
@@ -747,7 +747,7 @@ func TestJoinApproveFormIsNeverHiddenByAClass(t *testing.T) {
 	if strings.Contains(tag, "join-desktop") {
 		t.Fatalf("form carries a hiding class: %s", tag)
 	}
-	if !strings.Contains(page, "join-mobile") {
+	if !strings.Contains(page, `class="lead only-m"`) {
 		t.Fatal("the loopback hint for small screens is gone")
 	}
 }

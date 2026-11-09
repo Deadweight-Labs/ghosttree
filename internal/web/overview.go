@@ -810,8 +810,10 @@ func (a *app) setupFor(r *http.Request, who viewer, hasContent bool, now time.Ti
 	view.Example = l.msg("setup.example")
 	a.guideSetup(r, view)
 	if machines := ownMachines(l, tokens, now); len(machines) > 0 {
-		// A machine is there, so the status says so, however long ago it signed in.
-		if _, recent := recentMachine(tokens, now); recent || forced {
+		// "Fertig" only follows a machine that has just connected. "Weiteren Agent
+		// verbinden" (?connect=1) is asked by someone who already has a machine and
+		// wants the command for the next one, so it never shows "Fertig".
+		if _, recent := recentMachine(tokens, now); recent && !forced {
 			view.State, view.Machine = "connected", machines[0].Name
 			return view, nil
 		}

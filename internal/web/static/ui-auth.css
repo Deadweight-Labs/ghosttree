@@ -1,80 +1,150 @@
 /* Sign-in, registration, invitation and pairing pages: a centred column with the
-   ghost, a heading and a card; the old class names of the invitation and pairing
-   pages are mapped on the same look. Mock: git-native-v2 login.html (R2),
-   register.html, join*.html. */
+   ghost, an optional status circle, a heading and one kind of card. Buttons, fields
+   and avatars are the shared parts (gbtn, gfield, gav); this file only lays them
+   out. Mock: git-native-v2 login.html (R2), register.html, join*.html. */
 
 :is(.g2.auth) {
-  & .authbox { max-width: 372px; margin: 0 auto; padding: 40px 16px 0; display: flex; flex-direction: column; align-items: stretch; }
-  & .auth-logo { align-self: center; display: inline-flex; color: var(--logo); }
+  & .authbox { max-width: 372px; margin: 0 auto; padding: 40px 16px 48px; display: flex; flex-direction: column; align-items: stretch; }
+  & .authbox.wide { max-width: 600px; }
+  & .auth-logo { align-self: center; display: inline-flex; margin-bottom: 24px; color: var(--logo); --header-bg: var(--canvas-default); }
   & .auth-logo svg { width: 48px; height: 48px; }
-  & h1 { margin: 16px 0; text-align: center; font-size: 24px; font-weight: 300; line-height: 1.25; }
-  & .auth-card { padding: 16px; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; display: flex; flex-direction: column; gap: 16px; }
+  & h1 { margin: 0 0 16px; text-align: center; font-size: 24px; font-weight: 300; line-height: 1.25; letter-spacing: -.5px; overflow-wrap: anywhere; }
+  & .mono.m { font: .92em var(--ui-mono); color: var(--fg-default); letter-spacing: 0; }
+  & .muted { color: var(--fg-muted); }
+  & .center { text-align: center; }
+  & .lead { margin: 0; color: var(--fg-muted); text-align: center; }
+
+  /* Status circle above the heading: neutral, ok, bad, attention */
+  & .ico { display: flex; align-items: center; justify-content: center; width: 48px; height: 48px; margin: 0 auto 16px; border-radius: 50%; color: var(--fg-muted); background: var(--canvas-subtle); border: 1px solid var(--border-default); }
+  & .ico .i { width: 24px; height: 24px; }
+  & .ico.ok { color: #fff; background: var(--success-emphasis); border-color: var(--success-emphasis); }
+  & .ico.ok .i { color: #fff; }
+  & .ico.bad { color: var(--danger-fg); background: var(--danger-subtle); border-color: var(--danger-muted); }
+  & .ico.att { color: var(--attention-fg); background: var(--attention-subtle); border-color: var(--attention-muted); }
+
+  /* The error sits above the card, white text, only the icon is red */
+  & .auth-error { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 16px; padding: 12px 16px; font-size: 14px; color: var(--fg-default); background: var(--danger-subtle); border: 1px solid var(--danger-muted); border-radius: 6px; }
+  & .auth-error .i { flex: none; margin-top: 2px; color: var(--danger-fg); }
+  & .auth-card .auth-error { margin: 0; }
+
+  /* The card */
+  & .auth-card { padding: 16px; background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; display: flex; flex-direction: column; gap: 16px; }
+  & .authbox.wide .auth-card { padding: 24px; }
+  & .auth-card.center { align-items: center; text-align: center; }
+  & .auth-card.center .gbtn.blk { align-self: stretch; }
   & .auth-card form { display: flex; flex-direction: column; gap: 16px; margin: 0; }
-  & .pfield { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 14px; }
+  & .auth-card form.newcode-form { display: inline; }
+
+  /* Fields */
+  & .pfield { display: flex; flex-direction: column; font-size: 14px; }
+  & .pfield > span:first-child { margin-bottom: 8px; font-weight: 600; }
   & .pfield .gfield { font-weight: 400; background: var(--canvas-default); }
-  & .pfield small { font-weight: 400; font-size: 12px; }
-  & .auth-or { display: flex; align-items: center; gap: 16px; color: var(--fg-muted); font-size: 14px; }
-  & .auth-or::before, & .auth-or::after { content: ""; flex: 1; height: 1px; background: var(--border-default); }
-  & .auth-error { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 12px; color: var(--danger-fg); background: var(--danger-subtle); border: 1px solid var(--danger-muted); border-radius: 6px; }
-  & .auth-flash { margin-bottom: 16px; padding: 12px 16px; }
-  & .auth-hint { margin: -8px 0 0; font-size: 13px; text-align: center; }
-  & .auth-token summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; list-style: none; color: var(--accent-fg); font-size: 14px; }
+  & .pfield small { margin-top: 4px; font-size: 12px; font-weight: 400; }
+  & .pfield small.bad { color: var(--danger-fg); }
+  & .gfield.is-bad, & .gfield.is-bad:focus-within { border-color: var(--danger-emphasis); }
+  & .gfield.is-bad:focus-within { box-shadow: inset 0 0 0 1px var(--danger-emphasis); }
+  & .gfield input::placeholder { color: var(--fg-muted); }
+  & .gfield.big { height: 48px; }
+  & .gfield.big input { text-align: center; text-transform: uppercase; font: 600 22px/1 var(--ui-mono); letter-spacing: .14em; }
+  & .gfield.big input::placeholder { font-weight: 400; }
+  & .fl { display: block; }
+  & .chkrow { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; cursor: pointer; }
+  & .chkrow input { flex: none; margin: 3px 0 0; width: 14px; height: 14px; accent-color: var(--accent-emphasis); }
+  & .chkhint { margin: 8px 0 0; font-size: 12px; color: var(--danger-fg); }
+
+  /* Buttons: a disabled one reads as disabled, not as a faded primary */
+  & .gbtn[disabled], & .gbtn[aria-disabled="true"] { opacity: 1; color: var(--fg-muted); background: var(--canvas-subtle); border-color: var(--border-default); box-shadow: none; cursor: not-allowed; }
+  & .gbtn { height: auto; min-height: 32px; padding-block: 5px; overflow-wrap: anywhere; white-space: normal; text-align: center; }
+  & .gbtn .i { flex: none; }
+  & .auth-card .gbtn .i { color: currentColor; }
+  & .linkbtn { padding: 0; font: inherit; color: var(--accent-fg); background: none; border: 0; cursor: pointer; }
+  & .linkbtn:hover { text-decoration: underline; }
+
+  /* "oder" and "neu hier?" */
+  & .auth-or { display: flex; align-items: center; gap: 12px; color: var(--fg-muted); font-size: 12px; }
+  & .auth-or::before, & .auth-or::after { content: ""; flex: 1; border-top: 1px solid var(--border-default); }
+
+  /* Token login */
+  & .auth-token summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; list-style: none; color: var(--accent-fg); font-size: 12px; }
   & .auth-token summary::-webkit-details-marker { display: none; }
+  & .auth-token summary .i { width: 12px; height: 12px; transition: transform .12s; }
   & .auth-token[open] summary .i { transform: rotate(180deg); }
   & .auth-token form { margin-top: 12px; }
-  & .auth-alt { margin: 24px 0 0; text-align: center; color: var(--fg-muted); font-size: 16px; }
-  & .gt-foot { margin-top: 48px; border-top: 0; }
-  & .muted { color: var(--fg-muted); }
-  & .join-facts { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--fg-muted); }
 
-  /* Invitation and pairing pages (join.html) */
-  & .join-card { background: var(--canvas-default); }
-  & .join-card .pfield, & .join-card label.fl { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
-  & .auth-card label.field { display: flex; flex-direction: column; gap: 4px; font-size: 14px; font-weight: 600; }
-  & .auth-card label.field input { height: 32px; padding: 0 12px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; font: 400 14px var(--ui-font); }
-  & .auth-card label.field input:focus { outline: 2px solid var(--accent-emphasis); outline-offset: -1px; }
-  & .join-card ul.join-shares { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); }
-  & .join-card ul.join-shares > li { padding: 12px 16px; }
-  & .join-card ul.join-shares > li + li { border-top: 1px solid var(--border-muted); }
-  & .authbox.wide { max-width: 640px; }
-  & .join-steps { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); }
-  & .join-step { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 16px; }
-  & .join-step + .join-step { border-top: 1px solid var(--border-muted); }
-  & .join-num { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 1px solid var(--border-default); border-radius: 50%; font-weight: 600; background: var(--canvas-subtle); }
-  & .join-step.is-active .join-num { color: var(--accent-fg); border-color: var(--accent-emphasis); }
-  & .join-step p { margin: 4px 0 0; color: var(--fg-muted); }
-  & .join-wait { display: flex; align-items: center; gap: 8px; }
-  & .join-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--attention-fg); box-shadow: 0 0 0 4px var(--attention-subtle); }
-  & .join-cmd { display: flex; align-items: center; gap: 8px; }
-  & .join-cmd code, & .join-msg { flex: 1; min-width: 0; padding: 8px 12px; font: 13px/1.5 var(--ui-mono); background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; overflow-wrap: anywhere; white-space: pre-wrap; }
-  & .join-url { color: var(--accent-fg); }
-  & .join-tok { white-space: nowrap; }
-  & .join-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-  & .join-confirm { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; cursor: pointer; }
-  & .join-confirm input { margin: 3px 0 0; width: 14px; height: 14px; accent-color: var(--accent-emphasis); }
-  & .join-confirm-hint, & .join-from, & .join-lead { margin: 0; color: var(--fg-muted); font-size: 14px; }
-  & .join-codefield { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
-  & .join-code { height: 40px; padding: 0 12px; font: 20px var(--ui-mono); letter-spacing: .2em; text-transform: uppercase; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; }
-  & .join-done { display: flex; align-items: center; gap: 12px; }
-  & .join-done h1 { margin: 0; text-align: left; }
-  & .join-check { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; color: #fff; background: var(--success-emphasis); border-radius: 50%; }
-  & .join-check .i { width: 22px; height: 22px; }
-  & .join-newcode { margin-top: 8px; text-align: center; }
-  & .join-mobile { display: none; }
-  & .join-paste code { cursor: pointer; }
-  & .ostabs { margin: 4px 0 0; }
-  & .btn, & a.btn { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 12px; font: 500 14px/20px var(--ui-font); color: var(--fg-default); background: var(--btn-bg); border: 1px solid var(--btn-border); border-radius: 6px; cursor: pointer; text-decoration: none; }
-  & .btn-primary { background: var(--btn-pri-bg); border-color: var(--btn-pri-border); color: #fff; }
-  & .btn.ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
-  & .btn[disabled] { opacity: .5; cursor: not-allowed; }
-  & .login-error { margin: 0; padding: 8px 12px; color: var(--danger-fg); background: var(--danger-subtle); border: 1px solid var(--danger-muted); border-radius: 6px; }
-  & .join-newcode .btn { background: transparent; border-color: transparent; color: var(--fg-muted); }
+  /* Under the card: "Schon ein Konto?", "Zurück", "Nicht du?" */
+  & .auth-alt { margin: 16px 0 0; text-align: center; color: var(--fg-muted); font-size: 14px; }
+  & .auth-alt.boxed { padding: 16px; color: var(--fg-default); border: 1px solid var(--border-default); border-radius: 6px; }
+  & .auth-back, & .signout { margin: 16px 0 0; text-align: center; color: var(--fg-muted); font-size: 12px; }
+  & .signout { display: block; }
+  & .signout .linkbtn { font-size: 12px; }
+
+  /* Footer: 40 px under the card, like the mock */
+  & .gt-foot { margin-top: 40px; padding: 0; border-top: 0; line-height: 18px; }
+
+  /* Invitation */
+  & .invh { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 16px; }
+  & .invh .plus { display: inline-flex; color: var(--fg-subtle); }
+  & .invh .gav.xl { width: 48px; height: 48px; font-size: 16px; }
+  & .gav.org { border-radius: 6px; }
+  & .facts { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 16px; margin: 0; padding: 0; list-style: none; font-size: 14px; color: var(--fg-muted); }
+  & .facts li { display: inline-flex; align-items: center; gap: 6px; }
+  & .facts b { color: var(--fg-default); font-weight: 600; }
+  & .shares { margin: 0; padding: 0; list-style: none; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; }
+  & .shares li { display: flex; align-items: flex-start; gap: 8px; padding: 12px 16px; font-size: 14px; color: var(--fg-muted); }
+  & .shares li + li { border-top: 1px solid var(--border-muted); }
+  & .shares .i { flex: none; margin-top: 2px; }
+  & .whoami { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; align-items: center; padding: 12px 16px; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; }
+  & .whoami small { display: block; color: var(--fg-muted); font-size: 12px; overflow-wrap: anywhere; }
+  & .whoami b { overflow-wrap: anywhere; }
+
+  /* Pairing */
+  & .from { margin: -8px 0 16px; color: var(--fg-muted); text-align: center; overflow-wrap: anywhere; }
+  & .from .sep { margin: 0 8px; color: var(--fg-subtle); }
+  & .wait { display: inline-flex; align-items: center; gap: 12px; color: var(--fg-muted); font-size: 14px; }
+  & .pulse { position: relative; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--attention-fg); }
+  & .pulse::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; background: var(--attention-fg); opacity: 0; animation: authpulse 1.8s ease-out infinite; }
+  & .pulse.acc { background: var(--accent-fg); }
+  & .pulse.acc::after { background: var(--accent-fg); }
+  & .authbox .auth-card.psteps { padding: 0; gap: 0; background: var(--canvas-default); }
+  & .psteps ol { margin: 0; padding: 0; list-style: none; }
+  & .step { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; padding: 16px; }
+  & .step + .step { border-top: 1px solid var(--border-muted); }
+  & .step .n { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 1px solid var(--border-default); border-radius: 50%; background: var(--canvas-subtle); font-size: 13px; font-weight: 600; }
+  & .step .n.now { color: var(--accent-fg); border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--accent-subtle); }
+  & .step .n.done { color: #fff; background: var(--success-emphasis); border-color: var(--success-emphasis); }
+  & .step .stt { font-weight: 600; line-height: 28px; }
+  & .step .ostabs, & .step .cmdc { margin-top: 8px; }
+  & .step .wait { margin-top: 4px; }
+  & .cmdc.code { margin: 0; }
+  & .cmdc.code .cmd { margin: 0; padding: 14px 112px 14px 16px; font: 600 20px/1.3 var(--ui-mono); letter-spacing: .12em; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; }
+  & .cmdc.code .gbtn { top: 50%; transform: translateY(-50%); right: 8px; }
+  & .acts2 { display: flex; gap: 8px; }
+  & .acts2 .gbtn { flex: 1; }
+  & .psteps + .acts2 { margin-top: 16px; }
+  & .only-m, & .acts2.only-m { display: none; }
+  & .newcode { margin-top: 16px; text-align: center; }
+  & .newcode form { display: inline; }
+  & .center a { overflow-wrap: anywhere; }
 }
+@keyframes authpulse { 0% { transform: scale(.6); opacity: .5; } 100% { transform: scale(1.6); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { :is(.g2.auth) .pulse::after { animation: none; } }
+
 @media (max-width: 767px) {
   :is(.g2.auth) {
-    & .authbox { padding-top: 32px; }
-    & .join-mobile { display: block; }
-    & .join-desktop { display: none; }
-    & .btn, & .gbtn { min-height: 44px; }
+    & .authbox { padding-top: 24px; }
+    & .authbox.wide .auth-card { padding: 16px; }
+    & .step { gap: 8px; padding: 12px; }
+    & .only-m { display: block; }
+    & .acts2.only-m { display: flex; }
+    & .not-m { display: none; }
+    & .acts2 { flex-direction: column; }
+    & .gbtn { min-height: 44px; }
+    & .gfield input { font-size: 16px; }
+    & .gfield.big input { font-size: 22px; }
+    & .auth-token summary, & .auth-alt a, & .auth-back a, & .signout .linkbtn, & .center a { display: inline-flex; align-items: center; min-height: 44px; }
+    & .chkrow { align-items: center; min-height: 44px; }
+    & .chkrow input { margin: 0; width: 20px; height: 20px; }
+    & .cmdc.code .cmd { padding: 14px 16px 60px; }
+    & .cmdc.code .gbtn { top: auto; bottom: 8px; right: 50%; transform: translateX(50%); }
   }
 }

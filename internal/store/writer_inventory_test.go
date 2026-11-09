@@ -201,6 +201,7 @@ var writerMethodClasses = map[string]string{
 	"RedeemLoginLink":               "write",
 	"CodeKindFor":                   "read",
 	"HasIdentities":                 "read",
+	"InviteNameFree":                "read",
 	"AccountActive":                 "read",
 	"CreateToken":                   "write",
 	"CreateDeviceToken":             "write",

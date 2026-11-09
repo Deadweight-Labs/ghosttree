@@ -31,7 +31,19 @@ func safeNext(raw string) string {
 		}
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || !strings.HasPrefix(u.Path, "/ui/") {
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
+		return ""
+	}
+	// Eine Einladungsseite darf Ziel sein, damit wer schon ein Konto hat, nach der
+	// Anmeldung dort weitermacht; nur der Pfad mit einem gut geformten Code, nie mit
+	// Anhang.
+	if rest, ok := strings.CutPrefix(u.Path, "/join/"); ok {
+		if wellFormedJoinCode(rest) && u.RawQuery == "" && u.Fragment == "" && !strings.Contains(raw, "%") {
+			return raw
+		}
+		return ""
+	}
+	if !strings.HasPrefix(u.Path, "/ui/") {
 		return ""
 	}
 	if u.Path == "/ui/login" || strings.HasPrefix(u.Path, "/ui/login/") || u.Path == "/ui/logout" {

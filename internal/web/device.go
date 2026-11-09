@@ -35,7 +35,7 @@ func (a *app) devicePage(w http.ResponseWriter, r *http.Request) {
 	if len(code) > 32 {
 		code = ""
 	}
-	a.renderBrowser(w, r, "device", pageData{Title: l.msg("adm.device.title"), Code: code})
+	a.renderBrowser(w, r, "device", pageData{Title: l.msg("adm.device.title"), Code: code, OIDC: a.oidc != nil})
 }
 
 // deviceLookup prüft den eingegebenen Code und zeigt, wer ihn angefordert hat.
@@ -96,10 +96,12 @@ func (a *app) deviceError(w http.ResponseWriter, r *http.Request, err error, cod
 		status, text = http.StatusConflict, l.msg("adm.device.err_machine")
 	}
 	if errors.Is(err, store.ErrDeviceLocked) {
-		status, text = http.StatusTooManyRequests, l.msg("adm.device.err_locked")
+		// Bei einer Sperre bleibt das Feld leer; sonst steht der getippte Code noch
+		// da, ein Tippfehler im achtstelligen Code muss nicht ganz neu getippt werden.
+		status, text, code = http.StatusTooManyRequests, l.msg("adm.device.err_locked"), ""
 	}
 	w.WriteHeader(status)
-	a.renderBrowser(w, r, "device", pageData{Title: l.msg("adm.device.title"), Error: text, Code: ""})
+	a.renderBrowser(w, r, "device", pageData{Title: l.msg("adm.device.title"), Error: text, Code: code, OIDC: a.oidc != nil})
 }
 
 type tokenRow struct {

@@ -154,7 +154,7 @@ func TestJoinStateFlipsToConnectedAndThePageDropsTheCode(t *testing.T) {
 	e.st.Join().Delivered(grant)
 	_, st := e.get(t, b, "/join/pair/state")
 	page := e.pairPage(t, b)
-	if !strings.Contains(st, `"connected"`) || strings.Contains(page, "join-paste-code") || !strings.Contains(page, "annas-laptop is connected") || !strings.Contains(page, "Continue in your terminal") {
+	if !strings.Contains(st, `"connected"`) || strings.Contains(page, "join-paste-code") || !strings.Contains(plainText(page), "annas-laptop is connected") || !strings.Contains(page, "Continue in your terminal") {
 		t.Fatalf("state %s, page %s", st, page)
 	}
 }

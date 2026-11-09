@@ -23,8 +23,7 @@
     if (!navigator.share) continue;
     button.hidden = false;
     button.addEventListener("click", () => {
-      const source = document.querySelector(button.dataset.share);
-      if (source) navigator.share({ text: source.textContent.trim() }).catch(() => {});
+      if (button.dataset.share) navigator.share({ text: button.dataset.share }).catch(() => {});
     });
   }
   // Connect and Deny: the page stays put. The installer's loopback is a top-level
@@ -77,7 +76,10 @@
     if (!document.hidden) {
       try {
         const response = await fetch("/join/pair/state", { cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json" } });
-        if (response.status === 401 || response.status === 403) { location.reload(); return; }
+        // The web session ended: the state URL answers with the sign-in page, not
+        // JSON. Reloading lands on the sign-in page instead of an old code.
+        const json = (response.headers.get("Content-Type") || "").includes("json");
+        if (response.status === 401 || response.status === 403 || response.redirected || (response.ok && !json)) { location.reload(); return; }
         if (response.ok) {
           const now = await response.json();
           if (now.state !== state || (now.nonce || "") !== nonce) { location.reload(); return; }

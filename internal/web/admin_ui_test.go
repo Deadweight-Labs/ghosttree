@@ -281,7 +281,7 @@ func TestLoginRequiredPageIsEnglishAndShort(t *testing.T) {
 	pasted := login(t, srv, tok)
 	resp := sameOriginPostForm(t, pasted, srv.URL+"/ui/device", url.Values{"csrf_token": {renderedCSRFToken(t, pasted, srv.URL+"/ui/overview")}, "user_code": {"x"}})
 	page := body(t, resp)
-	if resp.StatusCode != http.StatusForbidden || strings.Contains(page, "Diese Aktion") || strings.Contains(page, "Anmeldung per Login") || !strings.Contains(page, "read-only session") {
+	if resp.StatusCode != http.StatusForbidden || strings.Contains(page, "Diese Aktion") || strings.Contains(page, "Anmeldung per Login") || !strings.Contains(page, "can only read") {
 		t.Fatalf("login required page: %d %s", resp.StatusCode, page)
 	}
 }

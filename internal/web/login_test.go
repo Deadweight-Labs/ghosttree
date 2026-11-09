@@ -136,7 +136,7 @@ func TestOIDCUnknownCodeOnEnterShowsTheErrorInTheForm(t *testing.T) {
 	env := newOIDCEnv(t, true)
 	resp := sameOriginPostForm(t, newBrowser(t), env.web.URL+"/ui/login/code", url.Values{"code": {"nope"}})
 	page := body(t, resp)
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(page, `role="alert"`) || strings.Contains(page, "Use the identity provider") {
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(page, `role="alert"`) || strings.Contains(page, "Use the identity provider") {
 		t.Fatalf("status=%d %s", resp.StatusCode, page)
 	}
 }
@@ -181,7 +181,7 @@ func TestLoginPageForAFreshInstanceAsksForBootstrapCodeAndName(t *testing.T) {
 	srv := httptest.NewServer(New(st, WithBootstrapFile(file)))
 	defer srv.Close()
 	page := loginPageOf(t, srv)
-	for _, want := range []string{"Bootstrap code", "Your name", `name="name"`, `name="code"`, `action="/ui/login/code"`, `placeholder="e.g. robin"`} {
+	for _, want := range []string{"Setup code", "Your name", `name="name"`, `name="code"`, `action="/ui/login/code"`, `placeholder="e.g. robin"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("bootstrap login lacks %q", want)
 		}
@@ -195,12 +195,12 @@ func TestLoginWithAWrongCodeShowsTheErrorInsideTheForm(t *testing.T) {
 	srv, _, _ := testWeb(t)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp := sameOriginPostForm(t, client, srv.URL+"/ui/login/code", url.Values{"code": {"not-a-code"}})
-	if resp.StatusCode != http.StatusForbidden {
+	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
 	page := body(t, resp)
 	for _, want := range []string{
-		`role="alert"`, "That code isn&#39;t valid. Check it and try again, or ask for a new link.",
+		`role="alert"`, "That code does not work. Check it, or ask for a new link.",
 		`name="code"`, `<h1>Sign in to ghosttree</h1>`,
 	} {
 		if !strings.Contains(page, want) {

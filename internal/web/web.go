@@ -34,6 +34,7 @@ type app struct {
 	publicOrigin  string // scheme://host of GHOSTTREE_PUBLIC_URL, or empty
 	publicHTTPS   bool
 	joinLimits    *joinLimiter
+	inviteNames   *inviteNameGuard
 	inviteLinks   *inviteLinks
 	distSums      distCache
 	distDir       string           // ctx archives + checksums.txt served at /dist/; empty = off
@@ -87,6 +88,7 @@ type pageData struct {
 	Invite                                                     bool
 	InviteV                                                    *joinView
 	ProviderName                                               string
+	Auth                                                       authView
 	Bootstrap, TokenOpen                                       bool
 	Shell                                                      shellView
 	Overview                                                   overviewView
@@ -156,7 +158,7 @@ func uiHeaders(h http.Header) {
 }
 
 func newApp(st *store.Store, opts ...Option) http.Handler {
-	a := &app{store: st, sessions: newSessions(), joinLimits: newJoinLimiter(), inviteLinks: newInviteLinks(), sourceFlows: newSourceFlows()}
+	a := &app{store: st, sessions: newSessions(), joinLimits: newJoinLimiter(), inviteNames: newInviteNameGuard(), inviteLinks: newInviteLinks(), sourceFlows: newSourceFlows()}
 	for _, opt := range opts {
 		opt(a)
 	}
@@ -177,6 +179,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /install.sh", a.installSh)
 	a.handle(mux, "GET /dist/{name}", a.distFile)
 	a.handle(mux, "GET /join/{code}", a.joinPage)
+	a.handle(mux, "GET /join/{code}/login", a.joinLogin)
 	a.handle(mux, "GET /join/", func(w http.ResponseWriter, r *http.Request) {
 		if a.joinGate(w, r) {
 			a.joinNotFound(a.langFor(r), w)
@@ -480,6 +483,7 @@ var webRoutes = map[string]webClass{
 	"GET /install.sh":                       webPublic,
 	"GET /dist/{name}":                      webPublic,
 	"GET /join/{code}":                      webPublic,
+	"GET /join/{code}/login":                webPublic,
 	"GET /join/":                            webPublic,
 	"GET /join/pair":                        webAccount,
 	"GET /join/pair/state":                  webAccount,

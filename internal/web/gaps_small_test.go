@@ -53,8 +53,8 @@ func TestRegisterChecksTheInvitationLikeTheJoinPageAndAnswersTheSameForEveryBadO
 	for name, link := range map[string]string{"unknown": strings.Repeat("ab", joinCodeLen/2), "expired": short, "used": used, "revoked": revoked,
 		"unknown in a link": "https://ghosttree.example/join/" + strings.Repeat("cd", joinCodeLen/2)} {
 		code, loc, page := post(link)
-		if code != http.StatusNotFound || loc != "" || !strings.Contains(page, "does not work") {
-			t.Errorf("%s -> %d %q, want 404 with the one message", name, code, loc)
+		if code != http.StatusUnprocessableEntity || loc != "" || !strings.Contains(page, "does not work") {
+			t.Errorf("%s -> %d %q, want 422 with the one message", name, code, loc)
 		}
 		for _, leak := range []string{"expired", "revoked", "used up", "Invited by", "alpha"} {
 			if strings.Contains(strings.ToLower(page), strings.ToLower(leak)) && leak != "expired" {
@@ -69,7 +69,7 @@ func TestRegisterChecksTheInvitationLikeTheJoinPageAndAnswersTheSameForEveryBadO
 		}
 	}
 	// A string that is no link at all keeps its own message and never reaches the store.
-	if code, _, page := post("hello"); code != http.StatusBadRequest || !strings.Contains(page, "That is not an invitation link.") {
+	if code, _, page := post("hello"); code != http.StatusUnprocessableEntity || !strings.Contains(page, "That is not an invitation link.") {
 		t.Errorf("a wrong link -> %d", code)
 	}
 	// Guessing is held back by the limit of the join page.
@@ -111,7 +111,7 @@ func TestTheAuthFooterHasNoSeparatorDotThatCanBeLeftAlone(t *testing.T) {
 			if strings.Contains(foot, "sep") || strings.Contains(foot, "·") {
 				t.Errorf("%s (version %q): the footer carries a separator dot: %s", path, ver, foot)
 			}
-			if strings.Contains(foot, "Server version") != (ver != "") {
+			if strings.Contains(foot, "ghosttree ") != (ver != "") {
 				t.Errorf("%s (version %q): the version line is wrong: %s", path, ver, foot)
 			}
 			if !strings.Contains(foot, "Privacy") || !strings.Contains(foot, "Help") {

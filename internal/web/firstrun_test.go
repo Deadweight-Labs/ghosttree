@@ -109,8 +109,10 @@ func TestOverviewShowsConnectedMachinesAndTheNextStep(t *testing.T) {
 		t.Error("another person's machine is listed")
 	}
 	_, forced := fetchPage(t, e.Member, e.Base+"/ui/overview?connect=1")
-	if !strings.Contains(forced, "anna-laptop</b> is connected") || strings.Contains(forced, "Waiting for your machine") {
-		t.Error("the connect page does not switch to connected")
+	// "Connect another agent" shows the command for the next machine, not "Done":
+	// the machine that is already there changes nothing about what is asked.
+	if strings.Contains(forced, "is connected") || !strings.Contains(forced, "Waiting for your machine") {
+		t.Error("the connect page shows the finished state instead of the command")
 	}
 }
 

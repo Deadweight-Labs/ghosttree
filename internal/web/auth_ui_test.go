@@ -33,7 +33,7 @@ func TestRegisterAsksOnlyForTheInvitationLinkAndLeadsToTheInvitationPage(t *test
 	}
 	res = sameOriginPostForm(t, client, srv.URL+"/ui/register", url.Values{"link": {"https://example.com/abc"}})
 	text := body(t, res)
-	if res.StatusCode != http.StatusBadRequest || !strings.Contains(text, "That is not an invitation link.") || !strings.Contains(text, "https://example.com/abc") {
+	if res.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(text, "That is not an invitation link.") || !strings.Contains(text, "https://example.com/abc") {
 		t.Errorf("a wrong link: %d %s", res.StatusCode, text)
 	}
 }

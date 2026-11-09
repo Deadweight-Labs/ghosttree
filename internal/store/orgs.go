@@ -1350,12 +1350,12 @@ func (s *Store) acceptInvitation(acct int64, code string) (Org, error) {
 // inviteName macht aus dem Anzeigenamen einen freien Kontonamen. Das Konto
 // self (0: keines) zählt dabei nicht als Kollision mit sich selbst.
 func inviteName(tx queryer, wanted string, self int64) (string, error) {
-	base := NormalizeAccountName(wanted)
-	if base == "" || MixedScriptName(base) {
-		base = "user"
-	}
-	if r := []rune(base); len(r) > 60 {
-		base = string(r[:60])
+	base, _ := inviteBaseName(wanted)
+	// Der Name selbst darf bis MaxDisplayNameRunes lang sein; erst mit Zähler
+	// wird er gekürzt, damit "-N" noch hineinpasst.
+	stem := base
+	if r := []rune(stem); len(r) > inviteSuffixStemRunes {
+		stem = strings.TrimSpace(string(r[:inviteSuffixStemRunes]))
 	}
 	name := base
 	for i := 2; i < 1000; i++ {
@@ -1366,7 +1366,7 @@ func inviteName(tx queryer, wanted string, self int64) (string, error) {
 		if !taken {
 			return name, nil
 		}
-		name = base + "-" + strconv.Itoa(i)
+		name = stem + "-" + strconv.Itoa(i)
 	}
 	return "", fmt.Errorf("no free account name for %q", wanted)
 }

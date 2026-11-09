@@ -222,7 +222,7 @@ func TestLocalInvitationLinkCreatesAccountAndSession(t *testing.T) {
 	b := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, _ := b.Get(srv.URL + "/ui/login/code?code=" + code)
 	page := body(t, resp)
-	if !strings.Contains(page, "alice invited you to Alpha") || !strings.Contains(page, "Your coding agents share") || strings.Contains(page, `type="password"`) || !strings.Contains(page, `name="name"`) {
+	if !strings.Contains(page, "alice invited you to Alpha") || strings.Contains(page, `type="password"`) || !strings.Contains(page, `name="name"`) {
 		t.Fatalf("landing page: %s", page)
 	}
 	// Ein GET verbraucht nichts.
@@ -246,7 +246,7 @@ func TestLocalInvitationLinkCreatesAccountAndSession(t *testing.T) {
 		t.Fatal("no session after redeeming")
 	}
 	resp = sameOriginPostForm(t, b, srv.URL+"/ui/login/code", url.Values{"code": {code}, "name": {"again"}})
-	if resp.StatusCode != http.StatusForbidden {
+	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("reuse: %d", resp.StatusCode)
 	}
 }
@@ -256,7 +256,7 @@ func TestOIDCInvitationLandingPointsToTheIdentityProvider(t *testing.T) {
 	code := env.invite(t, org, "")
 	resp, _ := http.Get(env.web.URL + "/ui/login/code?code=" + code)
 	page := body(t, resp)
-	if !strings.Contains(page, "Continue and join") || !strings.Contains(page, `action="/ui/login/oidc"`) || strings.Contains(page, `name="name"`) {
+	if !strings.Contains(page, "Join with your identity provider") || !strings.Contains(page, `action="/ui/login/oidc"`) || strings.Contains(page, `name="name"`) {
 		t.Fatalf("landing page: %s", page)
 	}
 	b := newBrowser(t)

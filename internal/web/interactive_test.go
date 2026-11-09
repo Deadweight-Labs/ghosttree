@@ -75,7 +75,7 @@ func TestPastedTokenSessionIsReadOnly(t *testing.T) {
 		}
 		resp := sameOriginPostForm(t, pasted, srv.URL+path, f)
 		page := body(t, resp)
-		if resp.StatusCode != http.StatusForbidden || !strings.Contains(page, "read-only session") || !strings.Contains(page, "login-link") {
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(page, "can only read") || !strings.Contains(page, "login-link") {
 			t.Fatalf("%s with a pasted token: %d %s", path, resp.StatusCode, page)
 		}
 	}
