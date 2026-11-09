@@ -107,20 +107,6 @@ func mdInterrupts(l string) bool {
 
 func mdIndent(l string) int { return len(l) - len(strings.TrimLeft(l, " ")) }
 
-// fenceFor is the fence that holds text: longer than any run of backticks in it.
-func fenceFor(text string) string {
-	n, run := 3, 0
-	for _, r := range text {
-		if r == '`' {
-			run++
-			n = max(n, run+1)
-		} else {
-			run = 0
-		}
-	}
-	return strings.Repeat("`", n)
-}
-
 // mdSplit reads the text line by line into its blocks.
 func mdSplit(s string) []bodyBlock {
 	lines := strings.Split(strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n"), "\n")

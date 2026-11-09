@@ -71,6 +71,8 @@ func coordHTTPError(l lang, w http.ResponseWriter, err error) {
 		http.Error(w, "coordination message already has a different task thread", http.StatusConflict)
 	case errors.Is(err, store.ErrCoordInvalidExpiry):
 		http.Error(w, l.msg("coord.expiry_invalid"), http.StatusBadRequest)
+	case errors.Is(err, store.ErrCoordBodyTooLong):
+		http.Error(w, l.msg("coord.body_too_long", store.CoordMaxBody>>10), http.StatusRequestEntityTooLarge)
 	case errors.Is(err, store.ErrCoordInvalidSequence):
 		http.Error(w, "invalid coordination sequence", http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordUnknownRecipient):

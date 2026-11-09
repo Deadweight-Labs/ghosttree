@@ -235,6 +235,7 @@ var messages = map[string]string{
 	"coord.conversation":               "Conversation",
 	"coord.context":                    "Room details",
 	"coord.expiry_invalid":             "Invalid expiry: enter a date and time like 2026-09-18 18:30.",
+	"coord.body_too_long":              "The message is too long: at most %d KB. Shorten it or put the long part into a document.",
 	"coord.close_panel":                "Close panel",
 	"coord.live.connecting":            "Connecting",
 	"coord.live.off":                   "Live updates off.",

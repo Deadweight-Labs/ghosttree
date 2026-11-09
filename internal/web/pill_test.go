@@ -201,8 +201,9 @@ func TestMarkdownRendererLeavesHashNumbersToTheServer(t *testing.T) {
 	if strings.Contains(src, "innerHTML") {
 		t.Error("ui-md.js builds HTML from a string")
 	}
-	// The cut points of the script test of the documents (#206): safeUrl stands on its own.
-	if i, j := strings.Index(src, "  function safeUrl("), strings.Index(src, "  // Address of a reference"); i < 0 || j <= i {
+	// The cut points of the script test of the documents (#206): safeUrl, with the comment and
+	// the patterns above it, stands on its own up to the comment of the next block.
+	if i, j := strings.Index(src, "  // Allowed: http(s) and relative addresses."), strings.Index(src, "  // Address of a reference"); i < 0 || j <= i || !strings.Contains(src[i:j], "function safeUrl(") {
 		t.Error("safeUrl is no longer a block of its own in ui-md.js")
 	}
 }

@@ -236,6 +236,7 @@ var messagesDE = map[string]string{
 	"coord.conversation":               "Unterhaltung",
 	"coord.context":                    "Raumdetails",
 	"coord.expiry_invalid":             "Ungültiges Ablaufdatum: gib Datum und Uhrzeit an, etwa 2026-09-18 18:30.",
+	"coord.body_too_long":              "Die Nachricht ist zu lang: höchstens %d KB. Kürze sie oder lege den langen Teil in ein Dokument.",
 	"coord.close_panel":                "Bereich schließen",
 	"coord.live.connecting":            "Verbinde",
 	"coord.live.off":                   "Live-Updates aus.",
