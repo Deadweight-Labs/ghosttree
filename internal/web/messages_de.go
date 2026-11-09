@@ -1226,6 +1226,7 @@ var messagesDE = map[string]string{
 	"ui.band.mentions_one":          "1 Erwähnung für dich",
 	"ui.band.mentions":              "%d Erwähnungen für dich",
 	"ui.band.icon_count":            "%[1]s, %[2]s",
+	"ui.band.more":                  "Weitere: %s",
 	"ui.org.tabs":                   "Organisation",
 	"ui.org.tab.repos":              "Repositories",
 	"ui.org.tab.agents":             "Agenten",

@@ -108,9 +108,22 @@ func (a *app) repoPackagesPage(w http.ResponseWriter, r *http.Request) {
 		}
 		v.EmptyKey = "packages.empty_branch"
 	}
+	// The numbers beside the tabs are what the list shows for the filter: with a branch
+	// that is the package of the branch, counted by its state.
+	openN, closedN := len(open), len(closed)
+	if v.Branch != "" {
+		openN, closedN = 0, 0
+		for _, s := range shown {
+			if s.State == requestdomain.PackageClosed {
+				closedN++
+			} else {
+				openN++
+			}
+		}
+	}
 	v.Tabs = []issueStateTab{
-		{Icon: "list", Label: "packages.tab.open", Count: strconv.Itoa(len(open)), Href: base, On: state == requestdomain.PackageOpen && v.Branch == ""},
-		{Icon: "done", Label: "packages.tab.closed", Count: strconv.Itoa(len(closed)), Href: pathWith(base, "state", requestdomain.PackageClosed), On: state == requestdomain.PackageClosed && v.Branch == ""},
+		{Icon: "list", Label: "packages.tab.open", Count: strconv.Itoa(openN), Href: base, On: state == requestdomain.PackageOpen && v.Branch == ""},
+		{Icon: "done", Label: "packages.tab.closed", Count: strconv.Itoa(closedN), Href: pathWith(base, "state", requestdomain.PackageClosed), On: state == requestdomain.PackageClosed && v.Branch == ""},
 	}
 	for _, p := range shown {
 		v.Rows = append(v.Rows, packageRowOf(l, pa, view, p))

@@ -684,7 +684,14 @@ func (a *app) pullDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 		}
 		v.Tabs = append(v.Tabs, t)
 	}
-	mk(pullTabTalk, "pulls.tab.talk", "chat", len(v.Items))
+	// The conversation counts what people said (comments and room messages), not the events between them.
+	said := 0
+	for _, it := range v.Items {
+		if it.Comment != nil || strings.HasPrefix(it.ID, "message-") {
+			said++
+		}
+	}
+	mk(pullTabTalk, "pulls.tab.talk", "chat", said)
 	mk(pullTabChecklist, "pulls.tab.checklist", "tasks", len(v.Members)+len(v.Features)+len(v.Uncovered))
 	mk(pullTabKnowledge, "pulls.tab.knowledge", "book", len(v.Know)+v.KnowMore)
 	mk(pullTabCommits, "pulls.tab.commits", "commit", count)

@@ -382,7 +382,7 @@ func (a *app) repoViewFor(r *http.Request, pa *store.ProjectAccess, kind viewerK
 	tab("features", "repo.tab.features", a.featureCount(pa, remote), true)
 	tab("commits", "repo.tab.commits", a.commitCount(pa, remote), true)
 	tab("tasks", "repo.tab.tasks", a.tasksTabCount(pa, remote), true)
-	tab("packages", "repo.tab.packages", "", true)
+	tab("packages", "repo.tab.packages", a.packageCount(pa, remote), true)
 	if pa != nil && pa.Check(remote, store.ResLabel, store.ActEdit, store.Object{}) == nil {
 		tab("settings", "repo.tab.settings", "", true)
 	}
@@ -400,6 +400,18 @@ func (a *app) sessionCount(pa *store.ProjectAccess, remote string) string {
 		return ""
 	}
 	return countText(len(page.Rows))
+}
+
+// packageCount is the number of open work packages the viewer can list.
+func (a *app) packageCount(pa *store.ProjectAccess, remote string) string {
+	if pa == nil {
+		return ""
+	}
+	list, err := pa.PackagesOfProject(remote, requestdomain.PackageOpen)
+	if err != nil {
+		return ""
+	}
+	return countText(len(list))
 }
 
 // commitCount is the number of commits ghosttree knows for the project.
@@ -470,11 +482,7 @@ func (a *app) openIssues(pa *store.ProjectAccess, remote string) string {
 
 func (a *app) knowledgeCount(pa *store.ProjectAccess, remote string) string {
 	pa.Filtered()
-	found, err := a.knowledgeKeep(a.knowledgeWindowFor(pa, remote), repoCountAt, func(k store.Knowledge) bool {
-		return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k)
-	})
-	if err != nil {
-		return ""
-	}
-	return countText(len(found))
+	// The tab counts what the entry list behind it shows (knowledgePage), proposals
+	// waiting for review included: the same read and the same test.
+	return a.knowledgeCountText(pa, remote)
 }
