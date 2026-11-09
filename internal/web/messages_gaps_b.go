@@ -19,6 +19,7 @@ var messagesGapsB = map[string]string{
 	// Labels on an object
 	"labels.add":     "Add a label",
 	"labels.add_btn": "Add",
+	"labels.none":    "None yet",
 	"labels.remove":  "Remove label %s",
 	// Search: qualifiers, quick filters, notices
 	"search.err.unknown":         "The qualifier %[1]s is not known. Known qualifiers: %[2]s.",
@@ -121,6 +122,7 @@ var messagesGapsBDE = map[string]string{
 	"ideas.result.pain_link":           "Die Idee wurde angelegt, aber die Verknüpfung mit dem Pain konnte nicht gespeichert werden.",
 	"labels.add":                       "Label hinzufügen",
 	"labels.add_btn":                   "Hinzufügen",
+	"labels.none":                      "Noch keine",
 	"labels.remove":                    "Label %s entfernen",
 	"search.err.unknown":               "Den Qualifier %[1]s gibt es nicht. Bekannte Qualifier: %[2]s.",
 	"search.err.invalid":               "Diese Suche lässt sich nicht lesen: %s",

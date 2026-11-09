@@ -42,6 +42,11 @@
   /* The label picker shrinks with the column instead of pushing its button out of it */
   & .side .sblk .v > .lbadd { gap: 6px; min-width: 0; max-width: 100%; }
   & .side .sblk .lbadd .selx { flex: 1 1 auto; min-width: 0; }
+  & .side .sblk .v > .none { color: var(--fg-muted); }
+  /* A block with a form puts its heading above it: the value column is too narrow for a field and a button */
+  & .side .sblk.stk:not(.live-side) { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  & .side .sblk.stk .v > .pform { display: flex; flex: 1 1 100%; align-items: stretch; gap: 8px; min-width: 0; }
+  & .side .sblk.stk .pform .gbtn { align-self: flex-start; }
   & .side .hc .hcard { right: auto; left: 0; }
   & .side .v .nchip { height: auto; min-height: 22px; max-width: 100%; padding: 1px 8px; white-space: normal; overflow-wrap: anywhere; border-radius: 12px; }
 }
