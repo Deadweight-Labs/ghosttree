@@ -22,7 +22,17 @@
   & .cbox .reqs .rh { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-muted); font-size: 14px; }
   & .cbox .reqs .rh .sp { flex: 1; }
   & .cbox .reqs .rh .prog { margin-left: 0; }
-  & .cbox .reqs .crit { grid-template-columns: 20px 16px minmax(0, 1fr) auto; }
+  /* The action of a requirement stands at the right of its row, quiet, on the middle line like "Tick off" of a
+     task step; the field for the proof opens under it only after the click. */
+  & .cbox .reqs .crit { grid-template-columns: 20px 16px minmax(0, 1fr) auto auto; }
+  & .cbox .reqs .crit .jump, & .cbox .reqs .crit > span:last-child { grid-column: 5; }
+  & .cbox .reqs .crit .resolve { position: relative; grid-column: 4; align-self: start; margin: -4px 0; }
+  & .cbox .reqs .crit .resolve > summary { color: var(--fg-muted); }
+  & .cbox .reqs .crit .resolve > summary:hover, & .cbox .reqs .crit .resolve[open] > summary { color: var(--fg-default); }
+  & .cbox .reqs .crit .resolve[open] > summary { background: var(--btn-active); }
+  & .cbox .reqs .crit .resolve-form { position: absolute; z-index: 40; top: calc(100% + 6px); right: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 340px; max-width: calc(100vw - 32px); margin: 0; padding: 12px; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-pop); }
+  & .cbox .reqs .crit .resolve-form .gfield { height: 32px; font-size: 14px; }
+  & .cbox .reqs .crit .resolve-form .rf-b { display: flex; justify-content: flex-end; gap: 8px; }
   & .cbox .reqs .crit + .crit { border-top: 1px solid var(--border-muted); }
   & .cbox .reqs .crit .jump { display: inline-flex; align-items: center; color: var(--fg-muted); padding: 2px; border-radius: 6px; }
   & .cbox .reqs .crit .jump:hover { color: var(--accent-fg); background: var(--neutral-muted); text-decoration: none; }
@@ -57,5 +67,8 @@
 @media (max-width: 767px) {
   :is(.g2.id) .cbox .reqs .rh { flex-wrap: wrap; }
   :is(.g2.id) .cbox .reqs .rh .prog.wide .bar { width: 96px; }
+  /* On the phone the action goes under the text of its requirement, at the left edge of it */
+  :is(.g2.id) .cbox .reqs .crit .resolve { grid-column: 3 / -1; grid-row: 2; justify-self: start; margin-left: -13px; }
+  :is(.g2.id) .cbox .reqs .crit .resolve-form { left: 13px; right: auto; }
   :is(.g2.id) .side .sblk:not(.live-side) { grid-template-columns: 108px minmax(0, 1fr); }
 }

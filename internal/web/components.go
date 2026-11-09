@@ -471,6 +471,13 @@ type hoverChip struct {
 	Show                    bool
 }
 
+// fileField is the file field of a form ("uifile"): Label is the word on the button, Tip says what
+// the file may be.
+type fileField struct {
+	Name, Accept, Label, Tip string
+	Required                 bool
+}
+
 // cmdBlock is a command to copy with a tab per operating system; the tab of the
 // visitor's platform is open at the start. Only macOS and Linux exist.
 type cmdBlock struct {

@@ -199,6 +199,12 @@
   & .cver { margin-top: 8px; padding: 8px 12px; color: var(--fg-muted); background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; }
   & .cvh { margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
   & .cver .prose { font-size: 14px; }
+  /* The file field: a button; the native field lies over it, invisible. */
+  & .filepick { position: relative; max-width: 100%; min-width: 0; cursor: pointer; }
+  & .filepick input[type="file"] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; font-size: 0; }
+  & .filepick:focus-within { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
+  & .filepick .fpt { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .filepick.has .fpt { color: var(--accent-fg); }
   /* Removing a comment asks first: the cross opens a small card under it. */
   & details.cdel { position: relative; }
   & details.cdel > summary { list-style: none; }

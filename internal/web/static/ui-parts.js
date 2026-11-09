@@ -295,7 +295,8 @@
     set: (k, v) => { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch (_) { /* full or blocked: the text stays in the field */ } },
     drop: (k) => { try { sessionStorage.removeItem(k); } catch (_) { /* nothing to drop */ } },
   };
-  const refused = /[?&](fail=|comment=(empty|too_long|failed))/.test(location.search);
+  // The refusal shows as the alert banner of the page (its query values are taken out of the address by ui-notice.js).
+  const refused = !!$('.callout.is-danger[role="alert"]') || /[?&](fail=|comment=(empty|too_long|failed))/.test(location.search);
   for (const form of $$("form[data-draft]")) {
     const cx = $(".cx", form);
     const ta = cx && $("textarea", cx);
@@ -343,6 +344,17 @@
     }
   }
 
+  // The file field shows the name of the file that was chosen, in place of its call to choose one.
+  document.addEventListener("change", (event) => {
+    const input = event.target;
+    if (!input.matches || !input.matches(".filepick input[type=file]")) return;
+    const label = input.closest(".filepick");
+    const name = $(".fpt", label);
+    const file = input.files && input.files[0];
+    name.textContent = file ? file.name : name.dataset.empty;
+    label.classList.toggle("has", !!file);
+  });
+
   // The remove card of a comment closes with its Cancel button, with Escape and with a click outside.
   document.addEventListener("click", (event) => {
     const cancel = event.target.closest("[data-cdel-close]");
@@ -352,11 +364,11 @@
       $("summary", d).focus();
       return;
     }
-    for (const d of $$("details.cdel[open]")) if (!d.contains(event.target)) d.open = false;
+    for (const d of $$("details.cdel[open], details.resolve[open]")) if (!d.contains(event.target)) d.open = false;
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    for (const d of $$("details.cdel[open]")) {
+    for (const d of $$("details.cdel[open], details.resolve[open]")) {
       d.open = false;
       $("summary", d).focus();
     }
