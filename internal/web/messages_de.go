@@ -847,6 +847,8 @@ var messagesDE = map[string]string{
 	"adm.notice.source_added":    "GitHub verbunden.",
 	"adm.notice.source_removed":  "Quelle getrennt.",
 	"adm.notice.source_failed":   "GitHub konnte das nicht bestätigen. Versuch das Verbinden nochmal.",
+	"adm.notice.source_proved":   "GitHub hat bestätigt. Wähle die Organisation, die du verbinden willst.",
+	"adm.service":                "Dienst",
 	"adm.notice.imported":        "Projekte angelegt.",
 	"adm.err.not_project_owner":  "Nur ein Projekt-Owner ändert, mit wem ein Projekt geteilt ist.",
 	"adm.err.prefix_unproven":    "Für dieses Präfix brauchst du eine verbundene GitHub-Organisation, die du verwaltest.",
@@ -1413,4 +1415,9 @@ var messagesDE = map[string]string{
 	"ui.cx.task_open":                       "Offen",
 	"pains.cx.why_accepted":                 "Warum leben wir damit?",
 	"pains.why":                             "Warum",
+
+	// Sections of the agent list.
+	"agents.section.active":   "Aktiv",
+	"agents.section.inactive": "Inaktiv",
+	"agents.seen":             "Gesehen: nicht mehr warten, ohne zu antworten",
 }

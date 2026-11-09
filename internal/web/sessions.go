@@ -75,6 +75,9 @@ type listRow struct {
 	// Kind is the avatar of the agent (claude, codex, system), Machine and Branch
 	// the second line, Project the repository's short name.
 	Kind, Machine, Branch, Project string
+	// Owner is the person the session belongs to, as far as the viewer may know
+	// it; the picture of the owner sits in the corner of the agent's avatar.
+	Owner string
 	// MachineHref is the machine page, empty when the viewer cannot reach it.
 	MachineHref string
 }
@@ -227,6 +230,7 @@ type sessionView struct {
 	Empty               bool
 	// The head of the page: avatar of the agent, machine, branch, how long it ran.
 	Kind, Machine, Branch, Project, Duration string
+	Owner                                    string
 	Messages                                 int
 	MachineHref                              string
 }
@@ -664,6 +668,7 @@ func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, n
 		Stamp:    s.LastSeenAt,
 		Private:  !row.Readable,
 		Kind:     harnessKind(s.Harness), Machine: s.Scope.Machine, Branch: s.Scope.Branch, Project: projectName(s.Scope.Project),
+		Owner: s.Owner,
 	}
 	if t := parseStamp(s.LastSeenAt); !t.IsZero() && now.Sub(t) < liveWindow {
 		lr.Live = true
@@ -843,6 +848,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 		v.Title = l.msg("sessions.untitled")
 	}
 	v.Kind, v.Machine, v.Branch, v.Project = harnessKind(sess.Harness), view.Scope.Machine, view.Scope.Branch, projectName(sess.Scope.Project)
+	v.Owner = view.Owner
 	v.Duration, v.Messages = formatDuration(sess.StartedAt, sess.LastSeenAt), sess.Messages
 	v.MachineHref = a.machineLinker(r)(v.Machine)
 	if t := parseStamp(sess.LastSeenAt); !t.IsZero() && time.Since(t) < liveWindow {

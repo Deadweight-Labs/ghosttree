@@ -201,6 +201,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/agents", a.requirePerson(http.HandlerFunc(a.agentsPage)))
 	a.handle(mux, "GET /ui/agents/{id}", a.requirePerson(http.HandlerFunc(a.agentPage)))
 	a.handle(mux, "GET /ui/agents/models", a.requirePerson(http.HandlerFunc(a.agentModelsPage)))
+	a.handle(mux, "POST /ui/agents/{id}/seen", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.agentSeen))))))
 	a.handle(mux, "POST /ui/agents/{id}/signal", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.agentSignal))))))
 	a.handle(mux, "GET /ui/rooms", a.requirePerson(http.HandlerFunc(a.roomsAlias)))
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
@@ -267,6 +268,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/profile/github/link", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileGitHubLink))))))
 	a.handle(mux, "POST /ui/profile/github/unlink", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileGitHubUnlink))))))
 	a.handle(mux, "GET /ui/orgs", a.requirePerson(http.HandlerFunc(a.orgsPage)))
+	a.handle(mux, "GET /ui/orgs/new", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.orgNewPage))))
 	a.handle(mux, "GET /ui/orgs/source/callback", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.orgSourceCallback))))
 	// Verwaltung nur aus einer interaktiven Sitzung, nicht aus eingefügtem Token.
 	for path, h := range map[string]http.HandlerFunc{
@@ -513,6 +515,7 @@ var webRoutes = map[string]webClass{
 	"GET /ui/agents":                        webCoord,
 	"GET /ui/agents/{id}":                   webCoord,
 	"GET /ui/agents/models":                 webAccount,
+	"POST /ui/agents/{id}/seen":             webAdmin,
 	"POST /ui/agents/{id}/signal":           webAdmin,
 	"GET /ui/rooms":                         webCoord,
 	"POST /ui/logout":                       webAccount,
@@ -572,6 +575,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/profile/github/link":          webAdmin,
 	"POST /ui/profile/github/unlink":        webAdmin,
 	"GET /ui/orgs":                          webAccount,
+	"GET /ui/orgs/new":                      webAccount,
 	"POST /ui/orgs/invite":                  webAdmin,
 	"POST /ui/orgs/invite/revoke":           webAdmin,
 	"POST /ui/orgs/member/role":             webAdmin,

@@ -112,14 +112,14 @@ type shellScope struct {
 
 // newMenu are the targets of the "+" menu. Issue, idea and pain lead to the form
 // of one repository (the one of the page, else the chosen or first one); Repo
-// leads to where an organization owner creates one. A target the viewer cannot
-// reach is empty and not shown.
+// leads to where an organization owner creates one; Org leads to the form for a
+// new organization. A target the viewer cannot reach is empty and not shown.
 type newMenu struct {
-	Issue, Idea, Pain, Repo string
+	Issue, Idea, Pain, Repo, Org string
 }
 
 // Any is true when the menu has at least one target.
-func (m *newMenu) Any() bool { return m != nil && (m.Issue != "" || m.Repo != "") }
+func (m *newMenu) Any() bool { return m != nil && (m.Issue != "" || m.Repo != "" || m.Org != "") }
 
 // newMenuFor builds the "+" menu for the viewer on this request.
 func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
@@ -142,6 +142,9 @@ func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
 		m.Idea = m.Issue + "?kind=idea"
 		m.Pain = m.Issue + "?kind=pain"
 	}
+	if interactive(r) {
+		m.Org = newOrgHref
+	}
 	if orgs, err := a.store.ListOrgs(browserPrincipal(r).ID); err == nil {
 		for _, o := range orgs {
 			if o.Role == store.OrgOwner && (m.Repo == "" || o.Default) {
@@ -160,7 +163,13 @@ func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
 type orgSwitch struct {
 	Current string
 	Items   []orgSwitchItem
+	// New leads to the form for a new organization; empty when the viewer
+	// cannot create one from here.
+	New string
 }
+
+// newOrgHref is the page with the form for a new organization.
+const newOrgHref = "/ui/orgs/new"
 
 type orgSwitchItem struct {
 	Label, Href string
@@ -341,6 +350,9 @@ func (a *app) orgSwitchFor(r *http.Request) *orgSwitch {
 		}
 	}
 	sw := &orgSwitch{Current: orgs[current].Name}
+	if interactive(r) {
+		sw.New = newOrgHref
+	}
 	for i, o := range orgs {
 		sw.Items = append(sw.Items, orgSwitchItem{Label: o.Name, Href: "/ui/" + url.PathEscape(o.Slug), Current: i == current})
 	}

@@ -145,7 +145,7 @@ func TestConnectingGitHubProvesAdminClaimsThePrefixAndListsRepos(t *testing.T) {
 	if r, _ := alice.Get(base + "/ui/orgs/source/callback?code=good&state=" + state); !strings.Contains(r.Header.Get("Location"), "source_failed") {
 		t.Fatal("the state must work once")
 	}
-	pick := pickLoc[strings.Index(pickLoc, "pick=")+5:]
+	pick := pickToken(pickLoc)
 	page = getOrgs(t, alice, base, pickLoc[len("/ui/orgs"):])
 	if !strings.Contains(page, "Choose a GitHub organization") || !strings.Contains(page, "github.com/deadweight-labs") {
 		t.Fatalf("the proven organizations are not offered: %s", page)

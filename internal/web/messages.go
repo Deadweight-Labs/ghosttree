@@ -846,6 +846,8 @@ var messages = map[string]string{
 	"adm.notice.source_added":    "GitHub connected.",
 	"adm.notice.source_removed":  "Source disconnected.",
 	"adm.notice.source_failed":   "GitHub could not confirm that. Try connecting again.",
+	"adm.notice.source_proved":   "GitHub confirmed it. Choose the organization to connect.",
+	"adm.service":                "Service",
 	"adm.notice.imported":        "Projects created.",
 	"adm.err.not_project_owner":  "Only a project owner can change who a project is shared with.",
 	"adm.err.prefix_unproven":    "That prefix needs a connected GitHub organization you administer.",
@@ -1412,4 +1414,9 @@ var messages = map[string]string{
 	"ui.cx.task_open":                       "Open",
 	"pains.cx.why_accepted":                 "Why do we live with it?",
 	"pains.why":                             "Why",
+
+	// Sections of the agent list.
+	"agents.section.active":   "Active",
+	"agents.section.inactive": "Inactive",
+	"agents.seen":             "Seen: stop waiting without an answer",
 }

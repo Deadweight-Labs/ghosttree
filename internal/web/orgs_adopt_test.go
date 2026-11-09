@@ -26,7 +26,7 @@ func callbackPick(t *testing.T, c *http.Client, base string) string {
 	if !strings.Contains(loc, "pick=") {
 		t.Fatalf("callback: %q", loc)
 	}
-	return loc[strings.Index(loc, "pick=")+5:]
+	return pickToken(loc)
 }
 
 func TestAnAlreadyConnectedOrgIsAdoptedInsteadOfHidden(t *testing.T) {

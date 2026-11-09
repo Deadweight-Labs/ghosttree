@@ -12,7 +12,6 @@
   & .ahead { display: flex; gap: 12px; min-width: 0; }
   & .ahead .gav.lg { width: 28px; height: 28px; border-radius: 6px; margin-top: 2px; }
   & .ahead .gav.lg .i { width: 16px; height: 16px; }
-  & .ahead .gav.agent .own { width: 14px; height: 14px; right: -5px; bottom: -5px; }
   & .ainfo { min-width: 0; }
   & .at { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; line-height: 24px; }
   & .at .title { font-size: 14px; font-weight: 600; color: var(--fg-default); }
@@ -29,6 +28,19 @@
   & .meta a:hover { color: var(--accent-fg); }
   & .meta a.ref.pill { color: var(--fg-default); }
   & .apost { margin-top: 6px; padding-left: 12px; border-left: 3px solid var(--border-default); color: var(--fg-default); }
+  /* Sections of the list: waiting on you, active, and the folded inactive rest. */
+  & .asec > .box-h .t { font-size: 14px; font-weight: 600; margin: 0; }
+  & .asec > .box-h .counter, & .asec > summary.box-h .counter { margin-left: 8px; }
+  & .awaits { border-color: var(--danger-muted); }
+  & .awaits > .box-h { background: var(--danger-subtle); }
+  /* The heading already says it waits on you; the row keeps age and the two actions. */
+  & .awaits .astate .ast { display: none; }
+  & details.asec > summary.box-h { display: flex; align-items: center; cursor: pointer; list-style: none; user-select: none; }
+  & details.asec > summary.box-h::-webkit-details-marker { display: none; }
+  & details.asec > summary .chv { display: inline-flex; margin-right: 6px; color: var(--fg-muted); transform: rotate(-90deg); transition: transform .12s; }
+  & details.asec[open] > summary .chv { transform: none; }
+  & details.asec:not([open]) > summary.box-h { border-bottom: 0; }
+  & .aseen { display: inline-flex; margin: 0; }
   & .astate { display: flex; align-items: center; gap: 12px; align-self: start; padding-top: 2px; font-size: 12px; white-space: nowrap; }
   & .ast { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
   & .ast.st-work { color: var(--success-fg); }
@@ -54,7 +66,7 @@
 @media (max-width: 767px) {
   :is(.g2.ag) {
     & .arow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-    & .astate { padding-left: 40px; }
+    & .astate { padding-left: 40px; flex-wrap: wrap; gap: 8px 12px; white-space: normal; }
   }
 }
 
