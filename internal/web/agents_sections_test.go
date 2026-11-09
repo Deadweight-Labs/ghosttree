@@ -32,23 +32,6 @@ func TestSectionAgentsSortsByWhatTheViewerHasToDoWithThem(t *testing.T) {
 	}
 }
 
-func TestLocalBackKeepsToTheInterface(t *testing.T) {
-	for back, want := range map[string]string{
-		"/ui/agents":            "/ui/agents",
-		"/ui/alpha/agents?x=1":  "/ui/alpha/agents?x=1",
-		"//evil.example/ui/":    "/ui/agents",
-		"https://evil.example/": "/ui/agents",
-		"/ui/\\evil":            "/ui/agents",
-		"/ui/a\r\nLocation: /x": "/ui/agents",
-		"":                      "/ui/agents",
-		"/other":                "/ui/agents",
-	} {
-		if got := localBack(back, "/ui/agents"); got != want {
-			t.Errorf("localBack(%q) = %q, want %q", back, got, want)
-		}
-	}
-}
-
 // An agent waits on Robin. "Seen" quits that wait without an answer; only the
 // person the agent waits on can, and only the wait of that one agent.
 func TestAgentSeenQuitsOnlyTheViewersOwnWait(t *testing.T) {

@@ -217,14 +217,30 @@ func (a *app) agentSeen(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.Redirect(w, r, localBack(r.FormValue("back"), "/ui/agents"), http.StatusSeeOther)
+	http.Redirect(w, r, a.agentSeenBack(r, r.FormValue("back")), http.StatusSeeOther)
 }
 
-// localBack is a page of this interface to return to: a path under /ui/ and
-// nothing else, so a form cannot send a person elsewhere.
-func localBack(back, fallback string) string {
-	if strings.HasPrefix(back, "/ui/") && !strings.ContainsAny(back, "\\\r\n") && !strings.HasPrefix(back, "//") {
-		return back
+// agentSeenBack is the agent list the check came from: the list of all agents
+// or the agents tab of an organisation the viewer belongs to. The address is
+// built here from known values, never taken over from the form.
+func (a *app) agentSeenBack(r *http.Request, back string) string {
+	const all = "/ui/agents"
+	slug, ok := strings.CutPrefix(back, "/ui/")
+	if !ok {
+		return all
 	}
-	return fallback
+	slug, ok = strings.CutSuffix(strings.SplitN(slug, "?", 2)[0], "/agents")
+	if !ok || slug == "" {
+		return all
+	}
+	orgs, err := a.store.ListOrgs(browserPrincipal(r).ID)
+	if err != nil {
+		return all
+	}
+	for _, o := range orgs {
+		if o.Slug == slug {
+			return "/ui/" + url.PathEscape(o.Slug) + "/agents"
+		}
+	}
+	return all
 }
