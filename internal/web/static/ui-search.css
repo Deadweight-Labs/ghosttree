@@ -51,6 +51,9 @@
   & .frow.qf .gbtn.sm { height: 28px; padding: 0 8px; }
   & .pre-h { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
   & .pre-h code { font-size: 12px; color: var(--fg-muted); }
+  & .pre-l { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+  & .pre-l > summary { cursor: pointer; font-size: 12px; }
+  & .pre-l > code { flex-basis: 100%; }
   & .save-f select.gfield { height: 32px; }
 }
 

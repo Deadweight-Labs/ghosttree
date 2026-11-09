@@ -1,7 +1,7 @@
 {{define "pain"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id pn"><div class="wrap">
-{{with .PainV}}{{with .Result}}<div class="callout{{if not .Fail}} done{{end}}" id="result" role="status">{{if .Fail}}{{mi "tri"}}{{else}}{{mi "check"}}{{end}}<div class="tt">{{.Text}}</div></div>{{end}}
-<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n" title="{{.Human}}">#{{.ID}}</span></h1></div>
+{{with .PainV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n" title="{{.Human}}">#{{.ID}}</span></h1></div>
 <div class="dmeta"><span class="lb pillbig {{.StateTone}}">{{mi "pain"}}{{.StateLabel}}</span>{{if .Person}}<span>{{actor .Actor .Person}} {{t "pains.recorded" .Age}}</span>{{end}}</div></div>
+{{template "resultbanner" (dict "R" .Result "Strip" "done fail")}}
 <div class="dgrid"><div class="dmain">
 {{if and .Remaining (eq .State "mitigated")}}<div class="callout" role="note">{{mi "tri"}}<div><div class="k">{{t "pains.stays_open"}}</div><div class="tt">{{.Remaining}}</div></div></div>{{end}}
 {{if and .Accepted (eq .State "accepted")}}<div class="callout neu" role="note">{{mi "pain"}}<div><div class="k">{{t "pains.why"}}</div><div class="tt">{{.Accepted}}</div></div></div>{{end}}

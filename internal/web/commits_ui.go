@@ -31,7 +31,10 @@ type commitsView struct {
 	Days                      []commitDay
 	Newer, Older              string
 	Empty                     bool
-	GitHub, GitHubTip         string
+	// EmptyKey is the line shown when the list has no commit, EmptyHref and
+	// EmptyAction the one way back out of it.
+	EmptyKey, EmptyAction, EmptyHref string
+	GitHub, GitHubTip                string
 }
 
 // commitsPage ist /ui/{org}/{repo}/commits[?branch=…&offset=…].
@@ -93,6 +96,15 @@ func (a *app) commitsPage(w http.ResponseWriter, r *http.Request) {
 		v.Older = href(branch, offset+commitsPerPage)
 	}
 	v.Empty = len(list.Items) == 0
+	switch {
+	case !v.Empty:
+	case offset > 0:
+		v.EmptyKey, v.EmptyAction, v.EmptyHref = "commits.empty_page", "commits.first_page", href(branch, 0)
+	case branch != "":
+		v.EmptyKey, v.EmptyAction, v.EmptyHref = "commits.empty_branch", "commits.all_branches", href("", 0)
+	default:
+		v.EmptyKey = "commits.empty"
+	}
 	if view.External != "" {
 		v.GitHub, v.GitHubTip = view.External+"/commits", l.msg("commits.gh_list", v.BranchLabel)
 		if branch != "" {

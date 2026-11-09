@@ -101,6 +101,7 @@
   & .note { margin: 0; font-size: 12px; color: var(--fg-muted); }
   & .note .cl { margin-right: 8px; }
   & .trunc { margin: 4px 12px; font-size: 12px; color: var(--fg-muted); }
+  & .tool .code-box, & .tool .diff { margin: 0; border: 0; border-top: 1px solid var(--border-muted); border-radius: 0; }
   & .code-box { margin: 4px 8px 8px; border: 1px solid var(--border-muted); border-radius: 6px; overflow: hidden; }
   & .code-head { display: flex; justify-content: space-between; padding: 4px 12px; font-size: 12px; color: var(--fg-muted); background: var(--canvas-subtle); }
   & .code-body { overflow-x: auto; padding: 4px 0; font: 12px/20px var(--ui-mono); }

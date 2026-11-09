@@ -1,9 +1,9 @@
 /* "Kurz erklärt": die Einordnung vor dem Originaltext. Ruhige Fläche mit
    Akzentkante; welche Herkunft der Text hat, steht klein in der Kopfzeile. */
 :is(.g2) {
-  & .ex { display: flex; flex-direction: column; gap: 6px; margin: 2px 0 6px; padding: 12px 16px; min-width: 0; background: var(--accent-subtle); border-left: 3px solid var(--accent-emphasis); border-radius: 6px; }
+  & .ex { display: flex; flex-direction: column; gap: 6px; margin: 0 0 16px; padding: 12px 16px; min-width: 0; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-left: 3px solid var(--accent-emphasis); border-radius: 6px; }
   & .ex-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-  & .ex-title { margin: 0; font-size: 13px; font-weight: 600; color: var(--accent-fg); }
+  & .ex-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--fg-default); }
   & .ex-mark { font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
   & .ex-text { margin: 0; line-height: 1.55; color: var(--fg-default); overflow-wrap: anywhere; }
   & .ex-from { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; margin: 0; min-width: 0; }
@@ -11,6 +11,6 @@
   & .ex-proj { font-weight: 600; color: var(--fg-muted); }
   & .ex-k { color: var(--fg-muted); }
   & .ex-from code { font-size: .875em; padding: 1px 6px; border-radius: 8px; background: var(--neutral-muted); }
-  & .coord-attention-card .ex { padding: 8px 12px; margin: 4px 0; }
+  & .coord-attention-card .ex { padding: 8px 12px; margin: 4px 0 8px; }
   & .coord-attention-card .ex-text { font-size: 13px; }
 }

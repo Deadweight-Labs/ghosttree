@@ -309,7 +309,7 @@ func parseStamp(s string) time.Time {
 	return t.In(time.Local)
 }
 
-func formatDuration(from, to string) string {
+func formatDuration(l lang, from, to string) string {
 	a, b := parseStamp(from), parseStamp(to)
 	if a.IsZero() || b.IsZero() || b.Before(a) {
 		return ""
@@ -317,11 +317,13 @@ func formatDuration(from, to string) string {
 	d := b.Sub(a)
 	switch {
 	case d < time.Minute:
-		return "<1m"
+		return l.msg("sessions.dur_short")
 	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
+		return l.msg("age.short.min", int(d.Minutes()))
+	case int(d.Minutes())%60 == 0:
+		return l.msg("age.short.hours", int(d.Hours()))
 	}
-	return fmt.Sprintf("%dh %02dm", int(d.Hours()), int(d.Minutes())%60)
+	return l.msg("sessions.dur_hm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 func dayLabel(l lang, t, now time.Time) string {
@@ -663,7 +665,7 @@ func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, n
 	s := row.Session
 	lr := listRow{
 		Meta:     sessionMeta(s),
-		Duration: formatDuration(s.StartedAt, s.LastSeenAt),
+		Duration: formatDuration(l, s.StartedAt, s.LastSeenAt),
 		Time:     clock(s.LastSeenAt),
 		Stamp:    s.LastSeenAt,
 		Private:  !row.Readable,
@@ -849,7 +851,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	}
 	v.Kind, v.Machine, v.Branch, v.Project = harnessKind(sess.Harness), view.Scope.Machine, view.Scope.Branch, projectName(sess.Scope.Project)
 	v.Owner = view.Owner
-	v.Duration, v.Messages = formatDuration(sess.StartedAt, sess.LastSeenAt), sess.Messages
+	v.Duration, v.Messages = formatDuration(l, sess.StartedAt, sess.LastSeenAt), sess.Messages
 	v.MachineHref = a.machineLinker(r)(v.Machine)
 	if t := parseStamp(sess.LastSeenAt); !t.IsZero() && time.Since(t) < liveWindow {
 		v.Live = true
@@ -1465,7 +1467,10 @@ func firstLine(s string) string {
 func resultSummary(l lang, b transcript.Block) string {
 	switch {
 	case b.Failed:
-		return b.Status
+		if b.Status != "" && b.Status != "error" {
+			return b.Status
+		}
+		return l.msg("sessions.failed")
 	case !b.HasOutput:
 		return ""
 	}

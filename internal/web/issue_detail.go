@@ -206,7 +206,7 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 		if now.Sub(created) < time.Minute {
 			v.Opened = l.msg("issue.opened_now")
 		} else {
-			v.Opened = l.msg("issue.opened", shortAge(l, now, created))
+			v.Opened = l.msg("issue.opened", shortAgo(l, now, created))
 		}
 	}
 }

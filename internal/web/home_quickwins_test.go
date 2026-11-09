@@ -104,7 +104,7 @@ func TestTokensAreSortedByUseAndUnusedOnesCanBeRevoked(t *testing.T) {
 	if i < 0 || j < 0 || k < 0 || !(i < j && j < k) {
 		t.Fatalf("order recent=%d old=%d never=%d: by last use first, never used last", i, j, k)
 	}
-	if !strings.Contains(page, "never used") || !strings.Contains(page, "Revoke unused") || !strings.Contains(page, "Revoke 1 tokens that were never used?") {
+	if !strings.Contains(page, "never used") || !strings.Contains(page, "Revoke unused") || !strings.Contains(page, "Revoke 1 token that was never used?") {
 		t.Errorf("the page does not offer to revoke the one unused token: %s", page)
 	}
 	if strings.Contains(page, "gina-never") {
@@ -131,7 +131,7 @@ func TestTokensAreSortedByUseAndUnusedOnesCanBeRevoked(t *testing.T) {
 		}
 	}
 	_, after := fetchPage(t, e.Member, e.Base+"/ui/account/tokens?revoked=1")
-	if !strings.Contains(after, "Revoked 1 unused tokens.") || strings.Contains(after, "Revoke unused") {
+	if !strings.Contains(after, "Revoked 1 unused token.") || strings.Contains(after, "Revoke unused") {
 		t.Errorf("after: %s", after)
 	}
 }

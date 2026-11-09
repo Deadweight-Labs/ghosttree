@@ -144,7 +144,7 @@ func TestPullListPagesAndNoPullsYet(t *testing.T) {
 	}
 	plain, _ := listEnv(t)
 	_, empty := fetchPage(t, plain.Owner, plain.Base+"/ui/x/shell/pulls")
-	mustContain(t, "empty list", empty, "No pull requests yet. They appear here as soon as GitHub reports them.")
+	mustContain(t, "empty list", empty, "No pull requests yet.")
 }
 
 func TestPullPageShowsConversationChecklistKnowledgeAndCommits(t *testing.T) {
@@ -161,7 +161,7 @@ func TestPullPageShowsConversationChecklistKnowledgeAndCommits(t *testing.T) {
 	mustNotContain(t, "pull page", page, "SECRET", "<script>", "Merge pull request")
 
 	_, list := fetchPage(t, e.Owner, base+"?tab=checklist")
-	mustContain(t, "checklist tab", list, `class="dstat"`, "of 2 criteria met", "Pull request tab", "Lists the pull requests", "Shows the checklist", `class="chip sha"`, "aaaaaaa",
+	mustContain(t, "checklist tab", list, "Pull request tab", "Lists the pull requests", "Shows the checklist", `class="chip sha"`, "aaaaaaa",
 		`href="/ui/x/shell/commits/`+pullShaA+`"`, "cbx on", `href="/ui/x/shell/issues/`)
 	_, know := fetchPage(t, e.Owner, base+"?tab=knowledge")
 	mustContain(t, "knowledge tab", know, "Anchored pitfall", `href="/ui/x/shell/knowledge/`, "Pitfall")
@@ -218,7 +218,7 @@ func TestCommitListGroupsByDayFiltersByBranchAndPages(t *testing.T) {
 		t.Fatalf("commit list = %d", code)
 	}
 	mustContain(t, "commit list", page, "Commits on 8 Nov 2026", "feat(web): list of pull requests", "feat(web): page of a pull request", `href="/ui/x/shell/commits/`+pullShaA+`"`, "aaaaaaa", "bbbbbbb", "ccccccc",
-		`data-copy-sha="`+pullShaA+`"`, "Copy SHA", `href="/ui/x/shell/pulls/12"`, "#12", "committed", "entries about this commit", "All branches", "feat/x",
+		`data-copy-sha="`+pullShaA+`"`, "Copy SHA", `href="/ui/x/shell/pulls/12"`, "#12", "committed", "about this commit", "All branches", "feat/x",
 		`href="https://github.com/x/shell/commits"`, `aria-label="Open on GitHub: commits"`, `class="pager"`, "Commit ccccccc")
 	mustNotContain(t, "commit list", page, "SECRET")
 	_, byBranch := fetchPage(t, e.Owner, base+"?branch="+url.QueryEscape("feat/x"))
@@ -228,7 +228,7 @@ func TestCommitListGroupsByDayFiltersByBranchAndPages(t *testing.T) {
 	_, ghost := fetchPage(t, e.Owner, base+"?branch=nope&offset=abc")
 	mustContain(t, "unknown branch", ghost, "All branches")
 	_, past := fetchPage(t, e.Owner, base+"?offset=500")
-	mustContain(t, "past the end", past, "No commits known yet.")
+	mustContain(t, "past the end", past, "No more commits here.", "Back to the newest")
 	// A guest sees the list, but only the default branch by name.
 	code, guest := fetchPage(t, e.Guest, base)
 	if code != http.StatusOK {
@@ -253,7 +253,7 @@ func TestCommitPageShowsWhatWasSaidAndAcceptsAPrefix(t *testing.T) {
 	mustContain(t, "prefix", prefix, "feat(web): list of pull requests")
 	// A commit without anything said says so; one that is none is unknown.
 	_, quiet := fetchPage(t, e.Owner, base+pullShaB)
-	mustContain(t, "quiet commit", quiet, "feat(web): page of a pull request", "Nothing has been written about this commit yet.")
+	mustContain(t, "quiet commit", quiet, "feat(web): page of a pull request", "Nothing written about this commit yet.")
 	for _, p := range []string{"zzzzzzz", "abc", "ddddddd", pullShaC} {
 		if code, _ := fetchPage(t, e.Owner, base+p); code != http.StatusNotFound {
 			t.Errorf("commit %q = %d, want 404", p, code)

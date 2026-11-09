@@ -1,6 +1,5 @@
 {{define "issue"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id"{{with .IssueV}} data-live-ids="{{.ID}}"{{end}}><div class="wrap">
-{{with .IssueV}}{{with .Result}}<div class="callout{{if not .Fail}} done{{end}}" id="result" role="status">{{if .Fail}}{{mi "tri"}}{{else}}{{mi "check"}}{{end}}<div class="tt">{{.Text}}</div></div>{{end}}
-<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n" title="{{.Human}}">#{{.ID}}</span></h1>
+{{with .IssueV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n" title="{{.Human}}">#{{.ID}}</span></h1>
 {{if .CanEdit}}<div class="gacts"><a class="gbtn sm hide-m" href="{{.Base}}/{{.ID}}?panel=edit#edit">{{mi "pencil"}}{{t "issue.action.edit"}}</a>
 <a class="gbtn sm pri hide-m" href="{{.Base}}/new">{{mi "plus"}}{{t "issues.new_issue"}}</a>
 <details class="dd top-menu"><summary class="gbtn sm icon" aria-label="{{t "issue.more"}}" title="{{t "issue.more"}}">{{mi "kebab"}}</summary><div class="pop r">
@@ -37,6 +36,7 @@
 <div class="wf"><button class="gbtn">{{t "requests.drop"}}</button></div></form></div></details>{{end}}
 </div>{{end}}
 
+{{template "resultbanner" (dict "R" .Result "Strip" "done fail")}}
 <div class="dgrid"><div class="dmain">
 {{range .Blockers}}<div class="callout" id="task-{{.N}}" role="group" aria-label="{{t "issues.blocker"}}">{{mi "pin"}}<div><div class="k">{{t "issue.waits_for" .Assignee}} {{refPill "task" .N .Href}}</div><div class="tt">{{.Title}}</div>{{if .Where}}<div class="k mono">{{.Where}}</div>{{end}}<div class="gacts"><a class="gbtn sm" href="/ui/inbox">{{t "issue.open_inbox"}}</a></div></div></div>
 {{end}}

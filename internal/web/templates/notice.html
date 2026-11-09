@@ -1,0 +1,2 @@
+{{/* The one banner for the outcome of an action. Green when it worked, red (.is-danger) when it failed. Strip names the query values the redirect carried, so a reload does not show it again. */}}
+{{define "resultbanner"}}{{with .R}}<div class="callout {{if .Fail}}is-danger{{else}}ok{{end}}" role="{{if .Fail}}alert{{else}}status{{end}}" data-strip="{{$.Strip}}">{{if .Fail}}{{mi "tri"}}{{else}}{{mi "check"}}{{end}}<div class="tt">{{.Text}}</div></div><script src="/static/ui-notice.js" defer></script>{{end}}{{end}}

@@ -9,7 +9,6 @@
 
   /* page of a feature: lead sentence, the boxes under the description */
   & .fsum { font-size: 16px; line-height: 24px; font-weight: 600; color: var(--fg-default); }
-  & .fsec { margin-top: 16px; }
   & .fuse { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; align-items: start; }
   & .fuse + .fuse { border-top: 1px solid var(--border-muted); }
   & .fuse .uk { padding-top: 2px; font-size: 12px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .04em; }

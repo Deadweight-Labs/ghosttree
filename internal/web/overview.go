@@ -897,8 +897,14 @@ func shortAgo(l lang, now, t time.Time) string {
 		return l.msg("age.min_ago", int(d/time.Minute))
 	case d < 48*time.Hour:
 		return l.msg("age.hours_ago", int(d/time.Hour))
+	case d < 2*week:
+		return l.msg("age.days_ago", int(d/day))
+	case d < 8*week:
+		return l.msg("age.weeks_ago", int(d/week))
+	case d < year:
+		return l.msg("age.months_ago", int(d/month))
 	}
-	return l.msg("age.days_ago", int(d/(24*time.Hour)))
+	return l.msg("age.years_ago", int(d/year))
 }
 
 func recentMachine(tokens []store.TokenInfo, now time.Time) (string, bool) {

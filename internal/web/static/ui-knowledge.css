@@ -11,6 +11,8 @@
   & .fw4 { font-weight: 400; }
   & .flash4 { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; padding: 8px 8px 8px 16px; background: var(--success-subtle); border: 1px solid var(--success-muted); border-radius: 6px; }
   & .flash4 > .i { color: var(--success-fg); }
+  & .flash4.neu { background: var(--canvas-subtle); border-color: var(--border-default); }
+  & .flash4.neu > .i { color: var(--fg-muted); }
   & .flash4 form { display: inline-flex; margin: 0; }
   & .lh .gfilters .dd { position: relative; }
   & .box-h .gbtn.sm { font-weight: 500; }

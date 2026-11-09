@@ -9,8 +9,8 @@
 {{if .Contra}}<div class="ws-pc ws-con"><span class="ws-pk">{{mi "x"}}{{t "workshop.contra"}}</span>{{template "knbody" .Contra}}</div>{{end}}
 {{if .Votes}}<div class="ws-votes">{{range .Votes}}<span class="ws-vote" title="{{.Tip}}">{{avatarOf .Voter}}</span>{{end}}<span class="muted">{{t "workshop.votes" (len .Votes)}}</span></div>{{end}}{{end}}
 
-{{define "workshop"}}{{$ws := .}}{{with .Result}}<div class="callout{{if not .Fail}} done{{end}}" id="result" role="status">{{if .Fail}}{{mi "tri"}}{{else}}{{mi "check"}}{{end}}<div class="tt">{{.Text}}</div></div>{{end}}
-<section class="box ws" id="workshop" aria-labelledby="ws-h">
+{{define "workshop"}}{{$ws := .}}{{template "resultbanner" (dict "R" .Result "Strip" "wdone wfail")}}
+{{if or .Steps .Summary .Raw .Concept .Affects .Decisions .CanDiscuss .CanApprove .CanWithdraw}}<section class="box ws" id="workshop" aria-labelledby="ws-h">
 <div class="box-h"><h2 class="t" id="ws-h">{{mi "flask"}} {{t "workshop.title"}}</h2><span class="sp"></span>{{if .OpenCount}}<span class="lb p-warn">{{t "workshop.open_n" .OpenCount}}</span>{{end}}<span class="lb {{.PhaseTone}}">{{.PhaseLabel}}</span></div>
 {{if .Steps}}<ol class="wsteps" aria-label="{{t "workshop.steps"}}">{{range .Steps}}<li class="{{.State}}"{{if eq .State "cur"}} aria-current="step"{{end}}><span class="wdot">{{if eq .State "done"}}{{mi "check"}}{{end}}</span><span>{{.Label}}</span></li>{{end}}</ol>{{end}}
 {{if .Summary}}<div class="box-r ws-sec"><div class="ws-k">{{t "workshop.summary"}}{{if .SummaryBy}}<span class="ws-meta">{{template "wsdot"}}<span>{{.SummaryBy}}</span>{{template "wsdot"}}<span>{{.SummaryAge}}</span></span>{{end}}{{if .Raw}}<span class="ws-meta">{{template "wsdot"}}<span>{{.Raw}}</span></span>{{end}}</div><div class="prose">{{template "knbody" .Summary}}</div></div>
@@ -40,4 +40,4 @@
 {{if or .CanDiscuss .CanApprove .CanWithdraw}}<div class="box-r ws-foot">{{if .CanDiscuss}}<form method="post" action="/ui/ideas/{{.ID}}/phase"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="mode" value="discuss"><button class="gbtn">{{mi "chat"}}{{t "workshop.discuss"}}</button></form>{{end}}
 {{if .CanApprove}}<form method="post" action="/ui/ideas/{{.ID}}/phase"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="mode" value="approve"><input type="hidden" name="revision" value="{{.Revision}}"><button class="gbtn pri">{{mi "check"}}{{t "workshop.approve" .Revision}}</button></form>{{end}}
 {{if .CanWithdraw}}<form method="post" action="/ui/ideas/{{.ID}}/phase"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="mode" value="withdraw"><button class="gbtn">{{t "workshop.withdraw"}}</button></form>{{end}}</div>{{end}}
-</section>{{end}}
+</section>{{end}}{{end}}

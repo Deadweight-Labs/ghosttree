@@ -14,7 +14,7 @@ var p1Templates = []string{"templates/layout.html", "templates/login.html", "tem
 var (
 	scriptRE   = regexp.MustCompile(`(?s)<script>.*?</script>`)
 	actionRE   = regexp.MustCompile(`(?s)\{\{.*?\}\}`)
-	catalogRE  = regexp.MustCompile(`\{\{\s*t\s+"([^"]+)"`)
+	catalogRE  = regexp.MustCompile(`\{\{\s*(?:t|agot)\s+"([^"]+)"`)
 	textNodeRE = regexp.MustCompile(`>([^<>]+)<`)
 	attrRE     = regexp.MustCompile(`\s(?:title|aria-label|placeholder|alt|value|label)="([^"]*)"`)
 )
@@ -88,6 +88,10 @@ func TestCatalogKeysUsedByTemplatesExistAndEveryKeyIsUsed(t *testing.T) {
 		}
 	}
 	for key := range messages {
+		// "x_one" is the singular of "x"; msg picks it when the count is 1.
+		if base, ok := strings.CutSuffix(key, "_one"); ok && used[base] {
+			continue
+		}
 		if !used[key] {
 			t.Errorf("message key %q is not used", key)
 		}
