@@ -273,7 +273,7 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		for n := range wd.Variants {
 			wd.Variants[n].Checked = wd.Variants[n].Label == wd.MyVote
 		}
-		wd.CanAttach = canWork && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
+		wd.CanAttach = canWork && wd.Open && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
 		w.Decisions = append(w.Decisions, wd)
 	}
 	// Die Wege der Phase: Diskussion anstoßen kann, wer mitarbeitet; freigeben und die Freigabe

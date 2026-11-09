@@ -80,7 +80,8 @@ func (a *app) tasksDone(w http.ResponseWriter, r *http.Request) {
 // of the task for the form on that page, else the list in the inbox.
 func (a *app) taskBack(r *http.Request, ids []int64, q url.Values) string {
 	if len(ids) == 1 && r.FormValue("back") == "task" {
-		if t, err := a.store.TaskByID(ids[0]); err == nil && t.Project != "" {
+		// Only a task the viewer may read names its repository in an address.
+		if t, err := a.access(r).GetHumanTask(ids[0]); err == nil && t.Project != "" {
 			return taskHrefOf(t)
 		}
 	}

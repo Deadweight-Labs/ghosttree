@@ -246,6 +246,8 @@
   & .callout > .i { color: var(--attention-fg); margin-top: 2px; }
   & .callout .k { font-size: 12px; color: var(--fg-muted); }
   & .callout .tt { font-weight: 600; }
+  & .callout > div { min-width: 0; }
+  & .callout .tt { overflow-wrap: anywhere; }
   & .callout.neu { background: var(--canvas-subtle); border-color: var(--border-default); }
   & .callout.neu > .i { color: var(--fg-muted); }
   & .callout.done { background: var(--done-subtle); border-color: var(--done-muted); align-items: center; }

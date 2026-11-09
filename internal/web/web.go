@@ -173,6 +173,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	mux := http.NewServeMux()
 	a.handle(mux, "GET /static/", a.staticFiles())
 	a.handle(mux, "GET /{$}", a.rootRedirect)
+	a.handle(mux, "GET /", a.unknownAddress)
 	a.handle(mux, "GET /favicon.ico", a.favicon)
 	a.handle(mux, "GET /ui/login", a.loginPage)
 	a.handle(mux, "POST /ui/login", a.requireSameOrigin(http.HandlerFunc(a.loginSubmit)))
@@ -541,6 +542,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/register":                     webPublic,
 	"POST /ui/login/code":                   webPublic,
 	"GET /{$}":                              webPublic,
+	"GET /":                                 webPublic,
 	"GET /favicon.ico":                      webPublic,
 	"GET /ui/{$}":                           webPublic,
 	"GET /ui/inbox":                         webAccount,

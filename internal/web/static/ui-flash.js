@@ -68,7 +68,8 @@
     if (named && named.type !== "hidden") named.setAttribute("aria-invalid", "true");
     // The form may sit in a closed <details> (an edit form): open it so the text is seen.
     for (let el = form.parentElement; el; el = el.parentElement) if (el.tagName === "DETAILS") el.open = true;
-    if (note) form.before(note);
+    // A composer sits in a row with its avatar: the note goes over the row, not into it.
+    if (note) (form.closest(".cx-cmt") || form).before(note);
     if (target) target.focus({ preventScroll: true });
     (note || form).scrollIntoView({ block: "center" });
     if (target) target.addEventListener("input", () => target.removeAttribute("aria-invalid"), { once: true });

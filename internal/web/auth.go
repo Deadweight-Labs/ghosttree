@@ -165,7 +165,11 @@ func (a *app) csrfGate(next http.Handler, multipart bool) http.Handler {
 			} else {
 				err = r.ParseForm()
 			}
-			rememberForm(r)
+			// What was typed is only kept for a form of this site: one sent from another
+			// origin gets no page of ours with its fields in them.
+			if a.sameOrigin(r) {
+				rememberForm(r)
+			}
 			var tooBig *http.MaxBytesError
 			if errors.As(err, &tooBig) {
 				a.formTooLarge(w, r)

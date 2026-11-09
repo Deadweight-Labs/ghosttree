@@ -628,8 +628,6 @@ var messages = map[string]string{
 	"sessions.who.thinking":        "Thinking",
 	"sessions.who.command":         "Command",
 	"sessions.who.output":          "Output",
-	"sessions.not_found":           "Session not found.",
-	"sessions.all_sessions":        "All sessions",
 	"sessions.back":                "Sessions",
 	"sessions.back_to_results":     "← Back to results for “%s”",
 	"sessions.prompts":             "Prompts",

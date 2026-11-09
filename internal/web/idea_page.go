@@ -290,6 +290,8 @@ func ideaFailKey(code string) string {
 		return "ideas.result.img_size"
 	case "img_bad":
 		return "ideas.result.img_bad"
+	case "img_other":
+		return "ideas.result.img_other"
 	}
 	return "ideas.result.failed"
 }
