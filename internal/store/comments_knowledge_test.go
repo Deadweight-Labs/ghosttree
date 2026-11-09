@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -158,5 +159,52 @@ func TestKnowledgeCommentsAndReactionsFollowTheRights(t *testing.T) {
 	}
 	if _, err := w.pa["mia"].React(ReactOnKnowledge, global, "heart"); err == nil {
 		t.Error("an entry without a project takes a reaction")
+	}
+}
+
+// The check after the rebuild counts only what points at comments: a version row
+// is also checked against every other foreign key of its table, and a break there
+// is not the business of this migration and must not stop the start.
+func TestCommentsRebuildCheckCountsOnlyReferencesToComments(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "fk.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	conn, err := st.DB().Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`PRAGMA defer_foreign_keys=ON`,
+		`DROP TABLE comment_versions`,
+		`CREATE TABLE zz_other(id INTEGER PRIMARY KEY)`,
+		`CREATE TABLE comment_versions(id INTEGER PRIMARY KEY,
+		   comment_id INTEGER NOT NULL REFERENCES comments(id),
+		   other_id INTEGER REFERENCES zz_other(id))`,
+		`INSERT INTO comments(id,project,object_kind,object_id,body,created_at) VALUES(1,'p','pain',1,'x','t')`,
+		// Broken against the other table only.
+		`INSERT INTO comment_versions(id,comment_id,other_id) VALUES(1,1,77)`,
+	} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if broken, err := commentsReferenceBroken(ctx, tx); err != nil || broken {
+		t.Fatalf("a break against another table counted as one against comments: %v %v", broken, err)
+	}
+	// Broken against comments: counted, together with the other one.
+	if _, err := tx.ExecContext(ctx, `INSERT INTO comment_versions(id,comment_id,other_id) VALUES(2,555,NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if broken, err := commentsReferenceBroken(ctx, tx); err != nil || !broken {
+		t.Fatalf("a version of a missing comment was not found: %v %v", broken, err)
 	}
 }

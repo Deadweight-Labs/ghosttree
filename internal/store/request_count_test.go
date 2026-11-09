@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -46,5 +48,38 @@ func TestCountRequestMatchesCountsWhatTheSearchFindsForTheViewer(t *testing.T) {
 	page, err := w.st.SearchRequests(pa.RequestFilter(requestdomain.SearchFilter{Query: "Needle", Limit: 25}))
 	if err != nil || len(page.Results) != 2 {
 		t.Errorf("the search lists %d, %v", len(page.Results), err)
+	}
+}
+
+// The time budget of the live search reaches the count and the search of requests:
+// with a context that has ended neither reads on. SearchRequestsWithContext binds
+// the whole search, the count of the origins included, to the context of the call.
+func TestRequestSearchAndCountEndWithTheirContext(t *testing.T) {
+	w := newPainWorld(t)
+	if _, err := w.st.CreateRequest(requestdomain.CreateInput{
+		Request:  requestdomain.Request{Type: "feature", Title: "Needle", Scope: scope.Axes{Project: roleProject}, Person: "mia"},
+		Criteria: []string{"it works"}, AuthorID: 3}); err != nil {
+		t.Fatal(err)
+	}
+	f := w.pa["mia"].RequestFilter(requestdomain.SearchFilter{Query: "Needle", Limit: 25})
+	// With a live context the context call answers like the plain call.
+	page, err := w.st.SearchRequestsWithContext(context.Background(), f, SearchAuto)
+	if err != nil || len(page.Results) != 1 {
+		t.Fatalf("live context: %d hits, %v", len(page.Results), err)
+	}
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := w.st.SearchRequestsWithContext(ended, f, SearchAuto); !errors.Is(err, context.Canceled) {
+		t.Errorf("search with an ended context: %v, want context canceled", err)
+	}
+	if _, err := w.st.WithContext(ended).CountRequestMatches(f); !errors.Is(err, context.Canceled) {
+		t.Errorf("count with an ended context: %v, want context canceled", err)
+	}
+	if _, err := w.st.WithContext(ended).CountRequests(f); !errors.Is(err, context.Canceled) {
+		t.Errorf("count of the list with an ended context: %v, want context canceled", err)
+	}
+	// The view for one call leaves the store as it was.
+	if page, err := w.st.SearchRequestsWith(f, SearchAuto); err != nil || len(page.Results) != 1 {
+		t.Errorf("the store itself after the view: %d hits, %v", len(page.Results), err)
 	}
 }

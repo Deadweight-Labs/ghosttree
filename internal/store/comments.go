@@ -124,17 +124,41 @@ func allowKnowledgeComments(db *sql.DB) error {
 		}
 	}
 	// Nur die Tabellen, die auf comments zeigen: eine Prüfung der ganzen
-	// Datenbank läse beim Start jede Tabelle einer großen Instanz.
-	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check(comment_versions)`)
+	// Datenbank läse beim Start jede Tabelle einer großen Instanz. Die Prüfung
+	// einer Tabelle meldet aber jeden ihrer Fremdschlüssel, auch die auf andere
+	// Tabellen; ein Bruch dort gehört nicht zu diesem Umbau und darf ihn nicht
+	// verhindern. Zählt nur, was auf comments zeigt (Spalte parent).
+	broken, err := commentsReferenceBroken(ctx, tx)
 	if err != nil {
 		return err
 	}
-	broken := rows.Next()
-	rows.Close()
 	if broken {
 		return fmt.Errorf("comments rebuild: a version refers to a comment that is gone")
 	}
 	return tx.Commit()
+}
+
+// commentsReferenceBroken says whether a row of comment_versions points to a
+// comment that does not exist. PRAGMA foreign_key_check answers one row per
+// broken reference with the columns table, rowid, parent and fkid.
+func commentsReferenceBroken(ctx context.Context, tx *sql.Tx) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check(comment_versions)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var table, parent string
+		var rowid sql.NullInt64
+		var fkid int
+		if err := rows.Scan(&table, &rowid, &parent, &fkid); err != nil {
+			return false, err
+		}
+		if parent == "comments" {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Arten von Objekten, an die ein Kommentar hängt.

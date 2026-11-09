@@ -1,6 +1,9 @@
 package store
 
-import "slices"
+import (
+	"context"
+	"slices"
+)
 
 // Prefilter is a condition in SQL that every row a reader's row rule lets through
 // satisfies, on the alias of the table of objects that the search names. Hybrid
@@ -31,12 +34,17 @@ func (p Prefilter) with(where string, args []any) (string, []any) {
 // A vector never counts without its object: one left behind by an object that is
 // gone or archived is not a hit.
 func (s *Store) vectorIDs(k embedKind, cfg *EmbedSearchConfig, qvec []float32, cond string, args []any) ([]int64, error) {
+	return s.vectorIDsCtx(s.ctx(), k, cfg, qvec, cond, args)
+}
+
+// vectorIDsCtx is vectorIDs whose read ends with ctx.
+func (s *Store) vectorIDsCtx(ctx context.Context, k embedKind, cfg *EmbedSearchConfig, qvec []float32, cond string, args []any) ([]int64, error) {
 	query := `SELECT e.` + k.idCol + `, e.scale, e.vec FROM ` + k.emb + ` e JOIN ` + k.from + ` ON ` + k.id + ` = e.` + k.idCol + `
 		WHERE ` + k.keyWhere("e") + `e.model = ? AND e.prefix_version = ? AND ` + k.active
 	if cond != "" {
 		query += ` AND (` + cond + `)`
 	}
-	rows, err := s.db.QueryContext(s.ctx(), query, append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion()}, args...)...)
+	rows, err := s.db.QueryContext(ctx, query, append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion()}, args...)...)
 	if err != nil {
 		return nil, err
 	}

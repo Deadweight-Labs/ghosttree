@@ -21,7 +21,7 @@ func (s *Store) CountRequests(f requestdomain.SearchFilter) (int, error) {
 		q += ` WHERE ` + strings.Join(where, ` AND `)
 	}
 	var n int
-	err := s.db.QueryRow(q, args...).Scan(&n)
+	err := s.db.QueryRowContext(s.ctx(), q, args...).Scan(&n)
 	return n, err
 }
 

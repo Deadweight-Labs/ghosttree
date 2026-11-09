@@ -448,6 +448,7 @@ var writerMethodClasses = map[string]string{
 	"SearchPainsWith":               "read",
 	"SearchDocuments":               "read",
 	"SearchRequestsWith":            "read",
+	"SearchRequestsWithContext":     "read",
 	"SearchKnowledge":               "read_with_best_effort",
 	"SearchKnowledgeForContext":     "read_with_best_effort",
 	"SearchKnowledgeWith":           "read_with_best_effort",

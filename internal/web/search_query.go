@@ -41,7 +41,11 @@ type searchLine struct {
 	origin    originctx.Filter
 	fetch     int
 	// shown is how many hits the page shows of each kind (searchPlan.shown).
-	shown   int
+	shown int
+	// union: the line is one of several of a quick filter whose hits are joined.
+	// The lines overlap, so no line can state its own total: each reads as many
+	// hits as the count needs (searchCountCap+1) and the union is counted.
+	union   bool
 	project string
 }
 
