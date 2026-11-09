@@ -117,7 +117,6 @@
   & .tlx.tl0 { margin-top: 0; }
   & .tlx > .cmt { position: relative; }
   & .tlx > .cmt::before { content: ""; position: absolute; z-index: 0; left: 19px; top: 0; bottom: -16px; width: 2px; background: var(--border-default); pointer-events: none; }
-  & .tlx > .cmt.tev::before { bottom: -12px; }
   & .tlx > .cmt:first-child::before { top: 20px; }
   & .tlx > .cmt.tev:first-child::before { top: 16px; }
   & .tlx > .cmt:last-child::before { bottom: auto; height: 20px; }
@@ -126,7 +125,6 @@
   & .tlx > .cmt > .gav, & .tlx .tav .gav { position: relative; z-index: 1; box-shadow: 0 0 0 3px var(--canvas-default); }
   & .tlx > .cmt > .gav.agent .own, & .tlx .tav .gav.agent .own { box-shadow: 0 0 0 2px var(--canvas-default); }
   & .cmt { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 16px; margin-bottom: 16px; scroll-margin-top: 16px; }
-  & .cmt.tev { margin-bottom: 12px; }
   & .tev .tav { display: flex; justify-content: center; align-items: flex-start; height: 32px; }
   /* The circle of an entry without a person: its tint lies over the page colour, so the line never shows through. */
   & .tev .tav .bd { --bdt: var(--neutral-muted); position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; box-sizing: content-box; width: 20px; height: 20px; margin-top: 2px; color: var(--fg-muted); background: linear-gradient(var(--bdt), var(--bdt)), var(--canvas-default); border: 4px solid var(--canvas-default); border-radius: 50%; }
@@ -138,7 +136,9 @@
   & .tev-m { min-width: 0; }
   & .tev-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-height: 32px; padding: 4px 0; line-height: 24px; color: var(--fg-muted); font-size: 14px; }
   & .tev-s { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-  & .tev-h .ganch { margin-left: auto; }
+  & .tev-h .ganch, & .tev-h .tev-r { margin-left: auto; }
+  & .tev-r { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  & .tev-r + .ganch { margin-left: 8px; }
   & .tev-h b, & .tev-h .person { color: var(--fg-default); font-weight: 600; }
   & .tev-h .tm { margin-left: 6px; font-size: 12px; color: var(--fg-muted); }
   & .tev-h .chip { vertical-align: 1px; margin: 0 2px; }
@@ -153,7 +153,7 @@
   /* One proof: the thing as a pill, the words about it as plain grey text that wraps with the line. */
   & .pfx { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; max-width: 100%; min-width: 0; vertical-align: baseline; }
   & .pnote { flex: 1 1 14ch; min-width: 0; font-size: 12px; line-height: 18px; font-weight: 400; color: var(--fg-muted); overflow-wrap: anywhere; }
-  & .pf > .pfx:has(.pnote) { flex: 1 1 260px; }
+  & .pf > .pfx:has(.pnote) { flex: 1 1 260px; order: 1; }
   & .bd2 .pfx { display: flex; margin-top: 4px; }
   & .bd2 .kn-body + .pfx, & .bd2 > .pfx:first-child { margin-top: 0; }
 
@@ -316,7 +316,7 @@
     & .cmt > .gav { display: none; }
     & .cbox::before { display: none; }
     & .tlx > .cmt::before { display: none; }
-    & .tlx > .cmt.tev:has(+ .cmt.tev)::before { display: block; top: 0; bottom: -12px; height: auto; }
+    & .tlx > .cmt.tev:has(+ .cmt.tev)::before { display: block; top: 0; bottom: -16px; height: auto; }
     & .cmt.tev { grid-template-columns: 40px minmax(0, 1fr); gap: 16px; }
     & .cmt.tev > .gav { display: inline-flex; }
     & .cx-h .wtools, & .cx-hint { display: none; }

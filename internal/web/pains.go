@@ -340,16 +340,26 @@ func withoutRepeatedPainNotes(events []pain.Event, comments []tlItem) []pain.Eve
 			if v == nil || v.Deleted || v.Who != ev.Person || text == "" || at.IsZero() || c.at.IsZero() {
 				continue
 			}
-			// The note is the comment alone, or "Why" with the comment after it
-			// (painStateNote); what stays is only what the comment does not say.
-			if note != text && !strings.HasSuffix(note, "\n\n"+text) {
+			rest, same := trimmedPainNote(note, text)
+			if !same {
 				continue
 			}
 			if d := c.at.Sub(at); d < sameMomentWithin && d > -sameMomentWithin {
-				out[i].Note = strings.TrimSpace(strings.TrimSuffix(note, text))
+				out[i].Note = rest
 				break
 			}
 		}
 	}
 	return out
+}
+
+// trimmedPainNote takes the comment out of a note: the note is the comment
+// alone, or "Why" with the comment after it (painStateNote). same says whether
+// the comment was in it; rest is what stays.
+func trimmedPainNote(note, comment string) (rest string, same bool) {
+	note, comment = strings.TrimSpace(note), strings.TrimSpace(comment)
+	if comment == "" || (note != comment && !strings.HasSuffix(note, "\n\n"+comment)) {
+		return note, false
+	}
+	return strings.TrimSpace(strings.TrimSuffix(note, comment)), true
 }

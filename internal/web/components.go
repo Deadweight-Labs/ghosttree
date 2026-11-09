@@ -181,6 +181,9 @@ type tlItem struct {
 	Head                      template.HTML
 	Age                       string
 	Body                      template.HTML
+	// Right stands at the right end of the head, in line with the anchor: the
+	// commits an entry is about, not part of the sentence.
+	Right template.HTML
 	// Git is the anchor of the entry as links (commit, pull request, branch).
 	Git *anchorView
 	// Comment makes the entry a comment box instead of a line of the history;
