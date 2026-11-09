@@ -124,6 +124,7 @@ var writerMethodClasses = map[string]string{
 	"IndexSessionContext":           "administrative",
 	"IndexBackfillStep":             "write",
 	"RunIndexBackfill":              "administrative",
+	"RepairIndexGaps":               "administrative",
 	"IndexProgress":                 "read",
 	"BrowseSessions":                "read",
 	"SearchTranscripts":             "read",

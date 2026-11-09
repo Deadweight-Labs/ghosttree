@@ -327,6 +327,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - `GHOSTTREE_PUBLIC_URL` and `GHOSTTREE_TRUSTED_PROXIES` for TLS and reverse
   proxies, with `Secure` cookies.
 - `DELETE /api/tokens/self` revokes the token that made the request.
+- `ctx db chunk-stats --db PATH [--sample N]` shows, from a sample, how many
+  bytes stored transcript lines take per line type and what the slim rule
+  would leave of them; read-only and throttled, so it may run beside the
+  server.
 
 ### Changed
 
@@ -335,6 +339,24 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   redact-sessions` in existing data. The server also redacts on arrival.
 - Stored transcripts no longer keep base64 images and files; a placeholder with
   type, size and hash stands in their place.
+- Transcripts are stored slim: lines and fields that only repeat what is
+  already there or that no reader uses are left out before upload (Claude
+  Code's `api-request*` lines, `prompt_snapshot` and `hook_success`
+  attachments, thinking signatures, `wireToolInputs`, the copies in
+  `toolUseResult`; Codex's `item_completed` copies, encrypted reasoning,
+  replaced history after compaction, rate limits), and tool outputs over
+  8 KB keep their first 6 KB and last 2 KB with length and hash. Prompts,
+  answers, thinking, tool calls, models and times stay. The server applies the
+  same rule to lines from older clients. Left-out lines leave gaps in the line
+  numbers. On local transcripts this saves about two thirds of the stored
+  bytes. `ctx export` returns the slim lines, which read the same but cannot be
+  resumed in Claude Code or Codex. What this gives up: the middle of a long
+  tool output is no longer stored, so search and embeddings cannot find it
+  (the marker's hash is over the redacted text); and an input that was queued
+  while the agent worked but never sent (`queue-operation` content) is no
+  longer in the archive. Secrets are redacted before anything is cut.
+- The session view shows the commands Codex's `exec` tool ran, with their
+  output, and the output of `exec` itself, which it skipped before.
 - The gardener runs as a real, hardened Claude Code agent by default (no Bash,
   sandboxed, allowlists) instead of one API call per entry.
 - The model for "In short" notes has its own `explain` entry in `llm.json`; it
@@ -351,6 +373,12 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- The server starts without reading every transcript line: the check for
+  lines an older binary wrote without search index compares the two highest
+  line numbers instead of scanning all lines since the last index run. Once
+  per start, two minutes after the index backfill, a throttled background
+  pass compares the line keys with the index keys (no transcript text is read)
+  and indexes any line it finds missing (`session_index_gaps` in the log).
 - Pains, ideas, tasks and comments written through MCP now carry their
   session: the server takes the session the client names in its header when the
   body has no numeric id. Before, a pain never had a session.

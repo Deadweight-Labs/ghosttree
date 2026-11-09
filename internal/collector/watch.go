@@ -18,6 +18,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/projectlink"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/slim"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/fsnotify/fsnotify"
 )
@@ -122,11 +123,15 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 	ident := st.identity(path, func() touchIdentity { return sessionIdentity(path, harness, machine) })
 	seq := fs.Seq
 	flush := func() error {
-		if len(batch) == 0 {
+		if len(batch) == 0 && offset == fs.Offset && len(touches) == 0 && len(proofs) == 0 {
 			return nil
 		}
-		if err := uploadSplit(up, ref, batch); err != nil {
-			return err
+		// Ohne Stapel (nur weggelassene oder leere Zeilen) wandert der
+		// Offset trotzdem weiter, sonst läse jeder Durchlauf sie neu.
+		if len(batch) > 0 {
+			if err := uploadSplit(up, ref, batch); err != nil {
+				return err
+			}
 		}
 		// Ein Pausenbeleg geht vor dem Offset-Fortschritt raus; scheitert er,
 		// wird der Stapel wiederholt (der Server hält jeden Beleg nur einmal).
@@ -169,23 +174,32 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 			// Blank lines still advance the offset once a batch is confirmed.
 			continue
 		}
-		p := parse([]byte(trimmed))
-		// Bilder zuerst heraus: sie sind der größte Teil einer Zeile, der
-		// Server ersetzt sie ohnehin, und die Redaktion muss sie nicht
-		// durchsuchen. Aktivität und Kontrollbeweis unten lesen die Originalzeile.
-		stored, _ := blobstrip.Strip(trimmed)
-		batch = append(batch, store.Chunk{
-			Seq:  seq,
-			Role: p.Role,
-			Text: redact.Redact(p.Text),
-			Raw:  redact.RedactJSON(stored),
-		})
+		// Aktivität und Kontrollbeweis lesen die Originalzeile, vor dem
+		// Schlanken.
 		touches = append(touches, activityFrom(ident, trimmed)...)
 		if harness != "codex" {
 			if p, ok := ControlProofFrom([]byte(trimmed)); ok {
 				proofs = append(proofs, p)
 			}
 		}
+		// Erst die Bilder, dann die Schwärzung, zuletzt Kopien und Ballast:
+		// das Kürzen langer Ausgaben darf weder base64 anschneiden noch ein
+		// Geheimnis, das die Schwärzung nur vollständig erkennt (ein privater
+		// Schlüssel zwischen BEGIN und END). Eine weggelassene Zeile behält
+		// ihre Nummer; die Folge hat dort eine Lücke.
+		stored, _ := blobstrip.Strip(trimmed)
+		stored, keep := slim.Line(redact.RedactJSON(stored))
+		if !keep {
+			seq++
+			continue
+		}
+		p := parse([]byte(trimmed))
+		batch = append(batch, store.Chunk{
+			Seq:  seq,
+			Role: p.Role,
+			Text: redact.Redact(p.Text),
+			Raw:  stored,
+		})
 		seq++
 		batchBytes += wireSize(batch[len(batch)-1])
 		if len(batch) >= uploadBatch || batchBytes >= uploadBatchBytes {
