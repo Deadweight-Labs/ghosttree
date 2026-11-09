@@ -92,7 +92,10 @@ func TestRenderingIsBoundedPerBlockAndPerPage(t *testing.T) {
 	}
 
 	long, _ := e.St.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "long-out", AccountID: 1, Scope: scope.Axes{Project: shellProject}})
-	if err := e.St.AppendChunks(long, bigTranscript(1, 50000)); err != nil {
+	// Lange Ausgaben kürzt schon das Speichern (internal/slim) auf rund 8 KB;
+	// viele kurze Zeilen bleiben darunter und treffen die Zeilengrenze.
+	longOut := []store.Chunk{{Seq: 0, Raw: aLine(bash("big0", "ls -la"))}, {Seq: 1, Raw: rLine("big0", strings.Repeat("a\n", 4000), false)}}
+	if err := e.St.AppendChunks(long, longOut); err != nil {
 		t.Fatal(err)
 	}
 	ls, _ := e.St.SessionByID(long)

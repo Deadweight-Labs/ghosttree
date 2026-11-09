@@ -206,42 +206,6 @@ func (b cliBackend) ProjectPreview(ctx context.Context, project string) ([]tui.I
 	return cleanItems(reqs), cleanItems(tasks), nil
 }
 
-// myTasksEverywhere is "my open tasks" outside a project: the tasks of every
-// visible project, at most taskProjectLimit of them.
-const taskProjectLimit = 25
-
-func (b cliBackend) myTasksEverywhere(c *client.Client) ([]tui.Item, error) {
-	projects, err := visibleProjects(c)
-	if err != nil {
-		return nil, err
-	}
-	out := []tui.Item{}
-	var firstErr error
-	for i, p := range projects {
-		if i >= taskProjectLimit {
-			break
-		}
-		list, err := c.ListHumanTasks(p.ID, "open", true, 0)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		short := p.ID
-		if i := strings.LastIndexByte(short, '/'); i >= 0 {
-			short = short[i+1:]
-		}
-		for _, t := range list {
-			out = append(out, tui.Item{Ref: t.HumanID(), Kind: "task", Title: t.Title, Meta: fmt.Sprintf("%s · REQ-%d", short, t.RequestID)})
-		}
-	}
-	if len(out) == 0 && firstErr != nil {
-		return nil, classifyErr(firstErr)
-	}
-	return cleanItems(out), nil
-}
-
 func (b cliBackend) ClaimPlan(ctx context.Context) (tui.ClaimPlan, error) {
 	_, _, remote, _ := folderInfo()
 	if remote == "" {

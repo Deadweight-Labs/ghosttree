@@ -257,29 +257,44 @@ func (s *Store) startIndexBackfill() error {
 // Binary schreibt ohne Index, und nach dem nächsten Update liegen sie jenseits
 // von backfill_bound. Gibt es dort Chunks ohne Indexzeile, wandert die Grenze
 // auf die größte Nummer und der Lauf beginnt wieder; der Stand davor bleibt.
+//
+// Es läuft bei jedem Start und vergleicht dafür nur die beiden größten
+// Nummern (je ein Schritt im B-Baum). Chunks werden nie gelöscht, ihre Nummern
+// steigen, und jeder Start eines Binarys mit Index kommt hier vorbei, bevor es
+// schreibt: was ein Binary ohne Index schrieb, liegt deshalb immer über der
+// größten indizierten Nummer.
 func (s *Store) raiseBackfillBound() error {
 	var bound int64
 	if err := s.db.QueryRow(`SELECT COALESCE((SELECT val FROM index_state WHERE key='backfill_bound'),0)`).Scan(&bound); err != nil {
 		return err
 	}
-	var missing int
-	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM session_chunks c WHERE c.id > ? AND NOT EXISTS (SELECT 1 FROM chunk_index x WHERE x.chunk_id = c.id))`, bound).Scan(&missing); err != nil || missing == 0 {
+	var maxChunk, maxIndexed sql.NullInt64
+	if err := s.db.QueryRow(maxChunkIDQuery).Scan(&maxChunk); err != nil {
 		return err
 	}
-	var max int64
-	if err := s.db.QueryRow(`SELECT COALESCE(MAX(id),0) FROM session_chunks`).Scan(&max); err != nil {
+	if err := s.db.QueryRow(maxIndexedChunkQuery).Scan(&maxIndexed); err != nil {
 		return err
+	}
+	if maxChunk.Int64 <= bound || maxChunk.Int64 <= maxIndexed.Int64 {
+		return nil
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO index_state(key,val) VALUES('backfill_bound',?),('backfill_done',0)`, max); err != nil {
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO index_state(key,val) VALUES('backfill_bound',?),('backfill_done',0)`, maxChunk.Int64); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
+
+// Die beiden Abfragen des Startvergleichs. Ohne Hülle um MAX greift SQLites
+// Min/Max-Optimierung: ein Sprung ans Ende des Baums statt eines Durchlaufs.
+const (
+	maxChunkIDQuery      = `SELECT MAX(id) FROM session_chunks`
+	maxIndexedChunkQuery = `SELECT MAX(chunk_id) FROM chunk_index`
+)
 
 // IndexProgress ist der sichtbare Stand des Nachindizierens.
 type IndexProgress struct {

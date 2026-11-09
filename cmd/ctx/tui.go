@@ -19,8 +19,6 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/installer"
 	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/query"
-	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
-	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/Deadweight-Labs/ghosttree/internal/tui"
 )
 
@@ -40,12 +38,19 @@ var runTUI = func(opt tui.Options) (tui.Model, error) {
 	return tui.Run(newCLIBackend(), opt)
 }
 
-const tuiUsage = `usage: ctx tui [--look mark|tree|lines]
+const tuiUsage = `usage: ctx tui [--look mark|tree|lines] [--switch rail|bar]
 
 The terminal interface: quick search (REQ-n, PAIN-n, TASK-n, IDEA-n, FEAT-n,
 #id, pr:n or a search line), your tasks, open requests and messages, and the
 local settings. ctx without arguments opens it in a terminal.
---look (or GHOSTTREE_TUI_LOOK) picks the logo and layout; f2 cycles them.
+Two modes, switched with shift+tab: Project (the folder's project: requests,
+pains, tasks, room) and Inbox (what waits for you across projects: tasks,
+questions and approvals, unread messages, suggestions to review).
+--look (or GHOSTTREE_TUI_LOOK) picks the start logo, f2 cycles it;
+--switch (or GHOSTTREE_TUI_SWITCH) draws the mode switch as a rail on the left
+or in the header line, f3 cycles it.
+ctrl+k opens the command palette (jump to an object, project or folder, run
+an action, search); ctrl+f jumps into the search line.
 
 Every setting it changes has a command of its own:
   sign in               ctx login [--server URL] [--machine NAME]
@@ -54,7 +59,7 @@ Every setting it changes has a command of its own:
   harness check/repair  ctx doctor / ctx doctor --fix
   collector restart     ctx install watch --restart`
 
-func tuiOptions(look string) (tui.Options, error) {
+func tuiOptions(look, switchStyle string) (tui.Options, error) {
 	if look == "" {
 		look = os.Getenv("GHOSTTREE_TUI_LOOK")
 	}
@@ -62,10 +67,18 @@ func tuiOptions(look string) (tui.Options, error) {
 	if !ok {
 		return tui.Options{}, fmt.Errorf("unknown look %q: use mark, tree or lines", look)
 	}
+	if switchStyle == "" {
+		switchStyle = os.Getenv("GHOSTTREE_TUI_SWITCH")
+	}
+	sw, ok := tui.ParseSwitchStyle(switchStyle)
+	if !ok {
+		return tui.Options{}, fmt.Errorf("unknown switch %q: use rail or bar", switchStyle)
+	}
 	return tui.Options{
-		Look:  style,
-		Plain: os.Getenv("NO_COLOR") != "",
-		Still: os.Getenv("GHOSTTREE_TUI_STILL") != "",
+		Look:   style,
+		Switch: sw,
+		Plain:  os.Getenv("NO_COLOR") != "",
+		Still:  os.Getenv("GHOSTTREE_TUI_STILL") != "",
 	}, nil
 }
 
@@ -73,6 +86,7 @@ func cmdTUI(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	look := fs.String("look", "", "mark, tree or lines")
+	switchStyle := fs.String("switch", "", "rail or bar")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		fmt.Fprintln(stdout, tuiUsage)
 		return 2
@@ -81,7 +95,7 @@ func cmdTUI(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, "ctx tui needs a terminal")
 		return 2
 	}
-	opt, err := tuiOptions(*look)
+	opt, err := tuiOptions(*look, *switchStyle)
 	if err != nil {
 		fmt.Fprintln(stdout, err)
 		return 2
@@ -97,7 +111,7 @@ func cmdTUI(args []string, stdout io.Writer) int {
 // quits after a successful login. A server named on the command line skips
 // the form.
 func runTUILogin(server, machine string, stdout io.Writer) int {
-	opt, err := tuiOptions("")
+	opt, err := tuiOptions("", "")
 	if err != nil {
 		opt = tui.Options{}
 	}
@@ -401,90 +415,6 @@ func firstLine(s string) string {
 		s = s[:i]
 	}
 	return s
-}
-
-// MyTasks are the open tasks for the caller in the current project, or in
-// every visible project when the folder has none.
-func (b cliBackend) MyTasks(ctx context.Context) ([]tui.Item, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, classifyErr(err)
-	}
-	c := b.client(cfg)
-	project := requestProjectAxes(cfg.Machine).Project
-	if project == "" {
-		return b.myTasksEverywhere(c)
-	}
-	list, err := c.ListHumanTasks(project, "open", true, 0)
-	if err != nil {
-		return nil, classifyErr(err)
-	}
-	out := make([]tui.Item, 0, len(list))
-	for _, t := range list {
-		out = append(out, tui.Item{Ref: t.HumanID(), Kind: "task", Title: t.Title, Meta: fmt.Sprintf("REQ-%d", t.RequestID)})
-	}
-	return cleanItems(out), nil
-}
-
-// OpenRequests are the open requests of the current project. Without a
-// project the answer is "no project", never the requests of every project.
-func (b cliBackend) OpenRequests(ctx context.Context) ([]tui.Item, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, classifyErr(err)
-	}
-	ax := requestProjectAxes(cfg.Machine)
-	if ax.Project == "" {
-		return nil, &tui.ProblemError{Kind: tui.ProblemNoProject}
-	}
-	page, err := b.client(cfg).SearchRequests(requestdomain.SearchFilter{Scope: ax, State: "open", Limit: 50})
-	if err != nil {
-		return nil, classifyErr(err)
-	}
-	out := make([]tui.Item, 0, len(page.Results))
-	for _, h := range page.Results {
-		meta := ""
-		if h.OpenCriteria > 0 {
-			meta = fmt.Sprintf("%d open", h.OpenCriteria)
-		}
-		out = append(out, tui.Item{Ref: fmt.Sprintf("REQ-%d", h.Request.ID), Kind: "issue", Title: h.Request.Title, Meta: meta})
-	}
-	return cleanItems(out), nil
-}
-
-// Messages lists what is unread in the room of the current repository for
-// this terminal, without moving the read mark: reading the list is not
-// reading the messages.
-func (b cliBackend) Messages(ctx context.Context) ([]tui.Item, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, classifyErr(err)
-	}
-	room, code := coordRoomKey(false, nil, cfg, io.Discard)
-	if code != 0 {
-		room = store.RoomKeyForMachine(cfg.Machine)
-	}
-	c := b.client(cfg)
-	me := coordSession(cfg)
-	after, _ := c.CoordCursor(me, store.DestinationRoom, room)
-	msgs, err := c.CoordInbox(store.DestinationRoom, room, me, after, 30)
-	if messagesNotFound(err) {
-		return []tui.Item{}, nil // no room yet: no messages
-	}
-	if err != nil {
-		return nil, classifyErr(err)
-	}
-	builder := clientBuilder(c, "")
-	out := make([]tui.Item, 0, len(msgs))
-	for i := len(msgs) - 1; i >= 0; i-- {
-		m := msgs[i]
-		if m.Expired {
-			continue
-		}
-		card := builder.MessageCard(store.MessageHit{ID: m.ID, RoomKey: room, Sequence: m.Sequence, Sender: m.SenderExternalID, Body: m.Body})
-		out = append(out, tui.Item{Ref: fmt.Sprintf("#%d", m.Sequence), Kind: "message", Title: m.Body, Meta: m.SenderExternalID, Card: &card})
-	}
-	return cleanItems(out), nil
 }
 
 func (cliBackend) Open(url string) (bool, string) {

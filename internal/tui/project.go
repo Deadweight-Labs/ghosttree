@@ -171,7 +171,7 @@ func (m Model) projectPanel(width int) block {
 		switch {
 		case !m.buttonEnabled(i):
 			continue
-		case m.zone == zoneButtons && m.button == i:
+		case m.button == i:
 			s = m.th.Selected.Render(" " + labels[i] + " ")
 		default:
 			s = m.th.Ref.Render(" " + labels[i] + " ")
@@ -187,11 +187,7 @@ func (m Model) projectPanel(width int) block {
 		h.row = row
 		b.hits = append(b.hits, h)
 	}
-	if m.zone == zoneButtons {
-		b.add(m.th.Subtle.Render(ansi.Truncate(m.buttonEquivalent(m.button), width, "…")))
-	} else {
-		b.blank(1)
-	}
+	b.add(m.th.Subtle.Render(ansi.Truncate(m.buttonEquivalent(m.button), width, "…")))
 	b.blank(1)
 	return b
 }
@@ -262,7 +258,7 @@ func (m Model) updateClaim(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.back = nil
 		m.screen = ScreenHome
-		m.zone = zoneList
+		m.mode, m.cursor = modeProject, 0
 		m.local = m.be.Local()
 		cmd := m.setFlash(fmt.Sprintf(m.lang.t("claim.done"), clean(msg.p.ID, 100), clean(msg.p.Org, 40)), false)
 		return m, tea.Batch(append(m.reloadHome(), cmd, m.search.Focus())...)
@@ -458,8 +454,7 @@ func (m Model) changeDir(dir string) (tea.Model, tea.Cmd) {
 	}
 	m.back = nil
 	m.screen = ScreenHome
-	m.zone = zoneList
-	m.section, m.cursor = 0, 0
+	m.mode, m.tab, m.cursor = modeProject, [2]int{}, 0
 	m.local = m.be.Local()
 	if s, ok := m.local.DefaultServer(); ok {
 		s.Account, s.Checked, s.Reachable, s.Token = m.server.Account, m.server.Checked, m.server.Reachable, m.server.Token
@@ -528,6 +523,7 @@ type projectsState struct {
 	list    listState
 	cursor  int
 	preview map[string]previewMsg
+	want    string // select this project once the list is there
 }
 
 func (m *Model) openProjects() tea.Cmd {
@@ -578,8 +574,12 @@ func (m Model) updateProjects(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.projects.list = listState{items: items, err: msg.err, loaded: true}
 		m.projects.cursor = 0
+		want := m.projects.want
+		if want == "" {
+			want = m.local.Project
+		}
 		for i, it := range items {
-			if it.Ref == m.local.Project {
+			if it.Ref == want {
 				m.projects.cursor = i
 			}
 		}
