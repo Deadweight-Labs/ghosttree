@@ -533,7 +533,10 @@ func TestLogModeRefusesNothingButLogsWouldDeny(t *testing.T) {
 	f.expect(t, "mia", 204, "PATCH", idPath("/api/knowledge/%d", staged), map[string]string{"body": "x"})
 	f.expect(t, "mia", 200, "GET", idPath("/api/sessions/%d", f.id["s-rex"]), nil)
 	f.expect(t, "nora", 200, "GET", idPath("/api/requests/%d", f.id["r-mia"]), nil)
-	f.expect(t, "mia", 204, "PATCH", idPath("/api/knowledge/%d", f.id["k-mia"]), map[string]string{"confidence": "verified"})
+	// Ausnahmen, die auch im Log-Modus gelten (strictDenial): Freigeben ohne
+	// Prüfrecht, und ein Gast schreibt nichts.
+	f.expect(t, "mia", 403, "PATCH", idPath("/api/knowledge/%d", f.id["k-mia"]), map[string]string{"confidence": "verified"})
+	f.expect(t, "gus", 403, "PATCH", idPath("/api/knowledge/%d", f.id["k-mia"]), map[string]string{"body": "x"})
 	f.expect(t, "robin", 200, "GET", idPath("/api/knowledge/%d", f.id["k-machine"]), nil)
 	if out := f.expect(t, "nora", 200, "GET", "/api/requests", nil); !strings.Contains(out, "mia request") {
 		t.Errorf("log mode must not filter the request search: %s", out)
@@ -545,7 +548,7 @@ func TestLogModeRefusesNothingButLogsWouldDeny(t *testing.T) {
 	for _, want := range []string{
 		"access: would deny", "account=person:6", "account=person:5", "account=person:3",
 		"resource=knowledge", "resource=session", "resource=transcript", "resource=request",
-		"action=read", "action=edit", "action=verify", "project=" + accProject,
+		"action=read", "action=edit", "project=" + accProject,
 	} {
 		if !strings.Contains(logged, want) {
 			t.Errorf("log lacks %q:\n%s", want, logged)
@@ -557,7 +560,7 @@ func TestLogModeRefusesNothingButLogsWouldDeny(t *testing.T) {
 			t.Errorf("log carries content %q", secret)
 		}
 	}
-	if would, denied := f.st.AccessCounters(); would == 0 || denied != 0 {
+	if would, denied := f.st.AccessCounters(); would == 0 || denied != 2 {
 		t.Errorf("counters would=%d denied=%d", would, denied)
 	}
 }

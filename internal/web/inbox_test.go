@@ -72,9 +72,10 @@ func TestInboxListsWhatWaitsAndNothingHidden(t *testing.T) {
 			t.Errorf("inbox shows %q to a member", leak)
 		}
 	}
-	// The guest gets the task assigned to them and nothing else.
+	// A guest marks no task done (Robin, 2026-11-09), so nothing waits for them,
+	// not even the task assigned to them; they still read it on its page.
 	_, guest := fetchPage(t, e.Guest, e.Base+"/ui/inbox")
-	if !strings.Contains(guest, "Only for gina") || strings.Contains(guest, "Create the vendor key") || strings.Contains(guest, "SECRET-TASK") {
+	if strings.Contains(guest, "Only for gina") || strings.Contains(guest, "Create the vendor key") || strings.Contains(guest, "SECRET-TASK") {
 		t.Errorf("guest inbox is wrong: %s", guest)
 	}
 }

@@ -367,15 +367,25 @@ func (a *app) sessionLinks(pa *store.ProjectAccess, ids []int64) map[int64]strin
 	return out
 }
 
-// projectParam ist das Projekt einer projektbezogenen Seite und löst genau wie
-// die Auswahl im Kopf auf (projectOptions): ein nutzbares ?project=, sonst das
+// projectParam ist das Projekt einer projektbezogenen Seite. Auf einer Seite
+// unter /ui/{org}/{repo} ist es das Repo, für jede Rolle; ob der Betrachter es
+// sehen darf, prüft die Seite selbst (gateList). Sonst löst es genau wie die
+// Auswahl im Kopf auf (projectOptions): ein nutzbares ?project=, sonst das
 // Cookie, sonst "" für alle Projekte. Nur ein Admin ohne Rolle im genannten
 // Projekt darf es trotzdem öffnen; die Abfrage filtert nach seinen Rechten.
+//
+// Die Wahl kommt aus der Projektliste der Hülle (shellBase), nicht aus der
+// Ansicht: auf Repo-Seiten zeigt die Hülle keine Projektliste, und eine leere
+// Wahl hieß dort „alle Projekte“, für Gäste und Mitglieder samt fremden
+// Maschinen-Einträgen (UI-Durchsicht 2026-11-09, Befund 1).
 func (a *app) projectParam(r *http.Request) string {
+	if repo := repoFrom(r); repo != nil && repo.Project != "" {
+		return repo.Project
+	}
 	if p := scope.NormalizeRemote(r.URL.Query().Get("project")); p != "" && a.access(r).IsAdmin() {
 		return p
 	}
-	return selectedProject(a.shellFor(r, "knowledge"))
+	return selectedProjectOf(a.shellBaseFor(r))
 }
 
 // access ist die Zugriffsprüfung der Browser-Sitzung. Sie nutzt denselben Store
