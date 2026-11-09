@@ -95,45 +95,87 @@ func (m *Model) openPalette() tea.Cmd {
 
 func (m Model) paletteWidth() int { return max(36, min(76, m.w-8)) }
 
-// fuzzy scores how well query matches text: every rune of the query must
-// appear in order. Matches at the start, at word starts and in runs score
-// higher; 0 with ok=false means no match.
-func fuzzy(query, text string) (int, bool) {
+// Match classes of fuzzy, best first. A prefix of the text or of one of its
+// words is a clear hit; the query as a run inside a word is good; pieces
+// that each start at a word start (like "ups" for "update channel set") are
+// acceptable. Letters scattered through words never count.
+const (
+	matchPieces   = 1
+	matchInside   = 2
+	matchWordHead = 3
+	matchPrefix   = 4
+)
+
+func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// fuzzy scores how well query matches text and says how (matchPrefix ...
+// matchPieces); ok is false when it does not match at all. The score sorts
+// by class first, then prefers earlier and shorter matches.
+func fuzzy(query, text string) (score int, ok bool) {
 	q := []rune(strings.ToLower(strings.TrimSpace(query)))
 	if len(q) == 0 {
 		return 1, true
 	}
 	t := []rune(strings.ToLower(text))
-	score, qi, run, first, lastHit := 0, 0, 0, -1, 0
-	for ti := 0; ti < len(t) && qi < len(q); ti++ {
-		if t[ti] != q[qi] {
-			run = 0
-			continue
-		}
-		if first < 0 {
-			first = ti
-		}
-		lastHit = ti
-		s := 1
-		if ti == 0 {
-			s += 8
-		} else if !unicode.IsLetter(t[ti-1]) && !unicode.IsDigit(t[ti-1]) {
-			s += 5
-		}
-		run++
-		s += 2 * (run - 1)
-		score += s
-		qi++
-	}
-	if qi < len(q) {
+	class, at := fuzzyClass(q, t)
+	if class == 0 {
 		return 0, false
 	}
-	if strings.Contains(string(t), string(q)) {
-		score += 10
+	return class*1000 - min(at, 200) - min(len(t), 200)/10, true
+}
+
+// fuzzyClass is the best match class of q in t and where it starts.
+func fuzzyClass(q, t []rune) (class, at int) {
+	head := func(i int) bool { return i == 0 || !isWordRune(t[i-1]) }
+	n := len(q)
+	for i := 0; i+n <= len(t); i++ {
+		if string(t[i:i+n]) != string(q) {
+			continue
+		}
+		switch {
+		case i == 0:
+			return matchPrefix, 0
+		case head(i):
+			if class < matchWordHead {
+				class, at = matchWordHead, i
+			}
+		case class < matchInside:
+			class, at = matchInside, i
+		}
 	}
-	// A match spread over the whole text is a weak one.
-	score -= (lastHit - first + 1 - len(q)) / 3
-	return max(1, score), true
+	if class > 0 {
+		return class, at
+	}
+	if start, ok := piecesFrom(q, t, 0, head); ok {
+		return matchPieces, start
+	}
+	return 0, 0
+}
+
+// piecesFrom matches q as consecutive pieces of t, each piece beginning at a
+// word start and continuing letter by letter, searching from position from.
+// It returns where the first piece begins.
+func piecesFrom(q, t []rune, from int, head func(int) bool) (int, bool) {
+	if len(q) == 0 {
+		return from, true
+	}
+	for i := from; i < len(t); i++ {
+		if !head(i) || t[i] != q[0] {
+			continue
+		}
+		// Take the longest run that agrees, then try shorter ones, so that
+		// "ups" can split as "up" + "s" when "ups" does not run on.
+		run := 0
+		for run < len(q) && i+run < len(t) && t[i+run] == q[run] {
+			run++
+		}
+		for k := run; k >= 1; k-- {
+			if _, ok := piecesFrom(q[k:], t, i+k, head); ok {
+				return i, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // palIsRef says whether the palette input names one object to open. Paths
@@ -198,12 +240,12 @@ func (m Model) palActions() []palItem {
 			run: func(m Model) (Model, tea.Cmd) { m.go_(ScreenSettings); m.search.Blur(); return m, m.enterSettings() }},
 		{id: "act:channel", title: fmt.Sprintf(m.lang.t("pal.channel"), next), keywords: "kanal channel update stable dev", hint: "ctx config set channel " + next,
 			run: func(m Model) (Model, tea.Cmd) { return m.palSetChannel(next) }},
-		{id: "act:doctor", title: m.lang.t("pal.doctor"), keywords: "doctor harness prüfen check", hint: "ctx doctor",
+		{id: "act:doctor", title: m.lang.t("pal.doctor"), keywords: "doctor doktor harness prüfen check", hint: "ctx doctor",
 			run: func(m Model) (Model, tea.Cmd) {
 				m, cmd := m.toSettingsRow("harness")
 				return m, tea.Batch(cmd, m.runDoctor(false))
 			}},
-		{id: "act:fix", title: m.lang.t("pal.fix"), keywords: "doctor fix reparieren repair harness", hint: "ctx doctor --fix",
+		{id: "act:fix", title: m.lang.t("pal.fix"), keywords: "doctor doktor fix reparieren repair harness", hint: "ctx doctor --fix",
 			run: func(m Model) (Model, tea.Cmd) {
 				m, cmd := m.toSettingsRow("harness")
 				return m, tea.Batch(cmd, m.runDoctor(true))
@@ -296,21 +338,25 @@ func (m Model) palVisible() []palItem {
 		if !ok {
 			continue
 		}
-		it.score = s + 3*recentRank[it.id]
+		it.score = s + 3*recentRank[it.id] // a small nudge, never a class jump
 		out = append(out, it)
 	}
-	// Weak hits next to a clear one are noise.
-	best := 0
+	// A clear hit (prefix or word start) pushes the piecewise ones out.
+	clear := false
 	for _, it := range out {
-		best = max(best, it.score)
-	}
-	kept := out[:0]
-	for _, it := range out {
-		if it.group == palSearch || it.score*4 >= best {
-			kept = append(kept, it)
+		if it.group != palSearch && it.score >= matchWordHead*1000-400 {
+			clear = true
 		}
 	}
-	out = kept
+	if clear {
+		kept := out[:0]
+		for _, it := range out {
+			if it.group == palSearch || it.score >= matchInside*1000-400 {
+				kept = append(kept, it)
+			}
+		}
+		out = kept
+	}
 	// Groups come in the order of their best hit; the search stays last.
 	groupBest := map[palGroup]int{}
 	for _, it := range out {

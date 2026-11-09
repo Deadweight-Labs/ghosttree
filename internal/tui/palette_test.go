@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -30,20 +31,78 @@ func palTitles(m Model) []string {
 	return out
 }
 
-func TestFuzzyMatchesInOrderAndRanksWordStarts(t *testing.T) {
-	if _, ok := fuzzy("einst", "Einstellungen"); !ok {
-		t.Fatal("prefix")
+func TestFuzzyCountsOnlyWordStartsAndRuns(t *testing.T) {
+	for _, tc := range []struct {
+		query, text string
+		ok          bool
+	}{
+		{"einst", "Einstellungen", true},                // prefix
+		{"kanal", "Update-Kanal auf dev stellen", true}, // word start
+		{"lungen", "Einstellungen", true},               // a run inside a word
+		{"ucs", "Update channel set", true},             // pieces at word starts
+		{"upch", "Update channel", true},                // runs at word starts
+		{"des", "Harnesses prüfen doctor", false},       // scattered letters
+		{"des", "abmelden logout sign out", false},      // scattered letters
+		{"ezt", "Einstellungen", false},
+	} {
+		if _, ok := fuzzy(tc.query, tc.text); ok != tc.ok {
+			t.Errorf("fuzzy(%q, %q) ok=%v, want %v", tc.query, tc.text, ok, tc.ok)
+		}
 	}
-	if _, ok := fuzzy("ezt", "Einstellungen"); ok {
-		t.Fatal("out of order matched")
-	}
-	start, _ := fuzzy("col", "Collector neu starten")
-	middle, _ := fuzzy("col", "Protokoll lesen")
-	if start <= middle {
-		t.Fatalf("word start %d should beat middle %d", start, middle)
+	prefix, _ := fuzzy("col", "Collector neu starten")
+	head, _ := fuzzy("col", "Restart collector")
+	inside, _ := fuzzy("col", "Protocol")
+	if !(prefix > head && head > inside) {
+		t.Fatalf("prefix %d > word start %d > inside %d", prefix, head, inside)
 	}
 	if s, ok := fuzzy("", "x"); !ok || s <= 0 {
 		t.Fatal("empty query matches everything")
+	}
+}
+
+func TestPaletteHitsForDesDokLog(t *testing.T) {
+	m := openPal(t, newFake())
+	m = typeText(m, "des")
+	got := palTitles(m)
+	for _, bad := range []string{"Harnesses prüfen", "Harnesses reparieren", "Abmelden"} {
+		for _, g := range got {
+			if g == bad {
+				t.Errorf("\"des\" hits %q by scattered letters: %v", bad, got)
+			}
+		}
+	}
+	if len(got) == 0 || got[0] != "Projekt deadweight-labs/design-system" {
+		t.Fatalf("\"des\": %v", got)
+	}
+
+	m = openPal(t, newFake())
+	m = typeText(m, "dok")
+	if got := palTitles(m); len(got) < 2 || got[0] != "Harnesses prüfen" || got[1] != "Harnesses reparieren" {
+		t.Fatalf("\"dok\": %v", got)
+	}
+
+	m = openPal(t, newFake())
+	m = typeText(m, "log")
+	got = palTitles(m)
+	if len(got) == 0 || got[0] != "Abmelden" {
+		t.Fatalf("\"log\": %v", got)
+	}
+	for _, g := range got {
+		if g == "Harnesses prüfen" || g == "Projekte anzeigen" {
+			t.Errorf("\"log\" also hits %q: %v", g, got)
+		}
+	}
+}
+
+func TestEveryActionTitleStartsUpperCase(t *testing.T) {
+	m := openPal(t, newFake().inFolder("unknown"))
+	for _, it := range m.palAll("") {
+		if it.group != palAction {
+			continue
+		}
+		if r := []rune(it.title)[0]; r != unicode.ToUpper(r) {
+			t.Errorf("action %q starts lower case", it.title)
+		}
 	}
 }
 
