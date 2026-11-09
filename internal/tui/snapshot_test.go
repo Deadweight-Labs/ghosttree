@@ -52,6 +52,19 @@ func TestWriteSnapshots(t *testing.T) {
 		}
 	}
 	for _, bg := range backgrounds {
+		f := newFake().inFolder("unknown")
+		m := ready(f, Options{}, 104, 36, bg.msg)
+		write("noproject-"+bg.name, m.View().Content)
+		m = drive(m, key("enter"))
+		write("claim-"+bg.name, m.View().Content)
+		f = newFake().inFolder("nogit")
+		m = ready(f, Options{}, 104, 36, bg.msg)
+		write("nogit-"+bg.name, m.View().Content)
+		m.moveButton(1)
+		m = drive(m, key("enter"))
+		write("projects-"+bg.name, m.View().Content)
+	}
+	for _, bg := range backgrounds {
 		f := newFake()
 		m := ready(f, Options{}, 104, 36, bg.msg)
 		m = drive(m, key("ctrl+s"))

@@ -155,7 +155,7 @@ func (m Model) listBlock(st listState, cursor, rows, width int, kind string, sec
 		b.add("  " + m.th.Subtle.Render(m.lang.t("loading")))
 		return b
 	case st.err != nil:
-		b.add("  " + m.th.Caution.Render(errText(st.err)))
+		b.add("  " + m.th.Caution.Render(m.problemText(st.err)))
 		return b
 	case len(st.items) == 0:
 		b.add("  " + m.th.Subtle.Render(m.lang.t("nothing")))
@@ -205,8 +205,10 @@ func (m Model) homeCentered() block {
 	width := m.contentWidth()
 	lg := m.logo.View()
 	logoH := lipgloss.Height(lg)
-	listRows := max(3, m.h-logoH-14)
-	showLogo := m.h >= logoH+16
+	panel := m.projectPanel(width)
+	extra := len(panel.lines)
+	listRows := max(3, m.h-logoH-14-extra)
+	showLogo := m.h >= logoH+16+extra
 	if showLogo {
 		b.blank(1)
 		var head block
@@ -228,10 +230,11 @@ func (m Model) homeCentered() block {
 	body.add(m.search.View())
 	body.add(m.th.Rule.Render(strings.Repeat("─", width)))
 	body.blank(1)
+	body.append(panel.indent(2))
 	body.append(m.tabs().indent(2))
 	body.blank(1)
 	if !showLogo {
-		listRows = max(3, m.h-12)
+		listRows = max(3, m.h-12-extra)
 	}
 	body.append(m.listBlock(m.lists[m.section], m.cursor, listRows, width, "item", m.section))
 	b.append(body.indent(max(2, (m.w-width)/2)))
@@ -268,7 +271,12 @@ func (m Model) homeSplit() block {
 	right.blank(1)
 	right.add(m.search.View())
 	right.add(m.th.Rule.Render(strings.Repeat("─", rightW)))
-	per := max(2, (m.h-10)/3-2)
+	panel := m.projectPanel(rightW)
+	if len(panel.lines) > 0 {
+		right.blank(1)
+		right.append(panel)
+	}
+	per := max(2, (m.h-10-len(panel.lines))/3-2)
 	for i := 0; i < listCount; i++ {
 		right.blank(1)
 		label := m.lang.t(sectionKeys[i])
@@ -336,6 +344,7 @@ func (m Model) homeHeader() block {
 	var body block
 	body.add(m.search.View())
 	body.blank(1)
+	body.append(m.projectPanel(width).indent(2))
 	body.append(m.tabs().indent(2))
 	body.add(m.th.Rule.Render(strings.Repeat("─", width)))
 	body.append(m.listBlock(m.lists[m.section], m.cursor, max(3, m.h-len(b.lines)-9), width, "item", m.section))
@@ -374,7 +383,7 @@ func (m Model) viewCard() block {
 	case m.cardErr != nil:
 		b.add("  " + m.th.Ref.Render(links.Clean(c.Ref, 40)))
 		b.blank(1)
-		for _, l := range strings.Split(lipgloss.Wrap(errText(m.cardErr), m.contentWidth(), " "), "\n") {
+		for _, l := range strings.Split(lipgloss.Wrap(m.problemText(m.cardErr), m.contentWidth(), " "), "\n") {
 			b.add("  " + m.th.Caution.Render(l))
 		}
 		return m.page(b, m.keys("esc", m.lang.t("key.back")))

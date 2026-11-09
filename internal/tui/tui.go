@@ -25,6 +25,16 @@ const (
 	ScreenCard
 	ScreenSettings
 	ScreenLogin
+	ScreenClaim
+	ScreenDirs
+	ScreenProjects
+)
+
+// Focus zones of the home screen: the lists, or the buttons of the "no
+// project" state.
+const (
+	zoneList = iota
+	zoneButtons
 )
 
 // Options set up one run.
@@ -95,6 +105,13 @@ type Model struct {
 	settings settingsState
 	login    loginState
 
+	proj     projectState
+	zone     int
+	button   int
+	claim    claimState
+	dirs     dirsState
+	projects projectsState
+
 	flash    string
 	flashBad bool
 	flashID  int
@@ -146,6 +163,10 @@ func New(be Backend, opt Options) Model {
 			m.lists[i].loading = true
 		}
 	}
+	if m.screen == ScreenHome && m.local.Configured && m.local.Project == "" {
+		m.zone = zoneButtons
+		m.moveButton(0)
+	}
 	if m.screen == ScreenLogin && opt.LoginDirect {
 		m.initCmd = m.startLogin()
 	}
@@ -169,6 +190,7 @@ func (m *Model) applyInputStyles() {
 	st.Cursor.Blink = false
 	m.search.SetStyles(st)
 	m.login.applyStyles(st)
+	m.dirs.input.SetStyles(st)
 }
 
 // Init asks for the background colour, starts the logo and the first loads.
@@ -259,9 +281,18 @@ func (m *Model) loadHome() []tea.Cmd {
 	if !m.local.Configured {
 		return cmds
 	}
+	if c := m.checkProject(); c != nil {
+		cmds = append(cmds, c)
+	}
 	loaders := [listCount]func(context.Context) ([]Item, error){m.be.MyTasks, m.be.OpenRequests, m.be.Messages}
 	for i := range loaders {
 		i, f := i, loaders[i]
+		if i == listRequests && m.local.Project == "" {
+			// Without a project there are no "open requests of this
+			// repository"; asking anyway would list every project.
+			m.lists[i] = listState{err: &ProblemError{Kind: ProblemNoProject}, loaded: true}
+			continue
+		}
 		m.lists[i].loading = true
 		cmds = append(cmds, call(quickTimeout, func(ctx context.Context) tea.Msg {
 			items, err := f(ctx)
@@ -269,6 +300,17 @@ func (m *Model) loadHome() []tea.Cmd {
 		}))
 	}
 	return cmds
+}
+
+// reloadHome forgets what was known about the folder's project and loads the
+// home again, after a folder change or a new project.
+func (m *Model) reloadHome() []tea.Cmd {
+	m.proj = projectState{}
+	if m.local.Project == "" && m.local.Configured {
+		m.zone, m.button = zoneButtons, 0
+		m.moveButton(0)
+	}
+	return m.loadHome()
 }
 
 func (m *Model) setFlash(s string, bad bool) tea.Cmd {
@@ -362,6 +404,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case listMsg:
 		m.lists[msg.which] = listState{items: msg.items, err: msg.err, loaded: true}
 		return m, nil
+	case projectCheckMsg:
+		if msg.project != m.local.Project {
+			return m, nil
+		}
+		m.proj = projectState{checked: true, known: msg.known, err: msg.err}
+		if m.noProject() && m.screen == ScreenHome && m.zone == zoneList && m.search.Value() == "" {
+			m.zone, m.button = zoneButtons, 0
+			m.moveButton(0)
+		}
+		return m, nil
+	case claimPlanMsg, claimDoneMsg:
+		return m.updateClaim(msg)
+	case recentDirsMsg:
+		return m.updateDirs(msg)
+	case projectsMsg, previewMsg:
+		return m.updateProjects(msg)
 	case cardMsg:
 		m.cardLoading = false
 		m.card, m.cardErr = msg.card.Sanitized(), msg.err
@@ -385,6 +443,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == ScreenLogin {
 			return m.updateLogin(msg)
 		}
+		if m.screen == ScreenDirs {
+			return m.updateDirs(msg)
+		}
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			m.quitting = true
@@ -406,6 +467,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.keySettings(msg)
 		case ScreenLogin:
 			return m.updateLogin(msg)
+		case ScreenClaim:
+			return m.updateClaim(msg)
+		case ScreenDirs:
+			return m.updateDirs(msg)
+		case ScreenProjects:
+			return m.updateProjects(msg)
 		}
 	}
 	switch m.screen {
@@ -466,6 +533,36 @@ func (m *Model) runSearch(line string) tea.Cmd {
 func (m Model) currentList() []Item { return m.lists[m.section].items }
 
 func (m Model) keyHome(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	empty := strings.TrimSpace(m.search.Value()) == ""
+	if m.zone == zoneButtons && m.noProject() {
+		switch msg.String() {
+		case "left":
+			if empty {
+				m.moveButton(-1)
+				return m, nil
+			}
+		case "right":
+			if empty {
+				m.moveButton(1)
+				return m, nil
+			}
+		case "enter":
+			if empty {
+				return m, m.activateButton(m.button)
+			}
+		case "down", "ctrl+n":
+			m.zone = zoneList
+			return m, nil
+		case "tab":
+			m.zone, m.section, m.cursor = zoneList, 0, 0
+			return m, nil
+		case "shift+tab":
+			m.zone, m.section, m.cursor = zoneList, listCount-1, 0
+			return m, nil
+		}
+	} else if m.zone == zoneButtons {
+		m.zone = zoneList
+	}
 	switch msg.String() {
 	case "esc":
 		if m.search.Value() != "" {
@@ -487,14 +584,29 @@ func (m Model) keyHome(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "tab":
+		if m.section == listCount-1 && m.noProject() {
+			m.zone = zoneButtons
+			m.moveButton(0)
+			return m, nil
+		}
 		m.section = (m.section + 1) % listCount
 		m.cursor = 0
 		return m, nil
 	case "shift+tab":
+		if m.section == 0 && m.noProject() {
+			m.zone = zoneButtons
+			m.moveButton(0)
+			return m, nil
+		}
 		m.section = (m.section + listCount - 1) % listCount
 		m.cursor = 0
 		return m, nil
 	case "up", "ctrl+p":
+		if m.cursor == 0 && m.noProject() {
+			m.zone = zoneButtons
+			m.moveButton(0)
+			return m, nil
+		}
 		return m.move(-1)
 	case "down", "ctrl+n":
 		return m.move(1)
@@ -604,6 +716,16 @@ func (m Model) click(a action) (tea.Model, tea.Cmd) {
 		return m, m.goBack()
 	case "login.open":
 		return m, m.openURL(m.login.start.CompleteURL)
+	case "button":
+		m.zone, m.button = zoneButtons, a.a
+		return m, m.activateButton(a.a)
+	case "dir":
+		if a.a < len(m.dirs.recent.items) {
+			return m.changeDir(m.dirs.recent.items[a.a].Ref)
+		}
+	case "project":
+		m.projects.cursor = a.a
+		return m, m.loadPreview()
 	}
 	return m, nil
 }
@@ -620,6 +742,12 @@ func (m Model) View() tea.View {
 		b = m.viewSettings()
 	case ScreenLogin:
 		b = m.viewLogin()
+	case ScreenClaim:
+		b = m.viewClaim()
+	case ScreenDirs:
+		b = m.viewDirs()
+	case ScreenProjects:
+		b = m.viewProjects()
 	default:
 		b = m.viewHome()
 	}
@@ -658,6 +786,8 @@ func (m Model) title() string {
 		return "ghosttree · " + m.lang.t("settings")
 	case ScreenLogin:
 		return "ghosttree · login"
+	case ScreenProjects:
+		return "ghosttree · " + m.lang.t("projects")
 	}
 	return "ghosttree"
 }
