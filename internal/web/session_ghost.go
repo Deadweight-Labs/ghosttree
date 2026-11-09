@@ -82,7 +82,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 	var items []tlItem
 
 	for _, c := range res.Criteria {
-		if !pa.CanSeeProject(c.Project, store.ResRequest) {
+		if !a.requestReadable(pa, c.RequestID) {
 			continue
 		}
 		issues[c.RequestID] = true
@@ -127,7 +127,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 	var tasks int
 	for _, t := range res.Tasks {
 		task := humantask.Task{ID: t.ID, Project: t.Project, RequestID: t.RequestID, AssigneeAccount: t.AssigneeAccount, CreatedByAccount: t.CreatedByAccount}
-		if !pa.CanSeeTask(task) || !a.taskRequestVisible(pa, t.Project, t.RequestID, t.AssigneeAccount, cache) {
+		if !pa.CanSeeTaskVia(task, cache) {
 			continue
 		}
 		tasks++
@@ -153,7 +153,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 	}
 
 	for _, r := range res.Requests {
-		if !pa.CanSeeProject(r.Project, store.ResRequest) {
+		if !a.requestReadable(pa, r.ID) {
 			continue
 		}
 		issues[r.ID] = true
@@ -234,21 +234,6 @@ func (a *app) filesEntry(l lang, entry func(at, icon, tone string, head, body te
 		b.WriteString(`</details>`)
 	}
 	return entry(files[0].At, "file", "", template.HTML(html.EscapeString(l.msg("sessions.ev.files", len(files)))), template.HTML(b.String()))
-}
-
-// taskRequestVisible is the rule canSeeTaskVia keeps in the store: a member does
-// not get the title of a task whose issue is hidden from them; a task assigned to
-// the viewer stays visible.
-func (a *app) taskRequestVisible(pa *store.ProjectAccess, project string, requestID, assignee int64, cache map[int64]bool) bool {
-	if v := pa.Viewer(); v.Account != 0 && v.Account == assignee {
-		return true
-	}
-	if ok, seen := cache[requestID]; seen {
-		return ok
-	}
-	ok := pa.CanSeeProject(project, store.ResRequest)
-	cache[requestID] = ok
-	return ok
 }
 
 // viewParam names the two views of the page: the ghosttree view and the raw log.

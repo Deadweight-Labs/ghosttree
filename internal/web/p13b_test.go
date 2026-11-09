@@ -191,3 +191,34 @@ func TestTheFormOfANewIssueIsFilledFromThePainOrTheConceptItComesFrom(t *testing
 		}
 	}
 }
+
+// Knowledge that a session wrote stays out of the view of anyone who may not read
+// it: held-back knowledge distilled from the private session of another account
+// is not shown, ordinary knowledge is.
+func TestTheGhosttreeViewLeavesOutHeldBackKnowledge(t *testing.T) {
+	e := seedSessions(t)
+	sid := e.id["alice-private"]
+	stamp := func(id int64) {
+		if err := e.St.RecordActor(actordomain.Knowledge, id, actordomain.Actor{Kind: actordomain.Agent, Harness: "claude-code", SessionID: sid, AccountID: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	held, err := e.St.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "Held back entry", Body: "b", Scope: scope.Axes{Project: shellProject}, Person: "", Origin: "distilled", Confidence: "quarantined",
+		SessionRef: "session:" + itoa(e.id["anna-private"])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown, err := e.St.InsertKnowledge(store.Knowledge{Type: "note", Title: "Plain entry", Body: "b", Scope: scope.Axes{Project: shellProject}, Person: "alice", Confidence: "trusted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp(held)
+	stamp(shown)
+	_, page := e.get(t, e.Owner, "/ui/sessions/"+e.pid["alice-private"])
+	if strings.Contains(page, "Held back entry") {
+		t.Error("the view shows knowledge held back from the viewer")
+	}
+	if !strings.Contains(page, "Plain entry") {
+		t.Error("the view lacks the ordinary entry")
+	}
+}

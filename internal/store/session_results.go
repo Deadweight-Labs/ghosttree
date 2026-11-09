@@ -17,7 +17,8 @@ import (
 // external id for an entry written before the collector uploaded the session
 // (the same rule as resolveActorSessions, one account only). Nothing is filtered
 // for the viewer here; each row carries what the access check needs (project,
-// scope, assignee).
+// scope, origin and session of knowledge, assignee), and the web layer asks the
+// rules of the store, not its own.
 
 // SessionCriterion is a requirement the session closed (met or waived).
 type SessionCriterion struct {
@@ -120,7 +121,7 @@ func (s *Store) SessionResults(sess Session) (SessionResults, error) {
 		return out, err
 	}
 
-	rows, err = s.db.QueryContext(s.ctx(), `SELECT ea.at, k.id, k.type, k.title, k.project, k.branch, k.machine, k.confidence, k.status, k.person
+	rows, err = s.db.QueryContext(s.ctx(), `SELECT ea.at, k.id, k.type, k.title, k.project, k.branch, k.machine, k.confidence, k.status, k.person, k.origin, k.session_ref
 		FROM entry_actors ea JOIN knowledge k ON k.id=ea.entry_id
 		WHERE ea.kind='knowledge' AND `+cond+` ORDER BY ea.at DESC, k.id DESC`, args...)
 	if err != nil {
@@ -128,7 +129,7 @@ func (s *Store) SessionResults(sess Session) (SessionResults, error) {
 	}
 	for rows.Next() {
 		var k SessionKnowledgeEntry
-		if err := rows.Scan(&k.At, &k.ID, &k.Type, &k.Title, &k.Scope.Project, &k.Scope.Branch, &k.Scope.Machine, &k.Confidence, &k.Status, &k.Person); err != nil {
+		if err := rows.Scan(&k.At, &k.ID, &k.Type, &k.Title, &k.Scope.Project, &k.Scope.Branch, &k.Scope.Machine, &k.Confidence, &k.Status, &k.Person, &k.Origin, &k.SessionRef); err != nil {
 			rows.Close()
 			return out, err
 		}
