@@ -65,7 +65,7 @@ const (
 
 // MaxCommentChars begrenzt einen Kommentar, in Zeichen und nicht in Bytes: so zählt
 // auch das Feld der Oberfläche, und ein deutscher Text mit Umlauten hat dort dieselbe
-// Länge wie ohne. Die Grenze passt zu den 64 KB einer Raum-Nachricht.
+// Länge wie ohne. Die Grenze der Raum-Nachrichten (CoordMaxBody) zählt Bytes und ist davon unabhängig.
 const MaxCommentChars = 64_000
 
 // Comment ist ein Kommentar, wie ein Betrachter ihn sieht. Ein gelöschter

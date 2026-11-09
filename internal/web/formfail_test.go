@@ -76,15 +76,16 @@ func TestAFormFromAnotherOriginIsRefusedPlainAndWritesNoFieldsBack(t *testing.T)
 	if foreign.StatusCode != http.StatusForbidden || !strings.HasPrefix(foreign.Header.Get("Content-Type"), "text/plain") || len(foreign.Cookies()) != 0 {
 		t.Errorf("a form from another origin = %d %q, cookies %v: want the plain refusal", foreign.StatusCode, foreign.Header.Get("Content-Type"), foreign.Cookies())
 	}
-	// The same page with an old token (the page was open too long) comes back with its text.
+	// The same page with an old token (the page was open too long) comes back with the note
+	// but not with its text: a refused token keeps nothing in the server's memory.
 	own := post(e.Base)
 	own.Body.Close()
 	if own.StatusCode != http.StatusSeeOther || own.Header.Get("Location") != "/ui/inbox" {
 		t.Fatalf("a stale form of this site = %d %q", own.StatusCode, own.Header.Get("Location"))
 	}
 	_, page := followRefusal(t, e.Owner, e.Base, own)
-	if !strings.Contains(page, "hello there") || !strings.Contains(page, msg("err.form.expired")) {
-		t.Errorf("the page does not carry the note and the text: %.200s", page)
+	if strings.Contains(page, "hello there") || !strings.Contains(page, msg("err.form.expired")) {
+		t.Errorf("the page does not carry the note alone: %.200s", page)
 	}
 }
 

@@ -165,9 +165,10 @@ func (a *app) csrfGate(next http.Handler, multipart bool) http.Handler {
 			} else {
 				err = r.ParseForm()
 			}
-			// What was typed is only kept for a form of this site: one sent from another
-			// origin gets no page of ours with its fields in them.
-			if a.sameOrigin(r) {
+			tokenOK := err == nil && subtle.ConstantTimeCompare([]byte(r.FormValue("csrf_token")), []byte(csrfOf(r))) == 1
+			// What was typed is only kept for a form of this site with a valid token: a
+			// refused token (or a body that did not parse) keeps nothing in the server's memory.
+			if tokenOK && a.sameOrigin(r) {
 				rememberForm(r)
 			}
 			var tooBig *http.MaxBytesError
@@ -175,9 +176,7 @@ func (a *app) csrfGate(next http.Handler, multipart bool) http.Handler {
 				a.formTooLarge(w, r)
 				return
 			}
-			if err != nil ||
-				subtle.ConstantTimeCompare([]byte(r.FormValue("csrf_token")), []byte(csrfOf(r))) != 1 ||
-				!a.sameOrigin(r) {
+			if !tokenOK || !a.sameOrigin(r) {
 				w.Header().Set(rejectHeader, "csrf")
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return

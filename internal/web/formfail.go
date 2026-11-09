@@ -29,13 +29,19 @@ const (
 	// (ein Emoji als %XX%XX%XX%XX), und maxLongText Zeichen sind das längste Feld.
 	maxFormBody = 1 << 20
 	// maxLongText ist die längste Beschreibung oder der längste Kommentar, in Zeichen,
-	// so wie das Feld (maxlength) sie zählt. Dazu passt die Grenze der Raum-Nachrichten
-	// von 64 KB.
+	// so wie das Feld (maxlength) sie zählt. Die Grenze der Raum-Nachrichten
+	// (store.CoordMaxBody) zählt Bytes und ist davon unabhängig.
 	maxLongText = 64_000
 
-	flashCookie     = "gt_flash"
-	flashTTL        = 10 * time.Minute
+	flashCookie = "gt_flash"
+	flashTTL    = 10 * time.Minute
+	// flashMaxEntries und flashPerPerson begrenzen den Arbeitsspeicher, den abgelehnte
+	// Eingaben belegen: höchstens so viele Merkzettel insgesamt und je Person. Ein
+	// Merkzettel hält höchstens flashMaxBytes an Feldnamen und Werten; was darüber
+	// liegt, wird nicht gemerkt (die Meldung kommt trotzdem).
 	flashMaxEntries = 128
+	flashPerPerson  = 4
+	flashMaxBytes   = 256 << 10
 	backField       = "gt_back"
 )
 
@@ -95,14 +101,50 @@ func rememberForm(r *http.Request) {
 	}
 }
 
+// secretNameParts sind Teilwörter (ohne Beachtung der Groß-/Kleinschreibung) von
+// Feldnamen, deren Wert nie auf einer Seite wiederkommt: Kennwörter, Token, Codes,
+// Schlüssel und alles, was einmalig bestätigt.
+var secretNameParts = []string{"password", "token", "code", "user_code", "confirm_code", "secret", "key", "otp", "pairing", "nonce"}
+
+// notSecretNames sind Felder, die ein Teilwort aus secretNameParts im Namen tragen,
+// aber nichts Geheimes enthalten (die Stichwörter eines Ablaufs, die Seite im Code-Baum).
+var notSecretNames = []string{"keywords", "codepage"}
+
+func secretName(name string) bool {
+	low := strings.ToLower(name)
+	if slices.Contains(notSecretNames, low) {
+		return false
+	}
+	for _, part := range secretNameParts {
+		if strings.Contains(low, part) {
+			return true
+		}
+	}
+	return false
+}
+
+// formSize ist die Summe der Bytes aller Feldnamen und Werte.
+func formSize(v url.Values) int {
+	n := 0
+	for name, vals := range v {
+		n += len(name)
+		for _, s := range vals {
+			n += len(s)
+		}
+	}
+	return n
+}
+
 // keptFields sind die Eingaben, die nach einem Fehler wiederkommen: alles außer dem
-// Token, der Rücksprungadresse und Feldern, die nach einem Kennwort oder Token
-// heißen.
+// Token, der Rücksprungadresse und Feldern, die nach einem Geheimnis heißen
+// (secretNameParts). Bei mehr als flashMaxBytes insgesamt kommt nichts wieder.
 func keptFields(v url.Values) url.Values {
 	out := url.Values{}
+	if formSize(v) > flashMaxBytes {
+		return out
+	}
 	for name, vals := range v {
-		low := strings.ToLower(name)
-		if name == "csrf_token" || name == backField || strings.Contains(low, "password") || strings.Contains(low, "token") {
+		if name == "csrf_token" || name == backField || secretName(name) {
 			continue
 		}
 		out[name] = slices.Clone(vals)
@@ -139,32 +181,68 @@ func (f *flashes) put(e *flashEntry) string {
 	if f.m == nil {
 		f.m = map[string]*flashEntry{}
 	}
-	for k, v := range f.m {
-		if now.After(v.expires) {
-			delete(f.m, k)
-		}
+	f.sweep(now)
+	// Wer zu viel ablehnen lässt, verdrängt zuerst die eigenen ältesten Merkzettel,
+	// nie die einer anderen Person.
+	for f.count(e.person) >= flashPerPerson {
+		delete(f.m, f.oldest(e.person))
 	}
 	for len(f.m) >= flashMaxEntries {
-		oldest := ""
-		for k, v := range f.m {
-			if oldest == "" || v.expires.Before(f.m[oldest].expires) {
-				oldest = k
-			}
+		if f.count(e.person) > 0 {
+			delete(f.m, f.oldest(e.person))
+		} else {
+			delete(f.m, f.oldest(""))
 		}
-		delete(f.m, oldest)
 	}
 	f.m[id] = e
 	return id
 }
 
+// sweep wirft abgelaufene Merkzettel weg. Der Aufrufer hält f.mu.
+func (f *flashes) sweep(now time.Time) {
+	for k, v := range f.m {
+		if now.After(v.expires) {
+			delete(f.m, k)
+		}
+	}
+}
+
+// count zählt die Merkzettel einer Person. Der Aufrufer hält f.mu.
+func (f *flashes) count(person string) int {
+	n := 0
+	for _, v := range f.m {
+		if v.person == person {
+			n++
+		}
+	}
+	return n
+}
+
+// oldest ist der Schlüssel des ältesten Merkzettels der Person, bei person == "" des
+// ältesten überhaupt. Der Aufrufer hält f.mu.
+func (f *flashes) oldest(person string) string {
+	oldest := ""
+	for k, v := range f.m {
+		if person != "" && v.person != person {
+			continue
+		}
+		if oldest == "" || v.expires.Before(f.m[oldest].expires) {
+			oldest = k
+		}
+	}
+	return oldest
+}
+
 func (f *flashes) take(id, person string) *flashEntry {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	now := time.Now()
+	f.sweep(now)
 	e, ok := f.m[id]
 	if !ok {
 		return nil
 	}
-	if time.Now().After(e.expires) || e.person != person {
+	if now.After(e.expires) || e.person != person {
 		if e.person == person {
 			delete(f.m, id)
 		}
@@ -192,6 +270,8 @@ func (a *app) takeFlash(w http.ResponseWriter, r *http.Request) *flashNote {
 		return nil
 	}
 	http.SetCookie(w, a.flashCookieFor(r, "", -1))
+	// Die Seite trägt die Eingaben einer abgelehnten Anfrage: kein Cache behält sie.
+	w.Header().Set("Cache-Control", "no-store")
 	e := a.flashBox().take(c.Value, browserPrincipal(r).ID)
 	if e == nil {
 		return nil
@@ -231,11 +311,13 @@ func (a *app) failFormTo(w http.ResponseWriter, r *http.Request, back string, st
 // failFormKeeping is failFormTo that leaves one field out of what comes back: the text
 // that was refused because it looks like a secret is never written onto a page again.
 func (a *app) failFormKeeping(w http.ResponseWriter, r *http.Request, back string, status int, text, field, drop string) {
+	// Mit einem Merker (csrfGate) kommt nur wieder, was er nach geprüftem Token
+	// behielt: nach einem CSRF-Fehler ist er leer. Nur ohne Merker (eine Route außerhalb
+	// der angemeldeten Seiten) gilt der gelesene Körper.
 	var values url.Values
 	if k, ok := r.Context().Value(formKeepKey{}).(*formKeep); ok && k != nil {
 		values = k.values
-	}
-	if values == nil {
+	} else {
 		values = r.PostForm
 	}
 	kept := keptFields(values)
@@ -303,6 +385,9 @@ func formFailText(l lang, code int, body, reject string) string {
 	switch {
 	case reject == "csrf":
 		return l.msg("err.form.expired")
+	case code == http.StatusRequestEntityTooLarge && body == strings.ToLower(l.msg("coord.body_too_long", store.CoordMaxBody>>10)):
+		// Die Grenze der Raum-Nachrichten zählt Bytes, nicht Zeichen: der Handler nennt sie selbst.
+		return l.msg("coord.body_too_long", store.CoordMaxBody>>10)
 	case code == http.StatusRequestEntityTooLarge:
 		return l.msg("err.form.toolarge", l.number(maxLongText))
 	case code == http.StatusForbidden:
