@@ -295,7 +295,7 @@
   & .cx textarea::placeholder { color: var(--fg-subtle); }
   /* The preview is the text field in reading form: same frame, radius, padding and
      minimum height (the script sets the exact height when it switches), so nothing jumps. */
-  & .cx-pv { min-height: 96px; padding: 8px 12px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; }
+  & .cx-pv { box-sizing: border-box; overflow: auto; min-height: 96px; padding: 8px 12px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; }
   /* The status row: every state the object can be in is one entry, the one it is in now carries a dot, the
      one that is chosen is filled. The words written above are the comment on the change. */
   & .cx-m { padding: 12px 12px 0; }

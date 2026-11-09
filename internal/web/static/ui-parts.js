@@ -137,7 +137,8 @@
       const pv = $(".cx-pv", cx);
       const w = $(".cx-w", cx);
       if (preview) {
-        if (!w.hidden) pv.style.minHeight = w.offsetHeight + "px";
+        // The preview has exactly the height of the field it replaces and scrolls inside it, so the box never jumps.
+        if (!w.hidden) pv.style.height = w.offsetHeight + "px";
         pv.textContent = "";
         if (window.GTMarkdown) {
           pv.appendChild(window.GTMarkdown.render(ta.value, { empty: pv.dataset.empty, done: pv.dataset.done, open: pv.dataset.open }));

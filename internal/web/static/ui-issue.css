@@ -68,7 +68,8 @@
   :is(.g2.id) .cbox .reqs .rh { flex-wrap: wrap; }
   :is(.g2.id) .cbox .reqs .rh .prog.wide .bar { width: 96px; }
   /* On the phone the action goes under the text of its requirement, at the left edge of it */
-  :is(.g2.id) .cbox .reqs .crit .resolve { grid-column: 3 / -1; grid-row: 2; justify-self: start; margin-left: -13px; }
-  :is(.g2.id) .cbox .reqs .crit .resolve-form { left: 13px; right: auto; }
+  :is(.g2.id) .cbox .reqs .crit .resolve { grid-column: 3 / -1; grid-row: 2; justify-self: stretch; margin: 0 0 0 -13px; }
+  :is(.g2.id) .cbox .reqs .crit .resolve-form { position: static; width: auto; max-width: none; margin: 4px 0 0 13px; box-shadow: none; }
+  :is(.g2.id) .cbox .reqs .crit .resolve-form .gfield { padding: 0 8px; font-size: 13px; }
   :is(.g2.id) .side .sblk:not(.live-side) { grid-template-columns: 108px minmax(0, 1fr); }
 }
