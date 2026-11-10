@@ -122,9 +122,9 @@ func TestDeviceFormBodyIsLimited(t *testing.T) {
 	srv, st, _ := testWeb(t)
 	client := loginInteractive(t, srv, st, "alice")
 	csrf := renderedCSRFToken(t, client, srv.URL+"/ui/device")
-	resp := sameOriginPostForm(t, client, srv.URL+"/ui/device", url.Values{"user_code": {strings.Repeat("A", 100000)}, "csrf_token": {csrf}})
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("oversized form: %d", resp.StatusCode)
+	resp := sameOriginPostForm(t, client, srv.URL+"/ui/device", url.Values{"user_code": {strings.Repeat("A", maxFormBody+1)}, "csrf_token": {csrf}})
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized form: %d, want the page for 413", resp.StatusCode)
 	}
 	resp.Body.Close()
 }

@@ -17,7 +17,7 @@ import (
 const (
 	overviewMaxWaiting = 8
 	tasksShown         = 200
-	taskNoteBytes      = 500
+	taskNoteChars      = 500
 )
 
 var (
@@ -61,25 +61,31 @@ func (a *app) tasksDone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	note := r.FormValue("note")
-	if len(note) > taskNoteBytes {
-		http.Error(w, "invalid input", http.StatusBadRequest)
+	back = a.taskBack(r, ids, q)
+	if tooLong(note, taskNoteChars) {
+		a.tooLongForm(w, r, back, "note", note, taskNoteChars)
 		return
 	}
 	pa := a.access(r)
 	accountID, _ := store.AccountNumericID(browserPrincipal(r).ID)
 	actor := humantask.Actor{AccountID: accountID, Person: personOf(r), Web: interactive(r)}
 	if _, err := pa.MarkTasksDone(ids, note, actor); err != nil {
-		a.taskFail(w, r, q, err)
+		a.taskFail(w, r, back, err)
 		return
 	}
-	// The form on the page of a task leads back to that page.
+	http.Redirect(w, r, back, http.StatusSeeOther)
+}
+
+// taskBack is the page a task form leads back to, on success and on refusal: the page
+// of the task for the form on that page, else the list in the inbox.
+func (a *app) taskBack(r *http.Request, ids []int64, q url.Values) string {
 	if len(ids) == 1 && r.FormValue("back") == "task" {
-		if t, err := a.store.TaskByID(ids[0]); err == nil && t.Project != "" {
-			http.Redirect(w, r, taskHrefOf(t), http.StatusSeeOther)
-			return
+		// Only a task the viewer may read names its repository in an address.
+		if t, err := a.access(r).GetHumanTask(ids[0]); err == nil && t.Project != "" {
+			return taskHrefOf(t)
 		}
 	}
-	http.Redirect(w, r, back+queryOf(q), http.StatusSeeOther)
+	return "/ui/inbox" + queryOf(q)
 }
 
 func queryOf(q url.Values) string {
@@ -89,21 +95,21 @@ func queryOf(q url.Values) string {
 	return "?" + q.Encode()
 }
 
-func (a *app) taskFail(w http.ResponseWriter, r *http.Request, q url.Values, err error) {
+// taskFail goes back to where the form was, with the reason over it and the note
+// still in its field (a secret-like note is the one thing the person has to rewrite).
+func (a *app) taskFail(w http.ResponseWriter, r *http.Request, back string, err error) {
+	l := a.langFor(r)
 	switch {
 	case errors.Is(err, store.ErrAccessForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
 	case errors.Is(err, store.ErrAccessNotFound):
 		http.NotFound(w, r)
 	case requestdomain.Code(err) == "secret_detected":
-		q.Set("fail", "secret")
-		http.Redirect(w, r, "/ui/inbox"+queryOf(q), http.StatusSeeOther)
+		a.failFormKeeping(w, r, back, http.StatusUnprocessableEntity, l.msg(taskFailKey("secret")), "note", "note")
 	case requestdomain.Code(err) == "invalid_transition":
-		q.Set("fail", "changed")
-		http.Redirect(w, r, "/ui/inbox"+queryOf(q), http.StatusSeeOther)
+		a.failFormTo(w, r, back, http.StatusConflict, l.msg(taskFailKey("changed")), "")
 	case requestdomain.Code(err) != "":
-		q.Set("fail", "failed")
-		http.Redirect(w, r, "/ui/inbox"+queryOf(q), http.StatusSeeOther)
+		a.failFormTo(w, r, back, http.StatusUnprocessableEntity, l.msg(taskFailKey("failed")), "")
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
 	default:

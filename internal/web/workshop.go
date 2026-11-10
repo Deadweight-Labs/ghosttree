@@ -273,7 +273,7 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		for n := range wd.Variants {
 			wd.Variants[n].Checked = wd.Variants[n].Label == wd.MyVote
 		}
-		wd.CanAttach = canWork && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
+		wd.CanAttach = canWork && wd.Open && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
 		w.Decisions = append(w.Decisions, wd)
 	}
 	// Die Wege der Phase: Diskussion anstoßen kann, wer mitarbeitet; freigeben und die Freigabe
@@ -393,7 +393,7 @@ func (a *app) workshopDecisionOf(w http.ResponseWriter, r *http.Request) (idea.D
 
 func formLine(r *http.Request, name string, max int) (string, bool) {
 	v := r.FormValue(name)
-	return v, len(v) <= max
+	return v, !tooLong(v, max)
 }
 
 // workshopPhase: POST /ui/ideas/{id}/phase. mode ist discuss (Diskussion beginnen), approve (Konzept
@@ -440,7 +440,7 @@ func (a *app) workshopVote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reason, fits := formLine(r, "reason", maxFieldBytes)
+	reason, fits := formLine(r, "reason", maxFieldChars)
 	if !fits {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
@@ -461,8 +461,8 @@ func (a *app) workshopClose(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reason, fits1 := formLine(r, "reason", maxFieldBytes)
-	answer, fits2 := formLine(r, "answer", maxFieldBytes)
+	reason, fits1 := formLine(r, "reason", maxFieldChars)
+	answer, fits2 := formLine(r, "answer", maxFieldChars)
 	if !fits1 || !fits2 {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
@@ -482,7 +482,7 @@ func (a *app) workshopReopen(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reason, fits := formLine(r, "reason", maxFieldBytes)
+	reason, fits := formLine(r, "reason", maxFieldChars)
 	if !fits {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return

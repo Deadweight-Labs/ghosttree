@@ -77,8 +77,8 @@ func TestTheIdeaButtonIsOnlyForWhoMayWorkOnThePainAndNeedsTheTokenAndATitle(t *t
 		t.Errorf("without a token -> %d, want 403", resp.StatusCode)
 	}
 	// An empty title leads back with the reason and makes nothing.
-	resp = postForm(t, e, e.Member, path, url.Values{"title": {"   "}})
-	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "fail=idea_invalid") {
+	resp = postForm(t, e, asBrowser(e.Member), path, url.Values{"title": {"   "}})
+	if resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "?") {
 		t.Errorf("an empty title -> %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if d, _ := tpOwner(e).PainDetailView(p.Pain.ID); len(d.Motivates) != 0 {

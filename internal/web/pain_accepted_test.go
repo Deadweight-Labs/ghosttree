@@ -30,12 +30,12 @@ func TestAcceptedPainNeedsAReasonAndShowsItInListAndPage(t *testing.T) {
 		}
 	}
 
-	resp := tpPost(t, e, e.Member, path, url.Values{"state": {"accepted"}})
-	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "fail=accepted_reason_required") {
+	resp := tpPost(t, e, asBrowser(e.Member), path, url.Values{"state": {"accepted"}})
+	if resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "?") {
 		t.Fatalf("accepted without a reason = %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	_, failed := fetchPage(t, e.Member, e.Base+"/ui/x/shell/pains/"+strconv.FormatInt(d.Pain.ID, 10)+"?fail=accepted_reason_required")
-	if !strings.Contains(failed, "Say why you live with it.") {
+	_, failed := followRefusal(t, e.Member, e.Base, resp)
+	if !strings.Contains(failed, "Say why you live with it.") || !strings.Contains(failed, `"field":"why"`) {
 		t.Error("the missing reason is not explained on the page")
 	}
 
