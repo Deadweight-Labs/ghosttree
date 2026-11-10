@@ -144,10 +144,12 @@ func TestNewLinesArePackedAndEveryReaderUnpacks(t *testing.T) {
 				t.Fatalf("SessionWindow: %+v, %v", len(w.Chunks), err)
 			}
 			// Der Index wird beim Schreiben aus der ungepackten Zeile gebildet.
-			var tool string
-			if err := db.QueryRow(`SELECT tool_output FROM chunk_index WHERE session_id=? AND seq=2`, id).Scan(&tool); err != nil ||
-				tool != transcript.Fields(transcript.Parse("claude-code", 2, want[2])).ToolOutput {
-				t.Fatalf("index tool_output %q, %v", tool, err)
+			tool := transcript.Fields(transcript.Parse("claude-code", 2, want[2])).ToolOutput
+			word := strings.Fields(tool)[0]
+			var found int
+			if err := db.QueryRow(`SELECT count(*) FROM chunk_fts JOIN chunk_index ci ON ci.chunk_id = chunk_fts.rowid
+				WHERE chunk_fts MATCH ? AND ci.session_id=? AND ci.seq=2`, `tool_output: "`+word+`"`, id).Scan(&found); err != nil || found != 1 {
+				t.Fatalf("index tool_output %q: found %d, %v", word, found, err)
 			}
 			ids := []int64{}
 			rows, _ := db.Query(`SELECT id FROM session_chunks WHERE session_id=? ORDER BY seq`, id)

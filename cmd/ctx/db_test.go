@@ -118,7 +118,7 @@ func TestDBVacuumFTSOptimizeIsReported(t *testing.T) {
 	if code := cmdDB([]string{"vacuum", "--db", path, "--yes", "--fts-optimize"}, &out); code != 0 {
 		t.Fatalf("code %d:\n%s", code, out.String())
 	}
-	for _, want := range []string{"fts        optimize chunks_fts", "optimizing chunks_fts", "optimizing knowledge_fts", "optimized  ", "quick_check: ok"} {
+	for _, want := range []string{"fts        optimize chunk_fts, chunks_fts", "optimizing chunk_fts", "optimizing chunks_fts", "optimizing knowledge_fts", "optimized  ", "quick_check: ok"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}

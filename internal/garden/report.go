@@ -260,17 +260,22 @@ func writeProofs(w io.Writer, res Result) {
 	fmt.Fprintln(w)
 }
 
-// writeGhosts lists the descriptions proposed (job 1), whole: they are the text a
-// person is asked to read.
+// writeGhosts lists the descriptions of job 1, whole: they are what the run
+// writes (or, in a dry run, how many and at what cost it would write).
 func writeGhosts(w io.Writer, res Result) {
 	if s := res.GhostRotation.Summary(); s != "" && res.Agent {
 		fmt.Fprintf(w, "%s\n\n", s)
 	}
-	if len(res.GhostNotes) == 0 && len(res.GhostKept) == 0 {
+	if e := res.GhostEstimate; res.DryRun && e.Sessions > 0 {
+		fmt.Fprintf(w, "## Beschreibungen (Ghosts)\nDer Lauf würde %d Dateien und %d Verzeichnisse beschreiben (%d davon aus Merges), in %d Sessions; geschätzt $%.4f.\n\n",
+			e.Files, e.Dirs, e.Merged, e.Sessions, e.USD)
 		return
 	}
-	fmt.Fprintf(w, "## Beschreibungen (Ghosts)\nDer Gärtner schlägt diese Beschreibungen vor. Geschrieben wird erst, wenn ein Mensch den Vorschlag auf der Prüfseite übernimmt.\n")
-	for _, g := range res.GhostNotes {
+	if len(res.GhostDescribed) == 0 && len(res.GhostKept) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "## Beschreibungen (Ghosts)\nDer Gärtner schreibt diese Beschreibungen selbst, mit Herkunft Gärtner und dem Merge-Commit als Anker. Absätze von Agenten und Menschen bleiben wörtlich stehen.\n")
+	for _, g := range res.GhostDescribed {
 		fmt.Fprintf(w, "- %s (%s)\n", g.Path, GhostStateLabel(g.GhostPath))
 		if g.Reason != "" {
 			fmt.Fprintf(w, "  - Begründung: %s\n", g.Reason)
@@ -282,7 +287,7 @@ func writeGhosts(w io.Writer, res Result) {
 		for _, g := range res.GhostKept {
 			ps = append(ps, g.Path)
 		}
-		fmt.Fprintf(w, "- Die bisherige Beschreibung stimmt noch (keine Änderung vorgeschlagen): %s\n", strings.Join(ps, ", "))
+		fmt.Fprintf(w, "- Die bisherige Beschreibung stimmt noch (nichts geschrieben): %s\n", strings.Join(ps, ", "))
 	}
 	fmt.Fprintln(w)
 }

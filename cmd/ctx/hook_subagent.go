@@ -36,7 +36,7 @@ const (
 // on comments. They name the core tools as the subagent sees them.
 const subagentRules = `### How to work with ghosttree here
 - Before you write or re-derive something: context_search (knowledge, past sessions, file descriptions); the mirror below is readable with grep and cat at no tool cost.
-- What you learn: a pitfall or a decision with its why -> context_remember; what a file does -> context_remember action=describe_file, instead of an explanatory comment.
+- What you learn: a pitfall or a decision with its why -> context_remember; what a file does that the code does not show -> context_remember action=describe_file, instead of an explanatory comment (the gardener describes new files after the merge).
 - Progress and open ends: a met criterion -> request action=criterion_met with evidence; a problem you cannot solve -> pain action=record; what only the human can give -> human_task action=create.
 `
 

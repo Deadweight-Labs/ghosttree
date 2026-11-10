@@ -85,6 +85,27 @@ func TestBuildDocsSaysWhenTheGardenerProposedADescriptionAndWhoConfirmedIt(t *te
 	}
 }
 
+// A description the gardener wrote itself after a merge (REQ-629) says so, with
+// the merge commit; one it wrote for a file no merge brought says only that.
+func TestBuildDocsSaysWhenTheGardenerWroteADescriptionAfterAMerge(t *testing.T) {
+	merge := strings.Repeat("ab", 20)
+	entries := []Entry{{Path: "m.go", Kind: "file"}, {Path: "r.go", Kind: "file"}}
+	described := map[string]store.GhostFile{
+		"m.go": {Path: "m.go", Kind: "file", Description: "text", DescribedAt: "2026-11-10T10:00:00Z", Person: "gardener", Harness: "gardener", SessionRef: GardenerMergeRef + merge},
+		"r.go": {Path: "r.go", Kind: "file", Description: "text", DescribedAt: "2026-11-10T10:00:00Z", Person: "gardener", Harness: "gardener", SessionRef: GardenerRunRef + merge},
+	}
+	byPath := map[string]string{}
+	for _, d := range BuildDocs(entries, described, nil, nil) {
+		byPath[d.Path] = d.Body
+	}
+	if !strings.Contains(byPath["m.go.md"], "beschrieben 2026-11-10 vom Gärtner nach Merge abababa\n") {
+		t.Errorf("a description after a merge:\n%s", byPath["m.go.md"])
+	}
+	if !strings.Contains(byPath["r.go.md"], "beschrieben 2026-11-10 vom Gärtner\n") || strings.Contains(byPath["r.go.md"], "bestätigt") {
+		t.Errorf("a description of a run:\n%s", byPath["r.go.md"])
+	}
+}
+
 // Ohne diese Zeile ist ein `ls` im Ghost-Baum genau so aussagekraeftig wie ein
 // `ls` im echten Repo — naemlich gar nicht. Die Verzeichnisdatei ist der
 // einzige Ort, an dem eine Ebene auf einen Blick lesbar wird.

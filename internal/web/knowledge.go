@@ -202,6 +202,8 @@ type knowledgeItemView struct {
 	// EditOpen öffnet das Formular, wenn die Seite über "Bearbeiten" der
 	// Prüfkarte erreicht wurde.
 	EditOpen bool
+	// EditBody is the field of the body in the edit form: write and preview, the toolbar.
+	EditBody composerView
 	// Move ist das Verschieben-Formular (nil ohne Recht zu ändern); Moves das
 	// Protokoll bisheriger Verschiebungen.
 	Move    *moveView
@@ -628,6 +630,7 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
 	card := a.cardFor(r, pa, k, true, 0, "item", "")
 	v := &knowledgeItemView{Card: card, Types: typeOptions(l, k.Type), Back: "/ui/knowledge", EditOpen: card.CanEdit && r.URL.Query().Get("edit") == "1"}
+	v.EditBody = composerView{Name: "body", Value: card.RawBody, Placeholder: l.msg("knowledge.field_body"), NoButtons: true, Required: true, Tall: true}
 	if k.Scope.Project != "" {
 		v.Back += "?project=" + url.QueryEscape(k.Scope.Project)
 	}

@@ -22,7 +22,7 @@ func oracleFixture(t *testing.T, hidden int) *accessAPIFixture {
 		t.Fatal(err)
 	}
 	long := strings.Repeat("filler words about nothing in particular ", 40) + " zaunkoenig " + strings.Repeat("more filler text goes here ", 40)
-	if err := f.st.AppendChunks(shared, []store.Chunk{{Seq: 0, Role: "user", Text: long, Raw: "{}"}}); err != nil {
+	if err := f.st.AppendChunks(shared, []store.Chunk{{Seq: 0, Role: "user", Text: long, Raw: promptRaw("claude-code", long)}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.st.SetSessionVisibility(shared, f.st.Access(store.Principal{ID: "person:4", Label: "rex"}), store.VisGuests); err != nil {
@@ -34,7 +34,7 @@ func oracleFixture(t *testing.T, hidden int) *accessAPIFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := f.st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "zaunkoenig zaunkoenig zaunkoenig", Raw: "{}"}}); err != nil {
+		if err := f.st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "zaunkoenig zaunkoenig zaunkoenig", Raw: promptRaw("claude-code", "zaunkoenig zaunkoenig zaunkoenig")}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -165,7 +165,7 @@ func TestGuestSessionCreationReturnsOnlyTheAddress(t *testing.T) {
 	if pid == "" {
 		t.Fatalf("guest got no address: %v", guest)
 	}
-	chunk := map[string]any{"chunks": []store.Chunk{{Seq: 0, Role: "user", Text: "hello", Raw: "{}"}}}
+	chunk := map[string]any{"chunks": []store.Chunk{{Seq: 0, Role: "user", Text: "hello", Raw: promptRaw("claude-code", "hello")}}}
 	f.expect(t, "gus", 204, "POST", "/api/sessions/"+pid+"/chunks", chunk)
 	f.expect(t, "gus", 200, "GET", "/api/sessions/"+pid, nil)
 	// The address belongs to the owner: nobody else may write to it.
@@ -219,7 +219,7 @@ func TestGuestNumbersAreUnknownOnEverySessionRoute(t *testing.T) {
 	payload := func(tail string) any {
 		switch tail {
 		case "/chunks":
-			return map[string]any{"chunks": []store.Chunk{{Seq: 0, Role: "user", Text: "x", Raw: "{}"}}}
+			return map[string]any{"chunks": []store.Chunk{{Seq: 0, Role: "user", Text: "x", Raw: promptRaw("claude-code", "x")}}}
 		case "/share":
 			return map[string]bool{"shared": true}
 		}
@@ -351,7 +351,7 @@ func TestGlobalEvidenceOfUnreadableSessionIsDropped(t *testing.T) {
 // damit hoch; fremde, verborgene und unbekannte Nummern antworten gleich.
 func TestOldNumberCollectorUploadsToOwnSessionInAnyProject(t *testing.T) {
 	f := accessAPI(t, true)
-	chunks := map[string]any{"chunks": []store.Chunk{{Seq: 0, Role: "user", Text: "hi", Raw: "{}"}}}
+	chunks := map[string]any{"chunks": []store.Chunk{{Seq: 0, Role: "user", Text: "hi", Raw: promptRaw("claude-code", "hi")}}}
 	for _, who := range []string{"mia", "lena", "robin"} {
 		for i, project := range []string{"", "github.com/nobody/claimed", accOther} {
 			body := map[string]any{"harness": "claude-code", "external_id": fmt.Sprintf("oc-%s-%d", who, i), "scope": map[string]string{"project": project}}
@@ -398,7 +398,7 @@ func TestSessionNumberRoutesAnswerAlikeForForeignHiddenUnknownAndLegacy(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := f.st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "hello", Raw: "{}"}}); err != nil {
+		if err := f.st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "hello", Raw: promptRaw("claude-code", "hello")}}); err != nil {
 			t.Fatal(err)
 		}
 		return id

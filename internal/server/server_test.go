@@ -434,7 +434,7 @@ func TestSessionFlowAndSearch(t *testing.T) {
 	}
 	json.NewDecoder(resp.Body).Decode(&created)
 	resp = req(t, "POST", srv.URL+"/api/sessions/1/chunks", tok,
-		map[string]any{"chunks": []store.Chunk{{Seq: 0, Role: "user", Text: "debugging livekit sfu", Raw: "{}"}}})
+		map[string]any{"chunks": []store.Chunk{{Seq: 0, Role: "user", Text: "debugging livekit sfu", Raw: promptRaw("claude-code", "debugging livekit sfu")}}})
 	if resp.StatusCode != 204 {
 		t.Fatalf("chunks status = %d", resp.StatusCode)
 	}

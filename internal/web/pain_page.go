@@ -38,47 +38,63 @@ func painTargets(from string) []string {
 	return []string{pain.Active}
 }
 
-// painComposer is the field under the history: text alone is a comment, the
-// status select adds a change of state to it (with the parts that state needs).
-// Nil when the viewer may neither work on the pain nor comment.
+// painStateOrder is the order of the states wherever they are listed.
+var painStateOrder = []string{pain.Active, pain.Mitigated, pain.Accepted, pain.Resolved, pain.Obsolete}
+
+// painComposer is the field under the history and the one place where the state
+// of the pain is changed: the status row lists the states in their order, the one
+// the pain is in carries the mark and only comments, every other one changes the
+// state and takes what is written as the comment on it. What a state needs (the
+// words, the proof, what stays open) is marked in its fields. Nil when the viewer
+// may neither work on the pain nor comment.
 func (a *app) painComposer(l lang, v *painView, from string, canComment bool) *composerView {
 	if !v.CanWork && !canComment {
 		return nil
 	}
 	cv := &composerView{Action: "/ui/pains/" + strconv.FormatInt(v.ID, 10) + "/state", Token: v.Token, Name: "note", Avatar: v.Viewer,
 		ModeLabel: l.msg("issue.cx.status"), Placeholder: l.msg("pains.cx.comment_ph")}
-	if canComment {
-		cv.Modes = append(cv.Modes, composerMode{Value: "comment", Label: l.msg("comments.cx.comment"), Submit: l.msg("comments.cx.submit"), Class: "pri",
-			Placeholder: l.msg("pains.cx.comment_ph"), Selected: true})
-	}
-	if !v.CanWork {
-		return cv
-	}
-	for _, st := range painTargets(from) {
-		m := composerMode{Value: st, Label: label(l, painStateKeys, st), Hint: "", Submit: l.msg("pains.cx.set", label(l, painStateKeys, st)), SubmitText: l.msg("pains.cx.set_text", label(l, painStateKeys, st)), Class: "pri",
-			Placeholder: l.msg("pains.cx.note"), Selected: !canComment && st == from}
+	targets := painTargets(from)
+	for _, st := range painStateOrder {
+		name := label(l, painStateKeys, st)
+		if st == from {
+			cv.Modes = append(cv.Modes, composerMode{Value: "comment", Label: name, Current: true, Disabled: !canComment, Selected: canComment,
+				Submit: l.msg("comments.cx.submit"), Class: "pri", Placeholder: l.msg("pains.cx.comment_ph")})
+			continue
+		}
+		if !v.CanWork || !slices.Contains(targets, st) {
+			continue
+		}
+		m := composerMode{Value: st, Label: name, Submit: l.msg("pains.cx.set", name), SubmitText: l.msg("pains.cx.set_text", name), Class: "pri",
+			Placeholder: l.msg("pains.cx.note")}
 		switch st {
 		case pain.Obsolete:
-			m.Placeholder = l.msg("pains.cx.why_obsolete")
+			m.Placeholder, m.NeedsText = l.msg("pains.cx.why_obsolete"), true
 		case pain.Accepted:
-			m.Placeholder = l.msg("pains.cx.why_accepted")
+			m.Placeholder, m.NeedsText = l.msg("pains.cx.why_accepted"), true
 		case pain.Active:
-			m.Placeholder = l.msg("pains.cx.why_active")
+			m.Placeholder, m.NeedsText = l.msg("pains.cx.why_active"), true
 		}
 		cv.Modes = append(cv.Modes, m)
 	}
 	if !slices.ContainsFunc(cv.Modes, func(m composerMode) bool { return m.Selected }) {
-		cv.Modes[0].Selected = true
+		for i := range cv.Modes {
+			if !cv.Modes[i].Disabled {
+				cv.Modes[i].Selected = true
+				break
+			}
+		}
+	}
+	if !v.CanWork {
+		return cv
 	}
 	var kinds []composerOption
 	for _, k := range v.EvidenceKinds {
 		kinds = append(kinds, composerOption{Value: k.Value, Label: k.Label, Selected: k.Selected})
 	}
 	cv.Fields = []composerField{
-		{Name: "remaining", Label: l.msg("pains.remaining_field"), Kind: "text", Show: pain.Mitigated, Wide: true},
-		{Name: "why", Label: l.msg("pains.why"), Kind: "text", Show: pain.Accepted + " " + pain.Obsolete, Wide: true},
+		{Name: "remaining", Label: l.msg("pains.remaining_field"), Kind: "text", Show: pain.Mitigated, Wide: true, Required: true},
 		{Name: "evidence_kind", Label: l.msg("requests.field_evidence_kind"), Kind: "select", Show: pain.Mitigated + " " + pain.Resolved, Options: kinds},
-		{Name: "evidence_ref", Label: l.msg("requests.field_evidence"), Kind: "text", Show: pain.Mitigated + " " + pain.Resolved, Wide: true},
+		{Name: "evidence_ref", Label: l.msg("requests.field_evidence"), Kind: "text", Show: pain.Mitigated + " " + pain.Resolved, Wide: true, Required: true},
 	}
 	return cv
 }

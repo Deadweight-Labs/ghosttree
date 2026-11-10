@@ -96,7 +96,7 @@ func paths(gs []GhostPath) string {
 func TestGhostSelectionTakesStaleBeforeUndescribedBeforeDriftedAndSkipsWhatNeedsNoDescription(t *testing.T) {
 	fx := newGhostFixture(t)
 	reviewed := map[string]bool{"empty-by-review.go": true}
-	got, rot := SelectGhosts(fx.repo, fx.described, reviewed, nil, nil, 0)
+	got, rot := SelectGhosts(fx.repo, fx.described, reviewed, nil, nil, nil, 0)
 	want := "internal/store/stale.go README.md cmd/a.go internal/web/z.go internal/store/drift.go"
 	if paths(got) != want {
 		t.Fatalf("order = %s\nwant    %s", paths(got), want)
@@ -128,30 +128,30 @@ func TestGhostSelectionTakesStaleBeforeUndescribedBeforeDriftedAndSkipsWhatNeeds
 		}
 	}
 	// The limit keeps the most urgent ones.
-	if limited, _ := SelectGhosts(fx.repo, fx.described, reviewed, nil, nil, 2); paths(limited) != "internal/store/stale.go README.md" {
+	if limited, _ := SelectGhosts(fx.repo, fx.described, reviewed, nil, nil, nil, 2); paths(limited) != "internal/store/stale.go README.md" {
 		t.Errorf("limit 2 = %s", paths(limited))
 	}
 }
 
 func TestGhostSelectionLeavesOutWhatWasLookedAtAndWhatHasAProposalStanding(t *testing.T) {
 	fx := newGhostFixture(t)
-	all, _ := SelectGhosts(fx.repo, fx.described, nil, nil, nil, 0)
+	all, _ := SelectGhosts(fx.repo, fx.described, nil, nil, nil, nil, 0)
 	stale := all[0]
 	// The gardener looked at the stale file in this state (and said the description holds).
 	seen := map[int64]Seen{GhostKey(stale.Path): {EntryHash: stale.Stamp(), Verdict: "kept"}}
-	got, rot := SelectGhosts(fx.repo, fx.described, nil, seen, nil, 0)
+	got, rot := SelectGhosts(fx.repo, fx.described, nil, seen, nil, nil, 0)
 	if strings.Contains(paths(got), stale.Path) || rot.Looked != 1 {
 		t.Errorf("a path looked at in its present state came back: %s (%+v)", paths(got), rot)
 	}
 	// The same path in another state is asked again: the file changed.
 	seen[GhostKey(stale.Path)] = Seen{EntryHash: "anderer Stand"}
-	if got, _ := SelectGhosts(fx.repo, fx.described, nil, seen, nil, 0); !strings.Contains(paths(got), stale.Path) {
+	if got, _ := SelectGhosts(fx.repo, fx.described, nil, seen, nil, nil, 0); !strings.Contains(paths(got), stale.Path) {
 		t.Error("a path whose state changed was not asked again")
 	}
 	// A proposal of the gardener for this version of the file stands, in any state.
 	note := GhostProposal("github.com/o/r", GhostProposalData{GhostPath: stale, Description: strings.Repeat("Text. ", 12)})
 	note.Status = "deprecated"
-	got, rot = SelectGhosts(fx.repo, fx.described, nil, nil, []store.Knowledge{note}, 0)
+	got, rot = SelectGhosts(fx.repo, fx.described, nil, nil, []store.Knowledge{note}, nil, 0)
 	if strings.Contains(paths(got), stale.Path) || rot.Proposed != 1 {
 		t.Errorf("a path with a rejected proposal came back: %s (%+v)", paths(got), rot)
 	}
@@ -196,7 +196,7 @@ const goodText = "Hält den Zustand des Dienstes. Invariante: genau ein Schreibe
 
 func TestGhostAnswerIsHeldToTheFileTheSessionReadAndToTheTextBounds(t *testing.T) {
 	fx := newGhostFixture(t)
-	pkg, _ := SelectGhosts(fx.repo, fx.described, nil, nil, nil, 0)
+	pkg, _ := SelectGhosts(fx.repo, fx.described, nil, nil, nil, nil, 0)
 	want := map[string]GhostPath{}
 	for _, g := range pkg {
 		want[g.Path] = g
@@ -259,7 +259,7 @@ func TestGhostAnswerIsHeldToTheFileTheSessionReadAndToTheTextBounds(t *testing.T
 
 func TestGhostAnswerIsDroppedWhenTheFileChangedWhileTheSessionRead(t *testing.T) {
 	fx := newGhostFixture(t)
-	pkg, _ := SelectGhosts(fx.repo, fx.described, nil, nil, nil, 0)
+	pkg, _ := SelectGhosts(fx.repo, fx.described, nil, nil, nil, nil, 0)
 	writeIn(t, fx.dir, "cmd/a.go", numbered("a", 4)+"// verändert\n")
 	v, err := validateGhosts(fx.repo, ghostJSON(ghostItem("cmd/a.go", "describe", goodText)), pkg, seenBy([]string{"cmd/a.go"}))
 	if err != nil {

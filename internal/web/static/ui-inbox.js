@@ -75,7 +75,7 @@
       });
       if (!response.ok) throw new Error(String(response.status));
       const result = await response.json();
-      settle(row, opts, (result.option && result.option.text) || $("button", form).textContent);
+      settle(row, opts, (result.option && result.option.text) || $("button", form).dataset.text);
     } catch (_) {
       for (const b of buttons) b.disabled = false;
       form.submit();

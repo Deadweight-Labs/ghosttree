@@ -226,12 +226,12 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 	}
 }
 
-// issueComposer is the field at the foot of the history. Text alone is a
-// comment; the status select adds a change to it: close the issue (the proof is
-// named in the fields, the words are the comment) or drop it (the words are the
-// reason and the comment). A viewer who may not edit the issue, but may comment,
-// gets the field with the one mode "Comment"; a closed issue can still be
-// commented on.
+// issueComposer is the field at the foot of the history, the one place where the
+// state of the issue is changed: the status row names every state it can go to,
+// the state it is in carries the mark and only comments. Closing it names the
+// proof in the fields (the words are the comment), dropping it needs the words as
+// the reason. A viewer who may not edit the issue, but may comment, gets the field
+// without the row; a closed issue can still be commented on.
 func (a *app) issueComposer(r *http.Request, l lang, pa *store.ProjectAccess, v *requestView) *composerView {
 	if !interactive(r) {
 		return nil
@@ -244,24 +244,29 @@ func (a *app) issueComposer(r *http.Request, l lang, pa *store.ProjectAccess, v 
 	id := strconv.FormatInt(v.ID, 10)
 	cv := &composerView{Action: "/ui/requests/" + id + "/close", Token: v.Token, Name: "reason", Avatar: browserPrincipal(r).Label,
 		ModeLabel: l.msg("issue.cx.status"), Placeholder: l.msg("comments.cx.placeholder")}
-	if canComment {
-		cv.Modes = append(cv.Modes, composerMode{Value: "comment", Label: l.msg("comments.cx.comment"), Submit: l.msg("comments.cx.submit"), Class: "pri",
-			Placeholder: l.msg("comments.cx.placeholder"), Selected: true})
-	}
+	cv.Modes = append(cv.Modes, composerMode{Value: "comment", Label: l.msg("requests.state.open"), Current: true, Disabled: !canComment, Selected: canComment,
+		Submit: l.msg("comments.cx.submit"), Class: "pri", Placeholder: l.msg("comments.cx.placeholder")})
 	if canClose {
 		var kinds []composerOption
 		for _, k := range v.Kinds {
 			kinds = append(kinds, composerOption{Value: k.Value, Label: k.Label, Selected: k.Selected})
 		}
+		done := composerMode{Value: "complete", Label: l.msg("requests.state.done"), Submit: l.msg("issue.cx.complete_btn"), SubmitText: l.msg("issue.cx.complete_text"),
+			Placeholder: l.msg("issue.cx.complete_ph"), Class: "pri"}
 		if v.CanComplete {
-			cv.Modes = append(cv.Modes, composerMode{Value: "complete", Label: l.msg("issue.cx.complete"), Submit: l.msg("issue.cx.complete_btn"), SubmitText: l.msg("issue.cx.complete_text"),
-				Placeholder: l.msg("issue.cx.complete_ph"), Selected: !canComment})
 			cv.Fields = append(cv.Fields,
 				composerField{Name: "evidence_kind", Label: l.msg("requests.field_evidence_kind"), Kind: "select", Show: "complete", Options: kinds},
 				composerField{Name: "evidence_ref", Label: l.msg("requests.field_evidence"), Kind: "text", Show: "complete", Wide: true})
+		} else {
+			done.Disabled, done.Hint = true, l.msg("issue.cx.complete_blocked")
 		}
-		cv.Modes = append(cv.Modes, composerMode{Value: "drop", Label: l.msg("issue.cx.drop"), Submit: l.msg("issue.cx.drop_btn"), SubmitText: l.msg("issue.cx.drop_text"), Class: "dangerf",
-			Placeholder: l.msg("issue.cx.drop_placeholder"), Selected: !canComment && !v.CanComplete})
+		drop := composerMode{Value: "drop", Label: l.msg("requests.state.dropped"), Submit: l.msg("issue.cx.drop_btn"), SubmitText: l.msg("issue.cx.drop_text"), Class: "dangerf",
+			Placeholder: l.msg("issue.cx.drop_placeholder"), NeedsText: true}
+		cv.Modes = append(cv.Modes, done, drop)
+		if !canComment {
+			cv.Modes[1].Selected = !done.Disabled
+			cv.Modes[2].Selected = done.Disabled
+		}
 	}
 	return cv
 }

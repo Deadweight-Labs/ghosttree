@@ -616,3 +616,38 @@ func TestSessionSearchFacetCountIsWhatTheListHoldsAfterTheClick(t *testing.T) {
 		t.Fatalf("project facet with a time filter %+v, want %+v", page.Facets.Projects, want)
 	}
 }
+
+// TestSessionVectorQueryLooksUpEachChunkOnce: with the readable set given as a
+// list, the plan looks up each embedding's chunk by its number alone. Carried
+// over to ci.session_id, the list made SQLite look every embedding up once per
+// readable session, 40 s instead of 0.1 s with a thousand readable sessions.
+func TestSessionVectorQueryLooksUpEachChunkOnce(t *testing.T) {
+	st, _ := searchWorld(t, 5)
+	if !st.hasChunkMap() {
+		t.Fatal("chunk_index_chunk missing")
+	}
+	var ids []int64
+	if err := st.eachSession(`(1=1)`, nil, func(s Session) (bool, error) { ids = append(ids, s.ID); return true, nil }); err != nil {
+		t.Fatal(err)
+	}
+	r := readableSessions{where: `(1=1) AND se.id IN (SELECT value FROM json_each(?))`, args: []any{idsJSONOf(ids)}, restricted: true}
+	args := append([]any{"m", "p", "", ""}, r.args...)
+	rows, err := st.db.Query(`EXPLAIN QUERY PLAN `+sessionVectorQuery(true, r), args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	joined := strings.Join(plan, "\n")
+	if !strings.Contains(joined, "chunk_index_chunk (chunk_id=?)") || strings.Contains(joined, "session_id=?") {
+		t.Fatalf("plan looks chunks up by session too:\n%s", joined)
+	}
+}

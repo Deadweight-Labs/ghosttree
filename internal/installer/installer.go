@@ -40,11 +40,12 @@ Search before you write. When a known state changes, supersede the old entry
 a follow-up that leaves both active. When what an entry describes no longer
 exists, retire it with ` + "`context_remember action=retire`" + ` and a reason.
 
-What a file or directory DOES belongs in its ghost file. Whenever you are about
-to write an explanatory comment that serves later readers more than the person
-in front of you — and whenever you create a file — put that text at the path
-instead, with ` + "`context_remember action=describe_file`" + `. This replaces the comment; it does not
-forbid it.
+What a file or directory DOES belongs in its ghost file. The gardener writes
+those descriptions after a merge, from the code, the diff and the pull request
+text. Describe a path yourself, with ` + "`context_remember action=describe_file`" + `, only
+when you know something the code does not show: its intent, a limit, how it
+hangs together with other parts, what went wrong here. That text replaces the
+explanatory comment you would otherwise write; it does not forbid comments.
 
 What ghosttree knows about this repository is also on disk, under ` + "`.ghosttree/`" + `:
 ` + "`.ghosttree/tree/`" + ` holds one ` + "`.md`" + ` per file and a ` + "`__dir.md`" + ` per directory,

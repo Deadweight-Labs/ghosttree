@@ -154,6 +154,14 @@
   & .pfx { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; max-width: 100%; min-width: 0; vertical-align: baseline; }
   & .pnote { flex: 1 1 14ch; min-width: 0; font-size: 12px; line-height: 18px; font-weight: 400; color: var(--fg-muted); overflow-wrap: anywhere; }
   & .pf > .pfx:has(.pnote) { flex: 1 1 260px; order: 1; }
+  /* Words that are no short identifier: the icon of the kind, then grey text that wraps. */
+  & .pfree { flex-wrap: nowrap; align-items: flex-start; gap: 6px; }
+  & .pf > .pfx.pfree { flex: 1 1 100%; }
+  & .pfree .pico { flex: none; display: inline-flex; align-items: center; height: 18px; color: var(--fg-muted); }
+  & .pfree .pico .i { width: 12px; height: 12px; }
+  /* Whatever chip a proof carries, it never grows wider than its line: the text is cut with an ellipsis. */
+  & .pfx .chip, & .pf .chip, & .tev-h .chip { max-width: 100%; min-width: 0; }
+  & .chip > .ct { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   & .bd2 .pfx { display: flex; margin-top: 4px; }
   & .bd2 .kn-body + .pfx, & .bd2 > .pfx:first-child { margin-top: 0; }
 
@@ -174,13 +182,47 @@
   & .cmt.tev:target .tev-m { box-shadow: 0 0 0 2px var(--accent-emphasis); border-radius: 6px; background: var(--accent-subtle); }
   /* A full comment: box with an arrow towards the avatar */
   & .cbox { position: relative; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); min-width: 0; }
-  & .cbox::before { content: ""; position: absolute; top: 11px; left: -8px; width: 14px; height: 14px; background: var(--canvas-subtle); border-left: 1px solid var(--border-default); border-bottom: 1px solid var(--border-default); transform: rotate(45deg); }
-  & .cbox .ch { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-height: 40px; padding: 8px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); border-radius: 6px 6px 0 0; color: var(--fg-muted); font-size: 14px; }
+  & .cbox::before { content: ""; position: absolute; top: 13px; left: -8px; width: 14px; height: 14px; background: var(--canvas-subtle); border-left: 1px solid var(--border-default); border-bottom: 1px solid var(--border-default); transform: rotate(45deg); }
+  & .cbox .ch { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-height: 40px; padding: 7px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); border-radius: 6px 6px 0 0; color: var(--fg-muted); font-size: 14px; }
   & .cbox .ch b { color: var(--fg-default); }
   & .cbox .cb { padding: 16px; min-width: 0; }
   & .cbox .cf { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 16px 14px; }
-  & .reqs + .cf, & .chist + .cf { padding-top: 14px; }
-  & .cmt:target > .cbox { box-shadow: 0 0 0 2px var(--accent-emphasis); }
+  & .reqs + .cf { padding-top: 14px; }
+  & .cmt:target > .cbox { border-color: var(--accent-emphasis); box-shadow: inset 0 0 0 1px var(--accent-emphasis); }
+  & .cbox .ch .gbtn.icon { width: 24px; height: 24px; padding: 0; }
+  & .cbox.gone .ch { border-bottom: 0; border-radius: 6px; }
+  /* A comment that is being edited: the composer is the box's own body, no second frame. */
+  & .cbox .cb:has(> form > .cx), & .cbox .cb:has(> .cx) { padding: 0; }
+  & .cbox .cb .cx { border: 0; border-radius: 0 0 6px 6px; }
+  & .cbox .cb .cx-h { border-radius: 0; }
+  /* Earlier versions: set in from the edge, each one a quiet block with its own head. */
+  & .chist { padding: 0 16px 12px; }
+  & .chist > summary { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; font-size: 12px; font-weight: 500; color: var(--fg-muted); cursor: pointer; }
+  & .chist > summary { list-style: none; }
+  & .chist > summary::-webkit-details-marker { display: none; }
+  & .chist > summary::before { content: ""; width: 0; height: 0; border: 4px solid transparent; border-left: 6px solid currentColor; border-right: 0; }
+  & .chist[open] > summary::before { transform: rotate(90deg); }
+  & .chist > summary:hover { color: var(--fg-default); }
+  & .chist[open] > summary { margin-bottom: 4px; }
+  & .cver { margin-top: 8px; padding: 8px 12px; color: var(--fg-muted); background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; }
+  & .cvh { margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .cver .prose { font-size: 14px; }
+  /* The file field: a button; the native field lies over it, invisible. */
+  & .filepick { position: relative; max-width: 100%; min-width: 0; cursor: pointer; }
+  & .filepick input[type="file"] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; font-size: 0; }
+  & .filepick:focus-within { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
+  & .filepick .fpt { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .filepick.has .fpt { color: var(--accent-fg); }
+  /* Removing a comment asks first: the cross opens a small card under it. */
+  & details.cdel { position: relative; }
+  & details.cdel > summary { list-style: none; }
+  & details.cdel > summary::-webkit-details-marker { display: none; }
+  & details.cdel[open] > summary { background: var(--btn-active); }
+  & .cdp { position: absolute; z-index: 40; top: calc(100% + 6px); right: 0; width: 260px; max-width: calc(100vw - 32px); padding: 12px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-pop); font-size: 14px; font-weight: 400; }
+  & .cdp p { margin: 0 0 12px; }
+  & .cdp .cda { display: flex; justify-content: flex-end; gap: 8px; }
+  & .cdp .cda form { display: flex; margin: 0; }
+  & .gbtn.dzf { color: #fff; background: var(--danger-emphasis); border-color: var(--danger-emphasis); }
 
   /* ---- Reactions: "👍 3", blue when you reacted; add button is a round smiley with plus ---- */
   & .react { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; font-size: 12px; font-weight: 500; color: var(--fg-muted); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 2em; cursor: pointer; }
@@ -250,23 +292,41 @@
   & .cx-h .utabs { gap: 8px; }
   & .cx-h .utabs li { padding: 8px 0 0; }
   & .cx-h .utabs li.sel::after { bottom: -1px; }
-  & .cx-h .wtools { display: flex; align-items: center; align-self: center; }
+  & .cx-h .wtools { display: flex; align-items: center; align-self: stretch; padding-top: 5px; }
+  & .cx-h .wtools[hidden] { display: none; }
   & .cx-h .wtools .gbtn { width: 28px; padding: 0; }
   & .cx-b { padding: 12px 12px 0; }
   & .cx-w { position: relative; }
   & .cx textarea { display: block; width: 100%; min-height: 96px; resize: vertical; padding: 8px 12px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; font: 14px/1.5 var(--ui-font); }
+  & .cx.tall textarea { min-height: 280px; }
   & .cx textarea:focus { outline: 0; border-color: var(--accent-emphasis); box-shadow: inset 0 0 0 1px var(--accent-emphasis); }
   & .cx textarea::placeholder { color: var(--fg-subtle); }
   /* The preview is the text field in reading form: same frame, radius, padding and
      minimum height (the script sets the exact height when it switches), so nothing jumps. */
-  & .cx-pv { min-height: 96px; padding: 8px 12px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; }
+  & .cx-pv { box-sizing: border-box; overflow: auto; min-height: 96px; padding: 8px 12px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; }
+  /* The status row: every state the object can be in is one entry, the one it is in now carries a dot, the
+     one that is chosen is filled. The words written above are the comment on the change. */
   & .cx-m { padding: 12px 12px 0; }
-  & .cx-mr { display: flex; align-items: center; gap: 8px; }
+  & .cx-st { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
+  & .cx-sl { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .cx-seg { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+  & .cx-opt { position: relative; display: inline-flex; cursor: pointer; }
+  & .cx-opt.off { cursor: default; }
+  & .cx-opt input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: inherit; }
+  & .cx-opt .sl { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; font-size: 14px; line-height: 20px; color: var(--fg-default); background: var(--btn-bg); border: 1px solid var(--btn-border); border-radius: 6px; white-space: nowrap; }
+  & .cx-opt:hover .sl { background: var(--btn-hover); }
+  & .cx-opt input:checked + .sl { font-weight: 600; background: var(--accent-subtle); border-color: var(--accent-emphasis); box-shadow: inset 0 0 0 1px var(--accent-emphasis); }
+  & .cx-opt input:focus-visible + .sl { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
+  & .cx-opt.off .sl { color: var(--fg-subtle); background: none; border-style: dashed; }
+  & .cx-opt .cdot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-muted); }
+  & .cx-opt input:checked + .sl .cdot { background: var(--accent-fg); }
   & .cx-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-  & .cx-grid:has(.cx-fl:not([hidden])) { margin-top: 12px; }
+  & .cx-m:not(:has(.cx-fl:not([hidden]))) { display: none; }
   & .cx-fl { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; font-weight: 600; color: var(--fg-default); }
+  & .cx-fl[hidden] { display: none; }
   & .cx-fl.wide { grid-column: 1 / -1; }
   & .cx-fl .gfield { font-weight: 400; color: var(--fg-default); }
+  & .cx-fl .req::before { content: "*"; margin-left: 2px; color: var(--danger-fg); }
   /* Menu that ui-select.js puts in place of a native select */
   /* The hidden native select stays a form control but takes no room: width and height are capped,
      because a rule like ".fl select.gfield { width: 100% }" would otherwise stretch it past the window. */
@@ -286,7 +346,7 @@
   & .cx-f .dd > .gbtn { height: 32px; font-size: 14px; font-weight: 400; }
   & .cx-f .gbtn { flex: none; }
   & .ddl::after { content: ":"; }
-  & .cx-hint { display: inline-flex; align-items: center; gap: 6px; margin-right: 4px; font-size: 12px; line-height: 16px; color: var(--fg-muted); }
+  & .cx-hint { display: inline-flex; align-items: center; margin-right: 4px; color: var(--fg-muted); }
   & .cx-hint .i { width: 16px; height: 16px; color: inherit; }
   & .gbtn.dangerf { background: var(--danger-emphasis); border-color: #1f232826; color: #fff; }
   & .gbtn.dangerf:hover { background: var(--danger-emphasis); filter: brightness(.92); }
@@ -319,7 +379,7 @@
     & .tlx > .cmt.tev:has(+ .cmt.tev)::before { display: block; top: 0; bottom: -16px; height: auto; }
     & .cmt.tev { grid-template-columns: 40px minmax(0, 1fr); gap: 16px; }
     & .cmt.tev > .gav { display: inline-flex; }
-    & .cx-h .wtools, & .cx-hint { display: none; }
+    & .cx-h .wtools { display: none; }
     & .cx-grid { grid-template-columns: minmax(0, 1fr); }
     & .cx-f .gbtn:last-child { margin-left: auto; }
     & .cx-f .sp { display: none; }
@@ -339,3 +399,6 @@
   & details.cfm .cfp p { margin: 0 0 12px; font-size: 14px; color: var(--fg-default); }
   & details.cfm .cfp .gbtn { width: 100%; justify-content: center; }
 }
+
+/* What only works with script is not shown without it (the toolbar of the composer, the copy buttons). */
+html:not(.js) .js-only { display: none; }

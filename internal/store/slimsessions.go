@@ -132,7 +132,7 @@ func SlimSessions(ctx context.Context, path string, opts SlimSessionsOptions) (S
 	if !info.Mode().IsRegular() {
 		return rep, fmt.Errorf("database path %q is not a regular file", path)
 	}
-	db, err := sql.Open("sqlite", maintenanceDSN(path))
+	db, err := sql.Open("sqlite", slimDSN(path))
 	if err != nil {
 		return rep, err
 	}
@@ -157,21 +157,11 @@ func SlimSessions(ctx context.Context, path string, opts SlimSessionsOptions) (S
 		return rep, errors.New("session_chunks has no slim_version column: start the new ghosttree server once so it migrates the database")
 	}
 	w := slimWork{ctx: ctx, db: db, write: !opts.DryRun, raw: rawStateFor(db), harness: map[int64]string{}}
-	for _, t := range []struct {
-		names []string
-		flag  *bool
-	}{
-		{[]string{"chunks_fts"}, &w.chunksFTS},
-		{[]string{"chunk_index", "sess_fts"}, &w.index},
-	} {
-		*t.flag = true
-		for _, n := range t.names {
-			if ok, err := has(n); err != nil {
-				return rep, err
-			} else if !ok {
-				*t.flag = false
-			}
-		}
+	if w.chunksFTS, err = chunksFTSLive(ctx, db); err != nil {
+		return rep, err
+	}
+	if w.index, err = hasWordIndex(ctx, db, has); err != nil {
+		return rep, err
 	}
 	if w.vectors, err = hasSessionEmbeddingTables(ctx, db); err != nil {
 		return rep, err
@@ -300,7 +290,7 @@ func SlimSessions(ctx context.Context, path string, opts SlimSessionsOptions) (S
 		for _, idx := range []struct {
 			name string
 			on   bool
-		}{{"chunks_fts", w.chunksFTS}, {"sess_fts", w.index}} {
+		}{{"chunks_fts", w.chunksFTS}, {"sess_fts", w.index}, {"chunk_fts", w.index}} {
 			if !idx.on {
 				continue
 			}
@@ -438,6 +428,35 @@ func (w *slimWork) exec(q maintQueryer, query string, args ...any) (int64, error
 // Jede Änderung steht unter "raw ist noch, wie gelesen": hat ein anderer
 // Schreiber die Zeile inzwischen geändert, bleibt sie für einen späteren Lauf.
 func (w *slimWork) apply(edits []slimEdit, rep *SlimSessionsReport) error {
+	if !w.write {
+		return w.applyIn(w.db, edits, rep)
+	}
+	// Der Server kann die Schreibsperre länger halten als busy_timeout. Dann
+	// wird derselbe Schritt nach einer Pause wiederholt, statt den Lauf
+	// abzubrechen; die Zähler gelten erst für den Versuch, der festgeschrieben ist.
+	before := *rep
+	for attempt := 0; ; attempt++ {
+		err := w.applyOnce(edits, rep)
+		if err == nil || !isBusy(err) || attempt >= len(slimBusyBackoff) {
+			return err
+		}
+		*rep = before
+		select {
+		case <-w.ctx.Done():
+			return w.ctx.Err()
+		case <-time.After(slimBusyBackoff[attempt]):
+		}
+	}
+}
+
+// slimDSN öffnet die Datenbank für den Lauf; Tests setzen ein kurzes busy_timeout.
+var slimDSN = func(path string) string { return maintenanceDSN(path) }
+
+// slimBusyBackoff sind die Pausen vor einem neuen Versuch, wenn ein Schritt an
+// der Schreibsperre scheiterte.
+var slimBusyBackoff = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute}
+
+func (w *slimWork) applyOnce(edits []slimEdit, rep *SlimSessionsReport) error {
 	var q maintQueryer = w.db
 	if w.write {
 		tx, err := w.db.BeginTx(w.ctx, nil)
@@ -539,20 +558,18 @@ func (w *slimWork) remove(q maintQueryer, e *slimEdit, rep *SlimSessionsReport) 
 		rep.Tables["session_embeddings"] += n
 	}
 	if w.index {
-		var old indexFields
 		var msgs int
-		err := q.QueryRowContext(w.ctx, `SELECT text, thinking, tool_input, tool_output FROM chunk_index WHERE chunk_id=?`, e.id).
-			Scan(&old.text, &old.thinking, &old.toolInput, &old.toolOutput)
+		old, ok, err := loadIndexRow(w.ctx, q, e.id)
 		switch {
-		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
 			return err
-		default:
-			if !old.empty() {
-				if _, err := w.exec(q, `INSERT INTO sess_fts(sess_fts, rowid, text, thinking, tool_input, tool_output) VALUES('delete', ?, ?, ?, ?, ?)`,
-					e.id, old.text, old.thinking, old.toolInput, old.toolOutput); err != nil {
-					return err
-				}
+		case ok:
+			if err := dropWords(w.exec, q, e.id, old); err != nil {
+				return err
+			}
+			if old.fts == 1 {
+				rep.Tables["chunk_fts"]++
+			} else if !old.fields.empty() {
 				rep.Tables["sess_fts"]++
 			}
 			if _, err := w.exec(q, `DELETE FROM chunk_index WHERE chunk_id=?`, e.id); err != nil {
@@ -589,21 +606,19 @@ func (w *slimWork) remove(q maintQueryer, e *slimEdit, rep *SlimSessionsReport) 
 	return nil
 }
 
-// reindex leitet die Zeile von chunk_index und den Eintrag in sess_fts aus der
+// reindex leitet die Zeile von chunk_index und die Wörter in chunk_fts aus der
 // neuen raw neu ab, wie redactWork.reindex, und gleicht msg_count der Session
 // an, falls sich die Zahl der Nachrichten der Zeile ändert.
 func (w *slimWork) reindex(q maintQueryer, e *slimEdit, rep *SlimSessionsReport) error {
 	if !w.index {
 		return nil
 	}
-	var old indexFields
-	err := q.QueryRowContext(w.ctx, `SELECT text, thinking, tool_input, tool_output FROM chunk_index WHERE chunk_id=?`, e.id).
-		Scan(&old.text, &old.thinking, &old.toolInput, &old.toolOutput)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil // noch nicht indiziert: der Nachindizierlauf liest die neue raw
-	}
+	old, ok, err := loadIndexRow(w.ctx, q, e.id)
 	if err != nil {
 		return err
+	}
+	if !ok {
+		return nil // noch nicht indiziert: der Nachindizierlauf liest die neue raw
 	}
 	h, err := w.harnessOf(q, e.session)
 	if err != nil {
@@ -618,34 +633,57 @@ func (w *slimWork) reindex(q maintQueryer, e *slimEdit, rep *SlimSessionsReport)
 		}
 		rep.Tables["sessions.msg_count"]++
 	}
-	if nf == old && f.Role == of.Role && f.Time == of.Time && f.Prompt == of.Prompt && f.ToolCalls == of.ToolCalls {
-		return nil
+	// Eine Zeile in sess_fts hält ihre Felder selbst; eine in chunk_fts wird mit
+	// den Feldern der alten raw verglichen.
+	was := old.fields
+	if old.fts == 1 {
+		was = indexFields{of.Text, of.Thinking, of.ToolInput, of.ToolOutput}
 	}
-	if !old.empty() {
-		if _, err := w.exec(q, `INSERT INTO sess_fts(sess_fts, rowid, text, thinking, tool_input, tool_output) VALUES('delete', ?, ?, ?, ?, ?)`,
-			e.id, old.text, old.thinking, old.toolInput, old.toolOutput); err != nil {
-			return err
-		}
+	if nf == was && f.Role == of.Role && f.Time == of.Time && f.Prompt == of.Prompt && f.ToolCalls == of.ToolCalls {
+		return nil
 	}
 	prompt := 0
 	if f.Prompt {
 		prompt = 1
 	}
-	if _, err := w.exec(q, `UPDATE chunk_index SET role=?, ts=?, is_prompt=?, tool_calls=?, text=?, thinking=?, tool_input=?, tool_output=? WHERE chunk_id=?`,
-		f.Role, f.Time, prompt, f.ToolCalls, nf.text, nf.thinking, nf.toolInput, nf.toolOutput, e.id); err != nil {
+	if _, err := w.exec(q, `UPDATE chunk_index SET role=?, ts=?, is_prompt=?, tool_calls=? WHERE chunk_id=?`,
+		f.Role, f.Time, prompt, f.ToolCalls, e.id); err != nil {
 		return err
 	}
-	if !nf.empty() {
-		if _, err := w.exec(q, `INSERT INTO sess_fts(rowid, text, thinking, tool_input, tool_output) VALUES(?, ?, ?, ?, ?)`,
-			e.id, nf.text, nf.thinking, nf.toolInput, nf.toolOutput); err != nil {
-			return err
-		}
+	if err := rewriteWords(w.exec, q, e.id, old, nf, f.Prompt); err != nil {
+		return err
 	}
 	rep.Tables["chunk_index"]++
-	if !old.empty() || !nf.empty() {
+	if old.fts == 0 && !old.fields.empty() {
 		rep.Tables["sess_fts"]++
 	}
+	if old.fts == 1 || !nf.empty() {
+		rep.Tables["chunk_fts"]++
+	}
 	return nil
+}
+
+// hasWordIndex sagt, ob die Datenbank den Suchindex der Sessions hat. Hat sie
+// chunk_index, aber noch nicht chunk_fts, lief der Server dieser Version noch
+// nicht: dann wird nichts angefasst.
+func hasWordIndex(ctx context.Context, db *sql.DB, has func(string) (bool, error)) (bool, error) {
+	ci, err := has("chunk_index")
+	if err != nil || !ci {
+		return false, err
+	}
+	for _, need := range []string{"sess_fts", "chunk_fts"} {
+		if ok, err := has(need); err != nil {
+			return false, err
+		} else if !ok {
+			return false, fmt.Errorf("no %s table: start the new ghosttree server once so it migrates the database, then run this again", need)
+		}
+	}
+	if ok, err := hasColumn(db, "chunk_index", "fts"); err != nil {
+		return false, err
+	} else if !ok {
+		return false, errors.New("chunk_index has no fts column: start the new ghosttree server once so it migrates the database")
+	}
+	return true, nil
 }
 
 func (w *slimWork) harnessOf(q maintQueryer, session int64) (string, error) {

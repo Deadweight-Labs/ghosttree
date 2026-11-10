@@ -85,19 +85,7 @@ type sessionBest struct {
 // configured model and text format are read, and of the sessions of r (the
 // asking session excepted): nothing outside is compared.
 func (s *Store) sessionVectorRanking(ctx context.Context, cfg *EmbedSearchConfig, qvec []float32, exclude string, r readableSessions) ([]sessionBest, error) {
-	// Von den Embeddings aus (wenige Zehntausend Zeilen): die Session jedes
-	// Chunks steht in der schmalen Zuordnung chunk_index_chunk. Ohne die
-	// erzwungene Reihenfolge ginge SQLite von der lesbaren Menge aus und läse alle
-	// Chunks aller lesbaren Sessions.
-	byChunk := ""
-	if s.hasChunkMap() {
-		byChunk = "INDEXED BY chunk_index_chunk"
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT ci.session_id, e.chunk_id, ci.seq, e.scale, e.vec
-		FROM session_embeddings e
-		CROSS JOIN chunk_index ci `+byChunk+` ON ci.chunk_id = e.chunk_id
-		CROSS JOIN sessions se ON se.id = ci.session_id
-		WHERE e.model = ? AND e.prefix_version = ? AND (? = '' OR se.external_id != ?) AND `+r.where,
+	rows, err := s.db.QueryContext(ctx, sessionVectorQuery(s.hasChunkMap(), r),
 		append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion(), exclude, exclude}, r.args...)...)
 	if err != nil {
 		return nil, err
@@ -150,6 +138,28 @@ func (s *Store) sessionVectorRanking(ctx context.Context, cfg *EmbedSearchConfig
 		return 0
 	})
 	return out, nil
+}
+
+// sessionVectorQuery is the query of sessionVectorRanking over the readable set
+// r; its arguments are model, text format, the asking session twice, then r.args.
+//
+// It starts from the embeddings (a few ten thousand rows) and finds the session
+// of each chunk in the narrow map chunk_index_chunk. Without the forced order
+// SQLite would start from the readable set and read every chunk of every
+// readable session. The unary plus keeps SQLite from carrying the list of
+// readable sessions (se.id IN json_each) over to ci.session_id: it would then
+// look up every embedding once per readable session, which with a thousand
+// readable sessions turned a 0.1 s query into 40 s.
+func sessionVectorQuery(chunkMap bool, r readableSessions) string {
+	byChunk := ""
+	if chunkMap {
+		byChunk = "INDEXED BY chunk_index_chunk"
+	}
+	return `SELECT ci.session_id, e.chunk_id, ci.seq, e.scale, e.vec
+		FROM session_embeddings e
+		CROSS JOIN chunk_index ci ` + byChunk + ` ON ci.chunk_id = e.chunk_id
+		CROSS JOIN sessions se ON se.id = +ci.session_id
+		WHERE e.model = ? AND e.prefix_version = ? AND (? = '' OR se.external_id != ?) AND ` + r.where
 }
 
 // semanticSnippetRunes is how much of the text that came closest a hit shows.

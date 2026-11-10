@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -137,7 +139,9 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			if act.Kind == "criterion.met" {
 				ev.Tone, ev.Icon = "ok", "check"
 				for _, e := range c.Evidence {
-					if e.Kind == "commit" {
+					// Only a bare hash stands in the sentence; a commit with words
+					// behind it goes under the line with the other proofs.
+					if e.Kind == "commit" && e.Note == "" && isShortRef(e.Ref) {
 						ev.Head = append(ev.Head, e)
 					} else {
 						ev.Body = append(ev.Body, e)
@@ -333,6 +337,20 @@ func proofChips(l lang, es []evidenceLine) template.HTML {
 		if ref == "" && e.Href == "" {
 			continue
 		}
+		// A commit written with words behind it ("237129c squash, green") is the
+		// hash as the pill and the words as its note.
+		if e.Kind == "commit" && !isShortRef(ref) {
+			if sha, rest, ok := splitCommitRef(ref); ok {
+				ref = sha
+				e.Note = strings.TrimSpace(rest + " " + e.Note)
+			}
+		}
+		// What is no short identifier (blanks in it, or long) is a sentence, not a
+		// pill: icon and grey text that wraps.
+		if e.Href == "" && !isShortRef(ref) {
+			b.WriteString(proofSentence(e, ref))
+			continue
+		}
 		var pill string
 		switch e.Kind {
 		case "commit":
@@ -342,7 +360,7 @@ func proofChips(l lang, es []evidenceLine) template.HTML {
 			}
 			pill = string(kindPill(l, "commit", short, e.Href, pillCard{Label: e.Label, Title: ref}))
 		case "test":
-			pill = `<span class="chip test" title="` + html.EscapeString(e.Label) + `">` + html.EscapeString(ref) + `</span>`
+			pill = `<span class="chip test" title="` + html.EscapeString(e.Label) + `"><span class="ct">` + html.EscapeString(ref) + `</span></span>`
 		case "file":
 			pill = string(kindPill(l, "file", ref, e.Href, pillCard{Title: ref, Brief: e.Label}))
 		case "decision":
@@ -350,13 +368,13 @@ func proofChips(l lang, es []evidenceLine) template.HTML {
 				pill = string(numberedPill(l, "decision", n, "", ""))
 				break
 			}
-			pill = `<span class="chip ar" title="` + html.EscapeString(e.Label) + `">` + string(mockIcon(proofIcon[e.Kind])) + html.EscapeString(ref) + `</span>`
+			pill = `<span class="chip ar" title="` + html.EscapeString(e.Label) + `">` + string(mockIcon(proofIcon[e.Kind])) + `<span class="ct">` + html.EscapeString(ref) + `</span></span>`
 		default:
 			if e.Kind == "url" && e.Href != "" {
 				pill = string(urlPill(l, e.Href))
 				break
 			}
-			inner := string(mockIcon(proofIcon[e.Kind])) + html.EscapeString(ref)
+			inner := string(mockIcon(proofIcon[e.Kind])) + `<span class="ct">` + html.EscapeString(ref) + `</span>`
 			if e.Href != "" {
 				pill = `<a class="chip ar" href="` + html.EscapeString(e.Href) + `" title="` + html.EscapeString(e.Label) + `">` + inner + `</a>`
 			} else {
@@ -373,6 +391,46 @@ func proofChips(l lang, es []evidenceLine) template.HTML {
 	}
 	return template.HTML(b.String())
 }
+
+// proofPillMax is the longest identifier that still stands as a pill.
+const proofPillMax = 80
+
+// isShortRef tells a short identifier (a hash, a test or file name, a number)
+// from words: no blank in it and not longer than proofPillMax.
+func isShortRef(s string) bool {
+	if strings.IndexFunc(s, unicode.IsSpace) >= 0 {
+		return false
+	}
+	return utf8.RuneCountInString(s) <= proofPillMax
+}
+
+var commitWordsPattern = regexp.MustCompile(`^([0-9a-fA-F]{7,40})\s+(\S[\s\S]*)$`)
+
+// splitCommitRef parts "237129c squash, green" into the hash and the words.
+func splitCommitRef(ref string) (sha, rest string, ok bool) {
+	m := commitWordsPattern.FindStringSubmatch(strings.TrimSpace(ref))
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
+// proofSentence writes a proof that is words as one unit: the icon of its kind,
+// then the text in grey that wraps with the line. The text is escaped and never
+// a link, so what a person wrote stays text.
+func proofSentence(e evidenceLine, text string) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if e.Note != "" {
+		text += " " + e.Note
+	}
+	icon := proofSentenceIcon[e.Kind]
+	if icon == "" {
+		icon = "book"
+	}
+	return `<span class="pfx pfree"><span class="pico" title="` + html.EscapeString(e.Label) + `">` + string(mockIcon(icon)) + `</span><span class="pnote">` + html.EscapeString(text) + `</span></span>`
+}
+
+var proofSentenceIcon = map[string]string{"commit": "commit", "test": "check", "file": "file", "decision": "book", "url": "ext", "session": "term", "request": "issue"}
 
 // relationEventKeys are the sentences of a new link by its kind; any other kind
 // reads like "related".

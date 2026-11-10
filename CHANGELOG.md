@@ -63,6 +63,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   (`--state-file` is required; each namespace's monthly budget is checked
   before every repository); it asks the server what is due
   and reports each run. `ctx garden check-knowledge` keeps working as before.
+- File descriptions are now mainly the gardener's: with `--propose` it writes
+  them itself (harness `gardener`) instead of filing a description note. The
+  files the merges into the default branch brought since its last run come
+  first, anchored on their merge commit, and the directory of a new file
+  follows; a description that no longer fits its file is revised. Paragraphs
+  an agent or a person wrote stay word for word, and the server refuses a text
+  of the gardener that drops one (`kept_paragraphs`). The description sessions
+  run on `--ghost-model` (default `claude-haiku-5-5`) and count against the
+  gardener's budget; `--dry-run` says how many files and directories it would
+  describe and at what estimated cost. Agents are asked to describe a path only
+  when they know something the code does not show; run `ctx install` again to
+  get the new wording of the rule section.
 - Projects now have owners as on GitHub. A write makes a remote a project
   only where nothing is in doubt: the claimed prefix of a connected
   organization the writer is a member of, or the writer's own GitHub login
@@ -525,6 +537,26 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - `GHOSTTREE_PUBLIC_URL` and `GHOSTTREE_TRUSTED_PROXIES` for TLS and reverse
   proxies, with `Secure` cookies.
 - `DELETE /api/tokens/self` revokes the token that made the request.
+- One search index over sessions: the words of every transcript line are
+  indexed once, in `chunk_fts`, which keeps no copy of the text; snippets are
+  made from the stored line for the hits of a page. The first start adds
+  `chunk_fts` and the columns `chunk_index.fts` and `chunk_index.prompt`
+  (additive, instant, no scan). Existing rows keep their copies until `ctx db
+  slim-search --db <path>` runs (first `--dry-run`, then beside the running
+  server, then `ctx db vacuum` with the server stopped): it moves their words
+  from `sess_fts` to `chunk_fts`, empties the four text fields of
+  `chunk_index`, empties `sess_fts`, drops the trigger `chunks_ai` and empties
+  `chunks_fts`. Nothing is derived again from the transcripts, so no
+  distillation and no embedding starts again. On local transcripts
+  `chunk_index` went from 273 MiB to 23 MiB and the file from 878 MiB to
+  563 MiB; the web search answers byte for byte as before. An older ghosttree
+  started after `slim-search` does not find the moved sessions, so going back
+  needs the backup.
+- The agents' session search (`context_search` with sessions,
+  `ctx search`) and the sessions of a request search the same fields as the
+  web search: messages, thinking, commands and tool output. Instructions a
+  harness injects (Codex developer messages, plugin and skill lists,
+  environment context) are no longer hits.
 - `ctx db chunk-stats --db PATH [--sample N]` shows, from a sample, how many
   bytes stored transcript lines take per line type: as text, as stored (packed
   or not), after the slim rule and after slimming and packing; read-only and
@@ -677,6 +709,13 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- Searching sessions by meaning no longer takes 40 s or more for a reader who
+  may read only part of the transcripts. SQLite looked every embedding up once
+  per readable session; it now looks it up once (0.1 s with a thousand readable
+  sessions).
+- `ctx db slim-sessions` no longer ends when the server holds the write lock
+  longer than its busy timeout: the step waits (5 s up to 2 min) and is tried
+  again, and its counts are taken only once.
 - `context_search` without `kind` and `ctx search` no longer lose every hit
   when one area fails. The areas run at the same time, each with a time
   budget of its own (on the server, sessions get 8 seconds when other areas

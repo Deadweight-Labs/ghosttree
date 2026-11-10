@@ -149,7 +149,7 @@ func TestClientSessionsAndSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "livekit sfu keeps dropping", Raw: "{}"}}); err != nil {
+	if err := c.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "livekit sfu keeps dropping", Raw: promptRaw("codex", "livekit sfu keeps dropping")}}); err != nil {
 		t.Fatal(err)
 	}
 	res, err := c.Search("livekit", "sessions", scope.Axes{}, 10)
