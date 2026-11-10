@@ -19,6 +19,8 @@ type Account struct {
 	Admin     bool   `json:"admin"`
 	State     string `json:"state"`
 	CreatedAt string `json:"created_at"`
+	// Kind is "person" or "service" (REQ-623).
+	Kind string `json:"kind,omitempty"`
 }
 
 // TokenInfo beschreibt ein Token ohne sein Geheimnis; der Hash verlässt den
@@ -280,13 +282,13 @@ func (s *Store) ListAccounts() ([]Account, error) {
 	return out, rows.Err()
 }
 
-const accountSelect = `SELECT id, name, email, is_admin, state, created_at FROM persons`
+const accountSelect = `SELECT id, name, email, is_admin, state, created_at, kind FROM persons`
 
 func scanAccount(r rowScanner) (Account, error) {
 	var a Account
 	var id int64
 	var admin int
-	if err := r.Scan(&id, &a.Name, &a.Email, &admin, &a.State, &a.CreatedAt); err != nil {
+	if err := r.Scan(&id, &a.Name, &a.Email, &admin, &a.State, &a.CreatedAt, &a.Kind); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Account{}, errAccountNotFound
 		}

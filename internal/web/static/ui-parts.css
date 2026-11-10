@@ -328,3 +328,14 @@
     & .cmdc .gbtn { top: auto; bottom: 8px; right: 8px; transform: none; }
   }
 }
+
+/* ---- Confirm: a destructive button asks first. The summary is the button that was there; the popover repeats the deed as a red button. ---- */
+:is(.g2) {
+  & details.cfm { position: relative; display: inline-block; }
+  & details.cfm > summary { list-style: none; cursor: pointer; }
+  & details.cfm > summary::-webkit-details-marker { display: none; }
+  & details.cfm[open] > summary { background: var(--btn-active); }
+  & details.cfm .cfp { position: absolute; z-index: 40; top: calc(100% + 4px); right: 0; width: 240px; max-width: calc(100vw - 32px); padding: 16px; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-pop); text-align: left; }
+  & details.cfm .cfp p { margin: 0 0 12px; font-size: 14px; color: var(--fg-default); }
+  & details.cfm .cfp .gbtn { width: 100%; justify-content: center; }
+}

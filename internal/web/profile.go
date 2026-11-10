@@ -69,6 +69,8 @@ func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, 
 	switch r.URL.Query().Get("notice") {
 	case "saved":
 		v.Notice = l.msg("profile.saved")
+	case "renamed":
+		v.Notice = l.msg("profile.saved_as", v.Name)
 	case "github_linked":
 		v.Notice = l.msg("profile.gh.linked")
 	case "github_unlinked":
@@ -93,15 +95,22 @@ func (a *app) profileSave(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		a.sessions.relabel(acct.ID, acct.Name)
-		http.Redirect(w, r, "/ui/profile?notice=saved", http.StatusSeeOther)
+		// The store may have cleaned the name; then the page says what it became.
+		notice := "saved"
+		if strings.Join(strings.Fields(r.FormValue("name")), " ") != acct.Name {
+			notice = "renamed"
+		}
+		http.Redirect(w, r, "/ui/profile?notice="+notice, http.StatusSeeOther)
+	// A refused name goes back to the form over the field, with what was typed in it;
+	// the page keeps showing the name the account has.
 	case errors.Is(err, store.ErrAccountNameTaken):
-		a.renderProfile(w, r, http.StatusConflict, r.FormValue("name"), l.msg("profile.err.taken"))
+		a.failFormTo(w, r, "/ui/profile", http.StatusConflict, l.msg("profile.err.taken"), "name")
 	case errors.Is(err, store.ErrNameRateLimited):
-		a.renderProfile(w, r, http.StatusTooManyRequests, "", l.msg("profile.err.rate"))
+		a.failFormTo(w, r, "/ui/profile", http.StatusTooManyRequests, l.msg("profile.err.rate"), "name")
 	case errors.Is(err, store.ErrNameNotAllowed):
-		a.renderProfile(w, r, http.StatusForbidden, "", l.msg("profile.err.locked"))
+		a.failFormTo(w, r, "/ui/profile", http.StatusForbidden, l.msg("profile.err.locked"), "name")
 	case errors.Is(err, store.ErrInvalidInput):
-		a.renderProfile(w, r, http.StatusBadRequest, r.FormValue("name"), l.msg("profile.err.invalid"))
+		a.failFormTo(w, r, "/ui/profile", http.StatusBadRequest, l.msg("profile.err.invalid"), "name")
 	default:
 		http.Error(w, l.msg("adm.err.generic"), http.StatusInternalServerError)
 	}

@@ -27,3 +27,6 @@
 @media (max-width: 767px) {
   :is(.g2.org) .orow { flex-direction: column; align-items: flex-start; gap: 4px; }
 }
+
+/* Projects waiting between a person's namespace and an organization (REQ-623). */
+:is(.g2.org) .sec-t { font-size: 16px; font-weight: 600; margin: 24px 0 8px; }

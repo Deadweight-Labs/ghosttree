@@ -2,6 +2,7 @@ package web
 
 import (
 	"database/sql"
+	"errors"
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"net/url"
@@ -170,6 +171,24 @@ type reviewView struct {
 	Tabs   []knTab
 	Segs   []knSeg
 	Source string
+	// Held are the entries held back since their project came into existence,
+	// in the projects where the viewer may release them.
+	Held []heldRow
+}
+
+// heldRow is one held entry with what its kind is called and where it leads
+// back to after a decision.
+type heldRow struct {
+	store.HeldEntry
+	KindLabel string
+	Back      string
+	// Body is the entry's text, only on the preview page of a reviewer.
+	Body string
+}
+
+var heldKindKeys = map[string]string{
+	store.HeldKnowledge: "review.held.knowledge", store.HeldRequest: "review.held.request", store.HeldPain: "review.held.pain",
+	store.HeldIdea: "review.held.idea", store.HeldDocument: "review.held.document",
 }
 
 type knowledgeItemView struct {
@@ -784,11 +803,83 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	}
 	slices.SortStableFunc(v.Groups, func(x, y reviewGroup) int { return strings.Compare(x.Label, y.Label) })
 	v.Titled = len(v.Groups) > 1 || project == ""
+	v.Held = a.heldRows(pa, l, project)
 	v.Empty = len(v.Cards) == 0 && v.Garden == nil
 	v.Rows = reviewRows(l, v.Garden, v.Cards)
 	v.Tabs = reviewTabs(r, l, gardenN, agentN, v.Source)
 	v.Segs = a.knowledgeSegs(r, pa, l, project, "review", a.knowledgeCountText(pa, project))
 	a.renderBrowser(w, r, "review", pageData{Title: l.msg("nav.review"), Project: project, ReviewV: v})
+}
+
+// heldRows lists the held entries of the project (or of every project of the
+// viewer) where the viewer may decide them.
+func (a *app) heldRows(pa *store.ProjectAccess, l lang, project string) []heldRow {
+	projects := []string{project}
+	if project == "" {
+		projects = pa.Projects()
+	}
+	back := "/ui/review"
+	if project != "" {
+		back += "?project=" + url.QueryEscape(project)
+	}
+	var out []heldRow
+	for _, p := range projects {
+		list, err := pa.HeldEntries(p, false)
+		if err != nil {
+			continue
+		}
+		for _, h := range list {
+			out = append(out, heldRow{HeldEntry: h, KindLabel: l.msg(heldKindKeys[h.Kind]), Back: back})
+		}
+		if len(out) >= reviewShown {
+			break
+		}
+	}
+	return out
+}
+
+// reviewHeldPreview shows a held entry to an owner, lead or reviewer of its
+// project, so the decision is not blind. Only here, in the web: no other
+// surface reads held text.
+func (a *app) reviewHeldPreview(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	p, err := a.access(r).PreviewHeld(r.PathValue("kind"), id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	v := &heldRow{HeldEntry: p.HeldEntry, KindLabel: l.msg(heldKindKeys[p.Kind]), Back: "/ui/review#held", Body: p.Body}
+	a.renderBrowser(w, r, "heldpreview", pageData{Title: p.Title, Project: p.Project, HeldV: v})
+}
+
+// reviewHeld releases or discards a held entry; the store checks the review
+// right in its project.
+func (a *app) reviewHeld(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.FormValue("id"), 10, 64)
+	release := r.FormValue("release")
+	if err != nil || (release != "1" && release != "0") {
+		http.NotFound(w, r)
+		return
+	}
+	switch err := a.store.DecideHeldEntry(browserPrincipal(r).ID, r.FormValue("kind"), id, release == "1"); {
+	case errors.Is(err, store.ErrHeldNotFound), errors.Is(err, store.ErrNotReviewer):
+		http.NotFound(w, r)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// The way back is one of two fixed addresses, never the form's value.
+	back := "/ui/review"
+	if r.FormValue("back") == "/ui/review#held" {
+		back = "/ui/review#held"
+	}
+	http.Redirect(w, r, back, http.StatusSeeOther)
 }
 
 // reviewPlan is what one decision changes: the right it needs, the patch, the
@@ -941,6 +1032,10 @@ func (a *app) reviewBulk(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("source") == "gardener" {
 		q.Set("source", "gardener")
 	}
+	if back := gardenBack(r, q); back != "" {
+		http.Redirect(w, r, back, http.StatusSeeOther)
+		return
+	}
 	if p := scope.NormalizeRemote(r.FormValue("project")); p != "" {
 		q.Set("project", p)
 	}
@@ -965,6 +1060,9 @@ func (a *app) afterDecision(r *http.Request, k store.Knowledge, done string) str
 	}
 	if r.FormValue("next") == "item" {
 		return "/ui/knowledge/" + strconv.FormatInt(k.ID, 10) + "?" + q.Encode()
+	}
+	if back := gardenBack(r, q); back != "" {
+		return back
 	}
 	if p := scope.NormalizeRemote(r.FormValue("project")); p != "" {
 		q.Set("project", p)

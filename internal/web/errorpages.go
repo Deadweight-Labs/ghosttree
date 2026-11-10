@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"net/http"
 	"slices"
 	"strings"
@@ -25,20 +26,40 @@ type errorPageWriter struct {
 	http.ResponseWriter
 	a        *app
 	r        *http.Request
+	keep     *formKeep
 	code     int
 	captured bool
+	reject   string
+	body     bytes.Buffer
 }
 
+// rejectHeader is how a handler tells the wrapper why it said no, where the status
+// alone does not (a missing form token is 403 like a missing right).
+const rejectHeader = "X-Gt-Reject"
+
 func (w *errorPageWriter) WriteHeader(code int) {
-	if (code == http.StatusNotFound || code == http.StatusForbidden) && w.r.Method == http.MethodGet && strings.HasPrefix(w.Header().Get("Content-Type"), "text/plain") {
+	plain := strings.HasPrefix(w.Header().Get("Content-Type"), "text/plain")
+	switch {
+	case plain && (code == http.StatusNotFound || code == http.StatusForbidden) && w.r.Method == http.MethodGet:
 		w.code, w.captured = code, true
 		return
+	case plain && code >= http.StatusBadRequest && w.r.Method == http.MethodPost && formNavigation(w.r):
+		// A form the browser sent as a page change: the plain-text refusal becomes the
+		// page the form was on, or a page of its own, with what was typed (failForm).
+		w.code, w.captured = code, true
+		w.reject = w.Header().Get(rejectHeader)
+		w.Header().Del(rejectHeader)
+		return
 	}
+	w.Header().Del(rejectHeader)
 	w.ResponseWriter.WriteHeader(code)
 }
 
 func (w *errorPageWriter) Write(b []byte) (int, error) {
 	if w.captured {
+		if w.r.Method == http.MethodPost {
+			w.body.Write(b)
+		}
 		return len(b), nil
 	}
 	return w.ResponseWriter.Write(b)
@@ -59,6 +80,30 @@ func (w *errorPageWriter) finish() {
 		return
 	}
 	h := w.ResponseWriter.Header()
+	if w.r.Method == http.MethodPost {
+		for _, k := range []string{"Content-Type", "Content-Length", "X-Content-Type-Options"} {
+			h.Del(k)
+		}
+		if w.reject == "csrf" && !w.a.sameOrigin(w.r) {
+			// A form from another origin is refused as plain as before: no page, no
+			// redirect and none of its fields written back.
+			h.Set("Content-Type", "text/plain; charset=utf-8")
+			h.Set("X-Content-Type-Options", "nosniff")
+			w.ResponseWriter.WriteHeader(w.code)
+			_, _ = w.ResponseWriter.Write(w.body.Bytes())
+			return
+		}
+		r := w.r
+		if w.keep != nil && w.keep.values != nil {
+			r, _ = withFormKeep(r)
+			if k, ok := r.Context().Value(formKeepKey{}).(*formKeep); ok {
+				k.values = w.keep.values
+			}
+		}
+		text := formFailText(w.a.langFor(r), w.code, w.body.String(), w.reject)
+		w.a.failForm(w.ResponseWriter, r, w.code, text, "")
+		return
+	}
 	h.Del("Content-Type")
 	h.Del("X-Content-Type-Options")
 	h.Set("X-Content-Type-Options", "nosniff")
@@ -142,6 +187,9 @@ func (a *app) errorViewFor(r *http.Request, code int) *errorView {
 		v.BackHref, v.BackLabel = "/ui/knowledge", l.msg("err.back_knowledge")
 	case strings.HasPrefix(path, "/ui/sessions"):
 		v.BackHref, v.BackLabel = "/ui/sessions", l.msg("err.back_sessions")
+		if code == http.StatusNotFound {
+			v.Title = l.msg("err.404.session")
+		}
 	case strings.HasPrefix(path, "/ui/agents"):
 		v.BackHref, v.BackLabel = "/ui/agents", l.msg("err.back_agents")
 	default:
@@ -149,6 +197,11 @@ func (a *app) errorViewFor(r *http.Request, code int) *errorView {
 		// the page already shows.
 		if rv := repoFrom(r); rv != nil {
 			v.BackHref, v.BackLabel = rv.Href, l.msg("err.back_repo")
+			// A page of a tab leads back to the list of that tab, which the head
+			// already shows as open.
+			if key, ok := errorBackKeys[repoTabOf(path)]; ok {
+				v.BackHref, v.BackLabel = rv.Href+"/"+repoTabOf(path), l.msg(key)
+			}
 		}
 	}
 	return v
@@ -172,4 +225,53 @@ var serverVersionText atomic.Value
 func srvVersion() string {
 	v, _ := serverVersionText.Load().(string)
 	return v
+}
+
+// errorBackKeys name the way back from a page of a tab to its list.
+var errorBackKeys = map[string]string{
+	"issues": "err.back_issues", "pains": "err.back_issues", "ideas": "err.back_issues",
+	"pulls": "err.back_pulls", "commits": "err.back_commits", "runbooks": "err.back_runbooks",
+	"tasks": "err.back_tasks", "docs": "err.back_docs", "features": "err.back_features", "packages": "err.back_packages",
+}
+
+// repoTabOf is the tab of an address /ui/{org}/{repo}/{tab}/…, "" for anything else.
+func repoTabOf(path string) string {
+	rest, ok := strings.CutPrefix(path, "/ui/")
+	if !ok {
+		return ""
+	}
+	segs := strings.Split(strings.Trim(rest, "/"), "/")
+	if _, more, ok := parseRepoPath(segs); ok && len(more) > 0 {
+		return more[0]
+	}
+	return ""
+}
+
+// unknownAddress answers every address no route takes. Under /ui/ a trailing slash is
+// taken off (the address of a repository with a slash led nowhere); a signed-in
+// viewer then sees the error page of the shell, and anyone else, and anything outside
+// /ui/, a small page with the way to the sign-in, not the plain text of net/http.
+func (a *app) unknownAddress(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	inUI := strings.HasPrefix(path, "/ui/")
+	if inUI && len(path) > len("/ui/") && strings.HasSuffix(path, "/") {
+		target := strings.TrimRight(path, "/")
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+		return
+	}
+	if cookie, err := r.Cookie(sessionCookie); err == nil {
+		if _, ok := a.sessions.get(cookie.Value); ok {
+			a.requirePerson(http.HandlerFunc(http.NotFound)).ServeHTTP(w, r)
+			return
+		}
+	}
+	if inUI || path == "/ui" {
+		a.loginRedirect(w, r)
+		return
+	}
+	l := a.langFor(r)
+	a.joinMessageBack(l, w, http.StatusNotFound, l.msg("err.404.title"), l.msg("err.404.text"), "/ui/login", l.msg("login.back_to_sign_in"))
 }

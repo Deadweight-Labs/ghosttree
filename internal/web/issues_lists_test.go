@@ -185,8 +185,11 @@ func TestNewIssuePageAndCreate(t *testing.T) {
 	// "Create another" goes back to an empty form.
 	resp = newIssuePost(t, e, url.Values{"kind": {"issue"}, "title": {"Second"}, "again": {"1"}})
 	resp.Body.Close()
-	if resp.Header.Get("Location") != "/ui/x/shell/issues/new" {
-		t.Errorf("again -> %q", resp.Header.Get("Location"))
+	loc = resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/ui/x/shell/issues/new?again=1&made=") {
+		t.Errorf("again -> %q", loc)
+	} else if _, page := fetchPage(t, e.Owner, e.Base+loc); !strings.Contains(page, "Issue #") || !strings.Contains(page, `name="again" value="1" checked`) {
+		t.Errorf("the form for the next one does not say what was made and keep the box ticked")
 	}
 }
 

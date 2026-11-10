@@ -130,24 +130,31 @@ func TestCreateProjectAsksWithNameAndOrganization(t *testing.T) {
 		t.Fatalf("screen %v", m.screen)
 	}
 	v := plainView(m)
-	for _, want := range []string{"github.com/someone/side", "Deadweight Labs", "Side Org", "github.com/someone/side in deadweight-labs anlegen?", "ctx project claim github.com/someone/side --org deadweight-labs"} {
+	// REQ-623: the own namespace is the default; the command names no org.
+	for _, want := range []string{"github.com/someone/side", "Eigener Namensraum (robin)", "Deadweight Labs", "github.com/someone/side in deinem eigenen Namensraum anlegen?"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("missing %q:\n%s", want, v)
 		}
 	}
+	if !strings.Contains(v, "ctx project claim github.com/someone/side") {
+		t.Errorf("command line missing:\n%s", v)
+	}
+	if strings.Contains(v, "--org") {
+		t.Errorf("the own namespace needs no --org:\n%s", v)
+	}
 	if len(f.claimed) != 0 {
 		t.Fatal("created before the confirmation")
 	}
-	m = drive(m, key("left"))
-	if m.claimOrg() != "side-org" || !strings.Contains(plainView(m), "Anlegen braucht Owner") {
+	m = drive(m, key("right"))
+	if m.claimOrg() != "deadweight-labs" || !strings.Contains(plainView(m), "--org deadweight-labs") {
 		t.Fatalf("org %q view %s", m.claimOrg(), plainView(m))
 	}
-	m = drive(m, key("right"))
+	m = drive(m, key("left"))
 	m = drive(m, key("enter"))
-	if len(f.claimed) != 1 || f.claimed[0] != "github.com/someone/side@deadweight-labs" {
+	if len(f.claimed) != 1 || f.claimed[0] != "github.com/someone/side@" {
 		t.Fatalf("claimed %v", f.claimed)
 	}
-	if m.screen != ScreenHome || !strings.Contains(m.flash, "gehört jetzt zu deadweight-labs") {
+	if m.screen != ScreenHome || !strings.Contains(m.flash, "gehört jetzt zu") {
 		t.Fatalf("screen %v flash %q", m.screen, m.flash)
 	}
 	if strings.Contains(plainView(m), "Kein Projekt in diesem Ordner") {

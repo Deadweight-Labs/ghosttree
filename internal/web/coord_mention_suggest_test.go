@@ -36,7 +36,7 @@ func suggestRoom(t *testing.T) (srv *httptest.Server, tokens map[string]string, 
 			t.Fatal(err)
 		}
 	}
-	if _, err := st.EnsureProject("person:1", project); err != nil {
+	if _, err := claimInOrg(st, "person:1", project); err != nil {
 		t.Fatal(err)
 	}
 	for who, role := range map[string]string{"person:2": store.RoleMember, "person:3": store.RoleGuest} {

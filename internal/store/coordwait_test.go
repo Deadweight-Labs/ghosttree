@@ -651,7 +651,7 @@ func TestAFailedRollbackAbortsTheSend(t *testing.T) {
 func TestOpenAttentionOfOtherRoomsIsNotScanned(t *testing.T) {
 	st, room := waitFixture(t)
 	const other = "github.com/dw/other"
-	if _, err := st.EnsureProject("person:1", other); err != nil {
+	if _, err := claimInOrg(st, "person:1", other); err != nil {
 		t.Fatal(err)
 	}
 	otherRoom := RoomKeyForProject(other)

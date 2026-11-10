@@ -25,7 +25,7 @@ func roleFixture(t *testing.T) *Store {
 			t.Fatal(err)
 		}
 	}
-	if _, err := st.EnsureProject("person:1", roleProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", roleProject); err != nil {
 		t.Fatal(err)
 	}
 	return st
@@ -347,7 +347,7 @@ func TestProjectRolesThroughRuntimeWriter(t *testing.T) {
 	if _, err := st.AcceptInvitation("person:2", code); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.EnsureProject("person:1", roleProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", roleProject); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetProjectRole("person:1", roleProject, "person:2", RoleLead, true, RoleViaWeb); err != nil {
@@ -378,7 +378,7 @@ func TestRolesMigrationOnOldDatabase(t *testing.T) {
 	if _, err := st.AcceptInvitation("person:2", code); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.EnsureProject("person:1", roleProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", roleProject); err != nil {
 		t.Fatal(err)
 	}
 	room := RoomKeyForProject(roleProject)

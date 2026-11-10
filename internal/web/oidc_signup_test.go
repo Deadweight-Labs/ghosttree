@@ -22,7 +22,7 @@ func signupEnv(t *testing.T, prompts []string, signup string) (*oidcEnv, string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.store.EnsureProject("person:1", "github.com/dw/signup"); err != nil {
+	if _, err := claimInOrg(env.store, "person:1", "github.com/dw/signup"); err != nil {
 		t.Fatal(err)
 	}
 	code, _, err := env.store.CreateProjectInvitation("person:1", org.ID, "github.com/dw/signup", store.RoleMember, 0)

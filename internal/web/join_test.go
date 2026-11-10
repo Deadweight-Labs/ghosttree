@@ -28,7 +28,7 @@ func joinWeb(t *testing.T) (srv *httptest.Server, st *store.Store, alice *http.C
 	if org, err = st.CreateOrg("person:1", "Alpha", "alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = st.EnsureProject("person:1", joinProject); err != nil {
+	if _, err = claimInOrg(st, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	return srv, st, loginInteractive(t, srv, st, "alice"), org, aliceTok
@@ -106,7 +106,7 @@ func TestJoinEveryInvalidVariantIsByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.EnsureProject("person:1", "github.com/alpha/moving"); err != nil {
+	if _, err := claimInOrg(st, "person:1", "github.com/alpha/moving"); err != nil {
 		t.Fatal(err)
 	}
 	moved, _, err := st.CreateProjectInvitation("person:1", org.ID, "github.com/alpha/moving", store.RoleMember, 0)
@@ -443,7 +443,7 @@ func TestJoinOIDCSignInCreatesAccountWithProjectRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.store.EnsureProject("person:1", joinProject); err != nil {
+	if _, err := claimInOrg(env.store, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	code, _, err := env.store.CreateProjectInvitation("person:1", org.ID, joinProject, store.RoleGuest, 0)
@@ -475,7 +475,7 @@ func TestOrgPageCreatesProjectInvitationLinks(t *testing.T) {
 	base, st, alice, anna, org := orgWeb(t)
 	_ = anna
 	st.SetAccessMode(store.AccessMode{Enforce: true})
-	if _, err := st.EnsureProject("person:1", joinProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
@@ -590,7 +590,7 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 
 func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 	base, st, alice, _, org := orgWeb(t)
-	if _, err := st.EnsureProject("person:1", joinProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	resp, _ := alice.Get(base + "/ui/orgs")
@@ -637,7 +637,7 @@ func TestOrgPageShowsOnlyWhoSharesAProject(t *testing.T) {
 		st.AddPerson(n)
 	}
 	const secret = "github.com/alpha/secret"
-	if _, err := st.EnsureProject("person:1", secret); err != nil {
+	if _, err := claimInOrg(st, "person:1", secret); err != nil {
 		t.Fatal(err)
 	}
 	a, _, _ := st.CreateProjectInvitation("person:1", org.ID, joinProject, store.RoleMember, 0)
@@ -656,8 +656,13 @@ func TestOrgPageShowsOnlyWhoSharesAProject(t *testing.T) {
 			t.Errorf("the page leaks %q", leak)
 		}
 	}
-	if !strings.Contains(page, "alice") || !strings.Contains(page, "anna") {
-		t.Fatalf("anna lacks owner or herself: %s", page)
+	// anna came in through a project invitation: a guest of the organization,
+	// who sees her project and no organization page (14 A, #4376).
+	if strings.Contains(page, `id="members"`) {
+		t.Fatalf("a project guest gets the organization's settings: %s", page)
+	}
+	if status, _ := fetchPage(t, anna, srv.URL+"/ui/alpha"); status != http.StatusNotFound {
+		t.Errorf("a project guest opens the organization page: %d", status)
 	}
 	// Auch ein Gast sieht keine anderen Mitglieder.
 	g, _, _ := st.CreateProjectInvitation("person:1", org.ID, joinProject, store.RoleGuest, 0)

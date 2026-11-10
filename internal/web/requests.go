@@ -30,13 +30,9 @@ const (
 	requestsShown   = 25
 	requestWorkChip = 2
 	activityShown   = 30
-	maxTextBytes    = 100_000
-	maxFieldBytes   = 2_000
-	maxTitleBytes   = 500
+	maxFieldChars   = 2_000
+	maxTitleChars   = 500
 	maxPriority     = 64
-	// Ein Formular kodiert Zeilenumbrüche und Umlaute mehrfach (bis zu sechs
-	// Bytes je Zeichen); die Grenze liegt über dem Sechsfachen des längsten Textes.
-	requestCorrectForm = 6*maxTextBytes + 16<<10
 )
 
 var (
@@ -771,31 +767,11 @@ func (a *app) requestFail(w http.ResponseWriter, r *http.Request, id int64, err 
 	}
 }
 
-// requestFormTooLarge liest das Formular vor requireCSRF und antwortet auf eine
-// überschrittene Grenze mit 413 und einer gestalteten Seite, statt dass der
-// Lesefehler dort als fehlendes Token (403) erscheint.
-func (a *app) requestFormTooLarge(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			var tooBig *http.MaxBytesError
-			if errors.As(err, &tooBig) {
-				w.Header().Set("Cache-Control", "no-store")
-				l := a.langFor(r)
-				w.WriteHeader(http.StatusRequestEntityTooLarge)
-				a.renderBrowser(w, r, "requesttoolarge", pageData{Title: l.msg("requests.toolarge.title"), BackURL: "/ui/requests",
-					ErrV: &errorView{Code: "413", Icon: "file", Title: l.msg("requests.toolarge.title"), Text: l.msg("requests.toolarge.body"), BackHref: r.URL.Path, BackLabel: l.msg("requests.toolarge.back_issue"), AltHref: "/ui/requests", AltLabel: l.msg("requests.toolarge.back")}})
-				return
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 func lineBreaks(s string) string { return strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(s) }
 
 func cleanText(s string, limit int) (string, bool) {
 	s = strings.TrimSpace(lineBreaks(s))
-	return s, s != "" && len(s) <= limit
+	return s, s != "" && !tooLong(s, limit)
 }
 
 func (a *app) requestDone(w http.ResponseWriter, r *http.Request, id int64, done string, extra url.Values) {
@@ -811,7 +787,7 @@ func (a *app) requestAddCriterion(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	text, valid := cleanText(r.FormValue("description"), maxFieldBytes)
+	text, valid := cleanText(r.FormValue("description"), maxFieldChars)
 	if !valid {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
@@ -849,7 +825,7 @@ func (a *app) requestResolve(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("state") == "waived" {
 		state = "waived"
 	}
-	ref, valid := cleanText(r.FormValue("evidence_ref"), maxFieldBytes)
+	ref, valid := cleanText(r.FormValue("evidence_ref"), maxFieldChars)
 	kind := r.FormValue("evidence_kind")
 	if !valid || !slices.Contains(evidenceKinds, kind) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
@@ -876,22 +852,26 @@ func (a *app) requestCorrect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := detail.Request
-	reason, valid := cleanText(r.FormValue("reason"), maxFieldBytes)
+	reason, valid := cleanText(r.FormValue("reason"), maxFieldChars)
 	if !valid {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
 	patch := map[string]string{}
 	if title := strings.TrimSpace(lineBreaks(r.FormValue("title"))); title != strings.TrimSpace(req.Title) {
-		if title == "" || len(title) > maxTitleBytes {
-			http.Error(w, "invalid input", http.StatusBadRequest)
+		if tooLong(title, maxTitleChars) {
+			a.tooLongForm(w, r, requestURL(req.ID), "title", title, maxTitleChars)
+			return
+		}
+		if title == "" {
+			a.failFormTo(w, r, requestURL(req.ID), http.StatusUnprocessableEntity, a.langFor(r).msg("err.form.required"), "title")
 			return
 		}
 		patch["title"] = title
 	}
 	if description := lineBreaks(r.FormValue("description")); description != lineBreaks(req.Description) {
-		if len(description) > maxTextBytes {
-			http.Error(w, "invalid input", http.StatusBadRequest)
+		if tooLong(description, maxLongText) {
+			a.tooLongForm(w, r, requestURL(req.ID), "description", description, maxLongText)
 			return
 		}
 		patch["description"] = description
@@ -904,7 +884,7 @@ func (a *app) requestCorrect(w http.ResponseWriter, r *http.Request) {
 		patch["type"] = typ
 	}
 	if priority := strings.TrimSpace(r.FormValue("priority")); priority != strings.TrimSpace(req.Priority) {
-		if len(priority) > maxPriority {
+		if tooLong(priority, maxPriority) {
 			http.Error(w, "invalid input", http.StatusBadRequest)
 			return
 		}
@@ -926,7 +906,7 @@ func (a *app) requestComplete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ref, valid := cleanText(r.FormValue("evidence_ref"), maxFieldBytes)
+	ref, valid := cleanText(r.FormValue("evidence_ref"), maxFieldChars)
 	kind := r.FormValue("evidence_kind")
 	if !valid || !slices.Contains(evidenceKinds, kind) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
@@ -945,7 +925,7 @@ func (a *app) requestDrop(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reason, valid := cleanText(r.FormValue("reason"), maxFieldBytes)
+	reason, valid := cleanText(r.FormValue("reason"), maxFieldChars)
 	if !valid {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return

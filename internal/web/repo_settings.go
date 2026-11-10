@@ -102,18 +102,28 @@ func (a *app) labelRedirect(w http.ResponseWriter, r *http.Request, project, key
 	http.Redirect(w, r, repoHref(project)+"/settings?"+key+"="+url.QueryEscape(value)+"#labels", http.StatusSeeOther)
 }
 
+// labelFail goes back to the label form with the refusal over it and the typed name,
+// colour and description still in the fields.
+func (a *app) labelFail(w http.ResponseWriter, r *http.Request, project, code string) {
+	field := "name"
+	if code == "forbidden" {
+		field = ""
+	}
+	a.failFormTo(w, r, repoHref(project)+"/settings#labels", http.StatusUnprocessableEntity, a.langFor(r).msg(labelFailKey(code)), field)
+}
+
 func (a *app) labelResult(w http.ResponseWriter, r *http.Request, project string, err error, done string) {
 	switch {
 	case err == nil:
 		a.labelRedirect(w, r, project, "done", done)
 	case requestdomain.Code(err) != "":
-		a.labelRedirect(w, r, project, "fail", requestdomain.Code(err))
+		a.labelFail(w, r, project, requestdomain.Code(err))
 	case err == store.ErrAccessForbidden:
-		a.labelRedirect(w, r, project, "fail", "forbidden")
+		a.labelFail(w, r, project, "forbidden")
 	case err == store.ErrAccessNotFound:
 		http.NotFound(w, r)
 	default:
-		a.labelRedirect(w, r, project, "fail", "label")
+		a.labelFail(w, r, project, "label")
 	}
 }
 

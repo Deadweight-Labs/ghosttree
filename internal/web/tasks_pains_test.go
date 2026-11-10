@@ -114,14 +114,14 @@ func TestSecretInTheDoneNoteIsRefusedWithoutAChange(t *testing.T) {
 	req := rqMake(t, e.St, rqSpec{Title: "Ship it"})
 	task := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "Set the key"})
 	leaked := "ghp_" + strings.Repeat("a1B2", 9)
-	resp := tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {strconv.FormatInt(task.ID, 10)}, "note": {leaked}})
-	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "fail=secret") {
+	resp := tpPost(t, e, asBrowser(e.Member), "/ui/tasks/done", url.Values{"id": {strconv.FormatInt(task.ID, 10)}, "note": {leaked}})
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/inbox?f=aufgaben" {
 		t.Fatalf("secret note = %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if got, _ := e.St.TaskByID(task.ID); got.State != humantask.Open || got.DoneNote != "" {
 		t.Errorf("a refused note changed the task: %+v", got)
 	}
-	_, page := fetchPage(t, e.Member, e.Base+resp.Header.Get("Location"))
+	_, page := followRefusal(t, e.Member, e.Base, resp)
 	if strings.Contains(page, leaked) || !strings.Contains(page, "looks like a secret") {
 		t.Error("the page repeats the value or lacks the refusal")
 	}
@@ -186,18 +186,19 @@ func TestPainsPageDetailAndStateChange(t *testing.T) {
 	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/pains/9999"); code != http.StatusNotFound {
 		t.Errorf("unknown pain = %d", code)
 	}
-	if resp := tpPost(t, e, e.Member, "/ui/pains/"+strconv.FormatInt(d.Pain.ID, 10)+"/state", url.Values{"state": {"mitigated"}, "evidence_kind": {"commit"}, "evidence_ref": {"abc123"}}); resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "fail=remaining_required") {
-		t.Errorf("mitigated without remaining = %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	mitigated := tpPost(t, e, asBrowser(e.Member), "/ui/pains/"+strconv.FormatInt(d.Pain.ID, 10)+"/state", url.Values{"state": {"mitigated"}, "evidence_kind": {"commit"}, "evidence_ref": {"abc123"}})
+	if mitigated.StatusCode != http.StatusSeeOther || strings.Contains(mitigated.Header.Get("Location"), "?") {
+		t.Errorf("mitigated without remaining = %d %s", mitigated.StatusCode, mitigated.Header.Get("Location"))
 	}
-	_, failed := fetchPage(t, e.Member, e.Base+"/ui/x/shell/pains/"+strconv.FormatInt(d.Pain.ID, 10)+"?fail=remaining_required")
-	if !strings.Contains(failed, "Say what is still unsolved.") {
+	_, failed := followRefusal(t, e.Member, e.Base, mitigated)
+	if !strings.Contains(failed, "Say what is still unsolved.") || !strings.Contains(failed, `"evidence_ref":["abc123"]`) {
 		t.Errorf("the rule failure is not shown on the page")
 	}
 	resp := tpPost(t, e, e.Member, "/ui/pains/"+strconv.FormatInt(d.Pain.ID, 10)+"/state", url.Values{"state": {"mitigated"}, "remaining": {"search still reads whole"}, "evidence_kind": {"commit"}, "evidence_ref": {"abc123"}})
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("mitigate = %d", resp.StatusCode)
 	}
-	_, after := fetchPage(t, e.Member, e.Base+resp.Header.Get("Location"))
+	_, after := followRefusal(t, e.Member, e.Base, resp)
 	for _, want := range []string{"State saved.", "search still reads whole", "Mitigated", "abc123"} {
 		if !strings.Contains(after, want) {
 			t.Errorf("after the change the page lacks %q", want)
@@ -232,11 +233,11 @@ func TestTaskDescriptionShowsAndAFailedDoneExplainsItself(t *testing.T) {
 		t.Fatalf("done = %d", resp.StatusCode)
 	}
 	// The second submit hits a task that is no longer open.
-	resp := tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {id}})
-	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "fail=changed") {
+	resp := tpPost(t, e, asBrowser(e.Member), "/ui/tasks/done", url.Values{"id": {id}})
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/inbox?f=aufgaben" {
 		t.Fatalf("second done = %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	_, after := fetchPage(t, e.Member, e.Base+resp.Header.Get("Location"))
+	_, after := followRefusal(t, e.Member, e.Base, resp)
 	if !strings.Contains(after, "Someone changed this already") {
 		t.Error("the failure is not explained")
 	}

@@ -300,7 +300,7 @@ func (a *app) orgSourceAdd(w http.ResponseWriter, r *http.Request) {
 				a.orgFailure(w, r, err)
 				return
 			}
-			orgRedirect(w, r, o.Slug, "source_added")
+			orgRedirect(w, r, a.mirrorGitHubOrg(r.Context(), o, proven.Login, proven.InstallationID).Slug, "source_added")
 			return
 		}
 	}
@@ -316,7 +316,27 @@ func (a *app) orgSourceAdd(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "source_added")
+	orgRedirect(w, r, a.mirrorGitHubOrg(r.Context(), o, proven.Login, proven.InstallationID).Slug, "source_added")
+}
+
+// mirrorGitHubOrg takes over name, picture and address of the connected GitHub
+// organization (REQ-623). Without the GitHub App, or when GitHub does not
+// answer, the org stays as it is; the next connect or refresh tries again.
+func (a *app) mirrorGitHubOrg(ctx context.Context, o store.Org, login string, installationID int64) store.Org {
+	profiler, ok := a.prover.(forge.OrgProfiler)
+	if !ok || installationID <= 0 || !a.sourceReady() {
+		return o
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	p, err := profiler.OrgProfile(ctx, installationID, login)
+	if err != nil {
+		return o
+	}
+	if got, err := a.store.MirrorGitHubOrg(o.ID, login, p.Login, p.Name); err == nil {
+		return got
+	}
+	return o
 }
 
 func (a *app) orgSourceRemove(w http.ResponseWriter, r *http.Request) {
@@ -342,6 +362,9 @@ func (a *app) orgSourceImport(w http.ResponseWriter, r *http.Request) {
 		}
 		a.refreshSourceRepos(r.Context(), browserPrincipal(r).ID, o.ID, src)
 		_, err = a.store.ImportSourceRepos(browserPrincipal(r).ID, o.ID, src.ID)
+		if err == nil && src.ID != 0 {
+			o = a.mirrorGitHubOrg(r.Context(), o, src.Login, src.InstallationID)
+		}
 	}
 	if err != nil {
 		a.orgFailure(w, r, err)
@@ -378,6 +401,34 @@ func (a *app) orgPrefixVisibility(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgRedirect(w, r, o.Slug, "visibility")
+}
+
+// orgFollowGitHub lets an owner decide whether name and address follow the
+// connected GitHub organization (security review 4). Switched on, the mirror
+// runs right away through the first source with an installation.
+func (a *app) orgFollowGitHub(w http.ResponseWriter, r *http.Request) {
+	o, err := a.formOrg(r)
+	follow := r.FormValue("follow") == "1"
+	me := browserPrincipal(r).ID
+	if err == nil {
+		err = a.store.SetOrgFollowGitHub(me, o.ID, follow)
+	}
+	if err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	if follow {
+		if cur, err := a.store.OrgByRef(o.Slug); err == nil {
+			o = cur
+		}
+		for _, src := range a.sourceListFor(me, o.ID) {
+			if src.InstallationID > 0 {
+				o = a.mirrorGitHubOrg(r.Context(), o, src.Login, src.InstallationID)
+				break
+			}
+		}
+	}
+	orgRedirect(w, r, o.Slug, "follow")
 }
 
 func (a *app) sourceListFor(me string, orgID int64) []store.Source {

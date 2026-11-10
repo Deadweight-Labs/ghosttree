@@ -81,7 +81,7 @@ func TestJoinPageForANewcomerIsUnchanged(t *testing.T) {
 // page, which says so; it does not drop the person silently on the overview.
 func TestOIDCSignInFromAnInvitationAsAMemberSaysSo(t *testing.T) {
 	env, org := inviteEnv(t)
-	if _, err := env.store.EnsureProject("person:1", joinProject); err != nil {
+	if _, err := claimInOrg(env.store, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	invite := func() string {

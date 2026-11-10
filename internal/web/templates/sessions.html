@@ -38,9 +38,7 @@
 {{template "foot" .}}{{end}}
 
 {{define "session"}}{{template "head" .}}{{template "nav" .}}<main class="g2 sess sess-detail"><link rel="stylesheet" href="/static/ui-sessions.css"><div class="wrap">
-{{with .SessionV}}{{if .Missing}}
-<div class="box"><div class="box-empty"><span>{{t "sessions.not_found"}}</span><a class="gbtn" href="/ui/sessions">{{t "sessions.all_sessions"}}</a></div></div>
-{{else if .Confirm}}
+{{with .SessionV}}{{if .Confirm}}
 <form class="callout sconfirm" method="post" action="{{.Confirm.Action}}">{{mi "tri"}}<div><p>{{.Confirm.Text}}</p><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="level" value="{{.Confirm.Level}}"><input type="hidden" name="confirm" value="1"><div class="gacts"><button class="gbtn pri">{{t "sessions.share_anyway"}}</button><a class="gbtn" href="{{.Confirm.Back}}">{{t "sessions.cancel"}}</a></div></div></form>
 {{else}}
 <div class="dhead"><div class="dtitle"><h1>{{.Title}}{{if .Machine}}{{if .MachineHref}}<a class="n" href="{{.MachineHref}}">{{.Kind}}@{{.Machine}}</a>{{else}}<span class="n">{{.Kind}}@{{.Machine}}</span>{{end}}{{end}}</h1>

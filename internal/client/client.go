@@ -45,7 +45,17 @@ type Client struct {
 	anchor func() gitanchor.Anchor
 	// originSession ist die Session, die beim Schreiben mitgeht (SetOriginSession).
 	originSession string
+	// readOnly refuses every request that is not a read (SetReadOnly).
+	readOnly bool
 }
+
+// ErrReadOnly answers a write of a client that only reads: GHOSTTREE_HOOKS=off
+// keeps a test run's agents from writing to a real server (REQ-623).
+var ErrReadOnly = errors.New("GHOSTTREE_HOOKS=off: this session only reads; nothing was written")
+
+// SetReadOnly makes the client refuse every request but GET and HEAD before it
+// leaves the machine.
+func (c *Client) SetReadOnly() { c.readOnly = true }
 
 type SearchResult struct {
 	Knowledge []store.Knowledge         `json:"knowledge"`
@@ -175,6 +185,9 @@ func (c *Client) do(method, path string, query url.Values, in, out any) error {
 }
 
 func (c *Client) doContext(ctx context.Context, method, path string, query url.Values, in, out any) error {
+	if c.readOnly && method != http.MethodGet && method != http.MethodHead {
+		return ErrReadOnly
+	}
 	u := strings.TrimSuffix(c.cfg.ServerURL, "/") + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()

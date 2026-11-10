@@ -225,7 +225,7 @@ func (c *avatarCache) fresh(e avatarEntry) bool { return c.now().Sub(e.Fetched) 
 // refresh fetches the picture of an account now and keeps it. A failure is
 // remembered for a while so a down GitHub is not asked again for every page.
 func (c *avatarCache) refresh(id int64) (avatarEntry, bool) {
-	link, ok := c.store.AccountGitHub("person:" + strconv.FormatInt(id, 10))
+	link, ok := c.linkOf(id)
 	if !ok {
 		return avatarEntry{}, false
 	}
@@ -238,7 +238,7 @@ func (c *avatarCache) refresh(id int64) (avatarEntry, bool) {
 	}
 	// The link may have been removed or changed while the picture came in; then
 	// the picture belongs to nobody any more and must not be kept.
-	if now, still := c.store.AccountGitHub("person:" + strconv.FormatInt(id, 10)); !still || now != link {
+	if now, still := c.linkOf(id); !still || now != link {
 		return avatarEntry{}, false
 	}
 	c.save(id, e)
@@ -246,6 +246,17 @@ func (c *avatarCache) refresh(id int64) (avatarEntry, bool) {
 	delete(c.failed, id)
 	c.mu.Unlock()
 	return e, true
+}
+
+// linkOf is the GitHub account a cache key stands for: a positive key is a
+// person (their linked account), a negative one the organization -key (the
+// login of its connected GitHub organization).
+func (c *avatarCache) linkOf(key int64) (store.GitHubLink, bool) {
+	if key < 0 {
+		login, ok := c.store.OrgAvatarLogin(-key)
+		return store.GitHubLink{Login: login}, ok
+	}
+	return c.store.AccountGitHub("person:" + strconv.FormatInt(key, 10))
 }
 
 // forget drops everything kept for an account: the picture in memory and on
@@ -413,6 +424,38 @@ func (a *app) avatarImage(w http.ResponseWriter, r *http.Request) {
 		// one running fetch per account hold here too, so the route cannot be
 		// used to make the server ask GitHub again and again.
 		if fetched, got := c.refreshOnce(id); got {
+			e, ok = fetched, true
+		}
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", e.Type)
+	h.Set("Cache-Control", "private, max-age=3600")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Length", strconv.Itoa(len(e.Data)))
+	_, _ = w.Write(e.Data)
+}
+
+// orgAvatarImage is /ui/avatar/org/{id}: the picture of the GitHub
+// organization an org is connected to, for its members. It shares the cache,
+// the pauses and the one-fetch-at-a-time rule with the pictures of people.
+func (a *app) orgAvatarImage(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 || a.avatars == nil || a.store.OrgRole(id, browserPrincipal(r).ID) == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if _, ok := a.store.OrgAvatarLogin(id); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	c := a.avatars
+	e, ok := c.load(-id)
+	if !ok || !c.fresh(e) {
+		if fetched, got := c.refreshOnce(-id); got {
 			e, ok = fetched, true
 		}
 	}

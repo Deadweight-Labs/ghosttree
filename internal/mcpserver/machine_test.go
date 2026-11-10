@@ -141,7 +141,7 @@ func TestRememberCanShareAMachineEntryFromTheStart(t *testing.T) {
 func TestMachineGetListsProjectEntriesThroughTheProjectRole(t *testing.T) {
 	w := newMachineWorld(t)
 	const project = "github.com/x/y"
-	if _, err := w.st.EnsureProject("person:1", project); err != nil {
+	if _, err := claimInOrg(w.st, "person:1", project); err != nil {
 		t.Fatal(err)
 	}
 	w.shareMachine(t, store.ShareRead)

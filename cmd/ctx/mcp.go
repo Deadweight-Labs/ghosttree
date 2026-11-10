@@ -186,6 +186,10 @@ func cmdMCP(args []string, stdout io.Writer) int {
 	}
 	hctx := currentGitContext(cfg.Machine)
 	c := client.New(cfg)
+	if hooksOff() {
+		// A test harness's agents read what they need and write nothing.
+		c.SetReadOnly()
+	}
 	// Jeder Schreibzugriff dieser Sitzung trägt den Git-Stand des
 	// Arbeitsverzeichnisses mit (REQ-597). Das Verzeichnis wird je Aufruf
 	// gelesen, weil der Agent HEAD zwischen zwei Schreibzugriffen verschiebt;

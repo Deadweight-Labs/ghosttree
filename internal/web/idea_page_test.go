@@ -47,14 +47,14 @@ func TestIdeaPageShowsTheWishAndDismissesWithAReason(t *testing.T) {
 	}
 	post := func(form url.Values) *http.Response {
 		form.Set("csrf_token", renderedCSRFToken(t, e.Owner, e.Base+"/ui/overview"))
-		return sameOriginPostForm(t, e.Owner, e.Base+"/ui/ideas/"+strconv.FormatInt(i.ID, 10)+"/state", form)
+		return sameOriginPostForm(t, asBrowser(e.Owner), e.Base+"/ui/ideas/"+strconv.FormatInt(i.ID, 10)+"/state", form)
 	}
 	resp := post(url.Values{"mode": {"dismissed"}, "reason": {" "}})
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "fail=reason_required") {
+	if resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "?") {
 		t.Fatalf("dismiss without a reason -> %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	_, failed := fetchPage(t, e.Owner, e.Base+resp.Header.Get("Location"))
+	_, failed := followRefusal(t, e.Owner, e.Base, resp)
 	if !strings.Contains(failed, "Say why the idea is dismissed.") {
 		t.Error("the refusal is not shown")
 	}

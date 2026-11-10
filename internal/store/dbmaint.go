@@ -67,6 +67,10 @@ type HolderScan struct {
 	// Unreadable zählt Prozesse, deren offene Dateien sich nicht auflisten
 	// ließen (fremde Benutzer ohne Root): dort kann ein Server unerkannt laufen.
 	Unreadable int
+	// Suspect counts the unreadable ones that could hold the database: they
+	// run as the owner of the database file, or their command line names ctx
+	// or ghosttree.
+	Suspect int
 	// Supported ist falsch, wo die Suche nicht möglich ist (kein /proc).
 	Supported bool
 }

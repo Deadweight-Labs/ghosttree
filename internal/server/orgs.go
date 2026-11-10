@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -32,7 +33,19 @@ func readOrgJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 // maschinenlesbarem Code.
 func writeOrgError(w http.ResponseWriter, err error) {
 	var unclaimed *store.ProjectUnclaimedError
+	var contested *store.ContestedError
 	switch {
+	case errors.As(err, &contested):
+		// Kinds and counts of other accounts' entries, never their content.
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "message": err.Error(), "code": "contested", "details": map[string]any{"kinds": contested.Kinds}})
+	case errors.Is(err, store.ErrGuestOnly):
+		writeCoded(w, http.StatusConflict, "guest_only", err.Error())
+	case errors.Is(err, store.ErrNotAdmin):
+		writeCoded(w, http.StatusForbidden, "admin_only", err.Error())
+	case errors.Is(err, store.ErrNotGitHubOwner):
+		writeCoded(w, http.StatusForbidden, "not_github_owner", err.Error())
+	case errors.Is(err, store.ErrNoHandover):
+		writeCoded(w, http.StatusConflict, "no_handover", err.Error())
 	case errors.As(err, &unclaimed):
 		recordResponseError(w, classifyRequestError(http.StatusConflict, "", err.Error()), err.Error())
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "message": err.Error(), "code": "project_unclaimed", "choices": unclaimed.Choices,
@@ -65,6 +78,14 @@ func writeOrgError(w http.ResponseWriter, err error) {
 		writeCoded(w, http.StatusConflict, "slug_taken", err.Error())
 	case errors.Is(err, store.ErrProjectClaimed):
 		writeCoded(w, http.StatusConflict, "project_claimed", err.Error())
+	case errors.Is(err, store.ErrProjectArchived):
+		writeCoded(w, http.StatusConflict, "project_archived", err.Error())
+	case errors.Is(err, store.ErrInvalidRemote):
+		writeCoded(w, http.StatusBadRequest, "invalid_remote", err.Error())
+	case errors.Is(err, store.ErrServiceAccount):
+		writeCoded(w, http.StatusForbidden, "service_account", err.Error())
+	case errors.Is(err, store.ErrUserNamespace):
+		writeCoded(w, http.StatusConflict, "user_namespace", err.Error())
 	case errors.Is(err, store.ErrAlreadyMember):
 		writeCoded(w, http.StatusConflict, "already_member", err.Error())
 	case errors.Is(err, store.ErrGuestLinkNeedsEnforcement):
@@ -126,6 +147,11 @@ func (a *api) listOrgs(w http.ResponseWriter, r *http.Request) {
 // createOrg legt eine Organisation an. Das darf nur ein Instanz-Admin: wer
 // Organisationen anlegen kann, kann sie auch füllen und Konten per Einladung
 // erzeugen, das ist Betreiberpolitik.
+// createOrg founds an organization over the API, for an instance admin only.
+// Every person may found one too, but in the web, from an interactive session
+// (POST /ui/orgs/create): API tokens are mostly agents' and CLI tokens, and
+// founding an organization is a person's decision, not an agent's. Services
+// found none on either path (the store refuses them).
 func (a *api) createOrg(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
 	if acct, err := a.st.AccountByPrincipalID(p.ID); err != nil || !acct.Admin {
@@ -273,33 +299,12 @@ func (a *api) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, o)
 }
 
+// setDefaultOrg answers clients from before REQ-623. "Organization for new
+// projects" no longer exists: a new project belongs to the organization whose
+// connected GitHub account holds the repository, else to the writer's own
+// namespace.
 func (a *api) setDefaultOrg(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Org string `json:"org"`
-	}
-	if !readOrgJSON(w, r, &body) {
-		return
-	}
-	if body.Org == "0" || body.Org == "none" {
-		if err := a.st.SetDefaultOrg(principalOf(r).ID, 0); err != nil {
-			writeOrgError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, store.Org{})
-		return
-	}
-	o, err := a.st.OrgByRef(body.Org)
-	if err == nil {
-		err = a.st.SetDefaultOrg(principalOf(r).ID, o.ID)
-	}
-	if err != nil {
-		if errors.Is(err, store.ErrNotOrgMember) || errors.Is(err, store.ErrOrgNotFound) {
-			err = store.ErrOrgNotFound
-		}
-		writeOrgError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, o)
+	writeCoded(w, http.StatusGone, "default_org_gone", "there is no default organization any more: a new project belongs to the organization that connected its GitHub account, else to your own namespace")
 }
 
 func (a *api) listProjects(w http.ResponseWriter, r *http.Request) {
@@ -342,11 +347,21 @@ func (a *api) claimProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Remote string `json:"remote"`
 		Org    string `json:"org"`
+		// Force decides a contested remote; only the instance admin may.
+		Force bool `json:"force"`
 	}
 	if !readOrgJSON(w, r, &body) {
 		return
 	}
-	p, err := a.st.ClaimProject(principalOf(r).ID, body.Remote, body.Org)
+	var p store.Project
+	var err error
+	if body.Force {
+		// Deciding a contested remote moves ownership: the web (/ui/orgs) or
+		// ctx project claim --force --db, never an API token.
+		webSessionOnly(w, "deciding a contested remote")
+		return
+	}
+	p, err = a.st.ClaimProject(principalOf(r).ID, body.Remote, body.Org)
 	if err != nil {
 		writeOrgError(w, err)
 		return
@@ -360,6 +375,43 @@ func (a *api) claimProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
+// reassignProject: giving a project another owner is the instance admin's
+// decision in the web (/ui/orgs) or with the database in hand (ctx project
+// reassign --db). An API token is often an agent's; a prompt must never move
+// ownership.
+func (a *api) reassignProject(w http.ResponseWriter, r *http.Request) {
+	webSessionOnly(w, "reassigning a project")
+}
+
+// listHeldEntries tells an agent or a script how many entries a project
+// holds back, by kind, for its reviewers; titles and content only show in the
+// web (/ui/review), where reviewers decide them.
+func (a *api) listHeldEntries(w http.ResponseWriter, r *http.Request) {
+	project := scope.NormalizeRemote(r.URL.Query().Get("project"))
+	if project == "" {
+		writeCoded(w, http.StatusBadRequest, "project_required", "name the project (?project=)")
+		return
+	}
+	list, err := a.access(r).HeldEntries(project, false)
+	if denyAccess(w, err) {
+		return
+	}
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	kinds := map[string]int{}
+	for _, h := range list {
+		kinds[h.Kind]++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"project": project, "held": len(list), "kinds": kinds})
+}
+
+// decideHeldEntry: releasing or discarding is a reviewer's decision in the web.
+func (a *api) decideHeldEntry(w http.ResponseWriter, r *http.Request) {
+	webSessionOnly(w, "releasing or discarding held entries")
+}
+
 // moveProject: ein Projekt in eine andere Organisation zu legen ändert, wer
 // implizit Owner ist, und löscht seine Rollen. Das macht nur ein Mensch in der
 // Weboberfläche.
@@ -367,41 +419,91 @@ func (a *api) moveProject(w http.ResponseWriter, r *http.Request) {
 	webSessionOnly(w, "project moves")
 }
 
-// gateProject ordnet beim Schreiben eine noch unbekannte Remote einer
-// Organisation zu (Regel: Standard-Organisation des Schreibenden, sonst seine
-// einzige). In ein bekanntes Projekt schreibt nur ein Mitglied seiner Org (409
-// project_claimed sonst). Ein Konto ohne Organisation schreibt in unbekannte
-// Projekte wie bisher; mit mehreren Organisationen und ohne
-// Standard wird nicht geraten (409 project_unclaimed). Gibt false zurück, wenn
-// schon geantwortet wurde.
-func (a *api) gateProject(w http.ResponseWriter, r *http.Request, project string) bool {
+// projectGate ordnet beim Schreiben eine noch unbekannte Remote ihrem Besitzer
+// zu (REQ-623: Präfix einer verbundenen Org, sonst der eigene Namensraum des
+// Schreibenden) und prüft ein bekanntes Projekt: hineinschreiben darf nur ein
+// Mitglied seines Besitzers, und ein archiviertes nimmt nichts mehr an. Der
+// Fehler sagt, warum nicht; nil heißt: weiter.
+func (a *api) projectGate(r *http.Request, project string) error {
+	if strings.TrimSpace(project) == "" {
+		return nil
+	}
+	if p, known := a.st.ProjectByRemote(project); known {
+		// Ein bekanntes Projekt nimmt nur Schreibzugriffe seines Besitzers an,
+		// auch von Konten ohne Org: sonst landeten Daten still bei Fremden.
+		if a.st.OrgRole(p.OrgID, principalOf(r).ID) == "" {
+			if p.Named {
+				// Ein benanntes Projekt eines Fremden und eines, das es nicht
+				// gibt, antworten gleich.
+				return store.ErrProjectNotFound
+			}
+			return store.ErrProjectClaimed
+		}
+		if p.ArchivedAt != "" {
+			return store.ErrProjectArchived
+		}
+		return nil
+	}
+	_, err := a.st.EnsureProject(principalOf(r).ID, project)
+	if errors.Is(err, store.ErrNoOrg) {
+		return nil
+	}
+	return err
+}
+
+// gateKnownProject prüft wie gateProject ein bekanntes Projekt, legt aber für
+// eine unbekannte Remote keines an: für Zugriffe, die keine Arbeit am Projekt
+// sind (einem Raum beitreten). Antwort wie gateProject.
+func (a *api) gateKnownProject(w http.ResponseWriter, r *http.Request, project string) bool {
 	if strings.TrimSpace(project) == "" {
 		return true
 	}
-	if p, known := a.st.ProjectByRemote(project); known {
-		// Ein bekanntes Projekt nimmt nur Schreibzugriffe seiner Org an, auch
-		// von Konten ohne Org: sonst landeten Daten still in einer fremden Org.
-		if a.st.OrgRole(p.OrgID, principalOf(r).ID) == "" {
-			if p.Named {
-				// Ein benanntes Projekt einer fremden Organisation und eines,
-				// das es nicht gibt, antworten gleich.
-				writeOrgError(w, store.ErrProjectNotFound)
-				return false
-			}
-			writeOrgError(w, store.ErrProjectClaimed)
-			return false
-		}
+	if _, known := a.st.ProjectByRemote(project); !known {
 		return true
 	}
-	_, err := a.st.EnsureProject(principalOf(r).ID, project)
-	if err == nil || errors.Is(err, store.ErrNoOrg) {
+	return a.gateProject(w, r, project)
+}
+
+// gateProject ist projectGate mit Antwort: false heißt, es wurde schon
+// geantwortet.
+func (a *api) gateProject(w http.ResponseWriter, r *http.Request, project string) bool {
+	err := a.projectGate(r, project)
+	if err == nil {
 		return true
 	}
 	var unclaimed *store.ProjectUnclaimedError
-	if errors.As(err, &unclaimed) || errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, store.ErrProjectClaimed) {
+	if errors.As(err, &unclaimed) || errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, store.ErrProjectClaimed) ||
+		errors.Is(err, store.ErrProjectArchived) || errors.Is(err, store.ErrInvalidRemote) || errors.Is(err, store.ErrServiceAccount) ||
+		errors.Is(err, store.ErrGuestOnly) {
 		writeOrgError(w, err)
 		return false
 	}
 	writeStoreError(w, http.StatusInternalServerError, err)
 	return false
+}
+
+// sessionProject decides the project axis of an incoming session. A session is
+// the writer's own record, so it is never refused for its project: one in a
+// repository the writer may not write to (someone else's, archived, a
+// throwaway checkout of a test run), one in a remote nobody has claimed, and
+// one of a guest outside its projects is kept without the project. ok is
+// false only after an internal error has been answered.
+func (a *api) sessionProject(w http.ResponseWriter, r *http.Request, project string) (string, bool) {
+	err := a.projectGate(r, project)
+	switch {
+	case err == nil:
+		if _, known := a.st.ProjectByRemote(project); !known && strings.TrimSpace(project) != "" {
+			return "", true
+		}
+		return project, true
+	case errors.Is(err, store.ErrProjectNotFound), errors.Is(err, store.ErrProjectClaimed), errors.Is(err, store.ErrProjectArchived),
+		errors.Is(err, store.ErrInvalidRemote), errors.Is(err, store.ErrServiceAccount), errors.Is(err, store.ErrGuestOnly):
+		return "", true
+	}
+	var unclaimed *store.ProjectUnclaimedError
+	if errors.As(err, &unclaimed) {
+		return "", true
+	}
+	writeStoreError(w, http.StatusInternalServerError, err)
+	return "", false
 }

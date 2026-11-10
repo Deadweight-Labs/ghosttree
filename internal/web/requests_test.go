@@ -257,12 +257,15 @@ func TestRequestCorrectNeedsAReasonAndEditRight(t *testing.T) {
 		t.Errorf("guest correcting = %d", resp.StatusCode)
 	}
 	for name, change := range map[string]map[string]string{
-		"no reason": {"title": "New", "reason": " "}, "no change": {}, "empty title": {"title": " "},
-		"bad type": {"type": "epic"},
+		"no reason": {"title": "New", "reason": " "}, "no change": {}, "bad type": {"type": "epic"},
 	} {
 		if resp := rqPost(t, e, e.Lead, id, "/correct", form(change)); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s: %d", name, resp.StatusCode)
 		}
+	}
+	// An empty title goes back to the issue with the refusal and what was typed.
+	if resp := rqPost(t, e, asBrowser(e.Lead), id, "/correct", form(map[string]string{"title": " "})); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("empty title: %d", resp.StatusCode)
 	}
 	if got, _ := e.St.RequestByID(id); got.Request.Title != "Old title" {
 		t.Fatal("a refused correction changed the request")
@@ -466,7 +469,7 @@ func TestRequestCorrectAcceptsALongDescription(t *testing.T) {
 	if got := rqBody(t, e, d.Request.ID).Description; got != strings.ReplaceAll(long, "\r\n", "\n") {
 		t.Errorf("long description not stored (%d bytes)", len(got))
 	}
-	tooLong := strings.Repeat("x", maxTextBytes+1)
+	tooLong := strings.Repeat("x", maxLongText+1)
 	if resp := rqPost(t, e, e.Lead, d.Request.ID, "/correct", rqCorrectForm("Long", tooLong, "too much")); resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("a description over the limit = %d", resp.StatusCode)
 	}
@@ -506,7 +509,7 @@ func TestRequestCorrectMayEmptyTheDescriptionAndKeepsIndentation(t *testing.T) {
 
 func TestRequestCorrectChecksLengthsOnlyOnChangedFields(t *testing.T) {
 	e := ovEnv(t)
-	legacyTitle := strings.Repeat("t", maxTitleBytes+100)
+	legacyTitle := strings.Repeat("t", maxTitleChars+100)
 	legacyPrio := strings.Repeat("p", maxPriority+10)
 	d := rqMake(t, e.St, rqSpec{Title: legacyTitle, Desc: "old", Priority: legacyPrio, Type: "bug"})
 	id := d.Request.ID
@@ -517,7 +520,7 @@ func TestRequestCorrectChecksLengthsOnlyOnChangedFields(t *testing.T) {
 	if got := rqBody(t, e, id); got.Description != "new" || got.Title != legacyTitle || got.Priority != legacyPrio {
 		t.Errorf("legacy fields were touched: %d %d", len(got.Title), len(got.Priority))
 	}
-	form.Set("title", strings.Repeat("u", maxTitleBytes+1))
+	form.Set("title", strings.Repeat("u", maxTitleChars+1))
 	form.Set("description", "newer")
 	if resp := rqPost(t, e, e.Lead, id, "/correct", form); resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("a changed over-long title = %d", resp.StatusCode)
@@ -693,7 +696,7 @@ func TestRequestHistoryLegacyRelationEntriesPairOncePerRelation(t *testing.T) {
 func TestRequestCorrectTooLargeIs413WithADesignedPage(t *testing.T) {
 	e := ovEnv(t)
 	d := rqMake(t, e.St, rqSpec{Title: "Big", Desc: "old", Priority: "mittel", Type: "bug"})
-	resp := rqPost(t, e, e.Lead, d.Request.ID, "/correct", rqCorrectForm("Big", strings.Repeat("x", requestCorrectForm+1), "too much"))
+	resp := rqPost(t, e, e.Lead, d.Request.ID, "/correct", rqCorrectForm("Big", strings.Repeat("x", maxFormBody+1), "too much"))
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("an oversize correction = %d, want 413", resp.StatusCode)
 	}

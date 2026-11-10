@@ -3,6 +3,8 @@ package web
 import (
 	"net/http"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -15,8 +17,14 @@ import (
 
 type orgRepoRow struct {
 	Name, Href string
-	Public     bool
-	Remote     string
+	// Shared: every member of the org has the default role in it (shared_projects).
+	// It is not public reading, which does not exist yet (REQ-598).
+	Shared bool
+	// User: the row of a person's own namespace, which is private or shared
+	// with Collaborators people, never "with the org".
+	User          bool
+	Collaborators int
+	Remote        string
 	// Issues and Knowledge are the numbers the repository's own tabs show.
 	Issues, Knowledge string
 }
@@ -31,13 +39,36 @@ type orgRoomRow struct {
 	Name, Href, Repo string
 }
 
+// orgServiceRow is a service account on the Services tab: what it is, whom it
+// works for, where it may work and when its token was last used.
+type orgServiceRow struct {
+	Name, For, Used string
+	Gardener        bool
+	Roles           []orgServiceRole
+}
+
+type orgServiceRole struct{ Repo, Href, Role string }
+
+// orgHandoverRow is a project waiting between a person's namespace and an
+// organization whose connected prefix covers it.
+type orgHandoverRow struct {
+	Remote, Name, Owner, Org string
+	Consented, CanAct        bool
+}
+
 type orgPageView struct {
-	Org    store.Org
-	Tab    string
-	Repos  []orgRepoRow
-	People []orgPersonRow
-	Rooms  []orgRoomRow
-	Groups []agentGroup
+	// Handover: on an organization's page, projects in people's namespaces
+	// its prefix covers (owners only); on a person's page, their projects an
+	// organization's prefix covers. Token is the form token.
+	Handover []orgHandoverRow
+	Token    string
+	Org      store.Org
+	Tab      string
+	Repos    []orgRepoRow
+	People   []orgPersonRow
+	Services []orgServiceRow
+	Rooms    []orgRoomRow
+	Groups   []agentGroup
 	// Sections is the same list by state: waiting on the viewer, active, inactive.
 	Sections agentSections
 	Cmd      cmdBlock
@@ -54,7 +85,8 @@ func (a *app) orgFor(r *http.Request, slug string) (store.Org, bool) {
 		return store.Org{}, false
 	}
 	for _, o := range orgs {
-		if strings.EqualFold(o.Slug, slug) {
+		// A guest sees only its project, never the organization (14 A, #4376).
+		if strings.EqualFold(o.Slug, slug) && !o.Guest {
 			return o, true
 		}
 	}
@@ -69,9 +101,20 @@ func (a *app) orgProjects(r *http.Request, org store.Org) []store.Project {
 
 // orgBandFor builds the band of an organisation with the number of each list.
 func (a *app) orgBandFor(r *http.Request, org store.Org, current string) *bandView {
+	if org.IsUser() {
+		return a.userBandFor(r, org, current)
+	}
 	counts := map[string]int{"repos": len(a.orgProjects(r, org))}
 	if members, err := a.store.ListOrgMembersFor(org.ID, browserPrincipal(r).ID, a.store.AccessEnforced()); err == nil {
-		counts["people"] = len(members)
+		for _, m := range members {
+			if m.Kind != store.AccountKindService {
+				counts["people"]++
+			}
+		}
+	}
+	showServices := false
+	if services, err := a.store.OrgServices(browserPrincipal(r).ID, org.ID); err == nil {
+		counts["services"], showServices = len(services), true
 	}
 	counts["rooms"] = counts["repos"]
 	counts["machines"] = len(a.orgMachines(r, org))
@@ -82,7 +125,17 @@ func (a *app) orgBandFor(r *http.Request, org store.Org, current string) *bandVi
 		}
 		counts["agents"] = n
 	}
-	return orgBand("/ui/"+url.PathEscape(org.Slug), current, counts, org.Role == store.OrgOwner)
+	opts := orgBandOpts{Owner: org.Role == store.OrgOwner, Services: showServices}
+	if n := a.gardenOpenCount(r, org); n >= 0 {
+		counts["gardener"], opts.Gardener = n, true
+	}
+	b := orgBand("/ui/"+url.PathEscape(org.Slug), current, counts, opts)
+	b.Head = &bandHead{Name: org.Name}
+	if org.AvatarLogin != "" {
+		b.Head.Avatar = "/ui/avatar/org/" + strconv.FormatInt(org.ID, 10)
+		b.Head.GitHub = "https://github.com/" + url.PathEscape(org.AvatarLogin)
+	}
+	return b
 }
 
 // orgAgentGroups are the agents at the projects of the organisation, by machine.
@@ -128,13 +181,58 @@ func (a *app) orgPage(w http.ResponseWriter, r *http.Request, org store.Org, tab
 				name = name[i+1:]
 			}
 			pa := a.access(r)
-			v.Repos = append(v.Repos, orgRepoRow{Name: name, Href: repoHref(p.Remote), Public: p.Shared, Remote: p.Remote,
-				Issues: orZero(a.openIssues(pa, p.Remote)), Knowledge: orZero(a.knowledgeCount(pa, p.Remote))})
+			row := orgRepoRow{Name: name, Href: repoHref(p.Remote), Shared: p.Shared, Remote: p.Remote, User: org.IsUser(),
+				Issues: orZero(a.openIssues(pa, p.Remote)), Knowledge: orZero(a.knowledgeCount(pa, p.Remote))}
+			if row.User {
+				row.Collaborators = a.store.ProjectCollaborators(p.Remote)
+			}
+			v.Repos = append(v.Repos, row)
+		}
+		v.Token = csrfOf(r)
+		admin := a.isAdmin(browserPrincipal(r))
+		if org.IsUser() {
+			list, _ := a.store.PendingHandovers(browserPrincipal(r).ID)
+			for _, h := range list {
+				v.Handover = append(v.Handover, orgHandoverRow{Remote: h.Remote, Name: lastSegment(h.Remote), Owner: h.Owner, Org: h.Org, Consented: h.Consented, CanAct: !h.Consented && interactive(r)})
+			}
+		} else if list, err := a.store.PendingTakeovers(browserPrincipal(r).ID, org.ID); err == nil {
+			for _, h := range list {
+				v.Handover = append(v.Handover, orgHandoverRow{Remote: h.Remote, Name: lastSegment(h.Remote), Owner: h.Owner, Org: h.Org, Consented: h.Consented, CanAct: (h.Consented || admin) && interactive(r)})
+			}
 		}
 	case "people":
 		members, _ := a.store.ListOrgMembersFor(org.ID, browserPrincipal(r).ID, a.store.AccessEnforced())
 		for _, m := range members {
+			if m.Kind == store.AccountKindService {
+				continue // services have their own tab
+			}
 			v.People = append(v.People, orgPersonRow{Name: store.NormalizeAccountName(m.Account), Role: m.Role, Self: m.AccountID == browserPrincipal(r).ID, Guest: m.Guest})
+		}
+	case "services":
+		services, err := a.store.OrgServices(browserPrincipal(r).ID, org.ID)
+		if err != nil {
+			// Guests do not see who works for the organization.
+			http.NotFound(w, r)
+			return
+		}
+		now := overviewNow().UTC()
+		for _, sv := range services {
+			row := orgServiceRow{Name: sv.Name, Gardener: sv.Gardener, For: l.msg("org.service.instance"), Used: l.msg("org.service.never_used")}
+			if sv.OfOrg {
+				row.For = l.msg("org.service.of_org", org.Name)
+			}
+			if sv.LastUsed != "" {
+				row.Used = l.msg("org.service.last_used", shortAge(l, now, parseTime(sv.LastUsed)))
+			}
+			for remote, role := range sv.Roles {
+				name := remote
+				if i := strings.LastIndex(name, "/"); i >= 0 {
+					name = name[i+1:]
+				}
+				row.Roles = append(row.Roles, orgServiceRole{Repo: name, Href: repoHref(remote), Role: role})
+			}
+			sort.Slice(row.Roles, func(i, j int) bool { return row.Roles[i].Repo < row.Roles[j].Repo })
+			v.Services = append(v.Services, row)
 		}
 	case "rooms":
 		for _, p := range a.orgProjects(r, org) {
@@ -158,7 +256,7 @@ func (a *app) orgPage(w http.ResponseWriter, r *http.Request, org store.Org, tab
 func (a *app) orgTab(w http.ResponseWriter, r *http.Request) bool {
 	tab := r.PathValue("b")
 	switch tab {
-	case "agents", "people", "rooms", "settings":
+	case "agents", "people", "services", "rooms", "settings", "gardener":
 	default:
 		return false
 	}
@@ -167,7 +265,7 @@ func (a *app) orgTab(w http.ResponseWriter, r *http.Request) bool {
 	}
 	org, ok := a.orgFor(r, r.PathValue("a"))
 	if !ok {
-		return false
+		return a.redirectMovedOrg(w, r, r.PathValue("a"), "/"+tab)
 	}
 	// A repository of that name inside the organisation wins.
 	remote, _, _ := parseRepoPath([]string{r.PathValue("a"), tab})
@@ -177,6 +275,10 @@ func (a *app) orgTab(w http.ResponseWriter, r *http.Request) bool {
 		if o.Remote == remote {
 			return false
 		}
+	}
+	if tab == "gardener" {
+		a.gardenTab(w, r, org)
+		return true
 	}
 	if tab == "settings" {
 		if org.Role != store.OrgOwner {
@@ -218,4 +320,65 @@ func (v *orgPageView) fillAgentFilters(canConnect bool) {
 	if canConnect {
 		v.Connect = "/ui/overview?connect=1"
 	}
+}
+
+// userBandFor is the band of a person's own namespace, with the person's
+// picture when they linked GitHub.
+func (a *app) userBandFor(r *http.Request, org store.Org, current string) *bandView {
+	counts := map[string]int{"repos": len(a.orgProjects(r, org)), "machines": len(a.orgMachines(r, org))}
+	opts := orgBandOpts{Owner: org.Role == store.OrgOwner}
+	if n := a.gardenOpenCount(r, org); n >= 0 {
+		counts["gardener"], opts.Gardener = n, true
+	}
+	b := userBand("/ui/"+url.PathEscape(org.Slug), current, counts, opts)
+	b.Head = &bandHead{Name: org.Name, Handle: org.Slug}
+	owner := "person:" + strconv.FormatInt(org.AccountID, 10)
+	if link, ok := a.store.AccountGitHub(owner); ok {
+		b.Head.Avatar = "/ui/avatar/" + strconv.FormatInt(org.AccountID, 10)
+		b.Head.GitHub = "https://github.com/" + url.PathEscape(link.Login)
+	}
+	return b
+}
+
+// redirectMovedOrg answers the address of an organization under a former slug
+// with a permanent redirect to the current one (REQ-623), for members only: to
+// anybody else the old address is as unknown as any other.
+func (a *app) redirectMovedOrg(w http.ResponseWriter, r *http.Request, slug, suffix string) bool {
+	cur, ok := a.store.OrgSlugTarget(slug)
+	if !ok {
+		return false
+	}
+	if _, member := a.orgFor(r, cur); !member {
+		return false
+	}
+	target := "/ui/" + url.PathEscape(cur) + suffix
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusFound)
+	return true
+}
+
+// handoverConsent is the owner's "hand it over" for a project an
+// organization's prefix covers (POST /ui/handover).
+func (a *app) handoverConsent(w http.ResponseWriter, r *http.Request) {
+	remote := r.FormValue("remote")
+	if err := a.store.ConsentHandover(browserPrincipal(r).ID, remote); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	ns, _ := a.store.UserNamespace(browserPrincipal(r).ID)
+	http.Redirect(w, r, "/ui/"+url.PathEscape(ns.Slug), http.StatusSeeOther)
+}
+
+// handoverTakeOver moves a waiting project into the organization (POST
+// /ui/orgs/takeover): an owner of it after the former owner agreed, or the
+// instance admin.
+func (a *app) handoverTakeOver(w http.ResponseWriter, r *http.Request) {
+	p, err := a.store.TakeOverProject(browserPrincipal(r).ID, r.FormValue("remote"))
+	if err != nil {
+		http.Error(w, "not taken over", http.StatusConflict)
+		return
+	}
+	http.Redirect(w, r, "/ui/"+url.PathEscape(p.Org), http.StatusSeeOther)
 }

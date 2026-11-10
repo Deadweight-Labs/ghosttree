@@ -38,7 +38,7 @@ func TestProjectListHidesProjectsWithoutRole(t *testing.T) {
 	const mine, foreign = apiRoleProject, "github.com/dw/foreign"
 	setup := func(t *testing.T) orgFixture {
 		f, _ := roleAPI(t)
-		if _, err := f.st.EnsureProject("person:1", foreign); err != nil {
+		if _, err := claimInOrg(f.st, "person:1", foreign); err != nil {
 			t.Fatal(err)
 		}
 		// anna (person:2) bekommt nur auf "mine" eine Rolle; ben (person:3) auf keine.
