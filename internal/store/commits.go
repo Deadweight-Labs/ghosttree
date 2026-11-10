@@ -517,6 +517,8 @@ func objectRef(kind string, id int64) string {
 		return fmt.Sprintf("IDEA-%d", id)
 	case CommentOnPain:
 		return fmt.Sprintf("PAIN-%d", id)
+	case CommentOnKnowledge:
+		return fmt.Sprintf("KN-%d", id)
 	}
 	return kind
 }

@@ -233,6 +233,14 @@ type SearchFilter struct {
 	// sieht dort nicht gekürzt aus, sondern beschädigt.
 	FullDescription bool
 	Limit           int
+	// LongPage lets Limit go beyond the 25 of a result list, up to
+	// store.RequestLongPageMax, for a caller that reads many hits in one go to
+	// count or cut them (the search page of the web interface). Every further page
+	// of a search costs the whole query again (the full-text match, or both
+	// rankings of a ranked search), so reading 200 hits as eight pages is eight
+	// times the work of one. Callers that hand the list to a person or a tool
+	// leave it off.
+	LongPage bool
 	// Restrict begrenzt die Treffer auf Aufträge ohne Projekt und auf die
 	// Projekte in Projects (Sichtbarkeit nach Rolle). Das gehört in die
 	// Abfrage und nicht in einen Filter danach: sonst stimmen Seitengröße und

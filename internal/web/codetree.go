@@ -356,6 +356,8 @@ type repoCodeView struct {
 type codeBranchView struct {
 	Name    string
 	Options []codeBranchOpt
+	// AllHref is the list of all branches, the last entry of the menu.
+	AllHref string
 }
 
 type codeBranchOpt struct {
@@ -494,7 +496,7 @@ func (a *app) repoCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v := &repoCodeView{Current: cp.Path, KnowledgeHref: view.Href + "/knowledge"}
-	v.Branch = codeBranchView{Name: cp.Branch}
+	v.Branch = codeBranchView{Name: cp.Branch, AllHref: branchesHref(view.Project)}
 	for _, n := range names {
 		o := codeBranchOpt{Name: n, Current: n == cp.Branch, Default: n == def}
 		if cp.Kind == "blob" {

@@ -215,6 +215,13 @@ type knowledgeItemView struct {
 	Side     knSide
 	// Panel names the form that is open ("move"), from ?panel=.
 	Panel string
+	// Comments, the reactions under the text and the box to write a comment, as on
+	// an issue (fillKnowledgeComments); CommentsN counts the comments not deleted.
+	Comments      []tlItem
+	CommentsN     int
+	Reactions     *reactionsView
+	Composer      *composerView
+	CommentResult *requestResult
 }
 
 // ----------------------------------------------------------------- Textblöcke
@@ -663,6 +670,7 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	v.Result = a.resultFor(r, pa, "item", "")
 	v.Panel = r.URL.Query().Get("panel")
 	a.fillKnowledgeItem(l, pa.KnowledgeView(k), v)
+	a.fillKnowledgeComments(r, l, pa, k, v)
 	v.Actor = a.actorViewOf(l, pa, actor.Knowledge, k.ID, v.Card.Person, true)
 	a.renderBrowser(w, r, "knowledgeitem", pageData{Title: k.Title, KnowledgeItemV: v})
 }
