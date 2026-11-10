@@ -709,6 +709,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- Searching sessions by meaning no longer takes 40 s or more for a reader who
+  may read only part of the transcripts. SQLite looked every embedding up once
+  per readable session; it now looks it up once (0.1 s with a thousand readable
+  sessions).
 - `ctx db slim-sessions` no longer ends when the server holds the write lock
   longer than its busy timeout: the step waits (5 s up to 2 min) and is tried
   again, and its counts are taken only once.
