@@ -47,7 +47,8 @@
 <div class="dmeta"><span class="state {{if .Live}}open{{else}}done{{end}}">{{if .Live}}{{mi "play"}}{{t "sessions.live"}}{{else}}{{mi "done"}}{{t "sessions.state.done"}}{{end}}</span>{{avatarX "lg" .Kind "" .Owner false}}{{if .Duration}}<span class="dur">{{mi "clock"}}{{.Duration}}</span>{{end}}{{if .Branch}}{{branchPill .Branch ""}}{{end}}{{if .Meta}}<span class="muted">{{.Meta}}</span>{{end}}</div></div>
 {{if .BackResults.Href}}<a class="back-results" href="{{.BackResults.Href}}">{{t "sessions.back"}} · {{.BackResults.Text}}</a>{{end}}
 <div class="dgrid"><div class="dmain">
-<div class="seshead"><nav class="utabs-nav plain" aria-label="{{t "sessions.views"}}"><ul class="utabs"><li class="sel"><a href="#" aria-current="page">{{mi "term"}}<span>{{t "sessions.raw"}}</span><span class="counter">{{.Messages}}</span></a></li></ul></nav></div>
+<div class="seshead"><nav class="utabs-nav plain" aria-label="{{t "sessions.views"}}"><ul class="utabs"><li{{if not .RawView}} class="sel"{{end}}><a href="{{.GhostHref}}"{{if not .RawView}} aria-current="page"{{end}}>{{mi "ghost"}}<span>{{t "sessions.ghost_view"}}</span></a></li><li{{if .RawView}} class="sel"{{end}}><a href="{{.RawHref}}"{{if .RawView}} aria-current="page"{{end}}>{{mi "term"}}<span>{{t "sessions.raw"}}</span><span class="counter">{{.Messages}}</span></a></li></ul></nav></div>
+{{if not .RawView}}{{template "uitimeline" .Side.Items}}{{else}}
 <div class="sd-tools">
 <form class="find" method="get" action="{{.FindAction}}" role="search"><label class="gfield">{{mi "search"}}<input id="find-q" type="search" name="q" value="{{.Q}}" placeholder="{{t "sessions.find_placeholder"}}" aria-label="{{t "sessions.find_label"}}" autocomplete="off" data-sessions-search></label>{{range .Hidden}}<input type="hidden" name="{{.Text}}" value="{{.Href}}">{{end}}
 {{if .HasFind}}<span class="find-nav">{{if .FindPos}}<span class="find-pos">{{.FindPos}}</span>{{else}}<span class="find-count">{{.FindCount}}</span>{{end}}{{if .PrevHref}}<a rel="prev" class="gbtn sm icon" href="{{.PrevHref}}" aria-label="{{t "sessions.prev_hit"}}">{{mi "chev"}}</a><a rel="next" class="gbtn sm icon fnav-next" href="{{.NextHref}}" aria-label="{{t "sessions.next_hit"}}">{{mi "chev"}}</a>{{end}}</span>{{end}}</form>
@@ -67,12 +68,16 @@
 {{end}}{{end}}
 </div>
 {{if .Later.Href}}<a class="morelink wlink" href="{{.Later.Href}}">{{.Later.Text}}</a>{{end}}
+{{end}}
 </div>
 <aside class="side" aria-label="{{t "sessions.details"}}">
-<div class="sblk"><h3>{{t "sessions.side.agent"}}</h3><div class="v"><span>{{avatarX "lg" .Kind "" .Owner false}}<span>{{.Kind}}</span></span>{{if .Machine}}{{if .MachineHref}}<a class="sub" href="{{.MachineHref}}">{{.Machine}}</a>{{else}}<span class="sub">{{.Machine}}</span>{{end}}{{end}}</div></div>
+<div class="sblk"><h3>{{t "sessions.side.agent"}}</h3><div class="v"><span>{{avatarX "lg" .Kind "" .Owner false}}<span>{{.Kind}}</span></span></div></div>
+{{if .Machine}}<div class="sblk"><h3>{{t "sessions.side.machine"}}</h3><div class="v">{{if .MachineHref}}<a class="mono" href="{{.MachineHref}}">{{.Machine}}</a>{{else}}<span class="mono">{{.Machine}}</span>{{end}}{{if .Side.StartedAt}}<span class="sub">{{t "sessions.side.started"}} <time datetime="{{.Side.Started}}" data-clock>{{.Side.StartedAt}}</time></span>{{end}}</div></div>{{end}}
 {{if .Project}}<div class="sblk"><h3>{{t "sessions.side.project"}}</h3><div class="v"><span class="mono">{{.Project}}</span>{{if .Branch}}<span class="sub mono">{{.Branch}}</span>{{end}}</div></div>{{end}}
-{{if .Created}}<div class="sblk"><h3>{{t "sessions.created"}}</h3><div class="v">{{range .Created}}<a href="{{.Href}}">{{.Text}}</a>{{end}}</div></div>{{end}}
-{{if .Prompts}}<div class="sblk prompts"><h3>{{t "sessions.prompts"}}</h3><ol>{{range .Prompts}}<li class="pr{{if .Current}} is-current{{end}}"><a href="{{.Href}}"><span class="pr-n">{{.N}}</span><span class="pr-t">{{.Text}}</span><span class="pr-m"><span>{{.Time}}</span><span>{{.Tools}}</span></span>{{if .Hits}}<span class="pr-hits">{{.Hits}}</span>{{end}}</a></li>{{end}}</ol>{{if .MorePrompts.Href}}<a class="pr-more" href="{{.MorePrompts.Href}}">{{.MorePrompts.Text}}</a>{{end}}</div>{{end}}
+{{if .Side.Areas}}<div class="sblk"><h3>{{t "sessions.side.areas"}}</h3><div class="v pills">{{range .Side.Areas}}{{.}}{{end}}</div></div>{{end}}
+{{if .Side.Issues}}<div class="sblk"><h3>{{t "sessions.side.issues"}}</h3><div class="v pills">{{range .Side.Issues}}{{.}}{{end}}</div></div>{{end}}
+{{if .Side.Made}}<div class="sblk"><h3>{{t "sessions.side.made"}}</h3><div class="v made">{{range .Side.Made}}<span>{{mi .Icon}}{{.Text}}</span>{{end}}</div></div>{{end}}
+{{if and .RawView .Prompts}}<div class="sblk prompts"><h3>{{t "sessions.prompts"}}</h3><ol>{{range .Prompts}}<li class="pr{{if .Current}} is-current{{end}}"><a href="{{.Href}}"><span class="pr-n">{{.N}}</span><span class="pr-t">{{.Text}}</span><span class="pr-m"><span>{{.Time}}</span><span>{{.Tools}}</span></span>{{if .Hits}}<span class="pr-hits">{{.Hits}}</span>{{end}}</a></li>{{end}}</ol>{{if .MorePrompts.Href}}<a class="pr-more" href="{{.MorePrompts.Href}}">{{.MorePrompts.Text}}</a>{{end}}</div>{{end}}
 </aside></div>
 {{end}}{{end}}
 </div><script src="/static/sessions.js"></script>

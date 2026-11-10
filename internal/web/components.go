@@ -223,9 +223,12 @@ func (r uiRow) HasRight() bool {
 type tlItem struct {
 	ID, Act, Who, Kind, Owner string
 	Icon, Tone                string
-	Head                      template.HTML
-	Age                       string
-	Body                      template.HTML
+	// Stamp is the moment as RFC 3339 when Age is a time of day (a session's
+	// entries): the page shows it in the reader's zone.
+	Stamp string
+	Head  template.HTML
+	Age   string
+	Body  template.HTML
 	// Right stands at the right end of the head, in line with the anchor: the
 	// commits an entry is about, not part of the sentence.
 	Right template.HTML
@@ -270,6 +273,14 @@ func firstOf(l lang, av actorView, who, verb, age, mark, editHref string) firstH
 		h.EditTip = l.msg("issue.action.edit")
 	}
 	return h
+}
+
+// editPanel is the panel "Bearbeiten" of a pain or an idea (template editpanel):
+// the form posts to Action, Close leads back to the page.
+type editPanel struct {
+	Open                 bool
+	Close, Action, Token string
+	Title, Body          string
 }
 
 // ---- Composer ----------------------------------------------------------------

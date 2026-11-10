@@ -200,6 +200,12 @@ func (a *ProjectAccess) CanSeeTask(t humantask.Task) bool {
 	return a.Allow(t.Project, ResTask, ActRead, a.taskObject(t))
 }
 
+// CanSeeTaskVia is canSeeTaskVia for a caller outside the package, with no cache
+// of its own to share: a list of tasks (a session's) asks it once per task.
+func (a *ProjectAccess) CanSeeTaskVia(t humantask.Task, cache map[int64]bool) bool {
+	return a.canSeeTaskVia(t, cache)
+}
+
 // canSeeTaskVia is CanSeeTask plus the request it hangs on: a member does not
 // get title and location of a task whose request is hidden from them. A task
 // assigned to the viewer stays visible, the assignment is the grant. cache holds
