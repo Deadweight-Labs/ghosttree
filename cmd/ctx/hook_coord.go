@@ -297,8 +297,17 @@ func postToolUse(stdin io.Reader, harness string, stdout io.Writer) int {
 				defer close(registerDone)
 				registerHookSession(raw, harness, false, store.HookTool)
 			}()
+			usesDone := make(chan struct{})
+			go func() {
+				defer close(usesDone)
+				if harness == "claude" {
+					noteSessionCall(raw)
+					flushSessionUses(raw, harness, false)
+				}
+			}()
 			text, polled := coordInboxContext(raw, false)
 			<-registerDone
+			<-usesDone
 			out.HookSpecificOutput.AdditionalContext = text
 			if polled && (harness == "claude" || harness == "codex") {
 				_ = hookstate.Record(harness, "PostToolUse")
@@ -309,19 +318,51 @@ func postToolUse(stdin io.Reader, harness string, stdout io.Writer) int {
 	return 0
 }
 
-// turnEnd is the Stop hook: the turn is over. It tells the server so (a turn
-// that ended is never "stuck") and answers with an empty, well-formed object,
-// because Claude Code validates a Stop hook's output and knows no
-// hookSpecificOutput for it.
+// turnEnd is the Stop hook (and StopFailure): the turn is over. It tells the
+// server so (a turn that ended is never "stuck") and sends the ghosttree calls
+// counted in this session. Once per session, when the session changed files
+// but recorded nothing in ghosttree, it gives the model a short reminder
+// (REQ-436); otherwise it answers with an empty, well-formed object.
 func turnEnd(stdin io.Reader, harness string, stdout io.Writer) int {
+	reminder := ""
 	if os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
 		if harness == "claude" || harness == "codex" {
 			_ = hookstate.Record(harness, "Stop")
 		}
 		if raw, err := io.ReadAll(io.LimitReader(stdin, 4<<20)); err == nil {
+			usesDone := make(chan struct{})
+			go func() {
+				defer close(usesDone)
+				if harness == "claude" {
+					flushSessionUses(raw, harness, true)
+					reminder = turnReminder(raw)
+					if dir, err := sessionLogDir(hookSessionID(raw)); err == nil {
+						pruneSessionLogs(dir)
+					}
+				}
+			}()
 			registerHookSession(raw, harness, true, store.HookTurnEnd)
+			<-usesDone
 		}
+	}
+	if reminder != "" {
+		_ = json.NewEncoder(stdout).Encode(stopReminderOutput(reminder))
+		return 0
 	}
 	_, _ = io.WriteString(stdout, "{}\n")
 	return 0
+}
+
+// stopReminderOutput hands the reminder to the model: the turn continues once
+// with it, and the hook's own stop_hook_active check keeps it from repeating.
+func stopReminderOutput(text string) any {
+	return map[string]string{"decision": "block", "reason": text}
+}
+
+func hookSessionID(raw []byte) string {
+	var in struct {
+		SessionID string `json:"session_id"`
+	}
+	_ = json.Unmarshal(raw, &in)
+	return strings.TrimSpace(in.SessionID)
 }
