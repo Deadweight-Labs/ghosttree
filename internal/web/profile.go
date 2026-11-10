@@ -20,6 +20,8 @@ type profileView struct {
 	Devices []profileDevice
 	// GitHub is the GitHub link block; nil when there is nothing to show.
 	GitHub *profileGitHub
+	// Notify are the switches of the block "Notifications".
+	Notify []profileNotify
 }
 
 type profileDevice struct{ Name, Seen string }
@@ -63,6 +65,7 @@ func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, 
 			}
 		}
 	}
+	v.Notify = a.profileNotifyRows(r, l)
 	if gh, ok := a.githubBlock(r); ok {
 		v.GitHub = &gh
 	}

@@ -152,6 +152,7 @@ func (a *app) waitingFor(r *http.Request, project string) []forYouRow {
 	if err != nil {
 		rows = nil
 	}
+	rows = a.notifyKeep(r, rows)
 	if memo != nil {
 		memo.waiting, memo.waitingSet = rows, true
 	}
@@ -294,6 +295,9 @@ func (a *app) inboxReplyComposer(l lang, token, who string, room string, replyTo
 // them, not one per message. Rooms come from CoordAccess.RoomSummaries, so only
 // rooms the viewer may read appear.
 func (a *app) inboxMentions(r *http.Request, project string) ([]inboxRow, error) {
+	if a.notifyOff(r)[store.NotifyMention] {
+		return nil, nil
+	}
 	l := a.langFor(r)
 	summaries, err := a.browserCoord(r).RoomSummaries()
 	if errors.Is(err, store.ErrCoordNotFound) || errors.Is(err, store.ErrCoordForbidden) {

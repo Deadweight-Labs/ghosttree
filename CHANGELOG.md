@@ -277,6 +277,19 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 #### Git-native ledger
 
+- The commit page shows what GitHub says about a commit: parents as pills,
+  the whole message, co-authors, the changed files with their added and removed
+  lines, and the state of the checks; the list shows the checks and the
+  co-authors too, and both have a `<>` button to the code at that commit.
+  `ctx github sync-prs --commits` (and the webhook, for the newest commits)
+  fetches and stores it, so a page never asks GitHub. The changed files need
+  the App permission `Contents: read`, the checks `Checks: read`; a missing
+  permission leaves the block out. A guest who may not read every branch gets
+  none of it.
+- The profile has a block "Notifications" with one switch per kind (mentions,
+  questions to me, decisions, tasks, gardener) for the inbox and the bell; a kind
+  switched off is missing there and from the count, and stays readable where it
+  comes from. The profile grid follows the mock (portrait 296 px).
 - A GitHub App connects an organization: its repositories join the
   organization in ghosttree, and pull requests are bound by webhook
   (`ctx github sync-prs` catches up).

@@ -1239,6 +1239,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if _, err := db.Exec(notifySchema); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureWorkPackages(db); err != nil {
 		_ = db.Close()
 		return nil, err

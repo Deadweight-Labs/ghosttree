@@ -118,7 +118,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:register|err|runbooks|agents|room|shell|nav|inbox|repo|ui|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|context|search|cards|page|explain|usage|garden|home|review|ref|avatar|issues|issue|ideas|newissue|stub|live|settings|features|workshop|pulls|commits|commit|comments|packages|anchor|org|user|vis|gardener|handover|docs)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:register|err|runbooks|agents|room|shell|nav|inbox|repo|ui|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|context|search|cards|page|explain|usage|garden|home|review|ref|avatar|issues|issue|ideas|newissue|stub|live|settings|features|workshop|pulls|commits|commit|comments|packages|anchor|org|user|vis|gardener|handover|docs|notify)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).
