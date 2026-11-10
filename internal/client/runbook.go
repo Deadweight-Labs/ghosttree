@@ -165,6 +165,25 @@ func (c *Client) TriggeredRunbooks(t RunbookTrigger) (string, error) {
 	return md, err
 }
 
+// RunbookTriggerSets returns the command and path triggers of the runbooks the
+// server would consider for this project and machine, one set per runbook. A
+// server that does not know the route answers with an error IsRouteMissing
+// recognises.
+func (c *Client) RunbookTriggerSets(project, machine string) ([]runbook.Triggers, error) {
+	q := url.Values{}
+	if project != "" {
+		q.Set("project", project)
+	}
+	if machine != "" {
+		q.Set("machine", machine)
+	}
+	var out struct {
+		Sets []runbook.Triggers `json:"sets"`
+	}
+	err := c.do("GET", "/api/runbook-triggers", q, nil, &out)
+	return out.Sets, err
+}
+
 // RunbookAllowed fragt den Server, ob genau diese Fassung auf dieser Maschine
 // laufen darf. Das ist die einzige Quelle für ctx run --run: eine Datei auf der
 // Maschine ist keine Freigabe.

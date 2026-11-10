@@ -24,6 +24,7 @@ var runbookRoutes = map[string]routeClass{
 	"POST /api/runbooks":                      classProject,
 	"GET /api/runbooks/find":                  classProject,
 	"POST /api/runbooks/triggered":            classProject,
+	"GET /api/runbook-triggers":               classProject,
 	"GET /api/runbooks/{id}":                  classProject,
 	"GET /api/runbooks/{id}/history":          classProject,
 	"POST /api/runbooks/{id}/approve":         classProject,
@@ -46,6 +47,7 @@ func (a *api) registerRunbookRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "POST /api/runbooks", a.writeRunbook)
 	a.routeFunc(mux, "GET /api/runbooks/find", a.findRunbook)
 	a.routeFunc(mux, "POST /api/runbooks/triggered", a.triggeredRunbooks)
+	a.routeFunc(mux, "GET /api/runbook-triggers", a.runbookTriggers)
 	a.routeFunc(mux, "GET /api/runbooks/{id}", a.getRunbook)
 	a.routeFunc(mux, "GET /api/runbooks/{id}/history", a.runbookHistory)
 	a.routeFunc(mux, "POST /api/runbooks/{id}/approve", a.approveRunbook)
@@ -592,6 +594,42 @@ func (a *api) triggeredRunbooks(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprint(w, "## Runbooks for what you are doing (ghosttree)\n\n")
 	fmt.Fprint(w, strings.Join(out, "\n"))
+}
+
+// runbookTriggers lists the command and path triggers of the runbooks that
+// /api/runbooks/triggered would consider for this caller, one set per runbook
+// and nothing else about them. The tool hook keeps the answer for a few minutes
+// and asks /triggered only for a command or path that one of the sets matches,
+// instead of once before every tool call. Keywords are left out: the prompt
+// hook asks the server every time.
+//
+// The route is not below /api/runbooks/: an older server reads the segment
+// after it as a runbook number and answers 400, which a client cannot tell
+// from a refusal. Here it answers 404, and the client asks as it did before.
+func (a *api) runbookTriggers(w http.ResponseWriter, r *http.Request) {
+	pa := a.access(r)
+	pa.Filtered()
+	ax := runbookScopeFromQuery(r)
+	out := struct {
+		Sets []runbook.Triggers `json:"sets"`
+	}{Sets: []runbook.Triggers{}}
+	if ax.Project != "" && !pa.CanSeeProject(ax.Project, store.ResRunbook) {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	cands, err := a.st.RunbookTriggerable(ax, a.accountOf(r))
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for _, c := range cands {
+		t := c.View.Spec.Triggers
+		if !pa.CanSeeRunbook(c.Ref) || len(t.Commands)+len(t.Paths) == 0 {
+			continue
+		}
+		out.Sets = append(out.Sets, runbook.Triggers{Commands: t.Commands, Paths: t.Paths})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // runbookAllowed beantwortet, ob genau diese Fassung auf dieser Maschine laufen
