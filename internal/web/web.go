@@ -56,6 +56,8 @@ type app struct {
 	searchSlots   searchLimiter
 	searchStreams searchStreams
 	logger        *slog.Logger // http_request lines and search failures; nil = slog.Default
+	// What the stored transcript lines take, for administrators.
+	transcripts transcriptStatsCache
 }
 type pageData struct {
 	// Flash is the note over the form a rejected form came back to; FormFailed is
@@ -73,6 +75,7 @@ type pageData struct {
 	PullsV                                                     *pullsView
 	PullV                                                      *pullView
 	CommitsV                                                   *commitsView
+	BranchesV                                                  *branchesView
 	CommitV                                                    *commitView
 	IssuesV                                                    *issuesView
 	IssueV                                                     *requestView
@@ -204,6 +207,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/inbox", a.requirePerson(http.HandlerFunc(a.inboxPage)))
 	a.handle(mux, "POST /ui/issues/create", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.issueCreate))))))
 	a.handle(mux, "POST /ui/ideas/{id}/state", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.ideaState))))))
+	a.handle(mux, "POST /ui/ideas/{id}/correct", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.ideaCorrect))))))
 	a.handle(mux, "POST /ui/comments/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.commentEdit))))))
 	a.handle(mux, "POST /ui/reactions", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reactionToggle))))))
 	a.handle(mux, "POST /ui/comments/{id}/delete", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.commentDelete))))))
@@ -240,6 +244,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
 	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
 	a.handle(mux, "POST /ui/knowledge/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeMove))))))
+	a.handle(mux, "POST /ui/knowledge/{id}/comment", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeComment))))))
 	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
 	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
 	a.handle(mux, "POST /ui/review/bulk", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewBulk))))))
@@ -588,6 +593,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/requests/{id}/drop":           webAdmin,
 	"GET /ui/knowledge":                     webProject,
 	"GET /ui/knowledge/{id}":                webProject,
+	"POST /ui/knowledge/{id}/comment":       webProject,
 	"POST /ui/knowledge/{id}/edit":          webAdmin,
 	"POST /ui/knowledge/{id}/move":          webAdmin,
 	"GET /ui/review":                        webProject,
@@ -662,13 +668,15 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/rename":                  webAdmin,
 	"POST /ui/orgs/accept":                  webAccount,
 
-	"GET /ui/tasks":             webProject,
-	"POST /ui/tasks/done":       webAdmin,
-	"POST /ui/inbox/answer":     webAdmin,
-	"GET /ui/pains":             webProject,
-	"GET /ui/pains/{id}":        webProject,
-	"POST /ui/pains/{id}/state": webAdmin,
-	"POST /ui/pains/{id}/idea":  webAdmin,
+	"GET /ui/tasks":               webProject,
+	"POST /ui/tasks/done":         webAdmin,
+	"POST /ui/inbox/answer":       webAdmin,
+	"GET /ui/pains":               webProject,
+	"GET /ui/pains/{id}":          webProject,
+	"POST /ui/pains/{id}/state":   webAdmin,
+	"POST /ui/pains/{id}/idea":    webAdmin,
+	"POST /ui/pains/{id}/correct": webAdmin,
+	"POST /ui/ideas/{id}/correct": webProject,
 
 	"POST /ui/labels/create":      webAdmin,
 	"POST /ui/labels/{id}/update": webAdmin,

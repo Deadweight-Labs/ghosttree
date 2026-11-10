@@ -29,7 +29,7 @@ const gardenUsage = `usage: ctx garden run-due --repos-dir <dir> [...] (the sche
        ctx garden check-knowledge [--mode agent|api] [--project <remote>] [--repo <dir>] [--type pitfall,decision]
                                   [--sessions 4] [--turns 60] [--per-session 30] [--session-timeout 40m]
                                   [--claude <path>] [--claude-dir <dir>] [--no-mcp]
-                                  [--requests 8] [--ghosts 8] [--idle-days 30]
+                                  [--requests 8] [--ghosts 8] [--ghost-model claude-haiku-5-5] [--idle-days 30]
                                   [--limit <n>] [--max-usd 2] [--dry-run] [--propose] [--out <file>]
                                   [--db <path>] [--min-age 14]
                                   [--daily-usd N] [--daily-calls N] [--daily-tokens N]
@@ -79,12 +79,18 @@ Two ways to run it:
                printed by a tool of the session; the test function stands in a file the session
                read; the file exists. A proof without a valid one is dropped. The gardener does
                not close requests and does not set criteria.
-               --ghosts N: job 1, the ghosts. The N files (default 8, 0 = off) whose description
+               --ghosts N: job 1, the ghosts. First every file the merges into the default
+               branch since the last run brought new or renamed, or changed so much that its
+               description no longer fits (up to 60, on top of N), and the directory of each
+               new file that has none; then the N files (default 8, 0 = off) whose description
                is stale or missing (stale before undescribed before slightly changed; lock
-               files, test data, generated and binary files are skipped) go to a session of
-               their own, which reads each file and proposes a description in the style of the
-               existing ones, or says the old one still stands. ctx checks the file did not
-               change while the session read it, and the length of the text.
+               files, test data, generated and binary files are skipped). They go to sessions
+               of their own (8 paths each, model --ghost-model, default claude-haiku-5-5),
+               which read each file and the text of its merge and write a description in the
+               style of the existing ones, or say the old one still stands. Paragraphs an
+               agent or a person wrote stay word for word; the session rewrites only the
+               gardener's own. ctx checks the file did not change while the session read it,
+               and the length of the text.
                --idle-days D: open requests without visible activity for D days (default 30,
                0 = no list) go into the report under "Liegengeblieben", from data alone, with
                no model call (also with --mode api and --dry-run).
@@ -112,9 +118,10 @@ and calls nothing).
                    superseded, retired or judged: a person confirms a note on the
                    review page, where a duplicate note offers "merge" and a
                    regression note offers to record the test or "not testable"; a
-                   criterion note offers "record criterion as met" with the proof, a
-                   description note "adopt description", which shows the old and the
-                   new text);
+                   criterion note offers "record criterion as met" with the proof);
+                 - the descriptions of job 1, written directly with harness gardener,
+                   the merge commit (or HEAD) as git anchor and the paragraphs of
+                   others kept word for word; the server refuses a text that drops one;
                  - each contradiction between entries as a thread, linked to
                    all of them, marked as the gardener's, with the reason and the
                    verbatim quotes as its first post. For the same entries there
@@ -144,6 +151,7 @@ type gardenStore interface {
 	ProjectKnowledge(project string, includeArchived bool) ([]store.Knowledge, error)
 	Remember(k store.Knowledge, autoCtx scope.Axes) (store.Knowledge, error)
 	garden.ThreadSink
+	garden.GhostWriter
 	gardenReader
 }
 
@@ -177,8 +185,17 @@ type gardenOpts struct {
 	// and what starts a session.
 	Sessions, PerSession, Turns int
 	Runner                      garden.SessionRunner
+	// GhostModel and GhostPricing are the model of the description sessions and
+	// its prices (nil: those of the gardener's model).
+	GhostModel   string
+	GhostPricing *garden.Pricing
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+
+	// What a run of job 1 needs to write: HEAD and the branch of the checkout,
+	// and what to do with the descriptions written (all: none was refused).
+	ghostHead, ghostBranch string
+	afterGhosts            func(written []garden.GhostProposalData, all bool)
 }
 
 func cmdGarden(args []string, stdout io.Writer) int {
@@ -214,7 +231,8 @@ func cmdGarden(args []string, stdout io.Writer) int {
 	noMCP := fs.Bool("no-mcp", false, "agent mode: give the sessions no ghosttree tools (context_search, context_get); the fixed git tools stay")
 	minAge := fs.Int("min-age", 14, "days; an entry looked at more recently is left out unless it or its code changed (0 = off)")
 	requests := fs.Int("requests", 8, "agent mode: open requests whose criteria are held against the history per run (0 = off)")
-	ghosts := fs.Int("ghosts", 8, "agent mode: files per run for which a description is proposed (0 = off)")
+	ghosts := fs.Int("ghosts", 8, "agent mode: files per run, besides those of merges, that get a description (0 = off)")
+	ghostModel := fs.String("ghost-model", garden.DefaultGhostModel, "agent mode: model of the description sessions (empty: the gardener's model)")
 	idleDays := fs.Int("idle-days", garden.DefaultIdleDays, "days without visible activity after which an open request is listed in the report (0 = no list)")
 	limits := addLimitFlags(fs, llmusage.JobGarden, "")
 	fs.Usage = func() { fmt.Fprintln(stdout, gardenUsage) }
@@ -293,6 +311,15 @@ func cmdGarden(args []string, stdout io.Writer) int {
 	}
 	opts := gardenOpts{Types: map[string]bool{}, Limit: *limit, MaxUSD: *maxUSD, DryRun: *dryRun, Propose: *propose,
 		Limits: lim, MinAge: time.Duration(*minAge) * 24 * time.Hour, Requests: *requests, Ghosts: *ghosts, IdleDays: *idleDays}
+	if gm := strings.TrimSpace(*ghostModel); gm != "" && gm != cfg.Model {
+		p, ok := llm.DefaultPrice(gm)
+		if !ok {
+			fmt.Fprintf(stdout, "no price known for the description model %q: choose one with a known price (%s) or leave --ghost-model empty for the gardener's model\n", gm, garden.DefaultGhostModel)
+			return 2
+		}
+		opts.GhostModel = gm
+		opts.GhostPricing = &garden.Pricing{InUSDPerMTok: p.InUSD, OutUSDPerMTok: p.OutUSD, CacheReadUSDPerMTok: p.CacheReadUSD, CacheWriteUSDPerMTok: p.CacheWriteUSD}
+	}
 	if *stateFile != "" && *dbPath != "" {
 		fmt.Fprintln(stdout, "--db and --state-file exclude each other")
 		return 2
@@ -521,7 +548,9 @@ func runGardenAgent(st gardenStore, repo *garden.Repo, project string, opts gard
 		Sessions: opts.Sessions, PerSession: opts.PerSession, Turns: opts.Turns, Limit: opts.Limit, Known: known,
 		Gate: meter.gate, OnSession: meter.recordSession,
 		Ledger: jobs.Ledger, Ghosts: jobs.Ghosts, GhostSamples: jobs.Samples,
+		GhostModel: opts.GhostModel, GhostPricing: opts.GhostPricing,
 	}
+	looked := map[string]bool{}
 	if opts.State != nil {
 		remember := func(name string, key int64, c store.GardenCheck) {
 			c.KnowledgeID, c.CheckedAt, c.Commit = key, now().UTC().Format(time.RFC3339Nano), head
@@ -536,9 +565,31 @@ func runGardenAgent(st gardenStore, repo *garden.Repo, project string, opts gard
 			remember(garden.LedgerState(project), r.ID, store.GardenCheck{EntryHash: r.Hash(), Verdict: "checked"})
 		}
 		aopts.OnGhostLooked = func(g garden.GhostPath, verdict string) {
-			remember(garden.GhostState(project), garden.GhostKey(g.Path), store.GardenCheck{EntryHash: g.Stamp(), Verdict: verdict})
+			looked[g.Path] = true
+			// A description is remembered once it is written (afterGhosts): one
+			// that was not, without --propose or refused, stays due.
+			if verdict == "kept" {
+				remember(garden.GhostState(project), garden.GhostKey(g.Path), store.GardenCheck{EntryHash: g.Stamp(), Verdict: verdict})
+			}
+		}
+		// The merge mark moves to HEAD once every path the merges brought has
+		// been written or found right; until then the next run takes them first again.
+		opts.afterGhosts = func(written []garden.GhostProposalData, all bool) {
+			for _, g := range written {
+				remember(garden.GhostState(project), garden.GhostKey(g.Path), store.GardenCheck{EntryHash: g.Stamp(), Verdict: "described"})
+			}
+			if !all || !jobs.MergesDone || head == "" {
+				return
+			}
+			for _, g := range jobs.Ghosts {
+				if g.Merge != nil && !looked[g.Path] {
+					return
+				}
+			}
+			remember(garden.GhostMergeState(project), mergeMarkKey, store.GardenCheck{Verdict: "merged"})
 		}
 	}
+	opts.ghostHead, opts.ghostBranch = head, repo.Branch()
 	if !opts.DryRun && opts.Runner == nil {
 		fmt.Fprintln(stdout, "agent mode without a session runner")
 		return 1
@@ -628,7 +679,7 @@ func finishGarden(st gardenStore, project string, opts gardenOpts, res garden.Re
 	}
 
 	if opts.Propose && !opts.DryRun {
-		if c := proposeGarden(st, project, res, stdout, known); c != 0 {
+		if c := proposeGarden(st, project, opts, res, stdout, known); c != 0 {
 			return c
 		}
 	}
@@ -655,7 +706,7 @@ func finishGarden(st gardenStore, project string, opts gardenOpts, res garden.Re
 // and regression answers, a thread for each contradiction. It writes nothing else.
 // A contradiction whose thread cannot be opened is filed as a staged note, so the
 // finding is not lost.
-func proposeGarden(st gardenStore, project string, res garden.Result, stdout io.Writer, known map[int64]garden.Entry) int {
+func proposeGarden(st gardenStore, project string, opts gardenOpts, res garden.Result, stdout io.Writer, known map[int64]garden.Entry) int {
 	existing, err := st.ProjectKnowledge(project, true)
 	if err != nil {
 		fmt.Fprintf(stdout, "cannot read existing proposals: %v\n", err)
@@ -693,9 +744,12 @@ func proposeGarden(st gardenStore, project string, res garden.Result, stdout io.
 		fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n+rn+cn+pn)
 		return 1
 	}
-	gn, err := garden.ProposeGhosts(st, project, existing, res.GhostNotes)
+	gn, err := garden.WriteGhosts(st, project, opts.ghostHead, opts.ghostBranch, res.GhostDescribed)
+	if opts.afterGhosts != nil {
+		opts.afterGhosts(res.GhostDescribed[:gn], err == nil)
+	}
 	if err != nil {
-		fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n+rn+cn+pn+gn)
+		fmt.Fprintf(stdout, "%v (%d descriptions written before the failure; the report above is complete)\n", err, gn)
 		return 1
 	}
 	outcomes := garden.OpenContradictionThreads(st, project, existing, contradictions, known)
@@ -735,8 +789,11 @@ func proposeGarden(st gardenStore, project string, res garden.Result, stdout io.
 	if opened+kept > 0 {
 		fmt.Fprintf(stdout, "%d contradictions opened as threads, %d already dealt with\n", opened, kept)
 	}
-	if pn+gn > 0 {
-		fmt.Fprintf(stdout, "%d criteria proposed as met, %d descriptions proposed, as staged notes from the gardener (see 'ctx review')\n", pn, gn)
+	if pn > 0 {
+		fmt.Fprintf(stdout, "%d criteria proposed as met, as staged notes from the gardener (see 'ctx review')\n", pn)
+	}
+	if gn > 0 {
+		fmt.Fprintf(stdout, "%d descriptions written by the gardener\n", gn)
 	}
 	return 0
 }

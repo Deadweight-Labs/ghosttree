@@ -1,6 +1,8 @@
 {{define "pain"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id pn"><div class="wrap">
-{{with .PainV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n" title="{{.Human}}">#{{.ID}}</span></h1></div>
+{{with .PainV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n" title="{{.Human}}">#{{.ID}}</span></h1>
+{{if or .Edit .IssueHref}}<div class="gacts">{{if .Edit}}<a class="gbtn sm" href="{{.Edit.Close}}?panel=edit#edit">{{mi "pencil"}}{{t "issue.action.edit"}}</a>{{end}}{{if .IssueHref}}<a class="gbtn sm" href="{{.IssueHref}}">{{mi "issue"}}{{t "pains.action.issue"}}</a>{{end}}</div>{{end}}</div>
 <div class="dmeta"><span class="lb pillbig {{.StateTone}}">{{mi "pain"}}{{.StateLabel}}</span>{{if .Person}}<span>{{actor .Actor .Person}} {{t "pains.recorded" .Age}}</span>{{end}}</div></div>
+{{with .Edit}}{{template "editpanel" .}}{{end}}
 {{template "resultbanner" (dict "R" .Result "Strip" "done fail")}}
 <div class="dgrid"><div class="dmain">
 {{if and .Remaining (eq .State "mitigated")}}<div class="callout" role="note">{{mi "tri"}}<div><div class="k">{{t "pains.stays_open"}}</div><div class="tt">{{md .Remaining}}</div></div></div>{{end}}

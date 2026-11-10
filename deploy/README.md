@@ -261,6 +261,86 @@ new data, which already stops the growth. To give the space back to the
 filesystem, run `ctx db vacuum` once with the service stopped, as described in
 the next section.
 
+### Slim and packed transcripts
+
+The server stores transcript lines slim (copies and ballast of the harnesses
+left out, long tool outputs cut to their first 6 KB and last 2 KB) and packed
+with deflate and a dictionary it learns from the database once, a little after
+the first start. Lines stored by an older version are neither. `ctx db
+slim-sessions` brings them to the same form; it deletes the lines the rule drops
+together with their index and full-text rows and packs the rest. It is safe to
+run while the server is up: it writes in short transactions and pauses at least
+as long as each one held the write lock. The server must already run the version
+that brings the command, since that version adds the dictionary table.
+
+```bash
+sudo systemctl stop ghosttree
+sudo sh -c 'cd /var/lib/ghosttree && zstd -T0 -o /var/backups/ghosttree-before-slim.db.zst ghosttree.db'
+sudo systemctl start ghosttree        # the new version migrates on start
+$RUN db slim-sessions --db $DB --dry-run                # what would change, writes nothing
+$RUN db slim-sessions --db $DB --skip-optimize          # beside the running server
+sudo systemctl stop ghosttree
+$RUN db vacuum --db $DB --fts-optimize --yes            # merges the full-text indexes, gives the space back
+sudo systemctl start ghosttree
+```
+
+On local transcripts (550,000 lines) the run took about a minute per 100,000
+lines, of which about 18 seconds held the write lock; the file went from 3.2 GiB
+to 1.0 GiB after `vacuum`. A second run finds nothing to do, and an interrupted
+one may simply be started again. `ctx db chunk-stats` shows what is stored per
+line type, and what the run would leave.
+
+Packed lines cannot be read by an older ghosttree. Going back to an older
+version after the upgrade needs the backup.
+
+### One search index over sessions
+
+The words of every transcript line are indexed once, in `chunk_fts`, a
+full-text index that keeps no copy of the text; a snippet is made from the
+stored line when a page of hits is shown. Older databases hold two more copies:
+`chunk_index` keeps four text fields per line (messages, thinking, tool input,
+tool output) as the content of the older index `sess_fts`, and `chunks_fts`
+indexes `session_chunks.text`, filled by the trigger `chunks_ai`. No reader
+uses either any more. The server of this version adds `chunk_fts` and two
+columns of `chunk_index` on start, without reading the table; until the command
+below has run, the searches read `chunk_fts` and `sess_fts` together and the
+trigger keeps filling `chunks_fts`.
+
+`ctx db slim-search` moves the words of each older row from `sess_fts` to
+`chunk_fts` with the values stored in the row, empties its four fields (the
+text of a prompt stays, in the column `prompt`), empties `sess_fts`, drops the
+trigger `chunks_ai` and empties `chunks_fts`. Nothing is derived again from the
+transcript lines; `session_chunks`, the vectors and the distillations stay as
+they are, so no distillation and no embedding is started again. It may run
+beside the server in short transactions and waits out a long write lock of the
+server. A second run finds nothing to do; an interrupted one may simply be
+started again.
+
+```bash
+sudo systemctl stop ghosttree
+sudo sh -c 'cd /var/lib/ghosttree && zstd -T0 -o /var/backups/ghosttree-before-slim-search.db.zst ghosttree.db'
+sudo systemctl start ghosttree        # the new version migrates on start
+$RUN db slim-search --db $DB --dry-run                  # rows and bytes that would move, writes nothing
+$RUN db slim-search --db $DB --skip-optimize            # beside the running server
+sudo systemctl stop ghosttree
+$RUN db vacuum --db $DB --fts-optimize --yes            # merges chunk_fts, gives the space back
+$RUN db check --db $DB --full
+sudo systemctl start ghosttree
+```
+
+On local transcripts (310,000 lines, file 878 MiB after `slim-sessions` and
+`vacuum`) the run took 44 seconds, of which 22 held the write lock;
+`chunk_index` went from 273 MiB to 23 MiB, `chunks_fts` (65 MiB) and `sess_fts`
+(112 MiB) to nothing, `chunk_fts` holds what `sess_fts` held (113 MiB), and the
+file was 563 MiB after `vacuum`. The searches answer the same as before the
+move, and while it runs only the order by rank may differ.
+
+An older ghosttree started on the database after the run finds the moved
+sessions neither in its web search nor in its agents' search. A rollback after
+`slim-search` therefore needs the backup; a rollback before it does not. If an
+older binary wrote lines after the run, the next run of `slim-search` moves
+them.
+
 ### Shrinking and checking the database
 
 Deleting rows (`ctx strip-images`, a cleanup after a redaction) leaves free pages

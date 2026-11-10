@@ -313,9 +313,23 @@ func (s *Store) commitIdea(in CreateIdeaInput) (int64, error) {
 	return id, tx.Commit()
 }
 
+// ideaReadFactor: the query of a search reads this many times the limit, so that
+// the rights have rows to drop.
+const ideaReadFactor = 4
+
 // SearchIdeas liefert die Ideen des Projekts, die der Betrachter lesen darf, die
 // jüngsten zuerst. State "" heißt offene, "all" alle.
 func (a *ProjectAccess) SearchIdeas(f idea.Filter) ([]idea.Idea, error) {
+	out, _, err := a.SearchIdeasCut(f)
+	return out, err
+}
+
+// SearchIdeasCut is SearchIdeas that also says whether the read of the project was
+// cut: the query reads four times the limit (the answer may be longer than the
+// limit) and stops there, before the rights drop the rows the viewer may not
+// read, so a short answer alone does not prove that nothing lies behind it. A
+// caller that counts hits needs this.
+func (a *ProjectAccess) SearchIdeasCut(f idea.Filter) ([]idea.Idea, bool, error) {
 	if f.Limit <= 0 {
 		f.Limit = 50
 	}
@@ -324,11 +338,11 @@ func (a *ProjectAccess) SearchIdeas(f idea.Filter) ([]idea.Idea, error) {
 	}
 	f.Project = scope.NormalizeRemote(f.Project)
 	if f.State != "" && f.State != "all" && !idea.ValidState(f.State) {
-		return nil, requestdomain.NewRuleError("invalid_state", fmt.Sprintf("unknown idea state %q", f.State), "use open, accepted, dismissed or all", nil)
+		return nil, false, requestdomain.NewRuleError("invalid_state", fmt.Sprintf("unknown idea state %q", f.State), "use open, accepted, dismissed or all", nil)
 	}
 	list, err := a.st.searchIdeas(f)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	out := make([]idea.Idea, 0, len(list))
 	for _, i := range list {
@@ -338,7 +352,7 @@ func (a *ProjectAccess) SearchIdeas(f idea.Filter) ([]idea.Idea, error) {
 	}
 	a.attachIdeaLabels(out)
 	a.attachIdeaPains(out)
-	return out, nil
+	return out, len(list) >= f.Limit*ideaReadFactor, nil
 }
 
 func (s *Store) searchIdeas(f idea.Filter) ([]idea.Idea, error) {
@@ -364,7 +378,7 @@ func (s *Store) searchIdeas(f idea.Filter) ([]idea.Idea, error) {
 		args = append(args, w, w)
 	}
 	q += ` ORDER BY i.id DESC LIMIT ?`
-	args = append(args, f.Limit*4)
+	args = append(args, f.Limit*ideaReadFactor)
 	rows, err := s.db.QueryContext(s.ctx(), q, args...)
 	if err != nil {
 		return nil, err

@@ -55,7 +55,7 @@ ghosttree entries, and start a fresh session.
 Start a NEW session in a repository and check two things:
 
 - The ghosttree MCP tools are offered (`context_search`, `context_get`,
-  `context_remember`, `context_describe_file`, the `request_*` family).
+  `context_remember` with its actions such as `describe_file`, and `request`).
 - Something from ghosttree appeared at the start of the session without anyone
   asking for it - known context, a ledger line, or a note that the project is
   empty.

@@ -196,8 +196,8 @@ func (g *languageGate) unusual(term string) (bool, error) {
 	// chunks would. It is a shortcut to the same verdict, not a second criterion:
 	// no word is ever judged by what the others say, only spared the count.
 	var anywhere int
-	err := g.s.db.QueryRow(`SELECT count(*) FROM (SELECT 1 FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT ?)`,
-		phrase, g.ceiling+1).Scan(&anywhere)
+	err := g.s.db.QueryRow(`SELECT count(*) FROM (SELECT 1 FROM (`+wordHits("")+`) LIMIT ?)`,
+		phrase, phrase, g.ceiling+1).Scan(&anywhere)
 	if err != nil {
 		if missingTable(err) {
 			return true, nil
@@ -213,9 +213,12 @@ func (g *languageGate) unusual(term string) (bool, error) {
 		// other accounts, and those are read past, never counted. The limit
 		// counts matching own chunks only, so what lies between cannot move it.
 		var n int
-		err := g.s.db.QueryRow(`SELECT count(*) FROM (
-			SELECT 1 FROM chunks_fts CROSS JOIN session_chunks c ON c.id = chunks_fts.rowid
-			WHERE chunks_fts MATCH ? AND chunks_fts.rowid BETWEEN ? AND ? AND c.session_id = ? LIMIT ?)`,
+		err := g.s.db.QueryRow(`SELECT count(*) FROM (SELECT 1 FROM (
+			SELECT ci.chunk_id FROM chunk_fts CROSS JOIN chunk_index ci ON ci.chunk_id = chunk_fts.rowid
+			WHERE chunk_fts MATCH ?1 AND chunk_fts.rowid BETWEEN ?2 AND ?3 AND ci.session_id = ?4
+			UNION ALL
+			SELECT ci.chunk_id FROM sess_fts CROSS JOIN chunk_index ci ON ci.chunk_id = sess_fts.rowid
+			WHERE sess_fts MATCH ?1 AND sess_fts.rowid BETWEEN ?2 AND ?3 AND ci.session_id = ?4) LIMIT ?5)`,
 			phrase, span.lo, span.hi, span.session, g.ceiling+1-seen).Scan(&n)
 		if err != nil {
 			if missingTable(err) {

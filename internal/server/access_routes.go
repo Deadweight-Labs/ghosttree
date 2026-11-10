@@ -81,6 +81,7 @@ var accessRoutes = map[string]routeClass{
 	"GET /api/context-snapshots/{name}":           classProject,
 	"GET /api/context-snapshots/{name}/entries":   classProject,
 	"POST /api/sessions":                          classProject,
+	"POST /api/tool-uses":                         classProject,
 	"GET /api/sessions":                           classProject,
 	"GET /api/machines":                           classAccount,
 	"GET /api/machines/{name}":                    classAccount,

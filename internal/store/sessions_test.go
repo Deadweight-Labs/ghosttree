@@ -204,7 +204,7 @@ func TestSessionRawIsNotCappedByReadLimit(t *testing.T) {
 func TestSearchSessions(t *testing.T) {
 	s := openTest(t)
 	id, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "x1", Scope: scope.Axes{Project: "github.com/x/y"}, StartedAt: "2026-08-23T00:00:00Z"})
-	s.AppendChunks(id, []Chunk{{Seq: 0, Role: "user", Text: "the livekit sfu drops connections", Raw: "{}"}})
+	s.AppendChunks(id, []Chunk{{Seq: 0, Role: "user", Text: "the livekit sfu drops connections", Raw: codexTextLine("user", "the livekit sfu drops connections")}})
 	hits, err := s.SearchSessions("livekit", scope.Axes{}, "", 10)
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("hits = %v, err = %v", hits, err)
@@ -225,7 +225,7 @@ func TestSearchSessionsExcludesTheAskingSession(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := s.AppendChunks(id, []Chunk{{Seq: 0, Role: "user", Text: "selbstbeleg suchwort", Raw: "{}"}}); err != nil {
+		if err := s.AppendChunks(id, []Chunk{{Seq: 0, Role: "user", Text: "selbstbeleg suchwort", Raw: codexTextLine("user", "selbstbeleg suchwort")}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -304,7 +304,7 @@ func TestSearchSessionsSnippetBelongsToItsOwnChunk(t *testing.T) {
 	s := openTest(t)
 	for _, w := range []string{"alpha", "beta", "gamma"} {
 		id, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: w, Scope: scope.Axes{Project: "github.com/x/y"}})
-		s.AppendChunks(id, []Chunk{{Seq: 0, Role: "user", Text: "common zebra and " + w + " detail", Raw: "{}"}})
+		s.AppendChunks(id, []Chunk{{Seq: 0, Role: "user", Text: "common zebra and " + w + " detail", Raw: codexTextLine("user", "common zebra and "+w+" detail")}})
 	}
 	hits, err := s.SearchSessions("zebra", scope.Axes{}, "", 2)
 	if err != nil || len(hits) != 2 {
@@ -315,4 +315,15 @@ func TestSearchSessionsSnippetBelongsToItsOwnChunk(t *testing.T) {
 			t.Errorf("snippet %q does not belong to %s", h.Snippet, h.Session.ExternalID)
 		}
 	}
+}
+
+// codexTextLine is a Codex transcript line with one message: a prompt as typed
+// (role user) or an answer (role assistant). The search indexes what the line
+// says, not the text column.
+func codexTextLine(role, text string) string {
+	if role == "user" {
+		return jl(map[string]any{"type": "event_msg", "payload": map[string]any{"type": "user_message", "message": text}})
+	}
+	return jl(map[string]any{"type": "response_item", "payload": map[string]any{"type": "message", "role": "assistant",
+		"content": []map[string]any{{"type": "output_text", "text": text}}}})
 }

@@ -18,7 +18,7 @@ func addSessions(t *testing.T, f *accessAPIFixture, prefix string, n int, text s
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := f.st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: text, Raw: "{}"}}); err != nil {
+		if err := f.st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: text, Raw: promptRaw("claude-code", text)}}); err != nil {
 			t.Fatal(err)
 		}
 	}

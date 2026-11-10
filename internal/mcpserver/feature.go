@@ -41,7 +41,7 @@ type FeatureCreateInput struct {
 	Message  string  `json:"message,omitempty" jsonschema:"what this first version is, one line"`
 	Ideas    []int64 `json:"ideas,omitempty" jsonschema:"ideas (IDEA-n as numbers) it came out of"`
 	Requests []int64 `json:"requests,omitempty" jsonschema:"issues (REQ-n as numbers) it came out of"`
-	FromIdea int64   `json:"from_idea,omitempty" jsonschema:"turn an implemented idea into this feature; refused when the idea changes an existing feature (feature_update with idea then)"`
+	FromIdea int64   `json:"from_idea,omitempty" jsonschema:"turn an implemented idea into this feature; refused when the idea changes an existing feature (feature action=update with idea then)"`
 	PR       int64   `json:"pr,omitempty" jsonschema:"the pull request this version belongs to"`
 }
 
@@ -126,7 +126,7 @@ func (s *Server) registerFeatureTools(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "feature_state", Description: "Retire a feature the product no longer has (a reason is required; a lead does it) or take it up again. A retired feature stays readable but leaves context and checklists.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleFeatureState)
 	mcp.AddTool(srv, &mcp.Tool{Name: "feature_link", Description: "Tie a feature to an idea or an issue: origin (it came out of that) or affects (that changes it). An idea that affects a feature shows its current description next to the wish, and its implementation carries that description forward instead of creating a new feature. Unlink takes a tie off; versions already written keep theirs.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleFeatureLink)
 	mcp.AddTool(srv, &mcp.Tool{Name: "feature_pr_paths", Description: "Tell ghosttree which paths a pull request changes, and read the checklist that follows: for every feature whose paths contain one of them the item 'Feature X: Beschreibung angepasst?'. Get the paths with git diff --name-only <merge-base>...HEAD. Without paths it only reads the checklist of that pull request.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleFeaturePRPaths)
-	mcp.AddTool(srv, &mcp.Tool{Name: "feature_check", Description: "Say that you looked at a feature's description for a pull request and it still holds (a refactoring, behavior unchanged): closes the checklist item without a new version. A note says why. If the behavior changed, write feature_update with pr instead.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleFeatureCheck)
+	mcp.AddTool(srv, &mcp.Tool{Name: "feature_check", Description: "Say that you looked at a feature's description for a pull request and it still holds (a refactoring, behavior unchanged): closes the checklist item without a new version. A note says why. If the behavior changed, write feature action=update with pr instead.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleFeatureCheck)
 }
 
 func (s *Server) featureInput(f FeatureFields, message string, base int, idea int64, requests []int64, pr int64) client.FeatureInput {
@@ -292,7 +292,7 @@ func (s *Server) handleFeatureCheck(_ context.Context, _ *mcp.CallToolRequest, i
 // RenderFeatureChecklist schreibt die Punkte eines PRs.
 func RenderFeatureChecklist(pr int64, list []requestdomain.FeatureCheck) string {
 	if len(list) == 0 {
-		return fmt.Sprintf("No feature description is touched by PR #%d (or no paths were reported: feature_pr_paths with paths).\n", pr)
+		return fmt.Sprintf("No feature description is touched by PR #%d (or no paths were reported: feature action=pr_paths with paths).\n", pr)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Feature descriptions PR #%d touches:\n", pr)
@@ -306,7 +306,7 @@ func RenderFeatureChecklist(pr int64, list []requestdomain.FeatureCheck) string 
 		}
 		fmt.Fprintf(&b, "- %s %s — %s\n", mark, oneLine(c.Text), how)
 	}
-	b.WriteString("Open item: feature_update with pr (the behavior changed) or feature_check with pr and a note (it did not).\n")
+	b.WriteString("Open item: feature action=update with pr (the behavior changed) or feature action=check with pr and a note (it did not).\n")
 	return b.String()
 }
 

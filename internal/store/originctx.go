@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strconv"
@@ -211,6 +212,11 @@ func (s *Store) viaFor(table string, ids []int64) (map[int64]string, error) {
 // originsFor liefert die Kontexte der Zeilen einer Tabelle, nach Zeilen-Id.
 // Zeilen ohne Kontext fehlen im Ergebnis. table kommt nur aus anchoredTables.
 func (s *Store) originsFor(table string, ids []int64) (map[int64]*originctx.Context, error) {
+	return s.originsForCtx(s.ctx(), table, ids)
+}
+
+// originsForCtx is originsFor whose reads end with ctx.
+func (s *Store) originsForCtx(ctx context.Context, table string, ids []int64) (map[int64]*originctx.Context, error) {
 	out := map[int64]*originctx.Context{}
 	byOrigin := map[int64]*originctx.Context{}
 	rowOrigin := map[int64]int64{}
@@ -224,7 +230,7 @@ func (s *Store) originsFor(table string, ids []int64) (map[int64]*originctx.Cont
 		for i, id := range part {
 			args[i] = id
 		}
-		rows, err := s.db.Query(`SELECT t.id, o.id, o.session_ref, o.captured_at, o.backfilled, o.via FROM `+table+` t
+		rows, err := s.db.QueryContext(ctx, `SELECT t.id, o.id, o.session_ref, o.captured_at, o.backfilled, o.via FROM `+table+` t
 			JOIN origin_contexts o ON o.id=t.origin_id WHERE t.id IN (`+placeholders(len(part))+`)`, args...)
 		if err != nil {
 			return nil, err
@@ -268,7 +274,7 @@ func (s *Store) originsFor(table string, ids []int64) (map[int64]*originctx.Cont
 		for i, id := range part {
 			args[i] = id
 		}
-		rows, err := s.db.Query(`SELECT origin_id,path,kind,weight FROM origin_paths WHERE origin_id IN (`+placeholders(len(part))+`)
+		rows, err := s.db.QueryContext(ctx, `SELECT origin_id,path,kind,weight FROM origin_paths WHERE origin_id IN (`+placeholders(len(part))+`)
 			ORDER BY weight DESC, path`, args...)
 		if err != nil {
 			return nil, err
@@ -287,7 +293,7 @@ func (s *Store) originsFor(table string, ids []int64) (map[int64]*originctx.Cont
 		if err != nil {
 			return nil, err
 		}
-		rows, err = s.db.Query(`SELECT origin_id,area,weight FROM origin_areas WHERE origin_id IN (`+placeholders(len(part))+`)
+		rows, err = s.db.QueryContext(ctx, `SELECT origin_id,area,weight FROM origin_areas WHERE origin_id IN (`+placeholders(len(part))+`)
 			ORDER BY weight DESC, area`, args...)
 		if err != nil {
 			return nil, err
@@ -650,7 +656,7 @@ func (s *Store) attachKnowledgeOrigins(ks []Knowledge) error {
 
 // attachRequestOrigins hängt Treffern den Kontext des Anlegens an: der steht am
 // Ereignis request.created.
-func (s *Store) attachRequestOrigins(hits []requestdomain.SearchHit) error {
+func (s *Store) attachRequestOrigins(ctx context.Context, hits []requestdomain.SearchHit) error {
 	if len(hits) == 0 {
 		return nil
 	}
@@ -660,7 +666,7 @@ func (s *Store) attachRequestOrigins(hits []requestdomain.SearchHit) error {
 		byRequest[h.Request.ID] = i
 		args[i] = h.Request.ID
 	}
-	rows, err := s.db.Query(`SELECT id, request_id FROM request_activity WHERE kind='request.created' AND origin_id IS NOT NULL
+	rows, err := s.db.QueryContext(ctx, `SELECT id, request_id FROM request_activity WHERE kind='request.created' AND origin_id IS NOT NULL
 		AND request_id IN (`+placeholders(len(args))+`)`, args...)
 	if err != nil {
 		return err
@@ -681,7 +687,7 @@ func (s *Store) attachRequestOrigins(hits []requestdomain.SearchHit) error {
 	if err != nil || len(actIDs) == 0 {
 		return err
 	}
-	origins, err := s.originsFor("request_activity", actIDs)
+	origins, err := s.originsForCtx(ctx, "request_activity", actIDs)
 	if err != nil {
 		return err
 	}

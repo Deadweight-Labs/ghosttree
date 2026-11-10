@@ -215,7 +215,7 @@ func renderDoc(e Entry, g store.GhostFile, described bool, f Freshness, reviewed
 			return b.String()
 		}
 		b.WriteString("(keine Beschreibung)\n\n")
-		b.WriteString("No description for this path yet. Whoever touches it next can write one with `context_describe_file`.\n\n")
+		b.WriteString("No description for this path yet. The gardener writes one after the next merge that touches it; add with `context_remember action=describe_file` only what the code does not show.\n\n")
 		return b.String()
 	}
 	date := g.DescribedAt
@@ -224,6 +224,10 @@ func renderDoc(e Entry, g store.GhostFile, described bool, f Freshness, reviewed
 	}
 	fmt.Fprintf(&b, "beschrieben %s", date)
 	switch {
+	case g.Harness == "gardener" && strings.HasPrefix(g.SessionRef, GardenerMergeRef):
+		fmt.Fprintf(&b, " vom Gärtner nach Merge %s", shortRef(strings.TrimPrefix(g.SessionRef, GardenerMergeRef)))
+	case g.Harness == "gardener" && strings.HasPrefix(g.SessionRef, GardenerRunRef):
+		b.WriteString(" vom Gärtner")
 	case g.Harness == "gardener" && g.Person != "":
 		// The server sets this mark only when a person adopted a proposal of the
 		// gardener on the review page, so it says who confirmed it.

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
 )
@@ -85,11 +86,12 @@ const redactQuoteMarker = redact.QuoteMarker
 // AppendChunks es bei neuen Chunks tut, und entfernt sie aus jeder Kopie:
 //
 //   - session_chunks.text und .raw
-//   - chunks_fts: Volltextindex über text (content='session_chunks'). Das UPDATE
-//     fasst ihn nicht an; der alte Eintrag wird mit dem Befehl 'delete' und dem
-//     alten Text gelöscht, der neue eingefügt.
-//   - chunk_index (aus raw abgeleitete Felder) und sess_fts darüber, auf dieselbe
-//     Weise
+//   - chunks_fts: Volltextindex über text (content='session_chunks'), solange
+//     der Auslöser chunks_ai ihn pflegt. Das UPDATE fasst ihn nicht an; der alte
+//     Eintrag wird mit dem Befehl 'delete' und dem alten Text gelöscht, der neue
+//     eingefügt.
+//   - chunk_index (Text eines Prompts, bei älteren Zeilen alle abgeleiteten
+//     Felder) und die Wörter in chunk_fts oder sess_fts
 //   - sessions.title, soweit er aus dem Prompt stammt
 //   - knowledge_evidence.quote und request_sightings.quote: wörtliche Zitate aus
 //     text
@@ -162,15 +164,19 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 		return rep, err
 	}
 	w := redactWork{db: db, ctx: ctx, write: !opts.DryRun, lits: opts.Literals, has: has,
-		harness: map[int64]string{}, retitled: map[int64]struct{}{}, requoted: map[string]struct{}{}}
+		harness: map[int64]string{}, retitled: map[int64]struct{}{}, requoted: map[string]struct{}{},
+		raw: rawStateFor(db)}
+	w.enc = w.raw.encoder(ctx, db)
 	if w.sessionVectors, err = hasSessionEmbeddingTables(ctx, db); err != nil {
+		return rep, err
+	}
+	if w.chunksFTS, err = chunksFTSLive(ctx, db); err != nil {
 		return rep, err
 	}
 	for _, t := range []struct {
 		names []string
 		flag  *bool
 	}{
-		{[]string{"chunks_fts"}, &w.chunksFTS},
 		{[]string{"chunk_index", "sess_fts"}, &w.index},
 		{[]string{"knowledge_evidence"}, &w.evidence},
 		{[]string{"request_sightings"}, &w.sightings},
@@ -185,6 +191,12 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 				*t.flag = false
 				rep.Skipped = append(rep.Skipped, n)
 			}
+		}
+	}
+
+	if w.index {
+		if _, err := hasWordIndex(ctx, db, has); err != nil {
+			return rep, err
 		}
 	}
 
@@ -211,9 +223,13 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 		}
 		for rows.Next() {
 			var e redactEdit
-			if err := rows.Scan(&e.id, &e.session, &e.seq, &e.oldText, &e.oldRaw); err != nil {
+			if err := rows.Scan(&e.id, &e.session, &e.seq, &e.oldText, &e.stored); err != nil {
 				rows.Close()
 				return fail(err)
+			}
+			if e.oldRaw, err = w.raw.line(ctx, db, e.stored); err != nil {
+				rows.Close()
+				return fail(fmt.Errorf("chunk %d: %w", e.id, err))
 			}
 			read++
 			last = e.id
@@ -299,7 +315,7 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 		for _, idx := range []struct {
 			name string
 			on   bool
-		}{{"chunks_fts", w.chunksFTS}, {"sess_fts", w.index}} {
+		}{{"chunks_fts", w.chunksFTS}, {"sess_fts", w.index}, {"chunk_fts", w.index}} {
 			if !idx.on {
 				continue
 			}
@@ -355,10 +371,13 @@ type redactEdit struct {
 	seq         int
 	oldText     string
 	oldRaw      string
-	newText     string
-	newRaw      string
-	textKinds   map[string]int64
-	rawKinds    map[string]int64
+	// stored ist raw, wie es gelesen wurde (gepackt oder nicht); das UPDATE
+	// vergleicht damit.
+	stored    rawcodec.Value
+	newText   string
+	newRaw    string
+	textKinds map[string]int64
+	rawKinds  map[string]int64
 }
 
 type redactBatch struct {
@@ -377,6 +396,8 @@ type maintQueryer interface {
 type redactWork struct {
 	db  *sql.DB
 	ctx context.Context
+	raw *rawState
+	enc *rawcodec.Encoder
 	// write is false for a dry run: the same steps run, nothing is written.
 	write                                 bool
 	chunksFTS, index, evidence, sightings bool
@@ -454,11 +475,11 @@ func (w *redactWork) apply(edits []redactEdit) (redactBatch, error) {
 		var err error
 		switch {
 		case textChanged && rawChanged:
-			n, err = w.exec(q, `UPDATE session_chunks SET text=?, raw=? WHERE id=? AND text=? AND raw=?`, e.newText, e.newRaw, e.id, e.oldText, e.oldRaw)
+			n, err = w.exec(q, `UPDATE session_chunks SET text=?, raw=? WHERE id=? AND text=? AND raw=?`, e.newText, w.enc.Encode(e.newRaw), e.id, e.oldText, e.stored.Stored())
 		case textChanged:
 			n, err = w.exec(q, `UPDATE session_chunks SET text=? WHERE id=? AND text=?`, e.newText, e.id, e.oldText)
 		default:
-			n, err = w.exec(q, `UPDATE session_chunks SET raw=? WHERE id=? AND raw=?`, e.newRaw, e.id, e.oldRaw)
+			n, err = w.exec(q, `UPDATE session_chunks SET raw=? WHERE id=? AND raw=?`, w.enc.Encode(e.newRaw), e.id, e.stored.Stored())
 		}
 		if err != nil {
 			return res, err
@@ -525,22 +546,22 @@ func (f indexFields) empty() bool {
 	return f.text == "" && f.thinking == "" && f.toolInput == "" && f.toolOutput == ""
 }
 
-// reindex rebuilds the row of chunk_index and the entry of sess_fts from the
-// new raw. sess_fts has its content in chunk_index; its entry is deleted with
-// the values it was made from, which is the row as it is stored now. Index
-// entries only exist for rows with at least one non-empty field.
+// reindex rebuilds the row of chunk_index and the words of the chunk from the
+// new raw. A row in sess_fts (fts = 0) has its content in chunk_index and is
+// deleted with the values it was made from, which is the row as it is stored
+// now; a row in chunk_fts is deleted by its number. Either way the words go to
+// chunk_fts afterwards. A row in chunk_fts is always rewritten: the index keeps
+// no text to compare, and what it holds may come from an older parser.
 func (w *redactWork) reindex(q maintQueryer, e redactEdit, res *redactBatch) error {
 	if !w.index {
 		return nil
 	}
-	var old indexFields
-	err := q.QueryRowContext(w.ctx, `SELECT text, thinking, tool_input, tool_output FROM chunk_index WHERE chunk_id=?`, e.id).
-		Scan(&old.text, &old.thinking, &old.toolInput, &old.toolOutput)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil // not indexed yet: the backfill reads the redacted raw
-	}
+	old, ok, err := loadIndexRow(w.ctx, q, e.id)
 	if err != nil {
 		return err
+	}
+	if !ok {
+		return nil // not indexed yet: the backfill reads the redacted raw
 	}
 	h, err := w.harnessOf(q, e.session)
 	if err != nil {
@@ -548,28 +569,18 @@ func (w *redactWork) reindex(q maintQueryer, e redactEdit, res *redactBatch) err
 	}
 	f := transcript.Fields(transcript.Parse(h, e.seq, e.newRaw))
 	nf := indexFields{f.Text, f.Thinking, f.ToolInput, f.ToolOutput}
-	if nf == old {
+	if old.fts == 0 && nf == old.fields {
 		return nil
 	}
-	if !old.empty() {
-		if _, err := w.exec(q, `INSERT INTO sess_fts(sess_fts, rowid, text, thinking, tool_input, tool_output) VALUES('delete', ?, ?, ?, ?, ?)`,
-			e.id, old.text, old.thinking, old.toolInput, old.toolOutput); err != nil {
-			return err
-		}
-	}
-	if _, err := w.exec(q, `UPDATE chunk_index SET text=?, thinking=?, tool_input=?, tool_output=? WHERE chunk_id=?`,
-		nf.text, nf.thinking, nf.toolInput, nf.toolOutput, e.id); err != nil {
+	if err := rewriteWords(w.exec, q, e.id, old, nf, old.prompt); err != nil {
 		return err
 	}
-	if !nf.empty() {
-		if _, err := w.exec(q, `INSERT INTO sess_fts(rowid, text, thinking, tool_input, tool_output) VALUES(?, ?, ?, ?, ?)`,
-			e.id, nf.text, nf.thinking, nf.toolInput, nf.toolOutput); err != nil {
-			return err
-		}
-	}
 	res.tables["chunk_index"]++
-	if !old.empty() || !nf.empty() {
+	if old.fts == 0 && !old.fields.empty() {
 		res.tables["sess_fts"]++
+	}
+	if old.fts == 1 || !nf.empty() {
+		res.tables["chunk_fts"]++
 	}
 	return nil
 }

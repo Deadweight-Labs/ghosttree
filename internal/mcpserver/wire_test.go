@@ -146,7 +146,7 @@ func TestCurrentSessionDoesNotComeBackAsEvidenceOverTheWire(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "eigenbeleg", Raw: "{}"}}); err != nil {
+		if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "eigenbeleg", Raw: promptRaw("codex", "eigenbeleg")}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -199,7 +199,7 @@ func TestThePlacementQuestionIsInTheSchema(t *testing.T) {
 	c, _ := newTestClient(t)
 	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y"}})
 
-	tools, err := session.ListTools(context.Background(), nil)
+	tools, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,4 +423,10 @@ func TestDescribeFileRefusesBothAtOnce(t *testing.T) {
 	if !failed {
 		t.Fatalf("beides zugleich muss abgewiesen werden, got %q", got)
 	}
+}
+
+// listRegistered lists every registered tool with its own schema and
+// description, not the core list an agent sees.
+func listRegistered(ctx context.Context, session *mcp.ClientSession) (*mcp.ListToolsResult, error) {
+	return session.ListTools(ctx, &mcp.ListToolsParams{Meta: mcp.Meta{registeredMeta: true}})
 }

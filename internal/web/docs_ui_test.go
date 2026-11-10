@@ -233,9 +233,9 @@ func TestRenamedDocumentRedirectsFromItsOldSlug(t *testing.T) {
 	}
 }
 
-// Across projects, "show all" of the documents is this search narrowed to
-// documents, not the list of the project of one hit.
-func TestSearchShowAllDocumentsAcrossProjects(t *testing.T) {
+// "More hits" of the documents stays in the search: it is this search narrowed
+// to documents, which shows more of them, not the list of the project of one hit.
+func TestSearchMoreHitsOfDocumentsStaysInTheSearch(t *testing.T) {
 	e := ovEnv(t)
 	for i := 0; i < searchPerGroup+1; i++ {
 		slug := "walrus-" + string(rune('a'+i))
@@ -244,12 +244,15 @@ func TestSearchShowAllDocumentsAcrossProjects(t *testing.T) {
 		}
 	}
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/search?q=walrus")
-	if !strings.Contains(page, `href="/ui/search?kind=docs&amp;q=is%3Adoc&#43;walrus"`) {
-		t.Error("show all does not narrow this search to documents")
+	if !strings.Contains(page, `class="row morelink" href="/ui/search?kind=docs&amp;q=walrus"`) {
+		t.Error("more hits does not narrow this search to documents")
 	}
-	_, page = fetchPage(t, e.Owner, e.Base+"/ui/search?q=walrus&project="+url.QueryEscape(shellProject))
-	if !strings.Contains(page, `href="/ui/x/shell/docs"`) {
-		t.Error("show all within a project is not its list of documents")
+	if strings.Count(page, `class="hit"`) != searchPerGroup {
+		t.Errorf("the page of all kinds shows %d hits of the documents, want %d", strings.Count(page, `class="hit"`), searchPerGroup)
+	}
+	_, page = fetchPage(t, e.Owner, e.Base+"/ui/search?q=walrus&kind=docs")
+	if strings.Count(page, `class="hit"`) != searchPerGroup+1 || strings.Contains(page, "morelink") {
+		t.Error("narrowed to documents, the search must show all six and offer no more")
 	}
 }
 

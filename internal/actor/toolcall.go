@@ -3,6 +3,8 @@ package actor
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/coretools"
 )
 
 type callLine struct {
@@ -77,6 +79,17 @@ func callMatches(name, input string, tools, commands []string) bool {
 	for _, t := range tools {
 		if name == t || strings.HasSuffix(name, "__"+t) || strings.HasSuffix(name, "."+t) || strings.HasSuffix(name, "/"+t) {
 			return true
+		}
+	}
+	// A core tool names the older tool through its action: pain with action
+	// record is pain_record.
+	if core, action, ok := coretools.Classify(name, inputAction(input)); ok {
+		if route, found := coretools.Route(core, action); found {
+			for _, t := range tools {
+				if route.Tool == t {
+					return true
+				}
+			}
 		}
 	}
 	if len(commands) == 0 || input == "" {
@@ -159,4 +172,12 @@ func shellCommands(input string) []string {
 		}
 	}
 	return out
+}
+
+func inputAction(input string) string {
+	var in struct {
+		Action string `json:"action"`
+	}
+	_ = json.Unmarshal([]byte(input), &in)
+	return in.Action
 }

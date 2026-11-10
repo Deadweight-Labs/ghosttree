@@ -25,7 +25,7 @@ type IdeaConceptFields struct {
 	What         string   `json:"what,omitempty" jsonschema:"Was es können soll: what the finished thing does"`
 	How          string   `json:"how,omitempty" jsonschema:"Wie wir es uns vorstellen: the approach in a few lines"`
 	Not          string   `json:"not,omitempty" jsonschema:"Was ausdrücklich nicht: what is out of scope"`
-	Questions    string   `json:"questions,omitempty" jsonschema:"Offene Fragen as free text. What has to be decided is a decision_open, not this text"`
+	Questions    string   `json:"questions,omitempty" jsonschema:"Offene Fragen as free text. What has to be decided is an open decision (idea action=decision_open), not this text"`
 	Requirements []string `json:"requirements,omitempty" jsonschema:"Anforderungen: drafts of acceptance criteria, one observable outcome per line. They become the criteria of the issues"`
 }
 
@@ -573,7 +573,7 @@ func (s *Server) workshopAction(in IdeaUpdateInput) (*mcp.CallToolResult, IdeaOu
 		return s.ideaResult(i, err, fmt.Sprintf("requirement %d is waived", in.Requirement))
 	case "discuss":
 		i, err := s.client.StartIdeaDiscussion(in.ID)
-		return s.ideaResult(i, err, fmt.Sprintf("Open the discussion with thread_open (link_kind idea, link_id IDEA-%d); anyone, agents included, answers in that thread. Put what is undecided as decision_open.", in.ID))
+		return s.ideaResult(i, err, fmt.Sprintf("Open the discussion with coord action=thread_open (link_kind idea, link_id IDEA-%d); anyone, agents included, answers in that thread. Put what is undecided as idea action=decision_open.", in.ID))
 	case "issues":
 		res, err := s.client.CreateIssuesFromIdea(in.ID, issueSpecs(in.Issues), in.Branch, in.PackageName, s.currentSessionID())
 		if err != nil {

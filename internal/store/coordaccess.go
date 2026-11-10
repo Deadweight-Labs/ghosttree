@@ -220,8 +220,24 @@ func (a CoordAccess) roleOpensProjectRoom(roomKey string, tx rowQuerier, via Act
 	if via == ActPost {
 		return matrixAllows(role, ResRoom, ActPost, Object{})
 	}
-	// Reading needs rank member and up, not the guest's room read (ResRoom).
+	return roleReadsProjectRoom(role)
+}
+
+// roleReadsProjectRoom says whether a project role may read the project room: rank
+// member and up (ResAgents), not the guest's room read (ResRoom). The room page and
+// everything that shows what was said in the room (the questions in the ghosttree
+// view of a session) ask this, so that they cannot differ.
+func roleReadsProjectRoom(role RoleInfo) bool {
 	return matrixAllows(role, ResAgents, ActRead, Object{})
+}
+
+// CanReadProjectRoom says whether the account behind principalID may read the room
+// of the project without an agent of their own in it (see roleOpensProjectRoom).
+func (s *Store) CanReadProjectRoom(project, principalID string) bool {
+	if s.reader != nil {
+		return s.reader.CanReadProjectRoom(project, principalID)
+	}
+	return roleReadsProjectRoom(s.ProjectRole(project, principalID))
 }
 
 func (a CoordAccess) principalOwnsPublicMembership(roomKey string) (bool, error) {
@@ -438,7 +454,7 @@ func (a CoordAccess) roleReadableProjectRooms(have []CoordRoom) ([]CoordRoom, er
 		if err := rows.Scan(&room.Key, &room.Kind, &room.Label, &room.CreatedAt, &orgRole, &role, &review, &share); err != nil {
 			return nil, err
 		}
-		if seen[room.Key] || !matrixAllows(deriveRole(orgRole, role, review == 1, share), ResAgents, ActRead, Object{}) {
+		if seen[room.Key] || !roleReadsProjectRoom(deriveRole(orgRole, role, review == 1, share)) {
 			continue
 		}
 		out = append(out, room)
@@ -1226,7 +1242,7 @@ func (a CoordAccess) ProjectAgents(project string) ([]CoordAgent, error) {
 	if a.Store == nil || a.AgentExternalID != "" || a.publicOnly {
 		return a.Peers(roomKey, "")
 	}
-	if _, ok := accountNumericID(a.Principal.ID); !ok || !matrixAllows(a.Store.ProjectRole(project, a.Principal.ID), ResAgents, ActRead, Object{}) {
+	if _, ok := accountNumericID(a.Principal.ID); !ok || !a.Store.CanReadProjectRoom(project, a.Principal.ID) {
 		return a.Peers(roomKey, "")
 	}
 	if _, err := a.rawRoom(roomKey); err != nil {

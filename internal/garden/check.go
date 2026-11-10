@@ -123,11 +123,14 @@ type Result struct {
 	LedgerRotation Rotation
 	Idle           []IdleRequest
 	IdleDays       int
-	// Job 1, the ghosts: the descriptions proposed, the paths whose description the
-	// session found right as it is, and what the selection left out.
-	GhostNotes    []GhostProposalData
-	GhostKept     []GhostPath
-	GhostRotation GhostRotation
+	// Job 1, the ghosts: the descriptions written (or, without --propose, the ones
+	// that would be), the paths whose description the session found right as it
+	// is, and what the selection left out. GhostEstimate is what a dry run
+	// expects the description sessions to cost.
+	GhostDescribed []GhostProposalData
+	GhostKept      []GhostPath
+	GhostRotation  GhostRotation
+	GhostEstimate  GhostEstimate
 }
 
 const systemPrompt = `Du prüfst einen Wissens-Eintrag (Pitfall oder Decision) eines Softwareprojekts gegen den aktuellen Code. Du entscheidest nichts, du machst einen Vorschlag, den ein Mensch prüft.

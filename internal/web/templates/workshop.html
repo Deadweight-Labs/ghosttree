@@ -34,9 +34,9 @@
 {{if .CanReopen}}<form method="post" class="ws-reopen" action="/ui/decisions/{{.ID}}/reopen"><input type="hidden" name="csrf_token" value="{{$ws.Token}}"><input class="gfield" name="reason" maxlength="500" required autocomplete="off" placeholder="{{t "workshop.why_reopen"}}" aria-label="{{t "workshop.why_reopen"}}"><button class="gbtn sm">{{t "workshop.reopen"}}</button></form>{{end}}{{end}}{{end}}
 {{if .CanAttach}}<form class="ws-up" method="post" action="/ui/ideas/{{$ws.ID}}/attach" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{$ws.Token}}"><input type="hidden" name="owner" value="variant">
 <select class="gfield" name="variant" aria-label="{{t "workshop.img.to"}}">{{range .Variants}}<option value="{{.ID}}">{{.Label}} · {{.Title}}</option>{{end}}</select>
-<input class="gfield" type="file" name="file" accept="image/png,image/jpeg,image/webp" required aria-label="{{t "workshop.img.file"}}">
+{{template "uifile" (fileField "file" "image/png,image/jpeg,image/webp" (t "workshop.img.pick") (t "workshop.img.file"))}}
 <input class="gfield" name="alt" maxlength="200" autocomplete="off" placeholder="{{t "workshop.img.alt"}}" aria-label="{{t "workshop.img.alt"}}">
-<button class="gbtn sm">{{mi "plus"}}{{t "workshop.img.add"}}</button></form>{{end}}</article>{{end}}
+<button class="gbtn">{{mi "plus"}}{{t "workshop.img.add"}}</button></form>{{end}}</article>{{end}}
 {{if or .CanDiscuss .CanApprove .CanWithdraw}}<div class="box-r ws-foot">{{if .CanDiscuss}}<form method="post" action="/ui/ideas/{{.ID}}/phase"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="mode" value="discuss"><button class="gbtn">{{mi "chat"}}{{t "workshop.discuss"}}</button></form>{{end}}
 {{if .CanApprove}}<form method="post" action="/ui/ideas/{{.ID}}/phase"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="mode" value="approve"><input type="hidden" name="revision" value="{{.Revision}}"><button class="gbtn pri">{{mi "check"}}{{t "workshop.approve" .Revision}}</button></form>{{end}}
 {{if .CanWithdraw}}<form method="post" action="/ui/ideas/{{.ID}}/phase"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="mode" value="withdraw"><button class="gbtn">{{t "workshop.withdraw"}}</button></form>{{end}}</div>{{end}}

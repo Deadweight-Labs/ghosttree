@@ -197,6 +197,8 @@ func commitEntryHref(view *repoView, def string, visible branchVisible, e store.
 			return view.Href + "/ideas/" + strconv.FormatInt(e.ObjectID, 10)
 		case store.CommentOnPain:
 			return view.Href + "/pains/" + strconv.FormatInt(e.ObjectID, 10)
+		case store.CommentOnKnowledge:
+			return view.Href + "/knowledge/" + strconv.FormatInt(e.ObjectID, 10)
 		}
 	}
 	return ""

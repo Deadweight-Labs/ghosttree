@@ -25,7 +25,7 @@ type extraSetup struct {
 func newExtraSetup(t *testing.T, runner SessionRunner) extraSetup {
 	t.Helper()
 	fx := newLedgerFixture(t)
-	gp, _ := SelectGhosts(fx.repo, nil, nil, nil, nil, 0)
+	gp, _ := SelectGhosts(fx.repo, nil, nil, nil, nil, nil, 0)
 	if len(gp) != 1 || gp[0].Path != "internal/store/x.go" {
 		t.Fatalf("ghost candidates = %v", paths(gp))
 	}
@@ -75,10 +75,10 @@ func TestExtraSessionsRunFirstWithTheirOwnInstructionAndLeaveTheKnowledgeSession
 			t.Errorf("%s may spend $%.2f, more than a quarter of the run", sp.Name, sp.BudgetUSD)
 		}
 	}
-	if len(res.Proofs) != 1 || res.Proofs[0].Criterion.ID != 1793 || res.Proofs[0].Session == "" || len(res.GhostNotes) != 1 || res.GhostNotes[0].Path != "internal/store/x.go" || len(res.Verdicts) != 3 {
-		t.Fatalf("proofs=%d ghosts=%d verdicts=%d", len(res.Proofs), len(res.GhostNotes), len(res.Verdicts))
+	if len(res.Proofs) != 1 || res.Proofs[0].Criterion.ID != 1793 || res.Proofs[0].Session == "" || len(res.GhostDescribed) != 1 || res.GhostDescribed[0].Path != "internal/store/x.go" || len(res.Verdicts) != 3 {
+		t.Fatalf("proofs=%d ghosts=%d verdicts=%d", len(res.Proofs), len(res.GhostDescribed), len(res.Verdicts))
 	}
-	if fmt.Sprint(checked) != "[457]" || fmt.Sprint(looked) != "[internal/store/x.go:proposed]" || res.LedgerChecked != 1 {
+	if fmt.Sprint(checked) != "[457]" || fmt.Sprint(looked) != "[internal/store/x.go:described]" || res.LedgerChecked != 1 {
 		t.Errorf("remembered %v %v", checked, looked)
 	}
 	if len(res.Sessions) != 3 || res.Sessions[0].Judged != 1 || res.StoppedBy != "" {
@@ -136,7 +136,7 @@ func TestExtraSessionsThatFailNeverStopTheKnowledgeJob(t *testing.T) {
 	if extra != 2 || failed != 2 {
 		t.Errorf("%d extra sessions ran and %d failed, want 2 and 2: after two failures the extra jobs stop", extra, failed)
 	}
-	if len(res.Proofs) != 0 || len(res.GhostNotes) != 0 {
+	if len(res.Proofs) != 0 || len(res.GhostDescribed) != 0 {
 		t.Error("something was proposed from a broken session")
 	}
 }
@@ -172,8 +172,8 @@ func TestAnExtraSessionThatChangesTheCheckoutEndsTheRun(t *testing.T) {
 	}
 	fr.answers = []func(SessionSpec) (SessionResult, error){tamper}
 	res := CheckAgent(context.Background(), s.fx.repo, agentEntries(3), s.opt)
-	if res.StoppedBy != "tamper" || len(res.Proofs) != 0 || len(res.GhostNotes) != 0 || len(fr.specs) != 1 {
-		t.Errorf("stopped by %q, %d proofs, %d descriptions, %d sessions", res.StoppedBy, len(res.Proofs), len(res.GhostNotes), len(fr.specs))
+	if res.StoppedBy != "tamper" || len(res.Proofs) != 0 || len(res.GhostDescribed) != 0 || len(fr.specs) != 1 {
+		t.Errorf("stopped by %q, %d proofs, %d descriptions, %d sessions", res.StoppedBy, len(res.Proofs), len(res.GhostDescribed), len(fr.specs))
 	}
 	for _, v := range res.Verdicts {
 		if v.Kind != NotRun {

@@ -67,7 +67,7 @@ func TestIssueComposerClosesOrDropsAndOnlyForThoseWhoMay(t *testing.T) {
 	}
 	// While a requirement is open there is nothing to complete, only to drop.
 	_, pageOpen := fetchPage(t, e.Owner, base+itoa(open.Request.ID))
-	if strings.Contains(pageOpen, `data-val="complete"`) || !strings.Contains(pageOpen, `data-val="drop"`) {
+	if !strings.Contains(pageOpen, `value="complete" data-mode-input disabled`) || !strings.Contains(pageOpen, `value="drop"`) {
 		t.Error("an issue with an open requirement offers to close")
 	}
 	_, guest := fetchPage(t, e.Guest, base+itoa(done.Request.ID))
