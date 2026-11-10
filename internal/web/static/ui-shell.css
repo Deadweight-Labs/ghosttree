@@ -62,7 +62,8 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .rband .utabs-box { position: relative; flex: 1 1 auto; min-width: 0; }
 .rband .utabs-nav { position: relative; margin: 0 -12px -1px; padding: 0 12px 1px; }
 .rband .band-ext { position: relative; z-index: 2; align-self: center; margin-bottom: 4px; flex: none; }
-.utabs-nav.scroll { overflow: auto hidden; scrollbar-width: none; overscroll-behavior-x: contain; scroll-padding-inline: 8px; }
+.utabs-nav.scroll { overflow: auto hidden; scrollbar-width: none; overscroll-behavior-x: contain; scroll-padding-inline: 24px; scroll-snap-type: x mandatory; }
+.utabs-nav.scroll .utabs > li { scroll-snap-align: start; }
 .utabs-nav.scroll::-webkit-scrollbar { display: none; }
 /* A scrolled row keeps no end padding of its own; this space after the last tab lets its focus ring show whole. Only with .scroll, so the fit check of ui-tabs.js never counts it. */
 .utabs-nav.scroll .utabs::after { content: ""; flex: none; width: 4px; }
@@ -133,10 +134,14 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 
 @media (max-width: 767px) {
   .gh-header { padding: 12px 16px; gap: 8px; }
-  .gh-header .hs { flex: 1; }
-  .gh-header .hsearch, .gh-header .hsearch:focus-within { display: flex; width: 100%; }
+  /* The search is one 44 px button with the magnifier; pressed, the field opens over the whole header. */
+  .gh-header .hs { position: static; flex: none; }
+  .gh-header .hsearch { display: flex; justify-content: center; gap: 0; width: 44px; height: 44px; padding: 0; background: var(--btn-bg); border-color: var(--btn-border); cursor: pointer; }
+  .gh-header .hsearch input { flex: 0 0 0; width: 0; padding: 0; }
+  .gh-header .hsearch:focus-within { position: absolute; z-index: 5; top: 12px; left: 16px; right: 16px; justify-content: flex-start; gap: 8px; width: auto; padding: 0 12px; background: var(--canvas-default); border-color: var(--accent-emphasis); cursor: text; }
+  .gh-header .hsearch:focus-within input { flex: 1; width: auto; }
   .gh-header .hsearch kbd { display: none; }
-  .gh-header .hcrumb { flex: none; max-width: 38vw; }
+  .gh-header .hcrumb { flex: 1 1 0; }
   .gh-header .hplus { display: none; }
   .gh-header .hcrumb .org, .gh-header .hcrumb .org + .sl { display: none; }
   .gh-header .sp { display: none; }

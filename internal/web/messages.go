@@ -1080,7 +1080,7 @@ var messages = map[string]string{
 	"usage.limit.day":          "Daily",
 	"usage.limit.month":        "Monthly",
 	"usage.limit":              "%[1]s limit reached (%[2]s). New calls wait.",
-	"garden.admin.title":       "Gardener",
+	"garden.admin.title":       "Gardener usage",
 	"garden.admin.checked":     "%[1]d entries checked so far, the oldest look is from %[2]s",
 	"explain.admin.counts":     "%[1]d written by agents, %[2]d generated",
 	"explain.admin.days":       "Last days",
