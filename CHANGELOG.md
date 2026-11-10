@@ -677,6 +677,9 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- `ctx db slim-sessions` no longer ends when the server holds the write lock
+  longer than its busy timeout: the step waits (5 s up to 2 min) and is tried
+  again, and its counts are taken only once.
 - `context_search` without `kind` and `ctx search` no longer lose every hit
   when one area fails. The areas run at the same time, each with a time
   budget of its own (on the server, sessions get 8 seconds when other areas

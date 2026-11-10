@@ -132,7 +132,7 @@ func SlimSessions(ctx context.Context, path string, opts SlimSessionsOptions) (S
 	if !info.Mode().IsRegular() {
 		return rep, fmt.Errorf("database path %q is not a regular file", path)
 	}
-	db, err := sql.Open("sqlite", maintenanceDSN(path))
+	db, err := sql.Open("sqlite", slimDSN(path))
 	if err != nil {
 		return rep, err
 	}
@@ -438,6 +438,35 @@ func (w *slimWork) exec(q maintQueryer, query string, args ...any) (int64, error
 // Jede Änderung steht unter "raw ist noch, wie gelesen": hat ein anderer
 // Schreiber die Zeile inzwischen geändert, bleibt sie für einen späteren Lauf.
 func (w *slimWork) apply(edits []slimEdit, rep *SlimSessionsReport) error {
+	if !w.write {
+		return w.applyIn(w.db, edits, rep)
+	}
+	// Der Server kann die Schreibsperre länger halten als busy_timeout. Dann
+	// wird derselbe Schritt nach einer Pause wiederholt, statt den Lauf
+	// abzubrechen; die Zähler gelten erst für den Versuch, der festgeschrieben ist.
+	before := *rep
+	for attempt := 0; ; attempt++ {
+		err := w.applyOnce(edits, rep)
+		if err == nil || !isBusy(err) || attempt >= len(slimBusyBackoff) {
+			return err
+		}
+		*rep = before
+		select {
+		case <-w.ctx.Done():
+			return w.ctx.Err()
+		case <-time.After(slimBusyBackoff[attempt]):
+		}
+	}
+}
+
+// slimDSN öffnet die Datenbank für den Lauf; Tests setzen ein kurzes busy_timeout.
+var slimDSN = func(path string) string { return maintenanceDSN(path) }
+
+// slimBusyBackoff sind die Pausen vor einem neuen Versuch, wenn ein Schritt an
+// der Schreibsperre scheiterte.
+var slimBusyBackoff = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute}
+
+func (w *slimWork) applyOnce(edits []slimEdit, rep *SlimSessionsReport) error {
 	var q maintQueryer = w.db
 	if w.write {
 		tx, err := w.db.BeginTx(w.ctx, nil)
