@@ -355,8 +355,16 @@ func turnEnd(stdin io.Reader, harness string, stdout io.Writer) int {
 
 // stopReminderOutput hands the reminder to the model: the turn continues once
 // with it, and the hook's own stop_hook_active check keeps it from repeating.
+// additionalContext rather than decision block: Claude Code shows a block to
+// the person as a hook error.
 func stopReminderOutput(text string) any {
-	return map[string]string{"decision": "block", "reason": text}
+	type specific struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	}
+	return struct {
+		HookSpecificOutput specific `json:"hookSpecificOutput"`
+	}{specific{"Stop", text}}
 }
 
 func hookSessionID(raw []byte) string {

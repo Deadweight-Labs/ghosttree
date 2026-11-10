@@ -21,6 +21,16 @@ func turnEndOutput(t *testing.T, payload map[string]any) map[string]any {
 	return got
 }
 
+// reminderText is the reminder a Stop hook output carries, "" for none.
+func reminderText(got map[string]any) string {
+	spec, _ := got["hookSpecificOutput"].(map[string]any)
+	if spec == nil || spec["hookEventName"] != "Stop" {
+		return ""
+	}
+	text, _ := spec["additionalContext"].(string)
+	return text
+}
+
 func toolCall(t *testing.T, session, tool string, input map[string]any) map[string]any {
 	t.Helper()
 	p := registerPayload(t, session)
@@ -37,8 +47,8 @@ func TestTurnEndRemindsOnceWhenFilesChangedAndNothingWasRecorded(t *testing.T) {
 	runHookAs(t, "post-tool-use", "claude", toolCall(t, id, "Read", map[string]any{"file_path": "/repo/a.go"}))
 	runHookAs(t, "post-tool-use", "claude", toolCall(t, id, "Edit", map[string]any{"file_path": "/repo/internal/store/b.go"}))
 	got := turnEndOutput(t, registerPayload(t, id))
-	reason, _ := got["reason"].(string)
-	if got["decision"] != "block" || !strings.Contains(reason, "b.go") || !strings.Contains(reason, "context_remember") {
+	reason := reminderText(got)
+	if !strings.Contains(reason, "b.go") || !strings.Contains(reason, "context_remember") {
 		t.Fatalf("no reminder after a change: %v", got)
 	}
 	if strings.Contains(reason, "a.go") {
@@ -105,7 +115,7 @@ func TestTurnEndKeepsTheReminderForARealTurnEnd(t *testing.T) {
 	}
 	p = registerPayload(t, id)
 	p["hook_event_name"] = "Stop"
-	if got := turnEndOutput(t, p); got["decision"] != "block" {
+	if got := turnEndOutput(t, p); reminderText(got) == "" {
 		t.Fatalf("the real turn end lost its reminder: %v", got)
 	}
 }
