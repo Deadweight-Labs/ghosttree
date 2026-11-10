@@ -57,11 +57,13 @@ func TestKnowledgeEntryTakesCommentsAndReactionsWithTheRightsOfAnIssue(t *testin
 	if status, _, _ := reactPost(t, e, e.Guest, url.Values{"kind": {"knowledge"}, "id": {itoa(id)}, "reaction": {"heart"}}); status != http.StatusForbidden {
 		t.Errorf("guest reaction -> %d, want 403", status)
 	}
-	// An empty comment is refused with the message, like on an issue.
-	resp = post(e.Member, id, "   ")
+	// An empty comment goes back to the entry with the message over the form, like on an issue (formfail.go).
+	resp = post(asBrowser(e.Member), id, "   ")
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "comment=empty") {
+	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "/knowledge/"+itoa(id)) || strings.Contains(resp.Header.Get("Location"), "?") {
 		t.Errorf("empty comment -> %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	} else if _, failed := followRefusal(t, e.Member, e.Base, resp); !strings.Contains(failed, "A comment needs text.") {
+		t.Errorf("the refusal is not shown over the form: %.300s", failed)
 	}
 }
 
