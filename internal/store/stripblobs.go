@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 )
 
 // StripBlobsOptions steuert StripSessionBlobs.
@@ -31,8 +32,7 @@ type StripBlobsOptions struct {
 type StripBlobsReport struct {
 	// Chunks ist die Zahl der Zeilen in session_chunks zu Beginn.
 	Chunks int64
-	// Candidates sind die Zeilen, deren raw einen Hinweis auf eine Nutzlast
-	// enthält und die darum gelesen und geprüft wurden.
+	// Candidates sind die gelesenen und geprüften Zeilen.
 	Candidates int64
 	// Changed sind die Zeilen, die eine Nutzlast trugen.
 	Changed int64
@@ -57,9 +57,10 @@ const (
 //
 // Die Datenbank wird ohne die Migrationen von Open geöffnet: der Lauf soll
 // gegen einen laufenden Server gehen können. Er liest in der Reihenfolge von id
-// (Keyset, nie OFFSET), filtert in SQL auf Zeilen mit einem Hinweis, schreibt
+// (Keyset, nie OFFSET), schreibt
 // jeden Schritt in einer kurzen Transaktion und wartet bei einer gesperrten
 // Datenbank bis zu 30 Sekunden. Ein zweiter Lauf findet nichts mehr zu ändern.
+// Gelesen wird jede Zeile, entpackt; geschrieben wird gepackt.
 //
 // chunks_fts indiziert text, nicht raw, und hat nur einen INSERT-Trigger; ein
 // UPDATE von raw lässt den Volltextindex also unberührt. Die Datei schrumpft
@@ -103,15 +104,12 @@ func StripSessionBlobs(ctx context.Context, path string, opts StripBlobsOptions)
 		return rep, err
 	}
 
-	// Dieselben Hinweise wie blobstrip.Strip; was keinen enthält, kann nichts
-	// tragen und wird in SQL ausgesiebt, ohne nach Go übertragen zu werden.
-	var hints []string
-	var needles []any
-	for _, n := range blobstrip.Needles {
-		hints = append(hints, `instr(raw, ?) > 0`)
-		needles = append(needles, n)
-	}
-	query := `SELECT id, raw FROM session_chunks WHERE id > ? AND (` + strings.Join(hints, ` OR `) + `) ORDER BY id LIMIT ?`
+	// Die Zeilen werden entpackt in Go geprüft (blobstrip.Strip sieht selbst
+	// zuerst nach seinen Hinweisen). Ein Vorfilter mit instr in SQL sähe in
+	// einer gepackten Zeile nur den Rahmen.
+	query := `SELECT id, raw FROM session_chunks WHERE id > ? ORDER BY id LIMIT ?`
+	state := rawStateFor(db)
+	enc := state.encoder(ctx, db)
 
 	// Wird der Lauf abgebrochen, meldet der Treiber mitunter "interrupted"
 	// statt des Context-Fehlers; für den Aufrufer ist es ein Abbruch.
@@ -131,22 +129,26 @@ func StripSessionBlobs(ctx context.Context, path string, opts StripBlobsOptions)
 		var batchSaved int64
 		var held, read int
 		last := rep.LastID
-		args := append(append([]any{rep.LastID}, needles...), opts.Batch)
-		rows, err := db.QueryContext(ctx, query, args...)
+		rows, err := db.QueryContext(ctx, query, rep.LastID, opts.Batch)
 		if err != nil {
 			return fail(err)
 		}
 		for rows.Next() {
 			var id int64
-			var raw string
-			if err := rows.Scan(&id, &raw); err != nil {
+			var v rawcodec.Value
+			if err := rows.Scan(&id, &v); err != nil {
 				rows.Close()
 				return fail(err)
+			}
+			raw, err := state.line(ctx, db, v)
+			if err != nil {
+				rows.Close()
+				return fail(fmt.Errorf("chunk %d: %w", id, err))
 			}
 			read++
 			last = id
 			if out, saved := blobstrip.Strip(raw); saved > 0 {
-				updates = append(updates, strippedRow{id, out})
+				updates = append(updates, strippedRow{id, enc.Encode(out)})
 				batchSaved += int64(saved)
 			}
 			if held += len(raw); held >= opts.BatchBytes {
@@ -189,7 +191,7 @@ func StripSessionBlobs(ctx context.Context, path string, opts StripBlobsOptions)
 
 type strippedRow struct {
 	id  int64
-	raw string
+	raw any // gepackt (rawcodec)
 }
 
 // writeStripped führt die Änderungen eines Schritts in einer Transaktion aus.

@@ -38,20 +38,23 @@ type writerRequest struct {
 }
 
 type runtimeWriter struct {
-	metrics                                        WriterStats
-	running                                        bool
-	activeOperations                               int
-	activeBytes                                    int64
-	drainStarted                                   time.Time
-	mu                                             sync.Mutex
-	ready                                          *sync.Cond
-	head, tail                                     *writerRequest
-	closed                                         bool
-	done                                           chan struct{}
-	cfg                                            WriterConfig
-	operations                                     int
-	bytes                                          int64
-	chunkWrite                                     func([]ChunkBatch) error
+	metrics          WriterStats
+	running          bool
+	activeOperations int
+	activeBytes      int64
+	drainStarted     time.Time
+	mu               sync.Mutex
+	ready            *sync.Cond
+	head, tail       *writerRequest
+	closed           bool
+	done             chan struct{}
+	cfg              WriterConfig
+	operations       int
+	bytes            int64
+	chunkWrite       func([]ChunkBatch) error
+	// chunkPack packt Raw der Chunks (Chunk.Stored) im Aufrufer von
+	// admitChunks, bevor der Auftrag in die Warteschlange geht.
+	chunkPack                                      func([]Chunk)
 	bestEffortWrite                                func(int, bestEffortBatch) error
 	bestEffort                                     [bestEffortKinds]bestEffortBatch
 	bestEffortDrops                                [bestEffortKinds]atomic.Uint64

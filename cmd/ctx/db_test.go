@@ -377,3 +377,40 @@ func TestDBChunkStatsPrintsLineTypes(t *testing.T) {
 		t.Errorf("sample 0: code %d", code)
 	}
 }
+
+func TestDBSlimSessionsDryRunReportsAndWritesNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "s", StartedAt: "2026-11-01T10:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"` + strings.Repeat("renamed the flag ", 20) + `"}]},"timestamp":"2026-11-01T10:00:00Z"}`
+	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "assistant", Text: "renamed", Raw: line}}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	before, _ := os.ReadFile(path)
+	var out bytes.Buffer
+	if code := cmdDB([]string{"slim-sessions", "--db", path, "--dry-run"}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	for _, want := range []string{"dry run: nothing is written", "lines: 1 in the table, 1 already current, 0 would be processed", "dictionary: none"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
+		t.Fatal("dry run changed the file")
+	}
+	out.Reset()
+	if code := cmdDB([]string{"slim-sessions", "--db", path, "--json"}, &out); code != 0 || !strings.Contains(out.String(), `"current": 1`) {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if code := cmdDB([]string{"slim-sessions"}, &out); code != 2 {
+		t.Fatalf("without --db: exit %d", code)
+	}
+}

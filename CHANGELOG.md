@@ -124,6 +124,24 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   sessions (`chunk_index_chunk`). On a large database this takes about as long
   as reading `chunk_index` once (around a minute for three million chunks on
   slow disks) and adds roughly 40 MB.
+- Transcript lines are packed (deflate with a dictionary) from the first start
+  on: new lines are stored packed, existing ones stay as they are until `ctx
+  db slim-sessions` runs. An older ghosttree cannot read packed lines, so going
+  back to it needs the backup taken before the upgrade. The first start adds
+  the table `session_raw_dicts` and the column `session_chunks.slim_version`
+  (both additive, instant); about 90 seconds after the start the server learns
+  a dictionary from a sample once, if it has none and at least 5000 lines.
+- To shrink an existing database: stop the server and take a compressed
+  backup of the database file (with its `-wal` and `-shm`, if present), start
+  the new server, run `ctx db
+  slim-sessions --db <path> --dry-run` and then without `--dry-run` beside the
+  running server (on local transcripts about a minute per 100,000 lines, of
+  which 18 seconds hold the write lock, in steps of 200 lines), then stop the
+  server and run `ctx db vacuum --db <path>`. The run itself needs no extra
+  disk space (it rewrites in place and frees pages); VACUUM needs about the size
+  of the remaining data once more in the database directory and in the WAL. On
+  local transcripts the file went from 3.2 GiB to 1.0 GiB, `raw` from 2.1 GiB
+  to 217 MiB.
 
 ### Added
 
@@ -504,9 +522,20 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   proxies, with `Secure` cookies.
 - `DELETE /api/tokens/self` revokes the token that made the request.
 - `ctx db chunk-stats --db PATH [--sample N]` shows, from a sample, how many
-  bytes stored transcript lines take per line type and what the slim rule
-  would leave of them; read-only and throttled, so it may run beside the
-  server.
+  bytes stored transcript lines take per line type: as text, as stored (packed
+  or not), after the slim rule and after slimming and packing; read-only and
+  throttled, so it may run beside the server. Administrators see the same per
+  line type on the settings page (Transcripts).
+- `ctx db slim-sessions --db PATH [--dry-run] [--batch N] [--pause D]` brings
+  stored transcripts to the form of new lines: slimmed, packed, lines the rule
+  drops deleted together with their rows in `chunk_index`, `sess_fts`,
+  `chunks_fts` and their session vectors (a line a knowledge or request quote
+  cites stays), and `text` cut like long outputs except in sessions with an
+  open distillation batch. It reports lines and bytes before and after, skips
+  what is already current, may be interrupted and started again, and pauses
+  at least as long as each transaction held the write lock. At the end it
+  merges both full-text indexes with `optimize` (`--skip-optimize` leaves that
+  to `ctx db vacuum --fts-optimize`).
 
 ### Changed
 
@@ -593,6 +622,21 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   (the marker's hash is over the redacted text); and an input that was queued
   while the agent worked but never sent (`queue-operation` content) is no
   longer in the archive. Secrets are redacted before anything is cut.
+- `session_chunks.raw` is stored packed: deflate (Go standard library) with a
+  32 KB dictionary learned from the database's own lines, versioned in
+  `session_raw_dicts` and never deleted while lines use it, with a CRC-32C of
+  the line in every frame so that a wrong dictionary or a damaged frame is an
+  error, never other text. Short lines that would not shrink stay plain text.
+  Every reader unpacks through one function; the hash that ties a session
+  vector to its line is taken over the unpacked line, so repacking does not
+  make the vectors stale. Checks that ran in SQL over `raw` (`instr`,
+  `length`) now run in Go over the unpacked line.
+- `session_chunks.text` is cut like long tool outputs (first 6 KB, marker, last
+  2 KB) when it is stored. The session index already kept 8 KB per field; the
+  full-text search over `text` and the distiller now see the same. This does
+  not start a new distillation: sessions are chosen by prompt version, not by
+  the digest of their text. On local transcripts a third of `text` was above
+  8 KB, almost all of it tool output.
 - The session view shows the commands Codex's `exec` tool ran, with their
   output, and the output of `exec` itself, which it skipped before.
 - The gardener runs as a real, hardened Claude Code agent by default (no Bash,

@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
 )
@@ -417,39 +419,55 @@ var chunksRead func(n int)
 // indexGroups liest und indiziert Chunks gruppenweise in tx, höchstens batch
 // Stück, solange der Schritt (seit began) noch Zeit und Speicher hat. Es liest
 // nie mehr, als es verarbeitet: die nächste Gruppe wird erst geholt, wenn die
-// vorige indiziert und das Budget noch nicht verbraucht ist. next liefert die
+// vorige indiziert und das Budget noch nicht verbraucht ist (nur die Zeile, an
+// der das Budget endet, wird gelesen und liegen gelassen). next liefert die
 // Abfrage für die nächsten n Chunks hinter after. exhausted heißt: die Abfrage
 // hatte weniger Zeilen als gefragt, es gibt nichts mehr.
-func indexGroups(tx *sql.Tx, began time.Time, batch int, after int64, next func(after int64, n int) (string, []any)) (last int64, processed int, exhausted bool, err error) {
+func indexGroups(tx *sql.Tx, state *rawState, began time.Time, batch int, after int64, next func(after int64, n int) (string, []any)) (last int64, processed int, exhausted bool, err error) {
 	last = after
 	size := 0
 	for processed < batch {
 		n := min(backfillGroup, batch-processed)
-		inner, args := next(last, n)
-		// Die Gruppe endet vor der Zeile, die das Byte-Budget des Schritts
-		// sprengen würde (die erste Zeile kommt immer mit); cnt ist die Zahl
-		// der Zeilen vor der Kürzung.
-		query := `SELECT id, session_id, seq, harness, raw, cnt FROM (
-			SELECT *, SUM(length(CAST(raw AS BLOB))) OVER (ORDER BY id) AS cum, COUNT(*) OVER () AS cnt FROM (` + inner + `))
-			WHERE cum - length(CAST(raw AS BLOB)) < ? ORDER BY id`
-		args = append(args, max(maxStepBytes-size, 1))
+		query, args := next(last, n)
+		// Die Gruppe endet, sobald die Zeilen davor das Byte-Budget des
+		// Schritts erreicht haben (die erste Zeile kommt immer mit). Gezählt
+		// wird die entpackte Zeile, in Go: in SQL sähe length(raw) nur die
+		// gepackte. Die Zeile, an der die Gruppe endet, ist dann schon gelesen
+		// und kommt im nächsten Schritt noch einmal.
 		rows, err := tx.Query(query, args...)
 		if err != nil {
 			return last, processed, false, err
 		}
 		var group []chunkRow
-		cnt := 0
+		read, full := 0, false
 		for rows.Next() {
 			var r chunkRow
-			if err := rows.Scan(&r.id, &r.sessionID, &r.seq, &r.harness, &r.raw, &cnt); err != nil {
+			var v rawcodec.Value
+			if err := rows.Scan(&r.id, &r.sessionID, &r.seq, &r.harness, &v); err != nil {
 				rows.Close()
 				return last, processed, false, err
 			}
+			if r.raw, err = state.line(context.Background(), tx, v); err != nil {
+				rows.Close()
+				return last, processed, false, fmt.Errorf("chunk %d: %w", r.id, err)
+			}
+			read++
+			if len(group) > 0 && size >= maxStepBytes {
+				full = true
+				break
+			}
+			size += len(r.raw)
 			group = append(group, r)
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return last, processed, false, err
+		}
+		// Weniger Zeilen als gefragt und keine wegen des Budgets liegen
+		// gelassen: es gibt nichts mehr.
+		cnt := read
+		if full {
+			cnt = n
 		}
 		if chunksRead != nil {
 			chunksRead(len(group))
@@ -460,14 +478,11 @@ func indexGroups(tx *sql.Tx, began time.Time, batch int, after int64, next func(
 			}
 			processed += len(group)
 			last = group[len(group)-1].id
-			for _, r := range group {
-				size += len(r.raw)
-			}
 		}
-		if cnt < n && len(group) == cnt {
+		if cnt < n {
 			return last, processed, true, nil
 		}
-		if len(group) < cnt || time.Since(began) >= backfillStepBudget || size >= maxStepBytes {
+		if full || time.Since(began) >= backfillStepBudget || size >= maxStepBytes {
 			break
 		}
 	}
@@ -500,7 +515,7 @@ func (s *Store) IndexBackfillStep(batch int) (bool, error) {
 		return false, err
 	}
 	defer tx.Rollback()
-	last, _, exhausted, err := indexGroups(tx, began, batch, cursor, func(after int64, n int) (string, []any) {
+	last, _, exhausted, err := indexGroups(tx, s.rawState(), began, batch, cursor, func(after int64, n int) (string, []any) {
 		return `SELECT c.id, c.session_id, c.seq, se.harness, c.raw FROM session_chunks c
 			JOIN sessions se ON se.id = c.session_id
 			WHERE c.id > ? AND c.id <= ? ORDER BY c.id LIMIT ?`, []any{after, bound, n}
@@ -575,7 +590,7 @@ func (s *Store) indexSessionBatch(id int64) (int, bool, error) {
 		return 0, false, err
 	}
 	defer tx.Rollback()
-	_, n, exhausted, err := indexGroups(tx, began, indexBatch, 0, func(after int64, k int) (string, []any) {
+	_, n, exhausted, err := indexGroups(tx, s.rawState(), began, indexBatch, 0, func(after int64, k int) (string, []any) {
 		return `SELECT c.id, c.session_id, c.seq, se.harness, c.raw FROM session_chunks c
 			JOIN sessions se ON se.id = c.session_id
 			LEFT JOIN chunk_index x ON x.chunk_id = c.id

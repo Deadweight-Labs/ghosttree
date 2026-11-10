@@ -236,7 +236,7 @@ func TestSessionWriterDoesNotMakeTheDocumentAgain(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer tx.Rollback()
-		if keep, err := verifySessionSource(tx, chunk, source); err != nil || !keep {
+		if keep, err := verifySessionSource(tx, st.rawState(), chunk, source); err != nil || !keep {
 			t.Fatalf("%v %v", keep, err)
 		}
 	})
