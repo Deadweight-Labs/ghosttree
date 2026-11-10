@@ -537,6 +537,26 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - `GHOSTTREE_PUBLIC_URL` and `GHOSTTREE_TRUSTED_PROXIES` for TLS and reverse
   proxies, with `Secure` cookies.
 - `DELETE /api/tokens/self` revokes the token that made the request.
+- One search index over sessions: the words of every transcript line are
+  indexed once, in `chunk_fts`, which keeps no copy of the text; snippets are
+  made from the stored line for the hits of a page. The first start adds
+  `chunk_fts` and the columns `chunk_index.fts` and `chunk_index.prompt`
+  (additive, instant, no scan). Existing rows keep their copies until `ctx db
+  slim-search --db <path>` runs (first `--dry-run`, then beside the running
+  server, then `ctx db vacuum` with the server stopped): it moves their words
+  from `sess_fts` to `chunk_fts`, empties the four text fields of
+  `chunk_index`, empties `sess_fts`, drops the trigger `chunks_ai` and empties
+  `chunks_fts`. Nothing is derived again from the transcripts, so no
+  distillation and no embedding starts again. On local transcripts
+  `chunk_index` went from 273 MiB to 23 MiB and the file from 878 MiB to
+  563 MiB; the web search answers byte for byte as before. An older ghosttree
+  started after `slim-search` does not find the moved sessions, so going back
+  needs the backup.
+- The agents' session search (`context_search` with sessions,
+  `ctx search`) and the sessions of a request search the same fields as the
+  web search: messages, thinking, commands and tool output. Instructions a
+  harness injects (Codex developer messages, plugin and skill lists,
+  environment context) are no longer hits.
 - `ctx db chunk-stats --db PATH [--sample N]` shows, from a sample, how many
   bytes stored transcript lines take per line type: as text, as stored (packed
   or not), after the slim rule and after slimming and packing; read-only and
