@@ -97,7 +97,9 @@ func Harnesses() []Harness {
 			Name:       "claude",
 			Components: append([]Component(nil), componentOrder...),
 			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelCoordInbox, ChannelTurnEnd, ChannelTurnFail, ChannelSubagentStart, ChannelMCP},
-			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
+			// SubagentStart measured 2026-11-10 on Claude Code 2.1.319: the
+			// briefing stands in the subagent's transcript as context.
+			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelSubagentStart, ChannelMCP},
 			HooksPath:  func(home string) string { return filepath.Join(home, ".claude", "settings.json") },
 			RulePath:   func(home string) string { return filepath.Join(home, ".claude", "CLAUDE.md") },
 			SkillsRoot: func(home string) string { return filepath.Join(home, ".claude", "skills") },
