@@ -13,7 +13,7 @@ var featureTools = []string{"feature_get", "feature_search", "feature_create", "
 func TestFeatureToolsAreRegisteredWithSchemas(t *testing.T) {
 	c, _ := newTestClient(t)
 	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y"}})
-	tools, err := session.ListTools(t.Context(), nil)
+	tools, err := listRegistered(t.Context(), session)
 	if err != nil {
 		t.Fatal(err)
 	}

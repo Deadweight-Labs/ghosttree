@@ -504,7 +504,7 @@ func (a *ProjectAccess) CreateFeature(in CreateFeatureInput) (feature.Feature, e
 		}
 		if aff, err := a.st.featuresAffectedBy(i.ID); err == nil && len(aff) > 0 {
 			return feature.Feature{}, requestdomain.NewRuleError("feature_exists", fmt.Sprintf("%s changes FEAT-%d: its description is carried forward, not a new feature", i.HumanID(), aff[0]),
-				fmt.Sprintf("write a new version of FEAT-%d with idea=%d (feature_update)", aff[0], i.ID), []string{fmt.Sprintf("FEAT-%d", aff[0])})
+				fmt.Sprintf("write a new version of FEAT-%d with idea=%d (feature action=update)", aff[0], i.ID), []string{fmt.Sprintf("FEAT-%d", aff[0])})
 		}
 		w.Idea = i.ID
 		ideas = append(ideas, i.ID)
@@ -627,7 +627,7 @@ func (a *ProjectAccess) UpdateFeature(id int64, in UpdateFeatureInput) (feature.
 		return feature.Version{}, false, err
 	}
 	if f.State == feature.Retired {
-		return feature.Version{}, false, requestdomain.NewRuleError("feature_retired", fmt.Sprintf("%s is retired", f.HumanID()), "take it up again first (feature_state)", nil)
+		return feature.Version{}, false, requestdomain.NewRuleError("feature_retired", fmt.Sprintf("%s is retired", f.HumanID()), "take it up again first (feature action=state)", nil)
 	}
 	if in.PR < 0 {
 		return feature.Version{}, false, requestdomain.NewRuleError("pr_invalid", "pr must be a positive pull request number", "leave it out when there is none", nil)

@@ -37,6 +37,19 @@ func currentSessionRef() string {
 	return ""
 }
 
+// mcpUsageHarness is the harness whose ghosttree tool calls ctx mcp counts
+// itself. Claude Code's are counted by its PostToolUse hook, which also knows
+// whether a subagent made the call.
+func mcpUsageHarness() string {
+	switch {
+	case os.Getenv("CODEX_SESSION_ID") != "" || os.Getenv("CODEX_THREAD_ID") != "":
+		return "codex"
+	case os.Getenv("OPENCODE_SESSION_ID") != "":
+		return "opencode"
+	}
+	return ""
+}
+
 // coordAgentOverride ist die Koordinationsidentität aus GHOSTTREE_AGENT_ID, die
 // `ctx claude` setzt, damit ctx mcp und ctx channel derselbe Agent sind. Sie
 // ersetzt NICHT die Harness-Session-ID (Suche, Snapshots und unterbrochene
@@ -225,6 +238,7 @@ func cmdMCP(args []string, stdout io.Writer) int {
 		return mcpserver.Live{Branch: g.Branch, Lineage: g.Lineage, CWD: cwd, Trunk: collector.IsDefaultBranch(ctx, cwd, g.Branch)}
 	})
 	srv.SetSessionRef(currentSessionRef())
+	srv.SetUsageHarness(mcpUsageHarness())
 	srv.SetCoordRef(coordAgentOverride())
 	srv.SetAgentRole(agentRoleFromEnv())
 	srv.SetSessionID(agentSessionFromEnv())

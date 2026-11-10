@@ -82,7 +82,7 @@ func ValidatePhase(from, to string, hasConcept, hasRequests, openRequests bool) 
 	switch to {
 	case PhaseApproved:
 		if !hasConcept {
-			return requestdomain.NewRuleError("concept_required", "an idea is approved with a concept", "write the concept first (idea_concept)", nil)
+			return requestdomain.NewRuleError("concept_required", "an idea is approved with a concept", "write the concept first (idea action=concept)", nil)
 		}
 	case PhaseBuilding:
 		// In Umsetzung geht nur eine freigegebene Idee, und sie kommt von selbst
@@ -91,13 +91,13 @@ func ValidatePhase(from, to string, hasConcept, hasRequests, openRequests bool) 
 			return requestdomain.NewRuleError("not_approved", "work starts on an approved idea", "approve the idea first; only a person can, in the web interface: its owner or a maintainer", nil)
 		}
 		if !hasRequests {
-			return requestdomain.NewRuleError("requests_required", "an idea is in work when issues came out of it", "create the issues from the idea (idea_update issues)", nil)
+			return requestdomain.NewRuleError("requests_required", "an idea is in work when issues came out of it", "create the issues from the idea (idea action=issues)", nil)
 		}
 	case PhaseDone:
 		return requestdomain.NewRuleError("invalid_phase", "an idea is done after it was in work", "create the issues from the idea first", nil)
 	}
 	if to == PhaseConcept && !hasConcept {
-		return requestdomain.NewRuleError("concept_required", "the phase concept needs a concept", "write the concept first (idea_concept)", nil)
+		return requestdomain.NewRuleError("concept_required", "the phase concept needs a concept", "write the concept first (idea action=concept)", nil)
 	}
 	if hasRequests && (to == PhaseRaw || to == PhaseConcept || to == PhaseDiscussion) {
 		return requestdomain.NewRuleError("invalid_phase", "issues already came out of this idea", "an approved idea with issues does not go back", nil)
@@ -320,7 +320,7 @@ func Brief(s string, max int) string {
 }
 
 // ElaborationHintText ist der einmalige Vorschlag. Er verlangt nichts.
-const ElaborationHintText = "Optional, nothing is blocked: this idea looks like a bigger undertaking. If you already have the substance (a chat, a transcript), attach it yourself without asking: idea_text for the raw version and the summary, idea_concept for a draft. Otherwise it stays one line."
+const ElaborationHintText = "Optional, nothing is blocked: this idea looks like a bigger undertaking. If you already have the substance (a chat, a transcript), attach it yourself without asking: idea action=text for the raw version and the summary, idea action=concept for a draft. Otherwise it stays one line."
 
 // largeWords sind Themen, bei denen eine Idee meist mehr als eine Zeile braucht.
 var largeWords = []string{

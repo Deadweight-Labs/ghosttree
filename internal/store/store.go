@@ -1259,6 +1259,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureToolCounts(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureRunbooks(db); err != nil {
 		_ = db.Close()
 		return nil, err

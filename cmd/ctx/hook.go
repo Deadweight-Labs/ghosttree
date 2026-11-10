@@ -68,6 +68,9 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 	if eventArg == "turn-end" {
 		return turnEnd(stdin, *harness, stdout)
 	}
+	if eventArg == "subagent-start" {
+		return subagentStart(stdin, *harness, stdout)
+	}
 	var out sessionStartOutput
 	var render func(io.Reader) string
 	switch eventArg {
@@ -156,6 +159,7 @@ const hookUsage = `usage: ctx hook session-start [--harness claude|codex]
        ctx hook pre-tool-use [--harness claude|codex]
        ctx hook post-tool-use [--harness claude|codex]
        ctx hook turn-end [--harness claude]
+       ctx hook subagent-start [--harness claude]
        ctx hook pause-gate [--harness claude]`
 
 // relevanceTimeout is short because this hook sits between the keystroke and
@@ -744,7 +748,7 @@ func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Fresh
 			// sie gezielt; sie ungefragt mitzuliefern wäre genau das
 			// Kontextrauschen, gegen das die Entdopplung antritt.
 			if g.Path == target && priorVersions > 0 {
-				fmt.Fprintf(&b, "(%s — `context_file_history` if the current description no longer fits)\n\n",
+				fmt.Fprintf(&b, "(%s — `context_search action=file_history` if the current description no longer fits)\n\n",
 					pluralVersions(priorVersions))
 			}
 		}
@@ -752,9 +756,9 @@ func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Fresh
 	if writing {
 		switch {
 		case !describedTarget:
-			fmt.Fprintf(&b, "This path has no description. If your change would produce an explanatory comment, write it to %s with `context_describe_file` instead.\n", target)
+			fmt.Fprintf(&b, "This path has no description. If your change would produce an explanatory comment, write it to %s with `context_remember action=describe_file` instead.\n", target)
 		case fresh[target].State == "stale" || fresh[target].State == "unknown":
-			fmt.Fprintf(&b, "The description of %s is out of date. Update it after your change with `context_describe_file`.\n", target)
+			fmt.Fprintf(&b, "The description of %s is out of date. Update it after your change with `context_remember action=describe_file`.\n", target)
 		}
 	}
 	return b.String()
@@ -779,7 +783,14 @@ func pauseGate(stdin io.Reader, harness string, stdout io.Writer) int {
 	if harness != "claude" {
 		return 0
 	}
-	agentpause.Gate(coordAgentOverride(), stdin, stdout)
+	// The gate runs before every tool, so it is where a subagent's prompt is
+	// seen before the subagent starts (hook_subagent.go).
+	raw, err := io.ReadAll(io.LimitReader(stdin, 4<<20))
+	if err != nil {
+		return 0
+	}
+	noteAgentSpawn(raw)
+	agentpause.Gate(coordAgentOverride(), bytes.NewReader(raw), stdout)
 	return 0
 }
 

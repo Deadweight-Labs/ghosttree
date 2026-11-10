@@ -160,3 +160,31 @@ func TestTerminalPersonShowsAsSuch(t *testing.T) {
 		t.Error("the models page has no line for people in the terminal")
 	}
 }
+
+// REQ-436, criterion 12: the statistics show calls of ghosttree's tools per
+// tool, action, harness and subagent, and the sessions that called none.
+func TestAgentModelsPageShowsToolUse(t *testing.T) {
+	e, _ := listEnv(t)
+	for _, ext := range []string{"s-busy", "s-silent"} {
+		if _, err := e.St.UpsertSession(store.Session{Harness: "claude", ExternalID: ext, AccountID: 1, Scope: scope.Axes{Project: shellProject}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.St.RecordToolUses(store.ToolUseBatch{Project: shellProject, SessionRef: "s-busy", Harness: "claude", Uses: []store.ToolUse{
+		{Tool: "context_remember", Action: "remember", Subagent: true, Calls: 3},
+	}}, 1); err != nil {
+		t.Fatal(err)
+	}
+	code, body := fetchPage(t, e.Owner, e.Base+"/ui/agents/models")
+	if code != http.StatusOK {
+		t.Fatalf("models page: %d", code)
+	}
+	for _, want := range []string{`class="box tusage"`, "<code>context_remember remember</code>", `<td class="n">3</td>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("models page lacks %q", want)
+		}
+	}
+	if _, guest := fetchPage(t, e.Guest, e.Base+"/ui/agents/models"); strings.Contains(guest, "context_remember remember") {
+		t.Error("a guest sees the tool statistics of the project")
+	}
+}

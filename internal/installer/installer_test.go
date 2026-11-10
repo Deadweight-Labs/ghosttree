@@ -33,7 +33,7 @@ func TestInstallCodexIdempotent(t *testing.T) {
 	if !strings.Contains(string(agents), "context_get") {
 		t.Errorf("AGENTS.md must tell codex to call context_get:\n%s", agents)
 	}
-	for _, want := range []string{"request_search", "substantial", "trivial local fixes", "acceptance criteria", "evidence"} {
+	for _, want := range []string{"request action=search", "substantial", "trivial local fixes", "acceptance criteria", "evidence"} {
 		if !strings.Contains(agentRules, want) {
 			t.Errorf("AGENTS.md missing request-ledger guidance %q:\n%s", want, agents)
 		}
@@ -55,7 +55,7 @@ func TestInstallCodexIdempotent(t *testing.T) {
 }
 
 func TestInstalledRulesNamePainsAndHumanTasks(t *testing.T) {
-	for _, want := range []string{"pain_record", "pain_update", "human_task_create", "human_task_resolve", "done yourself", "not a guarantee"} {
+	for _, want := range []string{"pain action=record", "pain action=update", "human_task action=create", "with action confirm or reopen", "done yourself", "not a guarantee"} {
 		if !strings.Contains(ruleText, want) {
 			t.Errorf("ruleText missing %q", want)
 		}
@@ -152,7 +152,7 @@ func TestInstallClaudeRuleSection(t *testing.T) {
 	if !strings.Contains(s, "context_remember") {
 		t.Errorf("rule section must mention context_remember:\n%s", s)
 	}
-	for _, want := range []string{"Search before you write", "supersede", "context_retire"} {
+	for _, want := range []string{"Search before you write", "supersede", "context_remember action=retire"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rule section must say %q:\n%s", want, s)
 		}
@@ -356,7 +356,7 @@ func TestInstallHooksAreIdempotent(t *testing.T) {
 // einen Ort. Solange es keinen Alternativort gab, war der Kommentar der einzige
 // mögliche Platz, und ihn zu verbieten hiess, die Information zu vernichten.
 func TestRuleTextNamesTheAlternativePlaceInsteadOfForbiddingComments(t *testing.T) {
-	if !strings.Contains(ruleText, "context_describe_file") {
+	if !strings.Contains(ruleText, "context_remember action=describe_file") {
 		t.Fatal("the rule must name the tool that replaces the comment")
 	}
 	if !strings.Contains(ruleText, ".ghosttree/tree/") {
@@ -368,7 +368,7 @@ func TestRuleTextNamesTheAlternativePlaceInsteadOfForbiddingComments(t *testing.
 }
 
 func TestRuleTextTellsAgentsHowMessagesReachThemAndHowToAnswer(t *testing.T) {
-	for _, want := range []string{"coord_inbox", "thread_reply", "coord_send", "new messages for you", "@name"} {
+	for _, want := range []string{"coord action=inbox", "coord action=thread_reply", "coord action=send", "new messages for you", "@name"} {
 		if !strings.Contains(ruleText, want) {
 			t.Errorf("ruleText missing %q", want)
 		}

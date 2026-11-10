@@ -262,7 +262,7 @@ func TestRememberForAProjectOnAMachineTakesBothAxes(t *testing.T) {
 func TestToolDescriptionsStateTheProjectAndMachineRule(t *testing.T) {
 	c, _ := targetFixture(t)
 	session := connect(t, targetServer(c, tgtHere))
-	listed, err := session.ListTools(context.Background(), nil)
+	listed, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +422,7 @@ func TestMovingKnowledgeAndRequestsFromTheTools(t *testing.T) {
 func TestTargetFieldsAreOptionalInTheSchema(t *testing.T) {
 	c, _ := targetFixture(t)
 	session := connect(t, targetServer(c, tgtHere))
-	tools, err := session.ListTools(context.Background(), nil)
+	tools, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}
