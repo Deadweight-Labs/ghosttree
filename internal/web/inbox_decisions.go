@@ -67,17 +67,21 @@ func (a *app) inboxDecisions(l lang, pa *store.ProjectAccess, project string, no
 	return rows
 }
 
-// inboxDecisionComposer is the composer behind "With a reason": the choice among
-// the variants, which is never preset, and one optional line for the reason.
+// inboxDecisionComposer is the composer behind "With a reason": the status row
+// is the choice among the variants, never preset (the browser asks for one), and
+// the words are the reason, one line of them.
 func (a *app) inboxDecisionComposer(l lang, token string, id int64, options []inboxOption) *composerView {
-	choice := composerField{Name: "option", Label: l.msg("inbox.dec.choice"), Kind: "select", Wide: true,
-		Options: []composerOption{{Value: "", Label: l.msg("inbox.dec.pick"), Selected: true}}}
-	for _, o := range options {
-		choice.Options = append(choice.Options, composerOption{Value: o.Key, Label: o.Key + " · " + o.Text})
-	}
-	return &composerView{Action: "/ui/inbox/answer", Token: token, Name: "reason", Placeholder: l.msg("inbox.dec.why"), Submit: l.msg("inbox.dec.decide"),
-		Cancel: l.msg("inbox.reply_cancel"), NoHint: true, NoTools: true, Fields: []composerField{choice},
+	cv := &composerView{Action: "/ui/inbox/answer", Token: token, Name: "reason", Placeholder: l.msg("inbox.dec.why"),
+		Cancel: l.msg("inbox.reply_cancel"), NoHint: true, Compact: true, ModeName: "option", Unset: true, ModeLabel: l.msg("inbox.dec.choice"),
 		Hidden: []hiddenField{{"kind", store.AnswerOnDecision}, {"id", strconv.FormatInt(id, 10)}, {"next", "1"}}}
+	for _, o := range options {
+		label := o.Lead()
+		if label == "" {
+			label = o.Key
+		}
+		cv.Modes = append(cv.Modes, composerMode{Value: o.Key, Label: label, Hint: o.Body(), Submit: l.msg("inbox.dec.decide"), Class: "pri", Placeholder: l.msg("inbox.dec.why")})
+	}
+	return cv
 }
 
 // inboxDecisionRows adds the composer to the decision rows that offer buttons.

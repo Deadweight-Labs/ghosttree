@@ -7,7 +7,7 @@
 {{end}}</div>{{template "foot" .}}{{end}}
 
 {{define "task"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id ft tk"><div class="wrap">
-{{with .TaskV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">#{{.ID}}</span></h1></div>
+{{with .TaskV}}{{template "resultbanner" (dict "R" .Result "Strip" "done fail")}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">#{{.ID}}</span></h1></div>
 <div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "tasks"}}{{.StateLabel}}</span><span class="lb neu">{{.KindLabel}}</span>{{if and .Assignee (eq .State "open")}}<span class="wl"><span>{{t "tasks.waits_for"}}</span><span class="person">{{avatarWait .Assignee}}{{.Assignee}}</span>{{if .SameAsker}}<span class="wl-age">· {{.Age}}</span>{{end}}</span>{{else if .Assignee}}<span class="wl"><span class="person">{{avatarOf .Assignee}}{{.Assignee}}</span>{{if .SameAsker}}<span class="wl-age">· {{t "tasks.asked" .Age}}</span>{{end}}</span>{{end}}{{if and .CreatedBy (not .SameAsker)}}<span class="wl"><span class="person">{{avatarOf .CreatedBy}}{{.CreatedBy}}</span><span>{{t "tasks.asked" .Age}}</span></span>{{end}}</div></div>
 <div class="dgrid"><div class="dmain">
 {{if .HasFirst}}<div class="tlx tl0">{{template "firstopen" .First}}
@@ -21,8 +21,7 @@
 {{template "firstclose"}}</div>{{end}}
 {{if .DoneBy}}<div class="callout" role="status">{{mi "done"}}<div><div class="k">{{t "tasks.done_by" .DoneBy .DoneAge}}</div>{{if .DoneNote}}<div class="tt">{{md .DoneNote}}</div>{{end}}</div></div>{{end}}
 {{if .Reason}}<div class="callout neu" role="note">{{mi "drop"}}<div><div class="k">{{t "tasks.state_note"}}</div><div class="tt">{{md .Reason}}</div></div></div>{{end}}
-{{if .CanDone}}<form method="post" action="{{.DoneAction}}" class="box fsec tdone"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="back" value="task">
-<div class="box-r"><label class="gfield"><input name="note" maxlength="500" placeholder="{{t "tasks.note_placeholder"}}" aria-label="{{t "tasks.note_placeholder"}}" autocomplete="off"></label><button class="gbtn pri">{{t "tasks.mark_done"}}</button></div></form>{{end}}
+{{with .Composer}}{{template "uicomposer" .}}{{end}}
 </div>
 <aside class="side" aria-label="{{t "tasks.side.facts"}}">
 {{if .Request}}<div class="sblk"><h3>{{t "tasks.side.issue"}}</h3><div class="v">{{with .Request}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
