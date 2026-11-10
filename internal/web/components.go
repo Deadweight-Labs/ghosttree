@@ -223,9 +223,12 @@ func (r uiRow) HasRight() bool {
 type tlItem struct {
 	ID, Act, Who, Kind, Owner string
 	Icon, Tone                string
-	Head                      template.HTML
-	Age                       string
-	Body                      template.HTML
+	// Stamp is the moment as RFC 3339 when Age is a time of day (a session's
+	// entries): the page shows it in the reader's zone.
+	Stamp string
+	Head  template.HTML
+	Age   string
+	Body  template.HTML
 	// Right stands at the right end of the head, in line with the anchor: the
 	// commits an entry is about, not part of the sentence.
 	Right template.HTML
@@ -272,19 +275,36 @@ func firstOf(l lang, av actorView, who, verb, age, mark, editHref string) firstH
 	return h
 }
 
+// editPanel is the panel "Bearbeiten" of a pain or an idea (template editpanel):
+// the form posts to Action, Close leads back to the page.
+type editPanel struct {
+	Open                 bool
+	Close, Action, Token string
+	Title, Body          string
+}
+
 // ---- Composer ----------------------------------------------------------------
 
-// composerMode is one choice of the mode select (the status of an issue, say):
-// it sets the button label and class, the placeholder and shows its own fields.
+// composerMode is one choice of the status row of the composer (the state of an
+// issue, a pain, the signal to an agent): it sets the button label and class, the
+// placeholder and shows its own fields. The composer is the one place where a
+// state is changed, and what is written in it is the comment on that change.
 type composerMode struct {
 	Value, Label string
-	// Hint is the small text beside the entry in the menu.
+	// Hint is the tooltip of the entry.
 	Hint string
 	// Submit is the button text, SubmitText the text when the field has content.
 	Submit, SubmitText string
 	// Class is the button class after "gbtn": "pri", "dangerf", "".
 	Class, Placeholder, Tip string
 	Selected                bool
+	// Current marks the state the object is in now: its entry is the one that
+	// changes nothing and only comments.
+	Current bool
+	// Disabled shows an entry that cannot be chosen (the viewer may not comment).
+	Disabled bool
+	// NeedsText says that the words are required in this mode (a reason).
+	NeedsText bool
 }
 
 // composerOption is a choice in a field or in the signal select.
@@ -299,7 +319,10 @@ type composerField struct {
 	Name, Label, Kind, Value string
 	Show                     string
 	Wide                     bool
-	Options                  []composerOption
+	// Required marks a field the visible mode cannot do without (the proof of
+	// "Resolved"): the label carries the mark and the browser asks for it.
+	Required bool
+	Options  []composerOption
 }
 
 // composerSelect is a select in the footer, left of the buttons (the signal slot).
@@ -348,6 +371,16 @@ type composerView struct {
 	NoHint, NoTools bool
 	// NoButtons leaves out the submit and cancel buttons (the page has its own).
 	NoButtons bool
+	// Required makes the words a must; Tall gives the field the height of a document.
+	Required, Tall bool
+	// MaxLen is the longest text the field takes (characters, as the browser counts them); 0 leaves it open.
+	MaxLen int
+	// Compact leaves out the tabs and the toolbar: a reason of a line (the decision in the inbox).
+	Compact bool
+	// ModeName is the name of the status field of the form ("mode" when empty); Unset leaves the row
+	// without a choice at first and asks for one (a decision is never preset).
+	ModeName  string
+	Unset     bool
 	Avatar    string
 	ModeLabel string
 	Modes     []composerMode
@@ -366,6 +399,14 @@ func (c composerView) FieldName() string {
 		return "body"
 	}
 	return c.Name
+}
+
+// ModeField is the name of the status field of the form.
+func (c composerView) ModeField() string {
+	if c.ModeName == "" {
+		return "mode"
+	}
+	return c.ModeName
 }
 
 // Mode is the mode that is selected, or the first one.
@@ -389,10 +430,11 @@ func (c composerView) Config() string {
 		Cls       string `json:"cls"`
 		Tip       string `json:"tip,omitempty"`
 		Ph        string `json:"ph,omitempty"`
+		Need      bool   `json:"need,omitempty"`
 	}
 	out := map[string]entry{}
 	for _, m := range c.Modes {
-		out[m.Value] = entry{Label: m.Submit, LabelText: m.SubmitText, Cls: m.Class, Tip: m.Tip, Ph: m.Placeholder}
+		out[m.Value] = entry{Label: m.Submit, LabelText: m.SubmitText, Cls: m.Class, Tip: m.Tip, Ph: m.Placeholder, Need: m.NeedsText}
 	}
 	raw, _ := json.Marshal(out)
 	return string(raw)
@@ -440,6 +482,13 @@ type reactionsView struct {
 type hoverChip struct {
 	Num, Title, Brief, Href string
 	Show                    bool
+}
+
+// fileField is the file field of a form ("uifile"): Label is the word on the button, Tip says what
+// the file may be.
+type fileField struct {
+	Name, Accept, Label, Tip string
+	Required                 bool
 }
 
 // cmdBlock is a command to copy with a tab per operating system; the tab of the

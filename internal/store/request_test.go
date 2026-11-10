@@ -234,7 +234,7 @@ func TestSessionHasOnePrimaryRequestAndStartIsIdempotent(t *testing.T) {
 func TestFinishWorkRequiresHandoffAndRequestSearchFindsTranscript(t *testing.T) {
 	s := openTest(t)
 	sessionID, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "work-2"})
-	_ = s.AppendChunks(sessionID, []Chunk{{Seq: 3, Role: "assistant", Text: "the migration checksum now matches", Raw: `{}`}})
+	_ = s.AppendChunks(sessionID, []Chunk{{Seq: 3, Role: "assistant", Text: "the migration checksum now matches", Raw: codexTextLine("assistant", "the migration checksum now matches")}})
 	detail, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "change", Title: "migration"}})
 	work, _, _ := s.StartRequestWork(detail.Request.ID, sessionID, "primary", "alice")
 	if _, err := s.FinishRequestWork(work.ID, "paused", "", "alice"); requestdomain.Code(err) != "summary_required" {

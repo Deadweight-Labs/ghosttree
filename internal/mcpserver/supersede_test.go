@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -91,7 +89,7 @@ func TestSupersedeNeedsAReasonAndWritesNothingWithout(t *testing.T) {
 func TestToolsTellAgentsToSearchFirstAndSupersedeInsteadOfAFollowUp(t *testing.T) {
 	c, _ := targetFixture(t)
 	session := connect(t, targetServer(c, tgtHere))
-	tools, err := session.ListTools(context.Background(), &mcp.ListToolsParams{})
+	tools, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +97,7 @@ func TestToolsTellAgentsToSearchFirstAndSupersedeInsteadOfAFollowUp(t *testing.T
 	for _, tool := range tools.Tools {
 		desc[tool.Name] = tool.Description
 	}
-	for _, want := range []string{"context_search first", "supersedes", "follow-up", "context_retire"} {
+	for _, want := range []string{"context_search first", "supersedes", "follow-up", "context_remember action=retire"} {
 		if !strings.Contains(desc["context_remember"], want) {
 			t.Errorf("context_remember does not say %q:\n%s", want, desc["context_remember"])
 		}

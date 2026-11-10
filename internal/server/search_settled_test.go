@@ -71,7 +71,7 @@ func TestSearchAllAnswersWhenOneAreaFails(t *testing.T) {
 	if _, err := f.st.InsertKnowledge(k); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.st.DB().Exec(`DROP TABLE chunks_fts`); err != nil {
+	if _, err := f.st.DB().Exec(`DROP TABLE chunk_fts`); err != nil {
 		t.Fatal(err)
 	}
 	v := url.Values{"q": {"zentrifol"}, "project": {accProject}}

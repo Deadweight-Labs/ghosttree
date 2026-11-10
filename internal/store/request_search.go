@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strconv"
@@ -44,9 +45,17 @@ func ValidRequestCursor(cursor string) bool {
 	return err == nil
 }
 
-func requestLimit(limit int) int {
+// RequestLongPageMax is the largest page of a request search that asks for a long
+// page (SearchFilter.LongPage); other pages stop at 25.
+const RequestLongPageMax = 200
+
+func requestLimit(f requestdomain.SearchFilter) int {
+	limit := f.Limit
 	if limit <= 0 {
 		limit = 10
+	}
+	if f.LongPage {
+		return min(limit, RequestLongPageMax)
 	}
 	return min(limit, 25)
 }
@@ -58,7 +67,7 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 	if s.reader != nil {
 		return s.reader.SearchRequests(filter)
 	}
-	return s.requestsByList(filter)
+	return s.requestsByList(s.ctx(), filter)
 }
 
 // SearchRequestsWith is SearchRequests that, with an embedding server configured
@@ -94,15 +103,27 @@ func (s *Store) SearchRequestsWith(filter requestdomain.SearchFilter, mode Searc
 	if s.reader != nil {
 		return s.reader.SearchRequestsWith(filter, mode)
 	}
+	return s.SearchRequestsWithContext(s.ctx(), filter, mode)
+}
+
+// SearchRequestsWithContext is SearchRequestsWith for a caller with a deadline:
+// every read of the search (both rankings, the page of hits, the origins of the
+// hits) and the wait for the vector of the query end when ctx ends, instead of
+// with the context of the store (WithContext), which a long-lived store does not
+// have. Callers that pass no context keep SearchRequestsWith.
+func (s *Store) SearchRequestsWithContext(ctx context.Context, filter requestdomain.SearchFilter, mode SearchMode) (requestdomain.SearchPage, error) {
+	if s.reader != nil {
+		return s.reader.SearchRequestsWithContext(ctx, filter, mode)
+	}
 	_, ranked := parseHybridCursor(filter.Cursor)
 	idCursor := filter.Cursor != "" && !ranked
 	if filter.Query != "" && !idCursor && (mode.strict() || ClassifySearch(filter.Query) == SearchFullText) {
-		qvec, cfg, err := s.queryVector(filter.Query, mode, KindRequest)
+		qvec, cfg, err := s.queryVectorCtx(ctx, filter.Query, mode, KindRequest)
 		if err != nil {
 			return requestdomain.SearchPage{}, err
 		}
 		if qvec != nil {
-			page, err := s.hybridRequests(filter, mode, qvec, cfg)
+			page, err := s.hybridRequests(ctx, filter, mode, qvec, cfg)
 			switch {
 			case err == nil:
 				s.embedShared().hybrid.Add(1)
@@ -113,7 +134,7 @@ func (s *Store) SearchRequestsWith(filter requestdomain.SearchFilter, mode Searc
 			s.embedShared().logFallback(cfg, err)
 		}
 	}
-	return s.requestsByList(filter)
+	return s.requestsByList(ctx, filter)
 }
 
 // requestAttrWhere is the part of a request query that every ranking shares: the
@@ -152,7 +173,7 @@ func requestHitSelect(filter requestdomain.SearchFilter) string {
 		FROM requests r`
 }
 
-func (s *Store) scanRequestHits(rows *sql.Rows) ([]requestdomain.SearchHit, error) {
+func (s *Store) scanRequestHits(ctx context.Context, rows *sql.Rows) ([]requestdomain.SearchHit, error) {
 	defer rows.Close()
 	var out []requestdomain.SearchHit
 	for rows.Next() {
@@ -167,14 +188,14 @@ func (s *Store) scanRequestHits(rows *sql.Rows) ([]requestdomain.SearchHit, erro
 		return nil, err
 	}
 	rows.Close()
-	return out, s.attachRequestOrigins(out)
+	return out, s.attachRequestOrigins(ctx, out)
 }
 
 // requestsByList is the list of requests as it has always been answered: ordered
 // by id, a query a filter on the full-text index, the cursor the last id of a
 // page (or, when a ranked search has fallen back to it, ~N: skip that many).
-func (s *Store) requestsByList(filter requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
-	limit := requestLimit(filter.Limit)
+func (s *Store) requestsByList(ctx context.Context, filter requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
+	limit := requestLimit(filter)
 	query := requestHitSelect(filter)
 	var where []string
 	var args []any
@@ -204,11 +225,11 @@ func (s *Store) requestsByList(filter requestdomain.SearchFilter) (requestdomain
 		query += ` OFFSET ?`
 		args = append(args, offset)
 	}
-	rows, err := s.db.QueryContext(s.ctx(), query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return requestdomain.SearchPage{}, err
 	}
-	results, err := s.scanRequestHits(rows)
+	results, err := s.scanRequestHits(ctx, rows)
 	if err != nil {
 		return requestdomain.SearchPage{}, err
 	}
@@ -242,8 +263,8 @@ var requestPool = keepScanCap
 // cut at requestPool, so that more requests match than the fusion holds. It does
 // not depend on the cursor, only on the query, the filter and the page size (the
 // room for hits of meaning alone is a share of one page).
-func (s *Store) fuseRequests(filter requestdomain.SearchFilter, mode SearchMode, qvec []float32, cfg *EmbedSearchConfig) (fused []fusedHit, truncated bool, err error) {
-	limit := requestLimit(filter.Limit)
+func (s *Store) fuseRequests(ctx context.Context, filter requestdomain.SearchFilter, mode SearchMode, qvec []float32, cfg *EmbedSearchConfig) (fused []fusedHit, truncated bool, err error) {
+	limit := requestLimit(filter)
 	pool := requestPool
 	where, args := requestAttrWhere(filter)
 	cond := strings.Join(where, " AND ")
@@ -259,7 +280,7 @@ func (s *Store) fuseRequests(filter requestdomain.SearchFilter, mode SearchMode,
 		}
 		// The id decides a tie, so that the same query always reads the same rows.
 		query += ` ORDER BY f.rank, r.id LIMIT ?`
-		rows, err := s.db.QueryContext(s.ctx(), query, append(append([]any{ftsQuery(filter.Query)}, args...), pool+1)...)
+		rows, err := s.db.QueryContext(ctx, query, append(append([]any{ftsQuery(filter.Query)}, args...), pool+1)...)
 		if err != nil {
 			return nil, false, err
 		}
@@ -271,7 +292,7 @@ func (s *Store) fuseRequests(filter requestdomain.SearchFilter, mode SearchMode,
 	if err != nil {
 		return nil, false, err
 	}
-	vecIDs, err := s.vectorIDs(k, cfg, qvec, cond, args)
+	vecIDs, err := s.vectorIDsCtx(ctx, k, cfg, qvec, cond, args)
 	if err != nil {
 		return nil, false, err
 	}
@@ -299,10 +320,10 @@ func (s *Store) fuseRequests(filter requestdomain.SearchFilter, mode SearchMode,
 
 // hybridRequests answers a query with the page of its fusion that the cursor
 // names.
-func (s *Store) hybridRequests(filter requestdomain.SearchFilter, mode SearchMode, qvec []float32, cfg *EmbedSearchConfig) (requestdomain.SearchPage, error) {
-	limit := requestLimit(filter.Limit)
+func (s *Store) hybridRequests(ctx context.Context, filter requestdomain.SearchFilter, mode SearchMode, qvec []float32, cfg *EmbedSearchConfig) (requestdomain.SearchPage, error) {
+	limit := requestLimit(filter)
 	offset, _ := parseHybridCursor(filter.Cursor)
-	fused, truncated, err := s.fuseRequests(filter, mode, qvec, cfg)
+	fused, truncated, err := s.fuseRequests(ctx, filter, mode, qvec, cfg)
 	if err != nil {
 		return requestdomain.SearchPage{}, err
 	}
@@ -324,11 +345,11 @@ func (s *Store) hybridRequests(filter requestdomain.SearchFilter, mode SearchMod
 	for i, f := range shown {
 		ids[i], inArgs[i] = f.ID, f.ID
 	}
-	rows, err := s.db.QueryContext(s.ctx(), requestHitSelect(filter)+` WHERE r.id IN (`+placeholders(len(ids))+`)`, inArgs...)
+	rows, err := s.db.QueryContext(ctx, requestHitSelect(filter)+` WHERE r.id IN (`+placeholders(len(ids))+`)`, inArgs...)
 	if err != nil {
 		return requestdomain.SearchPage{}, err
 	}
-	loaded, err := s.scanRequestHits(rows)
+	loaded, err := s.scanRequestHits(ctx, rows)
 	if err != nil {
 		return requestdomain.SearchPage{}, err
 	}

@@ -147,6 +147,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "GET /api/context-snapshots/{name}", a.getContextSnapshot)
 	a.routeFunc(mux, "GET /api/context-snapshots/{name}/entries", a.contextSnapshotEntries)
 	a.routeFunc(mux, "POST /api/sessions", a.createSession)
+	a.routeFunc(mux, "POST /api/tool-uses", a.recordToolUses)
 	a.routeFunc(mux, "GET /api/sessions", a.listSessions)
 	a.routeFunc(mux, "GET /api/machines", a.listMachines)
 	a.registerMachineRoutes(mux)

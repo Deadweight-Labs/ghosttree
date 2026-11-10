@@ -477,29 +477,25 @@ func (a *app) searchDocs(l lang, st *store.Store, pa *store.ProjectAccess, sl se
 				Type: d.Kind, Author: d.Person, Created: d.CreatedAt, Updated: d.UpdatedAt})
 		}
 	}
-	docs, err := st.SearchDocuments(text, store.DocumentSearch{Project: sl.project, Limit: a.overfetch(searchPerGroup + 1),
+	limit := a.overfetch(sl.fetch)
+	docs, err := st.SearchDocuments(text, store.DocumentSearch{Project: sl.project, Limit: limit,
 		Keep: keepDoc, Prefilter: pa.DocumentPrefilter()})
 	if err != nil {
 		return g
 	}
+	// The search applies the rule itself and stops at the limit: an answer of that
+	// size may have more behind it.
+	g.Capped = len(docs) >= limit
 	docs = keep(docs, 0, keepDoc)
 	words := strings.Fields(strings.ToLower(text))
 	for i, d := range docs {
-		if i == searchPerGroup {
-			// More hits: within one project its list of documents, across
-			// projects this search narrowed to documents.
-			if sl.project != "" {
-				g.All = docsHref(sl.project)
-			} else {
-				g.All = "/ui/search?" + url.Values{"q": {"is:doc " + line}, "kind": {"docs"}}.Encode()
-			}
-			break
-		}
 		o := originOf(l, now, d.UpdatedAt, store.ObjectFacts{})
 		hit := searchHit{Title: d.Title, Sub: docKindLabel(l, d.Kind) + " · " + d.Slug, Project: lastSegment(d.Project),
 			Href: docHref(d.Project, d.Slug), Date: o.Date, Stamp: o.Stamp}
-		if rev, err := st.DocumentRevision(d.ID, d.HeadRevision); err == nil {
-			hit.Snip = docSnippet(rev.Body, words)
+		if i < sl.shown {
+			if rev, err := st.DocumentRevision(d.ID, d.HeadRevision); err == nil {
+				hit.Snip = docSnippet(rev.Body, words)
+			}
 		}
 		g.Hits = append(g.Hits, hit)
 	}

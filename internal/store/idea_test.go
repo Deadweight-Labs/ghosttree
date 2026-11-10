@@ -185,3 +185,29 @@ func TestIdeaStoresAnchorAndOriginLikeAPain(t *testing.T) {
 		t.Fatalf("facts: %+v", got)
 	}
 }
+
+// SearchIdeasCut says that the read of the project was cut: it reads four times
+// the limit and stops there, so an answer of fewer rows does not prove that
+// nothing lies behind it once the rights have dropped some.
+func TestSearchIdeasCutSaysWhenTheReadStoppedAtItsLimit(t *testing.T) {
+	w := newPainWorld(t)
+	for _, title := range []string{"Cut one", "Cut two", "Cut three", "Cut four", "Cut five"} {
+		newIdea(t, w, "mia", title)
+	}
+	pa := w.pa["mia"]
+	// Limit 1 reads 4 of the 5 rows and stops.
+	list, cut, err := pa.SearchIdeasCut(idea.Filter{Project: roleProject, State: "all", Query: "Cut", Limit: 1})
+	if err != nil || len(list) != ideaReadFactor || !cut {
+		t.Errorf("limit 1 of 5: %d ideas, cut %v, %v", len(list), cut, err)
+	}
+	// Limit 2 reads up to 8: everything there is.
+	list, cut, err = pa.SearchIdeasCut(idea.Filter{Project: roleProject, State: "all", Query: "Cut", Limit: 2})
+	if err != nil || len(list) != 5 || cut {
+		t.Errorf("limit 2 of 5: %d ideas, cut %v, %v", len(list), cut, err)
+	}
+	// The plain call answers the same list.
+	plain, err := pa.SearchIdeas(idea.Filter{Project: roleProject, State: "all", Query: "Cut", Limit: 1})
+	if err != nil || len(plain) != ideaReadFactor {
+		t.Errorf("SearchIdeas: %d ideas, %v", len(plain), err)
+	}
+}

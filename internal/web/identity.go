@@ -285,6 +285,9 @@ func identityFuncs(l lang) template.FuncMap {
 		},
 		"issueRow": func(r issueRow) uiRow { return issueUIRow(l, r) },
 		"inc":      func(i int) int { return i + 1 },
+		"fileField": func(name, accept, label, tip string) fileField {
+			return fileField{Name: name, Accept: accept, Label: label, Tip: tip, Required: true}
+		},
 		"hc": func(num, title, brief, href string) hoverChip {
 			return hoverChip{Num: num, Title: title, Brief: brief, Href: href}
 		},

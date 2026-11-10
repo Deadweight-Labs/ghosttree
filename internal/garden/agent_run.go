@@ -20,6 +20,8 @@ type SessionSpec struct {
 	System    string
 	MaxTurns  int
 	BudgetUSD float64
+	// Model overrides the model of the runner for this session; empty keeps it.
+	Model string
 }
 
 // AgentOptions drive an agent run.
@@ -49,8 +51,12 @@ type AgentOptions struct {
 	Ledger       []LedgerRequest
 	Ghosts       []GhostPath
 	GhostSamples []GhostSample
+	// GhostModel is the model of the description sessions (empty: the runner's),
+	// GhostPricing its prices (nil: Pricing).
+	GhostModel   string
+	GhostPricing *Pricing
 	// OnLedgerChecked and OnGhostLooked see every request and path a session
-	// went through, so the caller can remember it (verdict is "proposed" or "kept").
+	// went through, so the caller can remember it (verdict is "described" or "kept").
 	OnLedgerChecked func(r LedgerRequest)
 	OnGhostLooked   func(g GhostPath, verdict string)
 }
@@ -73,6 +79,7 @@ type sessionTask struct {
 	pkg     Package
 	reqs    []LedgerRequest
 	ghosts  []GhostPath
+	model   string
 }
 
 // chunkEven splits xs into the fewest pieces of at most per elements, as even as
@@ -105,7 +112,7 @@ func (opt AgentOptions) extraTasks() []sessionTask {
 	for i, c := range gchunks {
 		name := fmt.Sprintf("Beschreibungen %d/%d (%d Pfade, %s)", i+1, len(gchunks), len(c), ghostArea(c))
 		out = append(out, sessionTask{kind: taskGhosts, name: name,
-			prompt: GhostPrompt(opt.Project, name, c, opt.GhostSamples, turns), system: GhostSystemPrompt(), turns: turns, entries: len(c), ghosts: c})
+			prompt: GhostPrompt(opt.Project, name, c, opt.GhostSamples, turns), system: GhostSystemPrompt(), turns: turns, entries: len(c), ghosts: c, model: opt.GhostModel})
 	}
 	return out
 }
@@ -167,6 +174,7 @@ func CheckAgent(ctx context.Context, repo *Repo, entries []Entry, opt AgentOptio
 			}
 		}
 		res.UpperBoundUSD = opt.MaxUSD
+		res.GhostEstimate = repo.EstimateGhosts(tasks, opt.ghostPricing())
 		return res
 	}
 	rest := func(from int) {
@@ -219,10 +227,13 @@ func CheckAgent(ctx context.Context, repo *Repo, entries []Entry, opt AgentOptio
 		if t.kind != taskKnowledge {
 			budget = math.Min(budget, opt.MaxUSD/4)
 		}
-		spec := SessionSpec{Name: t.name, Prompt: t.prompt, System: t.system, MaxTurns: t.turns, BudgetUSD: budget}
+		spec := SessionSpec{Name: t.name, Prompt: t.prompt, System: t.system, MaxTurns: t.turns, BudgetUSD: budget, Model: t.model}
 		out, err := opt.Runner.RunSession(ctx, spec)
 		st := SessionStat{Name: t.name, Entries: t.entries, Turns: out.Turns, Usage: out.Usage, ReportedUSD: out.ReportedUSD, Denials: out.Denials, DeniedCalls: out.DeniedCalls, Tools: out.Tools}
 		st.CostUSD = opt.Pricing.CostUsage(out.Usage)
+		if t.kind == taskGhosts {
+			st.CostUSD = opt.ghostPricing().CostUsage(out.Usage)
+		}
 		res.Spent += st.CostUSD
 		// The fingerprint of .git/config and .git/hooks is taken first and
 		// without git: a planted hook or config must never get to run.
@@ -337,7 +348,7 @@ func (res *Result) validate(repo *Repo, opt AgentOptions, t sessionTask, out Ses
 			for j := range v.Proposals {
 				v.Proposals[j].Session = t.name
 				if opt.OnGhostLooked != nil {
-					opt.OnGhostLooked(v.Proposals[j].GhostPath, "proposed")
+					opt.OnGhostLooked(v.Proposals[j].GhostPath, "described")
 				}
 			}
 			for _, g := range v.Kept {
@@ -345,7 +356,7 @@ func (res *Result) validate(repo *Repo, opt AgentOptions, t sessionTask, out Ses
 					opt.OnGhostLooked(g, "kept")
 				}
 			}
-			res.GhostNotes = append(res.GhostNotes, v.Proposals...)
+			res.GhostDescribed = append(res.GhostDescribed, v.Proposals...)
 			res.GhostKept = append(res.GhostKept, v.Kept...)
 			return len(v.Proposals) + len(v.Kept), v.Rejected
 		}, nil
@@ -372,4 +383,11 @@ func (res *Result) validate(repo *Repo, opt AgentOptions, t sessionTask, out Ses
 		res.Covers = append(res.Covers, val.Covers...)
 		return judged, val.Rejected
 	}, nil
+}
+
+func (opt AgentOptions) ghostPricing() Pricing {
+	if opt.GhostPricing != nil {
+		return *opt.GhostPricing
+	}
+	return opt.Pricing
 }

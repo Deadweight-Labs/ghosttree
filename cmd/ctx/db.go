@@ -20,6 +20,8 @@ const dbUsage = `usage: ctx db vacuum --db <path> [--tmpdir <dir>] [--fts-optimi
        ctx db check --db <path> [--full]
        ctx db backfill-actors --db <path> [--dry-run] [--batch N] [--kind k,...] [--no-models] [--json]
        ctx db chunk-stats --db <path> [--sample N] [--json]
+       ctx db slim-sessions --db <path> [--dry-run] [--batch N] [--pause D] [--json]
+       ctx db slim-search --db <path> [--dry-run] [--batch N] [--pause D] [--json]
        ctx db migrate-owners --db <path> --dry-run|--apply --backup <file> [--plan <file>]
 
 Maintenance of the database file with the SQL functions of the schema. The
@@ -31,6 +33,8 @@ ghosttree_valid_utf8, which only ctx registers, so "sqlite3 <db> VACUUM" and
   check   quick_check or integrity_check, writes nothing (may run beside the server)
   backfill-actors  who wrote existing entries (agent or person), only where proven
   chunk-stats  bytes of stored transcript lines per line type, from a sample
+  slim-sessions  slim and pack the stored transcript lines (may run beside the server)
+  slim-search    one search index over sessions, no text copies (may run beside the server)
   migrate-owners   projects to their owners (organization or person), REQ-623`
 
 const dbChunkStatsUsage = `usage: ctx db chunk-stats --db <path> [--sample N] [--json]
@@ -38,8 +42,10 @@ const dbChunkStatsUsage = `usage: ctx db chunk-stats --db <path> [--sample N] [-
 Draw N random transcript lines from session_chunks (default 2000) and count the
 bytes of their raw JSON per line type (claude:assistant,
 codex:event_msg:item_completed:CommandExecution, ...): how many lines, how
-large, and what the current slim rule would leave of them. Use it to spot new
-ballast that a harness started to write.
+large as text, what they take as stored now (packed or not), what the current
+slim rule would leave of them, and what of that would be left packed with the
+newest dictionary (the state after "ctx db slim-sessions"). Percentages are of
+the text. Use it to spot new ballast that a harness started to write.
 
 Each line is one lookup by its number; nothing scans the table, and it pauses
 between batches. Nothing is written (query_only), so the server may keep
@@ -115,6 +121,10 @@ func cmdDB(args []string, stdout io.Writer) int {
 		return cmdDBBackfillActors(args[1:], stdout)
 	case "chunk-stats":
 		return cmdDBChunkStats(args[1:], stdout)
+	case "slim-sessions":
+		return cmdDBSlimSessions(args[1:], stdout)
+	case "slim-search":
+		return cmdDBSlimSearch(args[1:], stdout)
 	case "migrate-owners":
 		return cmdDBMigrateOwners(args[1:], stdout)
 	case "help", "--help", "-h":
@@ -313,19 +323,28 @@ func cmdDBChunkStats(args []string, stdout io.Writer) int {
 }
 
 func printChunkStats(stdout io.Writer, rep store.ChunkStatsReport) {
-	fmt.Fprintf(stdout, "chunks: about %d (highest id), sampled %d lines, %s raw, slim rule version %d, %s\n",
-		rep.HighestID, rep.Sampled, humanBytes(int(rep.Bytes)), rep.SlimVersion, rep.Duration.Round(time.Millisecond))
+	dict := "no dictionary"
+	if rep.Dict > 0 {
+		dict = fmt.Sprintf("dictionary %d", rep.Dict)
+	}
+	fmt.Fprintf(stdout, "chunks: at most %d (highest id), sampled %d lines, %s as text, %s stored (%d packed), slim rule version %d, %s, %s\n",
+		rep.HighestID, rep.Sampled, humanBytes(int(rep.Bytes)), humanBytes(int(rep.StoredBytes)), rep.Packed, rep.SlimVersion, dict,
+		rep.Duration.Round(time.Millisecond))
 	if rep.Sampled == 0 {
 		return
 	}
-	fmt.Fprintf(stdout, "%-56s %7s %7s %11s %10s\n", "line type", "bytes", "lines", "avg bytes", "after slim")
-	for _, k := range rep.Kinds {
-		after := "-"
-		if k.Bytes > 0 {
-			after = fmt.Sprintf("%.0f%%", 100*float64(k.SlimBytes)/float64(k.Bytes))
+	fmt.Fprintf(stdout, "%-56s %7s %7s %10s %8s %8s %8s\n", "line type", "text", "lines", "avg bytes", "stored", "slim", "packed")
+	pct := func(a, b int64) string {
+		if b <= 0 {
+			return "-"
 		}
-		fmt.Fprintf(stdout, "%-56s %6.1f%% %7d %11d %10s\n", k.Kind,
-			100*float64(k.Bytes)/float64(rep.Bytes), k.Chunks, k.Bytes/int64(k.Chunks), after)
+		return fmt.Sprintf("%.0f%%", 100*float64(a)/float64(b))
 	}
-	fmt.Fprintf(stdout, "after slim: %.0f%% of the sampled bytes would remain\n", 100*float64(rep.SlimBytes)/float64(max(rep.Bytes, 1)))
+	for _, k := range rep.Kinds {
+		fmt.Fprintf(stdout, "%-56s %6.1f%% %7d %10d %8s %8s %8s\n", k.Kind,
+			100*float64(k.Bytes)/float64(rep.Bytes), k.Chunks, k.Bytes/int64(k.Chunks),
+			pct(k.StoredBytes, k.Bytes), pct(k.SlimBytes, k.Bytes), pct(k.PackedBytes, k.Bytes))
+	}
+	fmt.Fprintf(stdout, "stored now: %s of the text; after slim: %s; after slim and packing (what slim-sessions leaves): %s\n",
+		pct(rep.StoredBytes, rep.Bytes), pct(rep.SlimBytes, rep.Bytes), pct(rep.PackedBytes, rep.Bytes))
 }

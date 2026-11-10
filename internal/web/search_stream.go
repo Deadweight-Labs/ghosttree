@@ -144,6 +144,10 @@ type searchEvent struct {
 	Side string `json:"side,omitempty"`
 	Body string `json:"body,omitempty"`
 	Slow bool   `json:"slow,omitempty"`
+	// Total and Capped are the count of the kind, which the page adds up to the
+	// count of "All".
+	Total  int  `json:"total,omitempty"`
+	Capped bool `json:"capped,omitempty"`
 }
 
 func (a *app) searchStream(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +237,7 @@ func (a *app) searchStream(w http.ResponseWriter, r *http.Request) {
 		if !res.slow && len(res.g.Hits) > 0 {
 			res.g.On = res.g.Key == current
 			ev.Side, ev.Body = a.searchFragment(p.l, "searchkind", res.g), a.searchFragment(p.l, "searchgroup", res.g)
+			ev.Total, ev.Capped = res.g.Total, res.g.Capped
 		}
 		if !send("group", ev) {
 			return

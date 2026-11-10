@@ -14,6 +14,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
+	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
@@ -1225,17 +1226,11 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).Check(g.Project, store.ResGhost, store.ActCreate, store.Object{})) {
 		return
 	}
-	// "From the gardener, adopted by <person>" is written on a description only by
-	// the review page, when a person confirms a proposal of the gardener, with
-	// the text and the content hashes of the note the gardener's account wrote.
-	// Nobody may claim it through this call, the gardener's own account included:
-	// the gardener proposes, it does not describe.
-	if store.ReservedForGardener(store.Knowledge{Harness: g.Harness, SessionRef: g.SessionRef}) {
-		writeCoded(w, http.StatusForbidden, "gardener_reserved", `harness "gardener" and "gardener:" references on a description are set only when a person adopts a proposal of the gardener on the review page`)
+	g.GitAnchor = anchorFromRequest(r)
+	if store.ReservedForGardener(store.Knowledge{Harness: g.Harness, SessionRef: g.SessionRef}) && !a.gardenerDescribes(w, r, g) {
 		return
 	}
 	g.Person = personOf(r)
-	g.GitAnchor = anchorFromRequest(r)
 	a.dropForeignSessionRef(r, &g.SessionRef)
 	if g.Kind == "dir" {
 		g.OriginContext = a.originFor(r, g.SessionRef, strings.TrimSuffix(g.Path, "/")+"/")
@@ -1419,4 +1414,33 @@ func (a *api) sessionFilters(f scope.Axes, fetch int) (db, view scope.Axes, limi
 func authorIDOf(r *http.Request) int64 {
 	id, _ := store.AccountNumericID(principalOf(r).ID)
 	return id
+}
+
+// gardenerDescribes lets the gardener's account write a description itself
+// (REQ-629) and refuses every other use of its marks. "From the gardener,
+// adopted by <person>" stays the review page's; through this call only the
+// gardener's account may write harness "gardener", with the reference of a
+// merge or a run (ghost.IsGardenerWriteRef), on the project level, anchored on
+// the very commit the reference names. The paragraphs an agent or a person
+// wrote must all stand in the new text, word for word.
+func (a *api) gardenerDescribes(w http.ResponseWriter, r *http.Request, g store.GhostFile) bool {
+	commit := strings.TrimPrefix(strings.TrimPrefix(g.SessionRef, ghost.GardenerMergeRef), ghost.GardenerRunRef)
+	if !a.st.IsGardenerPrincipal(principalOf(r)) || g.Harness != store.GardenerHarness || !ghost.IsGardenerWriteRef(g.SessionRef) ||
+		g.Branch != "" || g.GitAnchor == nil || g.GitAnchor.Commit != commit {
+		writeCoded(w, http.StatusForbidden, "gardener_reserved", `harness "gardener" and "gardener:" references on a description are the gardener's: its own account writes them with the merge or run commit as reference and anchor, and the review page when a person adopts a proposal`)
+		return false
+	}
+	chain, err := a.st.GhostFileChain(g.Project, g.Path, 0)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return false
+	}
+	if len(chain) == 0 {
+		return true
+	}
+	if missing := ghost.MissingKept(ghost.Attribute(chain[0].Description, chain), g.Description); len(missing) > 0 {
+		writeCoded(w, http.StatusConflict, "kept_paragraphs", fmt.Sprintf("%d paragraph(s) written by an agent or a person are missing or changed; the gardener keeps them word for word", len(missing)))
+		return false
+	}
+	return true
 }

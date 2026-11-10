@@ -281,6 +281,12 @@ type sessionView struct {
 	Owner                                    string
 	Messages                                 int
 	MachineHref                              string
+	// RawView is the raw log; otherwise the page shows the ghosttree view
+	// (session_ghost.go). GhostHref and RawHref are the two tabs. Side holds the
+	// results of the session for the side bar, Items the entries of the view.
+	RawView            bool
+	GhostHref, RawHref string
+	Side               sessionGhost
 }
 
 // ------------------------------------------------------------------- Helfer
@@ -894,6 +900,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	if !slices.Contains(kindKeys, kind) {
 		kind = ""
 	}
+	raw := rawWanted(qv)
 
 	if !a.store.IndexProgress().Done {
 		if err := a.store.IndexSessionContext(r.Context(), sess.ID); err != nil && r.Context().Err() == nil {
@@ -919,6 +926,9 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	// Zustand der Seite, der in jedem Link erhalten bleibt.
 	state := func(extra url.Values, drop ...string) url.Values {
 		out := url.Values{}
+		if raw {
+			out.Set("view", viewRaw)
+		}
 		if q != "" {
 			out.Set("q", q)
 		}
@@ -994,6 +1004,14 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	for _, link := range created {
 		v.Created = append(v.Created, linkChip(l, link))
 	}
+	v.RawView = raw
+	v.GhostHref = sessionURL(sess.PublicID, url.Values{"view": {viewGhost}}, "")
+	v.RawHref = sessionURL(sess.PublicID, url.Values{"view": {viewRaw}}, "")
+	v.Side = a.ghostView(l, pa, sess, view, created, !raw)
+	if !raw {
+		a.renderBrowser(w, r, "session", pageData{Title: v.Title, SessionV: v})
+		return
+	}
 
 	// Suche in der Session: Positionen gelten für die ganze Session.
 	hlKind := kind
@@ -1007,7 +1025,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	v.HasFind = q != ""
 	v.FindAction = "/ui/sessions/" + sess.PublicID
 	v.Hidden = nil
-	for _, key := range []string{"tools", "thinking", "open", "back", "kind"} {
+	for _, key := range []string{"view", "tools", "thinking", "open", "back", "kind"} {
 		if val := state(nil).Get(key); val != "" {
 			v.Hidden = append(v.Hidden, chip{Text: key, Href: val})
 		}

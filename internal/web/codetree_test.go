@@ -131,7 +131,7 @@ func TestCodeTabTreeFolderAndFilePages(t *testing.T) {
 		t.Errorf("an undescribed file offers no action:\n%s", web)
 	}
 	_, blank := fetchPage(t, e.Member, e.Base+"/ui/x/shell/blob/main/internal/web/a.go")
-	if !strings.Contains(blank, `class="ct-empty"`) || !strings.Contains(blank, `context_describe_file path=&#34;internal/web/a.go&#34;`) {
+	if !strings.Contains(blank, `class="ct-empty"`) || !strings.Contains(blank, `context_remember action=describe_file path=&#34;internal/web/a.go&#34;`) {
 		t.Errorf("empty description page lacks the open writing action:\n%s", blank)
 	}
 

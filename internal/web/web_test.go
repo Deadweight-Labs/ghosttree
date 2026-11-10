@@ -254,11 +254,11 @@ func TestOperatorSectionsUseStoredData(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]string{
-		"/ui/knowledge?q=SQLite":          "SQLite stays",
-		"/ui/review":                      "SQLite stays",
-		"/ui/sessions":                    "/ui/sessions/" + stored.PublicID,
-		"/ui/sessions/" + stored.PublicID: "ledger context",
-		"/ui/context?project=p":           "SQLite runtime",
+		"/ui/knowledge?q=SQLite": "SQLite stays",
+		"/ui/review":             "SQLite stays",
+		"/ui/sessions":           "/ui/sessions/" + stored.PublicID,
+		"/ui/sessions/" + stored.PublicID + "?view=raw": "ledger context",
+		"/ui/context?project=p":                         "SQLite runtime",
 	} {
 		resp, err := client.Get(srv.URL + path)
 		if err != nil {

@@ -28,7 +28,7 @@ func RenderPackage(d PackageDetail) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n", packageHeader(d))
 	if len(d.Members) == 0 {
-		b.WriteString("\nNo requests in this package yet (package_update action=add).\n")
+		b.WriteString("\nNo requests in this package yet (package action=add).\n")
 		return b.String()
 	}
 	for _, role := range []string{RolePflicht, RoleOptional} {
@@ -77,7 +77,7 @@ func writeFeatureChecks(b *strings.Builder, d PackageDetail) {
 		}
 		fmt.Fprintf(b, "- %s %s — %s\n", mark, f.Text, how)
 	}
-	b.WriteString("Write the new state with feature_update (pr=this PR), or confirm that it still holds with feature_check.\n")
+	b.WriteString("Write the new state with feature action=update (pr=this PR), or confirm that it still holds with feature action=check.\n")
 }
 
 func writeWaitingTasks(b *strings.Builder, d PackageDetail) {
@@ -198,9 +198,9 @@ func RenderPackageReview(d PackageDetail) string {
 			}
 			fmt.Fprintf(&b, "- IDEA-%d#%d %s (%s)\n", u.Idea, u.No, u.Text, how)
 		}
-		b.WriteString("An idea counts as done only when each of its requirements has a met criterion or is waived with a reason (idea_update requirement_waive).\n")
+		b.WriteString("An idea counts as done only when each of its requirements has a met criterion or is waived with a reason (idea action=requirement_waive).\n")
 	}
 	writeFeatureChecks(&b, d)
-	b.WriteString("\nConfirm: request_record_progress action=criterion_met with evidence_kind and evidence_ref. Reopen what the code does not show: action=criterion_reopen with criterion_id and reason.\n")
+	b.WriteString("\nConfirm: request action=criterion_met with evidence_kind and evidence_ref. Reopen what the code does not show: action=criterion_reopen with criterion_id and reason.\n")
 	return b.String()
 }

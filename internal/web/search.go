@@ -25,11 +25,29 @@ import (
 )
 
 const (
-	// searchPerGroup is how many hits a group shows; one more is asked for, so
-	// "show all" appears only when there is something behind it. No total is
-	// ever counted: a number would say how much exists beyond what the viewer sees.
+	// searchPerGroup is how many hits a group shows on the page of all kinds;
+	// searchKindPage is how many it shows once the page is narrowed to one kind,
+	// and the step of "More hits" (n= in the address, never above searchCountCap).
 	searchPerGroup = 5
+	searchKindPage = 20
 	minSearchRunes = 2
+	// searchCountCap is how many hits of a kind are counted. The count is of the
+	// hits that survive the very same rights and qualifier rules as the shown
+	// ones (a count straight in SQL would count what the viewer may not see, and
+	// most rights are rules in Go), so it reads at most this many rows of a kind;
+	// beyond it the page says "100+". Requests are the exception: their rights
+	// are part of the SQL, so a search of plain words in one line counts them
+	// exactly with one COUNT (CountRequestMatches). A viewer is told no number
+	// that includes a hit he may not read.
+	//
+	// Every kind also says whether its read was cut at its limit (searchGroup.Capped):
+	// then what it found is a lower bound, whatever its size, and the page says
+	// "12+" and not "12". That holds for the qualified searches (the qualifiers
+	// drop hits after the read) and for the lines of a quick filter alike.
+	searchCountCap = 100
+	// searchSessionCount is the same for sessions, whose search is the most
+	// expensive one: more rows are read only when the page asks to show more.
+	searchSessionCount = 30
 )
 
 // searchHit is one hit. Date and Area are where and when it came to be: the
@@ -52,14 +70,29 @@ type searchHit struct {
 // when nothing lies behind the shown hits.
 type searchGroup struct {
 	Key, Label, Icon string
-	Hits             []searchHit
-	All              string
+	// Hits are the hits of the group; the kind searches return every hit they
+	// count, searchKind cuts them to the window the page shows.
+	Hits []searchHit
+	// Total is how many hits the kind has for this viewer, Capped says that it
+	// has more than were counted (see searchCountCap): a kind sets it when its
+	// read was cut at its limit, sizeGroup also when the hits pass the cap. Count
+	// is Total as the facet shows it ("24", "100+"), TotalLabel the line of the
+	// list ("24 hits"). Exact: Total came from a COUNT, a kind sets it with Total,
+	// and then the cap does not bind it.
+	Total             int
+	Capped, Exact     bool
+	Count, TotalLabel string
+	// Full is the list of the repository that holds the whole search (the issue
+	// list for requests and ideas), empty when there is none that would show the
+	// same hits: no single repository, or a quick filter of several lines.
+	Full string
+	// More is the link that shows more hits of the kind, empty when the group
+	// shows all of them and nothing lies behind the last step.
+	More string
 	// Mark is the icon of the kind, Href the link that narrows the page to it.
 	Mark, Href string
 	// MultiProject: the hits come from more than one repository.
 	MultiProject bool
-	// Shown is how many hits the group shows ("5+" when more lie behind them).
-	Shown string
 	// On: the page is narrowed to this group.
 	On bool
 }
@@ -78,6 +111,8 @@ type searchView struct {
 	// Kind is the group the page is narrowed to ("" = all), AllHref the link
 	// back to all of them.
 	Kind, AllHref string
+	// AllCount is the number of hits of all kinds together, as the facet shows it.
+	AllCount string
 	// Presets are the saved searches of the project, CanSave the form that keeps
 	// this search (a project has to be chosen); Project and Token belong to it.
 	Presets []presetLink
@@ -118,6 +153,7 @@ func (a *app) searchPage(w http.ResponseWriter, r *http.Request) {
 			p.v.Live = p.liveView(r)
 		} else {
 			p.v.Groups = a.runSearch(r.Context(), r, p)
+			p.v.AllCount = allCount(p.v.Groups)
 		}
 	}
 	if kind := r.URL.Query().Get("kind"); kind != "" {
@@ -152,6 +188,11 @@ type searchPlan struct {
 	// kinds are the groups this viewer gets, in the order of the page.
 	kinds []string
 	href  func(kind string) string
+	// shown is how many hits each group shows: searchPerGroup on the page of all
+	// kinds, more once it is narrowed to one (n= of the address).
+	shown int
+	// kind is the kind the page is narrowed to, "" for the page of all kinds.
+	kind string
 }
 
 func (p *searchPlan) runnable() bool { return len(p.lines) > 0 }
@@ -176,13 +217,14 @@ func (a *app) planSearch(r *http.Request) *searchPlan {
 			v.Notice, v.NoticeKind = l.msg("search.min_chars", minSearchRunes), "note"
 		}
 	}
-	p := &searchPlan{l: l, pa: pa, v: v, guest: guest, project: project, now: overviewNow().UTC()}
+	p := &searchPlan{l: l, pa: pa, v: v, guest: guest, project: project, now: overviewNow().UTC(), shown: searchPerGroup}
 	p.href = func(k string) string {
 		qs := url.Values{"q": {q}}
 		if v.Preset != "" {
 			qs = r.URL.Query()
 			qs.Del("kind")
 			qs.Del("live")
+			qs.Del("n")
 		}
 		if k != "" {
 			qs.Set("kind", k)
@@ -193,6 +235,12 @@ func (a *app) planSearch(r *http.Request) *searchPlan {
 	p.kinds = []string{"requests", "ideas", "knowledge", "docs"}
 	if !guest {
 		p.kinds = append(p.kinds, "sessions", "tasks", "pains")
+	}
+	if k := r.URL.Query().Get("kind"); slices.Contains(p.kinds, k) {
+		p.kind, p.shown = k, searchKindPage
+		if n, err := strconv.Atoi(r.URL.Query().Get("n")); err == nil {
+			p.shown = min(max(n, searchKindPage), searchCountCap)
+		}
 	}
 	if !v.Searched {
 		return p
@@ -210,11 +258,15 @@ func (a *app) planSearch(r *http.Request) *searchPlan {
 		if !sl.qualified && utf8.RuneCountInString(sl.text) < minSearchRunes {
 			continue
 		}
+		sl.shown = p.shown
 		if un := sl.unsupportedKinds(); len(un) > 0 && v.Notice == "" {
 			v.Notice, v.NoticeKind = l.msg("search.err.kinds", searchKindWords(l, un)), "note"
 		}
 		p.lines = append(p.lines, sl)
 		p.raw = append(p.raw, line)
+	}
+	for i := range p.lines {
+		p.lines[i].union = len(p.lines) > 1
 	}
 	return p
 }
@@ -263,11 +315,14 @@ func (a *app) searchKind(ctx context.Context, r *http.Request, p *searchPlan, ke
 	st := a.store.WithContext(ctx)
 	pa := st.Access(browserPrincipal(r))
 	var merged *searchGroup
+	// capped: one line was cut at its limit, even one that found nothing to show.
+	capped := false
 	for i, sl := range p.lines {
 		if ctx.Err() != nil {
 			return searchGroup{Key: key}
 		}
 		g := a.searchOne(ctx, p.l, st, pa, sl, p.raw[i], p.now, key)
+		capped = capped || g.Capped
 		if len(g.Hits) == 0 {
 			continue
 		}
@@ -281,18 +336,76 @@ func (a *app) searchKind(ctx context.Context, r *http.Request, p *searchPlan, ke
 				merged.Hits = append(merged.Hits, h)
 			}
 		}
-		if merged.All == "" {
-			merged.All = g.All
-		}
 	}
 	if merged == nil || ctx.Err() != nil {
 		return searchGroup{Key: key}
 	}
-	merged.Shown = strconv.Itoa(len(merged.Hits))
-	if merged.All != "" {
-		merged.Shown += "+"
+	if len(p.lines) > 1 {
+		// Lines of a quick filter overlap: the union is counted from its hits, and
+		// the list of one line does not hold them all.
+		merged.Total, merged.Exact, merged.Full = 0, false, ""
 	}
+	merged.Capped = capped
+	p.sizeGroup(merged)
 	return *merged
+}
+
+// sizeGroup turns the hits a kind found into what the page shows of it: the
+// total and its labels, the window of hits, and the link to more of them.
+// The kinds return every hit they counted (at most searchCountCap, one more
+// to tell that there are more) and say with Capped whether they were cut; Total
+// is set by a kind only when it counted exactly with a COUNT (Exact), and then
+// it stands.
+//
+// The link to more hits is the next step of the narrowed page (n=). A step never
+// passes searchCountCap, so at that size the page would point at itself: there
+// the link leads to the list of the repository (Full), or is not shown.
+func (p *searchPlan) sizeGroup(g *searchGroup) {
+	limit := searchCountCap
+	if g.Key == "sessions" {
+		limit = max(searchSessionCount, p.shown)
+	}
+	n := len(g.Hits)
+	if g.Exact && g.Total >= n {
+		g.Capped = false
+	} else {
+		g.Exact = false
+		g.Total, g.Capped = min(n, limit), g.Capped || n > limit
+	}
+	g.Count = strconv.Itoa(g.Total)
+	g.TotalLabel = p.l.msg("search.total", g.Total)
+	if g.Capped {
+		g.Count += "+"
+		g.TotalLabel = p.l.msg("search.total_capped", g.Total)
+	}
+	if len(g.Hits) > p.shown {
+		g.Hits = g.Hits[:p.shown]
+	}
+	if g.Total <= len(g.Hits) && !(g.Capped && p.shown >= searchCountCap) {
+		return
+	}
+	switch {
+	case p.kind != g.Key:
+		g.More = p.href(g.Key)
+	case p.shown < searchCountCap:
+		g.More = p.href(g.Key) + "&n=" + strconv.Itoa(min(p.shown+searchKindPage, searchCountCap))
+	default:
+		// The last step is shown: only the list of the repository goes further.
+		g.More = g.Full
+	}
+}
+
+// allCount is the number of hits of all groups as the facet "All" shows it.
+func allCount(groups []searchGroup) string {
+	total, capped := 0, false
+	for _, g := range groups {
+		total += g.Total
+		capped = capped || g.Capped
+	}
+	if capped {
+		return strconv.Itoa(total) + "+"
+	}
+	return strconv.Itoa(total)
 }
 
 func (a *app) searchOne(ctx context.Context, l lang, st *store.Store, pa *store.ProjectAccess, sl searchLine, line string, now time.Time, key string) searchGroup {
@@ -304,7 +417,7 @@ func (a *app) searchOne(ctx context.Context, l lang, st *store.Store, pa *store.
 func (a *app) searchOneKind(ctx context.Context, l lang, st *store.Store, pa *store.ProjectAccess, sl searchLine, line string, now time.Time, key string) searchGroup {
 	switch key {
 	case "requests":
-		return a.searchRequests(l, st, pa, sl, line, now)
+		return a.searchRequests(ctx, l, st, pa, sl, line, now)
 	case "ideas":
 		return a.searchIdeas(l, st, pa, sl, line, now)
 	case "knowledge":
@@ -359,7 +472,7 @@ func factsFor(st *store.Store, kind string, ids []int64) map[int64]store.ObjectF
 	return facts
 }
 
-func (a *app) searchRequests(l lang, st *store.Store, pa *store.ProjectAccess, sl searchLine, line string, now time.Time) searchGroup {
+func (a *app) searchRequests(ctx context.Context, l lang, st *store.Store, pa *store.ProjectAccess, sl searchLine, line string, now time.Time) searchGroup {
 	g := searchGroup{Key: "requests", Label: l.msg("nav.requests"), Icon: "requests"}
 	if !sl.wants(query.KindRequest) {
 		return g
@@ -368,13 +481,25 @@ func (a *app) searchRequests(l lang, st *store.Store, pa *store.ProjectAccess, s
 	if project != "" && pa.GateList(project, store.ResRequest, true) != nil {
 		project = "\x00hidden"
 	}
-	filter := requestdomain.SearchFilter{Scope: scope.Axes{Project: project}, Query: sl.text, Limit: sl.fetch,
+	filter := requestdomain.SearchFilter{Scope: scope.Axes{Project: project}, Query: sl.text,
 		Commit: sl.anchor.Commit, PR: sl.anchor.PR, Origin: sl.origin}
-	page, err := st.SearchRequestsWith(pa.RequestFilter(filter), store.SearchAuto)
+	// Without qualifiers a single line reads only the window, and the total is one
+	// COUNT on the same filter (rights are part of it). With qualifiers the hits
+	// that survive them are the count, and the lines of a quick filter overlap so
+	// that the union is the count: both read every candidate they count, page after
+	// page, and say when that was cut.
+	want := sl.shown + 1
+	exact := !sl.qualified && !sl.union
+	if !exact {
+		want = sl.fetch
+	} else if n, err := st.CountRequestMatches(pa.RequestFilter(filter)); err == nil {
+		g.Total, g.Exact = n, true
+	}
+	hits, more, err := requestWindow(ctx, st, pa, filter, want)
 	if err != nil {
 		return g
 	}
-	hits := page.Results
+	g.Capped = more && !g.Exact
 	ids := make([]int64, len(hits))
 	for i, h := range hits {
 		ids[i] = h.Request.ID
@@ -391,20 +516,36 @@ func (a *app) searchRequests(l lang, st *store.Store, pa *store.ProjectAccess, s
 		}
 		kept = append(kept, h)
 	}
-	pa.NoteRequestHits(page.Results)
-	for i, raw := range kept {
-		if i == searchPerGroup {
-			if projects := visibleProjects(pa, project); len(projects) > 0 {
-				g.All = repoHref(projects[0]) + "/issues?q=" + url.QueryEscape(line)
-			}
-			break
-		}
+	for _, raw := range kept {
 		h := pa.RequestHitView(raw)
 		o := originOf(l, now, h.Request.CreatedAt, facts[raw.Request.ID])
 		g.Hits = append(g.Hits, searchHit{Title: h.Request.Title, Sub: requestStateLabel(l, h.Request.State), Project: lastSegment(h.Request.Scope.Project), RefKind: "request", RefN: h.Request.ID,
 			Href: requestURL(h.Request.ID), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
 	}
+	g.Full = a.issueListHref(pa, sl, line, "")
 	return g
+}
+
+// issueListHref is the list of the repository that shows what a search found, for
+// the group that has no more steps of its own: the issue list takes the same line
+// (kind "idea" adds is:idea) and lists every state when the line names none. It
+// is a link only for a search of exactly one repository, as the list belongs to one
+// and a link to the first of several would show a part and call it the whole; and
+// not for a quick filter of several lines (searchKind clears it), since no single
+// line stands for their union.
+func (a *app) issueListHref(pa *store.ProjectAccess, sl searchLine, line, kind string) string {
+	projects := visibleProjects(pa, sl.project)
+	if len(projects) != 1 {
+		return ""
+	}
+	q := strings.TrimSpace(line)
+	if kind != "" {
+		q = "is:" + kind + " " + q
+	}
+	if !strings.Contains(line, "is:") {
+		q += " is:all"
+	}
+	return repoHref(projects[0]) + "/issues?q=" + url.QueryEscape(strings.TrimSpace(q))
 }
 
 func (a *app) searchIdeas(l lang, st *store.Store, pa *store.ProjectAccess, sl searchLine, line string, now time.Time) searchGroup {
@@ -418,10 +559,11 @@ func (a *app) searchIdeas(l lang, st *store.Store, pa *store.ProjectAccess, sl s
 	}
 	var all []found
 	for _, p := range visibleProjects(pa, sl.project) {
-		list, err := pa.SearchIdeas(idea.Filter{Project: p, State: "all", Query: sl.text, Limit: sl.fetch})
+		list, cut, err := pa.SearchIdeasCut(idea.Filter{Project: p, State: "all", Query: sl.text, Limit: sl.fetch})
 		if err != nil {
 			continue
 		}
+		g.Capped = g.Capped || cut
 		ids := make([]int64, len(list))
 		for i, it := range list {
 			ids[i] = it.ID
@@ -434,17 +576,12 @@ func (a *app) searchIdeas(l lang, st *store.Store, pa *store.ProjectAccess, sl s
 			all = append(all, found{it, facts[it.ID]})
 		}
 	}
-	for i, f := range all {
-		if i == searchPerGroup {
-			if projects := visibleProjects(pa, sl.project); len(projects) > 0 {
-				g.All = repoHref(projects[0]) + "/issues?q=" + url.QueryEscape("is:idea "+line)
-			}
-			break
-		}
+	for _, f := range all {
 		o := originOf(l, now, f.idea.CreatedAt, f.of)
 		g.Hits = append(g.Hits, searchHit{Title: f.idea.Title, Sub: label(l, ideaStateKeys, f.idea.State), Project: lastSegment(f.idea.Project), RefKind: "idea", RefN: f.idea.ID,
 			Href: repoHref(f.idea.Project) + "/ideas/" + strconv.FormatInt(f.idea.ID, 10), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
 	}
+	g.Full = a.issueListHref(pa, sl, line, "idea")
 	return g
 }
 
@@ -457,9 +594,10 @@ func (a *app) searchKnowledge(l lang, st *store.Store, pa *store.ProjectAccess, 
 	readable := func(k store.Knowledge) bool {
 		return pa.CanSeeKnowledge(k) && (k.Status == "active" || k.Status == "stale")
 	}
+	limit := a.overfetch(sl.fetch)
 	entries, err := st.SearchKnowledgeWith(sl.text, store.KnowledgeSearch{
 		Axes: scope.Axes{Project: project}, Operator: true, Anchor: sl.anchor, Origin: sl.origin,
-		Limit: a.overfetch(sl.fetch), Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
+		Limit: limit, Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
 		// Die Vorschläge des Gärtners gehören in die Prüfung; in der Suche
 		// erscheinen sie nur, wenn die Zeile nach ihnen fragt.
 		NoGardener: !(sl.qualified && sl.q.WantsUnsettled()),
@@ -467,6 +605,9 @@ func (a *app) searchKnowledge(l lang, st *store.Store, pa *store.ProjectAccess, 
 	if err != nil {
 		return g
 	}
+	// The search applies the rule itself and stops at the limit: an answer of that
+	// size may have more behind it, and the qualifiers below drop hits from it.
+	g.Capped = len(entries) >= limit
 	entries = keep(entries, 0, readable)
 	ids := make([]int64, len(entries))
 	for i, k := range entries {
@@ -478,11 +619,7 @@ func (a *app) searchKnowledge(l lang, st *store.Store, pa *store.ProjectAccess, 
 			return sl.q.Match(factsOf(pa, query.KindKnowledge, k.ID, k.Status, k.Type, k.Scope.Project, k.Person, "", k.CreatedAt, k.UpdatedAt, facts[k.ID]).WithKnowledge(k.Confidence, k.Harness))
 		})
 	}
-	for i, k := range entries {
-		if i == searchPerGroup {
-			g.All = "/ui/knowledge?q=" + url.QueryEscape(line)
-			break
-		}
+	for _, k := range entries {
 		row := a.knowledgeRowFor(l, pa, k, true)
 		o := originOf(l, now, k.CreatedAt, facts[k.ID])
 		g.Hits = append(g.Hits, searchHit{Title: row.Title, Sub: row.TypeLabel, Project: row.Project, RefKind: "knowledge", RefN: k.ID, Href: row.Href, Date: o.Date, Stamp: o.Stamp, Area: o.Area})
@@ -497,7 +634,9 @@ func (a *app) searchSessions(ctx context.Context, l lang, st *store.Store, pa *s
 		return g
 	}
 	filter := store.SessionFilter{Project: sl.project}
-	limit := searchPerGroup + 1
+	// One more than shown tells that there is more, but a page of the transcript
+	// search holds at most sessionPageMax: a larger limit would silently become 50.
+	limit := min(max(searchSessionCount, sl.shown)+1, sessionPageMax)
 	if sl.qualified {
 		limit = min(sl.fetch, 60)
 	}
@@ -505,7 +644,7 @@ func (a *app) searchSessions(ctx context.Context, l lang, st *store.Store, pa *s
 	if err != nil {
 		return g
 	}
-	n := 0
+	g.Capped = page.Next != "" || len(page.Groups) >= limit
 	for _, grp := range page.Groups {
 		s := grp.Session
 		if sl.qualified {
@@ -517,11 +656,6 @@ func (a *app) searchSessions(ctx context.Context, l lang, st *store.Store, pa *s
 				continue
 			}
 		}
-		if n == searchPerGroup {
-			g.All = "/ui/sessions?q=" + url.QueryEscape(sl.text)
-			break
-		}
-		n++
 		title := s.Title
 		if title == "" {
 			title = l.msg("sessions.untitled")
@@ -548,6 +682,8 @@ func (a *app) searchTasks(l lang, st *store.Store, pa *store.ProjectAccess, sl s
 		if err != nil {
 			continue
 		}
+		// The words are matched on what the list returns, and it stops at its limit.
+		g.Capped = g.Capped || len(tasks) >= tasksShown
 		var matched []humantask.Task
 		for _, t := range tasks {
 			hay := strings.ToLower(t.Title + " " + t.Description + " " + t.Location)
@@ -571,10 +707,6 @@ func (a *app) searchTasks(l lang, st *store.Store, pa *store.ProjectAccess, sl s
 			facts[t.ID] = of
 			if sl.qualified && !sl.q.Match(factsOf(pa, query.KindTask, t.ID, t.State, t.Kind, p, t.CreatedBy, t.Assignee, t.CreatedAt, t.UpdatedAt, of)) {
 				continue
-			}
-			if len(g.Hits) == searchPerGroup {
-				g.All = "/ui/inbox?f=aufgaben&done=1"
-				return g
 			}
 			sub := ""
 			if t.State != humantask.Open {
@@ -601,6 +733,8 @@ func (a *app) searchPains(l lang, st *store.Store, pa *store.ProjectAccess, sl s
 	if err != nil {
 		return g
 	}
+	// The search applies the rights itself and stops at its limit.
+	g.Capped = len(list) >= sl.fetch
 	ids := make([]int64, len(list))
 	for i, p := range list {
 		ids[i] = p.ID
@@ -609,10 +743,6 @@ func (a *app) searchPains(l lang, st *store.Store, pa *store.ProjectAccess, sl s
 	for _, row := range list {
 		if sl.qualified && !sl.q.Match(factsOf(pa, query.KindPain, row.ID, row.State, "", row.Project, row.Person, "", row.CreatedAt, row.UpdatedAt, facts[row.ID])) {
 			continue
-		}
-		if len(g.Hits) == searchPerGroup {
-			g.All = "/ui/pains"
-			break
 		}
 		o := originOf(l, now, row.CreatedAt, facts[row.ID])
 		g.Hits = append(g.Hits, searchHit{Title: row.Title, Sub: label(l, painStateKeys, row.State), Project: lastSegment(row.Project), RefKind: "pain", RefN: row.ID, Href: painURL(row.ID), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
@@ -708,3 +838,24 @@ func markWords(text string, words []string) template.HTML {
 	}
 	return template.HTML(b.String())
 }
+
+// requestWindow reads the first want requests of a search in one query (a long
+// page: every further page of a search costs the whole query again, and a count
+// of 200 would be eight of them) and says to the log mode what the rights would
+// have hidden. more says that the search has more hits than the want that came
+// back: the page ended with a cursor, or the ranked search ended cut at its
+// depth (Truncated). It reads through ctx, so the time budget of a live search
+// ends the query too.
+func requestWindow(ctx context.Context, st *store.Store, pa *store.ProjectAccess, filter requestdomain.SearchFilter, want int) (hits []requestdomain.SearchHit, more bool, err error) {
+	filter.Limit, filter.Cursor, filter.LongPage = min(want, store.RequestLongPageMax), "", true
+	page, err := st.SearchRequestsWithContext(ctx, pa.RequestFilter(filter), store.SearchAuto)
+	if err != nil {
+		return nil, false, err
+	}
+	pa.NoteRequestHits(page.Results)
+	return page.Results, page.NextCursor != "" || page.Truncated, nil
+}
+
+// sessionPageMax is the largest page the search of transcripts gives; it turns a
+// larger Limit into 50 (store.SearchTranscripts).
+const sessionPageMax = 100

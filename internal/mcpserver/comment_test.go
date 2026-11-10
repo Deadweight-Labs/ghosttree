@@ -39,7 +39,7 @@ func TestCommentToolsOverTheWire(t *testing.T) {
 func TestCommentToolsSayThatEarlierVersionsStayVisible(t *testing.T) {
 	c, _ := newTestClient(t)
 	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Machine: "testbox"}})
-	tools, err := session.ListTools(context.Background(), nil)
+	tools, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -705,6 +705,16 @@ func (c *Client) PutGhost(g store.GhostFile) (int64, error) {
 	return out.ID, err
 }
 
+// PutGhostAnchored writes a description at the git state given, not at the one
+// of the working directory: the gardener anchors what it writes on the merge
+// commit it describes.
+func (c *Client) PutGhostAnchored(g store.GhostFile, a gitanchor.Anchor) (int64, error) {
+	prev := c.anchor
+	c.anchor = func() gitanchor.Anchor { return a }
+	defer func() { c.anchor = prev }()
+	return c.PutGhost(g)
+}
+
 // GhostsForPath liefert die Beschreibung dieses Pfades und die seiner
 // Vorfahren, jede einmal je Session.
 //

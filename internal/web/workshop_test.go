@@ -143,7 +143,7 @@ func TestMemberVotesAndTheOwnerDecidesAndBothShowInTheTimeline(t *testing.T) {
 			t.Errorf("after deciding the page lacks %q", want)
 		}
 	}
-	if strings.Contains(after, `type="radio"`) {
+	if strings.Contains(after, `type="radio" name="variant"`) {
 		t.Error("a closed question still offers a choice")
 	}
 	// Reopening needs a reason; then the question is open and shows the choice again.

@@ -27,6 +27,7 @@ func OpenRuntime(path string, cfg WriterConfig) (*Store, error) {
 		return nil, err
 	}
 	s.writer.chunkWrite = func(batches []ChunkBatch) error { return s.direct().appendChunkBatches(batches) }
+	s.writer.chunkPack = func(chunks []Chunk) { packChunks(chunks, s.rawEncoder()) }
 	s.writer.bestEffortWrite = func(kind int, batch bestEffortBatch) error { return s.direct().writeBestEffort(kind, batch) }
 	s.bookkeeper = s.writer
 	s.reader.bookkeeper = s.writer

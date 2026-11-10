@@ -12,6 +12,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Before you upgrade
 
+- Run `ctx install` again on every machine after upgrading: it adds the
+  SubagentStart hook and rewrites the rule section in `CLAUDE.md` and
+  `AGENTS.md`, which now names the twelve core tools.
+
 - Existing instances move to owners with `ctx db migrate-owners --db <path>`
   (first `--dry-run`, then `--apply --backup <file>` with the server stopped;
   `--apply` refuses while another process has the database open, and the
@@ -59,6 +63,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   (`--state-file` is required; each namespace's monthly budget is checked
   before every repository); it asks the server what is due
   and reports each run. `ctx garden check-knowledge` keeps working as before.
+- File descriptions are now mainly the gardener's: with `--propose` it writes
+  them itself (harness `gardener`) instead of filing a description note. The
+  files the merges into the default branch brought since its last run come
+  first, anchored on their merge commit, and the directory of a new file
+  follows; a description that no longer fits its file is revised. Paragraphs
+  an agent or a person wrote stay word for word, and the server refuses a text
+  of the gardener that drops one (`kept_paragraphs`). The description sessions
+  run on `--ghost-model` (default `claude-haiku-5-5`) and count against the
+  gardener's budget; `--dry-run` says how many files and directories it would
+  describe and at what estimated cost. Agents are asked to describe a path only
+  when they know something the code does not show; run `ctx install` again to
+  get the new wording of the rule section.
 - Projects now have owners as on GitHub. A write makes a remote a project
   only where nothing is in doubt: the claimed prefix of a connected
   organization the writer is a member of, or the writer's own GitHub login
@@ -124,6 +140,24 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   sessions (`chunk_index_chunk`). On a large database this takes about as long
   as reading `chunk_index` once (around a minute for three million chunks on
   slow disks) and adds roughly 40 MB.
+- Transcript lines are packed (deflate with a dictionary) from the first start
+  on: new lines are stored packed, existing ones stay as they are until `ctx
+  db slim-sessions` runs. An older ghosttree cannot read packed lines, so going
+  back to it needs the backup taken before the upgrade. The first start adds
+  the table `session_raw_dicts` and the column `session_chunks.slim_version`
+  (both additive, instant); about 90 seconds after the start the server learns
+  a dictionary from a sample once, if it has none and at least 5000 lines.
+- To shrink an existing database: stop the server and take a compressed
+  backup of the database file (with its `-wal` and `-shm`, if present), start
+  the new server, run `ctx db
+  slim-sessions --db <path> --dry-run` and then without `--dry-run` beside the
+  running server (on local transcripts about a minute per 100,000 lines, of
+  which 18 seconds hold the write lock, in steps of 200 lines), then stop the
+  server and run `ctx db vacuum --db <path>`. The run itself needs no extra
+  disk space (it rewrites in place and frees pages); VACUUM needs about the size
+  of the remaining data once more in the database directory and in the WAL. On
+  local transcripts the file went from 3.2 GiB to 1.0 GiB, `raw` from 2.1 GiB
+  to 217 MiB.
 
 ### Added
 
@@ -503,12 +537,61 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - `GHOSTTREE_PUBLIC_URL` and `GHOSTTREE_TRUSTED_PROXIES` for TLS and reverse
   proxies, with `Secure` cookies.
 - `DELETE /api/tokens/self` revokes the token that made the request.
+- One search index over sessions: the words of every transcript line are
+  indexed once, in `chunk_fts`, which keeps no copy of the text; snippets are
+  made from the stored line for the hits of a page. The first start adds
+  `chunk_fts` and the columns `chunk_index.fts` and `chunk_index.prompt`
+  (additive, instant, no scan). Existing rows keep their copies until `ctx db
+  slim-search --db <path>` runs (first `--dry-run`, then beside the running
+  server, then `ctx db vacuum` with the server stopped): it moves their words
+  from `sess_fts` to `chunk_fts`, empties the four text fields of
+  `chunk_index`, empties `sess_fts`, drops the trigger `chunks_ai` and empties
+  `chunks_fts`. Nothing is derived again from the transcripts, so no
+  distillation and no embedding starts again. On local transcripts
+  `chunk_index` went from 273 MiB to 23 MiB and the file from 878 MiB to
+  563 MiB; the web search answers byte for byte as before. An older ghosttree
+  started after `slim-search` does not find the moved sessions, so going back
+  needs the backup.
+- The agents' session search (`context_search` with sessions,
+  `ctx search`) and the sessions of a request search the same fields as the
+  web search: messages, thinking, commands and tool output. Instructions a
+  harness injects (Codex developer messages, plugin and skill lists,
+  environment context) are no longer hits.
 - `ctx db chunk-stats --db PATH [--sample N]` shows, from a sample, how many
-  bytes stored transcript lines take per line type and what the slim rule
-  would leave of them; read-only and throttled, so it may run beside the
-  server.
+  bytes stored transcript lines take per line type: as text, as stored (packed
+  or not), after the slim rule and after slimming and packing; read-only and
+  throttled, so it may run beside the server. Administrators see the same per
+  line type on the settings page (Transcripts).
+- `ctx db slim-sessions --db PATH [--dry-run] [--batch N] [--pause D]` brings
+  stored transcripts to the form of new lines: slimmed, packed, lines the rule
+  drops deleted together with their rows in `chunk_index`, `sess_fts`,
+  `chunks_fts` and their session vectors (a line a knowledge or request quote
+  cites stays), and `text` cut like long outputs except in sessions with an
+  open distillation batch. It reports lines and bytes before and after, skips
+  what is already current, may be interrupted and started again, and pauses
+  at least as long as each transaction held the write lock. At the end it
+  merges both full-text indexes with `optimize` (`--skip-optimize` leaves that
+  to `ctx db vacuum --fts-optimize`).
 
 ### Changed
+
+- The MCP server lists twelve core tools instead of 76: `context_search`,
+  `context_get`, `context_remember`, `request`, `pain`, `idea`, `coord`,
+  `human_task`, `package`, `feature`, `runbook` and `comment`. Each takes an
+  `action` (for example `request` with `action=criterion_met`); the old names
+  still answer when called directly but are no longer listed. The list shrank
+  from 100,709 to about 41,600 bytes, and every core tool asks Claude Code to
+  load it up front (`_meta` `anthropic/alwaysLoad`), so agents see the
+  descriptions without tool search.
+- A subagent in Claude Code starts with a short ghosttree briefing: the working
+  rules, the branch's work package with its open criteria, the pitfalls its
+  task names and where the `.ghosttree/` mirror is (SubagentStart hook).
+- A session that changed files but recorded nothing in ghosttree gets one
+  reminder at the end of a turn with what is worth keeping. Read-only sessions
+  get none.
+- Calls of ghosttree's tools are counted per session, tool, action, harness and
+  subagent, and the statistics page (Agents, Models) shows them with the
+  sessions that called none.
 
 - Guests see their project only: no page of the organization (repositories,
   people, services, agents, machines, rooms, gardener, settings), the
@@ -593,6 +676,21 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   (the marker's hash is over the redacted text); and an input that was queued
   while the agent worked but never sent (`queue-operation` content) is no
   longer in the archive. Secrets are redacted before anything is cut.
+- `session_chunks.raw` is stored packed: deflate (Go standard library) with a
+  32 KB dictionary learned from the database's own lines, versioned in
+  `session_raw_dicts` and never deleted while lines use it, with a CRC-32C of
+  the line in every frame so that a wrong dictionary or a damaged frame is an
+  error, never other text. Short lines that would not shrink stay plain text.
+  Every reader unpacks through one function; the hash that ties a session
+  vector to its line is taken over the unpacked line, so repacking does not
+  make the vectors stale. Checks that ran in SQL over `raw` (`instr`,
+  `length`) now run in Go over the unpacked line.
+- `session_chunks.text` is cut like long tool outputs (first 6 KB, marker, last
+  2 KB) when it is stored. The session index already kept 8 KB per field; the
+  full-text search over `text` and the distiller now see the same. This does
+  not start a new distillation: sessions are chosen by prompt version, not by
+  the digest of their text. On local transcripts a third of `text` was above
+  8 KB, almost all of it tool output.
 - The session view shows the commands Codex's `exec` tool ran, with their
   output, and the output of `exec` itself, which it skipped before.
 - The gardener runs as a real, hardened Claude Code agent by default (no Bash,
@@ -611,6 +709,9 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- `ctx db slim-sessions` no longer ends when the server holds the write lock
+  longer than its busy timeout: the step waits (5 s up to 2 min) and is tried
+  again, and its counts are taken only once.
 - `context_search` without `kind` and `ctx search` no longer lose every hit
   when one area fails. The areas run at the same time, each with a time
   budget of its own (on the server, sessions get 8 seconds when other areas

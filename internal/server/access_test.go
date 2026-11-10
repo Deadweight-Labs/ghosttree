@@ -121,7 +121,7 @@ func accessAPIOpen(t *testing.T, enforce, singleConn bool) *accessAPIFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "secretterm " + name, Raw: "{}"}}); err != nil {
+		if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "secretterm " + name, Raw: promptRaw("claude-code", "secretterm "+name)}}); err != nil {
 			t.Fatal(err)
 		}
 		f.id["s-"+name] = id
@@ -707,7 +707,7 @@ func TestProdScenarioSingleOwnerKeepsEverythingEnforced(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_ = st.AppendChunks(sid, []store.Chunk{{Seq: 0, Role: "user", Text: "legacy", Raw: "{}"}})
+		_ = st.AppendChunks(sid, []store.Chunk{{Seq: 0, Role: "user", Text: "legacy", Raw: promptRaw("claude-code", "legacy")}})
 		ids["s"+p] = sid
 	}
 	if ids["kmachine"], err = st.InsertKnowledge(store.Knowledge{Type: "note", Title: "m", Body: "b", Scope: scope.Axes{Machine: "old-box"}, Person: "robin", Confidence: "trusted"}); err != nil {
