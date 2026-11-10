@@ -45,6 +45,56 @@ func TestProofChipsWriteThePillAndTheNoteApart(t *testing.T) {
 	}
 }
 
+// A proof that is words, not a short identifier, is no pill: it would run out of
+// the box as one line of code. It stands as the icon of its kind and grey text
+// that wraps; short identifiers stay pills.
+func TestProofChipsLongTextIsNoChipAndShortIdentifiersStayPills(t *testing.T) {
+	long := "Robin im Chat 2026-11-08 zu Mock git-native-v2: bisher mag ich ihn sehr; Entscheidungen #4310, #4315 <i>x</i>"
+	for _, e := range []evidenceLine{
+		{Kind: "decision", Label: "Entscheidung", Ref: long},
+		{Kind: "test", Label: "Test", Ref: "Prüf-Agent, Squash 237129c, gezielt grün am 2026-11-09"},
+		{Kind: "test", Label: "Test", Ref: strings.Repeat("TestVeryLong", 10)},
+		{Kind: "file", Label: "Datei", Ref: "internal/" + strings.Repeat("a/", 50) + "x.html"},
+	} {
+		got := string(proofChips(langDE, []evidenceLine{e}))
+		if strings.Contains(got, `class="chip`) || strings.Contains(got, "k-file") {
+			t.Errorf("%s %.30q became a pill:\n%s", e.Kind, e.Ref, got)
+		}
+		for _, want := range []string{`pfree`, `<span class="pnote">`} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s %.30q lacks %q:\n%s", e.Kind, e.Ref, want, got)
+			}
+		}
+		if strings.Contains(got, "<i>x</i>") {
+			t.Errorf("a proof became markup: %s", got)
+		}
+	}
+	for _, tc := range []struct {
+		e    evidenceLine
+		want string
+	}{
+		{evidenceLine{Kind: "test", Label: "Test", Ref: "TestAnchorBranch"}, `class="chip test"`},
+		{evidenceLine{Kind: "decision", Label: "Entscheidung", Ref: "kept-offline"}, `class="chip ar"`},
+		{evidenceLine{Kind: "commit", Label: "Commit", Ref: "237129c6db4e0e5f452c32c4bf83bf65dc6ca525"}, `k-commit`},
+		{evidenceLine{Kind: "file", Label: "Datei", Ref: "docs/a.md"}, `k-file`},
+	} {
+		got := string(proofChips(langDE, []evidenceLine{tc.e}))
+		if !strings.Contains(got, tc.want) || strings.Contains(got, "pfree") {
+			t.Errorf("%s %q is not a plain pill (%s):\n%s", tc.e.Kind, tc.e.Ref, tc.want, got)
+		}
+	}
+	// A commit written with words is the hash as pill and the words as the note.
+	got := string(proofChips(langDE, []evidenceLine{{Kind: "commit", Label: "Commit", Ref: "237129c gh pr view 186: MERGED nach dev"}}))
+	for _, want := range []string{`k-commit`, `>237129c<`, `<span class="pnote">gh pr view 186: MERGED nach dev</span>`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("commit with words lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "pfree") {
+		t.Errorf("commit with words became a sentence: %s", got)
+	}
+}
+
 // The first object of an issue is one bubble: the head with its maker, the
 // text, the requirements and the explanation in it; the line starts there.
 func TestIssueFirstObjectIsOneBubbleWithTheRequirementsInIt(t *testing.T) {

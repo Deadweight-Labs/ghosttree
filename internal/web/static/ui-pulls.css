@@ -15,7 +15,7 @@
   &.pr .dmeta .person .gav, &.cd .dmeta .person .gav { width: 20px; height: 20px; font-size: 9px; }
   & .subnav { margin: 16px 0 0; }
   & .subnav .utabs li > a .counter { margin-left: 2px; }
-  & .subnav .utabs-nav { margin-bottom: -1px; padding-bottom: 1px; }
+  & .subnav .utabs-nav { margin: 0 -4px -1px; padding: 0 4px 1px; }
   &.pr .dgrid, &.cd .dgrid { margin-top: 0; }
   &.pr .dhead { margin-bottom: 16px; }
   &.pr .subnav .utabs li.sel::after { bottom: -1px; }
