@@ -120,11 +120,11 @@ func TestOnlyProjectOwnersChangeVisibility(t *testing.T) {
 func TestOrgInvitationNeedsNoProjectAndSeesSharedProjects(t *testing.T) {
 	st := orgStore(t, "robin", "philipp")
 	o := mustOrg(t, st, "person:1", "Deadweight", "dw")
-	if _, err := st.EnsureProject("person:1", sharedProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", sharedProject); err != nil {
 		t.Fatal(err)
 	}
 	mustShare(t, st, "person:1", sharedProject, true)
-	if _, err := st.EnsureProject("person:1", otherProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", otherProject); err != nil {
 		t.Fatal(err)
 	}
 	code, inv, err := st.CreateInvitation("person:1", o.ID, "", OrgMember, 0)
@@ -151,7 +151,7 @@ func TestOrgInvitationNeedsNoProjectAndSeesSharedProjects(t *testing.T) {
 func TestGuestsStayOnTheirProjects(t *testing.T) {
 	st := roleFixture(t)
 	st.SetAccessMode(AccessMode{Enforce: true})
-	if _, err := st.EnsureProject("person:1", otherProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", otherProject); err != nil {
 		t.Fatal(err)
 	}
 	mustShare(t, st, "person:1", sharedProject, true)

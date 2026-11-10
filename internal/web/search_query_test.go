@@ -253,3 +253,20 @@ func TestPullAndCommitPagesOfferWhatWasDoneHere(t *testing.T) {
 		t.Errorf("the commit view does not show what was said at the commit")
 	}
 }
+
+// The gardener's suggestions belong to the review queue. The search shows a
+// person staged entries, but the gardener's notes only when the line asks.
+func TestSearchShowsGardenerNotesOnlyWhenAskedFor(t *testing.T) {
+	e := qualEnv(t)
+	knInsert(t, e.St, store.Knowledge{Title: "Needle staged guess", Body: "body", Confidence: "staged"})
+	knInsert(t, e.St, store.Knowledge{Title: "Gardener says Needle is stale", Body: "body", Confidence: "staged",
+		Harness: store.GardenerHarness, SessionRef: store.GardenerRefPrefix + "check-knowledge:1", Origin: "distilled"})
+	if page := searchPageOf(t, e.Owner, e, "Needle"); strings.Contains(page, "is stale") || !strings.Contains(page, "staged guess") {
+		t.Errorf("plain search: a gardener note shown or a staged entry hidden")
+	}
+	for _, q := range []string{"Needle author:gardener", "Needle is:staged"} {
+		if page := searchPageOf(t, e.Owner, e, q); !strings.Contains(page, "is stale") {
+			t.Errorf("%q: the gardener note is missing", q)
+		}
+	}
+}

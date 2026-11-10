@@ -35,8 +35,10 @@ func TestRepoSettingsTabAndLabels(t *testing.T) {
 	if resp := form(e.Lead, "/ui/labels/create", url.Values{"name": {"ui"}, "color": {"0969da"}}); resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "done=created") {
 		t.Fatalf("create = %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if resp := form(e.Lead, "/ui/labels/create", url.Values{"name": {"UI"}, "color": {"#0969da"}}); !strings.Contains(resp.Header.Get("Location"), "fail=label_exists") {
+	if resp := form(asBrowser(e.Lead), "/ui/labels/create", url.Values{"name": {"UI"}, "color": {"#0969da"}}); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/x/shell/settings#labels" {
 		t.Errorf("a second label of the same name: %s", resp.Header.Get("Location"))
+	} else if _, failed := followRefusal(t, e.Lead, e.Base, resp); !strings.Contains(failed, `"fields":`) || !strings.Contains(failed, `"UI"`) || !strings.Contains(failed, `"field":"name"`) {
+		t.Errorf("the refused label form does not come back with its input and the field: %.300s", failed)
 	}
 	if resp := form(e.Member, "/ui/labels/create", url.Values{"name": {"member-label"}, "color": {"0969da"}}); resp.StatusCode != http.StatusSeeOther {
 		t.Errorf("a member may create labels (rule: from member): %d", resp.StatusCode)
@@ -55,7 +57,7 @@ func TestRepoSettingsTabAndLabels(t *testing.T) {
 	if resp := form(e.Lead, "/ui/labels/"+strconv.FormatInt(id, 10)+"/update", url.Values{"name": {"design"}, "color": {"#fbca04"}, "description": {"Aussehen"}}); !strings.Contains(resp.Header.Get("Location"), "done=updated") {
 		t.Errorf("update: %s", resp.Header.Get("Location"))
 	}
-	if resp := form(e.Member, "/ui/labels/"+strconv.FormatInt(id, 10)+"/delete", url.Values{}); resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "fail=forbidden") {
+	if resp := form(asBrowser(e.Member), "/ui/labels/"+strconv.FormatInt(id, 10)+"/delete", url.Values{}); resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "done=") {
 		t.Errorf("a member deleting a label: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if resp := form(e.Lead, "/ui/labels/"+strconv.FormatInt(id, 10)+"/delete", url.Values{}); !strings.Contains(resp.Header.Get("Location"), "done=deleted") {

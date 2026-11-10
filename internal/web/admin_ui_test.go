@@ -191,7 +191,7 @@ func TestOrgPageGivesAMemberOnlyTheirOwnControls(t *testing.T) {
 			t.Errorf("member sees %q", hidden)
 		}
 	}
-	if !strings.Contains(page, "Leave") || !strings.Contains(page, "For new projects") {
+	if !strings.Contains(page, "Leave") || strings.Contains(page, "For new projects") {
 		t.Errorf("member lacks own controls: %s", page)
 	}
 }
@@ -251,9 +251,11 @@ func TestTokensPageIsRowsNotATableAndKeepsRevoke(t *testing.T) {
 	if _, _, err := st.CreateToken("anna", store.TokenSpec{Label: "annas"}); err != nil {
 		t.Fatal(err)
 	}
+	// An administrator sees only the own tokens, never those of other
+	// machines (14 A, #4376).
 	resp, _ := alice.Get(base + "/ui/account/tokens")
 	page := body(t, resp)
-	if strings.Contains(page, "<table") || !strings.Contains(page, "annas") || !strings.Contains(page, "/ui/account/tokens/revoke") {
+	if strings.Contains(page, "<table") || strings.Contains(page, "annas") || !strings.Contains(page, "/ui/account/tokens/revoke") {
 		t.Fatalf("admin tokens: %s", page)
 	}
 	resp, _ = anna.Get(base + "/ui/account/tokens")

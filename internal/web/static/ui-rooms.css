@@ -88,7 +88,7 @@
   & .cm-time { font-size: 12px; color: var(--fg-muted); }
   & .rm-to, & .cm-host, & .cm-note { font-size: 12px; color: var(--fg-muted); }
   & .cm-row { display: flex; align-items: flex-start; gap: 8px; }
-  & .cm-bubble { margin: 0; flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  & .cm-bubble { margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
   & .cm-tools { display: flex; align-items: center; gap: 4px; opacity: 0; transition: opacity .1s; }
   & .rm-msg:hover .cm-tools, & .rm-msg:focus-within .cm-tools { opacity: 1; }
   & .mention { padding: 0 4px; color: var(--accent-fg); background: var(--accent-subtle); border-radius: 6px; }
@@ -112,7 +112,7 @@
   & .rqk-approval { color: var(--done-fg); background: var(--done-subtle); border-color: var(--done-muted); }
   & .rqk-handoff { color: var(--attention-fg); background: var(--attention-subtle); border-color: var(--attention-muted); }
   & .rq4 .lb .i { margin-right: 4px; }
-  & .rq4 .ask-t { margin: 0; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  & .rq4 .ask-t { margin: 0; padding: 12px; overflow-wrap: anywhere; }
   & .rq4 .rm-fold { margin: 0 12px 8px; }
   & .rq4-n { margin: 0 12px 8px; font-size: 12px; color: var(--fg-muted); }
   & .rq4-f { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 8px 12px; background: var(--canvas-subtle); border-top: 1px solid var(--border-muted); }

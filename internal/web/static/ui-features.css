@@ -13,13 +13,12 @@
   & .fuse + .fuse { border-top: 1px solid var(--border-muted); }
   & .fuse .uk { padding-top: 2px; font-size: 12px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .04em; }
   & .fuse .prose { min-width: 0; font-size: 14px; }
-  & .farea { display: flex; align-items: center; gap: 8px; color: var(--fg-default); font-size: 14px; }
+  & .farea { display: flex; align-items: center; gap: 8px; padding: 8px 16px; color: var(--fg-default); font-size: 14px; }
   & .farea + .farea { border-top: 1px solid var(--border-muted); }
   & .farea .i { color: var(--fg-muted); flex: none; }
   & .farea .mono { min-width: 0; overflow-wrap: anywhere; }
   & .farea:hover { background: var(--row-hover); text-decoration: none; }
   & .farea:hover .mono { color: var(--accent-fg); }
-  & .tlx { margin-top: 24px; }
 }
 
 @media (max-width: 767px) {

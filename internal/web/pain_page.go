@@ -101,9 +101,9 @@ func (a *app) painItems(l lang, pa *store.ProjectAccess, p pain.Pain, events []p
 			it.Head = sentence("pains.ev.state", pill)
 			var body strings.Builder
 			if e.Remaining != "" {
-				body.WriteString(`<b class="xtl">` + html.EscapeString(l.msg("pains.stays_open")) + `</b> ` + html.EscapeString(e.Remaining))
+				body.WriteString(`<b class="xtl">` + html.EscapeString(l.msg("pains.stays_open")) + `</b>` + string(mdText(e.Remaining)))
 			} else if e.Note != "" {
-				body.WriteString(html.EscapeString(e.Note))
+				body.WriteString(string(mdText(e.Note)))
 			}
 			if e.EvidenceKind != "" {
 				ev := a.evidenceLineFor(l, pa, p.Project, requestdomain.Evidence{Kind: e.EvidenceKind, Ref: e.EvidenceRef})
@@ -115,11 +115,11 @@ func (a *app) painItems(l lang, pa *store.ProjectAccess, p pain.Pain, events []p
 			}
 			it.Body = template.HTML(body.String())
 		case "corrected":
-			it.Icon, it.Head, it.Body = "pencil", sentence("pains.ev.corrected"), template.HTML(html.EscapeString(e.Note))
+			it.Icon, it.Head, it.Body = "pencil", sentence("pains.ev.corrected"), mdText(e.Note)
 		case "link_added":
-			it.Icon, it.Head = "link", sentence("pains.ev.link_added", html.EscapeString(ellipsize(linkDataText(e.Data), 120)))
+			it.Icon, it.Head = "link", sentence("pains.ev.link_added", painLinkTarget(l, e.Data))
 		case "link_removed":
-			it.Icon, it.Head = "x", sentence("pains.ev.link_removed", html.EscapeString(ellipsize(linkDataText(e.Data), 120)))
+			it.Icon, it.Head = "x", sentence("pains.ev.link_removed", painLinkTarget(l, e.Data))
 		default:
 			it.Head = template.HTML(html.EscapeString(label(l, painEventKeys, e.Kind)))
 		}

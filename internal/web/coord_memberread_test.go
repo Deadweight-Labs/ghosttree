@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -430,5 +431,25 @@ func TestOwnerWithoutAgentMentionsAnAgentInTheRoom(t *testing.T) {
 	}
 	if st := postRoom(t, e, e.Guest, "/ui/coord/send", room, url.Values{"body": {"guest ping"}, "mentions": {"claude:laptop:aaaa"}}); st != http.StatusForbidden {
 		t.Errorf("guest mention: %d", st)
+	}
+}
+
+// A message over 64 KB is not stored: the form answers 413 with a sentence that
+// says the limit, in the language of the page.
+func TestRoomMessageOverTheLimitIsRefusedWithAReason(t *testing.T) {
+	e := shellWebAll(t)
+	room, _ := memberReadSeed(t, e)
+	post := func(body string) (int, string) {
+		form := url.Values{"room": {room}, "body": {body}, "csrf_token": {renderedCSRFToken(t, e.Member, e.Base+"/ui/coord?room="+url.QueryEscape(room))}}
+		resp := sameOriginPostForm(t, e.Member, e.Base+"/ui/coord/send", form)
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if status, text := post(strings.Repeat("a", store.CoordMaxBody+1)); status != http.StatusRequestEntityTooLarge || !strings.Contains(text, "64 KB") {
+		t.Errorf("a message over the limit: status %d, %q", status, text)
+	}
+	if status, text := post(strings.Repeat("a", store.CoordMaxBody)); status != http.StatusSeeOther {
+		t.Errorf("a message of the limit: status %d, %q", status, text)
 	}
 }

@@ -110,7 +110,7 @@ func (a *app) requestMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pa := a.access(r)
-	reason, valid := cleanText(r.FormValue("reason"), maxFieldBytes)
+	reason, valid := cleanText(r.FormValue("reason"), maxFieldChars)
 	if !valid {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return

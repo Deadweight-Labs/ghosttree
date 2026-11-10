@@ -46,6 +46,16 @@ type bandView struct {
 	Tabs     []bandTab
 	Extras   []bandTab
 	External string
+	// Head is the owner above the tabs of an organization or a person: picture,
+	// name and where it lives on GitHub (REQ-623).
+	Head *bandHead
+}
+
+// bandHead is the owner line above the tabs.
+type bandHead struct {
+	Name, Handle string
+	Avatar       string // address of the picture, empty: initials
+	GitHub       string // the GitHub page, empty when not connected
 }
 
 // Promoted are the extras that show with their name: the open one and those with a mention.
@@ -84,7 +94,37 @@ func (t bandTab) MentionKey() string {
 // orgBand is the band of an organisation page: repositories, agents, people,
 // rooms and, for owners, settings. base is the address of the organisation
 // ("/ui/acme"); counts maps a tab key to its number.
-func orgBand(base, current string, counts map[string]int, owner bool) *bandView {
+// orgBandOpts are the tabs that depend on the viewer: the settings for owners,
+// the services for members (not guests), the gardener where it is switched on
+// and the viewer may review its proposals.
+type orgBandOpts struct {
+	Owner, Services, Gardener bool
+}
+
+// userBand is the band of a person's own namespace: their repositories and
+// machines, the gardener where it is on, and the settings for the person.
+func userBand(base, current string, counts map[string]int, opts orgBandOpts) *bandView {
+	tab := func(key, label, path, icon string) bandTab {
+		t := bandTab{Key: key, Label: label, Href: base + path, Icon: icon, Current: key == current}
+		if n, ok := counts[key]; ok {
+			t.Count = strconv.Itoa(n)
+		}
+		return t
+	}
+	v := &bandView{Label: "ui.org.tabs", Tabs: []bandTab{
+		tab("repos", "ui.org.tab.repos", "", "repo"),
+		tab("machines", "ui.org.tab.machines", "/machines", "server"),
+	}}
+	if opts.Gardener {
+		v.Tabs = append(v.Tabs, tab("gardener", "ui.org.tab.gardener", "/gardener", "sprout"))
+	}
+	if opts.Owner {
+		v.Tabs = append(v.Tabs, tab("settings", "ui.org.tab.settings", "/settings", "gear"))
+	}
+	return v
+}
+
+func orgBand(base, current string, counts map[string]int, opts orgBandOpts) *bandView {
 	tab := func(key, label, path, icon string) bandTab {
 		t := bandTab{Key: key, Label: label, Href: base + path, Icon: icon, Current: key == current}
 		if n, ok := counts[key]; ok {
@@ -96,10 +136,15 @@ func orgBand(base, current string, counts map[string]int, owner bool) *bandView 
 		tab("repos", "ui.org.tab.repos", "", "repo"),
 		tab("agents", "ui.org.tab.agents", "/agents", "bot"),
 		tab("people", "ui.org.tab.people", "/people", "people"),
-		tab("rooms", "ui.org.tab.rooms", "/rooms", "chat"),
-		tab("machines", "ui.org.tab.machines", "/machines", "server"),
 	}}
-	if owner {
+	if opts.Services {
+		v.Tabs = append(v.Tabs, tab("services", "ui.org.tab.services", "/services", "bot"))
+	}
+	v.Tabs = append(v.Tabs, tab("rooms", "ui.org.tab.rooms", "/rooms", "chat"), tab("machines", "ui.org.tab.machines", "/machines", "server"))
+	if opts.Gardener {
+		v.Tabs = append(v.Tabs, tab("gardener", "ui.org.tab.gardener", "/gardener", "sprout"))
+	}
+	if opts.Owner {
 		v.Tabs = append(v.Tabs, tab("settings", "ui.org.tab.settings", "/settings", "gear"))
 	}
 	return v
@@ -181,12 +226,50 @@ type tlItem struct {
 	Head                      template.HTML
 	Age                       string
 	Body                      template.HTML
+	// Right stands at the right end of the head, in line with the anchor: the
+	// commits an entry is about, not part of the sentence.
+	Right template.HTML
 	// Git is the anchor of the entry as links (commit, pull request, branch).
 	Git *anchorView
 	// Comment makes the entry a comment box instead of a line of the history;
 	// at is the moment the entry sorts by when comments are mixed in.
 	Comment *commentView
 	at      time.Time
+}
+
+// withActor makes the entry the work of the agent or person the stamp names:
+// the name the page writes, the avatar kind and the owner in its corner.
+func (it *tlItem) withActor(v actorView) {
+	if v.Label == "" {
+		return
+	}
+	it.Who, it.Kind, it.Owner = v.Label, v.Kind, v.Owner()
+}
+
+// firstHead is the head of the first object of a page: the one bubble that
+// opens the timeline of an issue, a pain, an idea, a task or a feature. Actor
+// says who made it (an agent with the mark of its owner, a person by name);
+// Who is the fallback name when no stamp is known.
+type firstHead struct {
+	Actor     actorView
+	Who       string
+	Verb      string
+	Age, Long string
+	Mark      string
+	EditHref  string
+	EditTip   string
+	// Git is the anchor the first object was written at (commit, pull request,
+	// branch); it stands at the right end of the head.
+	Git *anchorView
+}
+
+// firstOf is the head of the first object from what the page knows.
+func firstOf(l lang, av actorView, who, verb, age, mark, editHref string) firstHead {
+	h := firstHead{Actor: av, Who: who, Verb: verb, Age: age, Mark: mark, EditHref: editHref}
+	if editHref != "" {
+		h.EditTip = l.msg("issue.action.edit")
+	}
+	return h
 }
 
 // ---- Composer ----------------------------------------------------------------

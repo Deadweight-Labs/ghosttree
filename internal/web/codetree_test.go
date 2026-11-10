@@ -202,7 +202,7 @@ func TestCodeTabBranchesWithSlashesAndRedirects(t *testing.T) {
 	}
 	for _, path := range []string{"/ui/x/shell/tree/nobranch/internal", "/ui/x/shell/tree/main/nothere", "/ui/x/shell/blob/main/internal/store/missing.go",
 		"/ui/x/shell/tree/main/internal/%2e%2e"} {
-		if status, _ := fetchPage(t, e.Member, e.Base+path); status != http.StatusNotFound && status != http.StatusMovedPermanently {
+		if status, _ := fetchPage(t, e.Member, e.Base+path); status != http.StatusNotFound && status != http.StatusFound {
 			t.Errorf("%s -> %d, want 404", path, status)
 		}
 	}

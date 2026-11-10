@@ -84,6 +84,9 @@ type pillSpec struct {
 	Extra string
 	// Name is what a screen reader says instead of the text ("Issue 602").
 	Name string
+	// Long asks the script for the title: in a sentence of the history the pill
+	// is written out (ui-refs.js fills it from the card of the page or /ui/refs).
+	Long bool
 }
 
 // pillHTML writes one pill; with an empty Href it is a span, not a link. The
@@ -112,6 +115,9 @@ func pillHTML(s pillSpec) template.HTML {
 	}
 	if s.Ref != "" {
 		b.WriteString(` data-ref="` + html.EscapeString(s.Ref) + `"`)
+		if s.Long {
+			b.WriteString(` data-long`)
+		}
 	} else if !s.Card.empty() {
 		if raw, err := json.Marshal(s.Card); err == nil {
 			b.WriteString(` data-pc="` + html.EscapeString(string(raw)) + `"`)
@@ -132,12 +138,23 @@ func pillHTML(s pillSpec) template.HTML {
 // numberedPill is the pill of a numbered kind (request, pain, idea, task,
 // decision, feature): its short form "#602", with the title when it is known.
 func numberedPill(l lang, kind string, n int64, href, title string) template.HTML {
+	return numberedPillOf(l, kind, n, href, title, false)
+}
+
+// longPill is the pill of a numbered kind for a sentence: icon, number and the
+// title, which the script adds. A title too long for the line is cut with an
+// ellipsis; the card says it whole.
+func longPill(l lang, kind string, n int64, href string) template.HTML {
+	return numberedPillOf(l, kind, n, href, "", true)
+}
+
+func numberedPillOf(l lang, kind string, n int64, href, title string, long bool) template.HTML {
 	k, ok := refKinds[kind]
 	if !ok {
 		k = refKinds["request"]
 	}
 	return pillHTML(pillSpec{Class: k.Class, Icon: template.HTML(k.Icon), Text: "#" + strconv.FormatInt(n, 10),
-		Title: title, Href: href, Ref: k.Prefix + "-" + strconv.FormatInt(n, 10),
+		Title: title, Href: href, Ref: k.Prefix + "-" + strconv.FormatInt(n, 10), Long: long,
 		Name: strings.TrimSpace(l.msg(k.Key) + " " + strconv.FormatInt(n, 10) + " " + title)})
 }
 
@@ -169,6 +186,12 @@ var prStates = map[string]struct{ Extra, Key, Tone string }{
 // prPill is a pull request as one pill: its icon takes the colour of its state,
 // so a merged one is no longer green. title, who and brief fill the card.
 func prPill(l lang, n int64, href, state, title, brief string) template.HTML {
+	return prPillOf(l, n, href, state, title, brief, false)
+}
+
+// prPillOf is prPill; external marks an address outside ghosttree (a GitHub link
+// in a text), whose state nobody here has read.
+func prPillOf(l lang, n int64, href, state, title, brief string, external bool) template.HTML {
 	card := pillCard{Label: l.msg("ref.kind.pull") + " #" + strconv.FormatInt(n, 10), Title: title, Brief: brief}
 	st, ok := prStates[state]
 	if ok {
@@ -177,7 +200,7 @@ func prPill(l lang, n int64, href, state, title, brief string) template.HTML {
 		st.Extra = "s-unknown"
 	}
 	k := pillKinds["pr"]
-	return pillHTML(pillSpec{Class: k.Class, Icon: mockIconBody(k.Icon), Text: "#" + strconv.FormatInt(n, 10), Href: href, Card: card, Extra: st.Extra})
+	return pillHTML(pillSpec{Class: k.Class, Icon: mockIconBody(k.Icon), Text: "#" + strconv.FormatInt(n, 10), Href: href, Card: card, Extra: st.Extra, External: external})
 }
 
 // pullPillFor reads a pull request as the viewer and writes its pill: the colour
@@ -249,7 +272,7 @@ func githubPull(raw string) (int64, bool) {
 // request it is, any other address by host and the end of its path.
 func urlPill(l lang, raw string) template.HTML {
 	if n, ok := githubPull(raw); ok {
-		return prPill(l, n, raw, "open", "", urlLabel(raw))
+		return prPillOf(l, n, raw, "", "", urlLabel(raw), true)
 	}
 	return kindPill(l, "url", urlLabel(raw), raw, pillCard{Title: urlLabel(raw), Brief: raw})
 }

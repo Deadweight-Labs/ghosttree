@@ -16,8 +16,8 @@ import (
 // here. The answer is the same: up to 50 references (?ref=REQ-12&ref=IDEA-3,
 // ?project= for pull requests), one entry each in the order of the request, and
 // "does not exist", "may not read" and "has no card" are the same entry
-// (gefunden=false). When none of the references is readable the answer is 404
-// with always the same body. The rights are those of reading the object
+// (gefunden=false). When none of the references is readable the answer is 200
+// with an empty list, always the same body. The rights are those of reading the object
 // (ProjectAccess). Links leave as addresses without host.
 
 func (a *app) refsLookup(w http.ResponseWriter, r *http.Request) {
@@ -51,9 +51,8 @@ func (a *app) refsLookup(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if !found {
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":"not_found"}`))
-		return
+		// None readable: an empty list, the same body for "unknown" and "not allowed".
+		list = []links.Info{}
 	}
 	_ = json.NewEncoder(w).Encode(struct {
 		Refs []links.Info `json:"refs"`

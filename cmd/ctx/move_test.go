@@ -43,7 +43,7 @@ func moveCLIFixture(t *testing.T) *store.Store {
 		t.Fatal(err)
 	}
 	for _, p := range []string{cliHere, cliInfra} {
-		if _, err := st.EnsureProject("person:1", p); err != nil {
+		if _, err := claimInOrg(st, "person:1", p); err != nil {
 			t.Fatal(err)
 		}
 	}

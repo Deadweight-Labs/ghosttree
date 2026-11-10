@@ -88,8 +88,8 @@ func (c *Client) ClaimProject(remote, org string) (store.Project, error) {
 	return out, err
 }
 
-// CreateProject legt ein benanntes Projekt ohne Git an. org leer heißt: die
-// Standard-Organisation des Kontos.
+// CreateProject legt ein benanntes Projekt ohne Git an. org leer heißt: der
+// eigene Namensraum des Kontos.
 func (c *Client) CreateProject(name, org string) (store.Project, error) {
 	var out store.Project
 	err := c.do("POST", "/api/projects", nil, map[string]string{"name": name, "org": org}, &out)
@@ -158,4 +158,25 @@ func (c *Client) RemoveProjectRole(remote, account string) error {
 		return err
 	}
 	return c.do("DELETE", projectRolePath(id)+"/"+url.PathEscape(account), nil, nil, nil)
+}
+
+// GardenDue lists the namespaces whose gardener is due (gardener's account only).
+func (c *Client) GardenDue() ([]store.GardenJob, error) {
+	var out []store.GardenJob
+	err := c.do("GET", "/api/garden/due", nil, nil, &out)
+	return out, err
+}
+
+// StartGardenRun reports the start of a run in one repository.
+func (c *Client) StartGardenRun(orgID int64, project string) (int64, error) {
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	err := c.do("POST", "/api/garden/runs", nil, map[string]any{"org_id": orgID, "project": project}, &out)
+	return out.ID, err
+}
+
+// FinishGardenRun reports how a run ended.
+func (c *Client) FinishGardenRun(id int64, state string, costUSD float64, note string) error {
+	return c.do("POST", "/api/garden/runs/"+strconv.FormatInt(id, 10)+"/finish", nil, map[string]any{"state": state, "cost_usd": costUSD, "note": note}, nil)
 }

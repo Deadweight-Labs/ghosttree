@@ -577,7 +577,7 @@ func TestSessionMissingPageIsTheSameForAbsentAndHidden(t *testing.T) {
 	if codeA != 404 || codeB != 404 {
 		t.Fatalf("codes %d %d", codeA, codeB)
 	}
-	if !strings.Contains(absent, "Session not found.") || !strings.Contains(absent, "All sessions") {
+	if !strings.Contains(absent, msg("err.404.session")) || !strings.Contains(absent, msg("err.back_sessions")) {
 		t.Error("missing page text")
 	}
 	strip := func(s string) string {

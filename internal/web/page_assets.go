@@ -8,6 +8,7 @@ var pageAssets = map[string]struct{ CSS, JS []string }{
 	"reposettings": {CSS: []string{"ui-settings.css", "ui-labels.css"}, JS: []string{"ui-settings.js"}},
 	"setup":        {CSS: []string{"ui-settings.css"}},
 	"orgs":         {CSS: []string{"ui-settings.css"}, JS: []string{"ui-settings.js"}},
+	"gardentab":    {CSS: []string{"ui-knowledge.css", "ui-org.css", "ui-garden.css"}},
 	"tokens":       {CSS: []string{"ui-settings.css"}},
 	"profile":      {CSS: []string{"ui-settings.css", "ui-agents.css"}},
 	"device":       {CSS: []string{"ui-settings.css"}},

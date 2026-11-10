@@ -28,9 +28,11 @@ import (
 type ideaFact struct{ Num, Title, Brief, Href string }
 
 type ideaPageView struct {
-	ID                      int64
-	Title, Person, Age      string
-	Actor                   actorView
+	ID                 int64
+	Title, Person, Age string
+	Actor              actorView
+	// First is the head of the bubble that opens the timeline.
+	First                   firstHead
 	State, StateLabel, Tone string
 	Blocks                  []bodyBlock
 	Reason                  string
@@ -103,6 +105,7 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 		}
 		v.Issues = append(v.Issues, f)
 	}
+	v.First = firstOf(l, v.Actor, firstNonEmpty(v.Actor.Label, v.Person), l.msg("ideas.wished"), v.Age, l.msg("issue.author"), "")
 	v.Items = mergeTimeline(a.ideaItems(l, ws, age), a.commentTimeline(r, l, pa, store.CommentOnIdea, i.ID, i.Person, view.Href+"/ideas/"+strconv.FormatInt(i.ID, 10), editingComment(r), age))
 	if s, err := pa.Reactions(store.ReactOnIdea, i.ID); err == nil {
 		v.Reactions = a.reactionsFor(r, l, store.ReactOnIdea, i.ID, s)
@@ -130,21 +133,7 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 	case commentResult(r, l) != nil:
 		v.Result = commentResult(r, l)
 	case r.URL.Query().Get("fail") != "":
-		v.Result = &requestResult{Text: l.msg("ideas.result.failed"), Kind: "failed", Fail: true}
-		switch r.URL.Query().Get("fail") {
-		case "reason_required":
-			v.Result.Text = l.msg("ideas.result.reason_required")
-		case "pain_link":
-			v.Result.Text = l.msg("ideas.result.pain_link")
-		case "img_none":
-			v.Result.Text = l.msg("ideas.result.img_none")
-		case "img_type":
-			v.Result.Text = l.msg("ideas.result.img_type")
-		case "img_size":
-			v.Result.Text = l.msg("ideas.result.img_size")
-		case "img_bad":
-			v.Result.Text = l.msg("ideas.result.img_bad")
-		}
+		v.Result = &requestResult{Text: l.msg(ideaFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
 	case r.URL.Query().Get("done") == "image":
 		v.Result = &requestResult{Text: l.msg("ideas.result.image"), Kind: "done"}
 	case r.URL.Query().Get("done") == "from_pain":
@@ -179,16 +168,16 @@ func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, age func(string) string) 
 		if t.Revision <= 1 {
 			continue
 		}
-		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-raw-" + strconv.Itoa(t.Revision), Act: "idea.raw", Who: t.Person, Icon: "pencil", Head: sentence("ideas.ev.raw", t.Revision), Age: age(t.CreatedAt), Body: template.HTML(html.EscapeString(t.Message))}})
+		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-raw-" + strconv.Itoa(t.Revision), Act: "idea.raw", Who: t.Person, Icon: "pencil", Head: sentence("ideas.ev.raw", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}})
 	}
 	if s := ws.Summary; s != nil {
-		all = append(all, datedItem{s.CreatedAt, tlItem{ID: "text-summary", Act: "idea.summary", Who: s.Person, Icon: "list", Head: sentence("ideas.ev.summary"), Age: age(s.CreatedAt), Body: template.HTML(html.EscapeString(s.Message))}})
+		all = append(all, datedItem{s.CreatedAt, tlItem{ID: "text-summary", Act: "idea.summary", Who: s.Person, Icon: "list", Head: sentence("ideas.ev.summary"), Age: age(s.CreatedAt), Body: mdText(s.Message)}})
 	}
 	for _, t := range ws.ConceptRevs {
-		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Who: t.Person, Icon: "book", Head: sentence("ideas.ev.concept", t.Revision), Age: age(t.CreatedAt), Body: template.HTML(html.EscapeString(t.Message))}})
+		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Who: t.Person, Icon: "book", Head: sentence("ideas.ev.concept", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}})
 	}
 	for _, d := range ws.Decisions {
-		all = append(all, datedItem{d.CreatedAt, tlItem{ID: "decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Who: d.Person, Icon: "chat", Head: sentence("ideas.ev.decision"), Age: age(d.CreatedAt), Body: template.HTML(html.EscapeString(d.Question))}})
+		all = append(all, datedItem{d.CreatedAt, tlItem{ID: "decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Who: d.Person, Icon: "chat", Head: sentence("ideas.ev.decision") + " " + longPill(l, "decision", d.ID, "#workshop"), Age: age(d.CreatedAt)}})
 	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].at < all[j].at })
 	items := make([]tlItem, len(all))
@@ -238,11 +227,17 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	to := r.FormValue("mode")
-	if !slices.Contains([]string{idea.Dismissed, idea.Open, "comment"}, to) || len(r.FormValue("reason")) > maxFieldBytes {
+	if !slices.Contains([]string{idea.Dismissed, idea.Open, "comment"}, to) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
 	pa := a.access(r)
+	if v := r.FormValue("reason"); tooLong(v, maxFieldChars) && to != "comment" {
+		if view, verr := pa.IdeaView(id); verr == nil {
+			a.tooLongForm(w, r, repoHref(view.Project)+"/ideas/"+strconv.FormatInt(id, 10), "reason", v, maxFieldChars)
+			return
+		}
+	}
 	if to == "comment" {
 		c, err := pa.AddComment(store.CommentOnIdea, id, r.FormValue("reason"), a.commentActor(r))
 		if err != nil {
@@ -261,7 +256,7 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 		}
 		if code := requestdomain.Code(err); code != "" {
 			if ideaView, verr := pa.IdeaView(id); verr == nil {
-				http.Redirect(w, r, repoHref(ideaView.Project)+"/ideas/"+strconv.FormatInt(id, 10)+"?fail="+url.QueryEscape(code), http.StatusSeeOther)
+				a.failFormTo(w, r, repoHref(ideaView.Project)+"/ideas/"+strconv.FormatInt(id, 10), http.StatusUnprocessableEntity, a.langFor(r).msg(ideaFailKey(code)), "reason")
 				return
 			}
 		}
@@ -277,4 +272,26 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.Redirect(w, r, repoHref(i.Project)+"/ideas/"+strconv.FormatInt(id, 10)+q, http.StatusSeeOther)
+}
+
+// ideaFailKey is the message of a refusal on an idea (the fail= value of a redirect
+// or the rule that refused the form).
+func ideaFailKey(code string) string {
+	switch code {
+	case "reason_required":
+		return "ideas.result.reason_required"
+	case "pain_link":
+		return "ideas.result.pain_link"
+	case "img_none":
+		return "ideas.result.img_none"
+	case "img_type":
+		return "ideas.result.img_type"
+	case "img_size":
+		return "ideas.result.img_size"
+	case "img_bad":
+		return "ideas.result.img_bad"
+	case "img_other":
+		return "ideas.result.img_other"
+	}
+	return "ideas.result.failed"
 }

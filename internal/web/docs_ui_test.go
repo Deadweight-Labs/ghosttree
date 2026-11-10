@@ -281,19 +281,20 @@ func TestDocLineDiffKeepsContextAroundChanges(t *testing.T) {
 }
 
 // ui-md.js turns only http(s) and relative addresses into links: javascript:,
-// data: and other schemes stay text.
+// data: and other schemes stay text, and so does an address with a direction mark.
 func TestUiMdDropsScriptLinks(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}
 	src := string(mustReadEmbedded(t, "static/ui-md.js"))
-	start := strings.Index(src, "  function safeUrl(")
+	// From the comment above the two patterns safeUrl uses to the comment of the next block.
+	start := strings.Index(src, "  // Allowed: http(s) and relative addresses.")
 	end := strings.Index(src, "  // Address of a reference")
 	if start < 0 || end <= start {
 		t.Fatal("safeUrl is not independently testable")
 	}
 	program := src[start:end] + `
-const bad = ["javascript:alert(1)", "JaVaScRiPt:alert(1)", " javascript:alert(1)", "java\tscript:alert(1)", "data:text/html,x", "vbscript:x", "//evil.example", "\u0000javascript:x"];
+const bad = ["javascript:alert(1)", "JaVaScRiPt:alert(1)", " javascript:alert(1)", "java\tscript:alert(1)", "data:text/html,x", "vbscript:x", "//evil.example", "\u0000javascript:x", "https://a.example/\u202eb", "/p\u2066", "https://a.example/\u200f"];
 for (const u of bad) if (safeUrl(u) !== null) throw new Error("allowed " + JSON.stringify(u));
 for (const u of ["https://example.com/a", "/ui/x/shell/docs/a", "#h-one"]) if (safeUrl(u) === null) throw new Error("refused " + u);
 `

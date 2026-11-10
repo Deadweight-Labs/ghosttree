@@ -96,6 +96,49 @@ type dayGroup struct {
 type partView struct {
 	Text string
 	Hit  bool
+	// CodeStart and CodeEnd open and close a piece between backticks; the
+	// backticks themselves are not shown. A hit inside stays inside the code.
+	CodeStart, CodeEnd bool
+}
+
+// codePieces cuts the pieces of a snippet at its backticks: what stands between
+// two of them is code, even when a hit lies inside. A backtick without a partner
+// (an odd number: the last one) stays a character.
+func codePieces(parts []partView) []partView {
+	total := 0
+	for _, p := range parts {
+		total += strings.Count(p.Text, "`")
+	}
+	var out []partView
+	code, seen := false, 0
+	for _, p := range parts {
+		for i, seg := range strings.Split(p.Text, "`") {
+			if i > 0 {
+				seen++
+				switch {
+				case total%2 == 1 && seen == total:
+					seg = "`" + seg
+				case code:
+					code = false
+					if n := len(out); n > 0 {
+						out[n-1].CodeEnd = true
+					}
+				default:
+					code = true
+					if seg != "" {
+						out = append(out, partView{Text: seg, Hit: p.Hit, CodeStart: true})
+						seg = ""
+					} else {
+						out = append(out, partView{CodeStart: true})
+					}
+				}
+			}
+			if seg != "" {
+				out = append(out, partView{Text: seg, Hit: p.Hit})
+			}
+		}
+	}
+	return out
 }
 
 type hitView struct {
@@ -208,7 +251,6 @@ type levelForm struct {
 }
 
 type sessionView struct {
-	Missing             bool
 	Confirm             *shareConfirm
 	PID, Title          string
 	Live                bool
@@ -774,6 +816,7 @@ func (a *app) groupView(l lang, g store.SearchGroup, query, kind string, now tim
 		for _, p := range h.Parts {
 			hv.Parts = append(hv.Parts, partView{Text: p.Text, Hit: p.Hit})
 		}
+		hv.Parts = codePieces(hv.Parts)
 		gv.Hits = append(gv.Hits, hv)
 	}
 	if more := g.Total - len(g.Hits); more > 0 {
@@ -803,11 +846,10 @@ func dayAndClock(l lang, stamp string, now time.Time) template.HTML {
 
 // ------------------------------------------------------------------ Detail
 
+// sessionMissing answers for a session that is not there and for one the viewer may not
+// read, the same: the plain 404 becomes the error page of the shell (errorViewFor).
 func (a *app) sessionMissing(w http.ResponseWriter, r *http.Request) {
-	l := a.langFor(r)
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusNotFound)
-	a.renderBrowser(w, r, "session", pageData{Title: l.msg("nav.sessions"), SessionV: &sessionView{Missing: true}})
+	http.NotFound(w, r)
 }
 
 // lookupSession löst die Adresse auf. Nur die zufällige Adresse führt zu einer

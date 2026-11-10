@@ -19,12 +19,12 @@ import (
 
 // searchLanguageHelp steht in der Beschreibung von context_search: die Sprache
 // in einem Absatz, damit ein Agent sie ohne Nachschlagen benutzt.
-const searchLanguageHelp = "Qualifiers (like GitHub, several allowed, - negates, comma means or, \"…\" groups): is:open|closed|done|pain|idea|feature|issue|knowledge|<state>, kind:, type:, repo:owner/name, branch:, commit:<7+ hex>, pr:12 or pr:10..14, package:N, req:N, task:N, pain:N, idea:N, feature:N (FEAT-N and everything that relates to it), parent:N, blocks:N, author:/for: (@me is you), label:/-label:, area:<path prefix>, topic:<named area>, created:/updated:>2026-11-01 (also <, >=, a..b, 7d), since:/until: (origin time). Words that are not qualifiers search the text. An unknown qualifier is an error, not ignored. Qualified searches also cover pains, ideas, features, criteria, human tasks and file descriptions."
+const searchLanguageHelp = "Qualifiers (like GitHub, several allowed, - negates, comma means or, \"…\" groups): is:open|closed|done|pain|idea|feature|issue|knowledge|<state>, kind:, type:, repo:owner/name, branch:, commit:<7+ hex>, pr:12 or pr:10..14, package:N, req:N, task:N, pain:N, idea:N, feature:N (FEAT-N and everything that relates to it), parent:N, blocks:N, author:/for: (@me is you), label:/-label:, area:<path prefix>, topic:<named area>, created:/updated:>2026-11-01 (also <, >=, a..b, 7d), since:/until: (origin time). Words that are not qualifiers search the text. An unknown qualifier is an error, not ignored. Qualified searches also cover pains, ideas, features, criteria, human tasks and file descriptions. Unconfirmed entries and the gardener's notes are left out unless asked for: is:staged, author:gardener."
 
 // ---- Ideen
 
 type IdeaRecordInput struct {
-	Project        string `json:"project,omitempty" jsonschema:"the project when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
+	Project        string `json:"project,omitempty" jsonschema:"the project when it is not the session's own (a remote or a unique short name)"`
 	Title          string `json:"title" jsonschema:"the wish in one line"`
 	Body           string `json:"body,omitempty" jsonschema:"one to three sentences, high level. No design, no criteria"`
 	AllowDuplicate bool   `json:"allow_duplicate,omitempty" jsonschema:"record it even though a similar open idea exists (the answer names it otherwise)"`
@@ -50,14 +50,14 @@ type IdeaSearchInput struct {
 
 type IdeaUpdateInput struct {
 	ID          int64            `json:"id" jsonschema:"the idea number, IDEA-n"`
-	Action      string           `json:"action" jsonschema:"promote (make a request out of it and link both; for a small idea), link_request (link an existing request, needs request_id), dismiss (needs reason), reopen, phase (needs phase), discuss (mark it as under discussion), issues (create the issues of an approved idea, with criteria from its requirements), requirement_waive (needs requirement and reason; a person only)"`
+	Action      string           `json:"action" jsonschema:"promote, link_request (needs request_id), dismiss (needs reason), reopen, phase (needs phase), discuss, issues, requirement_waive (needs requirement and reason; a person only)"`
 	RequestID   int64            `json:"request_id,omitempty" jsonschema:"with link_request: the request that came out of the idea"`
 	Reason      string           `json:"reason,omitempty" jsonschema:"required for dismiss"`
 	Title       string           `json:"title,omitempty" jsonschema:"with promote: the request title; default is the idea title"`
 	Description string           `json:"description,omitempty" jsonschema:"with promote: the request description; default is the idea text"`
 	Type        string           `json:"type,omitempty" jsonschema:"with promote: feature (default), change, bug or investigation"`
 	Criteria    []string         `json:"criteria,omitempty" jsonschema:"with promote: observable acceptance criteria of the new request"`
-	Phase       string           `json:"phase,omitempty" jsonschema:"with phase: concept, discussion or done (when its issues are done and every requirement has a met criterion or is waived). Approving is for a person in the web interface (the owner of the idea or a maintainer), a token cannot do it: propose it as a decision"`
+	Phase       string           `json:"phase,omitempty" jsonschema:"with phase: concept, discussion or done (issues done, every requirement met or waived). Approving is for a person in the web interface; propose it as a decision"`
 	Issues      []IdeaIssueInput `json:"issues,omitempty" jsonschema:"with issues: the issues to create from the approved idea; none means one issue with all requirements as criteria"`
 	Revision    int              `json:"revision,omitempty" jsonschema:"with phase approved (a person, in the web interface): the version of the concept that was seen"`
 	Requirement int              `json:"requirement,omitempty" jsonschema:"with requirement_waive: the number (from 1) of the requirement of the concept"`
@@ -638,8 +638,15 @@ func RenderQualifiedLinked(res client.SearchResult, b links.Builder) string {
 			out.WriteString(hitLink(renderHit(h), b.WithProject(h.Session.Scope.Project).Session(id)))
 		}
 	}
+	note := renderGaps(res.Unavailable)
 	if out.Len() == 0 {
+		if note != "" {
+			return "(nothing found in the areas that answered)\n\n" + note
+		}
 		return "(no results)\n"
+	}
+	if note != "" {
+		out.WriteString("\n" + note)
 	}
 	return out.String()
 }
@@ -679,10 +686,10 @@ func (s *Server) qualifiedSearch(in SearchInput, parsed query.Query, anchor clie
 func (s *Server) registerQueryTools(srv *mcp.Server) {
 	closed := false
 	additive := false
-	mcp.AddTool(srv, &mcp.Tool{Name: "idea_record", Description: "Record a wish without working it out: a title and one to three sentences, high level. Ideas are the light inbox next to pains (a pain is a problem without a solution, an idea is a wish). Nothing is decided: no type, no priority, no criteria. A similar open idea is named instead of recording a second one. Later an idea becomes a request with idea_update promote. Recording never needs a question back and has no required field, whatever the topic. If you already have the content (a chat, a transcript), pass raw, summary and concept to attach it in the same call. A bigger idea can be worked out later (idea_text, idea_concept, decision_open); the answer may suggest that once, nothing is blocked.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleIdeaRecord)
+	mcp.AddTool(srv, &mcp.Tool{Name: "idea_record", Description: "Record a wish without working it out: a title and one to three sentences. Ideas are the light inbox next to pains (a pain is a problem, an idea a wish); nothing is decided, no field is required and no question back is needed. A similar open idea is named instead of recording a second one. Have the content already (a chat, a transcript)? Pass raw, summary and concept in the same call. Later idea_update promote makes a request of it; idea_text, idea_concept and decision_open work it out.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleIdeaRecord)
 	mcp.AddTool(srv, &mcp.Tool{Name: "idea_get", Description: "Read one idea with its state, the requests that came out of it and what is attached: summary, concept, versions of the raw text, open and closed decisions with variants and votes, images, discussions (threads linked with link_kind idea).", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleIdeaGet)
 	mcp.AddTool(srv, &mcp.Tool{Name: "idea_search", Description: "List the current project's ideas, open ones by default. Look here before recording an idea.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleIdeaSearch)
-	mcp.AddTool(srv, &mcp.Tool{Name: "idea_update", Description: "Turn an idea into work or put it aside: promote creates a request from it and links both (the idea counts as taken up), link_request links a request that already exists, dismiss needs a reason (dismissed ideas stay searchable), reopen takes a dismissed one back. For a worked-out idea: phase moves it along (approved is for the owner of the idea or a maintainer in the web interface, not for a token; it needs a concept; done needs every requirement covered by a met criterion or waived), discuss marks it as under discussion, issues creates the issues of an approved idea with criteria from its requirements, optionally in the work package of a branch.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleIdeaUpdate)
+	mcp.AddTool(srv, &mcp.Tool{Name: "idea_update", Description: "Turn an idea into work or put it aside: promote (creates a request, linked both ways), link_request, dismiss (with a reason; stays searchable), reopen. For a worked-out idea: phase (approved only by a person in the web interface; done needs every requirement met or waived), discuss, issues (the issues of an approved idea, criteria from its requirements, optionally in a branch's work package).", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleIdeaUpdate)
 	s.registerIdeaWorkshopTools(srv)
 	mcp.AddTool(srv, &mcp.Tool{Name: "label", Description: "Labels like on GitHub: list them, create one for the project or its org (name, color, description), change or delete it, or put them on and take them off a request, pain, idea or knowledge entry. Search with label:name and -label:name in context_search. Type and area are not labels; use type: and area:.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleLabel)
 	mcp.AddTool(srv, &mcp.Tool{Name: "topic", Description: "Named areas of the repository: a topic is a name for several path prefixes (Search = internal/embed + internal/store/embeddings). topic:<name> in context_search then filters like all of them.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleTopic)

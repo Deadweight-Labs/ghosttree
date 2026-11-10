@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
+	"html"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -57,6 +58,8 @@ type painView struct {
 	Token, Back   string
 	Result        *requestResult
 	Explain       *explainView
+	// First is the head of the bubble that opens the timeline.
+	First firstHead
 	// CanIdea shows the form "Create idea" (a solution idea this pain motivates).
 	CanIdea bool
 }
@@ -129,7 +132,21 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 	v.Viewer, v.StateTone = browserPrincipal(r).Label, painStateTone[p.State]
 	v.Base = repoHref(p.Project)
 	ago := func(at string) string { return shortAgo(l, now, parseTime(at)) }
-	v.Items = mergeTimeline(a.painItems(l, pa, p, detail.Events, ago), a.commentTimeline(r, l, pa, store.CommentOnPain, p.ID, p.Person, v.Base+"/pains/"+strconv.FormatInt(p.ID, 10), editingComment(r), ago))
+	comments := a.commentTimeline(r, l, pa, store.CommentOnPain, p.ID, p.Person, v.Base+"/pains/"+strconv.FormatInt(p.ID, 10), editingComment(r), ago)
+	events := withoutRepeatedPainNotes(detail.Events, comments)
+	var createdGit *anchorView
+	if v.hasFirst() {
+		// The head of the first object says who recorded the pain, and when.
+		for _, e := range events {
+			if e.Kind == "created" {
+				createdGit = anchorViewOf(pa, p.Project, e.GitAnchor, e.Via)
+			}
+		}
+		events = slices.DeleteFunc(events, func(e pain.Event) bool { return e.Kind == "created" })
+	}
+	v.First = firstOf(l, v.Actor, firstNonEmpty(v.Actor.Label, v.Person), l.msg("pains.recorded_ch"), v.Age, l.msg("issue.author"), "")
+	v.First.Git = createdGit
+	v.Items = mergeTimeline(a.painItems(l, pa, p, events, ago), comments)
 	seen := map[string]bool{}
 	for _, e := range detail.Events {
 		if e.Person != "" && !seen[e.Person] {
@@ -197,8 +214,8 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, f := range []string{"remaining", "evidence_ref", "note", "why"} {
-		if len(r.FormValue(f)) > maxFieldBytes {
-			http.Error(w, "invalid input", http.StatusBadRequest)
+		if v := r.FormValue(f); tooLong(v, maxFieldChars) {
+			a.tooLongForm(w, r, a.painHref(r, id), f, v, maxFieldChars)
 			return
 		}
 	}
@@ -210,7 +227,7 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := a.access(r).SetPainState(id, to, r.FormValue("remaining"), ev, painStateNote(to, r.FormValue("why"), r.FormValue("note")), by); err != nil {
 		if code := requestdomain.Code(err); code != "" {
-			http.Redirect(w, r, a.painHref(r, id)+"?fail="+url.QueryEscape(code), http.StatusSeeOther)
+			a.failFormTo(w, r, a.painHref(r, id), http.StatusUnprocessableEntity, a.langFor(r).msg(painFailKey(code)), painFailField(code))
 			return
 		}
 		a.painFail(w, r, err)
@@ -244,6 +261,25 @@ func painStateNote(to, why, note string) string {
 
 // linkDataText writes the target of a link event ("request:1", "knowledge:3",
 // "external:text") the way the rest of the page names it.
+// painLinkTarget writes what a link event of a pain points at ("request:3",
+// "idea:5", "knowledge:7", "external:https://…") as the long pill it is; what
+// it does not know stays text.
+func painLinkTarget(l lang, data string) string {
+	kind, rest, _ := strings.Cut(data, ":")
+	n, err := strconv.ParseInt(rest, 10, 64)
+	switch {
+	case kind == "request" && err == nil:
+		return string(longPill(l, "request", n, requestURL(n)))
+	case kind == "idea" && err == nil:
+		return string(longPill(l, "idea", n, ""))
+	case kind == "knowledge" && err == nil:
+		return string(longPill(l, "knowledge", n, "/ui/knowledge/"+rest))
+	case kind == "external" && (strings.HasPrefix(rest, "https://") || strings.HasPrefix(rest, "http://")):
+		return string(urlPill(l, rest))
+	}
+	return html.EscapeString(ellipsize(linkDataText(data), 120))
+}
+
 func linkDataText(data string) string {
 	kind, rest, _ := strings.Cut(data, ":")
 	switch kind {
@@ -255,6 +291,21 @@ func linkDataText(data string) string {
 		return rest
 	}
 	return data
+}
+
+// painFailField is the field of the pain form a refusal is about.
+func painFailField(code string) string {
+	switch code {
+	case "remaining_required":
+		return "remaining"
+	case "evidence_required", "evidence_invalid":
+		return "evidence_ref"
+	case "note_required":
+		return "note"
+	case "accepted_reason_required":
+		return "why"
+	}
+	return ""
 }
 
 // painFailKey maps the fail= value of a redirect to its message; unknown values
@@ -277,4 +328,53 @@ func painFailKey(code string) string {
 		return "pains.result.idea_invalid"
 	}
 	return "pains.result.failed"
+}
+
+// hasFirst says whether the page opens with the bubble of the pain's text.
+func (v *painView) hasFirst() bool { return len(v.Blocks) > 0 || v.Explain != nil }
+
+// withoutRepeatedPainNotes leaves the note out of a change of state when a
+// comment of the same person with the same text stands beside it: the status
+// select writes the words as the note and as a comment, and the timeline shows
+// them once, in the comment (the same rule as for an issue). A "Why" written
+// before the comment stays as the note.
+func withoutRepeatedPainNotes(events []pain.Event, comments []tlItem) []pain.Event {
+	out := slices.Clone(events)
+	for i, ev := range out {
+		note := strings.TrimSpace(ev.Note)
+		if note == "" {
+			continue
+		}
+		at := parseTime(ev.CreatedAt)
+		for _, c := range comments {
+			v := c.Comment
+			text := ""
+			if v != nil {
+				text = strings.TrimSpace(v.Raw)
+			}
+			if v == nil || v.Deleted || v.Who != ev.Person || text == "" || at.IsZero() || c.at.IsZero() {
+				continue
+			}
+			rest, same := trimmedPainNote(note, text)
+			if !same {
+				continue
+			}
+			if d := c.at.Sub(at); d < sameMomentWithin && d > -sameMomentWithin {
+				out[i].Note = rest
+				break
+			}
+		}
+	}
+	return out
+}
+
+// trimmedPainNote takes the comment out of a note: the note is the comment
+// alone, or "Why" with the comment after it (painStateNote). same says whether
+// the comment was in it; rest is what stays.
+func trimmedPainNote(note, comment string) (rest string, same bool) {
+	note, comment = strings.TrimSpace(note), strings.TrimSpace(comment)
+	if comment == "" || (note != comment && !strings.HasSuffix(note, "\n\n"+comment)) {
+		return note, false
+	}
+	return strings.TrimSpace(strings.TrimSuffix(note, comment)), true
 }

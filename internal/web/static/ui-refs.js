@@ -108,26 +108,48 @@
     function want(key) {
       if (KEY.test(key) && !template(key) && !asked[key] && keys.indexOf(key) < 0) keys.push(key);
     }
-    for (var a of $$("[data-ref]")) want(a.getAttribute("data-ref"));
+    // what the caller asks for goes first: the "#1970" of a text wait for the
+    // answer, a pill of the page does not
     (extra || []).forEach(want);
+    for (var a of $$("[data-ref]")) want(a.getAttribute("data-ref"));
     return keys.slice(0, 50);
   }
+  // inflight: the request a key is on, so that a second caller waits for it
+  // instead of finding the key "asked" and the answer not there yet.
+  var inflight = {};
   function lookup(done, extra) {
-    var keys = missingKeys(extra);
-    if (!keys.length) { if (done) done(); return; }
-    keys.forEach(function (k) { asked[k] = true; });
-    var q = keys.map(function (k) { return "ref=" + encodeURIComponent(apiRef(k)); }).join("&");
-    fetch("/ui/refs?" + q, { credentials: "same-origin", headers: { Accept: "application/json" } })
-      .then(function (r) { return r.ok ? r.json() : { refs: [] }; })
-      .then(function (data) {
-        (data.refs || []).forEach(function (info) {
-          var key = info && info.gefunden ? localKey(info.ref) : "";
-          if (key && KEY.test(key)) remote[key] = info;
+    var keys = missingKeys(extra), waits = [];
+    for (var k of Object.keys(inflight)) if (inflight[k] && waits.indexOf(inflight[k]) < 0) waits.push(inflight[k]);
+    if (keys.length) {
+      keys.forEach(function (k) { asked[k] = true; });
+      var q = keys.map(function (k) { return "ref=" + encodeURIComponent(apiRef(k)); }).join("&");
+      var req = fetch("/ui/refs?" + q, { credentials: "same-origin", headers: { Accept: "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : { refs: [] }; })
+        .then(function (data) {
+          (data.refs || []).forEach(function (info) {
+            var key = info && info.gefunden ? localKey(info.ref) : "";
+            if (key && KEY.test(key)) remote[key] = info;
+          });
+        })
+        .catch(function () {})
+        .then(function () {
+          keys.forEach(function (k) { inflight[k] = null; });
+          linkify(document);
         });
-        linkify(document);
-      })
-      .catch(function () {})
-      .then(function () { if (done) done(); });
+      keys.forEach(function (k) { inflight[k] = req; });
+      waits.push(req);
+    } else if (!waits.length) {
+      linkify(document);
+    }
+    if (!done) return;
+    if (!waits.length) done(); else Promise.all(waits).then(function () { done(); });
+  }
+  // The long form of a pill (data-long) says its title: from the answer, or from
+  // the card the server wrote into the page.
+  function titleOf(key) {
+    if (remote[key] && remote[key].titel) return remote[key].titel;
+    var t = template(key), pt = t && t.content.querySelector(".pc-t");
+    return pt ? pt.textContent : "";
   }
   // A pill the preview wrote as a plain span gets its address once it is known.
   function linkify(root) {
@@ -137,29 +159,34 @@
       var a = node("a", s.className);
       a.setAttribute("href", href);
       a.setAttribute("data-ref", s.getAttribute("data-ref"));
+      if (s.hasAttribute("data-long")) a.setAttribute("data-long", "");
       while (s.firstChild) a.appendChild(s.firstChild);
       s.replaceWith(a);
     }
-    // A pill that asks for its title (data-long) gets it from the answer.
     for (var p of $$("[data-ref][data-long]", root)) {
-      var info = remote[p.getAttribute("data-ref")];
-      if (info && info.titel && window.GTPill) window.GTPill.setTitle(p, info.titel);
+      var title = titleOf(p.getAttribute("data-ref"));
+      if (title && window.GTPill) window.GTPill.setTitle(p, title);
     }
   }
   // resolve turns the marks a text wrote for a "#1970" (ui-md.js) into pills:
   // only for what the server knows and the viewer may read. A mark that is no
-  // knowledge entry goes back to the plain text it was.
-  function resolve(root, done) {
+  // knowledge entry goes back to the plain text it was. A mark whose key the
+  // first call had no room for is asked for in a call of its own.
+  function resolve(root, done, round) {
     var marks = $$("[data-maybe]", root);
     if (!marks.length) { if (done) done(); return; }
     var keys = marks.map(function (m) { return m.getAttribute("data-maybe"); });
     lookup(function () {
+      var again = false;
       marks.forEach(function (m) {
         var key = m.getAttribute("data-maybe"), href = window.GTRefs.href(key);
-        if (remote[key] && href && window.GTPill) m.replaceWith(window.GTPill.ref(key, { href: href }));
+        var known = !!remote[key] || !!template(key);
+        if (!known && !asked[key]) { again = true; return; }
+        if (known && href && window.GTPill) m.replaceWith(window.GTPill.ref(key, { href: href }));
         else m.replaceWith(document.createTextNode(m.textContent));
       });
-      if (done) done();
+      if (again && (round || 0) < 8) resolve(root, done, (round || 0) + 1);
+      else if (done) done();
     }, keys);
   }
 
@@ -285,5 +312,7 @@
   scan(document);
   // ui-md.js ran before this script: its marks of "#1970" are resolved now.
   resolve(document);
+  // The long form of the pills in a sentence says its title (the page's card or /ui/refs).
+  if (document.querySelector("[data-ref][data-long]")) lookup();
   window.GTCards = { scan: scan, hide: hide };
 })();

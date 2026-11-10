@@ -171,9 +171,12 @@ func (f *fakeBackend) ClaimPlan(ctx context.Context) (ClaimPlan, error) {
 	if f.local.Remote == "" {
 		return ClaimPlan{}, &ClaimError{Code: "no_remote"}
 	}
+	// What the backend offers under the owner model (REQ-623): the own
+	// namespace first for a remote no connected organization holds, then the
+	// organizations the person owns.
 	return ClaimPlan{Remote: f.local.Remote, Orgs: []OrgChoice{
-		{Slug: "side-org", Name: "Side Org", Role: "member"},
-		{Slug: "deadweight-labs", Name: "Deadweight Labs", Role: "owner", Default: true},
+		{Own: true, Slug: "robin", Default: true},
+		{Slug: "deadweight-labs", Name: "Deadweight Labs", Role: "owner"},
 	}}, nil
 }
 

@@ -273,7 +273,7 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		for n := range wd.Variants {
 			wd.Variants[n].Checked = wd.Variants[n].Label == wd.MyVote
 		}
-		wd.CanAttach = canWork && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
+		wd.CanAttach = canWork && wd.Open && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
 		w.Decisions = append(w.Decisions, wd)
 	}
 	// Die Wege der Phase: Diskussion anstoßen kann, wer mitarbeitet; freigeben und die Freigabe
@@ -306,7 +306,7 @@ func (a *app) workshopDated(l lang, ws store.IdeaWorkshop, age func(string) stri
 	for _, d := range ws.Decisions {
 		for _, vt := range d.Votes {
 			out = append(out, datedItem{vt.At, tlItem{ID: "vote-" + strconv.FormatInt(d.ID, 10) + "-" + url.QueryEscape(vt.Voter), Act: "idea.vote", Who: vt.Voter, Icon: "thumb",
-				Head: template.HTML(sentence("workshop.ev.vote", vt.Variant) + " <span class=\"rn\">" + html.EscapeString(d.HumanID()) + "</span>"), Age: age(vt.At), Body: template.HTML(html.EscapeString(vt.Reason))}})
+				Head: template.HTML(sentence("workshop.ev.vote", vt.Variant) + " <span class=\"rn\">" + html.EscapeString(d.HumanID()) + "</span>"), Age: age(vt.At), Body: mdText(vt.Reason)}})
 		}
 		if d.State == idea.DecisionOpen || d.DecidedAt == "" {
 			continue
@@ -322,17 +322,17 @@ func (a *app) workshopDated(l lang, ws store.IdeaWorkshop, age func(string) stri
 		if d.ChosenVariant != "" {
 			for _, vr := range d.Variants {
 				if vr.Label == d.ChosenVariant {
-					body = append(body, "<b>"+html.EscapeString(vr.Label+" · "+vr.Title)+"</b>")
+					body = append(body, "<p><b>"+html.EscapeString(vr.Label+" · "+vr.Title)+"</b></p>")
 				}
 			}
 		}
 		for _, s := range []string{d.Answer, d.Reason, d.Trigger} {
 			if s != "" {
-				body = append(body, html.EscapeString(s))
+				body = append(body, string(mdText(s)))
 			}
 		}
 		out = append(out, datedItem{d.DecidedAt, tlItem{ID: "decided-" + strconv.FormatInt(d.ID, 10), Act: "idea.decided", Who: d.DecidedBy, Icon: icon, Tone: tone,
-			Head: template.HTML(sentence(key) + " <span class=\"rn\">" + html.EscapeString(d.HumanID()) + "</span>"), Age: age(d.DecidedAt), Body: template.HTML(strings.Join(body, "<br>"))}})
+			Head: template.HTML(sentence(key) + " <span class=\"rn\">" + html.EscapeString(d.HumanID()) + "</span>"), Age: age(d.DecidedAt), Body: template.HTML(strings.Join(body, ""))}})
 	}
 	return out
 }
@@ -393,7 +393,7 @@ func (a *app) workshopDecisionOf(w http.ResponseWriter, r *http.Request) (idea.D
 
 func formLine(r *http.Request, name string, max int) (string, bool) {
 	v := r.FormValue(name)
-	return v, len(v) <= max
+	return v, !tooLong(v, max)
 }
 
 // workshopPhase: POST /ui/ideas/{id}/phase. mode ist discuss (Diskussion beginnen), approve (Konzept
@@ -440,7 +440,7 @@ func (a *app) workshopVote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reason, fits := formLine(r, "reason", maxFieldBytes)
+	reason, fits := formLine(r, "reason", maxFieldChars)
 	if !fits {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
@@ -461,8 +461,8 @@ func (a *app) workshopClose(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reason, fits1 := formLine(r, "reason", maxFieldBytes)
-	answer, fits2 := formLine(r, "answer", maxFieldBytes)
+	reason, fits1 := formLine(r, "reason", maxFieldChars)
+	answer, fits2 := formLine(r, "answer", maxFieldChars)
 	if !fits1 || !fits2 {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
@@ -482,7 +482,7 @@ func (a *app) workshopReopen(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reason, fits := formLine(r, "reason", maxFieldBytes)
+	reason, fits := formLine(r, "reason", maxFieldChars)
 	if !fits {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return

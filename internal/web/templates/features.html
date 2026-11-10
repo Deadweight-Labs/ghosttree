@@ -12,13 +12,13 @@
 {{with .FeatureV}}<div class="dhead"><div class="dtitle"><h1>{{.Name}}<span class="n">#{{.ID}}</span></h1></div>
 <div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "feature"}}{{.StateLabel}}</span>{{if .Person}}<span><span class="person">{{avatarOf .Person}}{{.Person}}</span> {{t "features.updated" .Age}}</span>{{end}}</div></div>
 <div class="dgrid"><div class="dmain">
-{{if .Reason}}<div class="callout neu" role="note">{{mi "drop"}}<div><div class="k">{{t "features.retired_because"}}</div><div class="tt">{{.Reason}}</div></div></div>{{end}}
-<div class="cmt">{{avatarX "xl" "" .Person "" false}}<div class="cbox"><div class="ch"><b>{{.Person}}</b><span>{{t "features.described_ch"}}</span><span class="sp"></span><span class="lb out">{{t "features.rev" .Revision}}</span></div>
-<div class="cb prose"><p class="fsum">{{.Summary}}</p>{{template "knbody" .Blocks}}</div></div></div>
-{{if .Limits}}<div class="box fsec"><div class="box-h"><span class="t">{{mi "tri"}} {{t "features.limits"}}</span></div><div class="box-r prose">{{template "knbody" .Limits}}</div></div>{{end}}
-{{if .Usage}}<div class="box fsec"><div class="box-h"><span class="t">{{mi "term"}} {{t "features.usage"}}</span></div>{{range .Usage}}<div class="box-r fuse"><span class="uk">{{.Label}}</span><div class="prose">{{template "knbody" .Blocks}}</div></div>{{end}}</div>{{end}}
-{{if .Areas}}<div class="box fsec"><div class="box-h"><span class="t">{{mi "folder"}} {{t "features.areas"}}</span><span class="sp"></span><span class="muted fw4">{{len .Areas}}</span></div>{{range .Areas}}<a class="box-r farea" href="{{.Href}}">{{mi .Icon}}<span class="mono">{{.Path}}</span></a>{{end}}</div>{{end}}
-{{if .Items}}{{template "uitimeline" .Items}}{{end}}
+<div class="tlx tl0">{{template "firstopen" .First}}
+<div class="cb prose"><p class="fsum">{{.Summary}}</p>{{template "knbody" .Blocks}}</div>
+{{if .Limits}}<div class="cs"><div class="cs-h">{{mi "tri"}}<span>{{t "features.limits"}}</span></div><div class="cs-b prose">{{template "knbody" .Limits}}</div></div>{{end}}
+{{if .Usage}}<div class="cs"><div class="cs-h">{{mi "term"}}<span>{{t "features.usage"}}</span></div>{{range .Usage}}<div class="cs-b fuse"><span class="uk">{{.Label}}</span><div class="prose">{{template "knbody" .Blocks}}</div></div>{{end}}</div>{{end}}
+{{if .Areas}}<div class="cs"><div class="cs-h">{{mi "folder"}}<span>{{t "features.areas"}}</span><span class="sp"></span><span class="cs-n">{{len .Areas}}</span></div>{{range .Areas}}<a class="farea" href="{{.Href}}">{{mi .Icon}}<span class="mono">{{.Path}}</span></a>{{end}}</div>{{end}}
+{{template "firstclose"}}
+{{template "uitlitems" .Items}}</div>
 </div>
 <aside class="side" aria-label="{{t "features.side.facts"}}">
 <div class="sblk"><h3>{{t "features.side.state"}}</h3><div class="v"><span class="lb {{.Tone}}">{{.StateLabel}}</span><span class="muted">{{t "features.rev" .Revision}}</span></div></div>

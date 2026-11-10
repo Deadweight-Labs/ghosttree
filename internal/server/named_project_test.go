@@ -34,14 +34,15 @@ func TestNamedProjectCreationOverTheAPI(t *testing.T) {
 	if code, out := f.call(t, "POST", "/api/projects", f.anna, map[string]any{"name": "a/b"}); code != 400 || out["code"] != "invalid_input" {
 		t.Errorf("a path as a name: %d %v", code, out)
 	}
-	if code, out := f.call(t, "POST", "/api/projects", f.anna, map[string]any{"name": "infra"}); code != 409 || out["code"] != "project_name_taken" {
+	if code, out := f.call(t, "POST", "/api/projects", f.anna, map[string]any{"name": "infra", "org": "alpha"}); code != 409 || out["code"] != "project_name_taken" {
 		t.Errorf("duplicate in the own organization: %d %v", code, out)
 	}
 	if code, out := f.call(t, "POST", "/api/projects", f.carl, map[string]any{"name": "mine", "org": "alpha"}); code != 403 || out["code"] != "not_org_member" {
 		t.Errorf("outsider: %d %v", code, out)
 	}
-	if code, out := f.call(t, "POST", "/api/projects", f.carl, map[string]any{"name": "mine"}); code != 409 || out["code"] != "no_org" {
-		t.Errorf("no organization: %d %v", code, out)
+	// Without an organization the project goes to the own namespace.
+	if code, out := f.call(t, "POST", "/api/projects", f.carl, map[string]any{"name": "mine"}); code != 201 || out["org_kind"] != "user" {
+		t.Errorf("own namespace: %d %v", code, out)
 	}
 }
 
@@ -97,11 +98,15 @@ func TestHostlessTwoSegmentRemotesKeepWorkingOverTheAPI(t *testing.T) {
 	write := func(token, project string) (int, map[string]any) {
 		return f.call(t, "POST", "/api/knowledge", token, map[string]any{"type": "note", "title": "t", "body": "b", "scope": map[string]any{"project": project}})
 	}
-	for _, remote := range []string{"gitserver/repo", "localhost/repo", "gitserver/other"} {
-		// First write creates the remote project in robin's organization.
+	if code, out := write(f.robin, "localhost/repo"); code != 400 || out["code"] != "invalid_remote" {
+		t.Errorf("localhost/repo: %d %v", code, out)
+	}
+	for _, remote := range []string{"gitserver/repo", "gitserver/other"} {
+		// A write leaves it unclaimed; robin claims it explicitly.
 		if code, out := write(f.robin, remote); code != 200 {
-			t.Errorf("%s: implicit create = %d %v", remote, code, out)
+			t.Errorf("%s: write = %d %v", remote, code, out)
 		}
+		f.mustCall(t, 200, "POST", "/api/projects/claim", f.robin, map[string]any{"remote": remote})
 		p, ok := f.st.ProjectByRemote(remote)
 		if !ok || p.Named {
 			t.Errorf("%s: project = %+v, %v", remote, p, ok)
@@ -127,4 +132,29 @@ func TestProjectCreationWorksForCLIAndLegacyTokens(t *testing.T) {
 	f.mustCall(t, 200, "POST", "/api/invitations/accept", legacy, map[string]any{"code": inv["code"]})
 	f.mustCall(t, 201, "POST", "/api/projects", f.robin, map[string]any{"name": "cli-made", "org": "alpha"})
 	f.mustCall(t, 201, "POST", "/api/projects", legacy, map[string]any{"name": "legacy-made", "org": "alpha"})
+}
+
+// A client set up with a named project id from before a slug change keeps
+// working: writes and reads with the old id reach the project under its new id
+// (security review 4).
+func TestOldNamedProjectIDsFollowTheSlug(t *testing.T) {
+	f := newOrgFixture(t)
+	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Alpha", "slug": "alpha"})
+	f.mustCall(t, 201, "POST", "/api/projects", f.robin, map[string]any{"name": "infra", "org": "alpha"})
+	f.mustCall(t, 200, "PATCH", "/api/orgs/alpha", f.robin, map[string]any{"name": "Beta", "slug": "beta"})
+	out := f.mustCall(t, 200, "POST", "/api/knowledge", f.robin, map[string]any{"type": "note", "title": "old id", "body": "b",
+		"scope": map[string]any{"project": "alpha/infra"}})
+	if scope, _ := out["scope"].(map[string]any); scope["project"] != "beta/infra" {
+		t.Fatalf("written to %v", out["scope"])
+	}
+	var n int
+	if err := f.st.DB().QueryRow(`SELECT COUNT(*) FROM knowledge WHERE project='alpha/infra'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d entries under the old id (%v)", n, err)
+	}
+	resp := req(t, "GET", f.srv.URL+"/api/knowledge?project=alpha/infra", f.robin, nil)
+	defer resp.Body.Close()
+	var list []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil || len(list) != 1 {
+		t.Fatalf("read with the old id: %v %v", list, err)
+	}
 }

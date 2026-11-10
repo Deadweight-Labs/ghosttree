@@ -71,7 +71,7 @@ func TestOrgCLICreateInviteAcceptAndMembers(t *testing.T) {
 		t.Fatalf("non-admin create: %d %s", code, out)
 	}
 	f.ok(t, "robin", "org", "create", "Alpha Team", "--slug", "alpha")
-	if out := f.ok(t, "robin", "org", "list"); !strings.Contains(out, "alpha") || !strings.Contains(out, "owner") || !strings.Contains(out, "default") {
+	if out := f.ok(t, "robin", "org", "list"); !strings.Contains(out, "alpha") || !strings.Contains(out, "owner") || !strings.Contains(out, "organization") {
 		t.Fatalf("list: %s", out)
 	}
 
@@ -167,14 +167,16 @@ func TestProjectCLIClaimMoveListAndDefaults(t *testing.T) {
 		t.Fatalf("move without --org: %d", c)
 	}
 
-	// Mehrere Orgs ohne Standard: Claim nennt die Auswahl.
-	f.ok(t, "robin", "org", "default", "none")
-	if c, o := f.as(t, "robin", "project", "claim", "github.com/x/z"); c == 0 || !strings.Contains(o, "project_unclaimed") || !strings.Contains(o, "alpha, beta") {
-		t.Fatalf("unclaimed: %d %s", c, o)
+	// Eine Standard-Org gibt es nicht mehr (REQ-623): ohne --org gehört das
+	// Projekt dem eigenen Namensraum.
+	if c, o := f.as(t, "robin", "org", "default", "beta"); c != 2 || !strings.Contains(o, "own namespace") {
+		t.Fatalf("org default: %d %s", c, o)
 	}
-	f.ok(t, "robin", "org", "default", "beta")
-	if out := f.ok(t, "robin", "project", "claim", "github.com/x/z"); !strings.Contains(out, "belongs to beta") {
-		t.Fatalf("claim with default: %s", out)
+	if out := f.ok(t, "robin", "project", "claim", "github.com/x/z"); !strings.Contains(out, "belongs to robin") {
+		t.Fatalf("claim without --org: %s", out)
+	}
+	if out := f.ok(t, "robin", "org", "list"); !strings.Contains(out, "your own namespace") {
+		t.Fatalf("list lacks the namespace: %s", out)
 	}
 }
 
@@ -198,7 +200,7 @@ func TestOrgRenameAndForceMove(t *testing.T) {
 	st.AddPerson("anna")
 	st.CreateOrg("person:1", "Home", "home")
 	st.CreateOrg("person:2", "Squat", "squat")
-	if _, err := st.ClaimProject("person:2", "github.com/x/y", "squat"); err != nil {
+	if _, err := claimOrPlace(st, "person:2", "github.com/x/y", "squat"); err != nil {
 		t.Fatal(err)
 	}
 	st.Close()
@@ -208,5 +210,38 @@ func TestOrgRenameAndForceMove(t *testing.T) {
 	}
 	if code := run([]string{"project", "claim", "--force", "x", "--db", db}, &out); code != 2 {
 		t.Fatalf("--force is only for move: %d", code)
+	}
+}
+
+// Review point 1 (third review): reassigning and deciding a contested remote
+// run on the server with the database in hand, never over the API.
+func TestProjectCLIReassignAndForceClaimNeedTheDatabase(t *testing.T) {
+	f := newOrgCLI(t)
+	f.ok(t, "robin", "org", "create", "Alpha", "--slug", "alpha")
+	if c, _ := f.as(t, "robin", "project", "reassign", "github.com/x/y", "--to", "beta"); c != 2 {
+		t.Fatalf("reassign without --db: %d", c)
+	}
+	db := t.TempDir() + "/reassign.db"
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.AddPerson("robin")
+	st.CreateOrg("person:1", "Alpha", "alpha")
+	st.CreateOrg("person:1", "Beta", "beta")
+	if _, err := claimOrPlace(st, "person:1", "github.com/x/y", "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	var out bytes.Buffer
+	if code := run([]string{"project", "reassign", "github.com/x/y", "--to", "beta", "--db", db}, &out); code != 0 || !strings.Contains(out.String(), "github.com/x/y now belongs to beta") {
+		t.Fatalf("reassign --db: %d %s", code, out.String())
+	}
+	out.Reset()
+	if code := run([]string{"project", "claim", "--force", "gitlab.com/x/z", "--org", "alpha", "--db", db}, &out); code != 0 || !strings.Contains(out.String(), "gitlab.com/x/z now belongs to alpha") {
+		t.Fatalf("claim --force --db: %d %s", code, out.String())
+	}
+	if c, _ := f.as(t, "robin", "project", "claim", "--force", "gitlab.com/x/w", "--org", "alpha"); c != 2 {
+		t.Fatalf("claim --force without --db: %d", c)
 	}
 }

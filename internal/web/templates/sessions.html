@@ -9,7 +9,7 @@
 <span class="sp"></span><a class="gbtn sm quiet" href="{{.SortHref}}">{{.SortLabel}}</a></header>
 {{range .Groups}}<section class="sgroup" data-session="{{.PID}}">
 <header class="sghead"><div><a class="sg-title" href="{{.Href}}">{{.Title}}</a><div class="meta">{{.Meta}}</div></div><div class="sg-side"><span>{{.Count}}</span><span class="stime">{{.Time}}</span></div></header>
-{{range .Hits}}<a class="shit" data-kind="{{.Kind}}" href="{{.Href}}"><span class="sh-who">{{.Label}}</span><span class="sh-text">{{range .Parts}}{{if .Hit}}<mark>{{.Text}}</mark>{{else}}{{.Text}}{{end}}{{end}}</span><span class="sh-seq">{{.Seq}}</span></a>{{end}}
+{{range .Hits}}<a class="shit" data-kind="{{.Kind}}" href="{{.Href}}"><span class="sh-who">{{.Label}}</span><span class="sh-text">{{range .Parts}}{{if .CodeStart}}<code>{{end}}{{if .Hit}}<mark>{{.Text}}</mark>{{else}}{{.Text}}{{end}}{{if .CodeEnd}}</code>{{end}}{{end}}</span><span class="sh-seq">{{.Seq}}</span></a>{{end}}
 {{if .MoreHref}}<a class="morelink" href="{{.MoreHref}}">{{.MoreText}}</a>{{end}}
 </section>
 {{else}}<div class="empty"><span>{{t "sessions.no_results" .Q}}</span><a class="gbtn sm" href="{{.ClearHref}}">{{t "sessions.clear_search"}}</a></div>{{end}}
@@ -38,9 +38,7 @@
 {{template "foot" .}}{{end}}
 
 {{define "session"}}{{template "head" .}}{{template "nav" .}}<main class="g2 sess sess-detail"><link rel="stylesheet" href="/static/ui-sessions.css"><div class="wrap">
-{{with .SessionV}}{{if .Missing}}
-<div class="box"><div class="box-empty"><span>{{t "sessions.not_found"}}</span><a class="gbtn" href="/ui/sessions">{{t "sessions.all_sessions"}}</a></div></div>
-{{else if .Confirm}}
+{{with .SessionV}}{{if .Confirm}}
 <form class="callout sconfirm" method="post" action="{{.Confirm.Action}}">{{mi "tri"}}<div><p>{{.Confirm.Text}}</p><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="level" value="{{.Confirm.Level}}"><input type="hidden" name="confirm" value="1"><div class="gacts"><button class="gbtn pri">{{t "sessions.share_anyway"}}</button><a class="gbtn" href="{{.Confirm.Back}}">{{t "sessions.cancel"}}</a></div></div></form>
 {{else}}
 <div class="dhead"><div class="dtitle"><h1>{{.Title}}{{if .Machine}}{{if .MachineHref}}<a class="n" href="{{.MachineHref}}">{{.Kind}}@{{.Machine}}</a>{{else}}<span class="n">{{.Kind}}@{{.Machine}}</span>{{end}}{{end}}</h1>
@@ -58,9 +56,9 @@
 {{if .Earlier.Href}}<a class="morelink wlink" href="{{.Earlier.Href}}">{{.Earlier.Text}}</a>{{end}}
 {{if .WindowError}}<p class="callout serror" role="alert">{{mi "tri"}}<span>{{t "sessions.window_error"}} <a class="gbtn sm" href="{{.RetryHref}}">{{t "sessions.retry"}}</a></span></p>{{end}}
 <div class="flow">
-{{range .Blocks}}{{if eq .Kind "user"}}<article class="blk blk-user{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}><header><span class="who sr">{{.Who}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></header><div class="msg">{{.Body}}</div></article>
-{{else if eq .Kind "assistant"}}<article class="blk blk-assistant{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}><header><span class="who">{{.Who}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></header><div class="msg">{{.Body}}</div></article>
-{{else if eq .Kind "thinking"}}<details class="think{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Open}} open{{end}}><summary><span class="tn">{{t "sessions.who.thinking"}}</span> <span class="ta">{{.Summary}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a></summary><div class="msg">{{.Body}}</div></details>
+{{range .Blocks}}{{if eq .Kind "user"}}<article class="blk blk-user{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}><header><span class="who sr">{{.Who}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></header><div class="msg" data-refify>{{.Body}}</div></article>
+{{else if eq .Kind "assistant"}}<article class="blk blk-assistant{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}><header><span class="who">{{.Who}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></header><div class="msg" data-refify>{{.Body}}</div></article>
+{{else if eq .Kind "thinking"}}<details class="think{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Open}} open{{end}}><summary><span class="tn">{{t "sessions.who.thinking"}}</span> <span class="ta">{{.Summary}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a></summary><div class="msg" data-refify>{{.Body}}</div></details>
 {{else if eq .Kind "note"}}<p class="note"><span class="cl">{{.NoteLabel}}</span>{{range .Notes}}{{if .Pill}}{{.Pill}}{{else}}<a class="chip ar" href="{{.Href}}">{{.Text}}</a>{{end}}{{end}}</p>
 {{else}}<details class="tool{{if .Failed}} is-failed{{end}}{{if .Target}} is-target{{end}}" id="{{.ID}}-t"{{if .Open}} open{{end}}><summary>{{range .Extra}}<span class="anchor" id="{{.}}"></span>{{end}}<span class="tn">{{.Tool}}</span> <span class="ta">{{.Arg}}</span><span class="tr{{if .Failed}} is-bad{{end}}">{{.Result}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a></summary>
 {{with .Input}}{{template "code" .}}{{end}}

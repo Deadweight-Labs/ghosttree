@@ -160,6 +160,13 @@ func (s *Store) AppendCoordMessage(m CoordMessage) (int64, error) {
 // would silently never expire.
 var ErrCoordInvalidExpiry = errors.New("coordination expiry is not an RFC 3339 timestamp")
 
+// CoordMaxBody is the most a message may say, in bytes. The page reads every message
+// as Markdown and leaves a text over this size as plain blocks (ui-md.js, 64 KB too).
+const CoordMaxBody = 64 << 10
+
+// ErrCoordBodyTooLong: the body of a message is over CoordMaxBody. Nothing is stored.
+var ErrCoordBodyTooLong = errors.New("coordination message body is too long")
+
 // ErrCoordOriginConflict: die origin_event_id gehört schon einer Nachricht
 // eines anderen Absenders oder eines anderen Ziels. Die Kennung ist instanzweit
 // eindeutig, darf aber nie auf die Nachricht eines Fremden verweisen.

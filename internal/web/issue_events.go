@@ -26,11 +26,17 @@ import (
 type issueEvent struct {
 	// ID is the id of the activity behind the entry ("event-<ID>" in the markup);
 	// Criterion is the requirement number a "met" or "waived" entry belongs to.
-	ID              int64
-	At              string
-	Criterion       int
-	Act, Tone, Icon string
-	By, Age         string
+	ID int64
+	At string
+	// CriterionID and TaskID are the rows an entry is about, for the stamp of
+	// who did it; Actor is that maker once looked up.
+	CriterionID, TaskID int64
+	StampKind           string
+	StampID             int64
+	Actor               actorView
+	Criterion           int
+	Act, Tone, Icon     string
+	By, Age             string
 	// Sentence is what follows the name; it holds the links to the objects.
 	Sentence template.HTML
 	// Quote is the text under the line (criterion, summary, reason).
@@ -94,7 +100,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 	sentence := func(key string, args ...any) template.HTML {
 		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
 	}
-	reqLink := func(n int64) string { return string(refPillHTML(l, "request", n, requestURL(n))) }
+	reqLink := func(n int64) string { return string(longPill(l, "request", n, requestURL(n))) }
 	var out []issueEvent
 	for i := len(acts) - 1; i >= 0 && len(out) < activityShown; i-- {
 		act := acts[i]
@@ -127,7 +133,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 				break
 			}
 			ev.Quote = c.Text
-			ev.Criterion = c.Number
+			ev.Criterion, ev.CriterionID = c.Number, c.ID
 			if act.Kind == "criterion.met" {
 				ev.Tone, ev.Icon = "ok", "check"
 				for _, e := range c.Evidence {
@@ -203,7 +209,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			link := html.EscapeString("#")
 			if m := painData.FindStringSubmatch(act.Data); m != nil {
 				n, _ := strconv.ParseInt(m[1], 10, 64)
-				link = string(refPillHTML(l, "pain", n, painURL(n)))
+				link = string(longPill(l, "pain", n, painURL(n)))
 			}
 			ev.Sentence = sentence(map[string]string{"pain.linked": "issue.ev.pain_linked", "pain.unlinked": "issue.ev.pain_unlinked"}[act.Kind], link)
 		case "task.created", "task.done", "task.confirmed", "task.reopened", "task.dropped":
@@ -213,17 +219,17 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			link := ""
 			if m != nil {
 				n, _ = strconv.ParseInt(m[1], 10, 64)
-				link = string(refPillHTML(l, "task", n, "#task-"+m[1]))
+				ev.TaskID = n
+				link = string(longPill(l, "task", n, "#task-"+m[1]))
 			}
 			switch act.Kind {
 			case "task.created":
+				// The long pill names the task with its title; the same words in a box
+				// under the line were said twice.
 				if who := assignees[n]; who != "" {
 					ev.Sentence = sentence("issue.ev.task_created_for", html.EscapeString(who), link)
 				} else {
 					ev.Sentence = sentence("issue.ev.task_created", link)
-				}
-				if m != nil {
-					ev.Quote = ellipsize(m[3], 200)
 				}
 			case "task.done", "task.confirmed":
 				ev.Tone, ev.Icon = "ok", "check"
@@ -298,9 +304,10 @@ func relationSentence(l lang, act requestdomain.Activity, reqLink func(int64) st
 		if base != "" {
 			href = base + "/ideas/" + m[3]
 		}
-		target = string(refPillHTML(l, "idea", n, href))
+		target = string(longPill(l, "idea", n, href))
 	case m[4] != "":
-		target = `<a href="/ui/knowledge/` + m[4] + `">` + html.EscapeString(l.msg("issue.knowledge_n", m[4])) + `</a>`
+		n, _ := strconv.ParseInt(m[4], 10, 64)
+		target = string(longPill(l, "knowledge", n, "/ui/knowledge/"+m[4]))
 	default:
 		target = html.EscapeString(ellipsize(m[5], 120))
 		if strings.HasPrefix(m[5], "https://") || strings.HasPrefix(m[5], "http://") {
@@ -326,33 +333,43 @@ func proofChips(l lang, es []evidenceLine) template.HTML {
 		if ref == "" && e.Href == "" {
 			continue
 		}
-		text := html.EscapeString(ref)
+		var pill string
 		switch e.Kind {
 		case "commit":
 			short := ref
 			if len(short) > 7 {
 				short = short[:7]
 			}
-			text = html.EscapeString(short)
-			b.WriteString(string(kindPill(l, "commit", short, e.Href, pillCard{Label: e.Label, Title: ref})))
+			pill = string(kindPill(l, "commit", short, e.Href, pillCard{Label: e.Label, Title: ref}))
 		case "test":
-			b.WriteString(`<span class="chip test" title="` + html.EscapeString(e.Label) + `">` + text + `</span>`)
+			pill = `<span class="chip test" title="` + html.EscapeString(e.Label) + `">` + html.EscapeString(ref) + `</span>`
+		case "file":
+			pill = string(kindPill(l, "file", ref, e.Href, pillCard{Title: ref, Brief: e.Label}))
+		case "decision":
+			if n, err := strconv.ParseInt(strings.TrimPrefix(strings.ToUpper(ref), "DEC-"), 10, 64); err == nil && n > 0 {
+				pill = string(numberedPill(l, "decision", n, "", ""))
+				break
+			}
+			pill = `<span class="chip ar" title="` + html.EscapeString(e.Label) + `">` + string(mockIcon(proofIcon[e.Kind])) + html.EscapeString(ref) + `</span>`
 		default:
 			if e.Kind == "url" && e.Href != "" {
-				b.WriteString(string(urlPill(l, e.Href)))
-				continue
+				pill = string(urlPill(l, e.Href))
+				break
 			}
-			inner := string(mockIcon(proofIcon[e.Kind])) + text
+			inner := string(mockIcon(proofIcon[e.Kind])) + html.EscapeString(ref)
 			if e.Href != "" {
-				rel := ""
-				if e.Kind == "url" {
-					rel = ` rel="noopener noreferrer"`
-				}
-				b.WriteString(`<a class="chip ar" href="` + html.EscapeString(e.Href) + `" title="` + html.EscapeString(e.Label) + `"` + rel + `>` + inner + `</a>`)
+				pill = `<a class="chip ar" href="` + html.EscapeString(e.Href) + `" title="` + html.EscapeString(e.Label) + `">` + inner + `</a>`
 			} else {
-				b.WriteString(`<span class="chip ar" title="` + html.EscapeString(e.Label) + `">` + inner + `</span>`)
+				pill = `<span class="chip ar" title="` + html.EscapeString(e.Label) + `">` + inner + `</span>`
 			}
 		}
+		// The thing is a pill, the words about it plain grey text that wraps;
+		// one proof is one unit that never pushes the box wider.
+		b.WriteString(`<span class="pfx">` + pill)
+		if e.Note != "" {
+			b.WriteString(` <span class="pnote">` + html.EscapeString(e.Note) + `</span>`)
+		}
+		b.WriteString(`</span>`)
 	}
 	return template.HTML(b.String())
 }
@@ -386,7 +403,9 @@ func timelineItems(l lang, events []issueEvent) []tlItem {
 		if e.ID != 0 {
 			id = "event-" + strconv.FormatInt(e.ID, 10)
 		}
-		items = append(items, tlItem{ID: id, Act: e.Act, Who: e.By, Icon: e.Icon, Tone: tone, Head: head, Age: e.Age, Body: body, Git: e.Git, at: parseTime(e.At)})
+		it := tlItem{ID: id, Act: e.Act, Who: e.By, Icon: e.Icon, Tone: tone, Head: head, Age: e.Age, Body: body, Git: e.Git, at: parseTime(e.At)}
+		it.withActor(e.Actor)
+		items = append(items, it)
 	}
 	return items
 }

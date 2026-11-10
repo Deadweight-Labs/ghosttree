@@ -11,7 +11,7 @@ func isGuest(st *Store, account int) bool {
 func TestProjectInvitationAsMemberKeepsNewcomerOnThatProject(t *testing.T) {
 	st := roleFixture(t)
 	st.SetAccessMode(AccessMode{Enforce: true})
-	if _, err := st.EnsureProject("person:1", otherProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", otherProject); err != nil {
 		t.Fatal(err)
 	}
 	mustShare(t, st, "person:1", otherProject, true)
@@ -37,7 +37,7 @@ func TestProjectInvitationAsMemberKeepsNewcomerOnThatProject(t *testing.T) {
 func TestBackfillMarksProjectOnlyAccountsAsGuests(t *testing.T) {
 	st := roleFixture(t)
 	st.SetAccessMode(AccessMode{Enforce: true})
-	if _, err := st.EnsureProject("person:1", otherProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", otherProject); err != nil {
 		t.Fatal(err)
 	}
 	o, _ := st.OrgByRef("alpha")

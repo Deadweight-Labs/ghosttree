@@ -114,6 +114,14 @@ func (l lang) date(t time.Time, withYear bool) string {
 	return s
 }
 
+// weekdayName is the short name of a weekday: "Mon" or "Mo".
+func (l lang) weekdayName(d time.Weekday) string {
+	if l != langDE {
+		return d.String()[:3]
+	}
+	return weekdaysDE[d]
+}
+
 // weekdayDate schreibt Wochentag und Datum: "Mon 2 Jan" bzw. "Mo 2. Jan".
 func (l lang) weekdayDate(t time.Time) string {
 	if l != langDE {
@@ -147,9 +155,13 @@ func parseTemplates(l lang) *template.Template {
 			}
 			return m
 		},
-		"lbl":  func(group, value string) string { return adminLabel(l, group, value) },
-		"lang": func() string { return string(l) },
-		"lead": func(s string) string { return leadSentence(s, 200) },
+		// mdblocks and md write the text of a person for the one Markdown renderer
+		// (ui-md.js): the blocks it was split into, or the text itself.
+		"mdblocks": mdBlocks,
+		"md":       mdText,
+		"lbl":      func(group, value string) string { return adminLabel(l, group, value) },
+		"lang":     func() string { return string(l) },
+		"lead":     func(s string) string { return leadSentence(s, 200) },
 		// lower writes an agent's name the way the mock does: claude, codex.
 		"lower": strings.ToLower,
 		// more is how many of n entries are left after the first k.

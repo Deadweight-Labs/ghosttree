@@ -64,11 +64,17 @@ type newIssueView struct {
 	// spaces or commas) for where the issue came from.
 	Parent, DerivedFrom string
 	Again               bool
-	Composer            composerView
+	// Made is the note over the form for the next one: what was just created.
+	Made     *newMade
+	Composer composerView
 	// Error is a catalog key ("" none), ErrorDetail the rule code behind it.
 	Error, ErrorDetail string
 	CanCreate          bool
 }
+
+type newMade struct{ Text, Href string }
+
+var newMadeKeys = map[string]string{newKindIssue: "newissue.made_issue", newKindIdea: "newissue.made_idea", newKindPain: "newissue.made_pain"}
 
 func newKind(r *http.Request) string {
 	switch k := r.FormValue("kind"); k {
@@ -117,6 +123,15 @@ func (a *app) newIssueDefaults(r *http.Request, pa *store.ProjectAccess, remote 
 				v.Packages = append(v.Packages, newPackageOption{ID: p.ID, Label: packageName(l, p.Package)})
 			}
 		}
+	}
+	// The form for the next one: the box stays ticked and says what was made.
+	v.Again = r.URL.Query().Get("again") == "1"
+	if id, err := strconv.ParseInt(r.URL.Query().Get("made"), 10, 64); err == nil && id > 0 {
+		object := map[string]string{newKindIdea: "ideas", newKindPain: "pains"}[kind]
+		if object == "" {
+			object = "issues"
+		}
+		v.Made = &newMade{Text: l.msg(newMadeKeys[kind], id), Href: v.Base + "/" + object + "/" + strconv.FormatInt(id, 10)}
 	}
 	v.Criteria = make([]string, newCriteria)
 	if v.HasCriteria {
@@ -259,9 +274,9 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 		_, _ = pa.SetLabels(kind, id, names, nil)
 	}
 	if v.Again {
-		next := v.Base + "/issues/new"
+		next := v.Base + "/issues/new?again=1&made=" + strconv.FormatInt(id, 10)
 		if v.Kind != newKindIssue {
-			next += "?kind=" + url.QueryEscape(v.Kind)
+			next += "&kind=" + url.QueryEscape(v.Kind)
 		}
 		http.Redirect(w, r, next, http.StatusSeeOther)
 		return

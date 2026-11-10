@@ -147,11 +147,20 @@ func (a *app) orgRoute(w http.ResponseWriter, r *http.Request) {
 	slug := strings.ToLower(r.PathValue("a"))
 	if orgs, err := a.store.ListOrgs(browserPrincipal(r).ID); err == nil {
 		for _, o := range orgs {
-			if strings.ToLower(o.Slug) == slug {
-				a.orgPage(w, r, o, "repos")
+			if strings.ToLower(o.Slug) != slug {
+				continue
+			}
+			if o.Guest {
+				// A guest sees its project, not the organization (14 A, #4376).
+				http.NotFound(w, r)
 				return
 			}
+			a.orgPage(w, r, o, "repos")
+			return
 		}
+	}
+	if a.redirectMovedOrg(w, r, slug, "") {
+		return
 	}
 	// The owner segment of a project the viewer can see counts as the
 	// organization too: that is what the breadcrumb of a repository links to.

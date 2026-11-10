@@ -21,7 +21,10 @@ import (
 )
 
 type Server struct {
-	client         *client.Client
+	client *client.Client
+	// searchBudget is the time one area of context_search may take; zero is
+	// defaultAreaBudget.
+	searchBudget   time.Duration
 	ctxAxes        scope.Axes
 	baseActivation activation.Context
 	// repoRoot ist das Arbeitsverzeichnis der Repo-Wurzel. Ghost-Dateien
@@ -156,14 +159,14 @@ type RememberInput struct {
 	Type      string `json:"type" jsonschema:"pitfall, decision, note or plan"`
 	Title     string `json:"title" jsonschema:"one line summary"`
 	Body      string `json:"body" jsonschema:"the knowledge itself; for a decision, cover why it was taken, which alternatives were rejected and what the tradeoffs are"`
-	ScopeHint string `json:"scope_hint" jsonschema:"where this belongs — required, because it is a judgement nobody else can make for you: project, branch, machine or global.\nThe question that separates project from branch: does this stop being true once the branch is merged or abandoned? A migration in flight, a temporary flag, a workaround for something only this branch broke — that is branch. Anything that outlives the branch is project, and most things do.\nA branch entry is read by this branch and by every branch cut from it afterwards, never by a sibling. Machine is for facts that concern only the host and no repository, global for facts about how you work anywhere.\nKnowledge about running a repository on a machine (how ghosttree is deployed on build-1) belongs to BOTH: use scope_hint project and also pass machine. It is then seen and delivered like any project entry, to everyone with a role in the project, and marked with the machine. Only knowledge that concerns the host alone (its users, firewall rules, a database that serves no repository) gets scope_hint machine without a project: that stays private to the machine's owner."`
+	ScopeHint string `json:"scope_hint" jsonschema:"where this belongs, required (a judgement only you can make): project, branch, machine or global. Branch only if it stops being true once the branch is merged or abandoned (a migration in flight, a temporary flag, a workaround for something only this branch broke); anything that outlives the branch is project, and most things do. A branch entry is read by this branch and branches cut from it later, never by a sibling. Machine is for facts about the host alone and no repository, global for how you work anywhere. Running a repository on a host is BOTH: project plus machine."`
 	Project   string `json:"project,omitempty" jsonschema:"file it under this project instead of the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to. For a problem with another project's tool, work or code. Applies to scope_hint project or branch"`
 	Machine   string `json:"machine,omitempty" jsonschema:"with scope_hint machine: file it for this machine instead of the one you are on. With scope_hint project: the machine this project knowledge is about (use \"here\" for the one you are on); the entry stays a project entry, seen by everyone with a role in the project, and the machine only marks where it applies. Any machine name, including one no agent ever ran on, such as an ssh target. Not with branch or global"`
 	// Supersedes makes this entry the replacement of older ones, so the old ones
 	// leave search and the briefing instead of standing next to a follow-up.
 	Supersedes      []int64 `json:"supersedes,omitempty" jsonschema:"ids of older entries this one replaces because the state they describe changed. They stop appearing in search and the briefing but stay readable through their history. You need the right to edit each of them, and they must belong to the same project. Search first to find them"`
 	SupersedeReason string  `json:"supersede_reason,omitempty" jsonschema:"required with supersedes: what changed, in one sentence"`
-	Explanation     string  `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
+	Explanation     string  `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the people who review it: two to four plain sentences in their language, in everyday words: what it is about, why it matters, what has to be done or decided, your recommendation. No markdown or links, never a secret; without it the server writes one later from the text alone"`
 	// ShareWithOrgs gibt einen Maschinen-Eintrag gleich an Orgs frei.
 	ShareWithOrgs []string `json:"share_with_orgs,omitempty" jsonschema:"with scope_hint machine (no project): also share the entry with these organizations (slugs), for which a person has already shared the machine. Without it a machine entry stays private to the machine's owner; on a machine that belongs to an organization it goes to that organization. Not for an entry with a project: that one is seen through the project"`
 }
@@ -191,6 +194,7 @@ type SessionsInput struct {
 }
 
 func (s *Server) Register(srv *mcp.Server) {
+	srv.AddReceivingMiddleware(slimToolList)
 	closed := false
 	additive := false
 	mcp.AddTool(srv, &mcp.Tool{Name: "context_snapshot_create", Description: "Create an immutable named snapshot of the bound project's durable context and observed Git state.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleSnapshotCreate)
@@ -375,20 +379,21 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 		kind = "all"
 	}
 	limit := searchLimit
-	var out strings.Builder
-
+	b := s.builder()
+	var areas []searchArea
 	if kind == "knowledge" || kind == "all" {
-		// The scope union is what a session reads here. Across projects that
-		// union is meaningless, so the axes are matched as given instead.
-		res, err := s.client.SearchAnchored(in.Query, "knowledge", ax, limit, !crossProject, anchor)
-		if err != nil {
-			return nil, nil, err
-		}
-		if len(res.Knowledge) > 0 {
+		areas = append(areas, searchArea{name: "knowledge", run: func(ctx context.Context) (string, error) {
+			// The scope union is what a session reads here. Across projects that
+			// union is meaningless, so the axes are matched as given instead.
+			res, err := s.client.SearchContext(ctx, in.Query, "knowledge", ax, "", limit, !crossProject, anchor)
+			if err != nil || len(res.Knowledge) == 0 {
+				return "", err
+			}
+			var out strings.Builder
 			out.WriteString("## knowledge\n")
 			shortened := false
 			for _, k := range res.Knowledge {
-				out.WriteString(hitLink(renderKnowledge(k), s.builder().WithProject(k.Scope.Project).Knowledge(k.ID)))
+				out.WriteString(hitLink(renderKnowledge(k), b.WithProject(k.Scope.Project).Knowledge(k.ID)))
 				shortened = shortened || len([]rune(oneLine(k.Body))) > snippetChars
 			}
 			// Only said when something was actually held back. A pointer to the
@@ -398,56 +403,70 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 				out.WriteString("(an entry ending in … is shortened; call context_search with knowledge_id=<id> for its full text)\n")
 			}
 			out.WriteString(limitNote(len(res.Knowledge), limit))
-		}
+			return out.String(), nil
+		}})
 	}
 	if (kind == "sessions" || kind == "all") && !anchored {
-		// Sessions carry all three axes, so an exact filter on the full context
-		// would only ever match this very session; project is the useful scope.
-		// An empty project means every project, which is what all_projects asks for.
-		filter := scope.Axes{Project: ax.Project, Machine: in.Machine}
-		res, err := s.client.SearchExcludingSession(in.Query, "sessions", filter, s.sessionRef, limit)
-		if err != nil {
-			return nil, nil, err
-		}
-		res.Sessions = withoutSession(res.Sessions, s.sessionRef)
-		if len(res.Sessions) > 0 {
-			out.WriteString("\n## sessions\n")
+		areas = append(areas, searchArea{name: "sessions", run: func(ctx context.Context) (string, error) {
+			// Sessions carry all three axes, so an exact filter on the full context
+			// would only ever match this very session; project is the useful scope.
+			// An empty project means every project, which is what all_projects asks for.
+			filter := scope.Axes{Project: ax.Project, Machine: in.Machine}
+			res, err := s.client.SearchContext(ctx, in.Query, "sessions", filter, s.sessionRef, limit, false, client.AnchorFilter{})
+			if err != nil {
+				return "", err
+			}
+			res.Sessions = withoutSession(res.Sessions, s.sessionRef)
+			if len(res.Sessions) == 0 {
+				return "", nil
+			}
+			var out strings.Builder
+			out.WriteString("## sessions\n")
 			for _, h := range res.Sessions {
 				out.WriteString(hitLink(renderHit(h), s.sessionURL(h.Session)))
 			}
 			out.WriteString(limitNote(len(res.Sessions), limit))
-		}
+			return out.String(), nil
+		}})
 	}
 	if kind == "requests" || kind == "all" {
-		filter := scope.Axes{Project: s.ctxAxes.Project}
-		res, err := s.client.SearchAnchored(in.Query, "requests", filter, limit, false, anchor)
-		if err != nil {
-			return nil, nil, err
-		}
-		if len(res.Requests) > 0 {
-			out.WriteString("\n## requests\n")
+		areas = append(areas, searchArea{name: "requests", run: func(ctx context.Context) (string, error) {
+			filter := scope.Axes{Project: s.ctxAxes.Project}
+			res, err := s.client.SearchContext(ctx, in.Query, "requests", filter, "", limit, false, anchor)
+			if err != nil || len(res.Requests) == 0 {
+				return "", err
+			}
+			var out strings.Builder
+			out.WriteString("## requests\n")
 			for _, h := range res.Requests {
 				out.WriteString(hitLink(fmt.Sprintf("- [request|status=%s|type=%s|source=ledger%s] REQ-%d %s — %s\n", h.Request.State, h.Request.Type, originctx.Label(h.OriginContext, h.Request.CreatedAt), h.Request.ID, h.Request.Title, h.MatchReason),
-					s.builder().WithProject(h.Request.Scope.Project).Issue(h.Request.ID)))
+					b.WithProject(h.Request.Scope.Project).Issue(h.Request.ID)))
 			}
 			out.WriteString(limitNote(len(res.Requests), limit))
-		}
+			return out.String(), nil
+		}})
 	}
 	if kind == "files" || kind == "all" {
-		// Der Ghost-Baum ist projektgebunden: ein Pfad ist nur im Repo
-		// eindeutig, zu dem er gehört.
-		res, err := s.client.SearchGhostsAnchored(in.Query, ax.Project, limit, anchor)
-		if err != nil {
-			return nil, nil, err
-		}
-		if len(res) > 0 {
-			out.WriteString("\n## files\n")
+		areas = append(areas, searchArea{name: "files", run: func(ctx context.Context) (string, error) {
+			// Der Ghost-Baum ist projektgebunden: ein Pfad ist nur im Repo
+			// eindeutig, zu dem er gehört.
+			res, err := s.client.SearchGhostsContext(ctx, in.Query, ax.Project, limit, anchor)
+			if err != nil || len(res) == 0 {
+				return "", err
+			}
+			var out strings.Builder
+			out.WriteString("## files\n")
 			for _, g := range res {
 				out.WriteString(renderGhostHit(g))
 			}
-		}
+			return out.String(), nil
+		}})
 	}
-	return textResult(out.String()), nil, nil
+	text, err := runSearchAreas(ctx, areas, s.areaBudget())
+	if err != nil {
+		return nil, nil, err
+	}
+	return textResult(text), nil, nil
 }
 
 func (s *Server) handleGet(ctx context.Context, _ *mcp.CallToolRequest, in GetInput) (*mcp.CallToolResult, any, error) {

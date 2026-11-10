@@ -1070,6 +1070,16 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// Right after the accounts: every later step may read accounts, orgs and
+	// projects through the shared column lists, which name the new columns.
+	if err := ensureOwnerNamespaces(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureGardenSettings(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateCoordRoomMemberships(db); err != nil {
 		_ = db.Close()
 		return nil, err

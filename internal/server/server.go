@@ -128,12 +128,18 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "DELETE /api/orgs/{org}/invitations/{id}", a.revokeOrgInvitation)
 	a.routeFunc(mux, "POST /api/invitations/accept", a.acceptInvitation)
 	a.routeFunc(mux, "PUT /api/account/default-org", a.setDefaultOrg)
+	a.routeFunc(mux, "GET /api/garden/due", a.gardenDue)
+	a.routeFunc(mux, "POST /api/garden/runs", a.gardenRunStart)
+	a.routeFunc(mux, "POST /api/garden/runs/{id}/finish", a.gardenRunFinish)
 	a.routeFunc(mux, "GET /api/projects", a.listProjects)
 	a.routeFunc(mux, "GET /api/projects/writable", a.writableProjects)
 	a.routeFunc(mux, "GET /api/projects/{id}/members", a.listProjectMembers)
 	a.routeFunc(mux, "PUT /api/projects/{id}/members/{account}", a.setProjectMemberRole)
 	a.routeFunc(mux, "DELETE /api/projects/{id}/members/{account}", a.removeProjectMemberRole)
 	a.routeFunc(mux, "POST /api/projects/claim", a.claimProject)
+	a.routeFunc(mux, "POST /api/projects/reassign", a.reassignProject)
+	a.routeFunc(mux, "GET /api/projects/held", a.listHeldEntries)
+	a.routeFunc(mux, "POST /api/projects/held", a.decideHeldEntry)
 	a.routeFunc(mux, "POST /api/projects", a.createProject)
 	a.routeFunc(mux, "POST /api/projects/move", a.moveProject)
 	a.routeFunc(mux, "POST /api/context-snapshots", a.createContextSnapshot)
@@ -325,7 +331,9 @@ func (a *api) auth(next http.Handler) http.Handler {
 			record.actor = principal.Label
 		}
 		ctx := context.WithValue(r.Context(), personKey{}, principal)
-		next.ServeHTTP(w, r.WithContext(withAccessHolder(ctx, a.st, principal)))
+		r = r.WithContext(withAccessHolder(ctx, a.st, principal))
+		movedProjects(r)
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -438,5 +446,9 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 
 func readJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
-	return json.NewDecoder(r.Body).Decode(v)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		return err
+	}
+	movedProjectFields(r, v)
+	return nil
 }

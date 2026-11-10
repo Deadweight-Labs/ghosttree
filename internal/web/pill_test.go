@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"html"
 	"regexp"
 	"strings"
@@ -86,6 +87,34 @@ func TestURLPillReadsHostAndEndOfPath(t *testing.T) {
 	pr := string(urlPill(langDE, "https://github.com/Deadweight-Labs/ghosttree/pull/163"))
 	if !strings.Contains(pr, "k-pr") || !strings.Contains(pr, "#163") {
 		t.Errorf("a GitHub pull request is a pull request pill: %s", pr)
+	}
+	// Nobody here has read its state, so it is not "open"; it leaves ghosttree.
+	if !strings.Contains(pr, "s-unknown") || strings.Contains(pr, "s-open") || !strings.Contains(pr, `rel="noopener noreferrer"`) {
+		t.Errorf("a GitHub link claims a state or does not leave ghosttree: %s", pr)
+	}
+}
+
+// In a sentence of the history the pill is written out: the script adds the title.
+func TestLongPillAsksTheScriptForItsTitle(t *testing.T) {
+	long, short := string(longPill(langDE, "request", 5, "/ui/requests/5")), string(refPillHTML(langDE, "request", 5, "/ui/requests/5"))
+	if !strings.Contains(long, ` data-long`) || strings.Contains(short, "data-long") {
+		t.Errorf("long %s short %s", long, short)
+	}
+	ev := issueEvents(langDE, []requestdomain.Activity{{Kind: "relation.added", Data: "parent REQ-7"}, {Kind: "task.created", Data: "TASK-5 x text"}, {Kind: "pain.linked", Data: "PAIN-3"}}, nil, nil, "", func(string) string { return "" })
+	var all string
+	for _, e := range ev {
+		all += string(e.Sentence)
+	}
+	for _, want := range []string{`data-ref="REQ-7" data-long`, `data-ref="TASK-5" data-long`, `data-ref="PAIN-3" data-long`} {
+		if !strings.Contains(all, want) {
+			t.Errorf("sentences lack %q: %s", want, all)
+		}
+	}
+	got := painLinkTarget(langDE, "request:3") + painLinkTarget(langDE, "idea:5") + painLinkTarget(langDE, "knowledge:9") + painLinkTarget(langDE, "weird:x")
+	for _, want := range []string{`data-ref="REQ-3" data-long`, `data-ref="IDEA-5" data-long`, `data-ref="KN-9" data-long`, "weird:x"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("pain links lack %q: %s", want, got)
+		}
 	}
 }
 
@@ -172,8 +201,9 @@ func TestMarkdownRendererLeavesHashNumbersToTheServer(t *testing.T) {
 	if strings.Contains(src, "innerHTML") {
 		t.Error("ui-md.js builds HTML from a string")
 	}
-	// The cut points of the script test of the documents (#206): safeUrl stands on its own.
-	if i, j := strings.Index(src, "  function safeUrl("), strings.Index(src, "  // Address of a reference"); i < 0 || j <= i {
+	// The cut points of the script test of the documents (#206): safeUrl, with the comment and
+	// the patterns above it, stands on its own up to the comment of the next block.
+	if i, j := strings.Index(src, "  // Allowed: http(s) and relative addresses."), strings.Index(src, "  // Address of a reference"); i < 0 || j <= i || !strings.Contains(src[i:j], "function safeUrl(") {
 		t.Error("safeUrl is no longer a block of its own in ui-md.js")
 	}
 }

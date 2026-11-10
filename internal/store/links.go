@@ -168,15 +168,21 @@ func (s *Store) tasksOfRequest(requestID int64) ([]humantask.Task, error) {
 // -------- visibility, the one filter every list goes through
 
 func (a *ProjectAccess) painObject(p pain.Pain) Object {
-	return Object{Own: a.valid && a.account != 0 && p.AuthorID == a.account}
+	return Object{Own: a.valid && a.account != 0 && p.AuthorID == a.account, HeldAuthor: a.heldAuthor(HeldPain, p.ID)}
 }
 
 // CanSeePain is the read filter for every list of pains.
 func (a *ProjectAccess) CanSeePain(p pain.Pain) bool {
+	if a.heldBack(HeldPain, p.ID, p.Project, ResPain) {
+		return false
+	}
 	return a.Allow(p.Project, ResPain, ActRead, a.painObject(p))
 }
 
 func (a *ProjectAccess) CheckPain(p pain.Pain, act Action) error {
+	if a.heldBack(HeldPain, p.ID, p.Project, ResPain) {
+		return ErrAccessNotFound
+	}
 	return a.Check(p.Project, ResPain, act, a.painObject(p))
 }
 

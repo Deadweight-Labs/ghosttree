@@ -132,14 +132,14 @@ func TestBandHasABoxWithFadesAndAMoreMarkAndEveryTabNamesItself(t *testing.T) {
 }
 
 func TestOrgBandHasTheTabsOfAnOrganisation(t *testing.T) {
-	b := orgBand("/ui/acme", "agents", map[string]int{"repos": 5, "agents": 3}, true)
+	b := orgBand("/ui/acme", "agents", map[string]int{"repos": 5, "agents": 3}, orgBandOpts{Owner: true})
 	page := renderPart(t, langDE, "uiband", b)
 	for _, want := range []string{`data-tab="repos"`, `data-tab="agents" class="sel"`, `href="/ui/acme/agents" aria-current="page"`, `data-tab="people"`, `data-tab="rooms"`, `data-tab="settings"`, `aria-label="Organisation"`, `<span class="counter">5</span>`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("org band lacks %q: %s", want, page)
 		}
 	}
-	if page := renderPart(t, langDE, "uiband", orgBand("/ui/acme", "repos", nil, false)); strings.Contains(page, `data-tab="settings"`) {
+	if page := renderPart(t, langDE, "uiband", orgBand("/ui/acme", "repos", nil, orgBandOpts{})); strings.Contains(page, `data-tab="settings"`) {
 		t.Error("settings are for owners")
 	}
 }
@@ -289,7 +289,7 @@ func TestComponentGalleryRenders(t *testing.T) {
 		{Key: "commits", Label: "repo.tab.commits", Href: "#", Icon: "commit"},
 	}}
 	part("Band", renderPart(t, l, "uiband", band))
-	part("Band Organisation", renderPart(t, l, "uiband", orgBand("#", "repos", map[string]int{"repos": 5, "agents": 5, "people": 3, "rooms": 4}, true)))
+	part("Band Organisation", renderPart(t, l, "uiband", orgBand("#", "repos", map[string]int{"repos": 5, "agents": 5, "people": 3, "rooms": 4}, orgBandOpts{Owner: true})))
 	part("Verweise", `<p class="gal-p">Im Text <b>`+string(refPillHTML(l, "pain", 55, "#"))+`</b> und `+string(refPillHTML(l, "request", 599, "#"))+` und `+string(refPillHTML(l, "task", 124, "#"))+` und `+string(refPillHTML(l, "idea", 7, "#"))+`, kurz: `+string(refHTML(l, "request", 599, "#"))+` `+string(refHTML(l, "pain", 55, "#"))+` `+string(refHTML(l, "task", 124, "#"))+` `+string(refHTML(l, "idea", 7, "#"))+`</p>`)
 	var av strings.Builder
 	for _, s := range []avatarSpec{{Name: "Robin", Size: "lg"}, {Name: "Mara", Size: "lg"}, {Kind: avClaude, Name: "claude", Owner: "Robin", Size: "lg"}, {Kind: avCodex, Name: "codex", Owner: "Robin", Size: "lg"}, {Kind: avGardener, Size: "lg"}, {Kind: avSystem, Size: "lg"}, {Name: "Jonas"}, {Kind: avClaude, Name: "claude"}} {

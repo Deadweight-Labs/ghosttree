@@ -100,16 +100,22 @@ func (s *Store) attachIdeaMeta(list []idea.Idea) error {
 }
 
 func (a *ProjectAccess) ideaObject(i idea.Idea) Object {
-	return Object{Own: a.valid && a.account != 0 && i.AuthorID == a.account}
+	return Object{Own: a.valid && a.account != 0 && i.AuthorID == a.account, HeldAuthor: a.heldAuthor(HeldIdea, i.ID)}
 }
 
 // CanSeeIdea ist der Lesefilter für jede Liste von Ideen.
 func (a *ProjectAccess) CanSeeIdea(i idea.Idea) bool {
+	if a.heldBack(HeldIdea, i.ID, i.Project, ResIdea) {
+		return false
+	}
 	return a.Allow(i.Project, ResIdea, ActRead, a.ideaObject(i))
 }
 
 // CheckIdea prüft eine Aktion auf eine vorhandene Idee.
 func (a *ProjectAccess) CheckIdea(i idea.Idea, act Action) error {
+	if a.heldBack(HeldIdea, i.ID, i.Project, ResIdea) {
+		return ErrAccessNotFound
+	}
 	return a.Check(i.Project, ResIdea, act, a.ideaObject(i))
 }
 

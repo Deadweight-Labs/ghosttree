@@ -31,7 +31,6 @@ const (
 	rankBlocks = iota
 	rankHandoff
 	rankTask
-	rankGarden
 	rankProposals
 )
 
@@ -253,9 +252,8 @@ func (a *app) homeAttention(r *http.Request, now time.Time) ([]forYouRow, error)
 	return rows, nil
 }
 
-// homeBundles gives ONE row for the knowledge proposals of agents and ONE for
-// the notes of the gardener, never a row per proposal. Only what the viewer may
-// verify is counted.
+// homeBundles gives ONE row for the knowledge proposals of agents, never a row
+// per proposal. Only what the viewer may verify is counted.
 func (a *app) homeBundles(l lang, pa *store.ProjectAccess, project string, now time.Time) ([]forYouRow, error) {
 	w := a.knowledgeWindowFor(pa, project)
 	w.Pending = true
@@ -266,27 +264,15 @@ func (a *app) homeBundles(l lang, pa *store.ProjectAccess, project string, now t
 	if err != nil {
 		return nil, err
 	}
-	var agents, garden []store.Knowledge
+	var agents []store.Knowledge
 	for _, k := range pending {
-		if k.Harness == gardenerHarness {
-			garden = append(garden, k)
-		} else {
+		// The gardener's notes are no inbox row (REQ-624): they wait on the
+		// Gardener tab of their organization or person.
+		if k.Harness != gardenerHarness {
 			agents = append(agents, k)
 		}
 	}
 	var rows []forYouRow
-	if len(garden) > 0 {
-		oldest, projects := bundleFacts(garden)
-		row := forYouRow{Mark: "garden", Title: l.msg("home.garden", len(garden)), Lead: l.msg("usage.job.garden"), Rest: projectNames(projects, 4), Actor: "gardener",
-			Action: l.msg("home.act.overview"), Href: "/ui/review?source=gardener", rank: rankGarden, at: oldest}
-		if len(garden) == 1 {
-			row.Title = l.msg("home.garden_one")
-		}
-		if now.Sub(oldest) >= 48*time.Hour {
-			row.Age = l.msg("home.oldest_since", shortAge(l, now, oldest))
-		}
-		rows = append(rows, row)
-	}
 	if len(agents) > 0 {
 		oldest, projects := bundleFacts(agents)
 		title := l.msg("home.proposals", len(agents))

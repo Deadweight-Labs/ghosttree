@@ -137,92 +137,134 @@ func TestAccountInSeveralOrgsAndDefault(t *testing.T) {
 }
 
 func TestProjectAssignmentRule(t *testing.T) {
-	st := orgStore(t, "robin", "anna", "ben", "carl")
+	st := orgStore(t, "robin", "anna", "ben", "carl", "gus")
+	st.SetAccessMode(AccessMode{Enforce: true})
 	alpha := mustOrg(t, st, "person:1", "Alpha", "alpha")
 	beta := mustOrg(t, st, "person:1", "Beta", "beta")
-	// robin: Owner beider. anna: Mitglied von Alpha. ben: Owner beider, ohne
-	// Standard. carl: keine Org.
-	join := func(acct string, o Org, role string) {
-		code, _, _ := st.CreateInvitation("person:1", o.ID, "", OrgMember, 0)
-		if _, err := st.AcceptInvitation(acct, code); err != nil {
-			t.Fatal(err)
-		}
-		if role == OrgOwner {
-			if err := st.SetOrgRole("person:1", o.ID, acct, OrgOwner); err != nil {
-				t.Fatal(err)
-			}
-		}
+	_ = beta
+	code, _, _ := st.CreateInvitation("person:1", alpha.ID, "", OrgMember, 0)
+	if _, err := st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
 	}
-	join("person:2", alpha, OrgMember)
-	join("person:3", alpha, OrgOwner)
-	join("person:3", beta, OrgOwner)
-	st.db.Exec(`UPDATE persons SET default_org_id=0 WHERE id=3`)
+	// alpha verbindet acme mit Präfix; anna ist dort Mitglied.
+	if _, err := st.ConnectSourceWithInstallation("person:1", alpha.ID, SourceGitHub, "acme", 9, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ClaimPrefix("person:1", alpha.ID, "github.com/acme/*", VisibilityShared); err != nil {
+		t.Fatal(err)
+	}
+	// Robins GitHub-Login ist von GitHub bestätigt (github_id > 0), Carls nicht.
+	if err := st.SetAccountGitHub("person:1", "robin-gh", 42); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetAccountGitHub("person:4", "carl-gh", 0); err != nil {
+		t.Fatal(err)
+	}
 
-	// Ein einfaches Mitglied besetzt nichts: die Remote bleibt unbeansprucht,
-	// der Schreibzugriff geht durch (kein Fehler).
-	p, err := st.EnsureProject("person:2", "https://github.com/Deadweight-Labs/ghosttree.git")
-	if err != nil || p.Org != "" {
-		t.Fatalf("member write: %+v %v", p, err)
+	// 2a: ein Schreibzugriff beansprucht nur über das Präfix einer Org, in der man
+	// Mitglied ist, oder über das eigene bestätigte Login.
+	if p, err := st.EnsureProject("person:2", "github.com/acme/app"); err != nil || p.Org != "alpha" {
+		t.Fatalf("member write under the prefix: %+v %v", p, err)
 	}
-	if _, ok := st.ProjectByRemote("github.com/deadweight-labs/ghosttree"); ok {
-		t.Fatal("a plain member must not claim a project by writing")
+	if p, err := st.EnsureProject("person:1", "github.com/robin-gh/tool"); err != nil || p.Org != "robin-gh" || p.OrgKind != OrgKindUser {
+		t.Fatalf("own verified login: %+v %v", p, err)
 	}
-	// Ein Owner schreibt in dieselbe unbeanspruchte Remote und gewinnt sie.
-	if p, err = st.EnsureProject("person:1", "github.com/deadweight-labs/ghosttree"); err != nil || p.Remote != "github.com/deadweight-labs/ghosttree" || p.Org != "alpha" {
-		t.Fatalf("owner write: %+v %v", p, err)
+	if _, err := st.EnsureProject("person:2", "github.com/robin-gh/other"); !errors.Is(err, ErrProjectClaimed) {
+		t.Fatalf("somebody else's verified login: %v", err)
 	}
-	// Danach ist sie bekannt; Mitglieder und Owner derselben Org schreiben weiter.
-	if p2, err := st.EnsureProject("person:3", "github.com/deadweight-labs/ghosttree"); err != nil || p2.Org != "alpha" {
-		t.Fatalf("known project: %+v %v", p2, err)
+	// 2b: sonst bleibt die Remote unbeansprucht, der Schreibzugriff geht durch.
+	for who, remote := range map[string]string{"person:4": "github.com/carl-gh/x", "person:2": "github.com/some-one/tool", "person:3": "gitlab.com/x/y"} {
+		if p, err := st.EnsureProject(who, remote); err != nil || p.ID != 0 {
+			t.Fatalf("%s writing %s: %+v %v", who, remote, p, err)
+		}
+		if _, ok := st.ProjectByRemote(remote); ok {
+			t.Fatalf("%s claimed %s by writing", who, remote)
+		}
 	}
-	// Eine unbeanspruchte Remote, die ein Mitglied angelegt hat, gewinnt der
-	// erste Owner, auch einer anderer Org (hier: ben mit Standard Beta).
-	st.EnsureProject("person:2", "github.com/x/memberfirst")
-	st.SetDefaultOrg("person:3", beta.ID)
-	if p, err := st.EnsureProject("person:3", "github.com/x/memberfirst"); err != nil || p.Org != "beta" {
-		t.Fatalf("first owner wins: %+v %v", p, err)
+	// 2c: ausdrücklich nur ohne fremde Einträge, sonst strittig mit Arten und Anzahl.
+	if _, err := st.InsertKnowledge(Knowledge{Type: "note", Title: "t", Body: "b", Scope: scope.Axes{Project: "gitlab.com/some-one/tool"}, Person: "anna"}); err != nil {
+		t.Fatal(err)
 	}
-	// Mehrere Orgs ohne Standard: nicht raten.
-	st.SetDefaultOrg("person:3", 0)
-	_, err = st.EnsureProject("person:3", "github.com/x/new")
-	var unclaimed *ProjectUnclaimedError
-	if !errors.As(err, &unclaimed) || len(unclaimed.Choices) != 2 {
-		t.Fatalf("several orgs, no default: %v", err)
+	var contested *ContestedError
+	if _, err := st.ClaimProject("person:3", "gitlab.com/some-one/tool", ""); !errors.As(err, &contested) || contested.Kinds["knowledge"] != 1 {
+		t.Fatalf("claim over anna's entry: %v", err)
 	}
-	if _, ok := st.ProjectByRemote("github.com/x/new"); ok {
-		t.Fatal("a refused write must not leave a project behind")
+	if p, err := st.ClaimProject("person:2", "gitlab.com/some-one/tool", ""); err != nil || p.Org != "anna" {
+		t.Fatalf("anna claims her own: %+v %v", p, err)
 	}
-	// Mit Standard geht es.
-	st.SetDefaultOrg("person:3", beta.ID)
-	if p, err := st.EnsureProject("person:3", "github.com/x/new"); err != nil || p.Org != "beta" {
-		t.Fatalf("default org: %+v %v", p, err)
+	// Review point 1: a github.com repository under a login nobody here
+	// verified is claimed explicitly by nobody but the instance admin.
+	for _, who := range []string{"person:2", "person:3"} {
+		if _, err := st.ClaimProject(who, "github.com/some-one/tool", ""); !errors.Is(err, ErrNotGitHubOwner) {
+			t.Fatalf("%s claimed github.com/some-one/tool: %v", who, err)
+		}
 	}
-	// Ein ausdrücklicher Claim ist Owner-Sache; ein Mitglied kann nicht besetzen.
-	if _, err := st.ClaimProject("person:2", "github.com/x/other", "alpha"); !errors.Is(err, ErrNotOrgOwner) {
-		t.Fatalf("explicit claim by a plain member: %v", err)
+	if _, err := st.ClaimContested("person:2", "gitlab.com/x/y", "alpha"); !errors.Is(err, ErrNotAdmin) {
+		t.Fatalf("a non-admin decided: %v", err)
 	}
-	if _, ok := st.ProjectByRemote("github.com/x/other"); ok {
-		t.Fatal("a refused claim left a project behind")
+	if p, err := st.ClaimContested("person:1", "gitlab.com/x/y", "alpha"); err != nil || p.Org != "alpha" {
+		t.Fatalf("the admin decides: %+v %v", p, err)
 	}
-	if p, err := st.ClaimProject("person:1", "github.com/x/other", "alpha"); err != nil || p.Org != "alpha" {
-		t.Fatalf("explicit claim by an owner: %+v %v", p, err)
+	// Ausdrücklich in eine Org: Mitglieder ja (sie werden Projekt-Owner), Fremde nicht.
+	if p, err := st.ClaimProject("person:2", "gitlab.com/x/member", "alpha"); err != nil || p.Org != "alpha" {
+		t.Fatalf("explicit claim by a member: %+v %v", p, err)
 	}
-	// Keine Org: bleibt unbeansprucht, kein Fehler für den Aufrufer außer ErrNoOrg.
-	if _, err := st.EnsureProject("person:4", "github.com/x/none"); !errors.Is(err, ErrNoOrg) {
-		t.Fatalf("no org: %v", err)
+	if role := st.ProjectRole("gitlab.com/x/member", "person:2"); role.Role != RoleOwner || role.Implicit {
+		t.Fatalf("the member who created it = %+v", role)
 	}
-	// Fremdes Projekt beanspruchen, in fremde Org beanspruchen.
-	if _, err := st.ClaimProject("person:4", "github.com/x/new", ""); !errors.Is(err, ErrProjectClaimed) {
-		t.Fatalf("claim of a foreign project: %v", err)
-	}
-	if _, err := st.ClaimProject("person:2", "github.com/x/mine", "beta"); !errors.Is(err, ErrNotOrgMember) {
+	if _, err := st.ClaimProject("person:4", "gitlab.com/x/mine", "alpha"); !errors.Is(err, ErrNotOrgMember) {
 		t.Fatalf("claim into a foreign org: %v", err)
 	}
 	if _, err := st.ClaimProject("person:2", "bad remote", ""); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("invalid remote: %v", err)
 	}
-	if p, err := st.ClaimProject("person:2", "github.com/deadweight-labs/ghosttree", ""); err != nil || p.Org != "alpha" {
-		t.Fatalf("own claim must be idempotent: %+v %v", p, err)
+	// Wegwerf-Remotes werden nie Projekte, auch nicht ausdrücklich.
+	for _, raw := range []string{"/home/u/.cache/run-1/origin", "https://benchmark.invalid/x", "file:///tmp/r"} {
+		if _, err := st.EnsureProject("person:1", raw); !errors.Is(err, ErrInvalidRemote) {
+			t.Fatalf("throwaway %q: %v", raw, err)
+		}
+		if _, err := st.ClaimProject("person:1", raw, "alpha"); !errors.Is(err, ErrInvalidRemote) && !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("throwaway claim %q: %v", raw, err)
+		}
+	}
+	// Befund 1: ein Nur-Gast bekommt keinen Namensraum, weder durch Schreiben
+	// noch ausdrücklich, und bleibt Gast.
+	pi, _, err := st.CreateProjectInvitation("person:1", alpha.ID, "github.com/acme/app", RoleGuest, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AcceptInvitation("person:5", pi); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetAccountGitHub("person:5", "gus-gh", 77); err != nil {
+		t.Fatal(err)
+	}
+	for i, try := range []func() error{
+		func() error { _, err := st.EnsureProject("person:5", "github.com/gus-gh/x"); return err },
+		func() error { _, err := st.ClaimProject("person:5", "github.com/elsewhere/y", ""); return err },
+		func() error { _, err := st.CreateNamedProject("person:5", "notes", ""); return err },
+	} {
+		if err := try(); !errors.Is(err, ErrGuestOnly) {
+			t.Fatalf("try %d: a guest got a project: %v", i, err)
+		}
+	}
+	if _, ok := st.UserNamespace("person:5"); ok {
+		t.Fatal("a guest got a namespace")
+	}
+	if got := st.OrgViewerKind(alpha.ID, "person:5"); got != OrgViewerGuest {
+		t.Fatalf("the guest is now %q", got)
+	}
+	// Ein Dienst legt nichts an und hat keinen Namensraum.
+	other := orgStore(t, "robin", "bot")
+	mustOrg(t, other, "person:1", "Alpha", "alpha")
+	if err := other.SetAccountKindAsOperator(2, AccountKindService, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.ClaimProject("person:2", "github.com/x/bot", ""); !errors.Is(err, ErrServiceAccount) {
+		t.Fatalf("service creates a project: %v", err)
+	}
+	if _, err := other.EnsureUserNamespace("person:2"); !errors.Is(err, ErrServiceAccount) {
+		t.Fatalf("service namespace: %v", err)
 	}
 }
 
@@ -490,7 +532,7 @@ func TestBootstrapCreatesDefaultOrg(t *testing.T) {
 		t.Fatal(err)
 	}
 	orgs, err := st.ListOrgs(acct.ID)
-	if err != nil || len(orgs) != 1 || orgs[0].Slug != "default" || orgs[0].Role != OrgOwner || !orgs[0].Default {
+	if err != nil || len(orgs) != 1 || orgs[0].Slug != "default" || orgs[0].Role != OrgOwner {
 		t.Fatalf("orgs = %+v %v", orgs, err)
 	}
 }
@@ -563,7 +605,7 @@ func TestOrgBackfillOnOldDatabase(t *testing.T) {
 		}
 		defer st.Close()
 		orgs, err := st.ListOrgs("person:1")
-		if err != nil || len(orgs) != 1 || orgs[0].Slug != "default" || orgs[0].Role != OrgOwner || !orgs[0].Default {
+		if err != nil || len(orgs) != 1 || orgs[0].Slug != "default" || orgs[0].Role != OrgOwner {
 			t.Fatalf("%s: robin's orgs = %+v %v", label, orgs, err)
 		}
 		if orgs, _ := st.ListOrgs("person:2"); len(orgs) != 0 {
@@ -625,7 +667,7 @@ func TestOrgsThroughRuntimeWriter(t *testing.T) {
 	if _, err := st.AcceptInvitation("person:2", code); !errors.Is(err, ErrTooManyAttempts) {
 		t.Fatalf("lock must survive the writer's store copies: %v", err)
 	}
-	if _, err := st.EnsureProject("person:1", "github.com/x/y"); err != nil {
+	if _, err := claimInOrg(st, "person:1", "github.com/x/y"); err != nil {
 		t.Fatal(err)
 	}
 	if p, ok := st.ProjectByRemote("github.com/x/y"); !ok || p.Org != "alpha" {
@@ -637,7 +679,7 @@ func TestForceMoveAndRename(t *testing.T) {
 	st := orgStore(t, "robin", "anna")
 	a := mustOrg(t, st, "person:1", "Alpha", "alpha")
 	b := mustOrg(t, st, "person:2", "Beta", "beta")
-	if _, err := st.ClaimProject("person:2", "github.com/x/y", "beta"); err != nil {
+	if _, err := claimOrPlace(st, "person:2", "github.com/x/y", "beta"); err != nil {
 		t.Fatal(err)
 	}
 	// Admin-Weg ohne Rechteprüfung, protokolliert in beiden Orgs.

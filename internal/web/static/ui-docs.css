@@ -17,6 +17,17 @@
   & .dcmeta { display: flex; align-items: center; gap: 12px; font-size: 12px; }
   & .dcage { white-space: nowrap; }
   & .dcdoc { padding: 24px 32px; }
+  & .dcread:has(.dctoc:not([hidden])) { display: grid; grid-template-columns: minmax(0, 1fr) 232px; gap: 24px; align-items: start; }
+  & .dctoc { order: 2; position: sticky; top: 72px; max-height: calc(100vh - 96px); padding: 4px 0 4px 16px; overflow: auto; border-left: 1px solid var(--border-muted); font-size: 13px; }
+  & .dctoc[hidden] { display: none; }
+  & .dctoc-h { margin-bottom: 8px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .dctoc ol { margin: 0; padding: 0; list-style: none; }
+  & .dctoc li { padding: 2px 0; line-height: 1.4; }
+  & .dctoc a { color: var(--fg-muted); overflow-wrap: anywhere; text-decoration: none; }
+  & .dctoc a:hover { color: var(--accent-fg); }
+  & .dctoc .lv1 { padding-left: 12px; }
+  & .dctoc .lv2 { padding-left: 24px; }
+  & .dctoc .lv3 { padding-left: 36px; }
   & .sec { display: flex; align-items: center; gap: 8px; margin: 24px 0 8px; }
   & .sec h2 { margin: 0; font-size: 16px; }
   & .dcrev { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 16px; }
@@ -39,6 +50,13 @@
   & .dl.skip { display: block; height: 20px; padding-left: 16px; background: var(--canvas-subtle); border-block: 1px solid var(--border-muted); color: var(--fg-muted); }
   & .dl.skip::after { content: "⋯"; }
   & .dl.skip:first-child { border-top: 0; }
+}
+
+@media (max-width: 980px) {
+  :is(.g2.dc) {
+    & .dcread:has(.dctoc:not([hidden])) { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    & .dctoc { order: -1; position: static; max-height: 40vh; padding: 0 0 12px; border-left: 0; border-bottom: 1px solid var(--border-muted); }
+  }
 }
 
 @media (max-width: 768px) {

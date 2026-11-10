@@ -1,6 +1,7 @@
 package web
 
 import (
+	"html/template"
 	"io"
 	"net/http"
 	"net/url"
@@ -54,11 +55,11 @@ type docPageView struct {
 	// Rev is the revision shown, Head the newest; Old says they differ.
 	Rev, Head int
 	Old       bool
-	// Raw is the Markdown source (ui-md.js renders it, as for comments),
-	// Blocks the plain paragraphs a page without script shows.
-	Raw    string
-	Blocks []bodyBlock
-	Revs   []docRevRow
+	// Body is the text of the revision for the Markdown renderer (ui-md.js):
+	// the source in data-md, the blocks as plain HTML for a page without script.
+	// The first heading is left out when it says what the title of the page says.
+	Body template.HTML
+	Revs []docRevRow
 	// Href is the permanent address of the document, Link the same with the
 	// public origin when the server knows it (what "Copy link" copies),
 	// RawHref its text.
@@ -232,8 +233,7 @@ func (a *app) docPage(w http.ResponseWriter, r *http.Request, remote, slug strin
 		lines, added, removed := docLineDiff(older.Body, newer.Body)
 		v.Diff = &docDiffView{From: from, To: to, Lines: lines, Added: added, Removed: removed}
 	} else {
-		v.Raw = rev.Body
-		v.Blocks = bodyBlocks(rev.Body, 0)
+		v.Body = mdBlocksOpt(bodyBlocks(withoutTitleHeading(rev.Body, d.Title), 0), mdOptions{Anchors: true})
 	}
 	v.CmpFrom, v.CmpTo = max(1, revNo-1), max(revNo, min(2, d.HeadRevision))
 	if v.Diff != nil {

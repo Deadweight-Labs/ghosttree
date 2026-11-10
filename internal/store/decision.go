@@ -888,15 +888,15 @@ func (a *ProjectAccess) decisionKnowledge(d idea.Decision, v *idea.Variant, answ
 	var decision strings.Builder
 	var images []string
 	if v != nil {
-		fmt.Fprintf(&decision, "Variant %s: %s", v.Label, v.Title)
+		fmt.Fprintf(&decision, "**Variant %s:** %s", v.Label, v.Title)
 		if v.Text != "" {
 			decision.WriteString("\n" + v.Text)
 		}
 		if v.Pro != "" {
-			decision.WriteString("\nPro: " + v.Pro)
+			decision.WriteString("\n**Pro:** " + v.Pro)
 		}
 		if v.Contra != "" {
-			decision.WriteString("\nContra: " + v.Contra)
+			decision.WriteString("\n**Contra:** " + v.Contra)
 		}
 		for _, m := range v.Attachments {
 			images = append(images, fmt.Sprintf("ATT-%d %s", m.ID, m.URL))
@@ -914,9 +914,9 @@ func (a *ProjectAccess) decisionKnowledge(d idea.Decision, v *idea.Variant, answ
 	}
 	title := fmt.Sprintf("%s: %s", d.HumanID(), d.Question)
 	var body strings.Builder
-	fmt.Fprintf(&body, "Question (%s, %s): %s\n\nDecision:\n%s\n\nReason: %s\n", d.HumanID(), subject, d.Question, decision.String(), reason)
+	fmt.Fprintf(&body, "**Question** (%s, %s): %s\n\n**Decision**\n%s\n\n**Reason:** %s\n", d.HumanID(), subject, d.Question, decision.String(), reason)
 	if len(images) > 0 {
-		body.WriteString("\nImages: " + strings.Join(images, "; ") + "\n")
+		body.WriteString("\n**Images:** " + strings.Join(images, "; ") + "\n")
 	}
 	origin := "human"
 	if actor.Agent {
@@ -925,7 +925,7 @@ func (a *ProjectAccess) decisionKnowledge(d idea.Decision, v *idea.Variant, answ
 		body.WriteString("\nDecided by an agent, not confirmed by a person. It blocks nothing; a person can overturn it with decision_reopen.\n")
 	}
 	if len(d.Votes) > 0 {
-		body.WriteString("\nVotes:")
+		body.WriteString("\n**Votes:**")
 		for _, vt := range d.Votes {
 			who := vt.Voter
 			if vt.ByAgent {
@@ -940,7 +940,10 @@ func (a *ProjectAccess) decisionKnowledge(d idea.Decision, v *idea.Variant, answ
 		GitAnchor: actor.GitAnchor, OriginContext: actor.Origin}
 	line := ""
 	if d.Subject == idea.SubjectIdea {
-		line = fmt.Sprintf("- %s %s: %s. Reason: %s", d.HumanID(), d.Question, idea.Brief(decision.String(), 400), reason)
+		// A line of a list in the concept: no marks of the knowledge text, and no
+		// second full stop where the text of the variant already ends with one.
+		brief := strings.TrimRight(idea.Brief(strings.ReplaceAll(decision.String(), "**", ""), 400), ". ")
+		line = fmt.Sprintf("- %s %s: %s. Reason: %s", d.HumanID(), d.Question, brief, reason)
 		if len(images) > 0 {
 			line += " Images: " + strings.Join(images, ", ")
 		}

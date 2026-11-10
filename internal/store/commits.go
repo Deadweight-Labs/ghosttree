@@ -503,7 +503,7 @@ func (e *entryResolver) load(r anchoredRow) *CommitEntry {
 		if err != nil || p != project {
 			return nil
 		}
-		return &CommitEntry{Kind: r.Kind, ID: r.ID, Ref: fmt.Sprintf("comment:%d", r.ID), Title: fmt.Sprintf("Kommentar zu %s", objectRef(c.ObjectKind, c.ObjectID)),
+		return &CommitEntry{Kind: r.Kind, ID: r.ID, Ref: fmt.Sprintf("comment:%d", r.ID), Title: oneLine(c.Body, 200),
 			Person: c.Person, ObjectKind: c.ObjectKind, ObjectID: c.ObjectID}
 	}
 	return nil

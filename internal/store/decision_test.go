@@ -252,7 +252,7 @@ func TestVariantsVotesAndAdoptionIntoKnowledgeAndConcept(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	k := knowledgeOf(t, w, got.KnowledgeID)
-	for _, want := range []string{"Variant A: In der Datenbank", "Pro: ein Backup", "Contra: größere Datei", "ein Backup reicht", "ATT-1", att.URL, "lena: A, Backup ist das Argument", "rex (agent): C"} {
+	for _, want := range []string{"**Variant A:** In der Datenbank", "**Pro:** ein Backup", "**Contra:** größere Datei", "ein Backup reicht", "ATT-1", att.URL, "lena: A, Backup ist das Argument", "rex (agent): C"} {
 		if !strings.Contains(k.Body, want) {
 			t.Errorf("knowledge lacks %q:\n%s", want, k.Body)
 		}

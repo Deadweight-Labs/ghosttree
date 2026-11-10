@@ -415,6 +415,7 @@ func (a CoordAccess) roleReadableProjectRooms(have []CoordRoom) ([]CoordRoom, er
 			om.role, COALESCE(pm.role,''), COALESCE(pm.can_review,0),
 			EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id=p.id)
 			AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=p.org_id AND og.account_id=om.account_id)
+			AND NOT EXISTS(SELECT 1 FROM persons ps WHERE ps.id=om.account_id AND ps.kind='service')
 		FROM coord_rooms r
 		JOIN projects p ON r.room_key='project:'||p.remote
 		JOIN org_members om ON om.org_id=p.org_id AND om.account_id=?
@@ -932,6 +933,9 @@ type CoordSent struct {
 // Bei einer Wiederholung (gleiche Client-Id oder gleiche origin_event_id
 // desselben Absenders) ist created false und die Id die der ersten Nachricht.
 func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
+	if len(message.Body) > CoordMaxBody {
+		return 0, false, ErrCoordBodyTooLong
+	}
 	if a.Store != nil && a.Store.writer != nil {
 		r, err := queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, message}, func(d *Store, p []any) (CoordSent, error) {
 			id, created, err := queuedCoordAccess(d, p).SendNew(p[3].(CoordMessage))
@@ -2916,8 +2920,10 @@ func (a CoordAccess) validatePrivateRecipients(actor string, principals []string
 // reinen Mitgliedschaft; ein Projekt-Owner liest keine fremden DMs. Mit tx wird
 // die Rolle in derselben Transaktion gelesen, sonst über den Store.
 //
-// Eine Remote ohne Projektzeile ist unbeansprucht; ihr Raum bleibt wie bisher
-// offen für Mitglieder des Raums, bis ein Owner sie beansprucht.
+// Eine Remote ohne Projektzeile ist unbeansprucht. Ihr Raum öffnet sich nur
+// Konten, die unter der Remote selbst gearbeitet haben (eigene Sessions oder
+// Einträge), und dem Instanz-Admin; sonst könnte jeder die Gespräche über ein
+// fremdes Repo mitlesen, bevor es jemand beansprucht.
 func (a CoordAccess) projectRoomGate(kind, roomKey string, res Resource, tx rowQuerier) error {
 	if kind != RoomProject || a.Store == nil {
 		return nil
@@ -2935,14 +2941,24 @@ func (a CoordAccess) projectRoomGate(kind, roomKey string, res Resource, tx rowQ
 	d := Decision{Allowed: matrixAllows(role, res, ActRead, Object{})}
 	if !d.Allowed {
 		d.Hidden, d.Reason = true, "no access to the project room"
-		if RoleRank(role.Role) == 0 && !a.projectClaimed(tx, project) {
-			d = Decision{Allowed: true, Reason: "unclaimed project"}
+		if RoleRank(role.Role) == 0 && !a.projectClaimed(tx, project) && ok && a.workedUnder(tx, project, acct) {
+			d = Decision{Allowed: true, Reason: "unclaimed project, own work there"}
 		}
 	}
 	if a.Store.accessCfg().apply(a.Principal.ID, project, res, ActRead, d) {
 		return nil
 	}
 	return ErrCoordNotFound
+}
+
+// workedUnder: the account has sessions or entries of its own under the
+// remote, or is the instance admin.
+func (a CoordAccess) workedUnder(tx rowQuerier, project string, acct int64) bool {
+	q := tx
+	if q == nil {
+		q = a.Store.db
+	}
+	return ownWorkUnderTx(q, project, acct)
 }
 
 func (a CoordAccess) projectClaimed(tx rowQuerier, project string) bool {

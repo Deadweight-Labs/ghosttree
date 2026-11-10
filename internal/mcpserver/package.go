@@ -72,7 +72,7 @@ type PackageUpdateInput struct {
 	RequestID int64               `json:"request_id,omitempty" jsonschema:"with remove: the request to take out"`
 	Reason    string              `json:"reason,omitempty" jsonschema:"required for remove; optional for add. It goes into the request's activity list"`
 	DryRun    bool                `json:"dry_run,omitempty" jsonschema:"with import_relations: only report what would happen"`
-	Project   string              `json:"project,omitempty" jsonschema:"the project when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
+	Project   string              `json:"project,omitempty" jsonschema:"the project when it is not the session's own (a remote or a unique short name)"`
 }
 
 type PackageMemberRef struct {
