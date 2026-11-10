@@ -194,7 +194,7 @@ type SessionsInput struct {
 }
 
 func (s *Server) Register(srv *mcp.Server) {
-	srv.AddReceivingMiddleware(slimToolList)
+	srv.AddReceivingMiddleware(s.coreMiddleware)
 	closed := false
 	additive := false
 	mcp.AddTool(srv, &mcp.Tool{Name: "context_snapshot_create", Description: "Create an immutable named snapshot of the bound project's durable context and observed Git state.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleSnapshotCreate)

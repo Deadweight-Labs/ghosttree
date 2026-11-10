@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -91,7 +90,7 @@ func TestSupersedeNeedsAReasonAndWritesNothingWithout(t *testing.T) {
 func TestToolsTellAgentsToSearchFirstAndSupersedeInsteadOfAFollowUp(t *testing.T) {
 	c, _ := targetFixture(t)
 	session := connect(t, targetServer(c, tgtHere))
-	tools, err := session.ListTools(context.Background(), &mcp.ListToolsParams{})
+	tools, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}

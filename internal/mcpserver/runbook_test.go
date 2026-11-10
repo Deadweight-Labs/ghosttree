@@ -93,7 +93,7 @@ func TestRunbookToolsAreDiscoverable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer clientSession.Close()
-	listed, err := clientSession.ListTools(ctx, nil)
+	listed, err := listRegistered(ctx, clientSession)
 	if err != nil {
 		t.Fatal(err)
 	}
