@@ -34,7 +34,7 @@ type PainRecordInput struct {
 	Title       string            `json:"title" jsonschema:"the problem in one line, without a solution"`
 	Body        string            `json:"body,omitempty" jsonschema:"what goes wrong, for whom, and how you noticed. No solution here"`
 	Motivates   []PainTargetInput `json:"motivates,omitempty" jsonschema:"requests, decisions or external references that exist because of this problem"`
-	Explanation string            `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
+	Explanation string            `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the people who review it: two to four plain sentences in their language, in everyday words: what it is about, why it matters, what has to be done or decided, your recommendation. No markdown or links, never a secret; without it the server writes one later from the text alone"`
 }
 
 type PainGetInput struct {

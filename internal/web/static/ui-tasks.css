@@ -7,6 +7,8 @@
   & .tstep form { margin: 0; }
   & .tstep .tby { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 12px; }
   & .twhere { margin-top: 8px; }
+  & .cs .tstep { align-items: center; padding: 8px 16px; }
+  & .cs .tstep + .tstep { border-top: 1px solid var(--border-muted); }
   & .tdone .box-r { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   & .tdone .gfield { flex: 1; min-width: 200px; }
 }

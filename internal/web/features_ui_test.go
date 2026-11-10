@@ -87,7 +87,7 @@ func TestFeaturePageShowsDescriptionVersionsIdeasAndPullRequests(t *testing.T) {
 	}
 	for _, want := range []string{"Inbox", "#" + strconv.FormatInt(f.ID, 10), "One place for everything that waits for you.", "The inbox lists questions, tasks and mentions.", "A tick marks one as done.",
 		"Voice answers are planned.", "Limits", "Usage", "CLI", "ctx inbox", "Interface", "The bell in the header.", "Areas", "internal/web",
-		"wrote version 2", "limits changed", "described the feature", "first description", "Voice answers", "Pull requests", "#12", "Voice package", "Idea", "Ideas", `class="tlx"`} {
+		"wrote version 2", "limits changed", "described the feature", "first description", "Voice answers", "Pull requests", "#12", "Voice package", "Idea", "Ideas", `class="tlx tl0"`, `class="cmt first"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("feature page lacks %q", want)
 		}
@@ -116,7 +116,7 @@ func TestFeatureRetiredShowsItsReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/features/"+strconv.FormatInt(f.ID, 10))
-	for _, want := range []string{"Retired because", "Replaced by the new inbox", "retired the feature"} {
+	for _, want := range []string{"Replaced by the new inbox", "retired the feature"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("retired feature page lacks %q", want)
 		}

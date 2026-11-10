@@ -123,8 +123,8 @@ func TestPastedTokenCannotRevokeForeignTokens(t *testing.T) {
 	pasted := login(t, srv, aliceTok)
 	csrf := renderedCSRFToken(t, pasted, srv.URL+"/ui/account/tokens")
 	page, _ := pasted.Get(srv.URL + "/ui/account/tokens")
-	if strings.Contains(body(t, page), "/ui/account/tokens/revoke") {
-		t.Fatal("a pasted-token admin session shows revoke buttons")
+	if text := body(t, page); strings.Contains(text, `value="`+strconv.FormatInt(bobTokens[0].ID, 10)+`"`) || strings.Contains(text, ">ci<") {
+		t.Fatal("a pasted-token admin session lists another account's token")
 	}
 	resp := sameOriginPostForm(t, pasted, srv.URL+"/ui/account/tokens/revoke", url.Values{"token_id": {strconv.FormatInt(bobTokens[0].ID, 10)}, "csrf_token": {csrf}})
 	if resp.StatusCode != http.StatusForbidden {

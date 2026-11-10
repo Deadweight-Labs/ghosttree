@@ -88,7 +88,6 @@ func TestOrgFormsNeedCSRFAndSameOrigin(t *testing.T) {
 		"/ui/orgs/project/move":  {"org": {"alpha"}, "remote": {"github.com/x/one"}, "to": {"alpha"}},
 		"/ui/orgs/invite/revoke": {"org": {"alpha"}, "id": {"1"}},
 		"/ui/orgs/accept":        {"code": {"x"}},
-		"/ui/orgs/default":       {"org": {"alpha"}},
 		"/ui/orgs/create":        {"name": {"Sneaky"}},
 		"/ui/orgs/rename":        {"org": {"alpha"}, "name": {"Sneaky"}},
 	}
@@ -130,7 +129,7 @@ func TestOrgFormsNeedCSRFAndSameOrigin(t *testing.T) {
 		t.Fatalf("a rejected form created an invitation: %+v", invs)
 	}
 	// Ein Körper über der Grenze kommt nicht durch.
-	big := url.Values{"csrf_token": {csrf}, "org": {"alpha"}, "email": {strings.Repeat("a", maxDeviceForm)}}
+	big := url.Values{"csrf_token": {csrf}, "org": {"alpha"}, "email": {strings.Repeat("a", maxFormBody)}}
 	if resp := sameOriginPostForm(t, alice, base+"/ui/orgs/invite", big); resp.StatusCode == http.StatusOK {
 		t.Fatal("oversized form accepted")
 	}
@@ -195,7 +194,7 @@ func TestOrgInviteAcceptRoleMoveAndRemoveInTheBrowser(t *testing.T) {
 		t.Fatalf("last owner: %d", resp.StatusCode)
 	}
 	// Eine fremde Organisation ist nicht vorhanden.
-	if resp := postOrg(t, anna, base, "/ui/orgs/default", url.Values{"org": {"alpha"}}); resp.StatusCode != http.StatusNotFound {
+	if resp := postOrg(t, anna, base, "/ui/orgs/rename", url.Values{"org": {"alpha"}, "name": {"Mine"}}); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("foreign org: %d", resp.StatusCode)
 	}
 }

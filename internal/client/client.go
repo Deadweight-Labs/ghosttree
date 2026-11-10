@@ -45,7 +45,17 @@ type Client struct {
 	anchor func() gitanchor.Anchor
 	// originSession ist die Session, die beim Schreiben mitgeht (SetOriginSession).
 	originSession string
+	// readOnly refuses every request that is not a read (SetReadOnly).
+	readOnly bool
 }
+
+// ErrReadOnly answers a write of a client that only reads: GHOSTTREE_HOOKS=off
+// keeps a test run's agents from writing to a real server (REQ-623).
+var ErrReadOnly = errors.New("GHOSTTREE_HOOKS=off: this session only reads; nothing was written")
+
+// SetReadOnly makes the client refuse every request but GET and HEAD before it
+// leaves the machine.
+func (c *Client) SetReadOnly() { c.readOnly = true }
 
 type SearchResult struct {
 	Knowledge []store.Knowledge         `json:"knowledge"`
@@ -61,6 +71,8 @@ type SearchResult struct {
 	Messages []store.MessageHit   `json:"messages,omitempty"`
 	// Query ist die Suchzeile, wie der Server sie gelesen hat.
 	Query string `json:"query,omitempty"`
+	// Unavailable nennt die Bereiche, die ausfielen; die übrigen sind vollständig.
+	Unavailable []store.SearchGap `json:"unavailable,omitempty"`
 }
 
 type APIError struct {
@@ -173,6 +185,9 @@ func (c *Client) do(method, path string, query url.Values, in, out any) error {
 }
 
 func (c *Client) doContext(ctx context.Context, method, path string, query url.Values, in, out any) error {
+	if c.readOnly && method != http.MethodGet && method != http.MethodHead {
+		return ErrReadOnly
+	}
 	u := strings.TrimSuffix(c.cfg.ServerURL, "/") + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -620,6 +635,16 @@ func (c *Client) search(q, kind string, filter scope.Axes, excludeSession string
 }
 
 func (c *Client) searchWith(q, kind string, filter scope.Axes, excludeSession string, limit int, union bool, af AnchorFilter) (SearchResult, error) {
+	return c.searchContext(context.Background(), q, kind, filter, excludeSession, limit, union, af)
+}
+
+// SearchContext is one search that ends with ctx: an area of context_search
+// with a time budget of its own. excludeSession leaves out the asking session.
+func (c *Client) SearchContext(ctx context.Context, q, kind string, filter scope.Axes, excludeSession string, limit int, union bool, af AnchorFilter) (SearchResult, error) {
+	return c.searchContext(ctx, q, kind, filter, excludeSession, limit, union, af)
+}
+
+func (c *Client) searchContext(ctx context.Context, q, kind string, filter scope.Axes, excludeSession string, limit int, union bool, af AnchorFilter) (SearchResult, error) {
 	query := axesQuery(filter)
 	af.apply(query)
 	query.Set("q", q)
@@ -636,7 +661,7 @@ func (c *Client) searchWith(q, kind string, filter scope.Axes, excludeSession st
 		query.Set("limit", strconv.Itoa(limit))
 	}
 	var out SearchResult
-	err := c.do("GET", "/api/search", query, nil, &out)
+	err := c.doContext(ctx, "GET", "/api/search", query, nil, &out)
 	return out, err
 }
 

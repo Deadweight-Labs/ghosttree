@@ -2,7 +2,6 @@ package web
 
 import (
 	"net/http"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -122,7 +121,12 @@ func decisionFailCode(rule string) string {
 	return "dec-failed"
 }
 
-// inboxFailRedirect leads a form without script back to the inbox with the reason.
-func inboxFailRedirect(w http.ResponseWriter, r *http.Request, code string) {
-	http.Redirect(w, r, "/ui/inbox?"+url.Values{"fail": {code}}.Encode(), http.StatusSeeOther)
+// inboxFail leads a form without script back to the inbox with the reason, and with
+// the text of the reason still in its field.
+func (a *app) inboxFail(w http.ResponseWriter, r *http.Request, code string) {
+	field := ""
+	if code == "dec-reason" {
+		field = "reason"
+	}
+	a.failFormTo(w, r, "/ui/inbox", http.StatusUnprocessableEntity, a.langFor(r).msg(inboxFailKey(code)), field)
 }

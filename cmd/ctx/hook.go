@@ -46,6 +46,11 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, hookUsage)
 		return 2
 	}
+	if hooksOff() {
+		// A test harness switched ghosttree off for its agents: no server call,
+		// no context, no session, and nothing that could stop a tool.
+		return 0
+	}
 	eventArg := args[0]
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -776,4 +781,17 @@ func pauseGate(stdin io.Reader, harness string, stdout io.Writer) int {
 	}
 	agentpause.Gate(coordAgentOverride(), stdin, stdout)
 	return 0
+}
+
+// envHooks switches every hook and the collector off when it is "off" (also
+// "0" or "false"). Test harnesses set it for the agents they start, so a test
+// run never writes sessions or projects to a real server (REQ-623).
+const envHooks = "GHOSTTREE_HOOKS"
+
+func hooksOff() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(envHooks))) {
+	case "off", "0", "false", "no":
+		return true
+	}
+	return false
 }

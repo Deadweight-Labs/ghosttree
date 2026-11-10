@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
 	"net/http"
@@ -52,6 +53,8 @@ type featureRef struct{ Num, Title, Brief, Href string }
 type featurePR struct{ Text, Title, Href string }
 
 type featureView struct {
+	// First is the head of the bubble that opens the timeline.
+	First               firstHead
 	ID                  int64
 	Name, Summary       string
 	State, StateLabel   string
@@ -302,7 +305,16 @@ func (a *app) featureDetail(w http.ResponseWriter, r *http.Request, remote, id s
 		}
 		v.PRs = append(v.PRs, line)
 	}
-	v.Items = a.featureItems(l, pa, view, versions, f, now)
+	// The maker is whoever wrote the first version, as the stamp of the feature says.
+	maker, madeAt := v.Person, f.UpdatedAt
+	for _, ver := range versions {
+		if ver.Revision <= 1 && ver.Person != "" {
+			maker, madeAt = ver.Person, ver.CreatedAt
+		}
+	}
+	makerView := a.actorViewOf(l, pa, actor.Feature, f.ID, maker, true)
+	v.Items = a.featureItems(l, pa, view, versions, f, now, makerView)
+	v.First = firstOf(l, makerView, maker, l.msg("features.described_ch"), shortAgo(l, now, parseTime(madeAt)), l.msg("features.rev", f.Revision), "")
 	seen := map[string]bool{}
 	for _, ver := range versions {
 		if ver.Person != "" && !seen[ver.Person] {
@@ -315,13 +327,16 @@ func (a *app) featureDetail(w http.ResponseWriter, r *http.Request, remote, id s
 
 // featureItems ist die Zeitleiste: jede Fassung ein Eintrag, dahinter, wenn das
 // Feature eingestellt ist, das Einstellen.
-func (a *app) featureItems(l lang, pa *store.ProjectAccess, view *repoView, versions []feature.Version, f feature.Feature, now time.Time) []tlItem {
+func (a *app) featureItems(l lang, pa *store.ProjectAccess, view *repoView, versions []feature.Version, f feature.Feature, now time.Time, maker actorView) []tlItem {
 	var items []tlItem
 	for _, ver := range versions {
 		it := tlItem{ID: "version-" + strconv.Itoa(ver.Revision), Act: "feature.version", Who: ver.Person, Icon: "pencil",
 			Age: shortAgo(l, now, parseTime(ver.CreatedAt)), Body: mdText(ver.Message),
 			Git: anchorViewOf(pa, view.Project, ver.GitAnchor, originVia(ver.OriginContext))}
 		if ver.Revision <= 1 {
+			if ver.Person == maker.Person {
+				it.withActor(maker)
+			}
 			it.Icon, it.Head = "plus", template.HTML(html.EscapeString(l.msg("features.ev.created")))
 		} else {
 			it.Head = template.HTML(html.EscapeString(l.msg("features.ev.version", ver.Revision)))

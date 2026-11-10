@@ -62,12 +62,18 @@ var accessRoutes = map[string]routeClass{
 	"DELETE /api/orgs/{org}/invitations/{id}":     classAccount,
 	"POST /api/invitations/accept":                classAccount,
 	"PUT /api/account/default-org":                classAccount,
+	"GET /api/garden/due":                         classAccount,
+	"POST /api/garden/runs":                       classAccount,
+	"POST /api/garden/runs/{id}/finish":           classAccount,
 	"GET /api/projects":                           classProject,
 	"GET /api/projects/writable":                  classProject,
 	"GET /api/projects/{id}/members":              classProject,
 	"PUT /api/projects/{id}/members/{account}":    classAdmin,
 	"DELETE /api/projects/{id}/members/{account}": classAdmin,
 	"POST /api/projects/claim":                    classAccount,
+	"POST /api/projects/reassign":                 classAdmin,
+	"GET /api/projects/held":                      classProject,
+	"POST /api/projects/held":                     classAdmin,
 	"POST /api/projects":                          classAccount,
 	"POST /api/projects/move":                     classAccount,
 	"POST /api/context-snapshots":                 classProject,
@@ -506,7 +512,7 @@ func (a *api) checkDocument(w http.ResponseWriter, r *http.Request, id int64, ac
 		writeStoreError(w, http.StatusNotFound, err)
 		return false
 	}
-	return !denyAccess(w, pa.Check(d.Project, store.ResDocument, act, store.Object{Own: pa.IsAuthor(d.Person)}))
+	return !denyAccess(w, pa.CheckDocument(d, act))
 }
 
 // listGateEntries ist listGate für Handler, die jeden Eintrag danach mit Own

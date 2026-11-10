@@ -33,6 +33,7 @@ The query is words and qualifiers, like GitHub:
   pr:12  pr:10..14  package:N  req:N  task:N  pain:N  idea:N  parent:N  blocks:N  author:  for:  (@me is you)
   label:name  -label:name  area:<path prefix>  topic:<name>  created:>2026-11-01  updated:<7d  since:  until:
   -qualifier negates, a,b means a or b, "..." groups. An unknown qualifier is an error.
+  Unconfirmed entries and the gardener's notes only with is:staged or author:gardener.
 
 Saved searches take {pr} {branch} {area} {since}; the built-in ones are pr-ergebnis, branch-offen, ordner, seit, fuer-mich.`
 

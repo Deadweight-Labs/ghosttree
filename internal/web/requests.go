@@ -30,13 +30,9 @@ const (
 	requestsShown   = 25
 	requestWorkChip = 2
 	activityShown   = 30
-	maxTextBytes    = 100_000
-	maxFieldBytes   = 2_000
-	maxTitleBytes   = 500
+	maxFieldChars   = 2_000
+	maxTitleChars   = 500
 	maxPriority     = 64
-	// Ein Formular kodiert Zeilenumbrüche und Umlaute mehrfach (bis zu sechs
-	// Bytes je Zeichen); die Grenze liegt über dem Sechsfachen des längsten Textes.
-	requestCorrectForm = 6*maxTextBytes + 16<<10
 )
 
 var (
@@ -72,6 +68,9 @@ func label(l lang, keys map[string]string, v string) string {
 
 type evidenceLine struct {
 	Kind, Label, Ref, Href string
+	// Note is what the writer put after the address or the file: Ref is the
+	// thing itself, Note the words about it. Both stood in one string.
+	Note string
 	// Person is who gave the proof.
 	Person string
 	// Git is the anchor the proof was written at.
@@ -130,6 +129,8 @@ type requestResult struct {
 }
 
 type requestView struct {
+	// First is the head of the bubble that opens the timeline.
+	First firstHead
 	// Reactions is the row under the text of the issue page.
 	Reactions                      *reactionsView
 	Explain                        *explainView
@@ -251,6 +252,7 @@ var sessionScrub = regexp.MustCompile(`session:[^\s#]+(#\S*)?`)
 
 func (a *app) evidenceLineFor(l lang, pa *store.ProjectAccess, project string, e requestdomain.Evidence) evidenceLine {
 	line := evidenceLine{Kind: e.Kind, Label: evidenceLabel(l, e.Kind), Ref: e.Ref, Person: e.Person, Git: anchorViewOf(pa, project, e.GitAnchor, e.Via)}
+	line.Ref, line.Note = splitProofRef(e.Kind, e.Ref)
 	switch e.Kind {
 	case "session":
 		line.Ref = ""
@@ -268,11 +270,56 @@ func (a *app) evidenceLineFor(l lang, pa *store.ProjectAccess, project string, e
 		line.Href = "/ui/sessions/" + pub + fragmentOf(frag)
 		line.Ref = l.msg("requests.open_session")
 	case "url":
-		if strings.HasPrefix(e.Ref, "https://") || strings.HasPrefix(e.Ref, "http://") {
-			line.Href = e.Ref
+		if strings.HasPrefix(line.Ref, "https://") || strings.HasPrefix(line.Ref, "http://") {
+			line.Href = line.Ref
 		}
 	}
 	return line
+}
+
+// splitProofRef parts a proof as people write it, "https://… (what it shows)"
+// or "docs/a.md (what is in it)", into the thing and the note about it. An
+// address ends at the first blank; a file or a decision at the first " (". A
+// note wrapped in one pair of brackets loses them. Other kinds (a commit, a
+// test, a session) stay whole.
+func splitProofRef(kind, ref string) (thing, note string) {
+	ref = strings.TrimSpace(ref)
+	switch kind {
+	case "url":
+		if strings.HasPrefix(ref, "https://") || strings.HasPrefix(ref, "http://") {
+			if i := strings.IndexAny(ref, " \t\n"); i > 0 {
+				return ref[:i], unwrapNote(ref[i:])
+			}
+		}
+	case "file", "decision":
+		if i := strings.Index(ref, " ("); i > 0 {
+			return strings.TrimSpace(ref[:i]), unwrapNote(ref[i:])
+		}
+	}
+	return ref, ""
+}
+
+// unwrapNote trims a note and takes off one pair of brackets that encloses it
+// all; "(PR #169), inklusive" stays as written because its first bracket
+// closes before the end.
+func unwrapNote(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
+		return s
+	}
+	depth := 0
+	for i, r := range s {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 && i < len(s)-1 {
+				return s
+			}
+		}
+	}
+	return strings.TrimSpace(s[1 : len(s)-1])
 }
 
 func evidenceLabel(l lang, kind string) string { return label(l, evidenceKeys, kind) }
@@ -720,31 +767,11 @@ func (a *app) requestFail(w http.ResponseWriter, r *http.Request, id int64, err 
 	}
 }
 
-// requestFormTooLarge liest das Formular vor requireCSRF und antwortet auf eine
-// überschrittene Grenze mit 413 und einer gestalteten Seite, statt dass der
-// Lesefehler dort als fehlendes Token (403) erscheint.
-func (a *app) requestFormTooLarge(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			var tooBig *http.MaxBytesError
-			if errors.As(err, &tooBig) {
-				w.Header().Set("Cache-Control", "no-store")
-				l := a.langFor(r)
-				w.WriteHeader(http.StatusRequestEntityTooLarge)
-				a.renderBrowser(w, r, "requesttoolarge", pageData{Title: l.msg("requests.toolarge.title"), BackURL: "/ui/requests",
-					ErrV: &errorView{Code: "413", Icon: "file", Title: l.msg("requests.toolarge.title"), Text: l.msg("requests.toolarge.body"), BackHref: r.URL.Path, BackLabel: l.msg("requests.toolarge.back_issue"), AltHref: "/ui/requests", AltLabel: l.msg("requests.toolarge.back")}})
-				return
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 func lineBreaks(s string) string { return strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(s) }
 
 func cleanText(s string, limit int) (string, bool) {
 	s = strings.TrimSpace(lineBreaks(s))
-	return s, s != "" && len(s) <= limit
+	return s, s != "" && !tooLong(s, limit)
 }
 
 func (a *app) requestDone(w http.ResponseWriter, r *http.Request, id int64, done string, extra url.Values) {
@@ -760,7 +787,7 @@ func (a *app) requestAddCriterion(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	text, valid := cleanText(r.FormValue("description"), maxFieldBytes)
+	text, valid := cleanText(r.FormValue("description"), maxFieldChars)
 	if !valid {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
@@ -798,7 +825,7 @@ func (a *app) requestResolve(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("state") == "waived" {
 		state = "waived"
 	}
-	ref, valid := cleanText(r.FormValue("evidence_ref"), maxFieldBytes)
+	ref, valid := cleanText(r.FormValue("evidence_ref"), maxFieldChars)
 	kind := r.FormValue("evidence_kind")
 	if !valid || !slices.Contains(evidenceKinds, kind) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
@@ -825,22 +852,26 @@ func (a *app) requestCorrect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := detail.Request
-	reason, valid := cleanText(r.FormValue("reason"), maxFieldBytes)
+	reason, valid := cleanText(r.FormValue("reason"), maxFieldChars)
 	if !valid {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
 	patch := map[string]string{}
 	if title := strings.TrimSpace(lineBreaks(r.FormValue("title"))); title != strings.TrimSpace(req.Title) {
-		if title == "" || len(title) > maxTitleBytes {
-			http.Error(w, "invalid input", http.StatusBadRequest)
+		if tooLong(title, maxTitleChars) {
+			a.tooLongForm(w, r, requestURL(req.ID), "title", title, maxTitleChars)
+			return
+		}
+		if title == "" {
+			a.failFormTo(w, r, requestURL(req.ID), http.StatusUnprocessableEntity, a.langFor(r).msg("err.form.required"), "title")
 			return
 		}
 		patch["title"] = title
 	}
 	if description := lineBreaks(r.FormValue("description")); description != lineBreaks(req.Description) {
-		if len(description) > maxTextBytes {
-			http.Error(w, "invalid input", http.StatusBadRequest)
+		if tooLong(description, maxLongText) {
+			a.tooLongForm(w, r, requestURL(req.ID), "description", description, maxLongText)
 			return
 		}
 		patch["description"] = description
@@ -853,7 +884,7 @@ func (a *app) requestCorrect(w http.ResponseWriter, r *http.Request) {
 		patch["type"] = typ
 	}
 	if priority := strings.TrimSpace(r.FormValue("priority")); priority != strings.TrimSpace(req.Priority) {
-		if len(priority) > maxPriority {
+		if tooLong(priority, maxPriority) {
 			http.Error(w, "invalid input", http.StatusBadRequest)
 			return
 		}
@@ -875,7 +906,7 @@ func (a *app) requestComplete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ref, valid := cleanText(r.FormValue("evidence_ref"), maxFieldBytes)
+	ref, valid := cleanText(r.FormValue("evidence_ref"), maxFieldChars)
 	kind := r.FormValue("evidence_kind")
 	if !valid || !slices.Contains(evidenceKinds, kind) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
@@ -894,7 +925,7 @@ func (a *app) requestDrop(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reason, valid := cleanText(r.FormValue("reason"), maxFieldBytes)
+	reason, valid := cleanText(r.FormValue("reason"), maxFieldChars)
 	if !valid {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return

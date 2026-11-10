@@ -167,6 +167,7 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 	ago := func(at string) string { return shortAgo(l, now, parseTime(at)) }
 	acts := a.visibleActivity(pa, detail)
 	v.Events = issueEvents(l, acts, v.Criteria, assignees, pkg, ago, repoHref(remote))
+	a.stampEvents(l, v.Events, req.ID)
 	anchors := map[int64]*anchorView{}
 	for _, act := range acts {
 		anchors[act.ID] = anchorViewOf(pa, remote, act.GitAnchor, act.Via)
@@ -175,7 +176,21 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 		v.Events[i].Git = anchors[v.Events[i].ID]
 	}
 	comments := a.commentTimeline(r, l, pa, store.CommentOnRequest, req.ID, req.Person, v.Base+"/"+strconv.FormatInt(req.ID, 10), editingComment(r), ago)
-	v.Timeline = mergeTimeline(timelineItems(l, withoutRepeatedNotes(v.Events, comments)), comments)
+	editHref := ""
+	if v.CanEdit {
+		editHref = v.Base + "/" + strconv.FormatInt(req.ID, 10) + "?panel=edit#edit"
+	}
+	v.First = firstOf(l, v.Actor, firstNonEmpty(v.Actor.Label, v.Person), l.msg("issue.commented"), shortAgo(l, now, parseTime(req.CreatedAt)), l.msg("issue.author"), editHref)
+	events := withoutRepeatedNotes(v.Events, comments)
+	if v.hasFirst() {
+		for _, e := range events {
+			if e.Act == "request.created" {
+				v.First.Git = e.Git
+			}
+		}
+		events = withoutCreated(events)
+	}
+	v.Timeline = mergeTimeline(timelineItems(l, events), comments)
 	if v.Result == nil {
 		v.Result = commentResult(r, l)
 	}
@@ -304,4 +319,61 @@ func (a *app) alsoComment(r *http.Request, id int64) url.Values {
 	}
 	a.stampActor(r, actor.Comment, c.ID)
 	return nil
+}
+
+// hasFirst says whether the page opens with the bubble of the first object: a
+// text, a summary, requirements, or the right to write them.
+func (v *requestView) hasFirst() bool {
+	return len(v.Blocks) > 0 || v.Explain != nil || len(v.Criteria) > 0 || v.CanEdit
+}
+
+// withoutCreated leaves out "created this issue": the head of the first object
+// says it, with the time, once.
+func withoutCreated(events []issueEvent) []issueEvent {
+	return slices.DeleteFunc(slices.Clone(events), func(e issueEvent) bool { return e.Act == "request.created" })
+}
+
+// stampEvents gives the entries of the history the maker the stamps name: the
+// requirement an agent met, the task an agent laid, the issue an agent closed
+// is shown as that agent (with its owner in the corner), not as the person.
+func (a *app) stampEvents(l lang, events []issueEvent, requestID int64) {
+	kinds := map[string]map[int64]string{}
+	add := func(kind string, id int64, person string) {
+		if id <= 0 || person == "" {
+			return
+		}
+		if kinds[kind] == nil {
+			kinds[kind] = map[int64]string{}
+		}
+		kinds[kind][id] = person
+	}
+	for i := range events {
+		events[i].StampKind, events[i].StampID = stampOf(events[i], requestID)
+		add(events[i].StampKind, events[i].StampID, events[i].By)
+	}
+	views := map[string]map[int64]actorView{}
+	for kind, persons := range kinds {
+		views[kind] = a.stampedActors(l, kind, persons)
+	}
+	for i := range events {
+		if v, ok := views[events[i].StampKind][events[i].StampID]; ok {
+			events[i].Actor = v
+		}
+	}
+}
+
+// stampOf names the stamp behind an entry of the history: the kind of entry
+// and its id. Entries nobody stamped (a link, a package) give 0.
+func stampOf(e issueEvent, requestID int64) (kind string, id int64) {
+	switch e.Act {
+	case "request.created":
+		return actor.Request, requestID
+	case "request.done":
+		return actor.RequestDone, requestID
+	case "criterion.met", "criterion.waived":
+		return actor.Criterion, e.CriterionID
+	case "task.created":
+		return actor.Task, e.TaskID
+	}
+	return "", 0
 }

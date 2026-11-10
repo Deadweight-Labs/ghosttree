@@ -32,7 +32,7 @@ func (a *app) inboxAnswer(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.As(err, &rule) && r.FormValue("kind") == store.AnswerOnDecision && r.FormValue("next") != "":
 			// A composer without script: back to the inbox with the reason in a line.
-			inboxFailRedirect(w, r, decisionFailCode(rule.ErrorCode))
+			a.inboxFail(w, r, decisionFailCode(rule.ErrorCode))
 		case errors.As(err, &rule):
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)

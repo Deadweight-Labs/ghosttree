@@ -3,8 +3,10 @@
 <div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "idea"}}{{.StateLabel}}</span>{{if .Person}}<span>{{actor .Actor .Person}} {{t "ideas.proposed" .Age}}</span>{{end}}{{template "gitanchor" .Git}}</div></div>
 {{template "resultbanner" (dict "R" .Result "Strip" "done fail")}}
 <div class="dgrid"><div class="dmain">
-{{if .Blocks}}<div class="cmt">{{if .Actor.Label}}{{avatarX "xl" .Actor.Kind .Actor.Label .Actor.Owner false}}{{else}}{{avatarX "xl" "" .Person "" false}}{{end}}<div class="cbox"><div class="ch"><b>{{or .Actor.Label .Person}}</b><span>{{t "ideas.wished"}}</span><span class="sp"></span><span class="lb out">{{t "issue.author"}}</span></div>
-<div class="cb prose">{{template "knbody" .Blocks}}</div>{{with .Reactions}}<div class="cf">{{template "uireactions" .}}</div>{{end}}</div></div>{{end}}
+{{if or .Blocks .Items}}<div class="tlx tl0">
+{{if .Blocks}}{{template "firstopen" .First}}
+<div class="cb prose">{{template "knbody" .Blocks}}</div>{{with .Reactions}}<div class="cf">{{template "uireactions" .}}</div>{{end}}{{template "firstclose"}}{{end}}
+{{template "uitlitems" .Items}}</div>{{end}}
 {{if or .Images .CanAttach}}<section class="box ws-imgbox" id="images" aria-labelledby="img-h"><div class="box-h"><h2 class="t" id="img-h">{{mi "image"}} {{t "workshop.images"}}</h2></div>
 {{if .Images}}<div class="ws-imgs ws-imgs-idea">{{range .Images}}{{template "wsimage" .}}{{end}}</div>{{end}}
 {{if .CanAttach}}<form class="ws-up" method="post" action="/ui/ideas/{{.ID}}/attach" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="owner" value="idea">
@@ -14,7 +16,6 @@
 {{if .HasImages}}<dialog class="ws-lb" id="ws-lb" aria-label="{{t "workshop.zoom_title"}}"><form method="dialog"><button class="ws-lb-x" aria-label="{{t "workshop.zoom_close"}}">{{mi "x"}}</button></form><img alt=""><p class="ws-lb-cap"></p></dialog>{{end}}
 {{if .Reason}}<div class="callout neu" role="note">{{mi "drop"}}<div><div class="k">{{t "ideas.dismissed_because"}}</div><div class="tt">{{md .Reason}}</div></div></div>{{end}}
 {{with .Workshop}}{{template "workshop" .}}{{end}}
-{{if .Items}}{{template "uitimeline" .Items}}{{end}}
 {{with .Composer}}{{template "uicomposer" .}}{{end}}
 </div>
 <aside class="side" aria-label="{{t "ideas.side.facts"}}">

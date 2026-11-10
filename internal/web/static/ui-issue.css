@@ -29,7 +29,6 @@
   & .cbox .reqs .crit .jump .i { width: 14px; height: 14px; }
   & .cbox .reqs .lnew { border-top: 1px solid var(--border-muted); }
   & .tev:target > .tev-m .tev-h { background: var(--accent-subtle); border-radius: 6px; }
-  & .tlx { margin-top: 24px; }
 
   /* the column of facts: name left, chips right */
   & .side .sblk:not(.live-side) { display: grid; grid-template-columns: 108px minmax(0, 1fr); align-items: start; gap: 4px 8px; padding: 10px 0; }

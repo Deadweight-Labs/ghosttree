@@ -1,5 +1,6 @@
 {{define "newissue"}}{{template "head" .}}{{template "nav" .}}<main class="g2 ni"><div class="wrap">
 {{with .NewIssueV}}<div class="dhead"><h1 class="ptitle">{{t .TitleKey}}</h1></div>
+{{with .Made}}<div class="callout ok" role="status" data-strip="made again">{{mi "check"}}<div class="tt"><a href="{{.Href}}">{{.Text}}</a></div></div><script src="/static/ui-notice.js" defer></script>{{end}}
 {{if .Error}}<div class="callout is-danger" role="alert">{{mi "tri"}}<div>{{t .Error}}{{if .ErrorDetail}} <code>{{.ErrorDetail}}</code>{{end}}</div></div>{{end}}
 <form method="post" action="/ui/issues/create" class="niform"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="kind" value="{{.Kind}}"><input type="hidden" name="project" value="{{.Project}}">
 <div class="dgrid"><div class="dmain">

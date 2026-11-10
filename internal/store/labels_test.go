@@ -154,7 +154,7 @@ func TestLabelsAreSetOnRequestsPainsAndIdeasWithTheRightsOfTheObject(t *testing.
 func TestALabelOfAnotherProjectBehavesLikeAnUnknownName(t *testing.T) {
 	w := newPainWorld(t)
 	other := "github.com/acme/other"
-	if _, err := w.st.EnsureProject("person:1", other); err != nil {
+	if _, err := claimInOrg(w.st, "person:1", other); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.pa["robin"].CreateLabel(LabelInput{Project: other, Name: "secret-plan"}); err != nil {

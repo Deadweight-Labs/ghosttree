@@ -86,8 +86,10 @@ func orgGuestTx(q rowQuerier, orgID, account int64) bool {
 
 // projectShareDefaultTx: das Projekt ist geteilt und das Konto kein Gast der
 // Organisation. Nur dann gilt die Standardrolle.
+// Dienste (Gärtner, Betriebs-Bots) bekommen sie nie: sie arbeiten nur, wo ein
+// Projekt sie ausdrücklich nennt (REQ-623).
 func projectShareDefaultTx(q rowQuerier, pid, orgID, account int64) bool {
-	return projectSharedTx(q, pid) && !orgGuestTx(q, orgID, account)
+	return projectSharedTx(q, pid) && !orgGuestTx(q, orgID, account) && !isServiceTx(q, account)
 }
 
 // backfillOrgGuests markiert einmalig, wer vor dieser Version nur über eine
@@ -172,6 +174,11 @@ func (s *Store) SetProjectVisibility(actorPrincipal, remote string, shared bool)
 	}
 	if p.Shared == shared {
 		return nil
+	}
+	if shared && p.OrgKind == OrgKindUser {
+		// A personal namespace has no members to share with; collaborators get
+		// a role on the project instead.
+		return ErrUserNamespace
 	}
 	action := "unshare_project"
 	if shared {
@@ -262,6 +269,9 @@ func (s *Store) ConnectSourceWithInstallation(actorPrincipal string, orgID int64
 	if err != nil {
 		return Source{}, err
 	}
+	if orgIsUserTx(tx, orgID) {
+		return Source{}, ErrUserNamespace
+	}
 	var id, owner int64
 	err = tx.QueryRow(`SELECT id, org_id FROM git_sources WHERE kind=? AND login=?`, kind, login).Scan(&id, &owner)
 	switch {
@@ -274,6 +284,13 @@ func (s *Store) ConnectSourceWithInstallation(actorPrincipal string, orgID int64
 		id, _ = res.LastInsertId()
 		if err := orgEvent(tx, orgID, "connect_source", principalOfID(actor), kind+":"+login, ""); err != nil {
 			return Source{}, err
+		}
+		// The connected GitHub organization's name belongs to this one: an
+		// unverified namespace holding it yields (slug_claims.go).
+		if kind == SourceGitHub {
+			if _, err := yieldSlugTx(tx, strings.ToLower(login), orgID, principalOfID(actor)); err != nil {
+				return Source{}, err
+			}
 		}
 	case err != nil:
 		return Source{}, err
@@ -500,7 +517,11 @@ func insertProjectTx(tx execQueryer, orgID int64, remote string) (int64, error) 
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return id, holdForeignEntriesTx(tx, remote, orgID, false)
 }
 
 // ---------------------------------------------------------------- Präfixe
@@ -555,6 +576,9 @@ func (s *Store) ClaimPrefix(actorPrincipal string, orgID int64, prefix, visibili
 	actor, err := requireOrgOwnerTx(tx, orgID, actorPrincipal)
 	if err != nil {
 		return OrgPrefix{}, err
+	}
+	if orgIsUserTx(tx, orgID) {
+		return OrgPrefix{}, ErrUserNamespace
 	}
 	var proven int
 	_ = tx.QueryRow(`SELECT COUNT(*) FROM git_sources WHERE org_id=? AND login=? AND kind=?`, orgID, login, SourceGitHub).Scan(&proven)

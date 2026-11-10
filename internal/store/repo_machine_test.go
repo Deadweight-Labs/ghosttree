@@ -297,7 +297,7 @@ func TestProjectEntryWithAMachineIsNotSharedThroughTheMachine(t *testing.T) {
 	f := newShareFixture(t)
 	st := f.st
 	const project = "github.com/dw/app"
-	if _, err := st.EnsureProject("person:1", project); err != nil {
+	if _, err := claimInOrg(st, "person:1", project); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetProjectRole("person:1", project, "person:3", RoleMember, false, RoleViaAPI); err != nil {
@@ -346,7 +346,7 @@ func TestMachineEntriesListOnlyWhatTheViewerMayRead(t *testing.T) {
 	f := newShareFixture(t)
 	st := f.st
 	const project = "github.com/dw/app"
-	if _, err := st.EnsureProject("person:1", project); err != nil {
+	if _, err := claimInOrg(st, "person:1", project); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetProjectRole("person:1", project, "person:3", RoleMember, false, RoleViaAPI); err != nil {

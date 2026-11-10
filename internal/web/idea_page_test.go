@@ -47,14 +47,14 @@ func TestIdeaPageShowsTheWishAndDismissesWithAReason(t *testing.T) {
 	}
 	post := func(form url.Values) *http.Response {
 		form.Set("csrf_token", renderedCSRFToken(t, e.Owner, e.Base+"/ui/overview"))
-		return sameOriginPostForm(t, e.Owner, e.Base+"/ui/ideas/"+strconv.FormatInt(i.ID, 10)+"/state", form)
+		return sameOriginPostForm(t, asBrowser(e.Owner), e.Base+"/ui/ideas/"+strconv.FormatInt(i.ID, 10)+"/state", form)
 	}
 	resp := post(url.Values{"mode": {"dismissed"}, "reason": {" "}})
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "fail=reason_required") {
+	if resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "?") {
 		t.Fatalf("dismiss without a reason -> %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	_, failed := fetchPage(t, e.Owner, e.Base+resp.Header.Get("Location"))
+	_, failed := followRefusal(t, e.Owner, e.Base, resp)
 	if !strings.Contains(failed, "Say why the idea is dismissed.") {
 		t.Error("the refusal is not shown")
 	}
@@ -91,10 +91,15 @@ func TestPainPageHistoryRunsOldestFirstWithTheStatesToGoTo(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/pains/"+strconv.FormatInt(d.Pain.ID, 10))
-	created := strings.Index(page, `data-act="pain.created"`)
+	// The first object (the text of the pain, with its maker and time) opens the
+	// timeline and says it was recorded; no second entry repeats it.
+	first := strings.Index(page, `class="cmt first"`)
 	state := strings.Index(page, `data-act="pain.state"`)
-	if created < 0 || state < 0 || created > state {
-		t.Errorf("history not oldest first: created %d, state %d", created, state)
+	if first < 0 || state < 0 || first > state {
+		t.Errorf("history not oldest first: first object %d, state %d", first, state)
+	}
+	if strings.Contains(page, `data-act="pain.created"`) {
+		t.Error("the pain is recorded twice: first object and entry")
 	}
 	for _, want := range []string{"Stays open", "Over 400 sessions it is slow again.", "3f9a2c1", `data-val="resolved"`, `data-val="obsolete"`, `data-val="active"`, `name="remaining"`, `name="evidence_ref"`, "Set to Fixed"} {
 		if !strings.Contains(page, want) {

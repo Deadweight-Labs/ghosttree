@@ -25,7 +25,8 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-const gardenUsage = `usage: ctx garden check-knowledge [--mode agent|api] [--project <remote>] [--repo <dir>] [--type pitfall,decision]
+const gardenUsage = `usage: ctx garden run-due --repos-dir <dir> [...] (the schedule set in the web interface)
+       ctx garden check-knowledge [--mode agent|api] [--project <remote>] [--repo <dir>] [--type pitfall,decision]
                                   [--sessions 4] [--turns 60] [--per-session 30] [--session-timeout 40m]
                                   [--claude <path>] [--claude-dir <dir>] [--no-mcp]
                                   [--requests 8] [--ghosts 8] [--idle-days 30]
@@ -183,6 +184,9 @@ type gardenOpts struct {
 func cmdGarden(args []string, stdout io.Writer) int {
 	if len(args) > 0 && args[0] == "git-mcp" {
 		return cmdGardenGitMCP(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "run-due" {
+		return cmdGardenRunDue(args[1:], stdout)
 	}
 	if len(args) == 0 || args[0] != "check-knowledge" {
 		fmt.Fprintln(stdout, gardenUsage)

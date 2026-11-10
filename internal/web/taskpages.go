@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
 	"net/http"
@@ -54,6 +55,8 @@ type taskStepView struct {
 }
 
 type taskPageView struct {
+	// First is the head of the bubble that opens the page: who asked, and when.
+	First                           firstHead
 	ID                              int64
 	Title, KindLabel                string
 	State, StateLabel, Tone         string
@@ -283,6 +286,7 @@ func (a *app) taskDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 	}
 	v.Note = a.taskNoteFor(l, t.ID, nil)
 	a.taskSteps(r2, l, pa, t, v)
+	v.First = firstOf(l, a.actorViewOf(l, pa, actor.Task, t.ID, t.CreatedBy, true), t.CreatedBy, l.msg("tasks.asked_ch"), v.Age, "", "")
 	if interactive(r) && t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil {
 		v.CanDone, v.DoneAction = true, "/ui/tasks/done"
 	}
@@ -362,4 +366,10 @@ func (a *app) tasksTabCount(pa *store.ProjectAccess, remote string) string {
 		return ""
 	}
 	return countText(len(list))
+}
+
+// HasFirst says whether the page opens with the bubble: the text, where, the
+// short explanation, the steps or how an agent checks it.
+func (v *taskPageView) HasFirst() bool {
+	return len(v.Blocks) > 0 || v.Where != "" || (v.Note != nil && v.Note.Text != "") || len(v.Steps) > 0 || v.CheckHint != ""
 }

@@ -563,7 +563,7 @@ func TestJoinOIDCSignInBindsTheSessionAndLandsOnThePairingPage(t *testing.T) {
 	env := newOIDCEnv(t, true)
 	env.store.SetAccessMode(store.AccessMode{Enforce: true})
 	org, _ := env.store.CreateOrg("person:1", "Alpha", "alpha")
-	if _, err := env.store.EnsureProject("person:1", joinProject); err != nil {
+	if _, err := claimInOrg(env.store, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	code, _, err := env.store.CreateProjectInvitation("person:1", org.ID, joinProject, store.RoleMember, 0)
@@ -717,7 +717,7 @@ func TestOIDCTypedProjectInvitationEndsOnThePairingPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = env.store.EnsureProject("person:1", joinProject); err != nil {
+	if _, err = claimInOrg(env.store, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	code := projectInvite(t, env.store, org, store.RoleMember)

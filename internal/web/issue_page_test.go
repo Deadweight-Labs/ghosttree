@@ -20,17 +20,20 @@ func TestIssueHistoryRunsOldestFirstAndRequirementsLeadToTheirEntry(t *testing.T
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/issues/"+itoa(d.Request.ID))
-	created := strings.Index(page, `data-act="request.created"`)
+	created := strings.Index(page, `class="cmt first"`)
 	met := strings.Index(page, `data-act="criterion.met"`)
 	added := strings.Index(page, `data-act="criterion.added"`)
 	if created < 0 || met < 0 || added < 0 || !(created < met && met < added) {
-		t.Errorf("the history is not oldest first: created %d, met %d, added %d", created, met, added)
+		t.Errorf("the history is not oldest first: first object %d, met %d, added %d", created, met, added)
 	}
-	// The requirements sit in the first comment, above the history.
+	if strings.Contains(page, `data-act="request.created"`) {
+		t.Error("the issue is created twice: first object and entry")
+	}
+	// The requirements sit in the first object, which opens the timeline.
 	box := strings.Index(page, `class="reqs"`)
-	tl := strings.Index(page, `class="tlx"`)
-	if box < 0 || tl < 0 || box > tl {
-		t.Errorf("requirements are not inside the first comment: box %d, history %d", box, tl)
+	tl := strings.Index(page, `class="tlx tl0"`)
+	if box < 0 || tl < 0 || box < tl || box > met {
+		t.Errorf("requirements are not inside the first object: box %d, timeline %d, entries %d", box, tl, met)
 	}
 	m := regexp.MustCompile(`id="criterion-1"[^>]*>.*?class="jump" href="#(event-\d+)"`).FindStringSubmatch(strings.ReplaceAll(page, "\n", " "))
 	if m == nil {

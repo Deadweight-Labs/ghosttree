@@ -237,26 +237,26 @@ func commitItem(l lang, e store.CommitEntry, href string, now time.Time) tlItem 
 	if t := parseTime(e.At); !t.IsZero() {
 		it.Age = shortAgo(l, now, t)
 	}
-	link := func(text string) string {
-		if href == "" {
-			return `<span class="t">` + html.EscapeString(text) + `</span>`
-		}
-		return `<a class="t" href="` + html.EscapeString(href) + `">` + html.EscapeString(text) + `</a>`
-	}
 	switch e.Kind {
 	case store.CommitKindRequest, store.CommitKindPain, store.CommitKindIdea:
 		kind := map[string]string{store.CommitKindRequest: "request", store.CommitKindPain: "pain", store.CommitKindIdea: "idea"}[e.Kind]
 		it.Head = template.HTML(html.EscapeString(l.msg(commitEvKeys[e.Kind])) + " " + string(refPillHTML(l, kind, e.ID, href)))
-		it.Body = template.HTML(link(e.Title))
+		it.Body = template.HTML(html.EscapeString(e.Title))
 	case store.CommitKindComment:
+		// The sentence names what was commented on, as a pill that leads to the
+		// comment; the box holds the words of the comment, plain.
 		it.Head = template.HTML(html.EscapeString(l.msg("commit.ev.comment")))
+		if kind, ok := map[string]string{store.CommentOnRequest: "request", store.CommentOnPain: "pain", store.CommentOnIdea: "idea"}[e.ObjectKind]; ok && e.ObjectID > 0 {
+			it.Head += " " + refPillHTML(l, kind, e.ObjectID, href)
+		}
+		it.Body = template.HTML(html.EscapeString(e.Title))
+	default:
+		// The words stand plain; the way to the entry is a small link at the right end.
+		it.Head = template.HTML(html.EscapeString(l.msg(commitEvKeys[e.Kind])))
 		it.Body = template.HTML(html.EscapeString(e.Title))
 		if href != "" {
-			it.Body += template.HTML(` <a class="t" href="` + html.EscapeString(href) + `">` + html.EscapeString(l.msg("commit.ev.open")) + `</a>`)
+			it.Right = template.HTML(`<a class="gbtn sm quiet" href="` + html.EscapeString(href) + `">` + html.EscapeString(l.msg("commit.ev.open")) + `</a>`)
 		}
-	default:
-		it.Head = template.HTML(html.EscapeString(l.msg(commitEvKeys[e.Kind])))
-		it.Body = template.HTML(link(e.Title))
 	}
 	return it
 }

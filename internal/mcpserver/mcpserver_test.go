@@ -468,7 +468,11 @@ func TestNonDecisionGetsNoHint(t *testing.T) {
 }
 
 func TestSessionsTool(t *testing.T) {
-	c, _ := newTestClient(t)
+	c, st := newTestClient(t)
+	// A session keeps its project only in a claimed one (REQ-623).
+	if _, err := st.ClaimProject("person:1", "github.com/x/y", ""); err != nil {
+		t.Fatal(err)
+	}
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Machine: "workstation-a"}}
 	id, err := c.UpsertSession(store.Session{Harness: "codex", ExternalID: "s1",
 		Scope:     scope.Axes{Project: "github.com/x/y", Branch: "old", Machine: "workstation-a"},

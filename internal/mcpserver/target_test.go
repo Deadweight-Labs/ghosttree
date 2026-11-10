@@ -53,7 +53,8 @@ func targetFixture(t *testing.T) (*client.Client, *store.Store) {
 	_ = acme
 	_ = other
 	for _, p := range []struct{ who, remote string }{{"person:1", tgtHere}, {"person:1", tgtInfra}, {"person:2", tgtForeign}} {
-		if _, err := st.EnsureProject(p.who, p.remote); err != nil {
+		// A write alone claims nothing any more (REQ-623); the fixture claims.
+		if _, err := claimOrPlace(st, p.who, p.remote, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -163,7 +164,7 @@ func TestAProjectWithoutWriteRightLooksLikeOneThatDoesNotExist(t *testing.T) {
 
 func TestAmbiguousShortNameIsRefused(t *testing.T) {
 	c, st := targetFixture(t)
-	if _, err := st.EnsureProject("person:1", "gitlab.com/acme/infra"); err != nil {
+	if _, err := claimInOrg(st, "person:1", "gitlab.com/acme/infra"); err != nil {
 		t.Fatal(err)
 	}
 	s := targetServer(c, tgtHere)

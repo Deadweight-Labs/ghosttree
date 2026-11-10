@@ -122,9 +122,9 @@ func TestDeviceFormBodyIsLimited(t *testing.T) {
 	srv, st, _ := testWeb(t)
 	client := loginInteractive(t, srv, st, "alice")
 	csrf := renderedCSRFToken(t, client, srv.URL+"/ui/device")
-	resp := sameOriginPostForm(t, client, srv.URL+"/ui/device", url.Values{"user_code": {strings.Repeat("A", 100000)}, "csrf_token": {csrf}})
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("oversized form: %d", resp.StatusCode)
+	resp := sameOriginPostForm(t, client, srv.URL+"/ui/device", url.Values{"user_code": {strings.Repeat("A", maxFormBody+1)}, "csrf_token": {csrf}})
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized form: %d, want the page for 413", resp.StatusCode)
 	}
 	resp.Body.Close()
 }
@@ -186,12 +186,13 @@ func TestTokenPageListsOwnTokensAndRevocationIsImmediate(t *testing.T) {
 		t.Fatalf("revoke without csrf: %d", resp.StatusCode)
 	}
 
-	// Alice (Admin, erste Person) sieht alle, Bob sieht Alices Token nicht.
+	// Alice (Admin, erste Person) sieht nur ihre eigenen Tokens, nicht die von
+	// Bobs Maschinen (14 A, #4376); Bob sieht Alices Token nicht.
 	aliceClient := loginInteractive(t, srv, st, "alice")
 	resp, _ = aliceClient.Get(srv.URL + "/ui/account/tokens")
 	adminPage := body(t, resp)
-	if !strings.Contains(adminPage, "bob-laptop") || !strings.Contains(adminPage, "alice") || !strings.Contains(adminPage, "revoked") {
-		t.Fatalf("admin page incomplete: %s", adminPage)
+	if strings.Contains(adminPage, "bob-laptop") {
+		t.Fatalf("the admin sees a token of another person's machine: %s", adminPage)
 	}
 	// Bob darf Alices Token nicht widerrufen (404, nichts passiert).
 	aliceTokens, _ := st.ListTokens("alice")

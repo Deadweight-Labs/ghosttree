@@ -33,7 +33,7 @@ func inFolder(t *testing.T) string {
 
 func TestProjectCreateByCLI(t *testing.T) {
 	st := moveCLIFixture(t)
-	if code, out := ctxRun("project", "create", "infra"); code != 0 || !strings.Contains(out, "acme/infra") {
+	if code, out := ctxRun("project", "create", "infra", "--org", "acme"); code != 0 || !strings.Contains(out, "acme/infra") {
 		t.Fatalf("create = %d: %s", code, out)
 	}
 	p, ok := st.ProjectByRemote("acme/infra")
@@ -43,7 +43,7 @@ func TestProjectCreateByCLI(t *testing.T) {
 	if role := st.ProjectRole("acme/infra", "person:1").Role; role != store.RoleOwner {
 		t.Errorf("creator role = %q", role)
 	}
-	if code, out := ctxRun("project", "create", "infra"); code != 1 || !strings.Contains(out, "already exists") {
+	if code, out := ctxRun("project", "create", "infra", "--org", "acme"); code != 1 || !strings.Contains(out, "already exists") {
 		t.Errorf("duplicate = %d: %s", code, out)
 	}
 	if code, out := ctxRun("project", "create", "github.com/a/b"); code != 1 || !strings.Contains(out, "invalid_input") {
@@ -61,7 +61,7 @@ func TestProjectCreateByCLI(t *testing.T) {
 	}
 }
 
-func TestProjectCreateNeedsAnOrganization(t *testing.T) {
+func TestProjectCreateWithoutOrganizationUsesTheOwnNamespace(t *testing.T) {
 	st := moveCLIFixture(t)
 	if _, err := st.AddAccount("bob", "", false); err != nil {
 		t.Fatal(err)
@@ -75,14 +75,15 @@ func TestProjectCreateNeedsAnOrganization(t *testing.T) {
 	if err := config.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := ctxRun("project", "create", "mine"); code != 1 || !strings.Contains(out, "no_org") {
+	// Without an organization the project goes to the own namespace (REQ-623).
+	if code, out := ctxRun("project", "create", "mine"); code != 0 || !strings.Contains(out, "bob/mine") {
 		t.Errorf("outsider = %d: %s", code, out)
 	}
 }
 
 func TestProjectLinkRecordsTheFolderLocallyAndUnlinkRemovesIt(t *testing.T) {
 	moveCLIFixture(t)
-	if code, out := ctxRun("project", "create", "docs"); code != 0 {
+	if code, out := ctxRun("project", "create", "docs", "--org", "acme"); code != 0 {
 		t.Fatalf("create: %s", out)
 	}
 	dir := inFolder(t)
@@ -105,7 +106,7 @@ func TestProjectLinkRecordsTheFolderLocallyAndUnlinkRemovesIt(t *testing.T) {
 	if code, _ := ctxRun("project", "link", "docs"); code != 0 {
 		t.Errorf("relink to the same project = %d", code)
 	}
-	if code, out := ctxRun("project", "create", "sky-go"); code != 0 {
+	if code, out := ctxRun("project", "create", "sky-go", "--org", "acme"); code != 0 {
 		t.Fatalf("create: %s", out)
 	}
 	if code, out := ctxRun("project", "link", "sky-go"); code != 1 || !strings.Contains(out, "unlink") {
@@ -139,7 +140,7 @@ func TestProjectLinkChecksWriteAccessAndRefusesHomeAndRoot(t *testing.T) {
 	if _, err := st.AddAccount("bob", "", false); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := ctxRun("project", "create", "secret"); code != 0 {
+	if code, out := ctxRun("project", "create", "secret", "--org", "acme"); code != 0 {
 		t.Fatalf("create: %s", out)
 	}
 	token, _, _ := st.CreateToken("bob", store.TokenSpec{Label: "t"})
@@ -185,7 +186,7 @@ func TestProjectLinkChecksWriteAccessAndRefusesHomeAndRoot(t *testing.T) {
 // github.com/acme/infra): the short name is ambiguous and nothing is picked.
 func TestProjectLinkRefusesAnAmbiguousShortName(t *testing.T) {
 	moveCLIFixture(t)
-	if code, out := ctxRun("project", "create", "infra"); code != 0 {
+	if code, out := ctxRun("project", "create", "infra", "--org", "acme"); code != 0 {
 		t.Fatalf("create: %s", out)
 	}
 	dir := inFolder(t)
@@ -203,7 +204,7 @@ func TestProjectLinkRefusesAnAmbiguousShortName(t *testing.T) {
 // gitserver/repo has the shape of a named id but is a repository: no link.
 func TestProjectLinkTreatsAHostlessRemoteAsARepository(t *testing.T) {
 	st := moveCLIFixture(t)
-	if _, err := st.EnsureProject("person:1", "git@gitserver:repo.git"); err != nil {
+	if _, err := claimInOrg(st, "person:1", "git@gitserver:repo.git"); err != nil {
 		t.Fatal(err)
 	}
 	dir := inFolder(t)
@@ -217,7 +218,7 @@ func TestProjectLinkTreatsAHostlessRemoteAsARepository(t *testing.T) {
 
 func TestProjectUnlinkMissingAndDoctorReportStaleLinks(t *testing.T) {
 	moveCLIFixture(t)
-	if code, out := ctxRun("project", "create", "notes"); code != 0 {
+	if code, out := ctxRun("project", "create", "notes", "--org", "acme"); code != 0 {
 		t.Fatalf("create: %s", out)
 	}
 	if checks := linkChecks(); len(checks) != 0 {
@@ -251,7 +252,7 @@ func TestProjectUnlinkMissingAndDoctorReportStaleLinks(t *testing.T) {
 
 func TestALinkedFolderResolvesForTheMCPServerAndFindsTheNamedProject(t *testing.T) {
 	moveCLIFixture(t)
-	if code, out := ctxRun("project", "create", "notes"); code != 0 {
+	if code, out := ctxRun("project", "create", "notes", "--org", "acme"); code != 0 {
 		t.Fatalf("create: %s", out)
 	}
 	dir := inFolder(t)
@@ -283,7 +284,7 @@ func TestALinkedFolderResolvesForTheMCPServerAndFindsTheNamedProject(t *testing.
 
 func TestBootstrapInALinkedFolderDeliversTheProjectsKnowledgeAndWritesNoMirror(t *testing.T) {
 	st := moveCLIFixture(t)
-	if code, out := ctxRun("project", "create", "notes"); code != 0 {
+	if code, out := ctxRun("project", "create", "notes", "--org", "acme"); code != 0 {
 		t.Fatalf("create: %s", out)
 	}
 	if _, err := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "backups run at night", Body: "the nas snapshots nightly",
@@ -321,7 +322,7 @@ func TestBootstrapInALinkedFolderDeliversTheProjectsKnowledgeAndWritesNoMirror(t
 // that project's knowledge.
 func TestAMarkerFileInsideAForeignRepoDoesNotPullInAProjectsKnowledge(t *testing.T) {
 	st := moveCLIFixture(t)
-	if code, out := ctxRun("project", "create", "notes"); code != 0 {
+	if code, out := ctxRun("project", "create", "notes", "--org", "acme"); code != 0 {
 		t.Fatalf("create: %s", out)
 	}
 	if _, err := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "victim secret", Body: "private",

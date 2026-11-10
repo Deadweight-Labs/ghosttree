@@ -290,9 +290,9 @@ func TestIssueHistoryReadsAsSentencesWithObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/issues/"+itoa(d.Request.ID))
-	tl := page[strings.Index(page, `<div class="tlx">`):]
+	tl := page[strings.Index(page, `<div class="tlx tl0">`):]
 	text := issuesVisibleText(tl)
-	for _, want := range []string{"robin set", "as the parent issue", "claude met", "Requirement 1", "created a task for alice", "claude started working", "created this issue"} {
+	for _, want := range []string{"robin set", "as the parent issue", "claude met", "Requirement 1", "created a task for alice", "claude started working", "described the issue"} {
 		if !strings.Contains(strings.Join(strings.Fields(text), " "), want) {
 			t.Errorf("the history lacks %q: %s", want, text)
 		}

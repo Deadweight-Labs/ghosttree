@@ -33,8 +33,15 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Scope = scope.CanonicalAxes(s.Scope)
-	if !a.gateMachine(w, r, s.Scope.Machine, true) || !a.gateProject(w, r, s.Scope.Project) {
+	if !a.gateMachine(w, r, s.Scope.Machine, true) {
 		return
+	}
+	var placed bool
+	if s.Scope.Project, placed = a.sessionProject(w, r, s.Scope.Project); !placed {
+		return
+	}
+	if s.Scope.Project == "" {
+		s.Scope.Branch, s.Scope.Lineage = "", nil
 	}
 	// Besitz kommt aus dem Token, nie aus dem Rumpf.
 	acct, ok := accountOf(principalOf(r))
@@ -706,6 +713,9 @@ type searchResult struct {
 	Messages []store.MessageHit   `json:"messages,omitempty"`
 	// Query ist die Suchzeile, wie der Server sie gelesen hat.
 	Query string `json:"query,omitempty"`
+	// Unavailable nennt die Bereiche, die bei einer Suche über mehrere Bereiche
+	// ausfielen. Die übrigen Treffer sind vollständig.
+	Unavailable []store.SearchGap `json:"unavailable,omitempty"`
 }
 
 func (a *api) search(w http.ResponseWriter, r *http.Request) {
@@ -737,6 +747,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	fetch := a.overfetch(limit)
 	pa.Filtered()
 	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}, Requests: []requestdomain.SearchHit{}}
+	gaps := a.newSearchGaps(r, kind == "all")
 	if kind == "knowledge" || kind == "all" {
 		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
 		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
@@ -750,39 +761,62 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 			Axes: filter, Union: r.URL.Query().Get("scope") == "union",
 			Limit: fetch, Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
 			NoRecord: true, Anchor: anchor, Origin: origin,
+			// Unbestätigtes und die Notizen des Gärtners bleiben draußen wie bei
+			// der Auslieferung; holen lassen sie sich mit is:staged oder
+			// author:gardener, das ist der qualifizierte Weg.
+			Settled: true,
 		})
 		if err != nil {
-			writeStoreError(w, http.StatusInternalServerError, err)
-			return
+			if !gaps.add("knowledge", err) {
+				writeStoreError(w, http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			delivered := filterTo(ks, limit, readable)
+			a.st.RecordKnowledgeSearchHits(delivered)
+			res.Knowledge = pa.KnowledgeViews(delivered)
+			gaps.done()
 		}
-		delivered := filterTo(ks, limit, readable)
-		a.st.RecordKnowledgeSearchHits(delivered)
-		res.Knowledge = pa.KnowledgeViews(delivered)
 	}
 	// Transkripte tragen keinen Git-Anker: mit einem Anker-Filter gibt es
 	// keine Session-Treffer, statt Treffer zu zeigen, die der Filter nicht prüfen kann.
 	if (kind == "sessions" || kind == "all") && !anchor.Active() && !origin.Active() {
-		hits, err := a.searchSessions(pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch, store.SearchAuto)
+		st, done := gaps.budget()
+		hits, err := a.searchSessions(st, pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch, store.SearchAuto)
+		err = done(err)
 		if err != nil {
-			writeStoreError(w, http.StatusInternalServerError, err)
-			return
+			if !gaps.add("sessions", err) {
+				writeStoreError(w, http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			res.Sessions = hits
+			gaps.done()
 		}
-		res.Sessions = hits
 	}
 	if kind == "requests" || kind == "all" {
 		// With embeddings the requests are ranked by words and by meaning; the
 		// filter, with the visibility of the reader, is the same SQL for both.
 		page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit, Commit: anchor.Commit, PR: anchor.PR, Origin: origin}), store.SearchAuto)
 		if err != nil {
-			writeStoreError(w, http.StatusInternalServerError, err)
-			return
+			if !gaps.add("requests", err) {
+				writeStoreError(w, http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			for i := range page.Results {
+				page.Results[i] = pa.RequestHitView(page.Results[i])
+			}
+			res.Requests = page.Results
+			a.noteRequestHits(r, page.Results)
+			gaps.done()
 		}
-		for i := range page.Results {
-			page.Results[i] = pa.RequestHitView(page.Results[i])
-		}
-		res.Requests = page.Results
-		a.noteRequestHits(r, page.Results)
 	}
+	if err := gaps.allFailed(); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	res.Unavailable = gaps.list
 	writeJSON(w, 200, res)
 }
 
@@ -795,7 +829,10 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 // sessions switched on ranks by words and by meaning (one hit for each session,
 // marked when only the meaning found it), and SearchFullTextOnly for the hint,
 // which asks for one word and is never sent to the embedding server.
-func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axes, excludeSession string, limit, fetch int, mode store.SearchMode) ([]store.SessionHit, error) {
+//
+// st is the store to read through: a.st, or a view of it that ends with the
+// time budget of the area (searchGaps.budget).
+func (a *api) searchSessions(st *store.Store, pa *store.ProjectAccess, q string, filter scope.Axes, excludeSession string, limit, fetch int, mode store.SearchMode) ([]store.SessionHit, error) {
 	dbFilter, viewFilter, fetchSessions := a.sessionFilters(filter, fetch)
 	// Mit Durchsetzung steht die lesbare Menge vor dem Rang fest: ein
 	// verborgener Treffer darf weder einen sichtbaren verdrängen noch
@@ -816,7 +853,7 @@ func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axe
 			}
 		}
 	}
-	hits, err := a.st.SearchSessionsWith(q, store.SessionSearch{
+	hits, err := st.SearchSessionsWith(q, store.SessionSearch{
 		Filter: dbFilter, ExcludeSession: excludeSession, Limit: fetchSessions, Keep: readable, Prefilter: pre, Mode: mode,
 	})
 	if err != nil {

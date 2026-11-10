@@ -32,6 +32,9 @@
 {{end}}</div>{{template "foot" .}}{{end}}
 
 {{define "orgmachines"}}{{template "head" .}}{{template "nav" .}}<main class="g2 mh"><div class="wrap">
-{{with .OrgMachinesV}}<div class="box">{{range .Rows}}{{template "uirow" .}}
-{{else}}<div class="empty"><span>{{t "machine.org_empty"}}</span></div>{{end}}</div>{{end}}
+{{with .OrgMachinesV}}{{if .User}}<div class="box">{{range .Own}}{{template "uirow" .}}
+{{else}}<div class="empty"><span>{{t "user.no_machines"}}</span></div>{{end}}</div>{{else}}<h2 class="mh-sec">{{t "org.machines_of_org"}}</h2><div class="box">{{range .Own}}{{template "uirow" .}}
+{{else}}<div class="empty"><span>{{t "machine.org_empty"}}</span></div>{{end}}</div>
+<h2 class="mh-sec">{{t "org.machines_shared"}}</h2><div class="box">{{range .Shared}}{{template "uirow" .}}
+{{else}}<div class="empty"><span>{{t "org.no_shared_machines"}}</span></div>{{end}}</div>{{end}}{{end}}
 </div>{{template "foot" .}}{{end}}

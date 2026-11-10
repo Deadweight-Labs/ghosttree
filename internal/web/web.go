@@ -29,6 +29,8 @@ type app struct {
 	bootstrapFile string
 	registered    []string
 	cursorOnce    sync.Once
+	flashOnce     sync.Once
+	flashStore    *flashes // rejected form input, shown again once (formfail.go)
 	cursorSeal    *flowSealer
 	proxies       proxytrust.Set
 	publicOrigin  string // scheme://host of GHOSTTREE_PUBLIC_URL, or empty
@@ -58,6 +60,10 @@ type app struct {
 	transcripts transcriptStatsCache
 }
 type pageData struct {
+	// Flash is the note over the form a rejected form came back to; FormFailed is
+	// the page that shows it when the address of the form is not known.
+	Flash                                                      *flashNote
+	FormFailed                                                 *formFailedView
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
 	OIDC, Paste, NeedsName                                     bool
 	Admin, Approved, Interactive                               bool
@@ -78,6 +84,7 @@ type pageData struct {
 	KnowledgeItemV                                             *knowledgeItemView
 	AgentModels                                                *agentModelsView
 	ReviewV                                                    *reviewView
+	HeldV                                                      *heldRow
 	ContextV                                                   *contextView
 	Sessions                                                   []store.Session
 	Chunks                                                     []store.Chunk
@@ -115,6 +122,7 @@ type pageData struct {
 	FeatureV                                                   *featureView
 	MachineV                                                   *machinePageView
 	OrgMachinesV                                               *orgMachinesView
+	GardenTabV                                                 *gardenTabView
 	TasksV                                                     *tasksView
 	TaskV                                                      *taskPageView
 	PackagesV                                                  *packagesView
@@ -169,6 +177,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	mux := http.NewServeMux()
 	a.handle(mux, "GET /static/", a.staticFiles())
 	a.handle(mux, "GET /{$}", a.rootRedirect)
+	a.handle(mux, "GET /", a.unknownAddress)
 	a.handle(mux, "GET /favicon.ico", a.favicon)
 	a.handle(mux, "GET /ui/login", a.loginPage)
 	a.handle(mux, "POST /ui/login", a.requireSameOrigin(http.HandlerFunc(a.loginSubmit)))
@@ -193,7 +202,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /join/pair/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairDecide))))))
 	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
 	a.handle(mux, "POST /join/{code}/signout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.joinSignOut)))))
-	a.handle(mux, "POST /ui/logout", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.logout))))
+	a.handle(mux, "POST /ui/logout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.logout)))))
 	a.handle(mux, "GET /ui/inbox", a.requirePerson(http.HandlerFunc(a.inboxPage)))
 	a.handle(mux, "POST /ui/issues/create", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.issueCreate))))))
 	a.handle(mux, "POST /ui/ideas/{id}/state", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.ideaState))))))
@@ -221,7 +230,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	}
 	a.handle(mux, "POST /ui/requests/{id}/close", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestClose))))))
 	a.handle(mux, "POST /ui/requests/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestMove))))))
-	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBodyN(requestCorrectForm, a.requestFormTooLarge(a.requireCSRF(http.HandlerFunc(a.requestCorrect)))))))
+	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestCorrect))))))
 	for suffix, h := range map[string]http.HandlerFunc{"create": a.labelCreate, "{id}/update": a.labelUpdate, "{id}/delete": a.labelDelete} {
 		a.handle(mux, "POST /ui/labels/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
@@ -236,6 +245,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
 	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
 	a.handle(mux, "POST /ui/review/bulk", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewBulk))))))
+	a.handle(mux, "GET /ui/review/held/{kind}/{id}", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.reviewHeldPreview))))
+	a.handle(mux, "POST /ui/review/held", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewHeld))))))
 	a.handle(mux, "POST /ui/review/{id}/{verdict}", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDecide))))))
 	a.handle(mux, "POST /ui/review/{id}/merge", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewMerge))))))
 	a.handle(mux, "POST /ui/review/{id}/criterion", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewCriterion))))))
@@ -249,20 +260,21 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/coord/events", a.requirePerson(http.HandlerFunc(a.coordEvents)))
 	a.handle(mux, "GET /ui/live", a.requirePerson(http.HandlerFunc(a.liveEvents)))
 	a.handle(mux, "GET /ui/avatar/{id}", a.requirePerson(http.HandlerFunc(a.avatarImage)))
+	a.handle(mux, "GET /ui/avatar/org/{id}", a.requirePerson(http.HandlerFunc(a.orgAvatarImage)))
 	a.handle(mux, "GET /ui/coord/thread/{id}", a.requirePerson(http.HandlerFunc(a.coordThreadPage)))
-	a.handle(mux, "POST /ui/coord/send", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordSend))))
-	a.handle(mux, "POST /ui/coord/thread/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateThread))))
-	a.handle(mux, "POST /ui/coord/thread/post", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordPostThread))))
-	a.handle(mux, "POST /ui/coord/thread/state", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordSetThreadState))))
-	a.handle(mux, "POST /ui/coord/read", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordMarkRead))))
-	a.handle(mux, "POST /ui/coord/unread", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordMarkUnread))))
-	a.handle(mux, "POST /ui/coord/attention/action", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordAttentionAction))))
-	a.handle(mux, "POST /ui/coord/standing/end", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordEndStanding))))
-	a.handle(mux, "POST /ui/coord/standing/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateStanding))))
-	a.handle(mux, "POST /ui/coord/direct/start", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordStartDirect))))
-	a.handle(mux, "POST /ui/coord/group/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateGroup))))
-	a.handle(mux, "POST /ui/coord/group/update", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordUpdateGroup))))
-	a.handle(mux, "POST /ui/coord/group/leave", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordLeaveGroup))))
+	a.handle(mux, "POST /ui/coord/send", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordSend)))))
+	a.handle(mux, "POST /ui/coord/thread/create", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordCreateThread)))))
+	a.handle(mux, "POST /ui/coord/thread/post", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordPostThread)))))
+	a.handle(mux, "POST /ui/coord/thread/state", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordSetThreadState)))))
+	a.handle(mux, "POST /ui/coord/read", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordMarkRead)))))
+	a.handle(mux, "POST /ui/coord/unread", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordMarkUnread)))))
+	a.handle(mux, "POST /ui/coord/attention/action", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordAttentionAction)))))
+	a.handle(mux, "POST /ui/coord/standing/end", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordEndStanding)))))
+	a.handle(mux, "POST /ui/coord/standing/create", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordCreateStanding)))))
+	a.handle(mux, "POST /ui/coord/direct/start", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordStartDirect)))))
+	a.handle(mux, "POST /ui/coord/group/create", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordCreateGroup)))))
+	a.handle(mux, "POST /ui/coord/group/update", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordUpdateGroup)))))
+	a.handle(mux, "POST /ui/coord/group/leave", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordLeaveGroup)))))
 	a.handle(mux, "POST /ui/coord/agent/control", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.coordAgentControl))))))
 	a.handle(mux, "GET /ui/device", a.requirePerson(http.HandlerFunc(a.devicePage)))
 	a.handle(mux, "POST /ui/device", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceLookup))))))
@@ -286,12 +298,15 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		"/ui/orgs/project/create": a.orgProjectCreate, "/ui/orgs/project/visibility": a.orgProjectVisibility,
 		"/ui/orgs/source/connect": a.orgSourceConnect, "/ui/orgs/source/add": a.orgSourceAdd,
 		"/ui/orgs/source/remove": a.orgSourceRemove, "/ui/orgs/source/import": a.orgSourceImport,
-		"/ui/orgs/prefix/visibility": a.orgPrefixVisibility,
+		"/ui/orgs/prefix/visibility": a.orgPrefixVisibility, "/ui/orgs/follow": a.orgFollowGitHub,
+		"/ui/orgs/garden": a.orgGardenSave, "/ui/gardener/undo": a.gardenAutoUndo,
+		"/ui/handover": a.handoverConsent, "/ui/orgs/takeover": a.handoverTakeOver,
+		"/ui/orgs/assign": a.orgAssign,
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
 	for path, h := range map[string]http.HandlerFunc{
-		"/ui/orgs/accept": a.orgAccept, "/ui/orgs/default": a.orgDefault,
+		"/ui/orgs/accept": a.orgAccept,
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(limitBody(a.requireCSRF(h))))
 	}
@@ -362,7 +377,42 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	case "profile":
 		data.NavSection = "profile"
 	}
-	a.renderPost(l, w, name, data, func(page []byte) []byte { return a.refCards(r, l, page) })
+	var note []byte
+	if r.Method == http.MethodGet {
+		if data.Flash = a.takeFlash(w, r); data.Flash != nil {
+			var banner bytes.Buffer
+			if err := l.page().ExecuteTemplate(&banner, "flashnote", data); err == nil {
+				note = banner.Bytes()
+			}
+		}
+	}
+	a.renderPost(l, w, name, data, func(page []byte) []byte { return putFlashNote(a.refCards(r, l, page), note) })
+}
+
+// putFlashNote puts the note of a rejected form at the top of the page content:
+// right after the opening of the first ".wrap" of the main area, else of the main
+// area itself. ui-flash.js moves it over the form it belongs to.
+func putFlashNote(page, note []byte) []byte {
+	if len(note) == 0 {
+		return page
+	}
+	at := bytes.Index(page, []byte("<main"))
+	if at < 0 {
+		return page
+	}
+	end := bytes.IndexByte(page[at:], '>')
+	if end < 0 {
+		return page
+	}
+	at += end + 1
+	const wrap = `<div class="wrap">`
+	if i := bytes.Index(page[at:min(len(page), at+400)], []byte(wrap)); i >= 0 {
+		at += i + len(wrap)
+	}
+	out := make([]byte, 0, len(page)+len(note))
+	out = append(out, page[:at]...)
+	out = append(out, note...)
+	return append(out, page[at:]...)
 }
 
 // sessionLinks nennt zu Sessionnummern aus Verweisen die Adresse in der
@@ -502,6 +552,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/register":                     webPublic,
 	"POST /ui/login/code":                   webPublic,
 	"GET /{$}":                              webPublic,
+	"GET /":                                 webPublic,
 	"GET /favicon.ico":                      webPublic,
 	"GET /ui/{$}":                           webPublic,
 	"GET /ui/inbox":                         webAccount,
@@ -541,9 +592,11 @@ var webRoutes = map[string]webClass{
 	"POST /ui/knowledge/{id}/edit":          webAdmin,
 	"POST /ui/knowledge/{id}/move":          webAdmin,
 	"GET /ui/review":                        webProject,
+	"GET /ui/review/held/{kind}/{id}":       webProject,
 	"GET /ui/search":                        webProject,
 	"GET /ui/search/stream":                 webProject,
 	"POST /ui/review/bulk":                  webAdmin,
+	"POST /ui/review/held":                  webAdmin,
 	"POST /ui/review/{id}/{verdict}":        webAdmin,
 	"POST /ui/review/{id}/merge":            webAdmin,
 	"POST /ui/review/{id}/criterion":        webAdmin,
@@ -557,6 +610,7 @@ var webRoutes = map[string]webClass{
 	"GET /ui/coord/events":                  webCoord,
 	"GET /ui/live":                          webAccount,
 	"GET /ui/avatar/{id}":                   webAccount,
+	"GET /ui/avatar/org/{id}":               webAccount,
 	"GET /ui/coord/thread/{id}":             webCoord,
 	"POST /ui/coord/send":                   webCoord,
 	"POST /ui/coord/thread/create":          webCoord,
@@ -597,11 +651,16 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/source/remove":           webAdmin,
 	"POST /ui/orgs/source/import":           webAdmin,
 	"POST /ui/orgs/prefix/visibility":       webAdmin,
+	"POST /ui/orgs/follow":                  webAdmin,
+	"POST /ui/orgs/assign":                  webAdmin,
+	"POST /ui/orgs/garden":                  webAdmin,
+	"POST /ui/gardener/undo":                webAdmin,
+	"POST /ui/handover":                     webAdmin,
+	"POST /ui/orgs/takeover":                webAdmin,
 	"GET /ui/orgs/source/callback":          webAccount,
 	"POST /ui/orgs/create":                  webAdmin,
 	"POST /ui/orgs/rename":                  webAdmin,
 	"POST /ui/orgs/accept":                  webAccount,
-	"POST /ui/orgs/default":                 webAccount,
 
 	"GET /ui/tasks":             webProject,
 	"POST /ui/tasks/done":       webAdmin,
