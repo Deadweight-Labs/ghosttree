@@ -2,6 +2,7 @@ package web
 
 import (
 	"html/template"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -49,46 +50,6 @@ var mentionPattern = regexp.MustCompile(`(^|[\s(])(@[\p{L}\p{N}][\p{L}\p{N}._:-]
 // (ui-md.js), like a comment: the source in data-md, the blocks as plain text
 // until the script has drawn them.
 func (m coordMessageView) BodyHTML() template.HTML { return mdText(m.Body) }
-
-// coordMetaItem is one piece of the quiet second line of a message.
-type coordMetaItem struct{ Text, Title string }
-
-// Meta is the second line under the head of a message, quiet: the role of the
-// sender, the machine and branch of an agent, the addressee and what the agent
-// says it works on. The head itself keeps the name and the time. A message that
-// continues a group of the same author carries only its addressee.
-func (m coordMessageView) Meta() []coordMetaItem {
-	var out []coordMetaItem
-	if !m.GroupStart {
-		if m.To != "" {
-			out = append(out, coordMetaItem{Text: m.To})
-		}
-		return out
-	}
-	if m.SenderRole != "" && !m.Own {
-		out = append(out, coordMetaItem{m.SenderRoleLabel, m.SenderRoleTitle})
-	}
-	if m.AuthorKind == "agent" {
-		parts := strings.Split(m.Name, " · ")
-		for i := 2; i < len(parts); i++ {
-			out = append(out, coordMetaItem{Text: strings.TrimSpace(parts[i])})
-		}
-		if host := strings.TrimPrefix(m.Machine, "@"); host != "" && len(parts) < 3 {
-			out = append(out, coordMetaItem{Text: host})
-		}
-	}
-	// A card names its addressee in its own head.
-	if m.To != "" && m.Request == nil {
-		out = append(out, coordMetaItem{Text: m.To})
-	}
-	if m.WorkNote != "" {
-		out = append(out, coordMetaItem{m.WorkNote, m.WorkNoteTitle})
-	}
-	if m.ExpiredText != "" {
-		out = append(out, coordMetaItem{Text: m.ExpiredText})
-	}
-	return out
-}
 
 // HM is the time of day alone, for the narrow column beside a message that
 // continues a group: the day is in the head of the group.
@@ -219,4 +180,121 @@ func msgAvatar(l lang, m coordMessageView, size string) template.HTML {
 		kind = avSystem
 	}
 	return avatarMarkup(l, avatarSpec{Kind: kind, Name: name, Size: size, Owner: owner})
+}
+
+// roomVariant reads the look of the message list that is being compared; any
+// other value is the default look.
+func roomVariant(r *http.Request) string {
+	switch v := r.URL.Query().Get("rv"); v {
+	case "a", "b", "c":
+		return v
+	}
+	return ""
+}
+
+// coordSystemPrefixes maps the English text the store writes for system lines to
+// the message that says the same in the language of the page.
+var coordSystemPrefixes = []struct{ prefix, key string }{
+	{"Mutual wait:", "coord.system.mutual_wait"},
+}
+
+// coordSystemText is the line of a system message in the language of the page.
+func coordSystemText(l lang, body string) string {
+	for _, p := range coordSystemPrefixes {
+		if strings.HasPrefix(body, p.prefix) {
+			return l.msg(p.key)
+		}
+	}
+	return body
+}
+
+// MetaTitle is what the head of a message keeps quiet: role, machine, branch
+// and what an agent says it works on, as the tooltip of the name.
+func (m coordMessageView) MetaTitle() string {
+	var parts []string
+	if m.SenderRole != "" && !m.Own {
+		parts = append(parts, m.SenderRoleLabel)
+	}
+	if m.AuthorKind == "agent" {
+		_, owner := m.splitAuthor()
+		parts = append(parts, strings.Split(m.Name, " · ")[1:]...)
+		if host := strings.TrimPrefix(m.Machine, "@"); host != "" && owner == "" {
+			parts = append(parts, host)
+		}
+	}
+	if m.WorkNote != "" {
+		// What an agent says about itself is marked as such, also in a tooltip.
+		parts = append(parts, m.WorkNote+" ("+m.WorkNoteTitle+")")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// coordRequestAction is one button or menu entry of a request card. IDs are the
+// attention items it acts on: a card with several addressees has one item each,
+// and one button acts on every item that offers it.
+type coordRequestAction struct {
+	Value, Label string
+	IDs          []int64
+}
+
+// coordRequestActions is what the foot of a request card shows: the one main
+// action, and everything else in one menu.
+type coordRequestActions struct {
+	Main               *coordRequestAction
+	Menu               []coordRequestAction
+	RoomKey, CSRFToken string
+	// Note is set for an approval: it only keeps the answer in the room.
+	Note bool
+}
+
+// Merged joins the actions of all items of the card, each action once. The first
+// verdict or answer is the main action; closing and withdrawing come last in the menu.
+func (r coordRequestView) Merged() *coordRequestActions {
+	if len(r.Items) == 0 {
+		return nil
+	}
+	out := &coordRequestActions{RoomKey: r.Items[0].RoomKey, CSRFToken: r.Items[0].CSRFToken}
+	var order []string
+	byValue := map[string]*coordRequestAction{}
+	add := func(id int64, a coordAttentionActionView) {
+		got, ok := byValue[a.Value]
+		if !ok {
+			got = &coordRequestAction{Value: a.Value, Label: a.Label}
+			byValue[a.Value] = got
+			order = append(order, a.Value)
+		}
+		got.IDs = append(got.IDs, id)
+	}
+	for _, item := range r.Items {
+		if item.CoordinationOnlyApproval && item.Incoming {
+			out.Note = true
+		}
+		if item.Primary != nil {
+			add(item.ID, *item.Primary)
+		}
+		for _, a := range item.Inline {
+			add(item.ID, a)
+		}
+		for _, a := range item.More {
+			add(item.ID, a)
+		}
+		if item.CanWithdraw {
+			add(item.ID, coordAttentionActionView{Value: store.AttentionActionWithdraw, Label: r.WithdrawLabel})
+		}
+	}
+	var last []coordRequestAction
+	for _, value := range order {
+		a := *byValue[value]
+		if value == store.AttentionActionDismiss || value == store.AttentionActionWithdraw {
+			last = append(last, a)
+			continue
+		}
+		if out.Main == nil {
+			out.Main = &a
+			continue
+		}
+		out.Menu = append(out.Menu, a)
+	}
+	out.Menu = append(out.Menu, last...)
+	return out
 }

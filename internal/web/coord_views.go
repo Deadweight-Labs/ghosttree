@@ -25,6 +25,9 @@ type coordPageView struct {
 	Recipients        []coordRecipientView
 	IncomingAttention []coordAttentionView
 	OutgoingAttention []coordAttentionView
+	// RoomVariant switches the look of the message list while the variants are
+	// compared (query rv=a|b|c); empty is the default look.
+	RoomVariant string
 }
 
 const coordAttentionVisible = 3
@@ -286,13 +289,15 @@ type coordRequestView struct {
 	State   string
 	Items   []coordAttentionView
 	Explain *explainView
+	// WithdrawLabel names the withdraw action in the language of the page.
+	WithdrawLabel string
 }
 
 type coordReplyView struct {
-	Sequence          int64
-	Author, Body, URL string
-	Missing           bool
-	Lang              lang
+	MessageID, Sequence int64
+	Author, Body, URL   string
+	Missing             bool
+	Lang                lang
 }
 
 // Name is who is quoted, short: an agent label "Claude _ ghosttree" or
@@ -649,7 +654,7 @@ func coordRoomLabel(l lang, room store.CoordRoom, principalID string, labels map
 
 func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, roomKey string, labels map[string]string) []coordMessageView {
 	out := make([]coordMessageView, 0, len(messages))
-	previousAuthorID, previousAuthorKind, previousCard := "", "", false
+	previousAuthorID, previousAuthorKind, previousTo, previousCard := "", "", "", false
 	for _, presentation := range messages {
 		message := presentation.Message
 		author := strings.TrimSpace(presentation.AuthorLabel)
@@ -698,10 +703,10 @@ func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, r
 			// The store names people the viewer may see in this room; the sender
 			// reads the name of whom he mentioned, not "Someone".
 			if name := strings.TrimSpace(presentation.MentionLabels[mention]); name != "" {
-				view.Mentions = append(view.Mentions, name)
+				view.Mentions = appendShortName(view.Mentions, name)
 				continue
 			}
-			view.Mentions = append(view.Mentions, coordIdentityLabel(l, mention, labels))
+			view.Mentions = appendShortName(view.Mentions, coordIdentityLabel(l, mention, labels))
 		}
 		view.MentionsText = coordJoinNames(l, view.Mentions)
 		switch {
@@ -713,9 +718,17 @@ func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, r
 		if message.Expired {
 			view.ExpiredText = l.msg("coord.expired")
 		}
+		// What one author writes to somebody else starts a new group: the addressee
+		// stands in the head of a group, so a continuation always has the same one.
+		if !view.GroupStart && view.To != previousTo {
+			view.GroupStart = true
+		}
+		if view.System {
+			view.Body = coordSystemText(l, message.Body)
+		}
 		view.PeerOnly = coordPeerOnly(message.AuthorKind, message.Intent, presentation.Mentions)
 		if presentation.Reply != nil {
-			view.Reply = &coordReplyView{Sequence: presentation.Reply.Sequence, Author: readableAuthor(l, presentation.Reply.Author), Body: presentation.Reply.Body, Missing: presentation.Reply.Missing, Lang: l}
+			view.Reply = &coordReplyView{MessageID: presentation.Reply.MessageID, Sequence: presentation.Reply.Sequence, Author: readableAuthor(l, presentation.Reply.Author), Body: presentation.Reply.Body, Missing: presentation.Reply.Missing, Lang: l}
 			if !view.Reply.Missing {
 				view.Reply.URL = coordRoomURL(roomKey, "around", view.Reply.Sequence) + "#message-" + strconv.FormatInt(view.Reply.Sequence, 10)
 			}
@@ -744,9 +757,36 @@ func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, r
 			view.Delivery = strings.Join(parts, " · ")
 		}
 		out = append(out, view)
-		previousAuthorID, previousAuthorKind, previousCard = authorID, message.AuthorKind, card
+		previousAuthorID, previousAuthorKind, previousTo, previousCard = authorID, message.AuthorKind, view.To, card
+	}
+	// A quote names the author as the message itself does.
+	shown := make(map[int64]string, len(out))
+	for _, view := range out {
+		shown[view.ID] = view.ShortName()
+	}
+	for i := range out {
+		if reply := out[i].Reply; reply != nil && !reply.Missing {
+			if name := shown[reply.MessageID]; name != "" {
+				reply.Author = name
+			}
+		}
 	}
 	return out
+}
+
+// appendShortName adds the name an addressee goes by in the head of a message:
+// an agent without its owner, machine and branch, each name once.
+func appendShortName(names []string, label string) []string {
+	if i := strings.Index(label, " · "); i > 0 {
+		label = label[:i]
+	}
+	label = strings.TrimSpace(label)
+	for _, n := range names {
+		if n == label {
+			return names
+		}
+	}
+	return append(names, label)
 }
 
 // markViewerMentions flags the messages that mention viewerID. views and
@@ -1373,7 +1413,7 @@ func decorateCoordMessages(l lang, views []coordMessageView, pres []store.CoordM
 			views[i].Directive = &coordDirectiveView{Active: ok, CanEnd: ok && item.CanEnd, MessageID: id, RoomKey: roomKey, Scope: scope,
 				Request: roleRoom && views[i].SenderRole != "" && !coordCanDirect(views[i].SenderRole)}
 		case isAttentionIntent(message.Intent):
-			request := &coordRequestView{Title: coordRequestTitle(l, message.Intent, "")}
+			request := &coordRequestView{Title: coordRequestTitle(l, message.Intent, ""), WithdrawLabel: l.msg("coord.withdraw")}
 			seen := map[int64]bool{}
 			for _, item := range attention {
 				if thread > 0 {

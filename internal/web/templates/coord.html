@@ -1,5 +1,5 @@
 {{define "coord"}}{{template "head" .}}{{template "nav" .}}
-<main class="g2 coord-workspace room rooms" data-coord-event-cursor="{{.Coord.EventCursor}}" data-coord-texts="{{.Coord.Texts}}"><link rel="stylesheet" href="/static/ui-rooms.css"><div class="wrap">
+<main class="g2 coord-workspace room rooms{{with .Coord.RoomVariant}} rv-{{.}}{{end}}" data-coord-event-cursor="{{.Coord.EventCursor}}" data-coord-texts="{{.Coord.Texts}}"><link rel="stylesheet" href="/static/ui-rooms.css"><link rel="stylesheet" href="/static/ui-rooms-rv.css"><div class="wrap">
   <h1 class="sr">{{t "coord.title"}}</h1>
   <p id="coord-status" class="sr" aria-live="polite" aria-atomic="true"></p>
   <p class="coord-live-status sr" data-coord-live-status role="status">{{t "coord.live.connecting"}}</p>
@@ -136,14 +136,18 @@
 
 {{define "coord-attention-actions"}}{{if .Primary}}<form method="post" action="/ui/coord/attention/action"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="attention_id" value="{{.ID}}"><input type="hidden" name="room" value="{{.RoomKey}}"><button class="gbtn sm pri" name="action" value="{{.Primary.Value}}">{{.Primary.Label}}</button></form>{{end}}{{if .Inline}}<form method="post" action="/ui/coord/attention/action"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="attention_id" value="{{.ID}}"><input type="hidden" name="room" value="{{.RoomKey}}">{{range .Inline}}<button class="gbtn sm" name="action" value="{{.Value}}">{{.Label}}</button>{{end}}</form>{{end}}{{if .CanWithdraw}}<form method="post" action="/ui/coord/attention/action"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="attention_id" value="{{.ID}}"><input type="hidden" name="room" value="{{.RoomKey}}"><button class="gbtn sm quiet" name="action" value="withdraw">{{t "coord.withdraw"}}</button></form>{{end}}{{if .More}}<details class="dd top-menu coord-attention-actions"><summary class="gbtn sm"><span>{{t "coord.actions"}}</span>{{mi "chev"}}</summary><form method="post" action="/ui/coord/attention/action" class="pop r"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="attention_id" value="{{.ID}}"><input type="hidden" name="room" value="{{.RoomKey}}">{{range .More}}<button class="opt" name="action" value="{{.Value}}">{{.Label}}</button>{{end}}</form></details>{{end}}{{end}}
 
-{{define "coord-message-meta"}}{{with .Meta}}<p class="cm-meta">{{range .}}<span{{if .Title}} title="{{.Title}}"{{end}}>{{.Text}}</span>{{end}}</p>{{end}}{{end}}
-
 {{define "coord-quote"}}{{with .Reply}}{{if .Missing}}<p class="cm-quote is-missing">{{mi "reply"}}<span>{{t "coord.reply_missing"}}</span></p>{{else}}<a class="cm-quote" href="{{.URL}}" title="{{.Title}}">{{mi "reply"}}<b>{{.Name}}</b><span>{{.Snippet}}</span></a>{{end}}{{end}}{{end}}
 
 {{define "coord-message-tools"}}{{if or .CanReply .CanPromote}}<div class="cm-tools coord-message-actions coord-message-tools">{{if .CanReply}}<a class="gbtn sm coord-reply-action" href="{{.ReplyURL}}" aria-label="{{t "coord.reply_aria" .Sequence}}">{{mi "reply"}}<span>{{t "coord.reply"}}</span></a>{{end}}{{if .CanPromote}}<details class="dd top-menu" data-float data-coord-draft-key="promote-{{.ID}}"><summary class="gbtn sm" data-coord-focus-key="promote-summary-{{.ID}}">{{mi "chat"}}<span>{{t "coord.start_thread"}}</span></summary><form method="post" action="/ui/coord/thread/create" class="pop r pform"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="anchor_message_id" value="{{.ID}}"><label class="pfield"><span>{{t "coord.thread_title"}}</span><input class="gfield" name="title" required></label><label class="pfield"><span>{{t "coord.thread_question"}}</span><input class="gfield" name="question"></label><label class="pfield"><span>{{t "coord.thread_request"}}</span><input class="gfield" name="request_id" placeholder="{{t "coord.thread_request_ph"}}"></label><div class="wf"><button class="gbtn sm pri">{{t "coord.thread_create"}}</button></div></form></details>{{end}}</div>{{end}}{{end}}
 
+{{define "coord-head"}}<header class="rm-head"><strong class="rm-name"{{with .MetaTitle}} title="{{.}}"{{end}}>{{if .Own}}{{t "coord.you"}}{{else}}{{.ShortName}}{{end}}</strong>{{if eq .AuthorKind "agent"}}<span class="sr">{{t "coord.agent"}}</span>{{end}}<time class="cm-time" datetime="{{.Timestamp}}" data-local="clock" title="{{.TimeTitle}}">{{.Clock}}</time>{{with .To}}<span class="rm-to">{{.}}</span>{{end}}{{if .MentionsViewer}}<span class="coord-mention-you">{{t "coord.mentions_you"}}</span>{{end}}{{with .ExpiredText}}<span class="cm-note">{{.}}</span>{{end}}</header>{{end}}
+
+{{define "coord-request-foot"}}{{with .Merged}}<div class="rq4-f">{{if .Note}}<p class="rq4-n">{{t "coord.approval_note"}}</p>{{end}}<span class="sp"></span>
+        {{- with .Main}}<form method="post" action="/ui/coord/attention/action"><input type="hidden" name="csrf_token" value="{{$.Merged.CSRFToken}}"><input type="hidden" name="room" value="{{$.Merged.RoomKey}}">{{range .IDs}}<input type="hidden" name="attention_id" value="{{.}}">{{end}}<button class="gbtn sm pri" name="action" value="{{.Value}}">{{.Label}}</button></form>{{end}}
+        {{- if .Menu}}<details class="dd top-menu rq4-menu" data-float><summary class="gbtn sm icon quiet" aria-label="{{t "coord.actions"}}" title="{{t "coord.actions"}}">{{mi "kebab"}}</summary><div class="pop r">{{range .Menu}}<form method="post" action="/ui/coord/attention/action"><input type="hidden" name="csrf_token" value="{{$.Merged.CSRFToken}}"><input type="hidden" name="room" value="{{$.Merged.RoomKey}}">{{range .IDs}}<input type="hidden" name="attention_id" value="{{.}}">{{end}}<button class="opt" name="action" value="{{.Value}}">{{.Label}}</button></form>{{end}}</div></details>{{end}}</div>{{end}}{{end}}
+
 {{define "coord-message"}}{{if .NewFrom}}<li class="cm-new" role="separator" data-from="{{.Sequence}}"><span>{{t "coord.new_divider"}}</span></li>{{end}}<li class="coord-message coord-message-group{{if .MentionsViewer}} coord-message-mentioned{{end}} {{if .GroupStart}}coord-message-group-start{{else}}coord-message-continuation{{end}}{{if and .Own (not .Directive) (not .Request)}} is-own{{end}}{{if .Directive}} is-directive{{else if .Request}} is-request{{else if .System}} is-system{{end}}{{if .ThreadAnchor}} is-anchor{{end}}" id="{{.DOMID}}" data-seq="{{.Sequence}}">
-{{- if .System}}<p class="cm-event"><i class="dot idle" aria-hidden="true"></i><span>{{.Body}}</span><time datetime="{{.Timestamp}}" data-local="clock" title="{{.Timestamp}}">{{.Clock}}</time></p>
+{{- if .System}}<p class="cm-event"><span>{{.Body}}</span><time datetime="{{.Timestamp}}" data-local="clock" title="{{.Timestamp}}">{{.Clock}}</time></p>
 {{- else if .Directive}}<article class="slab{{if not .Directive.Active}} is-ended{{end}}">
   <div class="slab-k"><span class="slab-pin" aria-hidden="true">{{mi "pin"}}</span><span class="lb warn"><span>{{if .Directive.Request}}{{t "coord.standing_request"}}{{else}}{{t "coord.directive"}}{{end}}</span></span><span class="slab-by">{{.Name}}</span>{{if .SenderRole}}<span class="cm-role" title="{{.SenderRoleTitle}}">{{.SenderRoleLabel}}</span>{{end}}<time class="cm-time" datetime="{{.Timestamp}}" data-local="clock" title="{{.Timestamp}}">{{.Clock}}</time></div>
   <p class="slab-t">{{.Body}}</p>
@@ -151,15 +155,13 @@
 </article>
 {{- else if .Request}}<article class="rm-msg is-ask">{{msgAvatar . "xl"}}
   <div class="rm-main">
-    <header class="rm-head"><strong>{{if .Own}}{{t "coord.you"}}{{else}}{{.ShortName}}{{end}}</strong>{{if eq .AuthorKind "agent"}}<span class="lb out">{{t "coord.agent"}}</span>{{end}}{{if .Request.Waiting}}<span class="cm-time">{{.Request.Waiting}}</span>{{else}}<time class="cm-time" datetime="{{.Timestamp}}" data-local="clock" title="{{.Timestamp}}">{{.Clock}}</time>{{end}}</header>
-    {{template "coord-message-meta" .}}
+    {{template "coord-head" .}}
     {{template "coord-quote" .}}
     <div class="rq4 rq-{{.Intent}}">
-      <div class="rq4-h"><span class="lb rqk-{{.Intent}}">{{template "room-ask-icon"}}{{.Request.Title}}</span>{{if .To}}<span class="rm-to">{{.To}}</span>{{end}}<span class="sp"></span>{{if .Request.State}}<span class="ask-state">{{.Request.State}}</span>{{else if .Request.Items}}<span class="rq-open">{{t "coord.open_state"}}</span>{{end}}</div>
+      <div class="rq4-h"><span class="lb rqk-{{.Intent}}">{{template "room-ask-icon"}}{{.Request.Title}}</span><span class="sp"></span>{{if .Request.State}}<span class="ask-state">{{.Request.State}}</span>{{else if .Request.Items}}<span class="rq-open">{{if .Request.Waiting}}{{.Request.Waiting}}{{else}}{{t "coord.open_state"}}{{end}}</span>{{end}}</div>
       <div class="ask-t">{{.BodyHTML}}</div>
       {{template "room-fold" .Request.Explain}}
-      {{range .Request.Items}}{{if and .CoordinationOnlyApproval .Inline}}<p class="coord-note rq4-n">{{t "coord.approval_note"}}</p>{{end}}{{end}}
-      <div class="acts rm-foot rq4-f">{{range .Request.Items}}{{template "coord-attention-actions" .}}{{end}}</div>
+      {{template "coord-request-foot" .Request}}
     </div>
     {{template "coord-message-tools" .}}
     {{template "coord-message-links" .}}
@@ -167,8 +169,7 @@
 </article>
 {{- else}}<article class="rm-msg{{if .PeerOnly}} is-peer{{end}}{{if .Own}} is-own{{end}}">{{if .GroupStart}}{{msgAvatar . "xl"}}{{else}}<span class="cm-gutter"><time datetime="{{.Timestamp}}" title="{{.TimeTitle}}">{{.HM}}</time></span>{{end}}
   <div class="rm-main cm-body">
-    {{if .GroupStart}}<header class="rm-head cm-who"><strong>{{if .Own}}{{t "coord.you"}}{{else}}{{.ShortName}}{{end}}</strong>{{if eq .AuthorKind "agent"}}<span class="lb out">{{t "coord.agent"}}</span>{{end}}{{if .MentionsViewer}}<span class="coord-mention-you">{{t "coord.mentions_you"}}</span>{{end}}<time class="cm-time" datetime="{{.Timestamp}}" data-local="clock" title="{{.TimeTitle}}">{{.Clock}}</time></header>{{else}}<span class="sr"><strong>{{if .Own}}{{t "coord.you"}}{{else}}{{.ShortName}}{{end}}</strong> <time datetime="{{.Timestamp}}">{{.Clock}}</time></span>{{end}}
-    {{template "coord-message-meta" .}}
+    {{if .GroupStart}}{{template "coord-head" .}}{{else}}<span class="sr"><strong>{{if .Own}}{{t "coord.you"}}{{else}}{{.ShortName}}{{end}}</strong> <time datetime="{{.Timestamp}}">{{.Clock}}</time></span>{{end}}
     {{template "coord-quote" .}}
     <div class="cm-bubble rm-bubble">{{.BodyHTML}}</div>
     {{if .Refs}}<ul class="coord-refs">{{range .Refs}}<li>{{.Text}}</li>{{end}}</ul>{{end}}

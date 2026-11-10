@@ -142,25 +142,23 @@ func TestCoordAttentionPreviewTruncatesByRunes(t *testing.T) {
 	}
 }
 
-func TestCoordApprovalVerdictsAreVisibleAndOnlyDismissIsFolded(t *testing.T) {
+func TestCoordApprovalCardHasOneMainActionAndTheRestInOneMenu(t *testing.T) {
 	page, _ := coordCompactAttentionFixture(t)
 	card := attentionCard(t, page, "Eingehende Anfrage 1")
-	details := strings.Index(card, `<details class="dd top-menu coord-attention-actions"`)
-	if details < 0 {
-		t.Fatalf("approval card lost its actions disclosure: %s", card)
+	menu := strings.Index(card, `<details class="dd top-menu rq4-menu"`)
+	if menu < 0 {
+		t.Fatalf("approval card lost its menu: %s", card)
 	}
-	for _, want := range []string{"Note approval", "Note rejection"} {
-		at := strings.Index(card, want)
-		if at < 0 || at > details {
-			t.Errorf("%q must be visible before the disclosure (at=%d, details=%d)", want, at, details)
-		}
+	foot := card[strings.Index(card, `class="rq4-f"`):]
+	if strings.Count(foot[:strings.Index(foot, "</details>")], `class="gbtn sm pri"`) != 1 || strings.Index(card, "Note approval") > menu {
+		t.Errorf("the card has one main action, outside the menu: %s", card)
 	}
-	folded := card[details:]
-	if strings.Contains(folded, "Note ") || !strings.Contains(folded, "Dismiss") {
-		t.Errorf("The disclosure must hold only Dismiss: %s", folded)
+	folded := card[menu:]
+	if !strings.Contains(folded, "Note rejection") || !strings.Contains(folded, "Dismiss") || strings.Contains(folded, "Note approval") {
+		t.Errorf("the menu holds the other verdict and dismissing, not the main action: %s", folded)
 	}
 	note, button := strings.Index(card, "Coordination only"), strings.Index(card, "Note approval")
-	if note < 0 || note > button || note > strings.Index(card, `acts rm-foot rq4-f`) {
-		t.Errorf("honest note must sit on the card directly above the verdict row: note=%d button=%d", note, button)
+	if note < 0 || note > button || note > strings.Index(card, `class="rq4-f"`)+len(`class="rq4-f"`)+200 {
+		t.Errorf("the honest note stands in the foot of the card before the main action: note=%d button=%d", note, button)
 	}
 }

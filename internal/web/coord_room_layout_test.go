@@ -193,7 +193,7 @@ func TestCoordRoomShowsWhoIsHereWithNoteAndBranchWithoutRightColumn(t *testing.T
 	if strings.Contains(messageItem(t, page, "1"), "to everyone") {
 		t.Error("a message to everyone carries no addressee")
 	}
-	if !strings.Contains(messageItem(t, page, "2"), `<span>to robin</span>`) {
+	if !strings.Contains(messageItem(t, page, "2"), `<span class="rm-to">to robin</span>`) {
 		t.Errorf("the second line names the addressee: %s", messageItem(t, page, "2"))
 	}
 }

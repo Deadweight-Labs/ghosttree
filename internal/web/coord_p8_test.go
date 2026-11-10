@@ -169,13 +169,12 @@ func TestCoordMessageHeadIsCalmAndQuoteIsOneLine(t *testing.T) {
 	page := coordPageBody(t, client, base+"/ui/coord?room="+url.QueryEscape(room))
 	reply := messageItem(t, page, "2")
 	head := segment(t, reply, `<header class="rm-head`, "</header>")
-	for _, gone := range []string{"apps-vm", "to robin", "Member"} {
-		if strings.Contains(head, gone) {
-			t.Errorf("the head of a message carries %q: %s", gone, head)
-		}
+	// The head holds the name, the time and, quiet, the addressee; machine and role are the tooltip of the name.
+	if strings.Contains(head, ">apps-vm<") || strings.Contains(head, ">Member<") || strings.Contains(reply, `class="cm-meta"`) {
+		t.Errorf("the head of a message carries more than name, time and addressee: %s", head)
 	}
-	if !strings.Contains(reply, `<p class="cm-meta">`) || !strings.Contains(reply, "<span>apps-vm</span>") || !strings.Contains(reply, "<span>to robin</span>") {
-		t.Errorf("the second line lacks machine and addressee: %s", reply)
+	if !strings.Contains(head, `<span class="rm-to">to robin</span>`) || !strings.Contains(head, `title="apps-vm"`) {
+		t.Errorf("the head lacks the addressee or the tooltip with the machine: %s", head)
 	}
 	quote := segment(t, reply, `class="cm-quote"`, "</a>")
 	if strings.Contains(quote, "**") || !strings.Contains(quote, "<span>Bold text second line</span>") || !strings.Contains(quote, "<b>robin</b>") {

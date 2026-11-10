@@ -6,7 +6,7 @@
   // What a search reads of a message: head, second line, quote, text, card. Not
   // the hidden forms and buttons that belong to it.
   const readable = (li) =>
-    [...li.querySelectorAll(".rm-head, .cm-meta, .cm-quote, .cm-bubble, .ask-t, .rq4-h, .slab-t")]
+    [...li.querySelectorAll(".rm-head, .cm-quote, .cm-bubble, .ask-t, .rq4-h, .slab-t")]
       .map((el) => el.textContent).join(" ");
   const filterMessages = (input) => {
     const q = norm(input.value.trim());

@@ -101,33 +101,35 @@
   & .coord-paging { display: flex; gap: 8px; padding: 8px 16px; }
   & .coord-paging:not(:has(*)) { display: none; }
 
-  /* Messages. A new author starts a group (a hairline above it, the avatar, name and time);
-     what the same author writes next stands close under it, its time shows on hover. */
+  /* Messages. A new author starts a group (the avatar, name and time; a hairline
+     above it); what the same author writes next stands close under it, its time shows
+     on hover. The variants of ui-rooms-rv.css set the chrome around them. */
   & .coord-messages { flex: 1 1 0; min-height: 0; margin: 0; padding: 4px 0 8px; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
   & .coord-messages > li { position: relative; margin: 0; }
-  & .coord-message-group-start:not(:first-child) { margin-top: 6px; border-top: 1px solid var(--border-muted); }
+  & .coord-message-group-start:not(:first-child) { margin-top: 12px; border-top: 1px solid var(--border-muted); }
   & .cm-new + .coord-message-group-start { margin-top: 0; border-top: 0; }
   & .coord-empty { display: flex; align-items: center; gap: 12px; padding: 24px; color: var(--fg-muted); }
   & .cm-new { display: flex; align-items: center; gap: 12px; margin: 10px 16px 4px; font-size: 12px; font-weight: 600; color: var(--danger-fg); }
   & .cm-new::before, & .cm-new::after { content: ""; flex: 1; height: 1px; background: currentColor; opacity: .45; }
   & .rm-msg { position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 4px 16px 6px; }
   & .coord-message-group-start .rm-msg { padding-top: 12px; }
+  & .coord-message-continuation .rm-msg { padding-top: 8px; }
   & .rm-msg:hover, & .rm-msg:focus-within { background: var(--row-hover); }
   & .rm-msg > .gav { width: 32px; height: 32px; font-size: 12px; }
   & .rm-msg > .gav .i { width: 18px; height: 18px; }
   & .rm-msg > .gav .own { width: 16px; height: 16px; font-size: 7px; }
-  & .coord-message-mentioned > .rm-msg { background: var(--accent-subtle); box-shadow: inset 3px 0 0 var(--accent-emphasis); }
+  & .coord-message-mentioned > .rm-msg { background: color-mix(in srgb, var(--accent-subtle) 40%, transparent); box-shadow: inset 3px 0 0 var(--accent-emphasis); }
   & .cm-gutter { padding-top: 1px; font-size: 11px; line-height: 20px; text-align: right; color: var(--fg-muted); opacity: 0; }
   & .rm-msg:hover .cm-gutter, & .rm-msg:focus-within .cm-gutter { opacity: 1; }
   & .rm-main { min-width: 0; }
+  /* The head holds the name and the time and, quiet, whom it is for. Role, machine and
+     branch of an agent are the tooltip of the name. */
   & .rm-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; min-height: 20px; line-height: 20px; }
-  & .rm-head strong { font-size: 14px; font-weight: 600; }
-  & .rm-head .lb { align-self: center; line-height: 16px; }
+  & .rm-name { font-size: 14px; font-weight: 600; }
+  & .rm-head .coord-mention-you { align-self: center; }
   & .cm-time { font-size: 12px; color: var(--fg-muted); }
-  & .rm-to, & .cm-host, & .cm-note { font-size: 12px; color: var(--fg-muted); }
-  /* The quiet second line: role, machine, branch, addressee, what the agent works on. */
-  & .cm-meta { display: flex; flex-wrap: wrap; gap: 0 8px; margin: 0; font-size: 12px; line-height: 18px; color: var(--fg-muted); }
-  & .cm-meta > span + span::before { content: "·"; margin-right: 8px; }
+  & .rm-to, & .cm-note { font-size: 12px; color: var(--fg-muted); }
+  & .rm-to { opacity: .8; }
   /* What a message answers, one line above it. */
   & .cm-quote { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 4px 0; padding-left: 10px; border-left: 2px solid var(--border-default); font-size: 12px; line-height: 18px; color: var(--fg-muted); }
   & .cm-quote .i { flex: none; width: 12px; height: 12px; }
@@ -156,13 +158,13 @@
   & .cm-thread { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px; }
   & .cm-thread b { font-weight: 600; }
   & .coord-reply-count { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; }
-  & .cm-event { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 4px 0; padding: 4px 16px; font-size: 12px; color: var(--fg-muted); }
+  /* A line of the system: small, in the middle, never a message. */
+  & .cm-event { display: flex; align-items: baseline; justify-content: center; gap: 8px; margin: 0 auto; padding: 10px 24px; max-width: 640px; font-size: 12px; line-height: 18px; text-align: center; color: var(--fg-muted); }
+  & .cm-event time { flex: none; opacity: .75; }
 
   /* Request cards: question, approval, blocker, handoff */
   & .rq4 { margin-top: 6px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); overflow: hidden; }
-  & .rq4-h { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-muted); }
-  & .rq-handoff .rq4-h { background: var(--attention-subtle); }
-  & .rq-approval .rq4-h { background: var(--done-subtle); }
+  & .rq4-h { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px 0; }
   & .rqk-question { color: var(--accent-fg); background: var(--accent-subtle); border-color: var(--accent-muted); }
   & .rqk-blocker { color: var(--danger-fg); background: var(--danger-subtle); border-color: var(--danger-muted); }
   & .rqk-approval { color: var(--done-fg); background: var(--done-subtle); border-color: var(--done-muted); }
@@ -170,10 +172,10 @@
   & .rq4 .lb .i { margin-right: 4px; }
   & .rq-open { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--attention-fg); }
   & .rq-open::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-  & .rq4 .ask-t { margin: 0; padding: 12px; overflow-wrap: anywhere; }
+  & .rq4 .ask-t { margin: 0; padding: 8px 12px 12px; overflow-wrap: anywhere; }
   /* "Kurz erklärt": title and first sentence side by side with room between them,
      the opened text under them; it never touches the text before or the card after it. */
-  & .rm-fold { margin: 0 12px 12px; }
+  & .rm-fold { margin: 0; padding: 6px 12px 8px; border-top: 1px solid var(--border-muted); }
   & .rm-fold > summary { display: flex; align-items: baseline; gap: 4px 12px; min-width: 0; padding: 4px 0; cursor: pointer; list-style: none; font-size: 13px; }
   & .rm-fold > summary::-webkit-details-marker { display: none; }
   & .rm-fold > summary::before { content: ""; flex: none; align-self: center; width: 6px; height: 6px; border: solid var(--fg-muted); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); transition: transform .1s; }
@@ -183,10 +185,16 @@
   & .rm-fold[open] .rm-fold-p { display: none; }
   & .rm-fold-b { margin: 4px 0 0; }
   & .rm-fold-b .ex { margin: 0; }
-  & .rq4-n { margin: 0 12px 8px; font-size: 12px; color: var(--fg-muted); }
-  & .rq4-f { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 8px 12px; background: var(--canvas-subtle); border-top: 1px solid var(--border-muted); }
+  /* The foot of a card: the one thing to say about it on the left, the one main action
+     and the menu with the rest on the right. */
+  & .rq4-f { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border-muted); }
   & .rq4-f:not(:has(*)) { display: none; }
-  & .rq4-f form { display: inline-flex; gap: 8px; margin: 0; }
+  & .rq4-f form { display: inline-flex; margin: 0; }
+  & .rq4-n { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-muted); }
+  & .rq4-f .sp { flex: 1 0 8px; }
+  & .rq4-menu > .pop { min-width: 200px; }
+  & .rq4-menu .pop form { display: block; }
+  & .rq4-menu .pop .opt { width: 100%; text-align: left; }
 
   /* Standing instruction */
   & .slab { padding: 12px 16px; background: var(--attention-subtle); border: 1px solid var(--attention-muted); border-radius: 6px; }
@@ -302,6 +310,10 @@
     & .cx-f > .rm-ask { margin-left: auto; }
     & .rttl { flex-direction: column; align-items: stretch; }
     & .rm-msg { gap: 8px; padding-left: 12px; padding-right: 12px; }
+    /* The note of a card takes a line of its own above the action. */
+    & .rq4-f { flex-wrap: wrap; }
+    & .rq4-n { flex: 1 0 100%; white-space: normal; }
+    & .rq4-f .sp { flex: 1 0 0; }
     & .coord-composer, & .coord-thread-composer { padding: 8px 12px 12px; }
     & .rwho-pop { width: calc(100vw - 32px); }
     & .rstart-pop { width: calc(100% - 16px); }

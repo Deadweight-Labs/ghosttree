@@ -86,10 +86,10 @@ func TestCoordRoomGroupsConsecutiveMessagesOfOneSender(t *testing.T) {
 	}
 	// An agent shows as name plus @machine; a person as a round avatar.
 	first := messageItem(t, page, "1")
-	if !strings.Contains(first, "<strong>claude</strong>") || !strings.Contains(first, `<span>apps-vm</span>`) || !strings.Contains(first, "gav agent") {
+	if !strings.Contains(first, `>claude</strong>`) || !strings.Contains(first, `title="apps-vm"`) || !strings.Contains(first, "gav agent") {
 		t.Errorf("agent identity: %s", first)
 	}
-	if own := messageItem(t, page, "3"); !strings.Contains(own, "<strong>You</strong>") || strings.Contains(own, "to everyone") {
+	if own := messageItem(t, page, "3"); !strings.Contains(own, `>You</strong>`) || strings.Contains(own, "to everyone") {
 		t.Errorf("own message: %s", own)
 	}
 }

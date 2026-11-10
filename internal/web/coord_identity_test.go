@@ -31,12 +31,13 @@ func TestWebShowsAgentIdentityAndSelfReportedNote(t *testing.T) {
 	roomPage := namesGetShell(t, e, "/ui/coord?room="+url.QueryEscape(room))
 	text := visibleText(roomPage)
 	for _, want := range []string{"mac-lab", "feat/mac-sync", "PR #77 feat/mac-sync"} {
-		if strings.Count(text, want) < 2 {
-			t.Errorf("room page shows %q fewer than twice (members and sender block): %s", want, text)
+		if !strings.Contains(text, want) {
+			t.Errorf("room page does not show %q in the member list: %s", want, text)
 		}
 	}
-	if !strings.Contains(roomPage, `class="pp-note muted" title="`+messages["coord.self_reported"]+`"`) || !strings.Contains(roomPage, `<span title="`+messages["coord.self_reported"]+`">PR #77 feat/mac-sync</span>`) {
-		t.Error("the note is not marked as self-reported in the member list and next to the message")
+	// The head of a message keeps machine, branch and note quiet: they are the tooltip of the name.
+	if !strings.Contains(roomPage, `class="pp-note muted" title="`+messages["coord.self_reported"]+`"`) || !strings.Contains(roomPage, "PR #77 feat/mac-sync ("+messages["coord.self_reported"]+")") {
+		t.Error("the note is not marked as self-reported in the member list and in the tooltip of the name")
 	}
 	agents := namesGetShell(t, e, "/ui/agents")
 	if !strings.Contains(agents, "mac-lab") || !strings.Contains(agents, `class="aq" title="`+messages["coord.self_reported"]+`"`) || !strings.Contains(agents, "PR #77 feat/mac-sync") {

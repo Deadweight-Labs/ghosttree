@@ -363,6 +363,7 @@ var messagesDE = map[string]string{
 	"coord.goto":                       "Zum Beitrag",
 	"coord.goto_aria":                  "Zum Beitrag: %s",
 	"coord.actions":                    "Mehr",
+	"coord.system.mutual_wait":         "Mehrere Agenten warten aufeinander. Keiner macht weiter, bis jemand antwortet, zurückzieht oder einen Menschen fragt. Automatisch wurde nichts entschieden.",
 	"coord.withdraw":                   "Zurückziehen",
 	"coord.approval_note":              "Nur Koordination: das hält die Antwort fest, extern wird nichts freigegeben.",
 	"coord.action.answer":              "Als beantwortet markieren",

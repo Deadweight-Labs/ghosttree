@@ -362,6 +362,7 @@ var messages = map[string]string{
 	"coord.goto":                       "Go to post",
 	"coord.goto_aria":                  "Go to post: %s",
 	"coord.actions":                    "More",
+	"coord.system.mutual_wait":         "Several agents are waiting on each other. None of them moves on until somebody answers, withdraws or asks a person. Nothing was decided automatically.",
 	"coord.withdraw":                   "Withdraw",
 	"coord.approval_note":              "Coordination only: this notes the answer, nothing external is approved.",
 	"coord.action.answer":              "Mark as answered",

@@ -1,0 +1,66 @@
+/* Three looks of the message list of a room, for the comparison (?rv=a|b|c on the
+   room page). The look without the parameter is B, the flat chat of ui-rooms.css.
+   When one is chosen, its rules move into ui-rooms.css and this file goes. */
+
+/* A: the GitHub conversation. The avatar stands in a column of its own, every
+   message is a box with a head bar (name, time), the text below it. */
+:is(.g2.rooms).rv-a {
+  & .coord-messages { padding: 16px 16px 20px; }
+  & .coord-message-group-start:not(:first-child) { margin-top: 16px; border-top: 0; }
+  & .coord-message-continuation { margin-top: 6px; }
+  & .rm-msg, & .coord-message-group-start .rm-msg { grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 0; align-items: start; }
+  & .rm-msg:hover, & .rm-msg:focus-within { background: none; }
+  & .rm-msg > .gav { margin-top: 2px; }
+  & .rm-main { position: relative; overflow: hidden; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; }
+  & .rm-head { min-height: 38px; padding: 8px 12px; align-items: center; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); }
+  & .rm-head .cm-time { order: 3; }
+  & .rm-head .rm-to { margin-right: auto; }
+  & .cm-quote { margin: 0; padding: 6px 12px; border-left: 0; border-bottom: 1px solid var(--border-muted); background: var(--canvas-default); }
+  & .cm-bubble { padding: 10px 12px; }
+  & .coord-refs { margin: 0; padding: 0 12px 10px; }
+  & .cm-thread, & .coord-reply-count { margin: 0; padding: 8px 12px; width: 100%; border-top: 1px solid var(--border-muted); background: var(--canvas-subtle); }
+  & .cm-gutter { padding-top: 12px; }
+  & .cm-tools { top: 5px; right: 8px; }
+  & .is-own .rm-main { border-color: var(--accent-muted); }
+  & .is-own .rm-head { background: var(--accent-subtle); border-bottom-color: var(--accent-muted); }
+  & .coord-message-mentioned > .rm-msg { background: none; box-shadow: none; }
+  & .coord-message-mentioned .rm-main { border-color: var(--accent-muted); box-shadow: inset 3px 0 0 var(--accent-emphasis); }
+  /* The card is the body of its box: no box in the box. */
+  & .is-ask .rq4 { margin: 0; border: 0; border-radius: 0; }
+  & .is-ask .rq4-f { background: var(--canvas-subtle); }
+  & .slab { margin-left: 44px; }
+  & .cm-event { padding: 14px 24px; }
+}
+
+/* C: runs in one panel. What one author writes in a row stands in one soft panel
+   with the avatar inside; a new author, a card or a system line starts the next. */
+:is(.g2.rooms).rv-c {
+  & .coord-messages { padding: 12px 16px 20px; }
+  & .coord-message-group-start:not(:first-child) { margin-top: 12px; border-top: 0; }
+  & .coord-messages > li.coord-message:not(.is-system, .is-directive) { background: var(--canvas-subtle); border: solid var(--border-muted); border-width: 0 1px; }
+  & .coord-messages > li.coord-message-group-start:not(.is-system, .is-directive) { border-top-width: 1px; border-radius: 12px 12px 0 0; }
+  & .coord-messages > li.coord-message:not(.is-system, .is-directive):not(:has(+ .coord-message-continuation)) { border-bottom-width: 1px; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }
+  & .coord-messages > li.is-own:not(.is-system, .is-directive) { background: var(--accent-subtle); border-color: var(--accent-muted); }
+  & .coord-messages > li.coord-message-mentioned:not(.is-system, .is-directive) { border-color: var(--accent-muted); box-shadow: inset 3px 0 0 var(--accent-emphasis); }
+  & .coord-message-mentioned > .rm-msg { background: none; box-shadow: none; }
+  & .rm-msg, & .coord-message-group-start .rm-msg { padding: 2px 14px 2px 12px; }
+  & .coord-message-group-start .rm-msg { padding-top: 12px; }
+  & .coord-message-continuation .rm-msg { padding-top: 6px; }
+  & .rm-msg:hover, & .rm-msg:focus-within { background: var(--row-hover); }
+  & .coord-messages > li:not(:has(+ .coord-message-continuation)) .rm-msg { padding-bottom: 10px; }
+  & .cm-quote { margin: 2px 0 6px; }
+  & .rq4 { background: var(--canvas-default); border-radius: 8px; }
+  & .cm-tools { top: -8px; right: 12px; }
+}
+
+@media (max-width: 767px) {
+  :is(.g2.rooms).rv-a {
+    & .coord-messages { padding: 12px 12px 16px; }
+    & .rm-msg, & .coord-message-group-start .rm-msg { grid-template-columns: 28px minmax(0, 1fr); gap: 8px; }
+    & .rm-msg > .gav { width: 28px; height: 28px; }
+  }
+  :is(.g2.rooms).rv-c {
+    & .coord-messages { padding: 10px 10px 16px; }
+    & .rm-msg, & .coord-message-group-start .rm-msg { padding-left: 10px; padding-right: 10px; }
+  }
+}

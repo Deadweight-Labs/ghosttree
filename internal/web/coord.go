@@ -232,6 +232,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		Recipients:        buildCoordRecipientViews(l, recipients),
 		IncomingAttention: incomingAttention,
 		OutgoingAttention: outgoingAttention,
+		RoomVariant:       roomVariant(r),
 	}
 	if room == "" {
 		// The landing is the room with the latest event, never a picker.
@@ -879,14 +880,25 @@ func (a *app) coordAttentionAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	id, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("attention_id")), 10, 64)
-	if err != nil || id <= 0 {
+	// One card can carry several items (one per addressee); its buttons name all of them.
+	var ids []int64
+	for _, raw := range r.Form["attention_id"] {
+		id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || id <= 0 {
+			http.Error(w, "attention item is required", http.StatusBadRequest)
+			return
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
 		http.Error(w, "attention item is required", http.StatusBadRequest)
 		return
 	}
-	if err := a.browserCoord(r).ResolveAttention(id, strings.TrimSpace(r.FormValue("action"))); err != nil {
-		coordHTTPError(l, w, err)
-		return
+	for _, id := range ids {
+		if err := a.browserCoord(r).ResolveAttention(id, strings.TrimSpace(r.FormValue("action"))); err != nil {
+			coordHTTPError(l, w, err)
+			return
+		}
 	}
 	location := "/ui/coord"
 	if room := strings.TrimSpace(r.FormValue("room")); room != "" {
