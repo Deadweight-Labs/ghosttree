@@ -670,7 +670,7 @@ func (s *Server) qualifiedSearch(in SearchInput, parsed query.Query, anchor clie
 	}
 	// Raum-Nachrichten liest der Server in den Räumen dieses Agenten.
 	anchor.Agent = s.coordRef()
-	res, err := s.client.SearchAnchored(in.Query, kind, ax, searchLimit, !crossProject, anchor)
+	res, err := s.client.SearchAnchored(in.Query, kind, ax, in.resultLimit(), !crossProject, anchor)
 	if err != nil {
 		return nil, nil, err
 	}

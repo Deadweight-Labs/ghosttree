@@ -167,3 +167,88 @@ func TestGetWithPathsFollowsTheBranchOfTheSession(t *testing.T) {
 		t.Errorf("a sibling reads the project level: %s", sibling)
 	}
 }
+
+// An agent sent into another worktree of the repository described its files
+// by their relative path and was told they do not exist: the server looks in
+// the checkout it started in. The absolute path names the worktree, and with
+// it the branch the description belongs to.
+func TestDescribeFindsAFileInAnotherWorktreeOfTheRepository(t *testing.T) {
+	base := t.TempDir()
+	if real, err := filepath.EvalSymlinks(base); err == nil {
+		base = real
+	}
+	repo, tree := filepath.Join(base, "repo"), filepath.Join(base, "tree")
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(path string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("package x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(repo, "init", "-b", "main")
+	run(repo, "remote", "add", "origin", "https://github.com/x/y.git")
+	write(filepath.Join(repo, "first.go"))
+	run(repo, "add", ".")
+	run(repo, "commit", "-m", "first")
+	run(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	run(repo, "worktree", "add", "-b", "feat/tree", tree)
+	write(filepath.Join(tree, "second.go"))
+	run(tree, "add", ".")
+	run(tree, "commit", "-m", "second")
+
+	c, st := newTestClient(t)
+	project := "github.com/x/y"
+	s := NewServer(c, scope.Axes{Project: project})
+	s.SetRepoRoot(repo)
+	describe := func(path string) (string, error) {
+		res, _, err := s.handleDescribe(context.Background(), nil, DescribeInput{Path: path, Description: "reads the second half"})
+		if err != nil {
+			return "", err
+		}
+		return text(t, res), nil
+	}
+
+	_, err := describe("second.go")
+	if err == nil || !strings.Contains(err.Error(), "absolute path") || !strings.Contains(err.Error(), repo) {
+		t.Fatalf("the relative path of a file in the other worktree must say where it was looked for and what to pass: %v", err)
+	}
+	if out, err := describe(filepath.Join(tree, "second.go")); err != nil || !strings.Contains(out, "second.go") {
+		t.Fatalf("the absolute path: %v %s", err, out)
+	}
+	g, err := st.GhostFileAt(project, "second.go", "feat/tree", nil)
+	if err != nil || g.Description != "reads the second half" || g.Branch != "feat/tree" {
+		t.Fatalf("the description belongs to the branch of the worktree: %+v %v", g, err)
+	}
+	if g, err := st.GhostFileAt(project, "second.go", "", nil); err == nil && g.Description != "" {
+		t.Fatalf("the description must not land on the project level: %+v", g)
+	}
+	// The absolute path of a file in the first checkout is the same as its
+	// relative one.
+	if out, err := describe(filepath.Join(repo, "first.go")); err != nil || !strings.Contains(out, "first.go") {
+		t.Fatalf("the absolute path in the first checkout: %v %s", err, out)
+	}
+
+	other := filepath.Join(base, "other")
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(other, "init", "-b", "main")
+	run(other, "remote", "add", "origin", "https://github.com/x/z.git")
+	write(filepath.Join(other, "third.go"))
+	run(other, "add", ".")
+	run(other, "commit", "-m", "third")
+	if _, err := describe(filepath.Join(other, "third.go")); err == nil || !strings.Contains(err.Error(), "github.com/x/z") {
+		t.Fatalf("a file of another project must be refused by name: %v", err)
+	}
+}
