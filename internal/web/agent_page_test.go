@@ -26,7 +26,7 @@ func TestAgentPageShowsTheAgentAndTheComposerWithItsSignals(t *testing.T) {
 	e := ovEnv(t)
 	ovAgent(t, e.St, shellProject, "claude:laptop:aaaa1111", "worker", "person:2")
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/agents/"+url.PathEscape("claude:laptop:aaaa1111"))
-	for _, want := range []string{"worker", "@laptop", `action="/ui/agents/claude:laptop:aaaa1111/signal"`, `name="mode"`, `data-val="pause"`, `data-val="interrupt"`, `data-val="request"`, "Takes effect at the next tool call"} {
+	for _, want := range []string{"worker", "@laptop", `action="/ui/agents/claude:laptop:aaaa1111/signal"`, `name="mode"`, `value="pause"`, `value="interrupt"`, `value="request"`, "Takes effect at the next tool call"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("agent page lacks %q", want)
 		}

@@ -202,6 +202,8 @@ type knowledgeItemView struct {
 	// EditOpen öffnet das Formular, wenn die Seite über "Bearbeiten" der
 	// Prüfkarte erreicht wurde.
 	EditOpen bool
+	// EditBody is the field of the body in the edit form: write and preview, the toolbar.
+	EditBody composerView
 	// Move ist das Verschieben-Formular (nil ohne Recht zu ändern); Moves das
 	// Protokoll bisheriger Verschiebungen.
 	Move    *moveView
@@ -215,6 +217,13 @@ type knowledgeItemView struct {
 	Side     knSide
 	// Panel names the form that is open ("move"), from ?panel=.
 	Panel string
+	// Comments, the reactions under the text and the box to write a comment, as on
+	// an issue (fillKnowledgeComments); CommentsN counts the comments not deleted.
+	Comments      []tlItem
+	CommentsN     int
+	Reactions     *reactionsView
+	Composer      *composerView
+	CommentResult *requestResult
 }
 
 // ----------------------------------------------------------------- Textblöcke
@@ -621,6 +630,7 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
 	card := a.cardFor(r, pa, k, true, 0, "item", "")
 	v := &knowledgeItemView{Card: card, Types: typeOptions(l, k.Type), Back: "/ui/knowledge", EditOpen: card.CanEdit && r.URL.Query().Get("edit") == "1"}
+	v.EditBody = composerView{Name: "body", Value: card.RawBody, Placeholder: l.msg("knowledge.field_body"), NoButtons: true, Required: true, Tall: true}
 	if k.Scope.Project != "" {
 		v.Back += "?project=" + url.QueryEscape(k.Scope.Project)
 	}
@@ -663,6 +673,7 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	v.Result = a.resultFor(r, pa, "item", "")
 	v.Panel = r.URL.Query().Get("panel")
 	a.fillKnowledgeItem(l, pa.KnowledgeView(k), v)
+	a.fillKnowledgeComments(r, l, pa, k, v)
 	v.Actor = a.actorViewOf(l, pa, actor.Knowledge, k.ID, v.Card.Person, true)
 	a.renderBrowser(w, r, "knowledgeitem", pageData{Title: k.Title, KnowledgeItemV: v})
 }

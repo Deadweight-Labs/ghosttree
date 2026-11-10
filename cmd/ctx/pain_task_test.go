@@ -75,7 +75,7 @@ func TestTaskCLI(t *testing.T) {
 	if code, out := add("--kind", "input", "--title", "Key sk-"+strings.Repeat("a1", 12)); code == 0 || !strings.Contains(out, "secret") {
 		t.Errorf("secret text: %d %s", code, out)
 	}
-	if code, out := painTaskRun(t, "task", "add", "--project", cliHere, "--kind", "input", "--title", "ohne Bindung"); code == 0 || !strings.Contains(out, "request_start_work") {
+	if code, out := painTaskRun(t, "task", "add", "--project", cliHere, "--kind", "input", "--title", "ohne Bindung"); code == 0 || !strings.Contains(out, "request action=start_work") {
 		t.Errorf("no binding: %d %s", code, out)
 	}
 	if code, _ := add("--kind", "action", "--title", "Handgriff"); code != 0 {

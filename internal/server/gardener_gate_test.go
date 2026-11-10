@@ -131,8 +131,8 @@ func TestGardenerMarksCannotRideOnASupersedeOrTheMigrationPath(t *testing.T) {
 
 // "Proposed by the gardener, confirmed by <person>" on a description is set only by
 // the review page. Through the API nobody may claim it, not the gardener's own
-// account either (it proposes, it does not describe), and an ordinary description
-// is written as before.
+// account either: what it writes itself carries the reference and anchor of a
+// merge (gardener_ghost_test.go). An ordinary description is written as before.
 func TestNobodyMayWriteAGardenerMarkOnADescriptionThroughTheAPI(t *testing.T) {
 	f := gardenerAPI(t)
 	ghost := func(harness, ref string) map[string]any {

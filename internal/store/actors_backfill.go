@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
-	actordomain "github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"modernc.org/sqlite"
+
+	actordomain "github.com/Deadweight-Labs/ghosttree/internal/actor"
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 )
 
 // ActorBackfillOptions steer the backfill of actors (REQ-620).
@@ -437,8 +439,12 @@ func (s *Store) sessionCalledTool(sessionID int64, from, to string, tool *toolPr
 		}
 		n, past := 0, false
 		for rows.Next() {
-			var raw string
-			if err := rows.Scan(&seq, &raw); err != nil {
+			var v rawcodec.Value
+			if err := rows.Scan(&seq, &v); err != nil {
+				break
+			}
+			raw, err := s.rawLine(v)
+			if err != nil {
 				break
 			}
 			n++
@@ -504,22 +510,26 @@ func chunkTime(raw string) (string, bool) {
 // timeFrom is the time of the first line at or after seq that has one,
 // looking at timeLookahead lines only.
 func (s *Store) timeFrom(sessionID int64, seq int) (string, bool) {
-	return timeFromQ(s.db, sessionID, seq)
+	return timeFromQ(s, sessionID, seq)
 }
 
 // timeLookahead: so many lines without a time in a row are rare (a long
 // tool output split into lines has none).
 const timeLookahead = 200
 
-func timeFromQ(q queryer, sessionID int64, seq int) (string, bool) {
-	rows, err := q.Query(`SELECT raw FROM session_chunks WHERE session_id=? AND seq>=? ORDER BY seq LIMIT ?`, sessionID, seq, timeLookahead)
+func timeFromQ(s *Store, sessionID int64, seq int) (string, bool) {
+	rows, err := s.db.Query(`SELECT raw FROM session_chunks WHERE session_id=? AND seq>=? ORDER BY seq LIMIT ?`, sessionID, seq, timeLookahead)
 	if err != nil {
 		return "", false
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var raw string
-		if rows.Scan(&raw) != nil {
+		var v rawcodec.Value
+		if rows.Scan(&v) != nil {
+			return "", false
+		}
+		raw, err := s.rawLine(v)
+		if err != nil {
 			return "", false
 		}
 		if at, ok := chunkTime(raw); ok {
@@ -589,10 +599,10 @@ func (s *Store) backfillSessionModelsOf(id int64, dryRun bool) (int, error) {
 		if err := s.db.QueryRow(`SELECT MIN(first_at) FROM session_models WHERE session_id=?`, id).Scan(&first); err != nil {
 			return 0, err
 		}
-		if first.Valid && modelsCoverStart(s.db, id, first.String) {
+		if first.Valid && modelsCoverStart(s, id, first.String) {
 			return 0, nil
 		}
-		obs, err := sessionObservations(s.db, id, top)
+		obs, err := sessionObservations(s, id, top)
 		if err != nil {
 			return 0, err
 		}
@@ -656,8 +666,8 @@ const modelsStartSlack = 10 * time.Minute
 
 // modelsCoverStart says whether the stored history of a session begins near
 // its first transcript line.
-func modelsCoverStart(q queryer, id int64, firstModel string) bool {
-	start, ok := timeFromQ(q, id, 0)
+func modelsCoverStart(s *Store, id int64, firstModel string) bool {
+	start, ok := timeFromQ(s, id, 0)
 	if !ok {
 		return true
 	}
@@ -670,23 +680,36 @@ func modelsCoverStart(q queryer, id int64, firstModel string) bool {
 }
 
 // sessionObservations reads the model sightings of a session up to line top.
-func sessionObservations(q queryer, id int64, top int64) ([]actordomain.Observation, error) {
+//
+// Codex nennt das Modell in turn_context-Zeilen ohne Rolle. Ob eine Zeile so
+// eine ist, entscheidet Go nach dem Entpacken; in SQL sähe instr(raw, ...) nur
+// den gepackten Rahmen.
+func sessionObservations(s *Store, id int64, top int64) ([]actordomain.Observation, error) {
 	var out []actordomain.Observation
 	after := -1
 	for {
-		rows, err := q.Query(`SELECT seq, raw FROM session_chunks WHERE session_id=? AND seq>? AND seq<=?
-			AND (role='assistant' OR (role='' AND instr(raw,'"turn_context"')>0)) ORDER BY seq LIMIT 1000`, id, after, top)
+		rows, err := s.db.Query(`SELECT seq, role, raw FROM session_chunks WHERE session_id=? AND seq>? AND seq<=?
+			AND role IN ('assistant','') ORDER BY seq LIMIT 1000`, id, after, top)
 		if err != nil {
 			return nil, err
 		}
 		n := 0
 		for rows.Next() {
-			var raw string
-			if err := rows.Scan(&after, &raw); err != nil {
+			var role string
+			var v rawcodec.Value
+			if err := rows.Scan(&after, &role, &v); err != nil {
 				rows.Close()
 				return nil, err
 			}
 			n++
+			raw, err := s.rawLine(v)
+			if err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("session %d line %d: %w", id, after, err)
+			}
+			if role == "" && !strings.Contains(raw, `"turn_context"`) {
+				continue
+			}
 			if o, ok := actordomain.ObserveModel(raw); ok {
 				out = append(out, o)
 			}

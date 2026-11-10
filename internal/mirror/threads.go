@@ -116,7 +116,7 @@ func threadBody(v ThreadView) string {
 			fmt.Fprintf(&b, "**Still open:** %s\n\n", v.Summary.OpenQuestions)
 		}
 	} else {
-		b.WriteString("## Working state\n\nNo summary yet. The discussion is readable in full with `thread_read`.\n\n")
+		b.WriteString("## Working state\n\nNo summary yet. The discussion is readable in full with `coord action=thread_read`.\n\n")
 	}
 
 	if len(v.Links) > 0 {
@@ -145,7 +145,7 @@ func threadBody(v ThreadView) string {
 		b.WriteString("\nA proposal is not an accepted rule, and a settled discussion is not implemented work.\n\n")
 	}
 
-	b.WriteString("Full history and new posts: `thread_read` with id " +
+	b.WriteString("Full history and new posts: `coord action=thread_read` with id " +
 		fmt.Sprint(v.Thread.ID) + ".\n")
 	b.WriteString(footer())
 	return b.String()

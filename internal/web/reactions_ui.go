@@ -89,7 +89,7 @@ func (a *app) reactionToggle(w http.ResponseWriter, r *http.Request) {
 	kind := r.FormValue("kind")
 	id, err := strconv.ParseInt(r.FormValue("id"), 10, 64)
 	key, ok := store.ParseReaction(r.FormValue("reaction"))
-	if err != nil || id <= 0 || !ok || (kind != store.ReactOnComment && kind != store.ReactOnIdea && kind != store.ReactOnRequest) {
+	if err != nil || id <= 0 || !ok || (kind != store.ReactOnComment && kind != store.ReactOnIdea && kind != store.ReactOnRequest && kind != store.ReactOnKnowledge) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}

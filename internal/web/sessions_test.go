@@ -480,7 +480,7 @@ func TestSessionLongTranscriptIsShownInWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess, _ := e.St.SessionByID(id)
-	_, tail := e.get(t, e.Owner, "/ui/sessions/"+sess.PublicID)
+	_, tail := e.get(t, e.Owner, "/ui/sessions/"+sess.PublicID+"?view=raw")
 	if !strings.Contains(tail, "prompt number 699 about") || strings.Contains(tail, "prompt number 100 about") {
 		t.Error("default window is not the latest 200")
 	}
@@ -533,7 +533,7 @@ func TestSessionDetailDegradesToARetryLineWhenTheTranscriptCannotBeLoaded(t *tes
 	if _, err := e.St.DB().Exec(`ALTER TABLE session_chunks RENAME TO session_chunks_gone`); err != nil {
 		t.Skipf("cannot break the table: %v", err)
 	}
-	code, page := e.get(t, e.Owner, "/ui/sessions/"+e.pid["anna-project"])
+	code, page := e.get(t, e.Owner, "/ui/sessions/"+e.pid["anna-project"]+"?view=raw")
 	if code != 200 || !strings.Contains(page, "Retry") || !strings.Contains(page, "Fix the zebrafish login") {
 		t.Errorf("status %d, error state: %.300s", code, page)
 	}

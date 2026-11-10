@@ -247,7 +247,7 @@ func TestRedactSessionsLiteralsCleanEveryCopy(t *testing.T) {
 			}
 			// What was changed is replaced, not emptied, and raw is still JSON.
 			var text, raw string
-			if err := read.QueryRow(`SELECT text, raw FROM session_chunks WHERE session_id=? AND seq=0`, sessions[0]).Scan(&text, &raw); err != nil {
+			if err := read.QueryRow(`SELECT text, raw FROM session_chunks WHERE session_id=? AND seq=0`, sessions[0]).Scan(&text, rawText(t, read, &raw)); err != nil {
 				t.Fatal(err)
 			}
 			if want := "Merk dir: sed 's/[REDACTED:literal]/x/' conf"; text != want || raw != redactUserLine(want) {
@@ -262,7 +262,7 @@ func TestRedactSessionsLiteralsCleanEveryCopy(t *testing.T) {
 				t.Fatal(err)
 			}
 			for rows.Next() {
-				if err := rows.Scan(&raw); err != nil {
+				if err := rows.Scan(rawText(t, read, &raw)); err != nil {
 					t.Fatal(err)
 				}
 				if !json.Valid([]byte(raw)) {
@@ -275,7 +275,7 @@ func TestRedactSessionsLiteralsCleanEveryCopy(t *testing.T) {
 				`SELECT raw FROM session_chunks WHERE session_id=? AND seq=3`,
 				`SELECT raw FROM session_chunks WHERE session_id=? AND seq=4`,
 			} {
-				if err := read.QueryRow(q, sessions[0]).Scan(&raw); err != nil || !strings.Contains(raw, redact.LiteralMarker) {
+				if err := read.QueryRow(q, sessions[0]).Scan(rawText(t, read, &raw)); err != nil || !strings.Contains(raw, redact.LiteralMarker) {
 					t.Fatalf("%s: %s, %v", q, raw, err)
 				}
 			}

@@ -224,7 +224,7 @@ func TestThreadToolSchemasRequireOnlyWhatIsMandatory(t *testing.T) {
 	c, _ := newTestClient(t)
 	session := connect(t, &Server{client: c})
 
-	tools, err := session.ListTools(context.Background(), nil)
+	tools, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}

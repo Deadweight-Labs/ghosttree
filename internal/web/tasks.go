@@ -80,8 +80,9 @@ func (a *app) tasksDone(w http.ResponseWriter, r *http.Request) {
 // of the task for the form on that page, else the list in the inbox.
 func (a *app) taskBack(r *http.Request, ids []int64, q url.Values) string {
 	if len(ids) == 1 && r.FormValue("back") == "task" {
-		// Only a task the viewer may read names its repository in an address.
-		if t, err := a.access(r).GetHumanTask(ids[0]); err == nil && t.Project != "" {
+		// Only a task the viewer may open names its repository in an address, the way the short link /ui/t/N checks it.
+		pa := a.access(r)
+		if t, err := pa.GetHumanTask(ids[0]); err == nil && t.Project != "" && a.canOpenRepo(r, pa, t.Project) {
 			return taskHrefOf(t)
 		}
 	}
@@ -126,6 +127,7 @@ func (a *app) registerPainTaskPages(mux *http.ServeMux) {
 	a.handle(mux, "GET /ui/pains/{id}", a.requirePerson(http.HandlerFunc(a.painPage)))
 	a.handle(mux, "POST /ui/pains/{id}/state", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painState))))))
 	a.handle(mux, "POST /ui/pains/{id}/idea", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painIdea))))))
+	a.handle(mux, "POST /ui/pains/{id}/correct", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painCorrect))))))
 }
 
 // taskFailKey maps the fail= value of a redirect to its message; anything else
@@ -136,6 +138,8 @@ func taskFailKey(code string) string {
 		return "tasks.result.secret"
 	case "changed":
 		return "tasks.result.changed"
+	case "too_long":
+		return "tasks.result.too_long"
 	}
 	return "tasks.result.failed"
 }

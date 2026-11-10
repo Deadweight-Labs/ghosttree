@@ -59,7 +59,7 @@ func (a *ProjectAccess) CreateIssuesFromIdea(in IdeaIssuesInput) (IdeaIssuesResu
 	}
 	if i.Phase != idea.PhaseApproved && i.Phase != idea.PhaseBuilding {
 		return IdeaIssuesResult{}, requestdomain.NewRuleError("not_approved", fmt.Sprintf("%s is %s, not approved", i.HumanID(), i.Phase),
-			"approve it first (its owner or a maintainer); a small idea without a concept can be promoted directly with idea_update promote", nil)
+			"approve it first (its owner or a maintainer); a small idea without a concept can be promoted directly with idea action=promote", nil)
 	}
 	// Nicht die Phase allein: der Freigabe-Marker, den nur ein Mensch setzt.
 	if _, approved, err := a.st.activeApproval(i.ID); err != nil {
@@ -128,7 +128,7 @@ func (a *ProjectAccess) CreateIssuesFromIdea(in IdeaIssuesInput) (IdeaIssuesResu
 		if desc == "" {
 			desc = idea.Brief(concept.Concept.About, 600)
 		}
-		desc = strings.TrimSpace(desc + "\n\nFrom " + i.HumanID() + ": " + i.Title + ". Read the concept and the decisions there before you build (idea_get).")
+		desc = strings.TrimSpace(desc + "\n\nFrom " + i.HumanID() + ": " + i.Title + ". Read the concept and the decisions there before you build (idea action=get).")
 		d, err := a.st.CreateRequest(requestdomain.CreateInput{
 			Request: requestdomain.Request{Type: typ, Title: p.spec.Title, Description: desc, Priority: p.spec.Priority,
 				Scope: scope.Axes{Project: i.Project}, Origin: agentOrigin(in.Actor.Agent), Person: in.Actor.Person, SessionRef: in.Actor.SessionRef},
@@ -293,7 +293,7 @@ func (a *ProjectAccess) IdeaBriefingForRequest(requestID int64, budget int) (str
 		}
 		for n, l := range lines {
 			if !limit(l) {
-				limit(fmt.Sprintf("- and %d more (decision_list)\n", len(lines)-n))
+				limit(fmt.Sprintf("- and %d more (idea action=decision_list)\n", len(lines)-n))
 				return
 			}
 		}
@@ -307,7 +307,7 @@ func (a *ProjectAccess) IdeaBriefingForRequest(requestID int64, budget int) (str
 		}
 		section("Deferred decisions that may be due now:", lines)
 	}
-	limit("Ask what is unclear as an open decision on the idea (decision_open with via_request), not in the chat.\n")
+	limit("Ask what is unclear as an open decision on the idea (idea action=decision_open with via_request), not in the chat.\n")
 	return b.String(), nil
 }
 

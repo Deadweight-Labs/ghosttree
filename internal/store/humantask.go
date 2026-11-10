@@ -75,7 +75,7 @@ func (a *ProjectAccess) GetHumanTask(id int64) (humantask.Task, error) {
 
 func workInvalid() error {
 	return requestdomain.NewRuleError("work_invalid", "that work does not belong to the request or you may not work on it",
-		"use the work id from request_start_work for this request", nil)
+		"use the work id from request action=start_work for this request", nil)
 }
 
 // CreateHumanTask asks the human for something only they can provide. Secrets
@@ -111,8 +111,8 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 		}
 	}
 	if requestID == 0 {
-		return humantask.Task{}, requestdomain.NewRuleError("request_required", "a human task hangs on a request: request_start_work first, or give request_id",
-			"request_start_work first, or give request_id", nil)
+		return humantask.Task{}, requestdomain.NewRuleError("request_required", "a human task hangs on a request: request action=start_work first, or give request_id",
+			"request action=start_work first, or give request_id", nil)
 	}
 	ref, err := st.RequestRef(RefRequest, requestID)
 	if err != nil {

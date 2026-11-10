@@ -160,7 +160,7 @@ func TestCommentsAreEditedWithVersionsAndDeletedSoftly(t *testing.T) {
 		t.Fatalf("lead deletes -> %d", resp.StatusCode)
 	}
 	_, gone := fetchPage(t, e.Owner, page)
-	if !strings.Contains(gone, "This comment was deleted.") || strings.Contains(gone, "Second draft") || strings.Contains(gone, "First draft") {
+	if !strings.Contains(gone, "Deleted by") || strings.Contains(gone, "Second draft") || strings.Contains(gone, "First draft") {
 		t.Error("a deleted comment shows its text or no placeholder")
 	}
 	if resp := postForm(t, e, e.Member, "/ui/comments/9999/edit", url.Values{"body": {"x"}}); resp.StatusCode != http.StatusNotFound {

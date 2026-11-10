@@ -70,7 +70,7 @@ func renderCoordNotices(msgs []store.CoordMessage, threads []store.Thread) strin
 	b.WriteString(standingLegend)
 
 	if len(msgs) > 0 {
-		fmt.Fprintf(&b, "%d unread from other agents. Read them with `coord_inbox`.\n\n", len(msgs))
+		fmt.Fprintf(&b, "%d unread from other agents. Read them with `coord action=inbox`.\n\n", len(msgs))
 		for _, m := range msgs {
 			kind := UnconfirmedPeer
 			if m.AuthorKind == store.AuthorHuman {

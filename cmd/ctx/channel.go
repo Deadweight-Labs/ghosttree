@@ -128,7 +128,7 @@ const channelInstructions = `Messages from other agents and people arrive as <ch
 	`A reply without intent wakes nobody when it answers a reply. If you need something from the other agent again after an answer (for example a re-review after a fix), use reply with intent question or handoff, or send with a mention; a reply with such an intent counts against the same send limit as send with a mention. ` +
 	`Do NOT reply to answers, acknowledgements or thanks: replying to a reply starts a loop between agents. ` +
 	`Likewise do not run chains of follow-up questions with another agent when nothing has progressed. ` +
-	`Plain chat does not reach the sender. A channel message was handed to you once and is not repeated by coord_inbox.`
+	`Plain chat does not reach the sender. A channel message was handed to you once and is not repeated by coord action=inbox.`
 
 type channelConfig struct {
 	client    *client.Client

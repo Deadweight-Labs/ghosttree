@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
@@ -13,8 +14,8 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-// Comments on an issue, an idea and a pain (REQ-599, store part 6). The three
-// pages show them as boxes in their timeline, between the entries of the
+// Comments on an issue, an idea, a pain and a knowledge entry (REQ-599, store part
+// 6). The pages show them as boxes in their timeline, between the entries of the
 // history, each with an anchor (#comment-n). Writing, editing and deleting go
 // through ProjectAccess (AddComment, EditComment, DeleteComment), so the rights
 // are the store's: members write, the author edits, the author and leads delete.
@@ -160,6 +161,8 @@ func commentPage(c store.Comment) string {
 		return repoHref(c.Project) + "/ideas/" + id
 	case store.CommentOnPain:
 		return repoHref(c.Project) + "/pains/" + id
+	case store.CommentOnKnowledge:
+		return knowledgeHref(c.Project, c.ObjectID)
 	}
 	return repoHref(c.Project) + "/issues/" + id
 }
@@ -178,6 +181,10 @@ func (a *app) objectPage(pa *store.ProjectAccess, kind string, id int64) string 
 	case store.CommentOnPain:
 		if p, err := pa.PainDetailView(id); err == nil {
 			return repoHref(p.Pain.Project) + "/pains/" + strconv.FormatInt(id, 10)
+		}
+	case store.CommentOnKnowledge:
+		if k, err := a.store.KnowledgeByID(id); err == nil && pa.CanSeeKnowledge(k) && k.Scope.Project != "" {
+			return knowledgeHref(k.Scope.Project, id)
 		}
 	}
 	return "/ui/inbox"
@@ -268,4 +275,54 @@ func (a *app) commentDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, commentPage(c)+"?comment=deleted#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
+}
+
+// knowledgeComment is POST /ui/knowledge/{id}/comment: a comment on an entry. The
+// rights are the store's, as for a comment on an issue: whoever may read the
+// entry and write in its project; a guest reads only.
+func (a *app) knowledgeComment(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	pa := a.access(r)
+	c, err := pa.AddComment(store.CommentOnKnowledge, id, r.FormValue("body"), a.commentActor(r))
+	if err != nil {
+		a.commentFail(w, r, a.objectPage(pa, store.CommentOnKnowledge, id), err)
+		return
+	}
+	a.stampActor(r, actor.Comment, c.ID)
+	http.Redirect(w, r, commentPage(c)+"?comment=added#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
+}
+
+// fillKnowledgeComments gives the page of an entry what the page of an issue has:
+// the comments, the reactions under the text and the box to write a comment. An
+// entry without a project has no place for either (store.CommentOnKnowledge).
+func (a *app) fillKnowledgeComments(r *http.Request, l lang, pa *store.ProjectAccess, k store.Knowledge, v *knowledgeItemView) {
+	project := strings.TrimSpace(k.Scope.Project)
+	if project == "" {
+		return
+	}
+	now := overviewNow().UTC()
+	ago := func(at string) string { return shortAgo(l, now, parseTime(at)) }
+	base := knowledgeHref(project, k.ID)
+	v.Comments = a.commentTimeline(r, l, pa, store.CommentOnKnowledge, k.ID, k.Person, base, editingComment(r), ago)
+	for _, it := range v.Comments {
+		if it.Comment != nil && !it.Comment.Deleted {
+			v.CommentsN++
+		}
+	}
+	if s, err := pa.Reactions(store.ReactOnKnowledge, k.ID); err == nil {
+		v.Reactions = a.reactionsFor(r, l, store.ReactOnKnowledge, k.ID, s)
+	}
+	v.CommentResult = commentResult(r, l)
+	if interactive(r) && pa.Allow(project, store.ResComment, store.ActCreate, store.Object{Own: true}) {
+		v.Composer = &composerView{Action: "/ui/knowledge/" + strconv.FormatInt(k.ID, 10) + "/comment", Token: csrfOf(r), Name: "body",
+			Avatar: browserPrincipal(r).Label, Placeholder: l.msg("comments.cx.placeholder"), Submit: l.msg("comments.cx.submit")}
+	}
 }

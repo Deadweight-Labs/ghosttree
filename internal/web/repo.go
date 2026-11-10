@@ -244,6 +244,10 @@ func (a *app) repoRoute(w http.ResponseWriter, r *http.Request) {
 		h = a.pullsPage
 	case "commits":
 		h = a.commitsPage
+	case "branches":
+		// The list of branches is a page of the Code tab: the tab stays open.
+		h = a.branchesPage
+		tab = "code"
 	case "runbooks":
 		h = a.runbooksPage
 	case "tasks":

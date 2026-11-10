@@ -1172,6 +1172,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureRawCodec(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureCanonicalSessionProjects(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1208,6 +1212,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureLabelsAndIdeas(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureIdeaEdits(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -1252,6 +1260,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureActors(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureToolCounts(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

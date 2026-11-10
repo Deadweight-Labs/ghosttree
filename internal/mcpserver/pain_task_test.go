@@ -18,7 +18,7 @@ var painTaskTools = []string{"pain_record", "pain_get", "pain_search", "pain_upd
 func TestPainAndTaskToolsHaveSchemasAndOptionalFields(t *testing.T) {
 	c, _ := newTestClient(t)
 	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y"}})
-	tools, err := session.ListTools(t.Context(), nil)
+	tools, err := listRegistered(t.Context(), session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestHumanTaskToolsOverTheWire(t *testing.T) {
 		t.Errorf("secret over MCP: %v %s", failed, got)
 	}
 	// Ohne request_id und ohne laufende Arbeit: eine Auskunft, die den Weg nennt.
-	if got, failed := callTool(t, session, "human_task_create", map[string]any{"kind": "action", "title": "Handgriff"}); !failed || !strings.Contains(got, "request_start_work") {
+	if got, failed := callTool(t, session, "human_task_create", map[string]any{"kind": "action", "title": "Handgriff"}); !failed || !strings.Contains(got, "request action=start_work") {
 		t.Errorf("no request: %v %s", failed, got)
 	}
 	// Mit laufender Arbeit der Session ergibt sich der Request von selbst.

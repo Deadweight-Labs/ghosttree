@@ -20,7 +20,7 @@ func TestCoordToolSchemasRequireOnlyWhatIsMandatory(t *testing.T) {
 	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{
 		Project: "github.com/x/y", Machine: "testbox"}})
 
-	tools, err := session.ListTools(context.Background(), nil)
+	tools, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestCoordSendDescriptionDoesNotPromiseDelivery(t *testing.T) {
 	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{
 		Project: "github.com/x/y", Machine: "testbox"}})
 
-	tools, err := session.ListTools(context.Background(), nil)
+	tools, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestCoordSendSchemaCarriesIntent(t *testing.T) {
 	c, _ := newTestClient(t)
 	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{
 		Project: "github.com/x/y", Machine: "testbox"}})
-	tools, err := session.ListTools(context.Background(), nil)
+	tools, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}

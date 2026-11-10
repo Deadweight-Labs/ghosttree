@@ -41,6 +41,8 @@ const (
 	ReactOnComment = "comment"
 	ReactOnIdea    = "idea"
 	ReactOnRequest = "request"
+	// ReactOnKnowledge: ein Wissenseintrag; reagieren darf, wer dort kommentieren darf.
+	ReactOnKnowledge = "knowledge"
 )
 
 // ReactionKind ist eine erlaubte Reaktion: der Schlüssel (so steht er in der
@@ -114,7 +116,7 @@ type ReactionSummary struct {
 }
 
 func reactionTargetNotFound(kind string, id int64) error {
-	return requestdomain.NewRuleError("reaction_target_not_found", fmt.Sprintf("%s %d not found, or you may not read it", kind, id), "name a comment, idea or issue you can read", nil)
+	return requestdomain.NewRuleError("reaction_target_not_found", fmt.Sprintf("%s %d not found, or you may not read it", kind, id), "name a comment, idea, issue or knowledge entry you can read", nil)
 }
 
 func invalidReaction(content string) error {
@@ -151,8 +153,15 @@ func (a *ProjectAccess) reactionTarget(kind string, id int64) (canReact bool, er
 			return false, notFound
 		}
 		return a.Allow(ref.Project, ResRequest, ActWork, Object{Own: true}), nil
+	case ReactOnKnowledge:
+		k, err := a.st.KnowledgeByID(id)
+		if err != nil || strings.TrimSpace(k.Scope.Project) == "" || !a.CanSeeKnowledge(k) {
+			a.Filtered()
+			return false, notFound
+		}
+		return a.Allow(k.Scope.Project, ResComment, ActCreate, Object{Own: true}), nil
 	}
-	return false, requestdomain.NewRuleError("invalid_reaction_target", "reactions hang on a comment, idea or issue", "use kind comment, idea or request", nil)
+	return false, requestdomain.NewRuleError("invalid_reaction_target", "reactions hang on a comment, idea, issue or knowledge entry", "use kind comment, idea, request or knowledge", nil)
 }
 
 // React setzt eine Reaktion des Betrachters. Hat er sie schon gesetzt, ändert sich

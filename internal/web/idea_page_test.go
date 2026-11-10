@@ -101,7 +101,7 @@ func TestPainPageHistoryRunsOldestFirstWithTheStatesToGoTo(t *testing.T) {
 	if strings.Contains(page, `data-act="pain.created"`) {
 		t.Error("the pain is recorded twice: first object and entry")
 	}
-	for _, want := range []string{"Stays open", "Over 400 sessions it is slow again.", "3f9a2c1", `data-val="resolved"`, `data-val="obsolete"`, `data-val="active"`, `name="remaining"`, `name="evidence_ref"`, "Set to Fixed"} {
+	for _, want := range []string{"Stays open", "Over 400 sessions it is slow again.", "3f9a2c1", `value="resolved"`, `value="obsolete"`, `value="active"`, `name="remaining"`, `name="evidence_ref"`, "Set to Fixed"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("pain page lacks %q", want)
 		}
@@ -112,7 +112,7 @@ func TestPainPageHistoryRunsOldestFirstWithTheStatesToGoTo(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, p2 := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/pains/"+strconv.FormatInt(d2.Pain.ID, 10))
-	if strings.Contains(p2, `data-val="active"`) || !strings.Contains(p2, `data-val="mitigated"`) {
+	if strings.Contains(p2, `value="active"`) || !strings.Contains(p2, `value="mitigated"`) {
 		t.Error("the offered states do not follow the transition table")
 	}
 }
