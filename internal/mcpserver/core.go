@@ -156,7 +156,7 @@ func (r *coreRouter) call(ctx context.Context, next mcp.MethodHandler, call *mcp
 	if route.Inner != "" {
 		args["action"] = route.Inner
 	}
-	if msg := r.foreignFields(name, route, args); msg != "" {
+	if msg := r.fieldProblems(name, route, args); msg != "" {
 		return toolError(msg), nil
 	}
 	raw, err := json.Marshal(args)
@@ -169,41 +169,9 @@ func (r *coreRouter) call(ctx context.Context, next mcp.MethodHandler, call *mcp
 	routed := *call
 	routed.Params = &inner
 	res, err := next(ctx, "tools/call", &routed)
+	textOnly(res)
 	r.srv.noteToolCall(call, name, route.Name, res, err)
 	return res, err
-}
-
-// foreignFields drops empty values the target does not take (a model often
-// fills every field of the shared schema) and names the first non-empty one,
-// together with the fields the action does take.
-func (r *coreRouter) foreignFields(core string, route coretools.Action, args map[string]any) string {
-	s := r.schema(route.Tool)
-	if s == nil || s.Properties == nil {
-		return ""
-	}
-	var foreign []string
-	for k, v := range args {
-		if _, ok := s.Properties[k]; ok {
-			continue
-		}
-		if emptyValue(v) {
-			delete(args, k)
-			continue
-		}
-		foreign = append(foreign, k)
-	}
-	if len(foreign) == 0 {
-		return ""
-	}
-	sort.Strings(foreign)
-	var takes []string
-	for k := range s.Properties {
-		if k != "action" {
-			takes = append(takes, k)
-		}
-	}
-	sort.Strings(takes)
-	return fmt.Sprintf("%s action=%s does not take %s; it takes %s", core, route.Name, strings.Join(foreign, ", "), strings.Join(takes, ", "))
 }
 
 func emptyValue(v any) bool {
@@ -301,8 +269,9 @@ func (r *coreRouter) coreTool(c coretools.Core, tools []*mcp.Tool) *mcp.Tool {
 	}
 	schema := &jsonschema.Schema{Type: "object", Properties: map[string]*jsonschema.Schema{"action": actionProp}, Required: required}
 	schema.PropertyOrder = append([]string{"action"}, order...)
+	shapes := map[string]string{}
 	for _, k := range order {
-		schema.Properties[k] = props[k]
+		schema.Properties[k] = sayShapeOnce(shapes, k, props[k])
 	}
 	closed := false
 	tool := &mcp.Tool{
@@ -371,6 +340,34 @@ func slimSchema(p *jsonschema.Schema) *jsonschema.Schema {
 	return &c
 }
 
+// sayShapeOnce describes the fields of a list of objects where the list first
+// occurs in a tool. A second field with the same items (what a pain motivates,
+// and what is added to that later) names the first instead of repeating it.
+func sayShapeOnce(seen map[string]string, name string, p *jsonschema.Schema) *jsonschema.Schema {
+	if p.Items == nil || len(p.Items.Properties) == 0 {
+		return p
+	}
+	raw, err := json.Marshal(p.Items)
+	if err != nil {
+		return p
+	}
+	first, ok := seen[string(raw)]
+	if !ok {
+		seen[string(raw)] = name
+		return p
+	}
+	c, items := *p, *p.Items
+	items.Properties = make(map[string]*jsonschema.Schema, len(p.Items.Properties))
+	for k, v := range p.Items.Properties {
+		bare := *v
+		bare.Description = ""
+		items.Properties[k] = &bare
+	}
+	c.Items = &items
+	c.Description = strings.TrimRight(c.Description, ". ") + " (items as in " + first + ")"
+	return &c
+}
+
 // cutDescription shortens a description to about limit runes, preferring the
 // end of a sentence or clause.
 func cutDescription(s string, limit int) string {
@@ -402,7 +399,9 @@ func mergeType(have, p *jsonschema.Schema) {
 	}
 	types := map[string]bool{}
 	for _, t := range append(append([]string{have.Type}, have.Types...), append([]string{p.Type}, p.Types...)...) {
-		if t != "" {
+		// null only says that the field may be left out, which every field of
+		// a core tool may.
+		if t != "" && t != "null" {
 			types[t] = true
 		}
 	}
