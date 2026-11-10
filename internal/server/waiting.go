@@ -67,7 +67,7 @@ func renderWaiting(w humantask.Waiting) string {
 		}
 	}
 	if len(confirmable) > 0 {
-		b.WriteString("\nDone by the human, not yet confirmed. Check each against its check line, then human_task_resolve with action confirm, or action reopen with a reason:\n")
+		b.WriteString("\nDone by the human, not yet confirmed. Check each against its check line, then human_task with action confirm, or action reopen with a reason:\n")
 		for _, t := range confirmable {
 			b.WriteString(waitingLine(t, true))
 		}

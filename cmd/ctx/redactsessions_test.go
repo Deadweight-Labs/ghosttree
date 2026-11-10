@@ -77,7 +77,7 @@ func readRedactState(t *testing.T, path string) (st redactState, hits map[string
 		return sb.String()
 	}
 	st = redactState{
-		chunks: dump(`SELECT text, raw FROM session_chunks ORDER BY id`),
+		chunks: chunkTextRaw(t, db),
 		index:  dump(`SELECT text, tool_input FROM chunk_index ORDER BY chunk_id`),
 		titles: dump(`SELECT title, '' FROM sessions ORDER BY id`),
 	}

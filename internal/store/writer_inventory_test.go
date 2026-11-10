@@ -13,6 +13,11 @@ import (
 )
 
 var writerMethodClasses = map[string]string{
+	"AddRawDict":                    "write",
+	"RecordToolUses":                "write",
+	"ToolUseStats":                  "read",
+	"RawDictSample":                 "read",
+	"TranscriptStats":               "read",
 	"ReplaceVanishedEvidence":       "write",
 	"RemoveAutoEvidence":            "write",
 	"MigrateOwners":                 "administrative",
@@ -186,6 +191,7 @@ var writerMethodClasses = map[string]string{
 	"RequestRef":                    "read",
 	"CountOpenRequestsFor":          "read",
 	"CountRequests":                 "read",
+	"CountRequestMatches":           "read",
 	"InterruptedWorkFor":            "read",
 	"RequestHandoffs":               "read",
 	"SessionIsShared":               "read",
@@ -451,6 +457,7 @@ var writerMethodClasses = map[string]string{
 	"SearchPainsWith":               "read",
 	"SearchDocuments":               "read",
 	"SearchRequestsWith":            "read",
+	"SearchRequestsWithContext":     "read",
 	"SearchKnowledge":               "read_with_best_effort",
 	"SearchKnowledgeForContext":     "read_with_best_effort",
 	"SearchKnowledgeWith":           "read_with_best_effort",

@@ -56,6 +56,8 @@ type app struct {
 	searchSlots   searchLimiter
 	searchStreams searchStreams
 	logger        *slog.Logger // http_request lines and search failures; nil = slog.Default
+	// What the stored transcript lines take, for administrators.
+	transcripts transcriptStatsCache
 }
 type pageData struct {
 	// Flash is the note over the form a rejected form came back to; FormFailed is
@@ -73,6 +75,7 @@ type pageData struct {
 	PullsV                                                     *pullsView
 	PullV                                                      *pullView
 	CommitsV                                                   *commitsView
+	BranchesV                                                  *branchesView
 	CommitV                                                    *commitView
 	IssuesV                                                    *issuesView
 	IssueV                                                     *requestView
@@ -241,6 +244,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
 	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
 	a.handle(mux, "POST /ui/knowledge/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeMove))))))
+	a.handle(mux, "POST /ui/knowledge/{id}/comment", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeComment))))))
 	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
 	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
 	a.handle(mux, "POST /ui/review/bulk", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewBulk))))))
@@ -588,6 +592,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/requests/{id}/drop":           webAdmin,
 	"GET /ui/knowledge":                     webProject,
 	"GET /ui/knowledge/{id}":                webProject,
+	"POST /ui/knowledge/{id}/comment":       webProject,
 	"POST /ui/knowledge/{id}/edit":          webAdmin,
 	"POST /ui/knowledge/{id}/move":          webAdmin,
 	"GET /ui/review":                        webProject,

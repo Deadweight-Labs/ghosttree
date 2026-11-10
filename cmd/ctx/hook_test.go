@@ -238,7 +238,7 @@ func TestPreToolUseUnderstandsCurrentCodexBashObject(t *testing.T) {
 	if !strings.Contains(ctx, "aktuelle Codex-Bash-Datei") {
 		t.Fatalf("current Codex payload delivered no description: %q", ctx)
 	}
-	if strings.Contains(ctx, "context_describe_file") {
+	if strings.Contains(ctx, "describe_file") {
 		t.Fatalf("Bash must not be treated as a write: %q", ctx)
 	}
 }
@@ -345,7 +345,7 @@ func TestPreToolUseAsksForADescriptionOnlyWhenWriting(t *testing.T) {
 		t.Fatalf("reading an undescribed file must stay silent, got %q", reading)
 	}
 	writing := renderGhostDelivery(entries, fresh, true, false, "a.go", 0)
-	if !strings.Contains(writing, "context_describe_file") {
+	if !strings.Contains(writing, "context_remember action=describe_file") {
 		t.Fatalf("writing an undescribed file must ask for one, got %q", writing)
 	}
 }

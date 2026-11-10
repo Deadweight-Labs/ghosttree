@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"math/rand"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -65,8 +67,12 @@ func readRaw(t *testing.T, path string) map[int64]string {
 	out := map[int64]string{}
 	for r.Next() {
 		var id int64
-		var raw string
-		if err := r.Scan(&id, &raw); err != nil {
+		var v rawcodec.Value
+		if err := r.Scan(&id, &v); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := store.DecodeRaw(context.Background(), db, v)
+		if err != nil {
 			t.Fatal(err)
 		}
 		out[id] = raw

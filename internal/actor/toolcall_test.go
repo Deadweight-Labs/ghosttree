@@ -28,6 +28,9 @@ func TestCallsToolCountsOnlyRealCalls(t *testing.T) {
 		{"other binary", `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"xctx pain add"}}]}}`, false},
 		{"bash elsewhere", `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"grep 'ctx pain add' docs"}}]}}`, false},
 		{"codex output", `{"type":"response_item","payload":{"type":"function_call_output","output":"pain_record"}}`, false},
+		{"core tool", `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__ghosttree__pain","input":{"action":"record","title":"t"}}]}}`, true},
+		{"core tool other action", `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__ghosttree__pain","input":{"action":"search"}}]}}`, false},
+		{"codex core tool", `{"type":"response_item","payload":{"type":"function_call","name":"mcp__ghosttree__pain","arguments":"{\"action\":\"record\",\"title\":\"t\"}"}}`, true},
 		{"suffix only", `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"xpain_record","input":{}}]}}`, false},
 	} {
 		if got := CallsTool(c.line, tools, cmds); got != c.want {

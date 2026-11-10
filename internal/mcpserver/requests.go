@@ -194,7 +194,7 @@ type RequestProgressInput struct {
 	Title          string `json:"title,omitempty" jsonschema:"replacement title for correct"`
 	Type           string `json:"type,omitempty" jsonschema:"replacement type for correct: feature, change, bug, or investigation"`
 	Priority       string `json:"priority,omitempty" jsonschema:"replacement priority for correct"`
-	RelationID     int64  `json:"relation_id,omitempty" jsonschema:"relation to remove; request_get lists every relation with its id. Pass request_id alongside it — that is the request the edge hangs off"`
+	RelationID     int64  `json:"relation_id,omitempty" jsonschema:"relation to remove; request action=get lists every relation with its id. Pass request_id alongside it — that is the request the edge hangs off"`
 	RelationKind   string `json:"relation_kind,omitempty" jsonschema:"parent, related, blocks, duplicates, supersedes, derived, knowledge, or external. The edge is read subject first: request_id <kind> other_request_id. \"blocks\" therefore means request_id blocks other_request_id — the one named in request_id is the one that has to be finished first. Same for parent: request_id is the child, other_request_id is the parent. derived: request_id came out of other_request_id."`
 	OtherRequestID int64  `json:"other_request_id,omitempty" jsonschema:"the object of the relation, read after the kind: request_id <kind> other_request_id"`
 	KnowledgeID    int64  `json:"knowledge_id,omitempty"`
@@ -456,7 +456,7 @@ func (s *Server) handleRequestFinishWork(_ context.Context, _ *mcp.CallToolReque
 func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest, in RequestProgressInput) (*mcp.CallToolResult, RequestChangeOutput, error) {
 	evidence := requestdomain.Evidence{Kind: in.EvidenceKind, Ref: in.EvidenceRef}
 	if in.Action == "relation_remove" && in.RelationID == 0 {
-		return nil, RequestChangeOutput{}, fmt.Errorf("relation_remove needs relation_id; request_get lists each relation with its id")
+		return nil, RequestChangeOutput{}, fmt.Errorf("relation_remove needs relation_id; request action=get lists each relation with its id")
 	}
 	var err error
 	switch in.Action {

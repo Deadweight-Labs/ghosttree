@@ -71,7 +71,7 @@ func TestSearchGroupsFollowTheViewersRights(t *testing.T) {
 	}
 }
 
-func TestSearchNeedsTwoCharactersShowsNoTotalsAndOffersAllOnlyBehindFiveHits(t *testing.T) {
+func TestSearchCountsHitsAndOffersMoreOnlyBehindTheShownOnes(t *testing.T) {
 	e := ovEnv(t)
 	for i := 0; i < 3; i++ {
 		rqMake(t, e.St, rqSpec{Title: fmt.Sprintf("Needle %d", i)})
@@ -81,22 +81,70 @@ func TestSearchNeedsTwoCharactersShowsNoTotalsAndOffersAllOnlyBehindFiveHits(t *
 		t.Error("a one-character query must not search or answer")
 	}
 	_, few := fetchPage(t, e.Member, e.Base+"/ui/search?q=Needle")
-	if strings.Contains(few, "Show all") {
-		t.Error("three hits offer Show all")
+	if strings.Contains(few, "More hits") || !strings.Contains(few, "3 hits") {
+		t.Error("three hits state their count and offer no more")
 	}
-	for i := 3; i < 6; i++ {
+	for i := 3; i < 8; i++ {
 		rqMake(t, e.St, rqSpec{Title: fmt.Sprintf("Needle %d", i)})
 	}
 	_, many := fetchPage(t, e.Member, e.Base+"/ui/search?q=Needle")
-	if !strings.Contains(many, "Show all") || strings.Count(many, `class="hit"`) != searchPerGroup {
-		t.Errorf("six hits must show %d and offer Show all", searchPerGroup)
+	if !strings.Contains(many, "8 hits") || strings.Count(many, `class="hit"`) != searchPerGroup {
+		t.Errorf("eight hits must say 8 and show %d", searchPerGroup)
 	}
-	if regexp.MustCompile(`(?i)\b\d+ (matches|results|hits)`).MatchString(many) {
-		t.Error("the search page states a total")
+	if !regexp.MustCompile(`<span class="nm">All</span><span class="counter">8</span>`).MatchString(many) ||
+		!regexp.MustCompile(`<span class="counter">8</span></a>`).MatchString(many) {
+		t.Error("the facets do not count 8 in All and in Requests")
+	}
+	if !strings.Contains(many, `class="row morelink" href="/ui/search?kind=requests&amp;q=Needle"`) {
+		t.Error("the shown five do not lead to the rest")
+	}
+	_, kind := fetchPage(t, e.Member, e.Base+"/ui/search?q=Needle&kind=requests")
+	if strings.Count(kind, `class="hit"`) != 8 || strings.Contains(kind, "morelink") {
+		t.Error("a click on the facet must show all eight hits, not the same five")
 	}
 	_, none := fetchPage(t, e.Member, e.Base+"/ui/search?q=zzzzqq")
 	if !strings.Contains(none, "No matches") {
 		t.Error("no hits must say so in one line")
+	}
+}
+
+// A page after the first: "More hits" of a narrowed page adds a step (n=), and a
+// count beyond the cap says so instead of stating a number it did not count.
+func TestSearchMoreHitsPagesAndTheCountStopsAtTheCap(t *testing.T) {
+	e := ovEnv(t)
+	for i := 0; i < searchKindPage+3; i++ {
+		rqMake(t, e.St, rqSpec{Title: fmt.Sprintf("Haystack %02d", i)})
+	}
+	_, page := fetchPage(t, e.Member, e.Base+"/ui/search?q=Haystack&kind=requests")
+	if n := strings.Count(page, `class="hit"`); n != searchKindPage {
+		t.Errorf("a narrowed page shows %d hits, want %d", n, searchKindPage)
+	}
+	if !strings.Contains(page, "23 hits") || !strings.Contains(page, `href="/ui/search?kind=requests&amp;q=Haystack&amp;n=40"`) {
+		t.Error("the narrowed page does not count 23 or does not lead to the next step")
+	}
+	_, page = fetchPage(t, e.Member, e.Base+"/ui/search?q=Haystack&kind=requests&n=40")
+	if n := strings.Count(page, `class="hit"`); n != searchKindPage+3 || strings.Contains(page, "morelink") {
+		t.Errorf("the second step shows %d hits (want all 23, no further link)", n)
+	}
+	for _, bad := range []string{"-5", "0", "x", "100000"} {
+		code, page := fetchPage(t, e.Member, e.Base+"/ui/search?q=Haystack&kind=requests&n="+bad)
+		if code != http.StatusOK || strings.Count(page, `class="hit"`) < searchKindPage || strings.Count(page, `class="hit"`) > searchCountCap {
+			t.Errorf("n=%s: status %d, %d hits", bad, code, strings.Count(page, `class="hit"`))
+		}
+	}
+}
+
+// A guest is counted only what he may read: the hit of a hidden project is in
+// neither the number nor the list.
+func TestSearchCountsOnlyWhatTheViewerMayRead(t *testing.T) {
+	e := searchEnv(t)
+	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/search?q=Needle&kind=requests")
+	_, guest := fetchPage(t, e.Guest, e.Base+"/ui/search?q=Needle&kind=requests")
+	if !strings.Contains(owner, "2 hits") {
+		t.Errorf("the owner of both projects is not counted both requests")
+	}
+	if !strings.Contains(guest, "1 hit") || strings.Contains(guest, "2 hits") || strings.Contains(guest, "SECRET") {
+		t.Errorf("the guest is counted what he may not read: %s", guest)
 	}
 }
 

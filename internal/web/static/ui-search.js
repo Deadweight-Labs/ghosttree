@@ -44,6 +44,8 @@
   const total = Number(box.dataset.total) || 0;
   const pending = new Set(Array.from(document.querySelectorAll("template[data-kind-side]"), (t) => t.dataset.kindSide));
   const placed = {};
+  const counts = {};
+  const allCount = document.querySelector("[data-search-all]");
   const sources = new Set();
   let done = 0;
   let shown = 0;
@@ -68,6 +70,12 @@
   const retry = (key) => {
     const t = document.querySelector(`template[data-kind-retry="${key}"]`);
     put(key, "body", t ? t.innerHTML : "");
+  };
+  // sum shows the hits of all kinds that are done, "+" when one was cut at its cap.
+  const sum = () => {
+    if (!allCount) return;
+    const list = Object.values(counts);
+    allCount.textContent = list.reduce((n, c) => n + c.total, 0) + (list.some((c) => c.capped) ? "+" : "");
   };
   const reveal = () => {
     const any = (part) => Object.values(placed).some((p) => (p[part] || []).length > 0);
@@ -103,6 +111,8 @@
         put(ev.key, "side", ev.side || "");
         put(ev.key, "body", ev.body || "");
         if (ev.side) shown++;
+        counts[ev.key] = { total: ev.total || 0, capped: !!ev.capped };
+        sum();
       }
       finish(ev.key);
       reveal();

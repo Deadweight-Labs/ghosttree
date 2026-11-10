@@ -356,6 +356,8 @@ type repoCodeView struct {
 type codeBranchView struct {
 	Name    string
 	Options []codeBranchOpt
+	// AllHref is the list of all branches, the last entry of the menu.
+	AllHref string
 }
 
 type codeBranchOpt struct {
@@ -494,7 +496,7 @@ func (a *app) repoCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v := &repoCodeView{Current: cp.Path, KnowledgeHref: view.Href + "/knowledge"}
-	v.Branch = codeBranchView{Name: cp.Branch}
+	v.Branch = codeBranchView{Name: cp.Branch, AllHref: branchesHref(view.Project)}
 	for _, n := range names {
 		o := codeBranchOpt{Name: n, Current: n == cp.Branch, Default: n == def}
 		if cp.Kind == "blob" {
@@ -599,11 +601,11 @@ func (a *app) codeFolderPage(r *http.Request, pa *store.ProjectAccess, view *rep
 // codeDescription is the box with the description of a path. Without one it
 // stays a single action: write it.
 func (a *app) codeDescription(_ lang, ix *codeIndex, p string) *codeDesc {
-	d := &codeDesc{Path: p, Label: p, Cmd: cmdLine{Icon: "file", Text: `context_describe_file path="` + p + `"`}}
+	d := &codeDesc{Path: p, Label: p, Cmd: cmdLine{Icon: "file", Text: `context_remember action=describe_file path="` + p + `"`}}
 	switch {
 	case p == "":
 		d.Label = "/"
-		d.Cmd.Text = `context_describe_file path="."`
+		d.Cmd.Text = `context_remember action=describe_file path="."`
 	case ix.isDir(p):
 		d.Label = p + "/"
 	}

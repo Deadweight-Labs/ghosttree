@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
 )
 
@@ -45,9 +46,13 @@ func rawRows(t *testing.T, db *sql.DB) map[int64]string {
 	out := map[int64]string{}
 	for rows.Next() {
 		var id int64
-		var raw string
-		if err := rows.Scan(&id, &raw); err != nil {
+		var v rawcodec.Value
+		if err := rows.Scan(&id, &v); err != nil {
 			t.Fatal(err)
+		}
+		raw, err := rawStateFor(db).line(context.Background(), db, v)
+		if err != nil {
+			t.Fatalf("chunk %d: %v", id, err)
 		}
 		out[id] = raw
 	}
