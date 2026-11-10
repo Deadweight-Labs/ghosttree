@@ -9,8 +9,9 @@ import (
 )
 
 // toolCountSchema (REQ-436): how often a session called ghosttree's tools, one
-// row per session, tool, action, harness and whether a subagent made the call.
-// The table is new; nothing existing changes. session_ref is the harness
+// row per session, tool, action, harness and whether a subagent made the call,
+// kept apart per reporting account so that nobody adds to another account's
+// counts. The table is new; nothing existing changes. session_ref is the harness
 // session id as the hooks and ctx mcp know it, the same value as
 // sessions.external_id once the transcript is uploaded.
 const toolCountSchema = `
@@ -25,7 +26,7 @@ CREATE TABLE IF NOT EXISTS tool_call_counts(
   account_id INTEGER NOT NULL DEFAULT 0,
   first_at TEXT NOT NULL,
   last_at TEXT NOT NULL,
-  PRIMARY KEY(project, session_ref, harness, tool, action, subagent)) WITHOUT ROWID;
+  PRIMARY KEY(project, session_ref, account_id, harness, tool, action, subagent)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS tool_call_counts_session ON tool_call_counts(session_ref);
 `
 
@@ -104,7 +105,7 @@ func (s *Store) RecordToolUses(b ToolUseBatch, account int64) error {
 		}
 		if _, err := tx.Exec(`INSERT INTO tool_call_counts(project, session_ref, harness, tool, action, subagent, calls, account_id, first_at, last_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?)
-			ON CONFLICT(project, session_ref, harness, tool, action, subagent) DO UPDATE SET calls=calls+excluded.calls, last_at=excluded.last_at`,
+			ON CONFLICT(project, session_ref, account_id, harness, tool, action, subagent) DO UPDATE SET calls=calls+excluded.calls, last_at=excluded.last_at`,
 			b.Project, b.SessionRef, b.Harness, u.Tool, u.Action, sub, u.Calls, account, at, at); err != nil {
 			return err
 		}
@@ -200,7 +201,8 @@ func (s *Store) ToolUseStats(projects []string, days int) (ToolUseReport, error)
 		return a.Tool+" "+a.Action+" "+a.Harness < b.Tool+" "+b.Action+" "+b.Harness
 	})
 	hrows, err := s.db.Query(`SELECT se.harness, COUNT(*),
-		SUM(CASE WHEN EXISTS (SELECT 1 FROM tool_call_counts u WHERE u.session_ref=se.external_id) THEN 1 ELSE 0 END)
+		SUM(CASE WHEN EXISTS (SELECT 1 FROM tool_call_counts u WHERE u.session_ref=se.external_id AND u.project=se.project
+			AND (se.account_id=0 OR u.account_id=se.account_id)) THEN 1 ELSE 0 END)
 		FROM sessions se WHERE se.project IN (`+in+`) AND se.last_seen_at >= ?
 		GROUP BY se.harness ORDER BY se.harness`, q...)
 	if err != nil {
@@ -219,13 +221,14 @@ func (s *Store) ToolUseStats(projects []string, days int) (ToolUseReport, error)
 	return rep, hrows.Err()
 }
 
-// RecordToolUses stores a report for a project the caller may upload sessions
-// to.
+// RecordToolUses stores a report for a project the caller may write knowledge
+// in: the counts appear in the project's statistics, so a stranger or a guest
+// must not add to them. A session without a project role is not counted.
 func (a *ProjectAccess) RecordToolUses(b ToolUseBatch) error {
 	if err := b.Validate(); err != nil {
 		return err
 	}
-	if err := a.Check(b.Project, ResSessionMeta, ActCreate, Object{Own: true}); err != nil {
+	if err := a.Check(b.Project, ResKnowledge, ActCreate, Object{Own: true}); err != nil {
 		return err
 	}
 	return a.st.RecordToolUses(b, a.account)

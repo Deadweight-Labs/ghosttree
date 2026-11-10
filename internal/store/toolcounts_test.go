@@ -61,6 +61,17 @@ func TestToolUseStatsCountCallsAndSilentSessions(t *testing.T) {
 		}
 	}
 
+	// Another account reporting under the same session id neither adds to
+	// these counts nor makes the silent session look busy.
+	if err := st.RecordToolUses(ToolUseBatch{Project: actorProject, SessionRef: "s-silent", Harness: "claude", Uses: []ToolUse{
+		{Tool: "context_search", Action: "search", Calls: 7},
+	}}, 2); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := st.ToolUseStats([]string{actorProject}, 30); err != nil || again.Silent != 1 {
+		t.Fatalf("a foreign report changed the silent count: %+v %v", again, err)
+	}
+
 	// Another project's viewer sees nothing of these.
 	if other, err := st.ToolUseStats([]string{"github.com/other/repo"}, 30); err != nil || other.Since != "" || len(other.Lines) != 0 {
 		t.Fatalf("other project: %+v %v", other, err)
