@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
 )
@@ -162,7 +163,9 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 		return rep, err
 	}
 	w := redactWork{db: db, ctx: ctx, write: !opts.DryRun, lits: opts.Literals, has: has,
-		harness: map[int64]string{}, retitled: map[int64]struct{}{}, requoted: map[string]struct{}{}}
+		harness: map[int64]string{}, retitled: map[int64]struct{}{}, requoted: map[string]struct{}{},
+		raw: rawStateFor(db)}
+	w.enc = w.raw.encoder(ctx, db)
 	if w.sessionVectors, err = hasSessionEmbeddingTables(ctx, db); err != nil {
 		return rep, err
 	}
@@ -211,9 +214,13 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 		}
 		for rows.Next() {
 			var e redactEdit
-			if err := rows.Scan(&e.id, &e.session, &e.seq, &e.oldText, &e.oldRaw); err != nil {
+			if err := rows.Scan(&e.id, &e.session, &e.seq, &e.oldText, &e.stored); err != nil {
 				rows.Close()
 				return fail(err)
+			}
+			if e.oldRaw, err = w.raw.line(ctx, db, e.stored); err != nil {
+				rows.Close()
+				return fail(fmt.Errorf("chunk %d: %w", e.id, err))
 			}
 			read++
 			last = e.id
@@ -355,10 +362,13 @@ type redactEdit struct {
 	seq         int
 	oldText     string
 	oldRaw      string
-	newText     string
-	newRaw      string
-	textKinds   map[string]int64
-	rawKinds    map[string]int64
+	// stored ist raw, wie es gelesen wurde (gepackt oder nicht); das UPDATE
+	// vergleicht damit.
+	stored    rawcodec.Value
+	newText   string
+	newRaw    string
+	textKinds map[string]int64
+	rawKinds  map[string]int64
 }
 
 type redactBatch struct {
@@ -377,6 +387,8 @@ type maintQueryer interface {
 type redactWork struct {
 	db  *sql.DB
 	ctx context.Context
+	raw *rawState
+	enc *rawcodec.Encoder
 	// write is false for a dry run: the same steps run, nothing is written.
 	write                                 bool
 	chunksFTS, index, evidence, sightings bool
@@ -454,11 +466,11 @@ func (w *redactWork) apply(edits []redactEdit) (redactBatch, error) {
 		var err error
 		switch {
 		case textChanged && rawChanged:
-			n, err = w.exec(q, `UPDATE session_chunks SET text=?, raw=? WHERE id=? AND text=? AND raw=?`, e.newText, e.newRaw, e.id, e.oldText, e.oldRaw)
+			n, err = w.exec(q, `UPDATE session_chunks SET text=?, raw=? WHERE id=? AND text=? AND raw=?`, e.newText, w.enc.Encode(e.newRaw), e.id, e.oldText, e.stored.Stored())
 		case textChanged:
 			n, err = w.exec(q, `UPDATE session_chunks SET text=? WHERE id=? AND text=?`, e.newText, e.id, e.oldText)
 		default:
-			n, err = w.exec(q, `UPDATE session_chunks SET raw=? WHERE id=? AND raw=?`, e.newRaw, e.id, e.oldRaw)
+			n, err = w.exec(q, `UPDATE session_chunks SET raw=? WHERE id=? AND raw=?`, w.enc.Encode(e.newRaw), e.id, e.stored.Stored())
 		}
 		if err != nil {
 			return res, err

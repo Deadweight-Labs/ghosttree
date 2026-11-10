@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
 )
@@ -822,9 +824,14 @@ func (s *Store) SessionWindow(id int64, from, around, limit int) (Window, error)
 	var w Window
 	for rows.Next() {
 		var c Chunk
-		if err := rows.Scan(&c.Seq, &c.Role, &c.Text, &c.Raw); err != nil {
+		var raw rawcodec.Value
+		if err := rows.Scan(&c.Seq, &c.Role, &c.Text, &raw); err != nil {
 			rows.Close()
 			return Window{}, err
+		}
+		if c.Raw, err = s.rawLine(raw); err != nil {
+			rows.Close()
+			return Window{}, fmt.Errorf("session %d chunk %d: %w", id, c.Seq, err)
 		}
 		w.Chunks = append(w.Chunks, c)
 	}
