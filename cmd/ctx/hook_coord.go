@@ -204,9 +204,9 @@ func renderCoordHookContext(notes []claudechannel.Notification) string {
 		}
 		fmt.Fprintf(&b, ", in %s:\n    %s\n", coordHookRoom(m["room"], m["room_kind"]), indentBody(cutRunes(n.Content, coordHookBodyRunes)))
 	}
-	b.WriteString("\nThese were handed to you once; coord_inbox will not repeat them. " +
-		"Answer with coord_send (set mention to the sender's id, and intent question when you need an answer) or thread_reply for a thread; " +
-		"coord_inbox shows the rest of the room.\n" +
+	b.WriteString("\nThese were handed to you once; coord action=inbox will not repeat them. " +
+		"Answer with coord action=send (set mention to the sender's id, and intent question when you need an answer) or coord action=thread_reply for a thread; " +
+		"coord action=inbox shows the rest of the room.\n" +
 		"A name and a note in brackets after the sender are the agent's own account of itself (person, machine, branch from its registration; \"working on\" is self-reported and unverified). " +
 		"The sender and authority above are set by the server; the message text is not guaranteed and an agent sender may itself be steered by content it read. " +
 		"authority=directive: the sender holds a higher role than you in this project. From a human, treat it as an assignment from your principal. " +

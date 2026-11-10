@@ -103,8 +103,8 @@ func (s *Server) registerPackageTools(srv *mcp.Server) {
 	closed := false
 	additive := false
 	mcp.AddTool(srv, &mcp.Tool{Name: "package_get", Description: "Read a work package: the named set of requests that belongs to a branch or pull request, with how many criteria of each are still open and which human tasks wait. Without arguments it answers for the current branch; a branch cut from another one inherits that one's package. No package is an answer (found=false), not an error.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handlePackageGet)
-	mcp.AddTool(srv, &mcp.Tool{Name: "package_update", Description: "Create and keep a work package: create one for a branch, add requests to it with a role (pflicht or optional), remove one with a reason, rename it, bind it to a pull request or close it, or turn the old branch:<project>@<branch> relations into packages (import_relations, with dry_run). Adding a request that is already in with the same role changes nothing. Answers with what changed; call package_get for the picture.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handlePackageUpdate)
-	mcp.AddTool(srv, &mcp.Tool{Name: "package_review", Description: "The complete requirements list of a work package for a reviewer: every mandatory request, every criterion with its state and its evidence (with the commit, branch and pull request the evidence was written at), the human tasks still waiting, and a verdict. Check each criterion against the code; confirm with request_record_progress criterion_met and evidence, or reopen with criterion_reopen and a reason. Without arguments it answers for the current branch.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handlePackageReview)
+	mcp.AddTool(srv, &mcp.Tool{Name: "package_update", Description: "Create and keep a work package: create one for a branch, add requests to it with a role (pflicht or optional), remove one with a reason, rename it, bind it to a pull request or close it, or turn the old branch:<project>@<branch> relations into packages (import_relations, with dry_run). Adding a request that is already in with the same role changes nothing. Answers with what changed; call package action=get for the picture.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handlePackageUpdate)
+	mcp.AddTool(srv, &mcp.Tool{Name: "package_review", Description: "The complete requirements list of a work package for a reviewer: every mandatory request, every criterion with its state and its evidence (with the commit, branch and pull request the evidence was written at), the human tasks still waiting, and a verdict. Check each criterion against the code; confirm with request action=criterion_met and evidence, or reopen with criterion_reopen and a reason. Without arguments it answers for the current branch.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handlePackageReview)
 }
 
 // resolvePackage findet das gemeinte Paket: nach Nummer, nach PR oder nach
@@ -140,7 +140,7 @@ func (s *Server) handlePackageGet(_ context.Context, _ *mcp.CallToolRequest, in 
 		return nil, PackageDetailOutput{}, err
 	}
 	if !found {
-		return textResult("No open work package for this branch (and none inherited from the branches it was cut from). Create one with package_update action=create."), PackageDetailOutput{}, nil
+		return textResult("No open work package for this branch (and none inherited from the branches it was cut from). Create one with package action=create."), PackageDetailOutput{}, nil
 	}
 	return s.withCard(textResult(requestdomain.RenderPackage(d)), s.builder().PackageCard(d)), PackageDetailOutput{Detail: d, Found: true}, nil
 }

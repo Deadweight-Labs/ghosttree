@@ -215,7 +215,7 @@ func renderDoc(e Entry, g store.GhostFile, described bool, f Freshness, reviewed
 			return b.String()
 		}
 		b.WriteString("(keine Beschreibung)\n\n")
-		b.WriteString("No description for this path yet. Whoever touches it next can write one with `context_describe_file`.\n\n")
+		b.WriteString("No description for this path yet. Whoever touches it next can write one with `context_remember action=describe_file`.\n\n")
 		return b.String()
 	}
 	date := g.DescribedAt

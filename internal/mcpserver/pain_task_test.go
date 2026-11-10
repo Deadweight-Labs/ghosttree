@@ -150,7 +150,7 @@ func TestHumanTaskToolsOverTheWire(t *testing.T) {
 		t.Errorf("secret over MCP: %v %s", failed, got)
 	}
 	// Ohne request_id und ohne laufende Arbeit: eine Auskunft, die den Weg nennt.
-	if got, failed := callTool(t, session, "human_task_create", map[string]any{"kind": "action", "title": "Handgriff"}); !failed || !strings.Contains(got, "request_start_work") {
+	if got, failed := callTool(t, session, "human_task_create", map[string]any{"kind": "action", "title": "Handgriff"}); !failed || !strings.Contains(got, "request action=start_work") {
 		t.Errorf("no request: %v %s", failed, got)
 	}
 	// Mit laufender Arbeit der Session ergibt sich der Request von selbst.

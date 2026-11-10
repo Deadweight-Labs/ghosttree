@@ -44,7 +44,7 @@ func renderInterrupted(threads []store.InterruptedThread, at time.Time) string {
 	for _, t := range threads {
 		fmt.Fprintf(&b, "- REQ-%d %q — stopped %s", t.RequestID, t.Title, humanSince(t.Since, at))
 		if t.Handoff != "" {
-			fmt.Fprintf(&b, ", handoff left: request_get %d\n", t.RequestID)
+			fmt.Fprintf(&b, ", handoff left: request action=get request_id=%d\n", t.RequestID)
 			continue
 		}
 		b.WriteString(", no handoff was left.\n")

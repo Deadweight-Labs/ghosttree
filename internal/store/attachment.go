@@ -122,7 +122,7 @@ func (a *ProjectAccess) Attach(in AttachInput) (idea.AttachmentMeta, error) {
 		}
 		if !a.st.threadLinkedToIdea(in.ThreadID, in.SubjectID) {
 			a.Filtered()
-			return idea.AttachmentMeta{}, requestdomain.NewRuleError("thread_not_found", "no such discussion on this idea", "open the discussion with thread_open and link_kind idea", nil)
+			return idea.AttachmentMeta{}, requestdomain.NewRuleError("thread_not_found", "no such discussion on this idea", "open the discussion with coord action=thread_open and link_kind idea", nil)
 		}
 		ownerRef = strconv.FormatInt(in.ThreadID, 10)
 	default:

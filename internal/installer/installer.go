@@ -25,6 +25,10 @@ const (
 // the source tree.
 const ruleText = `## ghosttree
 
+ghosttree has twelve MCP tools; each takes an ` + "`action`" + `: ` + "`context_search`" + `,
+` + "`context_get`" + `, ` + "`context_remember`" + `, ` + "`request`" + `, ` + "`pain`" + `, ` + "`idea`" + `, ` + "`coord`" + `,
+` + "`human_task`" + `, ` + "`package`" + `, ` + "`feature`" + `, ` + "`runbook`" + `, ` + "`comment`" + `.
+
 Code comments explain code to humans. Operational history, failed approaches
 and session notes belong in ghosttree via the ` + "`context_remember`" + ` MCP tool
 rather than in source comments. Search prior knowledge with ` + "`context_search`" + `
@@ -34,12 +38,12 @@ before working in another subtree.
 Search before you write. When a known state changes, supersede the old entry
 (` + "`context_remember`" + ` with ` + "`supersedes`" + ` and ` + "`supersede_reason`" + `) instead of adding
 a follow-up that leaves both active. When what an entry describes no longer
-exists, retire it with ` + "`context_retire`" + ` and a reason.
+exists, retire it with ` + "`context_remember action=retire`" + ` and a reason.
 
 What a file or directory DOES belongs in its ghost file. Whenever you are about
 to write an explanatory comment that serves later readers more than the person
 in front of you — and whenever you create a file — put that text at the path
-instead, with ` + "`context_describe_file`" + `. This replaces the comment; it does not
+instead, with ` + "`context_remember action=describe_file`" + `. This replaces the comment; it does not
 forbid it.
 
 What ghosttree knows about this repository is also on disk, under ` + "`.ghosttree/`" + `:
@@ -60,52 +64,52 @@ document worktree. Create or import them with ` + "`ctx doc new`" + ` and
 the source tree clean; never commit specs or plans as internal working files.
 
 For substantial feature, architecture, migration, or multi-session work, use
-` + "`request_search`" + ` before implementation. Continue a matching request and
+` + "`request action=search`" + ` before implementation. Continue a matching request and
 associate the current session, or create a request with explicit acceptance
 criteria. Trivial local fixes and routine maintenance do not require a request.
 Mark criteria and requests complete only with concrete evidence.
 
 Messages to you from people and agents in this project arrive in the hook
 context, under "ghosttree: new messages for you", once each. Answer with
-` + "`thread_reply`" + ` inside a thread or ` + "`coord_send`" + ` (set ` + "`mention`" + ` to the
-sender); ` + "`coord_inbox`" + ` lists everything in the room and marks what is
+` + "`coord action=thread_reply`" + ` inside a thread or ` + "`coord action=send`" + ` (set ` + "`mention`" + ` to the
+sender); ` + "`coord action=inbox`" + ` lists everything in the room and marks what is
 addressed to you. Write ` + "`@name`" + ` in a message to address a person or agent.
 
-When you start work on a PR or branch, say so with ` + "`coord_status`" + ` (one
+When you start work on a PR or branch, say so with ` + "`coord action=status`" + ` (one
 sentence, at most 200 characters, for example "PR #77 feat/mac-sync, room sync");
 update it when it changes and clear it with an empty note when you are done.
-Others see it as self-reported next to your name in ` + "`coord_peers`" + ` and on your
+Others see it as self-reported next to your name in ` + "`coord action=peers`" + ` and on your
 messages. Never put a secret in it. ` + "`@agents`" + ` in a message reaches every agent
 of the project seen working in the last 15 minutes.
 
-A problem without a solution belongs in ` + "`pain_record`" + `, not in a request
+A problem without a solution belongs in ` + "`pain action=record`" + `, not in a request
 (requests need criteria). Never set a pain to resolved just because a request
-is finished: use ` + "`pain_update`" + ` with evidence, and for mitigated with ` + "`remaining`" + `.
+is finished: use ` + "`pain action=update`" + ` with evidence, and for mitigated with ` + "`remaining`" + `.
 
-A wish you voice in passing, without working it out, belongs in ` + "`idea_record`" + `
-(look in ` + "`idea_search`" + ` first); ` + "`idea_update`" + ` with promote makes a request of it.
+A wish you voice in passing, without working it out, belongs in ` + "`idea action=record`" + `
+(look in ` + "`idea action=search`" + ` first); ` + "`idea action=promote`" + ` makes a request of it.
 ` + "`context_search`" + ` also takes qualifiers (is:open, label:bug, area:internal/store,
-pr:12, branch:...; the tool description lists them), and ` + "`search_preset`" + ` runs saved
+pr:12, branch:...; the tool description lists them), and ` + "`context_search action=preset_run`" + ` runs saved
 searches such as pr-ergebnis (what was done in a pull request).
 
 What only the human can provide (a key, a file, a decision, a manual step) you
-create with ` + "`human_task_create`" + `, with where it lives and how to check it, instead
+create with ` + "`human_task action=create`" + `, with where it lives and how to check it, instead
 of saying it in chat. Never write a secret or file contents into it, only where
 it lives; token patterns are refused (a heuristic, not a guarantee). Never set
 a task to done yourself. Check what the human marked done, then call
-` + "`human_task_resolve`" + ` with confirm or reopen.
+` + "`human_task`" + ` with action confirm or reopen.
 
 Give a task ` + "`steps`" + ` (numbered, one line each, with a link where a page helps) and an
 ` + "`explanation`" + `: the person then gets a checklist, and nothing is generated for the task
 later. Every answer about one object ends with its web link and a short card; hand
-that link to the person instead of describing where to click. ` + "`open_link`" + ` gives link
+that link to the person instead of describing where to click. ` + "`context_get action=link`" + ` gives link
 and card for REQ-n, TASK-n, PAIN-n, #id, pr:n or preset:name values. Short commands:
 ` + "`/ghost open|task|req|preset`" + ` in Claude Code, ` + "`$ghost ...`" + ` in Codex.
 
 The people who read what you write change things but do not dive into every small
 finding of an agent. So give each entry a short ` + "`explanation`" + `: ` + "`context_remember`" + `
-(every entry), ` + "`request_create`" + `, ` + "`pain_record`" + `, ` + "`human_task_create`" + `, and
-` + "`coord_send`" + ` with intent question. Two to four plain sentences in the language
+(every entry), ` + "`request action=create`" + `, ` + "`pain action=record`" + `, ` + "`human_task action=create`" + `, and
+` + "`coord action=send`" + ` with intent question. Two to four plain sentences in the language
 the project's people use: what it is about in everyday words, why it matters
 (who it affects, when), what has to be done or decided, and your recommendation.
 No markdown, no secret. You know the context; a text the server generates later
