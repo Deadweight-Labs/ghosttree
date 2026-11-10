@@ -500,9 +500,9 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	// verborgenen Sessions: wer nicht alles lesen darf, bekommt die Reihenfolge
 	// nur aus der lesbaren Menge (Trefferzahl, dann Aktualität).
 	restricted := !pa.ReadsAll()
-	rankExpr := "0"
+	rank := ""
 	if q.Sort != "newest" && !restricted {
-		rankExpr = "bm25(sess_fts, 2.0, 0.5, 1.0, 0.5)"
+		rank = sessionWeights
 	}
 	// Wenige lesbare Sessions: von ihren Chunks aus suchen. Viele: von den
 	// Treffern aus, die Session steht in der schmalen Zuordnung chunk_index_chunk;
@@ -511,16 +511,16 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	var rows *sql.Rows
 	switch {
 	case len(readable) <= smallReadableSet || !s.hasChunkMap():
-		rows, err = s.db.QueryContext(ctx, `WITH h AS MATERIALIZED (SELECT rowid AS rid, `+rankExpr+` AS r FROM sess_fts WHERE sess_fts MATCH ?)
+		rows, err = s.db.QueryContext(ctx, `WITH h AS MATERIALIZED (`+wordHits(rank)+`)
 		SELECT ci.session_id, MIN(h.r), COUNT(*)
 		FROM h JOIN chunk_index ci ON ci.chunk_id = h.rid
 		WHERE ci.session_id IN (SELECT value FROM json_each(?))
-		GROUP BY ci.session_id`, expr, idsJSON(readable))
+		GROUP BY ci.session_id`, append(wordArgs(expr), idsJSON(readable))...)
 	default:
-		rows, err = s.db.QueryContext(ctx, `WITH h AS MATERIALIZED (SELECT rowid AS rid, `+rankExpr+` AS r FROM sess_fts WHERE sess_fts MATCH ?)
+		rows, err = s.db.QueryContext(ctx, `WITH h AS MATERIALIZED (`+wordHits(rank)+`)
 		SELECT ci.session_id, MIN(h.r), COUNT(*)
 		FROM h CROSS JOIN chunk_index ci INDEXED BY chunk_index_chunk ON ci.chunk_id = h.rid
-		GROUP BY ci.session_id`, expr)
+		GROUP BY ci.session_id`, wordArgs(expr)...)
 	}
 	if err != nil {
 		return SearchPage{}, err
@@ -669,8 +669,8 @@ func (s *Store) hitsFor(ctx context.Context, pa *ProjectAccess, page []matchedSe
 	rows, err := s.db.QueryContext(ctx, `SELECT ci.session_id, ci.chunk_id, ci.seq, ci.role, 0
 		FROM chunk_index ci INDEXED BY chunk_index_session
 		WHERE ci.session_id IN (SELECT value FROM json_each(?))
-		AND ci.chunk_id IN (SELECT rowid FROM sess_fts WHERE sess_fts MATCH ?)
-		ORDER BY ci.session_id, ci.seq`, idsJSON(sessions), expr)
+		AND ci.chunk_id IN (SELECT rid FROM (`+wordHits("")+`))
+		ORDER BY ci.session_id, ci.seq`, append([]any{idsJSON(sessions)}, wordArgs(expr)...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -698,26 +698,8 @@ func (s *Store) hitsFor(ctx context.Context, pa *ProjectAccess, page []matchedSe
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	chunkJSON, _ := json.Marshal(chunkIDs)
-	snips := map[int64][4]string{}
-	srows, err := s.db.QueryContext(ctx, `SELECT rowid,
-		snippet(sess_fts, 0, char(2), char(3), '…', 18), snippet(sess_fts, 1, char(2), char(3), '…', 18),
-		snippet(sess_fts, 2, char(2), char(3), '…', 18), snippet(sess_fts, 3, char(2), char(3), '…', 18)
-		FROM sess_fts WHERE sess_fts MATCH ? AND rowid IN (SELECT value FROM json_each(?))`, expr, string(chunkJSON))
+	snips, err := s.chunkSnippets(ctx, expr, chunkIDs, "\x02", "\x03", 18)
 	if err != nil {
-		return nil, err
-	}
-	for srows.Next() {
-		var id int64
-		var c [4]string
-		if err := srows.Scan(&id, &c[0], &c[1], &c[2], &c[3]); err != nil {
-			srows.Close()
-			return nil, err
-		}
-		snips[id] = c
-	}
-	srows.Close()
-	if err := srows.Err(); err != nil {
 		return nil, err
 	}
 	allowed := kindColumns(kind)
@@ -881,8 +863,8 @@ func (s *Store) SessionHits(pa *ProjectAccess, sess Session, q, kind string) ([]
 	if expr == "" {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(s.ctx(), `SELECT ci.seq FROM sess_fts JOIN chunk_index ci ON ci.chunk_id = sess_fts.rowid
-		WHERE sess_fts MATCH ? AND ci.session_id = ? ORDER BY ci.seq`, expr, sess.ID)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT ci.seq FROM (`+wordHits("")+`) h JOIN chunk_index ci ON ci.chunk_id = h.rid
+		WHERE ci.session_id = ? ORDER BY ci.seq`, append(wordArgs(expr), sess.ID)...)
 	if err != nil {
 		return nil, err
 	}
@@ -904,7 +886,7 @@ func (s *Store) SessionOutline(id int64) ([]transcript.Prompt, error) {
 	if s.reader != nil {
 		return s.reader.SessionOutline(id)
 	}
-	rows, err := s.db.QueryContext(s.ctx(), `SELECT seq, is_prompt, tool_calls, ts, CASE WHEN is_prompt=1 THEN text ELSE '' END
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT seq, is_prompt, tool_calls, ts, CASE WHEN is_prompt=1 THEN `+promptTextCol+` ELSE '' END
 		FROM chunk_index WHERE session_id=? AND (is_prompt=1 OR tool_calls>0) ORDER BY seq`, id)
 	if err != nil {
 		return nil, err

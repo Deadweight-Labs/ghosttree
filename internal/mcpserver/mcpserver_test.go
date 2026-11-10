@@ -158,7 +158,7 @@ func TestSearchAllProjectsFindsSessionsFromAnotherProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the vitest suite hangs on teardown", Raw: "{}"}}); err != nil {
+	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the vitest suite hangs on teardown", Raw: promptRaw("claude-code", "the vitest suite hangs on teardown")}}); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
@@ -192,7 +192,7 @@ func TestSessionsToolReachesOtherProjectsOnRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the vitest suite hangs on teardown", Raw: "{}"}}); err != nil {
+	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the vitest suite hangs on teardown", Raw: promptRaw("claude-code", "the vitest suite hangs on teardown")}}); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
@@ -480,7 +480,7 @@ func TestSessionsTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the livekit sfu keeps dropping", Raw: "{}"}}); err != nil {
+	if err := c.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the livekit sfu keeps dropping", Raw: promptRaw("codex", "the livekit sfu keeps dropping")}}); err != nil {
 		t.Fatal(err)
 	}
 	res, _, err := s.handleSessions(context.Background(), nil, SessionsInput{Query: "livekit"})

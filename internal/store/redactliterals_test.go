@@ -94,6 +94,7 @@ func seedLiterals(t *testing.T, s *Store) (sessions [4]int64) {
 			t.Fatal(err)
 		}
 	}
+	legacySearchLayout(t, s)
 	if _, err := s.db.Exec(`UPDATE sessions SET title='Notizen zu fakeWRD' WHERE id=?`, d); err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +236,7 @@ func TestRedactSessionsLiteralsCleanEveryCopy(t *testing.T) {
 			if rep.Tables["knowledge_evidence.quote"] != 3 || rep.Tables["request_sightings.quote"] != 1 {
 				t.Errorf("quotes = %v", rep.Tables)
 			}
-			if !reflect.DeepEqual(rep.Optimized, []string{"chunks_fts", "sess_fts"}) || rep.Checkpoint == "" {
+			if !reflect.DeepEqual(rep.Optimized, []string{"chunks_fts", "sess_fts", "chunk_fts"}) || rep.Checkpoint == "" {
 				t.Fatalf("optimized %v, checkpoint %q", rep.Optimized, rep.Checkpoint)
 			}
 
@@ -303,7 +304,7 @@ func TestRedactSessionsLiteralsCleanEveryCopy(t *testing.T) {
 			}
 
 			// No search finds the values, in no index and not in the segments either.
-			for _, table := range []string{"chunks_fts", "sess_fts"} {
+			for _, table := range []string{"chunks_fts", "sess_fts", "chunk_fts"} {
 				for _, word := range literalTokens {
 					if n := ftsHits(t, read, table, word); n != 0 {
 						t.Errorf("%s MATCH %q: %d hits", table, word, n)
@@ -313,7 +314,7 @@ func TestRedactSessionsLiteralsCleanEveryCopy(t *testing.T) {
 					}
 				}
 			}
-			if ftsHits(t, read, "chunks_fts", "notiert") != 1 || ftsHits(t, read, "sess_fts", "durchgesickerte") != 1 {
+			if ftsHits(t, read, "chunks_fts", "notiert") != 1 || wordCount(t, read, "durchgesickerte") != 1 {
 				t.Error("the index lost entries that were not touched")
 			}
 			checkIntegrity(t, read)

@@ -788,33 +788,44 @@ func (s *Store) SearchRequestSessions(requestID int64, query string, limit int, 
 			return requestdomain.SessionPage{}, requestdomain.NewRuleError("invalid_cursor", "session search cursor is invalid", "use the opaque cursor returned by the previous page", nil)
 		}
 	}
-	rows, err := s.db.Query(`SELECT se.id,c.seq,se.harness,w.state,w.summary,
-		snippet(chunks_fts,0,'','','…',12)
-		FROM chunks_fts f
-		JOIN session_chunks c ON c.id=f.rowid
-		JOIN sessions se ON se.id=c.session_id
+	expr := ftsQuery(query)
+	rows, err := s.db.Query(`SELECT se.id,ci.seq,se.harness,w.state,w.summary,ci.chunk_id
+		FROM (`+wordHits("")+`) h
+		JOIN chunk_index ci ON ci.chunk_id=h.rid
+		JOIN sessions se ON se.id=ci.session_id
 		JOIN request_work w ON w.session_id=se.id AND w.request_id=?
-		WHERE chunks_fts MATCH ? AND (?=0 OR se.id<? OR (se.id=? AND c.seq<?))
-		ORDER BY se.id DESC,c.seq DESC LIMIT ?`, requestID, ftsQuery(query), cursorSession, cursorSession, cursorSession, cursorSeq, limit+1)
+		WHERE (?=0 OR se.id<? OR (se.id=? AND ci.seq<?))
+		ORDER BY se.id DESC,ci.seq DESC LIMIT ?`, append(wordArgs(expr), requestID, cursorSession, cursorSession, cursorSession, cursorSeq, limit+1)...)
 	if err != nil {
 		return requestdomain.SessionPage{}, err
 	}
 	defer rows.Close()
 	var page requestdomain.SessionPage
+	var cids []int64
 	for rows.Next() {
 		var hit requestdomain.SessionHit
-		if err := rows.Scan(&hit.SessionID, &hit.ChunkSeq, &hit.Harness, &hit.Outcome, &hit.Handoff, &hit.Snippet); err != nil {
+		var cid int64
+		if err := rows.Scan(&hit.SessionID, &hit.ChunkSeq, &hit.Harness, &hit.Outcome, &hit.Handoff, &cid); err != nil {
 			return page, err
 		}
 		page.Results = append(page.Results, hit)
+		cids = append(cids, cid)
 	}
 	if err := rows.Err(); err != nil {
 		return page, err
 	}
+	rows.Close()
 	if len(page.Results) > limit {
 		last := page.Results[limit-1]
 		page.NextCursor = fmt.Sprintf("%d:%d", last.SessionID, last.ChunkSeq)
-		page.Results = page.Results[:limit]
+		page.Results, cids = page.Results[:limit], cids[:limit]
+	}
+	snips, err := s.chunkSnippets(s.ctx(), expr, cids, "\x02", "\x03", 12)
+	if err != nil {
+		return page, err
+	}
+	for i := range page.Results {
+		page.Results[i].Snippet = plainSnippet(snips[cids[i]])
 	}
 	return page, nil
 }
