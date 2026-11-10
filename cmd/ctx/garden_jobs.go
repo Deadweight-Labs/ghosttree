@@ -12,13 +12,14 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-// What jobs 4 (the ledger) and 1 (the ghosts) read from the server. Both only read:
-// the client of the gardener has no call here that changes a request or a ghost.
+// What jobs 4 (the ledger) and 1 (the ghosts) read from the server. Nothing here
+// changes a request; the ghosts are written through garden.GhostWriter.
 type gardenReader interface {
 	SearchRequests(filter requestdomain.SearchFilter) (requestdomain.SearchPage, error)
 	GetRequest(id int64) (requestdomain.Detail, error)
 	GhostTree(project, prefix string) ([]store.GhostFile, error)
 	GhostReviews(project, prefix string) ([]store.GhostReview, error)
+	GhostChain(project, path string, limit int) ([]store.GhostVersion, error)
 }
 
 const (
@@ -28,6 +29,12 @@ const (
 	requestsScanned = 300
 	// requestsPage is the most the server returns in one page.
 	requestsPage = 25
+	// ghostChainDepth reads the whole history of a description (0 = no limit), as
+	// the server does when it holds a text of the gardener to the paragraphs of
+	// others: with less, the two could attribute a paragraph differently.
+	ghostChainDepth = 0
+	// mergeMarkKey is the one key under garden.GhostMergeState.
+	mergeMarkKey = 1
 )
 
 // gardenJobs is what a run takes up besides the knowledge entries.
@@ -38,6 +45,9 @@ type gardenJobs struct {
 	Ghosts         []garden.GhostPath
 	GhostRotation  garden.GhostRotation
 	Samples        []garden.GhostSample
+	// MergesDone is true when every path the merges up to HEAD brought is in
+	// Ghosts, so the run may move the merge mark there once they are written.
+	MergesDone bool
 }
 
 // gardenRequests reads the open requests of the project with their criteria and
@@ -132,10 +142,42 @@ func planGardenJobs(st gardenStore, repo *garden.Repo, project string, opts gard
 			return j
 		}
 		seen := gardenSeen(opts.State, garden.GhostState(project), stdout)
-		j.Ghosts, j.GhostRotation = garden.SelectGhosts(repo, described, empty, seen, existing, opts.Ghosts)
+		since := ""
+		if m, ok := gardenSeen(opts.State, garden.GhostMergeState(project), stdout)[mergeMarkKey]; ok {
+			since = m.Commit
+		}
+		merged, err := repo.Merged(since)
+		if err != nil {
+			fmt.Fprintf(stdout, "cannot read the merges since %s: %v (the description job takes no merges this run)\n", shortSHA(since), err)
+			merged = nil
+		}
+		j.Ghosts, j.GhostRotation = garden.SelectGhosts(repo, described, empty, seen, existing, merged, opts.Ghosts)
+		j.MergesDone = err == nil && j.GhostRotation.MergedLeft == 0
+		for i, g := range j.Ghosts {
+			if g.Old == "" {
+				continue
+			}
+			// Without the history nothing can be told apart, and Attribute then keeps
+			// every paragraph as somebody else's.
+			chain, cerr := st.GhostChain(project, g.Path, ghostChainDepth)
+			if cerr != nil {
+				fmt.Fprintf(stdout, "history of %s not read: %v (every paragraph of it is kept)\n", g.Path, cerr)
+			}
+			j.Ghosts[i].Prior = ghost.Attribute(g.Old, chain)
+		}
 		j.Samples = garden.PickSamples(described, j.Ghosts)
 	}
 	return j
+}
+
+func shortSHA(c string) string {
+	if c == "" {
+		return "the last run"
+	}
+	if len(c) > 7 {
+		return c[:7]
+	}
+	return c
 }
 
 // gardenSeen reads the check memory under one name; without a memory nothing was seen.

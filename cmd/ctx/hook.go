@@ -756,9 +756,9 @@ func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Fresh
 	if writing {
 		switch {
 		case !describedTarget:
-			fmt.Fprintf(&b, "This path has no description. If your change would produce an explanatory comment, write it to %s with `context_remember action=describe_file` instead.\n", target)
+			fmt.Fprintf(&b, "This path has no description; the gardener writes one after the merge. If your change would produce an explanatory comment about something the code does not show, write it to %s with `context_remember action=describe_file` instead.\n", target)
 		case fresh[target].State == "stale" || fresh[target].State == "unknown":
-			fmt.Fprintf(&b, "The description of %s is out of date. Update it after your change with `context_remember action=describe_file`.\n", target)
+			fmt.Fprintf(&b, "The description of %s is out of date; the gardener revises it after the merge. Add with `context_remember action=describe_file` only what the code does not show.\n", target)
 		}
 	}
 	return b.String()

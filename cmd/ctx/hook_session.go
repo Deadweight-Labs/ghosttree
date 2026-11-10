@@ -288,7 +288,7 @@ func renderTurnReminder(edited []string) string {
 	return "ghosttree: this session changed " + strings.Join(names, ", ") + more +
 		" but recorded nothing in ghosttree. Before you finish, keep what the next session would need, if anything: " +
 		"a pitfall you ran into or a decision you took (with why) -> context_remember; " +
-		"what a new file does -> context_remember action=describe_file; " +
+		"what a file does that the code does not show -> context_remember action=describe_file (the gardener describes new files after the merge); " +
 		"a criterion your change meets -> request action=criterion_met with evidence; " +
 		"a problem you leave unsolved -> pain action=record. " +
 		"If nothing is worth keeping, just finish. This reminder comes once per session."

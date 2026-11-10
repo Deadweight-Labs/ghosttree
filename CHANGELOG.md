@@ -63,6 +63,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   (`--state-file` is required; each namespace's monthly budget is checked
   before every repository); it asks the server what is due
   and reports each run. `ctx garden check-knowledge` keeps working as before.
+- File descriptions are now mainly the gardener's: with `--propose` it writes
+  them itself (harness `gardener`) instead of filing a description note. The
+  files the merges into the default branch brought since its last run come
+  first, anchored on their merge commit, and the directory of a new file
+  follows; a description that no longer fits its file is revised. Paragraphs
+  an agent or a person wrote stay word for word, and the server refuses a text
+  of the gardener that drops one (`kept_paragraphs`). The description sessions
+  run on `--ghost-model` (default `claude-haiku-5-5`) and count against the
+  gardener's budget; `--dry-run` says how many files and directories it would
+  describe and at what estimated cost. Agents are asked to describe a path only
+  when they know something the code does not show; run `ctx install` again to
+  get the new wording of the rule section.
 - Projects now have owners as on GitHub. A write makes a remote a project
   only where nothing is in doubt: the claimed prefix of a connected
   organization the writer is a member of, or the writer's own GitHub login

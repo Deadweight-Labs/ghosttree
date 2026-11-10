@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/garden"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -56,6 +57,11 @@ type gardenFakeStore struct {
 	ghosts      []store.GhostFile
 	reviews     []store.GhostReview
 	requestsErr error
+	// Job 1 writes: the history of each path, the descriptions written with
+	// their anchors, and putErr to make writing fail.
+	chains    map[string][]store.GhostVersion
+	described []store.GhostFile
+	putErr    error
 }
 
 func (f *gardenFakeStore) SearchRequests(flt requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
@@ -84,6 +90,27 @@ func (f *gardenFakeStore) GhostTree(string, string) ([]store.GhostFile, error) {
 
 func (f *gardenFakeStore) GhostReviews(string, string) ([]store.GhostReview, error) {
 	return f.reviews, nil
+}
+
+func (f *gardenFakeStore) GhostChain(_, path string, _ int) ([]store.GhostVersion, error) {
+	return f.chains[path], nil
+}
+
+func (f *gardenFakeStore) PutGhostAnchored(g store.GhostFile, a gitanchor.Anchor) (int64, error) {
+	if f.putErr != nil {
+		return 0, f.putErr
+	}
+	g.GitAnchor = &a
+	f.described = append(f.described, g)
+	// What was written is what the next run reads.
+	kept := f.ghosts[:0:0]
+	for _, old := range f.ghosts {
+		if old.Path != g.Path {
+			kept = append(kept, old)
+		}
+	}
+	f.ghosts = append(kept, g)
+	return int64(len(f.described)), nil
 }
 
 func (f *gardenFakeStore) ProjectKnowledge(string, bool) ([]store.Knowledge, error) {

@@ -71,7 +71,7 @@ var table = []Core{
 		Default: "remember",
 		Actions: []Action{
 			{Name: "remember", Tool: "context_remember", Line: "store an entry (type, title, body, scope_hint; explanation for reviewers; supersedes with supersede_reason replaces older ones). A decision says why, which alternatives were rejected, the tradeoffs. Repo knowledge about a host gets scope_hint project plus machine"},
-			{Name: "describe_file", Tool: "context_describe_file", Line: "what a file or directory does, instead of an explanatory comment (path, description; nothing_to_say when the code says it all). Do it for every file you create"},
+			{Name: "describe_file", Tool: "context_describe_file", Line: "what a file or directory does that the code does not show (intent, limits, connections), instead of an explanatory comment (path, description; nothing_to_say when the code says it all). The gardener describes new and changed files after the merge"},
 			{Name: "retire", Tool: "context_retire", Line: "an entry whose subject no longer exists (id, reason)"},
 			{Name: "supersede", Tool: "context_supersede", Line: "mark an existing entry as the replacement of older ones (id, supersedes, reason)"},
 			{Name: "move", Rare: true, Tool: "context_move", Line: "move an entry to another project, machine or global (id)"},
