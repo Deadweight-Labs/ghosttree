@@ -120,6 +120,9 @@ type SearchInput struct {
 	Since string   `json:"since,omitempty" jsonschema:"only entries written on or after this time: a date (2026-11-01), an RFC3339 time or a relative one such as 7d, 2w, 12h. Entries filed before the origin was recorded count by their creation time"`
 	Until string   `json:"until,omitempty" jsonschema:"only entries written on or before this time, same formats as since; a date includes that whole day"`
 	Area  []string `json:"area,omitempty" jsonschema:"only entries that arose in this area: a path prefix relative to the repository root, such as internal/store. Repeat for several, an entry matching any of them counts. Entries without a recorded origin area are left out"`
+	// Limit was offered by the shared field list of the core tool (sessions takes
+	// it) and refused by the search itself.
+	Limit int `json:"limit,omitempty" jsonschema:"maximum results per area (default 20, at most 50)"`
 }
 
 // searchAxes resolves the project axis a search runs on. Scope separation is
@@ -304,6 +307,19 @@ func textResult(s string) *mcp.CallToolResult {
 // am 2026-08-25 von einem Codex-Prüflauf.
 const searchLimit = 20
 
+// maxSearchLimit caps what one search may ask for per area.
+const maxSearchLimit = 50
+
+func (in SearchInput) resultLimit() int {
+	switch {
+	case in.Limit <= 0:
+		return searchLimit
+	case in.Limit > maxSearchLimit:
+		return maxSearchLimit
+	}
+	return in.Limit
+}
+
 // limitNote sagt, dass eine Liste am Anschlag endet — und nur dann.
 func limitNote(shown, limit int) string {
 	if shown < limit {
@@ -381,7 +397,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	if kind == "" {
 		kind = "all"
 	}
-	limit := searchLimit
+	limit := in.resultLimit()
 	b := s.builder()
 	var areas []searchArea
 	if kind == "knowledge" || kind == "all" {

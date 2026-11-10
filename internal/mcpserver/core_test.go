@@ -16,8 +16,9 @@ import (
 
 // maxToolListBytes is a ceiling on what tools/list sends. It is not a target:
 // it makes growth visible. Before the core tools (REQ-436) the list was
-// 100,709 bytes for 76 tools; raising the ceiling should be a decision.
-const maxToolListBytes = 45_000
+// 100,709 bytes for 76 tools, with them 41,588; raising the ceiling should be
+// a decision.
+const maxToolListBytes = 42_000
 
 // Claude Code cuts a description of a tool it loads up front at 4,096
 // characters.
@@ -41,6 +42,21 @@ func TestToolListShowsOnlyTheCoreToolsLoadedUpFront(t *testing.T) {
 	whole, _ := json.Marshal(res)
 	if len(whole) > maxToolListBytes {
 		t.Errorf("tools/list is %d bytes, over the ceiling of %d", len(whole), maxToolListBytes)
+	}
+	if strings.Contains(string(whole), `"null"`) {
+		t.Errorf("a field of a core tool is listed as nullable; every field may be left out")
+	}
+	for _, tool := range res.Tools {
+		if tool.Name != "pain" {
+			continue
+		}
+		raw, _ := json.Marshal(tool.InputSchema)
+		if n := strings.Count(string(raw), "a request this problem motivates"); n != 1 {
+			t.Errorf("pain describes the items of motivates and link_add %d times, want once", n)
+		}
+		if !strings.Contains(string(raw), "items as in motivates") {
+			t.Errorf("link_add does not say where its items are described")
+		}
 	}
 	hidden := map[string]bool{}
 	for _, name := range coretools.Tools() {
