@@ -575,6 +575,24 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Changed
 
+- A session start no longer waits for the files under `.ghosttree/` to be
+  rewritten. The hook asked the server once per document and several times per
+  discussion before the model saw anything: 71 requests in a small project,
+  1.8 seconds at 25 ms a request. Where the files exist, a process of its own
+  (`ctx hook refresh-files <repo>`) now rewrites them while the session
+  begins, and the hook waits for two requests (79 ms in the same setup). For
+  those seconds the files show the state of the previous session start. A
+  checkout without the files still gets them before the session starts.
+- The hook before a tool call asks the server about runbooks only when a
+  command or path trigger matches. It keeps the triggers of the project for
+  five minutes (`GET /api/runbook-triggers`, under
+  `$XDG_STATE_HOME/ghosttree/runbook-triggers`) and matches them with the
+  server's own rule, so a Bash call that names no file costs no request
+  instead of one. A runbook approved in the meantime reaches the tool hook
+  within those five minutes and the prompt hook at once. A server without the
+  route is asked before every call, as before.
+- A tool call on several paths nothing is known about no longer delivers a
+  line break as context, and no longer counts against the session budget.
 - The MCP server lists twelve core tools instead of 76: `context_search`,
   `context_get`, `context_remember`, `request`, `pain`, `idea`, `coord`,
   `human_task`, `package`, `feature`, `runbook` and `comment`. Each takes an
