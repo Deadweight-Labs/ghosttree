@@ -645,23 +645,24 @@ func (s *Store) readableSessions(filter scope.Axes, keep func(Session) bool, pre
 // ftsSessionHits sind die Chunk-Treffer des Volltexts in der lesbaren Menge, beste
 // zuerst, ohne Ausschnitt und ohne Besitzer; cids sind die Chunk-Nummern dazu.
 func (s *Store) ftsSessionHits(q, excludeSession string, r readableSessions, pre SessionPrefilter, limit int) ([]SessionHit, []int64, error) {
-	args := append([]any{ftsQuery(q), excludeSession, excludeSession}, r.args...)
+	args := append(wordArgs(ftsQuery(q)), excludeSession, excludeSession)
+	args = append(args, r.args...)
 	args = append(args, limit)
 	// bm25 (f.rank) hängt vom ganzen Index ab, auch von verborgenen Sessions:
 	// wer nur eine Teilmenge lesen darf, bekommt die Reihenfolge allein aus
 	// der lesbaren Menge.
 	order := "h.r"
 	if !pre.Unrestricted && r.restricted {
-		order = "COUNT(*) OVER (PARTITION BY se.id) DESC, se.last_seen_at DESC, se.id DESC, c.seq"
+		order = "COUNT(*) OVER (PARTITION BY se.id) DESC, se.last_seen_at DESC, se.id DESC, ci.seq"
 	}
 	// snippet() liest den Text jeder Zeile, die es liefert: in der CTE liefe es
 	// für jeden Treffer des ganzen Index. Sie führt nur Zeile und Rang; den
 	// Ausschnitt gibt es danach für die höchstens limit Ergebniszeilen.
-	rows, err := s.db.QueryContext(s.ctx(), `WITH h AS MATERIALIZED (SELECT rowid AS cid, rank AS r FROM chunks_fts WHERE chunks_fts MATCH ?)
-		SELECT `+prefix(sessionCols, "se.")+`, c.seq, h.cid
+	rows, err := s.db.QueryContext(s.ctx(), `WITH h AS MATERIALIZED (`+wordHits("rank")+`)
+		SELECT `+prefix(sessionCols, "se.")+`, ci.seq, h.rid
 		FROM h
-		JOIN session_chunks c ON c.id = h.cid
-		JOIN sessions se ON se.id = c.session_id
+		JOIN chunk_index ci ON ci.chunk_id = h.rid
+		JOIN sessions se ON se.id = ci.session_id
 		WHERE (? = '' OR se.external_id != ?) AND `+r.where+`
 		ORDER BY `+order+` LIMIT ?`, args...)
 	if err != nil {
@@ -691,23 +692,12 @@ func (s *Store) sessionSnippets(q string, out []SessionHit, cids []int64) error 
 	if len(cids) == 0 {
 		return nil
 	}
-	snips := map[int64]string{}
-	// Je Treffer ein Punktzugriff über rowid; ein IN über json_each nutzte
-	// den FTS5-Index nicht und führte MATCH noch einmal über alles aus.
-	for _, cid := range cids {
-		if _, done := snips[cid]; done {
-			continue
-		}
-		var snip string
-		err := s.db.QueryRow(`SELECT snippet(chunks_fts, 0, '', '', '…', 12) FROM chunks_fts
-			WHERE rowid=? AND chunks_fts MATCH ?`, cid, ftsQuery(q)).Scan(&snip)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		snips[cid] = snip
+	snips, err := s.chunkSnippets(s.ctx(), ftsQuery(q), cids, "\x02", "\x03", 12)
+	if err != nil {
+		return err
 	}
 	for i := range out {
-		out[i].Snippet = snips[cids[i]]
+		out[i].Snippet = plainSnippet(snips[cids[i]])
 	}
 	return nil
 }

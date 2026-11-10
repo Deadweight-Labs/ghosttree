@@ -76,6 +76,7 @@ func seedLiteralDB(t *testing.T) string {
 	if err := s.IndexSession(id); err != nil {
 		t.Fatal(err)
 	}
+	keepChunksFTS(t, s.DB())
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func readLiteralState(t *testing.T, path string) (dump string, hits map[string]i
 	var sb strings.Builder
 	sb.WriteString(chunkTextRaw(t, db))
 	for _, q := range []string{
-		`SELECT text || '|' || thinking || '|' || tool_input || '|' || tool_output FROM chunk_index ORDER BY chunk_id`,
+		`SELECT text || '|' || thinking || '|' || tool_input || '|' || tool_output || '|' || prompt FROM chunk_index ORDER BY chunk_id`,
 		`SELECT title FROM sessions ORDER BY id`,
 	} {
 		rows, err := db.Query(q)
@@ -109,7 +110,7 @@ func readLiteralState(t *testing.T, path string) (dump string, hits map[string]i
 		rows.Close()
 	}
 	hits = map[string]int{}
-	for _, table := range []string{"chunks_fts", "sess_fts"} {
+	for _, table := range []string{"chunks_fts", "chunk_fts"} {
 		for _, word := range []string{"fakewrd", "7ktest", "qdzt", "w0rd", "notiert"} {
 			var n int
 			if err := db.QueryRow(`SELECT count(*) FROM `+table+` WHERE `+table+` MATCH ?`, word).Scan(&n); err != nil {
@@ -168,7 +169,7 @@ func TestRedactSessionsLiteralsCommand(t *testing.T) {
 	path := seedLiteralDB(t)
 	list := writeLiterals(t, 0o600, redactTestLiterals)
 	before, hitsBefore := readLiteralState(t, path)
-	if hitsBefore["chunks_fts fakewrd"] == 0 || hitsBefore["sess_fts fakewrd"] == 0 || hitsBefore["sess_fts w0rd"] == 0 || !strings.Contains(before, redactTestPassword) {
+	if hitsBefore["chunks_fts fakewrd"] == 0 || hitsBefore["chunk_fts fakewrd"] == 0 || hitsBefore["chunk_fts w0rd"] == 0 || !strings.Contains(before, redactTestPassword) {
 		t.Fatalf("the seed does not hold the values where the test looks: %v", hitsBefore)
 	}
 
@@ -186,7 +187,7 @@ func TestRedactSessionsLiteralsCommand(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("dry run: code %d: %s", code, out)
 	}
-	for _, want := range []string{"dry run: nothing is written", "known values: 5", "would replace: 5", "raw/literal", "text/literal", "chunk_index", "sess_fts", "sessions.title", "texts written by people and agents that hold a known value: none"} {
+	for _, want := range []string{"dry run: nothing is written", "known values: 5", "would replace: 5", "raw/literal", "text/literal", "chunk_index", "chunk_fts", "sessions.title", "texts written by people and agents that hold a known value: none"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dry run output lacks %q:\n%s", want, out)
 		}
@@ -203,7 +204,7 @@ func TestRedactSessionsLiteralsCommand(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d: %s", code, out)
 	}
-	for _, want := range []string{"chunks with secrets replaced: 5", "raw/literal", "full-text indexes merged: chunks_fts, sess_fts", "write-ahead log:", "ctx db vacuum --db " + path} {
+	for _, want := range []string{"chunks with secrets replaced: 5", "raw/literal", "full-text indexes merged: chunks_fts, sess_fts, chunk_fts", "write-ahead log:", "ctx db vacuum --db " + path} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

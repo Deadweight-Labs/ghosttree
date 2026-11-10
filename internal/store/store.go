@@ -369,10 +369,10 @@ CREATE TABLE IF NOT EXISTS session_chunks(
   seq INTEGER NOT NULL, role TEXT NOT NULL DEFAULT '',
   text TEXT NOT NULL DEFAULT '', raw TEXT NOT NULL,
   UNIQUE(session_id, seq));
+-- chunks_fts was the first search path over sessions; chunk_fts replaced it
+-- (REQ-622). A database that still has the trigger chunks_ai keeps it up to
+-- date until ctx db slim-search drops the trigger and empties the table.
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content='session_chunks', content_rowid='id');
-CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON session_chunks BEGIN
-  INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
-END;
 -- prompt_version is part of the identity, not a note beside it. Keyed on the
 -- transcript alone, a session was retired against whichever prompt happened to
 -- reach it first, and no later improvement could ever touch it again.

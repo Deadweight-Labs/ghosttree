@@ -33,7 +33,8 @@ func appendChunks(t *testing.T, s *Store, session int64, from, n int, text func(
 	t.Helper()
 	chunks := make([]Chunk, n)
 	for i := range chunks {
-		chunks[i] = Chunk{Seq: from + i, Role: "user", Text: text(from + i), Raw: "{}"}
+		t := text(from + i)
+		chunks[i] = Chunk{Seq: from + i, Role: "user", Text: t, Raw: userLine("2026-10-01T10:00:00Z", t)}
 	}
 	if err := s.AppendChunks(session, chunks); err != nil {
 		t.Fatal(err)
@@ -666,7 +667,7 @@ func TestProbeRelevanceNamesTheWordBehindEachHit(t *testing.T) {
 		if i == 0 {
 			text = "wie ist der stand von ollama"
 		}
-		chunks[i] = Chunk{Seq: i, Role: "user", Text: text, Raw: "{}"}
+		chunks[i] = Chunk{Seq: i, Role: "user", Text: text, Raw: userLine("2026-10-01T10:00:00Z", text)}
 	}
 	if err := s.AppendChunks(id, chunks); err != nil {
 		t.Fatal(err)

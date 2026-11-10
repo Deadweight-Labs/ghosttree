@@ -34,6 +34,7 @@ func seedUnslimmed(t *testing.T, s *Store, ext, harness string, chunks []legacyC
 	if err := s.IndexSession(id); err != nil {
 		t.Fatal(err)
 	}
+	legacySearchLayout(t, s)
 	return id
 }
 
@@ -131,7 +132,7 @@ func TestSlimSessionsBringsTheStockToTheFormOfNewLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rep.Chunks != 7 || rep.Scanned != 7 || rep.Deleted != 1 || rep.KeptCited != 1 || rep.TextCut != 2 || rep.TextKeptOpenBatch != 1 ||
-		rep.Slimmed < 2 || rep.Tables["session_embeddings"] != 1 || rep.RawAfter >= rep.RawBefore || len(rep.Optimized) != 2 {
+		rep.Slimmed < 2 || rep.Tables["session_embeddings"] != 1 || rep.RawAfter >= rep.RawBefore || len(rep.Optimized) != 3 {
 		t.Fatalf("report %+v", rep)
 	}
 
