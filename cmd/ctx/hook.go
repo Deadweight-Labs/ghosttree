@@ -783,7 +783,14 @@ func pauseGate(stdin io.Reader, harness string, stdout io.Writer) int {
 	if harness != "claude" {
 		return 0
 	}
-	agentpause.Gate(coordAgentOverride(), stdin, stdout)
+	// The gate runs before every tool, so it is where a subagent's prompt is
+	// seen before the subagent starts (hook_subagent.go).
+	raw, err := io.ReadAll(io.LimitReader(stdin, 4<<20))
+	if err != nil {
+		return 0
+	}
+	noteAgentSpawn(raw)
+	agentpause.Gate(coordAgentOverride(), bytes.NewReader(raw), stdout)
 	return 0
 }
 

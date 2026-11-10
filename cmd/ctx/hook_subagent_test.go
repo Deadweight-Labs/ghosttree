@@ -141,3 +141,31 @@ func TestSubagentStartAnswersTheProbe(t *testing.T) {
 		t.Fatalf("probe answer %q", out.String())
 	}
 }
+
+// Claude Code may not have written the Agent call to the parent's transcript
+// when SubagentStart runs; the PreToolUse gate has seen it before.
+func TestSubagentTaskComesFromThePreToolUseGate(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	for i, prompt := range []string{"trace the reconnect loop", "count the migrations"} {
+		raw, _ := json.Marshal(map[string]any{"session_id": "sess-gate", "tool_name": "Agent", "tool_use_id": "toolu_" + string(rune('x'+i)),
+			"tool_input": map[string]any{"subagent_type": "Explore", "description": "d", "prompt": prompt}})
+		var out bytes.Buffer
+		if code := cmdHookWith(bytes.NewReader(raw), []string{"pause-gate", "--harness", "claude"}, &out); code != 0 {
+			t.Fatalf("gate exit %d", code)
+		}
+	}
+	empty := filepath.Join(t.TempDir(), "empty.jsonl")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in := subagentStartInput{SessionID: "sess-gate", TranscriptPath: empty, AgentType: "Explore"}
+	if got := subagentTask(in); !strings.Contains(got, "trace the reconnect loop") {
+		t.Fatalf("first: %q", got)
+	}
+	if got := subagentTask(in); !strings.Contains(got, "count the migrations") {
+		t.Fatalf("second: %q", got)
+	}
+	if got := subagentTask(in); got != "" {
+		t.Fatalf("third: %q", got)
+	}
+}

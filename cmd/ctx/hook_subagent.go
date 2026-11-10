@@ -189,12 +189,91 @@ func briefLine(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// subagentTask finds the prompt the parent wrote for this subagent: the newest
-// Agent (or older Task) call in the parent's transcript whose subagent_type
-// matches, and that no earlier SubagentStart of this session took. Claude Code
-// does not pass the prompt to the hook.
+// subagentSpawnWindow is how old a recorded Agent call may be to count as the
+// one a starting subagent belongs to.
+const subagentSpawnWindow = 2 * time.Minute
+
+// noteAgentSpawn records the prompt of an Agent (or older Task) call from the
+// PreToolUse payload, before the subagent starts. Claude Code passes the
+// prompt to no subagent hook, and the parent's transcript may not hold the
+// call yet when SubagentStart runs.
+func noteAgentSpawn(raw []byte) {
+	var in struct {
+		SessionID string `json:"session_id"`
+		ToolName  string `json:"tool_name"`
+		ToolUseID string `json:"tool_use_id"`
+		ToolInput struct {
+			Prompt       string `json:"prompt"`
+			Description  string `json:"description"`
+			SubagentType string `json:"subagent_type"`
+		} `json:"tool_input"`
+	}
+	if json.Unmarshal(raw, &in) != nil || (in.ToolName != "Agent" && in.ToolName != "Task") ||
+		!store.ValidExternalID(strings.TrimSpace(in.SessionID)) || strings.TrimSpace(in.ToolInput.Prompt) == "" {
+		return
+	}
+	dir, err := sessionLogDir(in.SessionID)
+	if err != nil || os.MkdirAll(dir, 0o700) != nil {
+		return
+	}
+	kind := in.ToolInput.SubagentType
+	if kind == "" {
+		kind = "general-purpose"
+	}
+	line, err := json.Marshal(subagentSpawn{ID: in.ToolUseID, Kind: kind, At: time.Now().Unix(),
+		Text: cutRunesPlain(strings.TrimSpace(in.ToolInput.Description+"\n"+in.ToolInput.Prompt), 8000)})
+	if err == nil {
+		appendLine(filepath.Join(dir, "spawns"), string(line), 1<<20)
+	}
+}
+
+type subagentSpawn struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+	At   int64  `json:"at"`
+	Text string `json:"text"`
+}
+
+// subagentTask finds the prompt the parent wrote for this subagent: an Agent
+// (or older Task) call whose subagent_type matches and that no earlier
+// SubagentStart of this session took, first from the calls the PreToolUse
+// gate recorded, else from the parent's transcript.
 func subagentTask(in subagentStartInput) string {
-	if in.TranscriptPath == "" || !store.ValidExternalID(strings.TrimSpace(in.SessionID)) {
+	if !store.ValidExternalID(strings.TrimSpace(in.SessionID)) {
+		return ""
+	}
+	dir, err := sessionLogDir(in.SessionID)
+	if err != nil {
+		return ""
+	}
+	taken := map[string]bool{}
+	if raw, err := os.ReadFile(filepath.Join(dir, "briefed")); err == nil {
+		for _, id := range strings.Fields(string(raw)) {
+			taken[id] = true
+		}
+	}
+	take := func(id, text string) string {
+		if os.MkdirAll(dir, 0o700) == nil {
+			appendLine(filepath.Join(dir, "briefed"), oneLineField(id), 0)
+		}
+		return text
+	}
+	fitsKind := func(kind string) bool { return in.AgentType == "" || kind == in.AgentType }
+	if raw, err := os.ReadFile(filepath.Join(dir, "spawns")); err == nil {
+		// Parallel spawns are recorded in order and start in order: the oldest
+		// recent untaken one is this subagent's.
+		for _, line := range strings.Split(string(raw), "\n") {
+			var sp subagentSpawn
+			if json.Unmarshal([]byte(line), &sp) != nil || taken[sp.ID] || !fitsKind(sp.Kind) {
+				continue
+			}
+			if time.Since(time.Unix(sp.At, 0)) > subagentSpawnWindow {
+				continue
+			}
+			return take(sp.ID, sp.Text)
+		}
+	}
+	if in.TranscriptPath == "" {
 		return ""
 	}
 	f, err := os.Open(in.TranscriptPath)
@@ -254,17 +333,7 @@ func subagentTask(in subagentStartInput) string {
 			calls = append(calls, call{id: c.ID, kind: kind, msg: msg, text: strings.TrimSpace(c.Input.Description + "\n" + c.Input.Prompt)})
 		}
 	}
-	dir, err := sessionLogDir(in.SessionID)
-	if err != nil {
-		return ""
-	}
-	taken := map[string]bool{}
-	if raw, err := os.ReadFile(filepath.Join(dir, "briefed")); err == nil {
-		for _, id := range strings.Fields(string(raw)) {
-			taken[id] = true
-		}
-	}
-	fits := func(c call) bool { return !taken[c.id] && (in.AgentType == "" || c.kind == in.AgentType) }
+	fits := func(c call) bool { return !taken[c.id] && fitsKind(c.kind) }
 	// The newest message with a fitting call; parallel spawns of one message
 	// start in order, so the first fitting call of it is this subagent's.
 	for i := len(calls) - 1; i >= 0; i-- {
@@ -273,10 +342,7 @@ func subagentTask(in subagentStartInput) string {
 		}
 		for _, c := range calls {
 			if c.msg == calls[i].msg && fits(c) {
-				if os.MkdirAll(dir, 0o700) == nil {
-					appendLine(filepath.Join(dir, "briefed"), oneLineField(c.id), 0)
-				}
-				return c.text
+				return take(c.id, c.text)
 			}
 		}
 	}
