@@ -87,6 +87,8 @@ type orgsView struct {
 	Explain *explainAdminView
 	// Garden is the same for the gardener; nil for anyone else.
 	Garden *gardenAdminView
+	// Transcripts is the same for the stored transcripts; nil for anyone else.
+	Transcripts *transcriptsAdminView
 	// GardenSet is the gardener's settings section, for the owner (REQ-624).
 	GardenSet *gardenSettingsView
 	// Moved: the viewer's namespaces that had to yield their address to its
@@ -148,6 +150,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	orgs = v.Orgs
 	v.Explain = a.explainAdminFor(r)
 	v.Garden = a.gardenAdminFor(r)
+	v.Transcripts = a.transcriptsAdminFor(r)
 	if interactive(r) && a.isAdmin(browserPrincipal(r)) {
 		v.Assign, _ = a.store.AllOwners()
 	}

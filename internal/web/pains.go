@@ -62,6 +62,11 @@ type painView struct {
 	First firstHead
 	// CanIdea shows the form "Create idea" (a solution idea this pain motivates).
 	CanIdea bool
+	// Edit is the panel "Bearbeiten" (nil: the viewer may not correct the pain);
+	// IssueHref leads to the form of a new issue this pain motivates ("" when the
+	// viewer may not open one).
+	Edit      *editPanel
+	IssueHref string
 }
 
 func painURL(id int64) string { return "/ui/pains/" + strconv.FormatInt(id, 10) }
@@ -100,6 +105,13 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 	v.CanWork = pa.CheckPain(p, store.ActWork) == nil
 	v.CanIdea = v.CanWork && interactive(r) && pa.Allow(p.Project, store.ResIdea, store.ActCreate, store.Object{Own: true})
 	v.Explain = a.explainFor(l, explain.KindPain, p.ID)
+	if interactive(r) && pa.CheckPain(p, store.ActEdit) == nil {
+		v.Edit = &editPanel{Open: r.URL.Query().Get("panel") == "edit", Close: repoHref(p.Project) + "/pains/" + strconv.FormatInt(p.ID, 10),
+			Action: painURL(p.ID) + "/correct", Token: csrfOf(r), Title: p.Title, Body: p.Body}
+	}
+	if interactive(r) && pa.Allow(p.Project, store.ResRequest, store.ActCreate, store.Object{Own: true}) {
+		v.IssueHref = repoHref(p.Project) + "/issues/new?derived_from=PAIN-" + strconv.FormatInt(p.ID, 10)
+	}
 	for _, s := range pain.States {
 		v.States = append(v.States, filterOption{Value: s, Label: label(l, painStateKeys, s), Selected: s == p.State})
 	}
@@ -166,6 +178,8 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 		v.Result = &requestResult{Text: l.msg(painFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
 	case r.URL.Query().Get("done") == "state":
 		v.Result = &requestResult{Text: l.msg("pains.result.state"), Kind: "done"}
+	case r.URL.Query().Get("done") == "corrected":
+		v.Result = &requestResult{Text: l.msg("pains.result.corrected"), Kind: "done"}
 	case r.URL.Query().Get("done") == "idea":
 		v.Result = &requestResult{Text: l.msg("pains.result.idea_made"), Kind: "done"}
 	}
@@ -326,6 +340,12 @@ func painFailKey(code string) string {
 		return "pains.result.invalid_transition"
 	case "idea_invalid":
 		return "pains.result.idea_invalid"
+	case "reason_required":
+		return "pains.result.reason_required"
+	case "title_required":
+		return "pains.result.title_required"
+	case "nothing_to_change":
+		return "pains.result.nothing_to_change"
 	}
 	return "pains.result.failed"
 }

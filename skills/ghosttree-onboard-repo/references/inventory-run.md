@@ -52,7 +52,7 @@ The fourth rule is the one that gets skipped, so read it twice.
 
 ## Writing nothing is a result, not a failure
 
-Use `context_describe_file` with `nothing_to_say: true`. The path leaves the
+Use `context_remember` with `action=describe_file` and `nothing_to_say: true`. The path leaves the
 work list, bound to the file's current contents, and comes back on its own if
 the file changes.
 

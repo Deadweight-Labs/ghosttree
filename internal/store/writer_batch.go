@@ -7,6 +7,9 @@ import (
 )
 
 func (w *runtimeWriter) admitChunks(ctx context.Context, batch ChunkBatch) (*writerRequest, error) {
+	if w.chunkPack != nil {
+		w.chunkPack(batch.Chunks)
+	}
 	size, err := referencedPayloadBytes(batch)
 	if err != nil {
 		return nil, w.reject(err)

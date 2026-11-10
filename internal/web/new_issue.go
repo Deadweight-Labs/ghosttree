@@ -5,6 +5,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -94,7 +95,60 @@ func (a *app) issueNew(w http.ResponseWriter, r *http.Request, remote string) {
 	if _, stop := a.gateList(w, r2, pa, remote, store.ResRequest); stop {
 		return
 	}
-	a.renderNewIssue(w, r2, remote, a.newIssueDefaults(r2, pa, remote), http.StatusOK)
+	v := a.newIssueDefaults(r2, pa, remote)
+	a.prefillFromOrigin(pa, remote, v)
+	a.renderNewIssue(w, r2, remote, v, http.StatusOK)
+}
+
+var originRef = regexp.MustCompile(`^(IDEA|PAIN)-(\d+)$`)
+
+// prefillFromOrigin fills the form of an issue that comes out of one idea or one
+// pain (the buttons "Make an issue of this"): the title, the text and, from the
+// concept of an idea, the requirements. What the viewer may not read is not used,
+// and what is wrong with the origin the save says, not this.
+func (a *app) prefillFromOrigin(pa *store.ProjectAccess, remote string, v *newIssueView) {
+	m := originRef.FindStringSubmatch(v.DerivedFrom)
+	if m == nil || !v.HasCriteria {
+		return
+	}
+	n, err := strconv.ParseInt(m[2], 10, 64)
+	if err != nil {
+		return
+	}
+	switch m[1] {
+	case "PAIN":
+		d, err := pa.PainDetailView(n)
+		if err != nil || d.Pain.Project != remote {
+			return
+		}
+		v.Title, v.Body = d.Pain.Title, d.Pain.Body
+	case "IDEA":
+		ws, err := pa.IdeaWorkshop(n)
+		if err != nil || ws.Idea.Project != remote {
+			return
+		}
+		v.Title, v.Body = ws.Idea.Title, ws.Idea.Body
+		if ws.Concept == nil {
+			return
+		}
+		c := ws.Concept.Concept
+		var parts []string
+		for _, p := range []string{c.About, c.What} {
+			if p = strings.TrimSpace(p); p != "" {
+				parts = append(parts, p)
+			}
+		}
+		if len(parts) > 0 {
+			v.Body = strings.Join(parts, "\n\n")
+		}
+		var reqs []string
+		for _, q := range c.Requirements {
+			if q = strings.TrimSpace(q); q != "" && len(reqs) < maxCriteria {
+				reqs = append(reqs, q)
+			}
+		}
+		v.Criteria = append(reqs, make([]string, max(0, newCriteria-len(reqs)))...)
+	}
 }
 
 func (a *app) newIssueDefaults(r *http.Request, pa *store.ProjectAccess, remote string) *newIssueView {

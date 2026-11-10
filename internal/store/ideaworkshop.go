@@ -400,7 +400,7 @@ func IdeaActorFor(p Principal, sessionRef string) idea.Actor {
 
 func humanOnly(what string) error {
 	return requestdomain.NewRuleError("human_only", what+" needs a person in the web interface, a token (API, MCP, CLI) does not count as one",
-		"propose it as a decision with way human (decision_open); a person decides it there", nil)
+		"propose it as a decision with way human (idea action=decision_open); a person decides it there", nil)
 }
 
 // SetIdeaPhase wechselt die Phase. Freigeben (approved) darf nur der Owner der
@@ -445,7 +445,7 @@ func (a *ProjectAccess) SetIdeaPhase(id int64, to string, actor idea.Actor, expe
 				nos[n] = fmt.Sprintf("%d", g.No)
 			}
 			return idea.Idea{}, requestdomain.NewRuleError("requirements_uncovered", fmt.Sprintf("requirements %s have no met criterion and are not waived", strings.Join(nos, ", ")),
-				"meet a criterion that came out of the requirement, or waive it with a reason (idea_update requirement_waive)", nil)
+				"meet a criterion that came out of the requirement, or waive it with a reason (idea action=requirement_waive)", nil)
 		}
 	}
 	if to == idea.PhaseApproved {
@@ -511,7 +511,7 @@ func (s *Store) commitIdeaApproval(id int64, from string, revision int, actor id
 	var body string
 	if err := tx.QueryRow(`SELECT revision, body FROM idea_texts WHERE idea_id=? AND part='concept' ORDER BY revision DESC LIMIT 1`, id).Scan(&head, &body); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return requestdomain.NewRuleError("concept_required", "an idea is approved with a concept", "write the concept first (idea_concept)", nil)
+			return requestdomain.NewRuleError("concept_required", "an idea is approved with a concept", "write the concept first (idea action=concept)", nil)
 		}
 		return err
 	}

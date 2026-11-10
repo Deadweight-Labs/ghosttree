@@ -16,6 +16,8 @@ const (
 	postToolHookCommand = "ctx hook post-tool-use"
 	// turnEndHookCommand: the Stop hook, which reports the end of a turn.
 	turnEndHookCommand = "ctx hook turn-end"
+	// subagentHookCommand: the briefing a subagent gets when it starts.
+	subagentHookCommand = "ctx hook subagent-start"
 )
 
 // ClaudeConfigDir resolves where Claude Code keeps its user config. Verified on

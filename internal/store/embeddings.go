@@ -163,7 +163,7 @@ func (s *Store) putEmbedding(e Embedding) error {
 		// the write lock, so that nothing can change it between the check and the
 		// write; a comparison of hashes, since the writer is no place to make the
 		// document again (see verifySessionSource).
-		keep, err := verifySessionSource(tx, e.ObjectID, e.Source)
+		keep, err := verifySessionSource(tx, s.rawState(), e.ObjectID, e.Source)
 		if err != nil {
 			return err
 		}

@@ -12,7 +12,7 @@ import (
 
 // ReactionSetInput is the reaction_set tool.
 type ReactionSetInput struct {
-	Ref      string `json:"ref" jsonschema:"what to react to: REQ-n (issue), IDEA-n or comment:n (a comment, see comment_list)"`
+	Ref      string `json:"ref" jsonschema:"what to react to: REQ-n (issue), IDEA-n or comment:n (a comment, see comment action=list)"`
 	Reaction string `json:"reaction" jsonschema:"one of +1, -1, laugh, hooray, confused, heart, rocket, eyes (or its emoji)"`
 	Remove   bool   `json:"remove,omitempty" jsonschema:"take your reaction back instead of setting it"`
 }

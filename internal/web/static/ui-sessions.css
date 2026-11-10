@@ -74,8 +74,26 @@
   & .pr-hits { grid-column: 2; font-size: 11px; color: var(--attention-fg); }
   & .pr-more { font-size: 12px; }
 
+  /* Side bar: pills run on and wrap, what the session made stands as lines with an icon */
+  & .side .v.pills { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 8px; }
+  & .side .v.pills > * { flex: none; max-width: 100%; margin: 0; }
+  & .side .v .sub { font-size: 12px; color: var(--fg-muted); }
+  & .side .v.made > span { gap: 8px; color: var(--fg-default); }
+  & .side .v.made .i { flex: none; width: 16px; height: 16px; color: var(--fg-muted); }
+
+  /* Ghosttree view: files with their lines, knowledge with its type */
+  & .tlx .files { display: grid; gap: 4px; justify-items: start; }
+  & .tlx .files .fl { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
+  & .tlx .files .chip { height: auto; min-height: 20px; white-space: normal; overflow-wrap: anywhere; }
+  & .tlx .files + .more-files, & .tlx .more-files > .files { margin-top: 6px; }
+  & .tlx .more-files > summary { display: inline-block; font-size: 12px; color: var(--accent-fg); cursor: pointer; }
+  & .diffstat { display: inline-flex; flex: none; gap: 4px; font: 12px/20px var(--ui-mono); }
+  & .diffstat .a { color: var(--success-fg); }
+  & .diffstat .m { color: var(--danger-fg); }
+  & .tlx .bd2 .lb + a.t { margin-left: 8px; }
+
   /* Raw history */
-  & .flow { display: grid; gap: 12px; }
+  & .flow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
   & .blk { position: relative; }
   & .blk header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; font-size: 12px; color: var(--fg-muted); }
   & .blk .who { font-weight: 600; color: var(--fg-default); }

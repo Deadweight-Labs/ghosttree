@@ -18,7 +18,7 @@ import (
 func TestContextSnapshotToolsWireSchemaAndBounds(t *testing.T) {
 	c, _ := newTestClient(t)
 	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: "p"}})
-	tools, err := session.ListTools(context.Background(), nil)
+	tools, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}

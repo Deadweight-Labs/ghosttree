@@ -633,7 +633,7 @@ func (a *api) writeDueDecisions(w http.ResponseWriter, pa *store.ProjectAccess, 
 	b.WriteString("\n## Deferred decisions now due (ghosttree)\n\n")
 	for n, d := range due {
 		if n >= 5 {
-			fmt.Fprintf(&b, "- and %d more (decision_list)\n", len(due)-n)
+			fmt.Fprintf(&b, "- and %d more (idea action=decision_list)\n", len(due)-n)
 			break
 		}
 		fmt.Fprintf(&b, "- %s %s (deferred until: %s)\n", d.HumanID(), idea.Brief(d.Question, 160), idea.Brief(d.Trigger, 120))

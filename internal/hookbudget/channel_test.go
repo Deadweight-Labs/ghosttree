@@ -94,7 +94,7 @@ func TestAFullCoordinationWindowSaysNothingWasDropped(t *testing.T) {
 	if !strings.Contains(got, "Nothing was dropped") {
 		t.Errorf("a full window must say nothing was lost: %q", got)
 	}
-	if !strings.Contains(got, "coord_inbox") {
+	if !strings.Contains(got, "coord action=inbox") {
 		t.Errorf("a full window must name the way to the rest: %q", got)
 	}
 }

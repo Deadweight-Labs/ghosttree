@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +127,13 @@ func TestSearchStreamShowsEachViewerWhatThePageShows(t *testing.T) {
 				t.Fatalf("%s %q: status %d", v.name, q, code)
 			}
 			wantRows, wantHeads, wantHits := pageParts(page)
+			// "All" is not a kind: the page counts it, the script of the live page
+			// adds it up from the events (they carry Total).
+			if len(wantRows) == 0 || !strings.HasPrefix(wantRows[0], "All=") {
+				t.Fatalf("%s %q: the first row of the page is not All: %v", v.name, q, wantRows)
+			}
+			wantAll := strings.TrimPrefix(wantRows[0], "All=")
+			wantRows = wantRows[1:]
 			events := readSearchStream(t, v.client, e.Base+"/ui/search/stream?q="+url.QueryEscape(q))
 			byKey := map[string]streamEvent{}
 			var keys []string
@@ -158,6 +166,13 @@ func TestSearchStreamShowsEachViewerWhatThePageShows(t *testing.T) {
 			_, gotHeads, gotHits := pageParts(body.String())
 			if !slices.Equal(gotRows, wantRows) || !slices.Equal(gotHeads, wantHeads) || !slices.Equal(gotHits, wantHits) {
 				t.Errorf("%s %q:\nstream %v\n       %v\n       %v\npage   %v\n       %v\n       %v", v.name, q, gotRows, gotHeads, gotHits, wantRows, wantHeads, wantHits)
+			}
+			sum := 0
+			for _, k := range wantKeys {
+				sum += byKey[k].Total
+			}
+			if wantAll != strconv.Itoa(sum) {
+				t.Errorf("%s %q: the page counts %s hits in all, the events add up to %d", v.name, q, wantAll, sum)
 			}
 			if q == "zebrafish" && len(gotRows) != len(wantKeys) {
 				t.Errorf("%s: the fixture does not reach every kind: %v", v.name, gotRows)

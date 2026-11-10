@@ -165,7 +165,7 @@ func (a *api) findPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		writeRequestError(w, requestdomain.NewRuleError("package_not_found", "no open work package for this branch or pr", "create one with package_update or ctx package create", nil))
+		writeRequestError(w, requestdomain.NewRuleError("package_not_found", "no open work package for this branch or pr", "create one with package action=create or ctx package create", nil))
 		return
 	}
 	if err != nil {

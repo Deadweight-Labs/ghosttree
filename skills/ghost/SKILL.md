@@ -19,7 +19,7 @@ Give the human the page of one object.
   `room:12`, `session:ID`, `doc:NAME`, `runbook:NAME`, `branch:NAME`,
   `preset:pr-ergebnis 155`, a repository path, a search line such as
   `is:open label:bug`, or `inbox`.
-- Call the MCP tool `open_link` with `ref=<what>`. It returns the link and a
+- Call the MCP tool `context_get` with `action=link` and `ref=<what>`. It returns the link and a
   card (title, state, next step, who). It opens nothing.
 - Show the card and the link. On the human's own machine you may also run
   `ctx open <what>`: it opens the browser there, and over ssh or without a
@@ -31,7 +31,7 @@ Give the human the page of one object.
 
 Ask the human for something only they can do, as a task with a walk-through.
 
-1. Call `human_task_create`: `kind` (secret, file, input or action), a short
+1. Call `human_task` with `action=create`: `kind` (secret, file, input or action), a short
    `title`, `location` for a secret or file (where it ends up, never the
    value), and `check_hint` (how you will check it).
 2. Always add `steps`: numbered, in the order they are done, one line each,
@@ -42,15 +42,15 @@ Ask the human for something only they can do, as a task with a walk-through.
    With steps and explanation from you, nothing is generated for this task later.
 4. Hand over the link from the reply. The web page shows the steps as a
    checklist the human ticks off. You never mark a task done yourself; when the
-   human says it is done, check it against the hint, then `human_task_resolve`.
+   human says it is done, check it against the hint, then `human_task` with `action=confirm` (or `reopen`).
 
 ## req <title>
 
 File a requirement.
 
-1. Look first with `request_search` (a title word or two). A match: give its
-   link instead (`open_link`) and offer to continue it.
-2. No match: `request_create` with `type`, `title`, a `description` that says
+1. Look first with `request` `action=search` (a title word or two). A match: give its
+   link instead (`context_get` `action=link`) and offer to continue it.
+2. No match: `request` with `action=create`, `type`, `title`, a `description` that says
    problem, evidence and approach, observable `criteria`, and an `explanation`.
 3. Answer with the card and link of the new issue. Criteria are called
    requirements in the web interface and checklist items on a pull request.
@@ -59,10 +59,10 @@ File a requirement.
 
 Run a saved search and hand over its link.
 
-1. Call `search_preset` with `action=run`, `name`, and the values the search
+1. Call `context_search` with `action=preset_run`, `name`, and the values the search
    takes by name: `pr`, `branch`, `area`, `since`. `preset:pr-ergebnis 155`
    means `name=pr-ergebnis`, `pr=155`. `action=list` shows what exists.
-2. Call `open_link` with `ref=preset:<name> <values>` and show the link with a
+2. Call `context_get` with `action=link` and `ref=preset:<name> <values>` and show the link with a
    few lines of the result.
 
 ## Shape of every answer

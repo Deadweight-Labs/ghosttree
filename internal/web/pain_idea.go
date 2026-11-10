@@ -9,6 +9,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -56,4 +57,48 @@ func (a *app) painIdea(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, repoHref(p.Project)+"/ideas/"+strconv.FormatInt(i.ID, 10)+"?done=from_pain&pain="+url.QueryEscape(strconv.FormatInt(id, 10)), http.StatusSeeOther)
+}
+
+// painCorrect ist POST /ui/pains/{id}/correct: Titel und Text des Pains ändern, mit
+// Grund. Nur was sich geändert hat, geht an den Store; die Rechte sind seine.
+func (a *app) painCorrect(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	pa := a.access(r)
+	detail, err := pa.PainDetailView(id)
+	if err != nil {
+		a.painFail(w, r, err)
+		return
+	}
+	p := detail.Pain
+	title, body, reason := strings.TrimSpace(r.FormValue("title")), r.FormValue("body"), strings.TrimSpace(r.FormValue("reason"))
+	back := a.painHref(r, id)
+	for f, v := range map[string]string{"body": body, "reason": reason} {
+		if tooLong(v, maxFieldChars) {
+			a.tooLongForm(w, r, back+"?panel=edit#edit", f, v, maxFieldChars)
+			return
+		}
+	}
+	var newTitle, newBody *string
+	if title != p.Title {
+		newTitle = &title
+	}
+	if lineBreaks(body) != lineBreaks(p.Body) {
+		body = lineBreaks(body)
+		newBody = &body
+	}
+	accountID, _ := store.AccountNumericID(browserPrincipal(r).ID)
+	by := pain.Actor{AccountID: accountID, Person: personOf(r), GitAnchor: gitanchor.Web()}
+	if _, err := pa.CorrectPain(id, newTitle, newBody, reason, by); err != nil {
+		if code := requestdomain.Code(err); code != "" {
+			http.Redirect(w, r, back+"?fail="+url.QueryEscape(code)+"&panel=edit#edit", http.StatusSeeOther)
+			return
+		}
+		a.painFail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, back+"?done=corrected", http.StatusSeeOther)
 }

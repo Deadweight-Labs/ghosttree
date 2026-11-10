@@ -72,7 +72,7 @@ func TestRequestSearchPagesPastTheFirstHundredAddUpToOneFusion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fused, cut, err := st.fuseRequests(f, SearchAuto, qvec, st.embedShared().cfg.Load())
+	fused, cut, err := st.fuseRequests(context.Background(), f, SearchAuto, qvec, st.embedShared().cfg.Load())
 	if err != nil || cut {
 		t.Fatalf("%v cut=%v", err, cut)
 	}

@@ -1,6 +1,8 @@
 {{define "idea"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id"><div class="wrap">
-{{with .IdeaV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">#{{.ID}}</span></h1></div>
+{{with .IdeaV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">#{{.ID}}</span></h1>
+{{if .Edit}}<div class="gacts"><a class="gbtn sm" href="{{.Edit.Close}}?panel=edit#edit">{{mi "pencil"}}{{t "issue.action.edit"}}</a></div>{{end}}</div>
 <div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "idea"}}{{.StateLabel}}</span>{{if .Person}}<span>{{actor .Actor .Person}} {{t "ideas.proposed" .Age}}</span>{{end}}{{template "gitanchor" .Git}}</div></div>
+{{with .Edit}}{{template "editpanel" .}}{{end}}
 {{template "resultbanner" (dict "R" .Result "Strip" "done fail")}}
 <div class="dgrid"><div class="dmain">
 {{if or .Blocks .Items}}<div class="tlx tl0">

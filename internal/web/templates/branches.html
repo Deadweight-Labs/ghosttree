@@ -1,0 +1,8 @@
+{{define "branches"}}{{template "head" .}}{{template "nav" .}}<main class="g2 cm br"><div class="wrap">
+{{with .BranchesV}}<div class="toolbar"><span class="sp"></span>{{template "ghbtn" .}}</div>
+<div class="box"><div class="box-h"><h2 class="t">{{t "branches.heading"}}</h2><span class="counter">{{.Total}}</span></div>
+{{range .Rows}}<div class="row cmrow brrow"><div class="cm"><div class="ct">{{.NamePill}}{{if .Default}}<span class="lb neu">{{t "code.branch_default"}}</span>{{end}}{{range .PRs}}{{prPillT .N .Href .State .Title}}{{end}}</div>
+<div class="meta">{{with .Commit}}<span class="brc">{{if .Title}}{{titleRefs .Title}}{{else}}{{t "branches.commit_untitled"}}{{end}}</span>{{if .Who}}<span class="stack">{{avatarOf .Who}}</span><b>{{.Who}}</b>{{end}}{{if .At}}{{agot "commits.committed_plain" .At}}{{end}}{{else}}<span>{{t "branches.no_commit"}}</span>{{end}}</div></div>
+<div class="cr">{{if .Knowledge}}<span class="said" title="{{t "branches.knowledge" .Knowledge}}" aria-label="{{t "branches.knowledge" .Knowledge}}"><span>{{mi "book"}}{{.Knowledge}}</span></span>{{end}}</div></div>
+{{end}}</div>
+{{end}}</div>{{template "foot" .}}{{end}}

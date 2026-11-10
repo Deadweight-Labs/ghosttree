@@ -255,6 +255,38 @@ new data, which already stops the growth. To give the space back to the
 filesystem, run `ctx db vacuum` once with the service stopped, as described in
 the next section.
 
+### Slim and packed transcripts
+
+The server stores transcript lines slim (copies and ballast of the harnesses
+left out, long tool outputs cut to their first 6 KB and last 2 KB) and packed
+with deflate and a dictionary it learns from the database once, a little after
+the first start. Lines stored by an older version are neither. `ctx db
+slim-sessions` brings them to the same form; it deletes the lines the rule drops
+together with their index and full-text rows and packs the rest. It is safe to
+run while the server is up: it writes in short transactions and pauses at least
+as long as each one held the write lock. The server must already run the version
+that brings the command, since that version adds the dictionary table.
+
+```bash
+sudo systemctl stop ghosttree
+sudo sh -c 'cd /var/lib/ghosttree && zstd -T0 -o /var/backups/ghosttree-before-slim.db.zst ghosttree.db'
+sudo systemctl start ghosttree        # the new version migrates on start
+$RUN db slim-sessions --db $DB --dry-run                # what would change, writes nothing
+$RUN db slim-sessions --db $DB --skip-optimize          # beside the running server
+sudo systemctl stop ghosttree
+$RUN db vacuum --db $DB --fts-optimize --yes            # merges the full-text indexes, gives the space back
+sudo systemctl start ghosttree
+```
+
+On local transcripts (550,000 lines) the run took about a minute per 100,000
+lines, of which about 18 seconds held the write lock; the file went from 3.2 GiB
+to 1.0 GiB after `vacuum`. A second run finds nothing to do, and an interrupted
+one may simply be started again. `ctx db chunk-stats` shows what is stored per
+line type, and what the run would leave.
+
+Packed lines cannot be read by an older ghosttree. Going back to an older
+version after the upgrade needs the backup.
+
 ### Shrinking and checking the database
 
 Deleting rows (`ctx strip-images`, a cleanup after a redaction) leaves free pages

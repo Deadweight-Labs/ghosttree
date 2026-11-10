@@ -38,7 +38,7 @@ func TestAnswerOptionsOverMCP(t *testing.T) {
 			t.Errorf("%s: %v %s", name, failed, out)
 		}
 	}
-	tools, err := session.ListTools(t.Context(), nil)
+	tools, err := listRegistered(t.Context(), session)
 	if err != nil {
 		t.Fatal(err)
 	}
