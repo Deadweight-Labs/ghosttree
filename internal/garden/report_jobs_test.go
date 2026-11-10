@@ -53,7 +53,7 @@ func TestReportShowsProofsAndProposedDescriptionsAsProposals(t *testing.T) {
 	proof := Proof{Request: ledgerReq(), Criterion: ledgerReq().Criteria[0], Reason: "Der Commit zeigt es.",
 		Items: []ProofItem{{Kind: ProofCommit, Ref: "4584fb7a1c2d (#149)", Detail: "2026-10-19 feat: x (#149)"}}}
 	g := GhostProposalData{GhostPath: GhostPath{Path: "internal/store/x.go", State: GhostStale, Percent: 42}, Description: "Erste Zeile.\nZweite Zeile.", Reason: "umgeschrieben"}
-	out := reportOf(Result{Agent: true, Proofs: []Proof{proof}, GhostNotes: []GhostProposalData{g}, GhostKept: []GhostPath{{Path: "cmd/ok.go"}}})
+	out := reportOf(Result{Agent: true, Proofs: []Proof{proof}, GhostDescribed: []GhostProposalData{g}, GhostKept: []GhostPath{{Path: "cmd/ok.go"}}})
 	for _, want := range []string{"## Ledger: erfüllte Kriterien (Vorschläge)", "Geschlossen wird nichts", "- #457 Gärtner pflegt das Ledger, Kriterium 6:", "Beleg commit: 4584fb7a1c2d (#149)",
 		"## Beschreibungen (Ghosts)", "- internal/store/x.go (veraltet (42 % der Zeilen seit der Beschreibung geändert))", "  > Erste Zeile.\n  > Zweite Zeile.", "stimmt noch", "cmd/ok.go"} {
 		if !strings.Contains(out, want) {

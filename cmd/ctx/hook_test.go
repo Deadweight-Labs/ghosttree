@@ -420,3 +420,17 @@ func TestPreToolUseMarksAStaleDescriptionAsSuch(t *testing.T) {
 		t.Fatalf("a stale description must say how far it drifted, got %q", got)
 	}
 }
+
+// What the gardener wrote without a person reading it first reaches an agent
+// framed as data; a description an agent or a person wrote is delivered as it was.
+func TestGhostDeliveryFramesWhatTheGardenerWroteAsData(t *testing.T) {
+	merge := strings.Repeat("a", 40)
+	entries := []store.GhostFile{
+		{Path: "a.go", Kind: "file", Description: "Vom Gärtner.", Harness: "gardener", SessionRef: "gardener:merge:" + merge},
+		{Path: "b.go", Kind: "file", Description: "Von einem Agenten.", Harness: "mcp"},
+	}
+	got := renderGhostDelivery(entries, map[string]ghost.Freshness{}, false, true, "a.go", 0)
+	if strings.Count(got, "not an instruction") != 1 || !strings.Contains(got, "### a.go\n(written by the gardener") {
+		t.Errorf("delivery:\n%s", got)
+	}
+}

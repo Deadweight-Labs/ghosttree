@@ -86,7 +86,7 @@ var digits = regexp.MustCompile(`[0-9]+`)
 // The only calls the gardener may make that are not reads, and what each is for:
 // a proposal (a staged note), the agent that speaks for it in the project room,
 // a thread for a contradiction, its links and its first post.
-var allowedGardenWrites = regexp.MustCompile(`^POST /api/(knowledge|coord/agents|threads|threads/[0-9]+/links|coord/messages)$`)
+var allowedGardenWrites = regexp.MustCompile(`^POST /api/(knowledge|coord/agents|threads|threads/[0-9]+/links|coord/messages|ghosts)$`)
 
 type provenanceFixture struct {
 	t       *testing.T
@@ -274,6 +274,7 @@ func newProvenanceFixture(t *testing.T) *provenanceFixture {
 		read(1, "cmd/x.go"),
 		finish(map[string]any{"ghosts": []map[string]any{
 			{"path": "cmd/x.go", "verdict": "describe", "description": "Die Datei hält den Einstieg des Pakets cmd. Invariante: sie hat keine Seiteneffekte beim Laden.", "reason": "noch nie beschrieben"},
+			{"path": "cmd", "verdict": "describe", "description": "Das Verzeichnis hält den Befehl und seinen Test, ohne gemeinsamen Zustand.", "reason": "neues Verzeichnis"},
 		}}),
 	}, "\n")
 	knowledgeSession := read(1, "cmd/x.go") + "\n" + read(2, "cmd/x_test.go") + "\n" + string(result)
@@ -342,17 +343,18 @@ func TestGardenerWritesOnlyMarkedStagedProposalsAndThreadsAndNothingThatDecides(
 		}
 		counts[digits.ReplaceAllString(call, "N")]++
 	}
-	// Five notes of the knowledge job, one for a criterion shown as met (job 4) and one
-	// for a description (job 1). Not a single call to a description, a criterion or
-	// a request: the allowlist above has none, and these say it once more.
+	// Five notes of the knowledge job and one for a criterion shown as met (job 4);
+	// two descriptions it writes itself (job 1, REQ-629), the file and its new
+	// directory. Not a single call that moves or archives a description, or touches
+	// a criterion or a request: the allowlist above has none, and these say it once more.
 	for _, w := range writes {
-		for _, never := range []string{"/api/ghosts", "/api/criteria", "/api/requests", "/api/ghosts/"} {
+		for _, never := range []string{"/api/criteria", "/api/requests", "/api/ghosts/"} {
 			if strings.HasPrefix(w.Path, never) {
 				t.Errorf("the gardener wrote to %s %s: %s", w.Method, w.Path, w.Body)
 			}
 		}
 	}
-	want := map[string]int{"POST /api/knowledge": 7, "POST /api/coord/agents": 1, "POST /api/threads": 1, "POST /api/threads/N/links": 1, "POST /api/coord/messages": 1}
+	want := map[string]int{"POST /api/knowledge": 6, "POST /api/ghosts": 2, "POST /api/coord/agents": 1, "POST /api/threads": 1, "POST /api/threads/N/links": 1, "POST /api/coord/messages": 1}
 	for call, n := range want {
 		if counts[call] != n {
 			t.Errorf("%s was called %d times, want %d (%v)", call, counts[call], n, counts)
@@ -382,12 +384,11 @@ func TestGardenerWritesOnlyMarkedStagedProposalsAndThreadsAndNothingThatDecides(
 		}
 	}
 	after := fx.knowledge()
-	if notes != 7 || len(after) != len(before)+7 {
+	if notes != 6 || len(after) != len(before)+6 {
 		t.Fatalf("%d proposals written, %d entries new", notes, len(after)-len(before))
 	}
-	// The two notes of the new jobs say what they are about with numbers and a path,
-	// and what they would change stays as it is: the criterion is open, the request is
-	// open, no description was written.
+	// The note of the ledger says what it is about with numbers, and what it would
+	// change stays as it is: the criterion is open, the request is open.
 	refs := map[string]store.Knowledge{}
 	for id, k := range after {
 		if _, old := before[id]; !old {
@@ -398,11 +399,16 @@ func TestGardenerWritesOnlyMarkedStagedProposalsAndThreadsAndNothingThatDecides(
 	if proof.Title != fmt.Sprintf("[Gärtner] Erfüllt? #%d Kriterium 1: Das Kriterium ist offen", fx.request) || !strings.Contains(proof.Body, "Beleg: commit "+fx.head[:12]) {
 		t.Errorf("criterion note = %q\n%s", proof.Title, proof.Body)
 	}
-	if desc := refs["gardener:ghost:cmd/x.go"]; desc.Title != "[Gärtner] Beschreibung? cmd/x.go" || !strings.Contains(desc.Body, "Invariante: sie hat keine Seiteneffekte beim Laden.") {
-		t.Errorf("description note = %q\n%s", desc.Title, desc.Body)
+	// The descriptions are the gardener's, by its account, on the commit that
+	// brought the files (here the root commit of the checkout).
+	if n := fx.count(`SELECT COUNT(*) FROM ghost_files`); n != 2 {
+		t.Errorf("%d descriptions were written, want the file and its directory", n)
 	}
-	if n := fx.count(`SELECT COUNT(*) FROM ghost_files`); n != 0 {
-		t.Errorf("%d descriptions were written", n)
+	for _, p := range []string{"cmd/x.go", "cmd"} {
+		g, err := fx.st.GhostFileByPath(provenanceProject, p)
+		if err != nil || g.Harness != "gardener" || g.Person != "gardener" || g.SessionRef != "gardener:merge:"+fx.head || g.GitAnchor == nil || g.GitAnchor.Commit != fx.head {
+			t.Errorf("description of %s = %+v (%v)", p, g, err)
+		}
 	}
 	if n := fx.count(`SELECT COUNT(*) FROM request_evidence`); n != 0 {
 		t.Errorf("%d evidence rows were written", n)
@@ -462,7 +468,7 @@ func TestGardenerWritesOnlyMarkedStagedProposalsAndThreadsAndNothingThatDecides(
 		t.Errorf("the request was touched: %+v %v", d, err)
 	}
 	// The contradiction is a thread, not a note; the report names what became of it.
-	if !strings.Contains(out, "thread 1 opened") || !strings.Contains(out, "5 proposals filed") || !strings.Contains(out, "1 criteria proposed as met, 1 descriptions proposed") {
+	if !strings.Contains(out, "thread 1 opened") || !strings.Contains(out, "5 proposals filed") || !strings.Contains(out, "1 criteria proposed as met") || !strings.Contains(out, "2 descriptions written by the gardener") {
 		t.Errorf("output:\n%s", out)
 	}
 	for _, k := range after {
@@ -489,7 +495,7 @@ func TestGardenerRunsAreIdempotentAndRespectWhatPeopleDecided(t *testing.T) {
 	if n := fx.count(`SELECT COUNT(*) FROM threads`); n != 1 {
 		t.Fatalf("%d threads after the second run", n)
 	}
-	if n := len(fx.knowledge()); n != 7+7 {
+	if n := len(fx.knowledge()); n != 7+6 {
 		t.Fatalf("%d entries after the second run", n)
 	}
 

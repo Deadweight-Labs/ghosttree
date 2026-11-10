@@ -365,7 +365,9 @@ func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 		"--append-system-prompt", system,
 		"--max-turns", fmt.Sprint(s.MaxTurns),
 	}
-	if c.Model != "" {
+	if s.Model != "" {
+		args = append(args, "--model", s.Model)
+	} else if c.Model != "" {
 		args = append(args, "--model", c.Model)
 	}
 	if s.BudgetUSD > 0 {
