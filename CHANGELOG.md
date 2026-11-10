@@ -575,6 +575,13 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Changed
 
+- `ctx` starts in 4.5 ms instead of 14.5 ms. It is one binary, and every start
+  parsed the page templates of the web interface in both languages, although
+  only `ctx serve` shows a page. They are now parsed when the server starts, so
+  a broken template still stops it at once. Every hook and every command is
+  that much faster. Together with the request it no longer makes, the hook
+  before a shell command that names no file takes 7.8 ms instead of 18.9 ms
+  against a local server.
 - A session start no longer waits for the files under `.ghosttree/` to be
   rewritten. The hook asked the server once per document and several times per
   discussion before the model saw anything: 71 requests in a small project,
