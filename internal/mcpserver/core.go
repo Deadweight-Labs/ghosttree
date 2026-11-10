@@ -147,11 +147,9 @@ func (r *coreRouter) call(ctx context.Context, next mcp.MethodHandler, call *mcp
 	}
 	route, ok := coretools.Route(name, strings.TrimSpace(action))
 	if !ok {
-		core, _ := coretools.Find(name)
 		if action == "" {
 			return toolError(fmt.Sprintf("%s needs an action: %s", name, strings.Join(coretools.ActionNames(name), ", "))), nil
 		}
-		_ = core
 		return toolError(fmt.Sprintf("%s has no action %q; it knows %s", name, action, strings.Join(coretools.ActionNames(name), ", "))), nil
 	}
 	delete(args, "action")
