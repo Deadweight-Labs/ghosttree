@@ -42,6 +42,61 @@ type commitLister interface {
 	PullRequestCommits(ctx context.Context, installationID int64, repo string, number int64) ([]forge.PullCommit, error)
 }
 
+// detailFetcher holt zu einem Commit die geänderten Dateien ("Contents: read") und
+// den Stand der Prüfungen ("Checks: read"). Das sind eigene Rechte der App; fehlt
+// eines, bleibt der Block auf der Commit-Seite einfach weg.
+type detailFetcher interface {
+	CommitFiles(ctx context.Context, installationID int64, repo, sha string) (forge.CommitFiles, error)
+	CommitCI(ctx context.Context, installationID int64, repo, sha string) (string, error)
+}
+
+// detailPlan merkt, welche Gruppen die App überhaupt abrufen darf: fehlt ein Recht,
+// wird es für den Rest des Laufs nicht mehr erfragt.
+type detailPlan struct{ files, ci bool }
+
+func newDetailPlan() *detailPlan { return &detailPlan{files: true, ci: true} }
+
+// recordCommitDetails holt Dateien und Prüfstand eines Commits und speichert sie.
+// Ein fehlendes Recht ist kein Fehler des Commits: die Gruppe wird im Plan
+// abgeschaltet. Ein Ratenlimit und jeder andere Fehler kommen zurück.
+func recordCommitDetails(ctx context.Context, st *store.Store, f detailFetcher, plan *detailPlan, installationID int64, project, sha string) error {
+	ch := store.CommitDetailsChange{InstallationID: installationID, Remote: project, SHA: sha}
+	if plan.files {
+		files, err := f.CommitFiles(ctx, installationID, project, sha)
+		switch {
+		case err == nil:
+			ch.HaveFiles, ch.FilesTotal, ch.Additions, ch.Deletions = true, files.Total, files.Additions, files.Deletions
+			for _, x := range files.Files {
+				ch.Files = append(ch.Files, store.CommitFileStat{Path: x.Path, Additions: x.Additions, Deletions: x.Deletions})
+			}
+		case errors.Is(err, forge.ErrPermissionMissing):
+			plan.files = false
+		default:
+			return err
+		}
+	}
+	if plan.ci {
+		ci, err := f.CommitCI(ctx, installationID, project, sha)
+		switch {
+		case err == nil:
+			ch.HaveCI, ch.CI = true, ci
+		case errors.Is(err, forge.ErrPermissionMissing):
+			plan.ci = false
+		default:
+			return err
+		}
+	}
+	if !ch.HaveFiles && !ch.HaveCI {
+		return nil
+	}
+	_, err := st.RecordCommitDetails(ch)
+	return err
+}
+
+// webhookDetailCommits ist, wie viele Commits der Webhook höchstens mit Dateien und
+// Prüfstand versieht; den Rest holt ctx github sync-prs --commits nach.
+const webhookDetailCommits = 5
+
 // pullCommitTimeout begrenzt den Abruf der Commits eines PRs im Webhook; GitHub
 // wartet auf die Antwort nur zehn Sekunden.
 const pullCommitTimeout = 8 * time.Second
@@ -56,7 +111,7 @@ func recordPullCommits(ctx context.Context, st *store.Store, l commitLister, ins
 	}
 	commits := make([]store.PullCommit, 0, len(list))
 	for _, c := range list {
-		commits = append(commits, store.PullCommit{SHA: c.SHA, Author: c.Author, AuthorName: c.AuthorName, Title: c.Title, CommittedAt: c.CommittedAt})
+		commits = append(commits, store.PullCommit{SHA: c.SHA, Author: c.Author, AuthorName: c.AuthorName, Title: c.Title, CommittedAt: c.CommittedAt, Message: c.Message, Parents: c.Parents})
 	}
 	return st.RecordPullCommits(store.PullCommitsChange{InstallationID: installationID, Remote: project, Number: number, Commits: commits})
 }
@@ -81,8 +136,23 @@ func pullWebhook(st *store.Store, l commitLister, onCommitError func(error)) for
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), pullCommitTimeout)
 		defer cancel()
-		if _, err := recordPullCommits(ctx, st, l, ev.InstallationID, res.Project, ev.Number); err != nil && onCommitError != nil {
-			onCommitError(fmt.Errorf("pull request commits of %s#%d: %w", res.Project, ev.Number, err))
+		if _, err := recordPullCommits(ctx, st, l, ev.InstallationID, res.Project, ev.Number); err != nil {
+			if onCommitError != nil {
+				onCommitError(fmt.Errorf("pull request commits of %s#%d: %w", res.Project, ev.Number, err))
+			}
+			return nil
+		}
+		if f, ok := l.(detailFetcher); ok {
+			shas, _ := st.CommitsNeedingDetails(res.Project, webhookDetailCommits)
+			plan := newDetailPlan()
+			for _, sha := range shas {
+				if err := recordCommitDetails(ctx, st, f, plan, ev.InstallationID, res.Project, sha); err != nil {
+					if onCommitError != nil {
+						onCommitError(fmt.Errorf("commit details of %s %s: %w", res.Project, sha[:7], err))
+					}
+					break
+				}
+			}
 		}
 		return nil
 	}
@@ -156,6 +226,57 @@ func syncPullCommits(ctx context.Context, st *store.Store, cl commitLister, proj
 		}
 	}
 	fmt.Fprintf(stdout, "%d pull requests without stored commits fetched, %d failed\n", fetched, failed)
+	if failed > 0 {
+		return 1
+	}
+	if f, ok := cl.(detailFetcher); ok {
+		return syncCommitDetails(ctx, st, f, targets, stdout)
+	}
+	return 0
+}
+
+// detailsPerRun begrenzt, wie viele Commits ein Lauf je Projekt mit Dateien und
+// Prüfstand versieht (jeder kostet zwei bis drei Abrufe); der nächste Lauf macht
+// dort weiter.
+const detailsPerRun = 150
+
+// syncCommitDetails holt Dateien und Prüfstand der Commits nach, die sie noch nicht
+// haben (oder deren Prüfung noch lief), jüngste zuerst. Ein Ratenlimit bricht ab.
+func syncCommitDetails(ctx context.Context, st *store.Store, f detailFetcher, targets []store.PullSyncTarget, stdout io.Writer) int {
+	var done, failed int
+	plan := newDetailPlan()
+	for _, t := range targets {
+		shas, err := st.CommitsNeedingDetails(t.Project, detailsPerRun)
+		if err != nil {
+			fmt.Fprintln(stdout, err)
+			return 1
+		}
+		for _, sha := range shas {
+			if !plan.files && !plan.ci {
+				break
+			}
+			cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err := recordCommitDetails(cctx, st, f, plan, t.InstallationID, t.Project, sha)
+			cancel()
+			switch {
+			case err == nil:
+				done++
+			case errors.Is(err, forge.ErrRateLimited):
+				fmt.Fprintf(stdout, "GitHub rate limit reached (%v); run the command again later\n", err)
+				return 1
+			default:
+				failed++
+				fmt.Fprintf(stdout, "%s %s: could not read the commit details (%v)\n", t.Project, sha[:7], err)
+			}
+		}
+	}
+	if !plan.files {
+		fmt.Fprintln(stdout, "the GitHub App lacks \"Contents: read\"; changed files were not fetched")
+	}
+	if !plan.ci {
+		fmt.Fprintln(stdout, "the GitHub App lacks \"Checks: read\"; the test state of commits was not fetched")
+	}
+	fmt.Fprintf(stdout, "%d commits with their files and checks fetched, %d failed\n", done, failed)
 	if failed > 0 {
 		return 1
 	}

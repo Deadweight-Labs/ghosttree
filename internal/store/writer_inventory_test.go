@@ -359,6 +359,8 @@ var writerMethodClasses = map[string]string{
 	"PullRequestOf":                 "read",
 	"PullRequestList":               "read",
 	"RecordPullCommits":             "write",
+	"RecordCommitDetails":           "write",
+	"CommitsNeedingDetails":         "read",
 	"SaveAnswerOptions":             "write",
 	"PullSyncTargets":               "read",
 	"PullsWithoutCommits":           "read",

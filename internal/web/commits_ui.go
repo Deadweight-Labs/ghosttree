@@ -137,9 +137,34 @@ type commitView struct {
 	Empty       bool
 	CommitsHref string
 	Entries     int
+	// What GitHub says about the commit (P13.5); every part is empty, and its block
+	// not shown, when it was not fetched or the viewer may not read it.
+	Body                      string
+	Co                        []string
+	Parents                   []commitParent
+	AvKind                    string
+	CI, CIIcon, CITitle       string
+	CodeHref, CodeTip         string
+	Changed                   []commitChange
+	ChangedTotal, ChangedMore int
+	Additions, Deletions      string
+	AtRaw                     string
 }
 
 type commitFile struct{ Path, Href, Desc, Who string }
+
+// commitParent is a parent of the commit as a pill: Href leads to its page here
+// when the server knows it, else to GitHub, else nowhere.
+type commitParent struct{ Short, SHA, Href string }
+
+// commitChange is one changed file with its lines. Bar is five blocks, "a" for
+// added and "d" for removed, in the share the lines have.
+type commitChange struct {
+	Path, Href, Desc string
+	// Add and Del are the lines as written ("+212", "−18").
+	Add, Del string
+	Bar      []string
+}
 
 // commitEntryHref ist die Adresse eines Eintrags im Repository.
 func commitEntryHref(view *repoView, def string, visible branchVisible, e store.CommitEntry) string {
@@ -202,7 +227,17 @@ func (a *app) commitDetail(w http.ResponseWriter, r *http.Request, remote, sha s
 	visible := a.branchRule(r2, pa, remote)
 	now := overviewNow().UTC()
 	row := a.commitRowOf(l, view, d.CommitInfo, names, seeAll, now)
-	v := &commitView{Short: row.Short, SHA: d.SHA, Who: row.Who, PRs: row.PRs, Branches: row.Branches, HasTitle: d.Title != "", Entries: len(d.Said), CommitsHref: view.Href + "/commits"}
+	v := &commitView{Short: row.Short, SHA: d.SHA, Who: row.Who, PRs: row.PRs, Branches: row.Branches, HasTitle: d.Title != "", Entries: len(d.Said), CommitsHref: view.Href + "/commits",
+		Body: d.Message, Co: row.Co, CI: row.CI, CIIcon: row.CIIcon, CITitle: row.CITitle, CodeHref: row.CodeHref, CodeTip: row.CodeTip}
+	for _, p := range d.Parents {
+		cp := commitParent{Short: shortSHA(p), SHA: p}
+		if _, err := pa.CommitView(remote, p); err == nil {
+			cp.Href = view.Href + "/commits/" + p
+		} else if view.External != "" {
+			cp.Href = view.External + "/commit/" + p
+		}
+		v.Parents = append(v.Parents, cp)
+	}
 	v.Title = firstNonEmpty(d.Title, l.msg("commit.untitled", row.Short))
 	if t := parseTime(d.At); !t.IsZero() {
 		v.At, v.AtTitle = shortAgo(l, now, t), l.dateTime(t.Local())
@@ -212,9 +247,29 @@ func (a *app) commitDetail(w http.ResponseWriter, r *http.Request, remote, sha s
 	}
 	v.DoneHref = pathWith("/ui/search", "project", remote, "preset", "pr-ergebnis", "commit", d.SHA)
 	reqSeen := map[int64]bool{}
+	described := map[string]commitFile{}
+	for _, e := range d.Said {
+		if e.Kind == store.CommitKindGhost && e.Path != "" {
+			described[e.Path] = commitFile{Path: e.Path, Href: commitEntryHref(view, def, visible, e), Desc: e.Title, Who: e.Person}
+		}
+	}
+	changedPaths := map[string]bool{}
+	for _, f := range d.Files {
+		c := commitChange{Path: f.Path, Add: signed("+", f.Additions), Del: signed("−", f.Deletions), Bar: diffBar(f.Additions, f.Deletions)}
+		if g, ok := described[f.Path]; ok {
+			c.Href, c.Desc = g.Href, g.Desc
+		}
+		changedPaths[f.Path] = true
+		v.Changed = append(v.Changed, c)
+	}
+	v.ChangedTotal, v.Additions, v.Deletions = max(d.FilesTotal, len(d.Files)), signed("+", d.Additions), signed("−", d.Deletions)
+	v.ChangedMore = v.ChangedTotal - len(v.Changed)
 	for _, e := range d.Said {
 		href := commitEntryHref(view, def, visible, e)
 		if e.Kind == store.CommitKindGhost {
+			if changedPaths[e.Path] {
+				continue
+			}
 			if len(v.Files) < 200 {
 				v.Files = append(v.Files, commitFile{Path: e.Path, Href: href, Desc: e.Title, Who: e.Person})
 			}
@@ -229,6 +284,34 @@ func (a *app) commitDetail(w http.ResponseWriter, r *http.Request, remote, sha s
 	}
 	v.Empty = len(d.Said) == 0
 	a.renderBrowser(w, r2, "commit", pageData{Title: v.Title, Project: remote, CommitV: v})
+}
+
+// signed writes a count of lines with its sign.
+func signed(sign string, n int) string { return sign + strconv.Itoa(n) }
+
+// diffBar spreads five blocks over added and removed lines: each side that has
+// lines keeps at least one block.
+func diffBar(add, del int) []string {
+	const n = 5
+	if add+del == 0 {
+		return nil
+	}
+	a := (add*n + (add+del)/2) / (add + del)
+	if add > 0 && a == 0 {
+		a = 1
+	}
+	if del > 0 && a == n {
+		a = n - 1
+	}
+	bar := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		if i < a {
+			bar = append(bar, "a")
+		} else {
+			bar = append(bar, "d")
+		}
+	}
+	return bar
 }
 
 // commitItem ist ein Eintrag der Zeitleiste „Was wurde dazu gesagt“.

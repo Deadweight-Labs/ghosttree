@@ -71,6 +71,27 @@
   & .ref.k-pr svg { color: var(--success-fg); }
   & span.chip.sha { color: var(--accent-fg); background: var(--neutral-muted); }
 
+  /* ---- Commit page: message, parents, co-authors, checks, changed files ---- */
+  & .cbody { margin: 8px 0 0; max-width: 100ch; font-size: 14px; line-height: 1.5; color: var(--fg-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+  & .chead .parents { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+  & span.stack { display: inline-flex; flex: none; }
+  & span.stack .gav + .gav { margin-left: -4px; box-shadow: 0 0 0 2px var(--canvas-default); }
+  & .chead .dacts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+  & .chead span.stack .gav { width: 20px; height: 20px; font-size: 9px; }
+  & .chead .person { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+  & b.co + b.co::before { content: ","; margin-right: 4px; margin-left: -4px; font-weight: 400; }
+  & .ci { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+  & .ci .i { width: 14px; height: 14px; }
+  & .ci.ok { color: var(--success-fg); }
+  & .ci.bad { color: var(--danger-fg); }
+  & .ci.wait { color: var(--attention-fg); }
+  & .chrow .diff, & .dstat { display: inline-flex; align-items: center; gap: 8px; font: 12px/1 var(--ui-mono); }
+  & .diff .add, & .dstat .add { color: var(--success-fg); }
+  & .diff .del, & .dstat .del { color: var(--danger-fg); }
+  & .dbar { display: inline-flex; gap: 2px; }
+  & .dbar i { width: 8px; height: 8px; border-radius: 1px; background: var(--success-emphasis); }
+  & .dbar i.d { background: var(--danger-emphasis); }
+
   /* ---- List of commits by day ---- */
   &.cm .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
   & .branchbtn .mono { font-size: 12px; color: var(--fg-default); }
@@ -88,7 +109,6 @@
   & .cmrow .ct a.title:hover { color: var(--accent-fg); }
   & .cmrow .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
   & .cmrow .meta b { color: var(--fg-default); font-weight: 600; }
-  & .cmrow .meta .stack { display: inline-flex; }
   & .cmrow .meta .stack .gav { width: 18px; height: 18px; font-size: 8px; }
   & .cr { display: flex; align-items: center; gap: 8px; }
   & .said { display: inline-flex; align-items: center; gap: 10px; height: 24px; padding: 0 8px; font-size: 12px; color: var(--fg-muted); border: 1px solid var(--border-default); border-radius: 2em; }

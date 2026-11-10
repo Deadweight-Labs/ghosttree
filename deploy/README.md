@@ -72,6 +72,12 @@ organization and the user its admin, otherwise the connection is refused.
 branch and PR anchors (`GitHubApp.PullRequests`) needs it and reports a missing
 permission as an error until it is added.
 
+The commit page shows the changed files and the state of the checks of a commit.
+Those two come from `Contents: read` and `Checks: read` (optionally `Commit
+statuses: read`); without them the commit page simply leaves the blocks out, and
+`ctx github sync-prs --commits` says which permission is missing. Parents,
+message and co-authors need only `Pull requests: read`.
+
 Give the server the App's credentials. The private key (PEM, as downloaded from
 GitHub) and the webhook secret are read from files only and never logged or sent
 to the browser:

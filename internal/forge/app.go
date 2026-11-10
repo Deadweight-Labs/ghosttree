@@ -452,9 +452,12 @@ type PullCommit struct {
 	// zuordnet), AuthorName der Name aus dem Commit.
 	Author     string `json:"author,omitempty"`
 	AuthorName string `json:"author_name,omitempty"`
-	// Title ist die erste Zeile der Commit-Nachricht.
+	// Title ist die erste Zeile der Commit-Nachricht, Message die ganze.
 	Title       string `json:"title"`
+	Message     string `json:"message,omitempty"`
 	CommittedAt string `json:"committed_at,omitempty"`
+	// Parents sind die SHAs der Eltern-Commits; sie kommen mit derselben Antwort.
+	Parents []string `json:"parents,omitempty"`
 }
 
 const (
@@ -483,7 +486,10 @@ func (g *GitHubApp) PullRequestCommits(ctx context.Context, installationID int64
 	var out []PullCommit
 	for page := 1; page <= maxCommitPages; page++ {
 		var raw []struct {
-			SHA    string `json:"sha"`
+			SHA     string `json:"sha"`
+			Parents []struct {
+				SHA string `json:"sha"`
+			} `json:"parents"`
 			Commit struct {
 				Message string `json:"message"`
 				Author  struct {
@@ -506,7 +512,10 @@ func (g *GitHubApp) PullRequestCommits(ctx context.Context, installationID int64
 			return nil, err
 		}
 		for _, r := range raw {
-			c := PullCommit{SHA: r.SHA, AuthorName: r.Commit.Author.Name, Title: firstLine(r.Commit.Message)}
+			c := PullCommit{SHA: r.SHA, AuthorName: r.Commit.Author.Name, Title: firstLine(r.Commit.Message), Message: r.Commit.Message}
+			for _, p := range r.Parents {
+				c.Parents = append(c.Parents, p.SHA)
+			}
 			if r.Author != nil {
 				c.Author = r.Author.Login
 			}
@@ -528,6 +537,163 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// CommitFile ist eine Datei, die ein Commit ändert, mit den Zeilen, die er
+// hinzufügt und entfernt.
+type CommitFile struct {
+	Path      string `json:"path"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+}
+
+// CommitFiles ist die Dateiliste eines Commits. Total ist die Zahl der Dateien
+// laut GitHub (die Liste hat höchstens maxCommitFiles), Additions und Deletions
+// die Summen über den ganzen Commit.
+type CommitFiles struct {
+	Files     []CommitFile `json:"files"`
+	Total     int          `json:"total"`
+	Additions int          `json:"additions"`
+	Deletions int          `json:"deletions"`
+}
+
+const maxCommitFiles = 300
+
+// CommitFiles liefert die geänderten Dateien eines Commits mit ihren Zeilenzahlen
+// (GET /repos/{owner}/{repo}/commits/{sha}). GitHub verlangt dafür das Recht
+// "Contents: read"; das Token wird darauf begrenzt. Fehlt es, kommt
+// ErrPermissionMissing: die Commit-Seite zeigt dann nur, was sie sonst weiß.
+func (g *GitHubApp) CommitFiles(ctx context.Context, installationID int64, repo, sha string) (CommitFiles, error) {
+	parts, ok := repoParts(repo)
+	if !ok || !hexSHA(sha) {
+		return CommitFiles{}, fmt.Errorf("commit files: repo must look like github.com/owner/repo and the sha must be hexadecimal")
+	}
+	tok, err := g.installationToken(ctx, installationID, map[string]string{"contents": "read"})
+	if err != nil {
+		return CommitFiles{}, permissionOr(err)
+	}
+	var raw struct {
+		Stats struct {
+			Additions int `json:"additions"`
+			Deletions int `json:"deletions"`
+		} `json:"stats"`
+		Files []struct {
+			Filename  string `json:"filename"`
+			Additions int    `json:"additions"`
+			Deletions int    `json:"deletions"`
+		} `json:"files"`
+	}
+	path := "/repos/" + url.PathEscape(parts[1]) + "/" + url.PathEscape(parts[2]) + "/commits/" + sha
+	if err := g.getAs(ctx, tok, path, &raw); err != nil {
+		return CommitFiles{}, permissionOr(err)
+	}
+	out := CommitFiles{Total: len(raw.Files), Additions: raw.Stats.Additions, Deletions: raw.Stats.Deletions}
+	for i, f := range raw.Files {
+		if i >= maxCommitFiles {
+			break
+		}
+		out.Files = append(out.Files, CommitFile{Path: f.Filename, Additions: f.Additions, Deletions: f.Deletions})
+	}
+	return out, nil
+}
+
+// Stände der Prüfungen eines Commits.
+const (
+	CIPending = "pending"
+	CISuccess = "success"
+	CIFailure = "failure"
+)
+
+// CommitCI fasst die Prüfungen eines Commits zu einem Stand zusammen: ein Check-Run
+// oder Status, der scheitert, ergibt "failure"; läuft noch einer, "pending"; sind
+// alle durch, "success". Hat der Commit keine Prüfung, ist der Stand leer. Das
+// braucht "Checks: read" (und, wenn die App es hat, "Commit statuses: read"); fehlt
+// "Checks", kommt ErrPermissionMissing.
+func (g *GitHubApp) CommitCI(ctx context.Context, installationID int64, repo, sha string) (string, error) {
+	parts, ok := repoParts(repo)
+	if !ok || !hexSHA(sha) {
+		return "", fmt.Errorf("commit checks: repo must look like github.com/owner/repo and the sha must be hexadecimal")
+	}
+	withStatuses := true
+	tok, err := g.installationToken(ctx, installationID, map[string]string{"checks": "read", "statuses": "read"})
+	if err != nil {
+		// Eine App ohne "Commit statuses" bekommt das Token nur für die Checks.
+		withStatuses = false
+		if tok, err = g.installationToken(ctx, installationID, map[string]string{"checks": "read"}); err != nil {
+			return "", permissionOr(err)
+		}
+	}
+	base := "/repos/" + url.PathEscape(parts[1]) + "/" + url.PathEscape(parts[2]) + "/commits/" + sha
+	var runs struct {
+		CheckRuns []struct {
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+		} `json:"check_runs"`
+	}
+	if err := g.getAs(ctx, tok, base+"/check-runs?per_page=100", &runs); err != nil {
+		return "", permissionOr(err)
+	}
+	state := ""
+	rank := map[string]int{"": 0, CISuccess: 1, CIPending: 2, CIFailure: 3}
+	worse := func(s string) {
+		if rank[s] > rank[state] {
+			state = s
+		}
+	}
+	for _, r := range runs.CheckRuns {
+		switch {
+		case r.Status != "completed":
+			worse(CIPending)
+		case r.Conclusion == "success" || r.Conclusion == "neutral" || r.Conclusion == "skipped":
+			worse(CISuccess)
+		default:
+			worse(CIFailure)
+		}
+	}
+	if withStatuses {
+		var st struct {
+			State      string `json:"state"`
+			TotalCount int    `json:"total_count"`
+		}
+		if err := g.getAs(ctx, tok, base+"/status", &st); err == nil && st.TotalCount > 0 {
+			switch st.State {
+			case "success":
+				worse(CISuccess)
+			case "pending":
+				worse(CIPending)
+			default:
+				worse(CIFailure)
+			}
+		}
+	}
+	return state, nil
+}
+
+func repoParts(repo string) ([]string, bool) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(repo)), "/")
+	return parts, len(parts) == 3 && parts[0] == "github.com" && parts[1] != "" && parts[2] != ""
+}
+
+func hexSHA(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// permissionOr macht aus einem 403, 404 oder 422 der App "Recht fehlt"; ein
+// Ratenlimit und alles andere bleiben, wie sie sind.
+func permissionOr(err error) error {
+	var se *statusError
+	if errors.As(err, &se) && (se.code == http.StatusForbidden || se.code == http.StatusNotFound || se.code == http.StatusUnprocessableEntity) {
+		return ErrPermissionMissing
+	}
+	return err
 }
 
 // ---------------------------------------------------------------- JWT und Token

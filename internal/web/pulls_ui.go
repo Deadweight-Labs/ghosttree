@@ -520,6 +520,12 @@ type commitRow struct {
 	Entries                                              int
 	PRs                                                  []commitPR
 	Branches                                             []commitBranch
+	// Co are the co-authors named in the commit message. CI is the state of its
+	// checks (ok, bad or wait; empty when none is known), CITitle says it in words.
+	// CodeHref is the code as it stood at this commit, on GitHub.
+	Co                            []string
+	CI, CIIcon, CITitle, CodeHref string
+	CodeTip                       string
 }
 
 type commitPR struct{ Text, Href, Title string }
@@ -723,6 +729,11 @@ func (a *app) commitRowOf(l lang, view *repoView, c store.CommitInfo, names []st
 	if row.Who != "" {
 		row.AvKind = actorKind(row.Who)
 	}
+	row.Co = c.CoAuthors
+	row.CI, row.CIIcon, row.CITitle = commitCI(l, c.CI)
+	if view.External != "" {
+		row.CodeHref, row.CodeTip = view.External+"/tree/"+c.SHA, l.msg("commit.code_tip", row.Short)
+	}
 	for _, n := range c.PRs {
 		p := commitPR{Text: "#" + strconv.FormatInt(n, 10), Href: view.Href + "/pulls/" + strconv.FormatInt(n, 10), Title: l.msg("commits.pr_title", n)}
 		row.PRs = append(row.PRs, p)
@@ -734,6 +745,20 @@ func (a *app) commitRowOf(l lang, view *repoView, c store.CommitInfo, names []st
 		}
 	}
 	return row
+}
+
+// commitCI says how the checks of a commit stand: a class, an icon and the words.
+// Nothing is known when the state is empty, and then nothing is shown.
+func commitCI(l lang, state string) (class, icon, title string) {
+	switch state {
+	case store.CommitCISuccess:
+		return "ok", "check", l.msg("commit.ci.success")
+	case store.CommitCIFailure:
+		return "bad", "x", l.msg("commit.ci.failure")
+	case store.CommitCIPending:
+		return "wait", "clock", l.msg("commit.ci.pending")
+	}
+	return "", "", ""
 }
 
 // pullChecklist füllt Kennzahlen, Mitglieder, Feature-Punkte und offene
