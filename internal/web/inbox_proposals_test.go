@@ -20,7 +20,7 @@ func TestInboxOffersTheProposedAnswersOfATaskAndAnswersWithOne(t *testing.T) {
 
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/inbox")
 	for _, want := range []string{`class="opts"`, "Suggestions", `action="/ui/inbox/answer"`, `name="kind" value="task"`, `name="id" value="` + itoa(task.ID) + `"`,
-		`name="option" value="1"`, `name="option" value="2"`, ">Variante A</button>", ">Variante B</button>", "Own answer", `name="next" value="1"`} {
+		`name="option" value="1"`, `name="option" value="2"`, "<span>Variante A</span></button>", "<span>Variante B</span></button>", "Own answer", `name="next" value="1"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("inbox lacks %q", want)
 		}
@@ -65,7 +65,7 @@ func TestInboxProposalsOfAQuestionInARoomAnswerItAsThePerson(t *testing.T) {
 	}
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/inbox")
 	m := regexp.MustCompile(`name="kind" value="attention"><input type="hidden" name="id" value="(\d+)"><input type="hidden" name="option" value="2"`).FindStringSubmatch(page)
-	if m == nil || !strings.Contains(page, ">One migration</button>") {
+	if m == nil || !strings.Contains(page, "<span>One migration</span></button>") {
 		t.Fatalf("the question lacks its proposals: %s", page)
 	}
 	// "Own answer" opens the field of the row; the plain "Reply" button would only repeat it.

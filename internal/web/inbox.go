@@ -82,6 +82,25 @@ type inboxRow struct {
 // what the button says and what the answer says.
 type inboxOption struct{ Key, Text string }
 
+// Lead is the letter in front of the line of a proposal ("A"): the key when it is a short mark
+// and the text does not carry it already as "A: ".
+func (o inboxOption) Lead() string {
+	if len(o.Key) == 0 || len(o.Key) > 2 || o.Key != strings.ToUpper(o.Key) {
+		return ""
+	}
+	return o.Key
+}
+
+// Body is the text of the proposal without its "A: " lead.
+func (o inboxOption) Body() string {
+	for _, sep := range []string{": ", ". ", ") "} {
+		if rest, ok := strings.CutPrefix(o.Text, o.Key+sep); ok && o.Lead() != "" {
+			return rest
+		}
+	}
+	return o.Text
+}
+
 // inboxQuick is the proposal a finished entry was answered with ("per Schnellantwort").
 type inboxQuick struct{ Text, Person string }
 

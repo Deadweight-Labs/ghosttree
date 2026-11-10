@@ -46,7 +46,7 @@ const (
 )
 
 // charCount zählt Zeichen, nicht Bytes: ein „ä“ ist eins. So zählt auch das Feld.
-func charCount(s string) int { return utf8.RuneCountInString(s) }
+func charCount(s string) int { return utf8.RuneCountInString(s) - strings.Count(s, "\r\n") }
 
 // tooLong sagt, ob s mehr als limit Zeichen hat.
 func tooLong(s string, limit int) bool { return charCount(s) > limit }

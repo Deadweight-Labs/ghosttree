@@ -12,7 +12,7 @@
 {{if or .Images .CanAttach}}<section class="box ws-imgbox" id="images" aria-labelledby="img-h"><div class="box-h"><h2 class="t" id="img-h">{{mi "image"}} {{t "workshop.images"}}</h2></div>
 {{if .Images}}<div class="ws-imgs ws-imgs-idea">{{range .Images}}{{template "wsimage" .}}{{end}}</div>{{end}}
 {{if .CanAttach}}<form class="ws-up" method="post" action="/ui/ideas/{{.ID}}/attach" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="owner" value="idea">
-<input class="gfield" type="file" name="file" accept="image/png,image/jpeg,image/webp" required aria-label="{{t "workshop.img.file"}}">
+{{template "uifile" (fileField "file" "image/png,image/jpeg,image/webp" (t "workshop.img.pick") (t "workshop.img.file"))}}
 <input class="gfield" name="alt" maxlength="200" autocomplete="off" placeholder="{{t "workshop.img.alt"}}" aria-label="{{t "workshop.img.alt"}}">
 <button class="gbtn">{{mi "plus"}}{{t "workshop.img.add"}}</button></form>{{end}}</section>{{end}}
 {{if .HasImages}}<dialog class="ws-lb" id="ws-lb" aria-label="{{t "workshop.zoom_title"}}"><form method="dialog"><button class="ws-lb-x" aria-label="{{t "workshop.zoom_close"}}">{{mi "x"}}</button></form><img alt=""><p class="ws-lb-cap"></p></dialog>{{end}}

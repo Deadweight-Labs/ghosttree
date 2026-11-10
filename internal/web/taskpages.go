@@ -75,6 +75,10 @@ type taskPageView struct {
 	CanDone    bool
 	DoneAction string
 	Token      string
+	// Composer is the field that reports the task as done: what is written is the note for the agent.
+	Composer *composerView
+	// Result is the line after a refused report (?fail=).
+	Result *requestResult
 }
 
 func init() {
@@ -289,6 +293,11 @@ func (a *app) taskDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 	v.First = firstOf(l, a.actorViewOf(l, pa, actor.Task, t.ID, t.CreatedBy, true), t.CreatedBy, l.msg("tasks.asked_ch"), v.Age, "", "")
 	if interactive(r) && t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil {
 		v.CanDone, v.DoneAction = true, "/ui/tasks/done"
+		v.Composer = &composerView{Action: v.DoneAction, Token: v.Token, Name: "note", Avatar: browserPrincipal(r).Label, Placeholder: l.msg("tasks.note_placeholder"),
+			Submit: l.msg("tasks.mark_done"), MaxLen: taskNoteChars, Hidden: []hiddenField{{"id", strconv.FormatInt(t.ID, 10)}, {"back", "task"}}}
+	}
+	if code := r.URL.Query().Get("fail"); code != "" {
+		v.Result = &requestResult{Text: l.msg(taskFailKey(code)), Kind: "failed", Fail: true}
 	}
 	a.renderBrowser(w, r2, "task", pageData{Title: t.Title, Project: remote, TaskV: v})
 }

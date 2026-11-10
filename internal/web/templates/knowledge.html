@@ -59,8 +59,7 @@
 <form method="post" action="/ui/knowledge/{{.ID}}/edit" class="pform"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
 <label class="pfield"><span>{{t "knowledge.field_title"}}</span><input class="gfield" name="title" value="{{.Title}}" required maxlength="500"></label>
 <label class="pfield"><span>{{t "knowledge.field_type"}}</span><select class="gfield" name="type">{{range $.KnowledgeItemV.Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
-<label class="pfield"><span>{{t "knowledge.field_body"}}</span><textarea name="body" required rows="12">
-{{.RawBody}}</textarea></label>
+<div class="pfield"><span>{{t "knowledge.field_body"}}</span>{{template "uicomposer" $.KnowledgeItemV.EditBody}}</div>
 <div class="wf"><button class="gbtn pri">{{t "knowledge.save"}}</button></div></form></div></details>{{end}}
 {{with $.KnowledgeItemV.Move}}<details class="panel box newbox" id="move"{{if eq $.KnowledgeItemV.Panel "move"}} open{{end}}><summary class="box-h"><span class="t">{{t "move.title"}}</span><span class="sp"></span><a class="gbtn sm icon quiet" href="{{$.KnowledgeItemV.Card.Href}}" aria-label="{{t "issue.close_panel"}}">{{mi "x"}}</a></summary><div class="cb write">
 <form method="post" action="/ui/knowledge/{{$.KnowledgeItemV.Card.ID}}/move" class="pform"><input type="hidden" name="csrf_token" value="{{.Token}}">
