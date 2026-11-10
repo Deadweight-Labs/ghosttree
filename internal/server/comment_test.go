@@ -178,7 +178,7 @@ func TestCommentEditOnlyByTheAuthorWithVersionsAndSoftDelete(t *testing.T) {
 		t.Errorf("versions: %+v", versions)
 	}
 	f.expect(t, "mia", 400, "PATCH", path, map[string]any{"body": "   "})
-	f.expect(t, "mia", 400, "PATCH", path, map[string]any{"body": strings.Repeat("x", store.MaxCommentBytes+1)})
+	f.expect(t, "mia", 400, "PATCH", path, map[string]any{"body": strings.Repeat("x", store.MaxCommentChars+1)})
 
 	// Löschen: Autor und Lead; der andere Member, der Gast und der Fremde nicht.
 	f.expect(t, "rex", 403, "DELETE", path, nil)

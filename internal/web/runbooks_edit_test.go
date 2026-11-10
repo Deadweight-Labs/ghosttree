@@ -200,20 +200,28 @@ func TestTheRunbookFormRefusesWhatTheModelRefusesAndKeepsTheInput(t *testing.T) 
 		t.Helper()
 		f := rbForm("ok-name")
 		mutate(f)
-		sameOriginPostForm(t, e.Member, e.Base+"/ui/runbooks/write", url.Values{}).Body.Close()
-		f.Set("csrf_token", renderedCSRFToken(t, e.Member, e.Base+"/ui/overview"))
-		resp := sameOriginPostForm(t, e.Member, e.Base+"/ui/runbooks/write", f)
-		page := body(t, resp)
-		if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(page, want) || !strings.Contains(page, `value="Roll out`) && name != "purpose" {
-			t.Errorf("%s -> %d, lacks %q or the input is lost", name, resp.StatusCode, want)
+		member := asBrowser(e.Member)
+		sameOriginPostForm(t, member, e.Base+"/ui/runbooks/write", url.Values{}).Body.Close()
+		f.Set("csrf_token", renderedCSRFToken(t, member, e.Base+"/ui/overview"))
+		resp := sameOriginPostForm(t, member, e.Base+"/ui/runbooks/write", f)
+		resp.Body.Close()
+		// The refusal goes back to the form (not to the address of the POST) with the text over
+		// it and every field as it was typed.
+		if resp.StatusCode != http.StatusSeeOther || !strings.HasSuffix(resp.Header.Get("Location"), "/runbooks/new") {
+			t.Errorf("%s -> %d %q, want a redirect to the form", name, resp.StatusCode, resp.Header.Get("Location"))
+			return
+		}
+		_, page := followRefusal(t, e.Member, e.Base, resp)
+		if !strings.Contains(page, want) || !strings.Contains(page, `class="callout is-danger"`) || (name != "purpose" && !strings.Contains(page, "Roll out")) {
+			t.Errorf("%s: the form lacks %q or the input is lost", name, want)
 		}
 	}
-	refuse("name", func(f url.Values) { f.Set("name", "Bad Name") }, "The runbook cannot be saved:")
+	refuse("name", func(f url.Values) { f.Set("name", "Bad Name") }, "The name may use lowercase letters")
 	refuse("new", func(f url.Values) { f.Set("name", "new") }, "is the address of this form")
 	refuse("purpose", func(f url.Values) { f.Set("purpose", "") }, "The runbook cannot be saved:")
 	refuse("type", func(f url.Values) { f["param_type"] = []string{"banana", "string"} }, "The runbook cannot be saved:")
-	refuse("param name", func(f url.Values) { f["param_name"] = []string{"Bad Name", ""} }, "parameter name")
-	refuse("pitfalls", func(f url.Values) { f.Set("pitfalls", "abc") }, "numbers of knowledge entries")
+	refuse("param name", func(f url.Values) { f["param_name"] = []string{"Bad Name", ""} }, "The name of a parameter starts with")
+	refuse("pitfalls", func(f url.Values) { f.Set("pitfalls", "abc") }, "Pitfalls are numbers of knowledge entries")
 	refuse("control characters", func(f url.Values) { f["step_command"] = []string{"echo\x07 bell", ""} }, "The runbook cannot be saved:")
 	if _, err := e.St.RunbookRefByScope(shellProject, "", "ok-name", 1); err == nil {
 		t.Error("a refused form stored a runbook")
@@ -226,9 +234,12 @@ func TestTheRunbookFormRefusesWhatTheModelRefusesAndKeepsTheInput(t *testing.T) 
 	again.Set("purpose", "Overwrite.")
 	sameOriginPostForm(t, e.Owner, e.Base+"/ui/runbooks/write", url.Values{}).Body.Close()
 	again.Set("csrf_token", renderedCSRFToken(t, e.Owner, e.Base+"/ui/overview"))
-	resp := sameOriginPostForm(t, e.Owner, e.Base+"/ui/runbooks/write", again)
-	if page := body(t, resp); resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(page, "exists already") {
+	resp := sameOriginPostForm(t, asBrowser(e.Owner), e.Base+"/ui/runbooks/write", again)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
 		t.Errorf("a second runbook of the same name -> %d", resp.StatusCode)
+	} else if _, page := followRefusal(t, e.Owner, e.Base, resp); !strings.Contains(page, "exists already") {
+		t.Errorf("a second runbook of the same name is not refused on the form")
 	}
 	if v, _ := rbHead(t, e, "taken"); v.Version != 1 || v.Spec.Purpose != "Roll out the thing." {
 		t.Errorf("the existing runbook was changed: %+v", v)
@@ -291,11 +302,23 @@ func TestARefusedRunbookFormTellsNothingToWhoMayNotReadTheRunbook(t *testing.T) 
 		}
 	}
 	// Whoever may read it, hears that the name is taken; whoever may edit it, sees the targets read-only.
-	if code, page := post(e.Member, nameTaken); code != http.StatusUnprocessableEntity || !strings.Contains(page, "exists already") {
+	posted := func(mutate func(url.Values)) (int, string) {
+		f := rbForm("deploy")
+		mutate(f)
+		f.Set("csrf_token", renderedCSRFToken(t, e.Member, e.Base+"/ui/overview"))
+		resp := sameOriginPostForm(t, asBrowser(e.Member), e.Base+"/ui/runbooks/write", f)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther {
+			return resp.StatusCode, ""
+		}
+		_, page := followRefusal(t, e.Member, e.Base, resp)
+		return resp.StatusCode, page
+	}
+	if code, page := posted(nameTaken); code != http.StatusSeeOther || !strings.Contains(page, "exists already") {
 		t.Errorf("a member creating over an existing name -> %d", code)
 	}
-	if code, page := post(e.Member, invalidEdit); code != http.StatusUnprocessableEntity || !strings.Contains(page, "SECRET-DEPLOY") {
-		t.Errorf("a member with an invalid edit -> %d, the form should carry the stored targets read-only", code)
+	if code, page := posted(invalidEdit); code != http.StatusSeeOther || !strings.Contains(page, "SECRET-DEPLOY") {
+		t.Errorf("a member with an invalid edit -> %d, the form of the edit should carry the stored targets read-only", code)
 	}
 }
 

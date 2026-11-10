@@ -172,8 +172,10 @@ const (
 	CommentOnKnowledge = "knowledge"
 )
 
-// MaxCommentBytes begrenzt einen Kommentar.
-const MaxCommentBytes = 20000
+// MaxCommentChars begrenzt einen Kommentar, in Zeichen und nicht in Bytes: so zählt
+// auch das Feld der Oberfläche, und ein deutscher Text mit Umlauten hat dort dieselbe
+// Länge wie ohne. Die Grenze der Raum-Nachrichten (CoordMaxBody) zählt Bytes und ist davon unabhängig.
+const MaxCommentChars = 64_000
 
 // Comment ist ein Kommentar, wie ein Betrachter ihn sieht. Ein gelöschter
 // Kommentar bleibt als Platzhalter in der Reihe (Deleted), ohne Text.
@@ -278,8 +280,8 @@ func checkCommentBody(body string) (string, error) {
 	if body == "" {
 		return "", requestdomain.NewRuleError("comment_empty", "a comment needs text", "write what you want to say", nil)
 	}
-	if !utf8.ValidString(body) || len(body) > MaxCommentBytes {
-		return "", requestdomain.NewRuleError("comment_too_long", fmt.Sprintf("a comment has at most %d bytes of text", MaxCommentBytes), "shorten it or put the long text in a document", nil)
+	if !utf8.ValidString(body) || utf8.RuneCountInString(body) > MaxCommentChars {
+		return "", requestdomain.NewRuleError("comment_too_long", fmt.Sprintf("a comment has at most %d characters of text", MaxCommentChars), "shorten it or put the long text in a document", nil)
 	}
 	return body, nil
 }

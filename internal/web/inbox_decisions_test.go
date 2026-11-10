@@ -88,16 +88,16 @@ func TestInboxDecisionIsTakenWithAClickAndWithAReason(t *testing.T) {
 	// The composer without script: no choice goes back to the inbox with the reason, and decides nothing.
 	noChoice := form("", "weil")
 	noChoice.Set("next", "1")
-	resp := tpPost(t, e, e.Owner, "/ui/inbox/answer", noChoice)
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/inbox?fail=dec-choice" {
+	resp := tpPost(t, e, asBrowser(e.Owner), "/ui/inbox/answer", noChoice)
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/inbox" {
 		t.Fatalf("no choice: %d to %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if _, page := fetchPage(t, e.Owner, e.Base+"/ui/inbox?fail=dec-choice"); !strings.Contains(page, "Pick one of the variants first.") {
-		t.Error("the inbox does not say why nothing was decided")
+	if _, page := followRefusal(t, e.Owner, e.Base, resp); !strings.Contains(page, "Pick one of the variants first.") || !strings.Contains(page, `"weil"`) {
+		t.Error("the inbox does not say why nothing was decided, or the reason typed is lost")
 	}
 	tooLong := form("A", strings.Repeat("x", idea.MaxReasonLine+1))
 	tooLong.Set("next", "1")
-	if resp := tpPost(t, e, e.Owner, "/ui/inbox/answer", tooLong); resp.Header.Get("Location") != "/ui/inbox?fail=dec-reason" {
+	if resp := tpPost(t, e, asBrowser(e.Owner), "/ui/inbox/answer", tooLong); resp.Header.Get("Location") != "/ui/inbox" {
 		t.Fatalf("a reason that is too long: %d to %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if got, _ := pa.DecisionView(d.ID); got.State != idea.DecisionOpen {

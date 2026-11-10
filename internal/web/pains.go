@@ -214,8 +214,8 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, f := range []string{"remaining", "evidence_ref", "note", "why"} {
-		if len(r.FormValue(f)) > maxFieldBytes {
-			http.Error(w, "invalid input", http.StatusBadRequest)
+		if v := r.FormValue(f); tooLong(v, maxFieldChars) {
+			a.tooLongForm(w, r, a.painHref(r, id), f, v, maxFieldChars)
 			return
 		}
 	}
@@ -227,7 +227,7 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := a.access(r).SetPainState(id, to, r.FormValue("remaining"), ev, painStateNote(to, r.FormValue("why"), r.FormValue("note")), by); err != nil {
 		if code := requestdomain.Code(err); code != "" {
-			http.Redirect(w, r, a.painHref(r, id)+"?fail="+url.QueryEscape(code), http.StatusSeeOther)
+			a.failFormTo(w, r, a.painHref(r, id), http.StatusUnprocessableEntity, a.langFor(r).msg(painFailKey(code)), painFailField(code))
 			return
 		}
 		a.painFail(w, r, err)
@@ -291,6 +291,21 @@ func linkDataText(data string) string {
 		return rest
 	}
 	return data
+}
+
+// painFailField is the field of the pain form a refusal is about.
+func painFailField(code string) string {
+	switch code {
+	case "remaining_required":
+		return "remaining"
+	case "evidence_required", "evidence_invalid":
+		return "evidence_ref"
+	case "note_required":
+		return "note"
+	case "accepted_reason_required":
+		return "why"
+	}
+	return ""
 }
 
 // painFailKey maps the fail= value of a redirect to its message; unknown values

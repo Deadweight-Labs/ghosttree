@@ -1,2 +1,5 @@
 {{/* The one banner for the outcome of an action. Green when it worked, red (.is-danger) when it failed. Strip names the query values the redirect carried, so a reload does not show it again. */}}
 {{define "resultbanner"}}{{with .R}}<div class="callout {{if .Fail}}is-danger{{else}}ok{{end}}" role="{{if .Fail}}alert{{else}}status{{end}}" data-strip="{{$.Strip}}">{{if .Fail}}{{mi "tri"}}{{else}}{{mi "check"}}{{end}}<div class="tt">{{.Text}}</div></div><script src="/static/ui-notice.js" defer></script>{{end}}{{end}}
+
+{{/* The note a rejected form comes back with (formfail.go): red, over the form that was sent. The data block carries what was typed, ui-flash.js writes it back into the fields. */}}
+{{define "flashnote"}}{{with .Flash}}<div class="callout is-danger" role="alert" id="gt-flashnote" tabindex="-1">{{mi "tri"}}<div class="tt">{{.Text}}</div></div><script type="application/json" id="gt-flash">{{.Data}}</script>{{end}}{{end}}

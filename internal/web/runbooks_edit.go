@@ -80,6 +80,26 @@ func padParams(rows []runbookParamRow, extra int) []runbookParamRow {
 	return rows
 }
 
+func filledParams(rows []runbookParamRow) []runbookParamRow {
+	var out []runbookParamRow
+	for _, p := range rows {
+		if p.Name != "" || p.Description != "" || p.Default != "" || p.Values != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func filledSteps(rows []runbookStepRow) []runbookStepRow {
+	var out []runbookStepRow
+	for _, s := range rows {
+		if s.Title != "" || s.Command != "" || s.Check != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func padSteps(rows []runbookStepRow, extra int) []runbookStepRow {
 	for i := 0; i < extra; i++ {
 		rows = append(rows, runbookStepRow{})
@@ -211,9 +231,12 @@ func (a *app) renderRunbookForm(w http.ResponseWriter, r *http.Request, v *runbo
 	l := a.langFor(r)
 	v.Types = runbookTypes
 	v.Token = csrfOf(r)
+	// The blank rows of a form that was sent back are dropped before the room for new
+	// lines is added, or each refusal would add a set of rows.
+	v.Params = filledParams(v.Params)
 	v.Params = padParams(v.Params, max(1, 3-len(v.Params)))
-	v.Steps = padSteps(v.Steps, 3)
-	v.Rollback = padSteps(v.Rollback, 2)
+	v.Steps = padSteps(filledSteps(v.Steps), 3)
+	v.Rollback = padSteps(filledSteps(v.Rollback), 2)
 	v.Base = repoHref(v.Project) + "/runbooks"
 	title := l.msg("runbooks.form.title_new")
 	if !v.New {
@@ -316,9 +339,15 @@ func (a *app) runbookWrite(w http.ResponseWriter, r *http.Request) {
 	// From here the viewer may write; the targets of an edited runbook are theirs to see.
 	v.Targets = formFromSpec(runbook.Spec{Targets: targets}).Targets
 	v.CanApprove = pa.MayApproveRunbook(v.Project, v.Machine, own)
+	// A refusal goes back to the form (not to the address of this POST), with the text
+	// over it and every row as it was typed.
+	formPage := repoHref(v.Project) + "/runbooks/new"
+	if !v.New {
+		formPage = runbookHrefIn(v.Project, v.Name) + "?edit=1"
+	}
 	fail := func(key, detail string) {
-		v.Error, v.Detail = key, detail
-		a.renderRunbookForm(w, r, v, http.StatusUnprocessableEntity)
+		text, field := runbookFailText(l, key, detail)
+		a.failFormTo(w, r, formPage, http.StatusUnprocessableEntity, text, field)
 	}
 	if v.New && err == nil {
 		fail("runbooks.form.err.exists", "")
@@ -342,7 +371,7 @@ func (a *app) runbookWrite(w http.ResponseWriter, r *http.Request) {
 		fail("runbooks.form.err.name_new", "")
 		return
 	}
-	if len(v.Note) > 500 {
+	if tooLong(v.Note, 500) {
 		fail("runbooks.form.err.invalid", l.msg("runbooks.form.err.note"))
 		return
 	}

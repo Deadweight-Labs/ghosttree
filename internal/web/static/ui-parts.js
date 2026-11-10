@@ -8,8 +8,8 @@
   // Menus: a div.dd opens with its button (data-dd), a details.dd by itself. Both
   // close with Escape (focus goes back to the button) and with a click outside,
   // and both are moved back into the window when they would stick out of it.
-  // details.rvk is the confirmation popover of the tokens page; it closes the same way.
-  const OPEN = ".dd.open, details.dd[open], details.rvk[open]";
+  // details.rvk (tokens page) and details.cfm (everywhere else) are the confirmation popovers; they close the same way.
+  const OPEN = ".dd.open, details.dd[open], details.rvk[open], details.cfm[open]";
   const trigger = (dd) => $(":scope > [data-dd], :scope > summary", dd);
   const closeMenus = (except) => {
     for (const dd of $$(OPEN)) {
@@ -100,11 +100,11 @@
       }
       return;
     }
-    if (!event.target.closest(".dd .pop")) closeMenus(event.target.closest("details.dd, details.rvk"));
+    if (!event.target.closest(".dd .pop")) closeMenus(event.target.closest("details.dd, details.rvk, details.cfm"));
   });
   document.addEventListener("toggle", (event) => {
     const d = event.target;
-    if (!d.matches || !d.matches("details.dd, details.rvk")) return;
+    if (!d.matches || !d.matches("details.dd, details.rvk, details.cfm")) return;
     if (d.open) {
       closeMenus(d);
       filterable(d);

@@ -129,7 +129,7 @@ func TestOrgFormsNeedCSRFAndSameOrigin(t *testing.T) {
 		t.Fatalf("a rejected form created an invitation: %+v", invs)
 	}
 	// Ein Körper über der Grenze kommt nicht durch.
-	big := url.Values{"csrf_token": {csrf}, "org": {"alpha"}, "email": {strings.Repeat("a", maxDeviceForm)}}
+	big := url.Values{"csrf_token": {csrf}, "org": {"alpha"}, "email": {strings.Repeat("a", maxFormBody)}}
 	if resp := sameOriginPostForm(t, alice, base+"/ui/orgs/invite", big); resp.StatusCode == http.StatusOK {
 		t.Fatal("oversized form accepted")
 	}

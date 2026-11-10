@@ -251,7 +251,6 @@ type levelForm struct {
 }
 
 type sessionView struct {
-	Missing             bool
 	Confirm             *shareConfirm
 	PID, Title          string
 	Live                bool
@@ -847,11 +846,10 @@ func dayAndClock(l lang, stamp string, now time.Time) template.HTML {
 
 // ------------------------------------------------------------------ Detail
 
+// sessionMissing answers for a session that is not there and for one the viewer may not
+// read, the same: the plain 404 becomes the error page of the shell (errorViewFor).
 func (a *app) sessionMissing(w http.ResponseWriter, r *http.Request) {
-	l := a.langFor(r)
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusNotFound)
-	a.renderBrowser(w, r, "session", pageData{Title: l.msg("nav.sessions"), SessionV: &sessionView{Missing: true}})
+	http.NotFound(w, r)
 }
 
 // lookupSession löst die Adresse auf. Nur die zufällige Adresse führt zu einer
