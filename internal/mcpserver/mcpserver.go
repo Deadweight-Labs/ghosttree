@@ -57,6 +57,9 @@ type Server struct {
 	lineageOf func(branch string) []string
 	// live liefert den Git-Stand des Arbeitsverzeichnisses jetzt (SetLive).
 	live func() Live
+	// usageHarness and reportUses: see usage.go.
+	usageHarness string
+	reportUses   func(store.ToolUseBatch)
 }
 
 // SetLineageResolver setzt, wie die Vorfahren eines anderen Branches als des

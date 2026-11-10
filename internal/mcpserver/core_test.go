@@ -10,6 +10,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/coretools"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -195,5 +196,33 @@ func TestRewriteToolNames(t *testing.T) {
 		if got := RewriteToolNames(in); got != want {
 			t.Errorf("RewriteToolNames(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Codex and OpenCode calls are counted by ctx mcp itself, as core tool and
+// action, also when the older name was called.
+func TestMCPCountsCallsForHarnessesWithoutAToolHook(t *testing.T) {
+	c, _ := newTestClient(t)
+	got := make(chan store.ToolUseBatch, 4)
+	srv := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y"}, sessionRef: "codex-sess-1",
+		usageHarness: "codex", reportUses: func(b store.ToolUseBatch) { got <- b }}
+	session := connect(t, srv)
+	callTool(t, session, "pain", map[string]any{"action": "search"})
+	callTool(t, session, "request_search", map[string]any{"query": "x"})
+	for _, want := range []string{"pain search", "request search"} {
+		b := <-got
+		u := b.Uses[0]
+		if b.Harness != "codex" || b.SessionRef != "codex-sess-1" || u.Tool+" "+u.Action != want || u.Calls != 1 {
+			t.Fatalf("report %+v, want %s", b, want)
+		}
+	}
+	// Without a harness to count for (Claude Code: its hook counts) nothing is sent.
+	srv2 := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y"}, sessionRef: "claude-sess",
+		reportUses: func(b store.ToolUseBatch) { got <- b }}
+	callTool(t, connect(t, srv2), "pain", map[string]any{"action": "search"})
+	select {
+	case b := <-got:
+		t.Fatalf("counted without a harness: %+v", b)
+	default:
 	}
 }
