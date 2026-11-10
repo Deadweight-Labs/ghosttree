@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/slim"
 )
@@ -303,4 +304,70 @@ func TestDictionarySampleIsSlimmed(t *testing.T) {
 		}
 	}
 
+}
+
+// A server that holds the write lock longer than busy_timeout does not end the
+// run: the step waits and is tried again, and its counts are taken only once.
+func TestSlimSessionsWaitsOutALongWriteLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []legacyChunk
+	for i := 0; i < 40; i++ {
+		for j, l := range realLines(i) {
+			lines = append(lines, legacyChunk{seq: 3*i + j, raw: l, text: "x"})
+		}
+	}
+	seedUnslimmed(t, s, "old", "claude-code", lines[:30])
+	s.Close()
+	// A first run learns the dictionary, as on a server that already runs the
+	// version: the only writes of the second run are its steps.
+	if _, err := SlimSessions(context.Background(), path, SlimSessionsOptions{Pause: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	seedUnslimmed(t, s, "later", "claude-code", lines[30:])
+	s.Close()
+	lines = lines[30:]
+
+	oldDSN, oldBackoff := slimDSN, slimBusyBackoff
+	slimDSN = func(p string) string { return p + "?_pragma=busy_timeout(50)" }
+	slimBusyBackoff = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 2 * time.Second}
+	defer func() { slimDSN, slimBusyBackoff = oldDSN, oldBackoff }()
+
+	holder, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	conn, err := holder.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(context.Background(), `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(2 * time.Second)
+		_, _ = conn.ExecContext(context.Background(), `COMMIT`)
+		_ = conn.Close()
+		close(released)
+	}()
+	started := time.Now()
+	rep, err := SlimSessions(context.Background(), path, SlimSessionsOptions{Batch: 1000, Pause: 1})
+	<-released
+	if err != nil {
+		t.Fatalf("run ended at the lock: %v", err)
+	}
+	if time.Since(started) < 2*time.Second {
+		t.Fatalf("run finished in %v while the lock was held for 2s: it never met the lock", time.Since(started))
+	}
+	if rep.Packed+rep.Deleted == 0 || rep.Packed+rep.Deleted > int64(len(lines)) {
+		t.Fatalf("counts after a retried step: packed %d deleted %d of %d lines", rep.Packed, rep.Deleted, len(lines))
+	}
 }
