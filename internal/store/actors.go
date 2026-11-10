@@ -663,33 +663,9 @@ func (s *Store) ReactionRowID(kind string, id int64, content string, account int
 // only from a session whose metadata the viewer may see (ActorView), else as
 // unknown.
 func (a *ProjectAccess) ActorStats(project string) ([]ActorStat, []string, error) {
-	a.Filtered()
-	var candidates []string
-	if project != "" {
-		if err := a.Check(project, ResProject, ActRead, Object{}); err != nil {
-			return nil, nil, err
-		}
-		candidates = []string{project}
-	} else {
-		seen := map[string]bool{}
-		for _, p := range a.Projects() {
-			seen[p] = true
-		}
-		if list, err := a.st.ListProjects(a.principal.ID, 0); err == nil {
-			for _, p := range a.VisibleProjects(list) {
-				seen[p.Remote] = true
-			}
-		}
-		for p := range seen {
-			candidates = append(candidates, p)
-		}
-		sort.Strings(candidates)
-	}
-	var projects []string
-	for _, p := range candidates {
-		if !a.HidesMachines(p) {
-			projects = append(projects, p)
-		}
+	projects, err := a.statsProjects(project)
+	if err != nil {
+		return nil, nil, err
 	}
 	hits, err := a.st.ActorStatHits(projects)
 	if err != nil {
@@ -714,6 +690,41 @@ func (a *ProjectAccess) ActorStats(project string) ([]ActorStat, []string, error
 		kept = append(kept, h)
 	}
 	return aggregateActorStats(kept), projects, nil
+}
+
+// statsProjects are the projects a statistics page counts: the named one (it
+// must be readable), else every project with a role or in one of the viewer's
+// organisations, without those whose machines the viewer may not see.
+func (a *ProjectAccess) statsProjects(project string) ([]string, error) {
+	a.Filtered()
+	var candidates []string
+	if project != "" {
+		if err := a.Check(project, ResProject, ActRead, Object{}); err != nil {
+			return nil, err
+		}
+		candidates = []string{project}
+	} else {
+		seen := map[string]bool{}
+		for _, p := range a.Projects() {
+			seen[p] = true
+		}
+		if list, err := a.st.ListProjects(a.principal.ID, 0); err == nil {
+			for _, p := range a.VisibleProjects(list) {
+				seen[p.Remote] = true
+			}
+		}
+		for p := range seen {
+			candidates = append(candidates, p)
+		}
+		sort.Strings(candidates)
+	}
+	var projects []string
+	for _, p := range candidates {
+		if !a.HidesMachines(p) {
+			projects = append(projects, p)
+		}
+	}
+	return projects, nil
 }
 
 // actorStatVisible is the read filter of the lists for one counted entry:

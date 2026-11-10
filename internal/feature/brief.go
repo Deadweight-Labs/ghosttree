@@ -90,8 +90,8 @@ func RenderBriefs(list []Brief, budget int) (text string, shown int) {
 		shown++
 	}
 	if rest := len(list) - shown; rest > 0 {
-		fmt.Fprintf(&b, "- and %d more (feature_search with path)\n", rest)
+		fmt.Fprintf(&b, "- and %d more (feature action=search with path)\n", rest)
 	}
-	b.WriteString("\nThe page of a feature (behavior, limits, usage): feature_get. If your change alters what a feature does, write the new state with feature_update.\n")
+	b.WriteString("\nThe page of a feature (behavior, limits, usage): feature action=get. If your change alters what a feature does, write the new state with feature action=update.\n")
 	return b.String(), shown
 }

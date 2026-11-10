@@ -69,7 +69,7 @@ func TestBootstrapNamesAnInterruptedThreadAndThePathToItsHandoff(t *testing.T) {
 	if !strings.Contains(out, fmt.Sprintf("REQ-%d", id)) || !strings.Contains(out, "Ghost-Dateien") {
 		t.Fatalf("bootstrap does not name the interrupted thread:\n%s", out)
 	}
-	if !strings.Contains(out, "request_get") {
+	if !strings.Contains(out, "request action=get") {
 		t.Fatalf("bootstrap does not say how to reach the handoff:\n%s", out)
 	}
 	if !strings.Contains(out, "40 minutes ago") {
@@ -88,7 +88,7 @@ func TestBootstrapSaysWhenNoHandoffWasLeft(t *testing.T) {
 	if !strings.Contains(out, "no handoff") {
 		t.Fatalf("a thread without a handoff must say so:\n%s", out)
 	}
-	if strings.Contains(out, "request_get") {
+	if strings.Contains(out, "request action=get") {
 		t.Fatalf("there is no handoff to fetch:\n%s", out)
 	}
 }

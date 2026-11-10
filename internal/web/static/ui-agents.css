@@ -78,3 +78,6 @@
 .mstats .n { text-align: right; font-variant-numeric: tabular-nums; }
 .mstats tr.people td { color: var(--fg-muted); }
 @media (max-width: 640px) { .mstats th, .mstats td { padding: 6px 8px; } }
+.tusage { margin-top: 16px; }
+.tusage .mstats + .mstats { margin-top: 8px; }
+.tusage .box-h .muted { font-size: 12px; }

@@ -13,7 +13,7 @@ import (
 type PainTargetInput struct {
 	RequestID   int64  `json:"request_id,omitempty" jsonschema:"a request this problem motivates"`
 	KnowledgeID int64  `json:"knowledge_id,omitempty" jsonschema:"a knowledge entry, usually a decision, this problem motivates"`
-	IdeaID      int64  `json:"idea_id,omitempty" jsonschema:"an idea, IDEA-n as a number: the solution idea this problem motivates (record it with idea_record and motivated_by_pain, or link an existing one here)"`
+	IdeaID      int64  `json:"idea_id,omitempty" jsonschema:"an idea, IDEA-n as a number: the solution idea this problem motivates (record it with idea action=record and motivated_by_pain, or link an existing one here)"`
 	ExternalRef string `json:"external_ref,omitempty" jsonschema:"an issue URL as free text"`
 }
 
@@ -59,7 +59,7 @@ type PainUpdateInput struct {
 	Body         string            `json:"body,omitempty" jsonschema:"replacement text; needs reason"`
 	Reason       string            `json:"reason,omitempty" jsonschema:"why the title or text changes, or why a link goes"`
 	LinkAdd      []PainTargetInput `json:"link_add,omitempty" jsonschema:"add what this problem motivates"`
-	LinkRemove   []int64           `json:"link_remove,omitempty" jsonschema:"ids of links to remove, from pain_get; needs reason"`
+	LinkRemove   []int64           `json:"link_remove,omitempty" jsonschema:"ids of links to remove, from pain action=get; needs reason"`
 }
 
 type PainLinkOut struct {

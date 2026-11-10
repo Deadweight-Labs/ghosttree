@@ -145,7 +145,7 @@ func TestIndexIsAnInventoryThatDoesNotPretendToBeComplete(t *testing.T) {
 		}
 	}
 	// Wo mehr liegt, muss dastehen — sonst liest sich der Auszug wie das Ganze.
-	for _, want := range []string{"context_sessions", "context_search", "request_get", "sees more"} {
+	for _, want := range []string{"context_search action=sessions", "context_search", "request action=get", "sees more"} {
 		if !strings.Contains(index, want) {
 			t.Errorf("INDEX.md does not say where more is to be had (%q):\n%s", want, index)
 		}

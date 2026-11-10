@@ -214,7 +214,7 @@ type promoteError struct {
 }
 
 func (e *promoteError) Error() string {
-	return "REQ-" + strconv.FormatInt(e.request, 10) + " was created, but linking it to the idea failed: " + e.err.Error() + " (link it with idea_update link_request, do not create it again)"
+	return "REQ-" + strconv.FormatInt(e.request, 10) + " was created, but linking it to the idea failed: " + e.err.Error() + " (link it with idea action=link_request, do not create it again)"
 }
 
 func (e *promoteError) Unwrap() error { return e.err }

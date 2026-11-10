@@ -58,7 +58,7 @@ func TestPromptHookDeliversAMentionOnceAndHidesItFromTheInbox(t *testing.T) {
 	e := hookEnv(t)
 	id := e.say(t, "please run the migration check", channelSelf)
 	got := runHook(t, "user-prompt-submit", prompt())
-	for _, want := range []string{"new messages for you", "sess-sender", "please run the migration check", "authority=", "coord_send", "thread_reply"} {
+	for _, want := range []string{"new messages for you", "sess-sender", "please run the migration check", "authority=", "coord action=send", "coord action=thread_reply"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("context lacks %q:\n%s", want, got)
 		}

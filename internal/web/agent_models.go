@@ -4,13 +4,35 @@ import (
 	"net/http"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // agentModelsView is the page /ui/agents/models (REQ-620): per harness and
 // model what agents did, in the projects the viewer may see in full; people
 // form one line for comparison.
 type agentModelsView struct {
-	Rows []agentModelRow
+	Rows  []agentModelRow
+	Usage *toolUsageView
+}
+
+// toolUsageView is the use of ghosttree's own tools (REQ-436): sessions per
+// harness and how many of them called none, then calls per tool and action.
+type toolUsageView struct {
+	Since            string
+	Sessions, Silent int
+	Harness          []toolUsageHarnessRow
+	Lines            []toolUsageLineRow
+}
+
+type toolUsageHarnessRow struct {
+	Kind, Name       string
+	Sessions, Silent int
+}
+
+type toolUsageLineRow struct {
+	Tool, Action, Kind, Harness string
+	Subagent                    bool
+	Calls, Sessions             int
 }
 
 type agentModelRow struct {
@@ -48,5 +70,26 @@ func (a *app) agentModelsPage(w http.ResponseWriter, r *http.Request) {
 		}
 		v.Rows = append(v.Rows, row)
 	}
+	if rep, err := a.access(r).ToolUseStats(selectedProject(shell), toolUsageDays); err == nil && rep.Since != "" {
+		v.Usage = newToolUsageView(rep)
+	}
 	a.renderBrowser(w, r, "agentmodels", pageData{Title: l.msg("nav.tab_models"), AgentModels: v})
+}
+
+// toolUsageDays is the window of the tool statistics.
+const toolUsageDays = 30
+
+func newToolUsageView(rep store.ToolUseReport) *toolUsageView {
+	u := &toolUsageView{Since: rep.Since, Sessions: rep.Sessions, Silent: rep.Silent}
+	if len(u.Since) >= 10 {
+		u.Since = u.Since[:10]
+	}
+	for _, h := range rep.Harness {
+		u.Harness = append(u.Harness, toolUsageHarnessRow{Kind: harnessKind(h.Harness), Name: h.Harness, Sessions: h.Sessions, Silent: h.Sessions - h.WithCalls})
+	}
+	for _, l := range rep.Lines {
+		u.Lines = append(u.Lines, toolUsageLineRow{Tool: l.Tool, Action: l.Action, Kind: harnessKind(l.Harness), Harness: l.Harness,
+			Subagent: l.Subagent, Calls: l.Calls, Sessions: l.Sessions})
+	}
+	return u
 }

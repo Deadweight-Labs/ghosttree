@@ -415,7 +415,7 @@ func (s *Server) handleCoordStatus(ctx context.Context, _ *mcp.CallToolRequest, 
 // room's members. One text for every refusal: it must not tell a guest apart
 // from anything else, so it names no role and no project.
 const peersNotVisible = "The agent list of this room is not available to you (guests of a project do not see its members). " +
-	"coord_send and coord_inbox work as usual; address people and agents by @name in the text if you know them."
+	"coord action=send and coord action=inbox work as usual; address people and agents by @name in the text if you know them."
 
 // peersError turns the server's refusal into that text and leaves every other
 // failure (network, server error) as it is.
@@ -431,7 +431,7 @@ func peersError(err error) error {
 }
 
 type CoordDMInput struct {
-	To   []string `json:"to" jsonschema:"session ids of the peers to talk to privately — one for a DM, more for a small group. Get them from coord_peers"`
+	To   []string `json:"to" jsonschema:"session ids of the peers to talk to privately — one for a DM, more for a small group. Get them from coord action=peers"`
 	Body string   `json:"body" jsonschema:"what you want to say"`
 	// Label hilft dem Menschen in der Übersicht und ist sonst folgenlos.
 	Label string `json:"label,omitempty" jsonschema:"short name for this conversation, for example 'API-Vertrag'"`
@@ -440,7 +440,7 @@ type CoordDMInput struct {
 
 type CoordDMReadInput struct {
 	With []string `json:"with,omitempty" jsonschema:"session ids of the other participants. Omit to list the private conversations you are part of"`
-	Room string   `json:"room,omitempty" jsonschema:"opaque group room id from coord_dm or the private-conversation list"`
+	Room string   `json:"room,omitempty" jsonschema:"opaque group room id from coord action=dm or the private-conversation list"`
 }
 
 // handleCoordDM eröffnet ein privates Gespräch und schreibt hinein. Beides in
@@ -457,7 +457,7 @@ func (s *Server) handleCoordDM(ctx context.Context, _ *mcp.CallToolRequest, in C
 	key := strings.TrimSpace(in.Room)
 	kind := store.RoomGroup
 	if key != "" && !strings.HasPrefix(key, "group:") {
-		return nil, nil, fmt.Errorf("room must be an opaque group id returned by coord_dm")
+		return nil, nil, fmt.Errorf("room must be an opaque group id returned by coord action=dm")
 	}
 	if key == "" {
 		members := append([]string{s.coordRef()}, in.To...)
@@ -532,12 +532,12 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 		return coordText(b.String()), nil, nil
 	}
 	if len(in.With) > 1 {
-		return nil, nil, fmt.Errorf("group conversations must be read by the opaque room id returned by coord_dm")
+		return nil, nil, fmt.Errorf("group conversations must be read by the opaque room id returned by coord action=dm")
 	}
 
 	key := strings.TrimSpace(in.Room)
 	if key != "" && !strings.HasPrefix(key, "group:") {
-		return nil, nil, fmt.Errorf("room must be an opaque group id returned by coord_dm")
+		return nil, nil, fmt.Errorf("room must be an opaque group id returned by coord action=dm")
 	}
 	if key == "" {
 		members := append([]string{s.coordRef()}, in.With...)
@@ -687,7 +687,7 @@ func (s *Server) handleCoordTouched(ctx context.Context, _ *mcp.CallToolRequest,
 		fmt.Fprintf(&b, "  %s — %s %s (%s), %s\n",
 			who, e.Tool, e.Path, e.Quality, store.DescribeConflict(kind))
 	}
-	b.WriteString("\nNothing is locked. Decide whether to coordinate with coord_send before you change it.")
+	b.WriteString("\nNothing is locked. Decide whether to coordinate with coord action=send before you change it.")
 	return coordText(b.String()), nil, nil
 }
 

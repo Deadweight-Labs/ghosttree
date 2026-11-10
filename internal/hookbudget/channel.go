@@ -63,7 +63,7 @@ func ChannelWindow(channel string) time.Duration {
 // "gelöscht": verzögert, mit dem Weg zum Rest. Spec §7 verlangt genau diese
 // drei Unterscheidungen.
 const coordNotice = "\n\n[ghosttree: coordination delivery is rate-limited right now. " +
-	"Nothing was dropped — read the rest with `coord_inbox`.]\n"
+	"Nothing was dropped — read the rest with `coord action=inbox`.]\n"
 
 // ChannelUsage liest den Kontostand eines Kanals. Ohne diesen Weg wäre die
 // Trennung der Budgets behauptet statt belegt: man sähe nur, dass etwas

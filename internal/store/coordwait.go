@@ -603,7 +603,7 @@ func reconcileWaitCyclesTx(tx *sql.Tx, roomKey string, ref time.Time) error {
 			// Kein Name im Text: der Raum kann Gäste haben, die Nachrichten
 			// lesen. Wer im Kreis steht, sagen die Erwähnungen, die nur
 			// Mitglieder sehen, und coord_peers.
-			Body: "Mutual wait: the agents mentioned here are waiting on each other, so none of them will move until one of you answers, withdraws or asks the human. Nothing was resolved automatically. See coord_peers for who waits on whom and the review date.",
+			Body: "Mutual wait: the agents mentioned here are waiting on each other, so none of them will move until one of you answers, withdraws or asks the human. Nothing was resolved automatically. See coord action=peers for who waits on whom and the review date.",
 		})
 		if err != nil {
 			return err

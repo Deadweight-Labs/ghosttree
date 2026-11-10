@@ -12,6 +12,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Before you upgrade
 
+- Run `ctx install` again on every machine after upgrading: it adds the
+  SubagentStart hook and rewrites the rule section in `CLAUDE.md` and
+  `AGENTS.md`, which now names the twelve core tools.
+
 - Existing instances move to owners with `ctx db migrate-owners --db <path>`
   (first `--dry-run`, then `--apply --backup <file>` with the server stopped;
   `--apply` refuses while another process has the database open, and the
@@ -538,6 +542,24 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   to `ctx db vacuum --fts-optimize`).
 
 ### Changed
+
+- The MCP server lists twelve core tools instead of 76: `context_search`,
+  `context_get`, `context_remember`, `request`, `pain`, `idea`, `coord`,
+  `human_task`, `package`, `feature`, `runbook` and `comment`. Each takes an
+  `action` (for example `request` with `action=criterion_met`); the old names
+  still answer when called directly but are no longer listed. The list shrank
+  from 100,709 to about 41,600 bytes, and every core tool asks Claude Code to
+  load it up front (`_meta` `anthropic/alwaysLoad`), so agents see the
+  descriptions without tool search.
+- A subagent in Claude Code starts with a short ghosttree briefing: the working
+  rules, the branch's work package with its open criteria, the pitfalls its
+  task names and where the `.ghosttree/` mirror is (SubagentStart hook).
+- A session that changed files but recorded nothing in ghosttree gets one
+  reminder at the end of a turn with what is worth keeping. Read-only sessions
+  get none.
+- Calls of ghosttree's tools are counted per session, tool, action, harness and
+  subagent, and the statistics page (Agents, Models) shows them with the
+  sessions that called none.
 
 - Guests see their project only: no page of the organization (repositories,
   people, services, agents, machines, rooms, gardener, settings), the

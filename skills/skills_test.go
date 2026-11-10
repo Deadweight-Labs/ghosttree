@@ -311,7 +311,7 @@ func TestOnboardingPublishesLongFormDocumentsOutsideGit(t *testing.T) {
 func TestGtSkillCarriesTheShortCommandsAndTheirTools(t *testing.T) {
 	body := string(mustFiles(t, "ghost")["SKILL.md"])
 	for _, must := range []string{"## open ", "## task ", "## req ", "## preset ",
-		"open_link", "human_task_create", "steps", "explanation", "request_search", "request_create", "search_preset", "ctx open",
+		"action=link", "`human_task` with `action=create`", "steps", "explanation", "`request` `action=search`", "`request` with `action=create`", "action=preset_run", "ctx open",
 		"carries no login", "REQ-596", "preset:pr-ergebnis 155"} {
 		if !strings.Contains(body, must) {
 			t.Errorf("gt/SKILL.md lacks %q", must)

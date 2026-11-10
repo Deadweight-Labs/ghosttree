@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// The Stop hook must answer with an empty JSON object: Claude Code validates a
-// Stop hook's output, and a hookSpecificOutput is not part of it.
+// Without a reminder to give, the Stop hook answers with an empty JSON object.
 func TestTurnEndHookAnswersWithAnEmptyObject(t *testing.T) {
 	registerEnv(t)
 	var out bytes.Buffer

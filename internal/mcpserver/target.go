@@ -38,7 +38,7 @@ func (s *Server) handleMove(_ context.Context, _ *mcp.CallToolRequest, in MoveIn
 		}
 	}
 	if chosen != 1 {
-		return nil, nil, fmt.Errorf("name exactly one target: project, machine or global. To move a request, use request_record_progress with action=correct and project")
+		return nil, nil, fmt.Errorf("name exactly one target: project, machine or global. To move a request, use request with action=correct and project")
 	}
 	project := in.Project
 	if project != "" {

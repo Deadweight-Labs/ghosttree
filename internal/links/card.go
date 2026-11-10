@@ -276,7 +276,7 @@ func (b Builder) FeatureCard(f feature.Feature) Card {
 	c.Next = "none"
 	for _, r := range f.Affects {
 		if r.Kind == feature.KindIdea && !r.Advanced {
-			c.Next, c.Who = fmt.Sprintf("carry the description forward for IDEA-%d (feature_update idea=%d)", r.ID, r.ID), "agent"
+			c.Next, c.Who = fmt.Sprintf("carry the description forward for IDEA-%d (feature action=update idea=%d)", r.ID, r.ID), "agent"
 			break
 		}
 	}

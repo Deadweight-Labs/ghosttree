@@ -94,7 +94,7 @@ func renderPackageBriefing(d requestdomain.PackageDetail, budget int) string {
 		b.WriteString("Waiting on a human:\n")
 		writeBudgeted(&b, tasks, budget, "package_get")
 	}
-	b.WriteString("Work for this package is recorded on its requests; package_review lists every criterion with its evidence.\n")
+	b.WriteString("Work for this package is recorded on its requests; package action=review lists every criterion with its evidence.\n")
 	return b.String()
 }
 

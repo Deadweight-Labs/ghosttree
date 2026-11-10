@@ -273,7 +273,7 @@ func Briefing(v View, reason string, limit int) string {
 		}
 		b.WriteString(line)
 	}
-	fmt.Fprintf(&b, "Full checklist with parameters: ctx run %s, or the MCP tool runbook_get name=%s.\n", v.Name, v.Name)
+	fmt.Fprintf(&b, "Full checklist with parameters: ctx run %s, or the MCP tool runbook action=get name=%s.\n", v.Name, v.Name)
 	return b.String()
 }
 
