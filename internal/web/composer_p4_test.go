@@ -1,6 +1,7 @@
 package web
 
 import (
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -82,20 +83,39 @@ func TestTaskReportIsTheComposerAndARefusalGoesBackToTheTask(t *testing.T) {
 	if strings.Contains(page, `tdone`) {
 		t.Error("the one-line form is still there")
 	}
-	resp := tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {itoa(task.ID)}, "back": {"task"}, "note": {"token ghp_" + strings.Repeat("Ab1", 5)}})
-	resp.Body.Close()
-	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, path+"?") || !strings.Contains(loc, "fail=secret") {
-		t.Fatalf("a refused report goes to %q, want the task page with fail=secret", loc)
+	// A browser navigates with the form: the refusal goes back to the page it came from, with the reason over it
+	// and the secret-like note not written onto the page again.
+	navPost := func(back string) *http.Response {
+		form := url.Values{"id": {itoa(task.ID)}, "back": {back}, "note": {"token ghp_" + strings.Repeat("Ab1", 5)}}
+		form.Set("csrf_token", renderedCSRFToken(t, e.Member, e.Base+"/ui/overview"))
+		req, err := http.NewRequest(http.MethodPost, e.Base+"/ui/tasks/done", strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", e.Base)
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		resp, err := e.Member.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
 	}
-	_, refused := fetchPage(t, e.Member, e.Base+path+"?fail=secret")
+	resp := navPost("task")
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != path {
+		t.Fatalf("a refused report goes to %d %q, want 303 to the task page", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	_, refused := followRefusal(t, e.Member, e.Base, resp)
 	if !strings.Contains(refused, `role="alert"`) {
 		t.Error("the task page does not say why the report was refused")
 	}
+	if strings.Contains(refused, "ghp_Ab1") {
+		t.Error("the secret-like note is written onto the page again")
+	}
 	// From the inbox it stays in the inbox.
-	resp = tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {itoa(task.ID)}, "back": {"inbox"}, "note": {"token ghp_" + strings.Repeat("Ab1", 5)}})
-	resp.Body.Close()
-	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, "/ui/inbox?") {
-		t.Errorf("a refused report from the inbox goes to %q", loc)
+	if resp := navPost("inbox"); !strings.HasPrefix(resp.Header.Get("Location"), "/ui/inbox") {
+		t.Errorf("a refused report from the inbox goes to %q", resp.Header.Get("Location"))
 	}
 }
 
