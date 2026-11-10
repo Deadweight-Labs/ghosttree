@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
 )
 
@@ -318,11 +319,15 @@ func (s *Store) sessionEditLines(sess Session) (add, del map[string]int, ok bool
 	n := 0
 	for rows.Next() {
 		var seq int
-		var raw string
-		if err := rows.Scan(&seq, &raw); err != nil {
+		var v rawcodec.Value
+		if err := rows.Scan(&seq, &v); err != nil {
 			return nil, nil, false
 		}
 		if n++; n > maxStatChunks {
+			return nil, nil, false
+		}
+		raw, err := s.rawLine(v)
+		if err != nil {
 			return nil, nil, false
 		}
 		if !strings.Contains(raw, `"file_path"`) && !strings.Contains(raw, "apply_patch") && !strings.Contains(raw, "*** ") {
