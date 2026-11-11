@@ -15,6 +15,10 @@ import (
 var writerMethodClasses = map[string]string{
 	"AddRawDict":                    "write",
 	"RecordToolUses":                "write",
+	"RecordContextLog":              "write",
+	"DeliveryReport":                "read",
+	"SignalReport":                  "read",
+	"ToolReportSince":               "read",
 	"ToolUseStats":                  "read",
 	"RawDictSample":                 "read",
 	"TranscriptStats":               "read",

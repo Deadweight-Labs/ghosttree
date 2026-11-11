@@ -14,6 +14,7 @@ import (
 const usageCmdUsage = `usage: ctx usage --db <path> [--days 30] [--limit 50]
        ctx usage --db <path> --tools [--prefix mcp__ghosttree__]
        ctx usage --db <path> --relevance [--sample 200]
+       ctx usage tools|deliveries|signals [--since YYYY-MM-DD] [--project P] [--json]   (reports from the server; see ctx usage tools -h)
 
 List active knowledge that has not been delivered or hit within the given
 window, least used first. This is the basis for deciding whether the bootstrap
@@ -29,6 +30,9 @@ as the first of its session and by the account that typed it, because the
 language gate counts the session text of that account only.`
 
 func cmdUsage(args []string, stdout io.Writer) int {
+	if code, handled := cmdUsageReport(args, stdout); handled {
+		return code
+	}
 	fs := flag.NewFlagSet("usage", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	dbPath := fs.String("db", "", "path to the ghosttree database")

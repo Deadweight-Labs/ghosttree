@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	"github.com/Deadweight-Labs/ghosttree/internal/deliverylog"
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
@@ -923,44 +924,66 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	body, shown := renderBootstrapShown(entries, intParam(r, "budget", defaultBudget), false)
+	body, shown, sizes := renderBootstrapParts(entries, intParam(r, "budget", defaultBudget), false)
 	// Recorded before the answer goes out, so the first prompt of the session
 	// cannot be handled ahead of it. A failed write costs only a possible repeat
 	// later, and the briefing is not worth failing for that.
 	a.rememberDelivered(r, store.DeliveredByBootstrap, shown)
-	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(200)
-	fmt.Fprint(w, body)
+	// The answer is assembled first and sent in one piece: the hook is told in a
+	// header how the briefing divides into entries and sections (REQ-636), and a
+	// header has to be written before the first byte of the body.
+	out := newBodyBuffer()
+	parts := make([]deliverylog.Part, 0, len(shown)+4)
+	for i, id := range shown {
+		parts = append(parts, deliverylog.Part{Via: deliverylog.ViaBootstrap, Kind: deliverylog.KindKnowledge, ID: id, Chars: sizes[i]})
+	}
+	fmt.Fprint(out, body)
 	if note := a.clientVersionNote(r); note != "" {
-		fmt.Fprintf(w, "\n> ghosttree: %s\n", note)
+		fmt.Fprintf(out, "\n> ghosttree: %s\n", note)
+	}
+	// What the sections below add is the work ledger in a wide sense: how much
+	// is open, the package of the branch, what waits for a person, what was left
+	// unfinished. Each is one part, so the log shows what that side of the
+	// briefing costs.
+	section := func(write func()) {
+		before := out.runes()
+		write()
+		if n := out.runes() - before; n > 0 {
+			parts = append(parts, deliverylog.Part{Via: deliverylog.ViaBootstrap, Kind: deliverylog.KindLedger, Chars: n})
+		}
 	}
 	if openRequests > 0 {
 		plural := "request"
 		if openRequests != 1 {
 			plural = "requests"
 		}
-		fmt.Fprintf(w, "\n## Work ledger (ghosttree)\n\n%d open %s in this scope. For substantial feature, architecture, migration, or multi-session work, search the request ledger first; continue a match or create one with explicit acceptance criteria. Trivial local fixes and routine maintenance do not require a request.\n", openRequests, plural)
+		section(func() {
+			fmt.Fprintf(out, "\n## Work ledger (ghosttree)\n\n%d open %s in this scope. For substantial feature, architecture, migration, or multi-session work, search the request ledger first; continue a match or create one with explicit acceptance criteria. Trivial local fixes and routine maintenance do not require a request.\n", openRequests, plural)
+		})
 	}
 	// Das Arbeitspaket des Branches (REQ-601), geerbt vom Ursprung, wenn der
 	// Branch keines hat.
-	a.writePackageBriefing(w, r, pa)
+	section(func() { a.writePackageBriefing(out, r, pa) })
 	// Vor der Prüfung auf Session-Metadaten: ein Gast mit einer zugewiesenen
 	// Aufgabe liest keine Sessions und bekommt den Abschnitt trotzdem.
 	if waiting, err := a.st.WaitingTasksFor(pa, axesFromQuery(r).Project, waitingMaxEach); err == nil {
-		fmt.Fprint(w, renderWaiting(waiting))
+		section(func() { fmt.Fprint(out, renderWaiting(waiting)) })
 	}
 	// Der Zähler sagt, dass es etwas gibt; erst diese Zeile sagt, dass etwas
 	// angefangen und liegengeblieben ist. Ein Fehler kostet nur die Auskunft:
 	// der Bootstrap ist bis hierhin schon geschrieben.
-	if !pa.Allow(axesFromQuery(r).Project, store.ResSessionMeta, store.ActRead, store.Object{}) {
-		return
+	if pa.Allow(axesFromQuery(r).Project, store.ResSessionMeta, store.ActRead, store.Object{}) {
+		if threads, err := a.st.InterruptedWorkFor(pa.Viewer(), axesFromQuery(r),
+			time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
+			r.URL.Query().Get("session"), maxInterruptedThreads); err == nil {
+			section(func() { fmt.Fprint(out, renderInterrupted(threads, time.Now().UTC())) })
+		}
 	}
-	if threads, err := a.st.InterruptedWorkFor(pa.Viewer(), axesFromQuery(r),
-		time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
-		r.URL.Query().Get("session"), maxInterruptedThreads); err == nil {
-		fmt.Fprint(w, renderInterrupted(threads, time.Now().UTC()))
-	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	setDelivered(w, parts)
+	w.WriteHeader(200)
+	fmt.Fprint(w, out.String())
 }
 
 func (a *api) interrupted(w http.ResponseWriter, r *http.Request) {
@@ -1007,11 +1030,19 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 // not delivered: the delivery memory must not claim it was, or relevance
 // delivery would never offer it either.
 func renderBootstrapShown(entries []store.Knowledge, budget int, includeStaged bool) (string, []int64) {
+	out, shown, _ := renderBootstrapParts(entries, budget, includeStaged)
+	return out, shown
+}
+
+// renderBootstrapParts is renderBootstrapShown that also says how many
+// characters each shown entry took, in the order of shown (REQ-636: the
+// delivery log counts per entry).
+func renderBootstrapParts(entries []store.Knowledge, budget int, includeStaged bool) (string, []int64, []int) {
 	if budget <= 0 {
 		budget = defaultBudget
 	}
 	if len(entries) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	var instructions, confirmed, staged []store.Knowledge
 	held := map[string]int{}
@@ -1030,6 +1061,7 @@ func renderBootstrapShown(entries []store.Knowledge, budget int, includeStaged b
 	}
 	var b strings.Builder
 	var shown []int64
+	var sizes []int
 	b.WriteString("## Known context (ghosttree)\n")
 	b.WriteString(keepCurrentHint)
 	if len(instructions) > 0 {
@@ -1039,8 +1071,10 @@ func renderBootstrapShown(entries []store.Knowledge, budget int, includeStaged b
 			if gate := activationLabel(k.Activation); gate != "" {
 				label += " | " + gate
 			}
-			fmt.Fprintf(&b, "- [%s] %s — %s\n", label, k.Title, oneLine(k.Body))
+			line := fmt.Sprintf("- [%s] %s — %s\n", label, k.Title, oneLine(k.Body))
+			b.WriteString(line)
 			shown = append(shown, k.ID)
+			sizes = append(sizes, deliverylog.Runes(line))
 		}
 	}
 	// Instructions do not compete for the context budget. Preserve the same
@@ -1061,8 +1095,8 @@ func renderBootstrapShown(entries []store.Knowledge, budget int, includeStaged b
 	// The two passes exist for the reserve, not for the reader: one shared set
 	// of headings keeps them from looking like two separate sections.
 	headings := map[string]bool{}
-	truncated := writeGroups(&b, broad, broadLimit, "", headings, &shown)
-	truncated = writeGroups(&b, projectScoped, contentLimit, "", headings, &shown) || truncated
+	truncated := writeGroups(&b, broad, broadLimit, "", headings, &shown, &sizes)
+	truncated = writeGroups(&b, projectScoped, contentLimit, "", headings, &shown, &sizes) || truncated
 	if len(staged) > 0 && !truncated {
 		truncated = writePreviewGroup(&b, staged, contentLimit)
 	}
@@ -1070,7 +1104,7 @@ func renderBootstrapShown(entries []store.Knowledge, budget int, includeStaged b
 		b.WriteString("…(truncated, use context_search for more)\n")
 	}
 	writeHeldIndex(&b, held)
-	return b.String(), shown
+	return b.String(), shown, sizes
 }
 
 // writeHeldIndex names what was deliberately not sent. Withholding silently
@@ -1170,7 +1204,7 @@ func splitByScopeBreadth(entries []store.Knowledge) (broad, projectScoped []stor
 // ran out. header is written lazily, so an empty group prints nothing.
 // headings is shared across calls so a type printed by one pass is not printed
 // again by the next. shown collects the id of every entry that was written.
-func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, header string, headings map[string]bool, shown *[]int64) bool {
+func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, header string, headings map[string]bool, shown *[]int64, sizes *[]int) bool {
 	if len(entries) == 0 {
 		return false
 	}
@@ -1204,6 +1238,7 @@ func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, head
 			}
 			b.WriteString(line)
 			*shown = append(*shown, k.ID)
+			*sizes = append(*sizes, deliverylog.Runes(line))
 			wroteHeader, headings[t] = true, true
 		}
 	}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/deliverylog"
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
@@ -233,6 +234,13 @@ func NewWithTimeout(cfg config.Config, d time.Duration) *Client {
 // counts what the start-up briefing carried (Bootstrap takes the same id).
 // Without one, every call is the first of its session.
 func (c *Client) Relevant(text string, ax scope.Axes, limit int, session string) (string, error) {
+	d, err := c.RelevantDelivered(text, ax, limit, session)
+	return d.Text, err
+}
+
+// RelevantDelivered is Relevant that also returns how the server says the
+// answer divides into entries.
+func (c *Client) RelevantDelivered(text string, ax scope.Axes, limit int, session string) (Delivered, error) {
 	q := axesQuery(ax)
 	q.Set("q", text)
 	if limit > 0 {
@@ -241,9 +249,9 @@ func (c *Client) Relevant(text string, ax scope.Axes, limit int, session string)
 	if session != "" {
 		q.Set("session", session)
 	}
-	var md string
-	err := c.do("GET", "/api/context/relevant", q, nil, &md)
-	return md, err
+	var d Delivered
+	err := c.do("GET", "/api/context/relevant", q, nil, &d)
+	return d, err
 }
 
 func (c *Client) Machine() string { return c.cfg.Machine }
@@ -360,6 +368,10 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 		return nil
 	case *string:
 		*o = string(raw)
+		return nil
+	case *Delivered:
+		o.Text = string(raw)
+		o.Parts = deliverylog.ParseHeader(resp.Header.Get(deliverylog.HeaderName))
 		return nil
 	default:
 		return json.Unmarshal(raw, out)
@@ -775,6 +787,13 @@ func (c *Client) InterruptedWork(ax scope.Axes, excludeSession string) ([]store.
 // dazu, ihren eigenen angefangenen Faden nicht als unterbrochen zu melden; leer
 // heisst, dass der Aufrufer sie nicht kennt.
 func (c *Client) Bootstrap(ax scope.Axes, actx activation.Context, budget int, session string) (string, error) {
+	d, err := c.BootstrapDelivered(ax, actx, budget, session)
+	return d.Text, err
+}
+
+// BootstrapDelivered is Bootstrap that also returns how the server says the
+// briefing divides into entries and sections.
+func (c *Client) BootstrapDelivered(ax scope.Axes, actx activation.Context, budget int, session string) (Delivered, error) {
 	q := axesQuery(ax)
 	if session != "" {
 		q.Set("session", session)
@@ -788,9 +807,9 @@ func (c *Client) Bootstrap(ax scope.Axes, actx activation.Context, budget int, s
 	if budget > 0 {
 		q.Set("budget", strconv.Itoa(budget))
 	}
-	var md string
-	err := c.do("GET", "/api/context/bootstrap", q, nil, &md)
-	return md, err
+	var d Delivered
+	err := c.do("GET", "/api/context/bootstrap", q, nil, &d)
+	return d, err
 }
 
 func (c *Client) PutGhost(g store.GhostFile) (int64, error) {
