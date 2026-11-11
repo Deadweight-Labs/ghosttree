@@ -381,7 +381,7 @@ func TestVacuumWritesItsTemporaryCopyToTheTempDir(t *testing.T) {
 			}
 			fds, _ := os.ReadDir("/proc/self/fd")
 			for _, fd := range fds {
-				if link, err := os.Readlink("/proc/self/fd/" + fd.Name()); err == nil && strings.Contains(link, "etilqs_") {
+				if link, err := os.Readlink("/proc/self/fd/" + fd.Name()); err == nil && sqliteTempFile(link) {
 					mu.Lock()
 					seen = append(seen, link)
 					mu.Unlock()
@@ -691,4 +691,11 @@ func TestScanFindsAnotherProcessHoldingTheDatabase(t *testing.T) {
 	if scan := scanDatabaseHolders(path); len(scan.Holders) != 0 {
 		t.Fatalf("scan after the helper exited = %+v", scan)
 	}
+}
+
+// sqliteTempFile says whether an open file is a temporary file of SQLite: named
+// etilqs_<hex> up to SQLite 3.53, an anonymous "#<n> (deleted)" since 3.54.
+func sqliteTempFile(link string) bool {
+	base := filepath.Base(link)
+	return strings.Contains(base, "etilqs_") || (strings.HasPrefix(base, "#") && strings.HasSuffix(base, " (deleted)"))
 }
