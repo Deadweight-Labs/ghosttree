@@ -204,6 +204,35 @@ func TestRunbookTriggersDeliverOncePerSessionWithABudget(t *testing.T) {
 	}
 }
 
+// The tool hook asks once for the command and path triggers and matches them
+// itself. It gets the triggers of the approved versions a caller may see, never
+// the keywords, the name or the steps, and a stranger gets none.
+func TestRunbookTriggerSetsCarryOnlyCommandAndPathTriggers(t *testing.T) {
+	f := accessAPI(t, true)
+	sets := func(who string) string {
+		return f.expect(t, who, 200, "GET", "/api/runbook-triggers?project="+accProject, nil)
+	}
+	if got := strings.TrimSpace(sets("mia")); got != `{"sets":[]}` {
+		t.Fatalf("no runbook, but got %s", got)
+	}
+	writeRunbookAPI(t, f, "robin", 201, rbBody("rollout", "ausrollen bitte", true, nil))
+	writeRunbookAPI(t, f, "robin", 201, rbBody("nur-stichwort", "x", true, func(s map[string]any) {
+		s["triggers"] = map[string]any{"keywords": []string{"ausrollen"}}
+	}))
+	writeRunbookAPI(t, f, "mia", 201, rbBody("nur-mia", "x", false, func(s map[string]any) {
+		s["triggers"] = map[string]any{"commands": []string{"make unapproved"}}
+	}))
+	got := strings.TrimSpace(sets("mia"))
+	if got != `{"sets":[{"commands":["ssh prod"]}]}` {
+		t.Fatalf("trigger sets = %s", got)
+	}
+	for _, who := range []string{"nora", "gus"} {
+		if got := strings.TrimSpace(sets(who)); got != `{"sets":[]}` {
+			t.Fatalf("%s got trigger sets: %s", who, got)
+		}
+	}
+}
+
 // Läufe tragen Anker, Maschine und Person; die Spitze zeigt den letzten Erfolg;
 // Abweichungen werden zu einem Vorschlag, den nur Owner und Lead annehmen.
 func TestRunbookRunsAnchorAndProposals(t *testing.T) {

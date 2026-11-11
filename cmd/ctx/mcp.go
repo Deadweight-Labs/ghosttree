@@ -199,6 +199,8 @@ func cmdMCP(args []string, stdout io.Writer) int {
 	}
 	hctx := currentGitContext(cfg.Machine)
 	c := client.New(cfg)
+	// An agent reads while the server restarts; two more tries span that.
+	c.SetReadRetries(2)
 	if hooksOff() {
 		// A test harness's agents read what they need and write nothing.
 		c.SetReadOnly()
