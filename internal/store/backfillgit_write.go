@@ -41,6 +41,7 @@ func (r *backfillRun) flush(batch []backfillSession, upTo int64) error {
 		if !isBusy(err) || attempt >= len(slimBusyBackoff) {
 			return err
 		}
+		r.rep.BusyRetries++
 		if err := r.sleep(slimBusyBackoff[attempt]); err != nil {
 			return err
 		}
@@ -110,6 +111,7 @@ func (r *backfillRun) commitCursor(upTo int64) error {
 		if !isBusy(err) || attempt >= len(slimBusyBackoff) {
 			return err
 		}
+		r.rep.BusyRetries++
 		if err := r.sleep(slimBusyBackoff[attempt]); err != nil {
 			return err
 		}

@@ -33,6 +33,7 @@ func (r *backfillRun) withBackfillTx(fn func(tx *sql.Tx) error) error {
 		if !isBusy(err) || attempt >= len(slimBusyBackoff) {
 			return err
 		}
+		r.rep.BusyRetries++
 		if err := r.sleep(slimBusyBackoff[attempt]); err != nil {
 			return err
 		}

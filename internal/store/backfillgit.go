@@ -194,6 +194,9 @@ type BackfillGitReport struct {
 	Coverage BackfillCoverage `json:"coverage"`
 
 	// LastID ist die letzte Session, deren Vorgänge festgeschrieben sind.
+	// BusyRetries counts the waits after SQLITE_BUSY; BEGIN IMMEDIATE should keep it at 0.
+	BusyRetries int64 `json:"busy_retries"`
+
 	LastID   int64         `json:"last_id"`
 	Duration time.Duration `json:"duration_ns"`
 	// Die Zeit je Abschnitt: Zeilen lesen und erkennen, Abgleich, Abdeckung zählen.
