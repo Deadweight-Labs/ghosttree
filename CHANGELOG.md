@@ -860,6 +860,12 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- `ctx coord peers`, `inbox` and `rooms` only read: in a repository whose
+  remote the server does not know as a project they no longer join its room
+  (which bound the `cli:<machine>` identity to that room and made every other
+  repository ask for `--agent-name`) and say that there is nothing to read yet.
+  A project still starts only with real work in it or with `ctx project claim`.
+
 - `ctx watch` no longer syncs the journals that Claude Code's Workflow tool
   writes under `subagents/workflows/<run>/journal.jsonl`. They are not
   transcripts and carry no session id, so every journal registered as session
