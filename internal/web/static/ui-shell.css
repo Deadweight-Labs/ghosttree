@@ -63,7 +63,8 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
    scrolling row and are not cut off. */
 .rband .utabs-box { position: relative; flex: 1 1 auto; min-width: 0; }
 .rband .utabs-nav { position: relative; margin: 0 -12px -1px; padding: 0 12px 1px; }
-.rband .band-ext { position: relative; z-index: 2; align-self: center; margin-bottom: 4px; flex: none; }
+.rband .band-ext, .rband .band-wait { position: relative; z-index: 2; align-self: center; margin-bottom: 4px; flex: none; }
+.rband .band-wait { display: inline-flex; border-radius: 2em; }
 .utabs-nav.scroll { overflow: auto hidden; scrollbar-width: none; overscroll-behavior-x: contain; scroll-padding-inline: 24px; scroll-snap-type: x mandatory; }
 .utabs-nav.scroll .utabs > li { scroll-snap-align: start; }
 .utabs-nav.scroll::-webkit-scrollbar { display: none; }

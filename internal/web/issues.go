@@ -41,10 +41,12 @@ var (
 
 // issueQuery is the search text as today's filters.
 type issueQuery struct {
-	Segment  string // issue, idea or pain
-	State    string // open, closed (done and dropped), done, dropped or all
-	Type     string
-	Branch   string
+	Segment string // issue, idea or pain
+	State   string // open, closed (done and dropped), done, dropped or all
+	Type    string
+	Branch  string
+	// Package is the number of the work package the list is narrowed to (0 = none).
+	Package  int64
 	Priority string
 	Commit   string
 	Label    string
@@ -101,6 +103,8 @@ func parseIssueQuery(q string) issueQuery {
 			iq.Status = strings.ToLower(val)
 		case "branch":
 			iq.Branch = val
+		case "package":
+			iq.Package, valid = parsePackageTerm(val)
 		case "commit":
 			valid = hexCommit.MatchString(val)
 			iq.Commit = val
@@ -335,7 +339,7 @@ func (a *app) issuesPage(w http.ResponseWriter, r *http.Request) {
 
 // narrowed says whether the search does more than pick a state.
 func (q issueQuery) narrowed() bool {
-	return q.Text != "" || q.Type != "" || q.Branch != "" || q.Priority != "" || q.Commit != "" || q.Label != "" || q.Author != "" || q.Status != "" || q.PR != 0
+	return q.Text != "" || q.Type != "" || q.Branch != "" || q.Package != 0 || q.Priority != "" || q.Commit != "" || q.Label != "" || q.Author != "" || q.Status != "" || q.PR != 0
 }
 
 // hitsInState is the number of entries the list shows for the query in the
@@ -407,6 +411,9 @@ func (a *app) issueMenus(l lang, pa *store.ProjectAccess, project, q string, iq 
 				}
 				menus = append(menus, m)
 			}
+		}
+		if m, ok := packageMenu(l, q, iq.Package, packageChoices(pa, project), func(p requestdomain.PackageSummary) bool { return p.State == requestdomain.PackageOpen }, href); ok {
+			menus = append(menus, m)
 		}
 	case segPain:
 		m := issueMenu{Label: l.msg("issues.filter.status"), Active: iq.Status != ""}
@@ -514,7 +521,7 @@ func hasLabel(labels []store.Label, name string) bool {
 
 func (a *app) issuePainRows(l lang, pa *store.ProjectAccess, project string, iq issueQuery, v *issuesView) error {
 	// No filter but state, label, author and text applies to pains yet.
-	for _, k := range []string{"type", "priority", "branch", "commit", "pr"} {
+	for _, k := range []string{"type", "priority", "branch", "package", "commit", "pr"} {
 		if tok, ok := iq.tokens[k]; ok {
 			v.Unsupported = append(v.Unsupported, tok)
 		}
@@ -575,7 +582,7 @@ func (a *app) issuePainRows(l lang, pa *store.ProjectAccess, project string, iq 
 var ideaStateKeys = map[string]string{idea.Open: "ideas.state.open", idea.Accepted: "ideas.state.accepted", idea.Dismissed: "ideas.state.dismissed"}
 
 func (a *app) issueIdeaRows(l lang, pa *store.ProjectAccess, project string, iq issueQuery, v *issuesView) error {
-	for _, k := range []string{"type", "priority", "branch", "commit", "pr", "status"} {
+	for _, k := range []string{"type", "priority", "branch", "package", "commit", "pr", "status"} {
 		if tok, ok := iq.tokens[k]; ok {
 			v.Unsupported = append(v.Unsupported, tok)
 		}
@@ -639,16 +646,34 @@ func (a *app) issueRequestRows(r *http.Request, pa *store.ProjectAccess, project
 	if !store.ValidRequestCursor(filter.Cursor) {
 		filter.Cursor = ""
 	}
-	// The members of the open work package of the branch: the branch filter of
-	// today. A branch without a package has no issues.
+	// The members of the open work package of the branch (the branch filter) and
+	// of the package that was named (package:N); both together keep what is in
+	// both. A branch without a package has no issues.
 	var members map[int64]bool
-	if iq.Branch != "" {
-		members = map[int64]bool{}
-		if d, err := a.store.PackageForBranch(project, iq.Branch, nil); err == nil {
-			for _, m := range d.Members {
-				members[m.RequestID] = true
+	keepMembers := func(of map[int64]bool) {
+		if members == nil {
+			members = of
+			return
+		}
+		for id := range members {
+			if !of[id] {
+				delete(members, id)
 			}
 		}
+	}
+	if iq.Branch != "" {
+		of := map[int64]bool{}
+		if d, err := a.store.PackageForBranch(project, iq.Branch, nil); err == nil {
+			for _, m := range d.Members {
+				of[m.RequestID] = true
+			}
+		}
+		keepMembers(of)
+	}
+	if iq.Package != 0 {
+		keepMembers(a.packageMembers(pa, project, iq.Package))
+	}
+	if members != nil {
 		filter.Limit, filter.Cursor = 200, ""
 	}
 	var hits []requestdomain.SearchHit

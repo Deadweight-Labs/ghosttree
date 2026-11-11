@@ -183,10 +183,7 @@
     let prev = null;
     for (const row of rowsOf(fresh)) {
       const old = have.get(hrefOf(row));
-      if (old) {
-        prev = old;
-        continue;
-      }
+      if (old) { old.remove(); }
       if (prev) prev.after(row); else cur.querySelector(".box-h").after(row);
       prev = row;
     }

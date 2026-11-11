@@ -24,6 +24,8 @@ type branchRow struct {
 	Commit    *branchCommit
 	PRs       []branchPR
 	Knowledge int
+	// Waiting are the people the open tasks of the branch's work package wait for.
+	Waiting []string
 }
 
 type branchCommit struct{ Title, Href, At, Who string }
@@ -54,8 +56,14 @@ func (a *app) branchesPage(w http.ResponseWriter, r *http.Request) {
 	know := a.knowledgeOfBranches(pa, view.Project, def)
 	v := &branchesView{Total: len(names)}
 	k := pillKinds["branch"]
+	tasks := a.openTasksByRequest(pa, view.Project)
 	for _, n := range names {
 		row := branchRow{Name: n, Href: links.tree(n, ""), Default: n == def, Commit: commits[n], PRs: prs[n], Knowledge: know[n]}
+		if d, err := a.store.PackageForBranch(view.Project, n, nil); err == nil {
+			if p, ok := a.packageStanding(pa, d, tasks); ok {
+				row.Waiting = p.Waiting
+			}
+		}
 		row.NamePill = pillHTML(pillSpec{Class: k.Class, Icon: mockIconBody(k.Icon), Text: n, Href: row.Href, Mono: k.Mono, Extra: "rl", Card: pillCard{Title: n}})
 		v.Rows = append(v.Rows, row)
 	}

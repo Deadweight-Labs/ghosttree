@@ -43,6 +43,11 @@ var pullIsStates = []string{"open", "merged", "closed", "all", "any"}
 type pullQuery struct {
 	// State: open, merged, closed; leer heißt alle.
 	State, Branch, Author string
+	// Package ist die Nummer des Arbeitspakets, auf das die Liste begrenzt ist
+	// (package:N); Number dann die Nummer seines PRs, NoPull: das Paket gibt es
+	// nicht (für den Betrachter) oder hat keinen PR, die Liste ist leer.
+	Package, Number int64
+	NoPull          bool
 	// Text bleibt für die Suche im Titel übrig.
 	Text        string
 	Unsupported []string
@@ -77,6 +82,8 @@ func parsePullQuery(q string) pullQuery {
 			pq.Branch = val
 		case "author":
 			pq.Author = val
+		case "package":
+			pq.Package, valid = parsePackageTerm(val)
 		default:
 			valid = false
 		}
@@ -213,7 +220,10 @@ func (a *app) pullCount(pa *store.ProjectAccess, remote string) string {
 // pullsTextScan PRs aller Zustände und zählt die Reiter aus den Treffern.
 func pullRows(pa *store.ProjectAccess, project string, pq pullQuery, offset int, visible branchVisible) (items []store.PullSummary, counts store.PullCounts, total int, err error) {
 	f := store.PullListFilter{State: pq.State, Branch: pq.Branch, Author: pq.Author}
-	if pq.Text == "" {
+	if pq.NoPull {
+		return nil, store.PullCounts{}, 0, nil
+	}
+	if pq.Text == "" && pq.Number == 0 {
 		f.Limit, f.Offset = pullsPerPage, offset
 		list, err := pa.PullRequests(project, f)
 		return list.Items, list.Counts, list.Total, err
@@ -227,7 +237,7 @@ func pullRows(pa *store.ProjectAccess, project string, pq pullQuery, offset int,
 			return nil, counts, 0, err
 		}
 		for _, it := range list.Items {
-			if !pullMatches(it, pq.Text, visible) {
+			if pq.Number != 0 && it.Number != pq.Number || !pullMatches(it, pq.Text, visible) {
 				continue
 			}
 			switch it.State {
@@ -273,26 +283,9 @@ func (a *app) pullPackages(pa *store.ProjectAccess, project string, items []stor
 		if err != nil {
 			continue
 		}
-		members := pa.PackageView(d, false).Members
-		ids := make([]int64, 0, len(members))
-		for _, m := range members {
-			ids = append(ids, m.RequestID)
+		if p, ok := a.packageStanding(pa, d, tasks); ok {
+			out[it.Number] = p
 		}
-		prog, err := a.store.CriteriaProgress(ids)
-		if err != nil {
-			continue
-		}
-		var p pullPackage
-		for _, id := range ids {
-			p.Done += prog[id].Done
-			p.Total += prog[id].Total
-			if t, ok := tasks[id]; ok {
-				if who := firstNonEmpty(t.Assignee, t.CreatedBy); who != "" && !slices.Contains(p.Waiting, who) {
-					p.Waiting = append(p.Waiting, who)
-				}
-			}
-		}
-		out[it.Number] = p
 	}
 	return out
 }
@@ -338,6 +331,11 @@ func (a *app) pullsPage(w http.ResponseWriter, r *http.Request) {
 		// A guest has no branch filter: the filter would tell which branches exist.
 		pq.Unsupported, pq.Branch = append(pq.Unsupported, "branch:"+pq.Branch), ""
 	}
+	packages := packageChoices(pa, project)
+	if pq.Package != 0 {
+		p, ok := packageNumbered(packages, pq.Package)
+		pq.Number, pq.NoPull = p.PR, !ok || p.PR == 0
+	}
 	offset := 0
 	if n, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && n > 0 {
 		offset = min(n, 100000)
@@ -372,6 +370,9 @@ func (a *app) pullsPage(w http.ResponseWriter, r *http.Request) {
 	tab("merge", "pulls.tab.merged", counts.Merged, store.PullMerged, true)
 	tab("drop", "pulls.tab.closed", counts.Closed, store.PullClosed, counts.Closed > 0 || pq.State == store.PullClosed)
 	v.Menus = a.pullMenus(l, pa, project, shown, pq, href, visible)
+	if m, ok := packageMenu(l, shown, pq.Package, packages, func(p requestdomain.PackageSummary) bool { return p.PR > 0 }, href); ok {
+		v.Menus = append(v.Menus, m)
+	}
 	filtered := q != "" && q != pullDefaultQuery
 	v.Empty = len(v.Rows) == 0 && !filtered && offset == 0 && len(pq.Unsupported) == 0
 	v.NoMatch = len(v.Rows) == 0 && !v.Empty
@@ -503,6 +504,8 @@ type pullMember struct {
 	Progress             rowProgress
 	Criteria             []pullCriterion
 	Tasks                []pullTaskLine
+	// Live is the agent that works on the issue right now (live.go).
+	Live liveAgent
 }
 
 type pullFeatureLine struct {
@@ -587,6 +590,8 @@ type pullView struct {
 	Side          pullSide
 	ChecklistHref string
 	KnowledgeHref string
+	// LiveIDs are the issues of the checklist, for the live stream.
+	LiveIDs string
 }
 
 // pullDetail ist /ui/{org}/{repo}/pulls/{n}.
@@ -781,8 +786,14 @@ func (a *app) pullChecklist(l lang, pa *store.ProjectAccess, view *repoView, d s
 			ids = append(ids, m.RequestID)
 		}
 		prog, _ := a.store.CriteriaProgress(ids)
+		live := a.liveByRequest(pa, ids, overviewNow().UTC(), l)
+		idText := make([]string, len(ids))
+		for i, id := range ids {
+			idText[i] = strconv.FormatInt(id, 10)
+		}
+		v.LiveIDs = strings.Join(idText, ",")
 		for _, m := range d.Package.Members {
-			pm := pullMember{N: m.RequestID, Href: view.Href + "/issues/" + strconv.FormatInt(m.RequestID, 10), Title: m.Title, Optional: m.Role == requestdomain.RoleOptional,
+			pm := pullMember{Live: live[m.RequestID], N: m.RequestID, Href: view.Href + "/issues/" + strconv.FormatInt(m.RequestID, 10), Title: m.Title, Optional: m.Role == requestdomain.RoleOptional,
 				Open: m.Open > 0, Progress: rowProgress{Done: prog[m.RequestID].Done, Total: prog[m.RequestID].Total}}
 			pm.Progress.Title = l.msg("pulls.progress", pm.Progress.Done, pm.Progress.Total)
 			for _, c := range m.Criteria {

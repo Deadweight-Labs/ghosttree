@@ -38,6 +38,9 @@
   & details.rq[open] > summary { border-bottom: 1px solid var(--border-muted); background: var(--canvas-subtle); }
   & details.rq > summary .rqt { font-weight: 600; }
   & details.rq > summary .rqs { display: inline-flex; align-items: center; gap: 12px; }
+  & details.rq > summary .rt-live { display: inline-flex; align-items: center; }
+  & details.rq > summary .rt-live:empty { display: none; }
+  & details.rq > summary .rt-live .gav { width: 20px; height: 20px; }
   & details.rq .inner { background: var(--canvas-default); }
   & details.rq .inner .crit { padding-left: 52px; }
   & details.rq .inner .crit + .crit { border-top: 1px solid var(--border-muted); }
