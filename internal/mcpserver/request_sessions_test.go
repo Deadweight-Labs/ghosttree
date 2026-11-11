@@ -60,13 +60,12 @@ func TestRequestGetNamesTheSessionsBehindThePullRequestOfThePackage(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkg, err := st.CreatePackage(requestdomain.PackageInput{Project: linkProject, Branch: "feat/a", Name: "Export",
-		Members: []requestdomain.PackageMember{{RequestID: d.Request.ID}}, Person: "alice"})
+	// Der PR ist offen und hat sein Paket schon (der Server legt es beim Öffnen an).
+	pkg, err := st.PackageForPR(linkProject, 9)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pr := int64(9)
-	if _, err := st.UpdatePackage(pkg.ID, requestdomain.PackagePatch{PR: &pr}); err != nil {
+	if _, err := st.AddPackageRequests(pkg.ID, []requestdomain.PackageMember{{RequestID: d.Request.ID}}, "", "alice"); err != nil {
 		t.Fatal(err)
 	}
 

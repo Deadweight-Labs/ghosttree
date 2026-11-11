@@ -83,7 +83,12 @@ type PullRequestResult struct {
 	Applied       bool
 	AnchorsTagged int
 	PackageBound  bool
-	Merged        bool
+	// PackageCreated: der PR war offen und sein Branch hatte kein Paket; der Server
+	// hat eines angelegt (package_auto.go). PackageMembers sind die Requests, die sich
+	// eindeutig herleiten ließen; 0 heißt, das Paket ist leer.
+	PackageCreated bool
+	PackageMembers int
+	Merged         bool
 	// Knowledge sind die Einträge, deren Anker nach dem Merge diesen PR tragen.
 	Knowledge        []int64
 	GhostsPromoted   int
@@ -136,6 +141,8 @@ const projectAnchorIDs = `
 //     ein Anker, der schon zu einem früheren PR desselben Branch-Namens gehört,
 //     bleibt dort;
 //   - ein offenes Arbeitspaket des Head-Branches ohne PR wird an ihn gebunden;
+//     hat der Branch keines, legt der Server beim offenen PR eines an (REQ-601
+//     AC-12, package_auto.go);
 //   - beim Merge (einmal) werden die Branch-Beschreibungen der Ghost-Dateien auf
 //     den Base-Branch gehoben und an den Requests des Pakets steht eine Notiz,
 //     welches Branch-Wissen hineingegangen ist.
@@ -245,6 +252,11 @@ func (s *Store) RecordPullRequest(c PullRequestChange) (PullRequestResult, error
 	}
 	n, _ = r.RowsAffected()
 	res.PackageBound = n > 0
+	if !res.PackageBound && state == "open" {
+		if res.PackageCreated, res.PackageMembers, err = autoPackageTx(tx, remote, c.Number, head, title, ts); err != nil {
+			return res, err
+		}
+	}
 	if !justMerged {
 		return res, tx.Commit()
 	}

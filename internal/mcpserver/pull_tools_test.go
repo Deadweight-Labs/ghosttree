@@ -41,7 +41,7 @@ func TestPullAndCommitToolsOverTheWire(t *testing.T) {
 	got := wireText(t, s, "pull_list", map[string]any{"state": "open"})
 	mustHave(t, "pull_list", got, "1 pull requests (open 1, merged 0, closed 0)", "#9 [open] Der PR (feat/a → main, alice-gh, 1 commits)")
 	got = wireText(t, s, "pull_get", map[string]any{"pr": 9})
-	mustHave(t, "pull_get", got, "PR #9 [open] Der PR", "package: none bound", "1 knowledge entries", "Pull request #9", "link: "+c.ServerURL()+"/ui/x/y/pulls/9")
+	mustHave(t, "pull_get", got, "PR #9 [open] Der PR", "package: 0 of 0 required requests", "1 knowledge entries", "Pull request #9", "link: "+c.ServerURL()+"/ui/x/y/pulls/9")
 	got = wireText(t, s, "commit_get", map[string]any{"commit": sha[:8]})
 	mustHave(t, "commit_get", got, "commit "+sha[:12]+" Titel", "1 entries were written", "KN-1 am Commit gesagt", "link: "+c.ServerURL()+"/ui/x/y/commit/"+sha)
 

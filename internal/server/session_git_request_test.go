@@ -24,9 +24,14 @@ func (f *accessAPIFixture) seedRequestSessions(t *testing.T) int64 {
 	d := decode[requestdomain.Detail](t, f.expect(t, "mia", 201, "POST", "/api/requests", map[string]any{
 		"type": "feature", "title": "Etwas mit Sessions", "project": accProject, "criteria": []string{"Es gibt einen Nachweis"}}))
 	id := d.Request.ID
-	pkg := pkgJSON(t, f.expect(t, "mia", 201, "POST", "/api/packages", map[string]any{
-		"project": accProject, "branch": "feat/x", "name": "Mit Sessions", "requests": []map[string]any{{"request_id": id}}}))
-	f.expect(t, "mia", 200, "PATCH", idPath("/api/packages/%d", pkg.ID), map[string]any{"pr": 12})
+	// PR 12 ist offen und hat sein Paket schon (der Server legt es beim Öffnen an).
+	pkg, err := f.st.PackageForPR(accProject, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AddPackageRequests(pkg.ID, []requestdomain.PackageMember{{RequestID: id, Role: requestdomain.RolePflicht}}, "", "mia"); err != nil {
+		t.Fatal(err)
+	}
 	return id
 }
 

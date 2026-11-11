@@ -40,7 +40,7 @@ func sessionBlockOf(l lang, links store.GitSessionLinks, ctx string) *sessBlock 
 			line.Href = "/ui/sessions/" + it.SessionRef
 			line.Title = strings.TrimSpace(it.Title)
 			if line.Title == "" {
-				line.Title = l.msg("sess.untitled")
+				line.Title = l.msg("sessions.link.untitled")
 			}
 			line.Title = ellipsize(line.Title, 90)
 		}
@@ -50,10 +50,10 @@ func sessionBlockOf(l lang, links store.GitSessionLinks, ctx string) *sessBlock 
 		b.Lines = append(b.Lines, line)
 	}
 	if links.More > 0 {
-		b.More = l.msg("sess.more", links.More)
+		b.More = l.msg("sessions.link.more", links.More)
 	}
 	if links.Hidden > 0 {
-		b.Hidden = l.msg("sess.hidden", links.Hidden)
+		b.Hidden = l.msg("sessions.link.hidden", links.Hidden)
 	}
 	return b
 }
@@ -68,32 +68,32 @@ func sessionNote(l lang, it store.GitSessionLinkView, ctx string) string {
 			switch o {
 			case store.RequestOriginPR:
 				if it.PR > 0 {
-					parts = append(parts, l.msg("sess.origin_pr", it.PR))
+					parts = append(parts, l.msg("sessions.link.origin_pr", it.PR))
 				}
 			case store.RequestOriginEvidence:
-				parts = append(parts, l.msg("sess.origin_evidence"))
+				parts = append(parts, l.msg("sessions.link.origin_evidence"))
 			}
 		}
 	case "commit":
 		switch it.Via {
 		case store.LinkViaPR:
 			if it.PR > 0 {
-				parts = append(parts, l.msg("sess.via_pr", it.PR))
+				parts = append(parts, l.msg("sessions.link.via_pr", it.PR))
 			}
 		case store.LinkViaPatch:
-			parts = append(parts, l.msg("sess.via_patch"))
+			parts = append(parts, l.msg("sessions.link.via_patch"))
 		}
 	default:
 		for _, s := range it.Sources {
 			switch s {
 			case store.PRSourceCreated:
-				parts = append(parts, l.msg("sess.created_pr"))
+				parts = append(parts, l.msg("sessions.link.created_pr"))
 			case store.PRSourceMerged:
-				parts = append(parts, l.msg("sess.merged_pr"))
+				parts = append(parts, l.msg("sessions.link.merged_pr"))
 			}
 		}
 		if it.Commits > 0 {
-			parts = append(parts, l.msg("sess.n_commits", it.Commits))
+			parts = append(parts, l.msg("sessions.link.n_commits", it.Commits))
 		}
 	}
 	return strings.Join(parts, " · ")

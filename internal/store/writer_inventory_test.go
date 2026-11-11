@@ -377,6 +377,7 @@ var writerMethodClasses = map[string]string{
 	"RecordSessionGitEvents":        "write",
 	"SessionsForPull":               "read",
 	"SessionsForCommit":             "read",
+	"SessionsForRequest":            "read",
 	"SessionCommits":                "read",
 	"SessionsWithOwners":            "read",
 	"RecordCommitDetails":           "write",
