@@ -147,7 +147,8 @@ func TestSearchStreamShowsEachViewerWhatThePageShows(t *testing.T) {
 				byKey[ev.Key] = ev
 				keys = append(keys, ev.Key)
 			}
-			wantKeys := []string{"requests", "ideas", "knowledge", "docs", "sessions", "tasks", "pains"}
+			// The page of all kinds leaves the sessions out (decision #4447).
+			wantKeys := []string{"requests", "ideas", "knowledge", "docs", "tasks", "pains"}
 			if v.name == "guest" {
 				wantKeys = wantKeys[:4]
 			}
@@ -217,8 +218,8 @@ func TestSearchStreamGivesUpAKindAfterItsBudget(t *testing.T) {
 			t.Errorf("%s: %+v, want given up without hits", ev.Key, ev.searchEvent)
 		}
 	}
-	if n != 7 {
-		t.Fatalf("%d kinds said, want 7", n)
+	if n != 6 {
+		t.Fatalf("%d kinds said, want 6 (the sessions are not searched on the page of all kinds)", n)
 	}
 	events = readSearchStream(t, e.Owner, e.Base+"/ui/search/stream?q=zebrafish&only=sessions")
 	if len(events) != 2 || events[0].Key != "sessions" || events[0].Slow || !strings.Contains(events[0].Body, `class="ht rl"`) {
@@ -272,10 +273,22 @@ func TestSearchLivePageIsTheFrame(t *testing.T) {
 	if !strings.Contains(page, `<meta http-equiv="refresh" content="0;url=/ui/search?q=zebrafish">`) {
 		t.Errorf("no way back without the page script:\n%s", page)
 	}
-	for _, k := range []string{"requests", "ideas", "knowledge", "docs", "sessions", "tasks", "pains"} {
+	for _, k := range []string{"requests", "ideas", "knowledge", "docs", "tasks", "pains"} {
 		if !strings.Contains(page, `data-kind-side="`+k+`"`) || !strings.Contains(page, `data-kind-body="`+k+`"`) {
 			t.Errorf("no place for %s", k)
 		}
+	}
+	// The sessions are not searched on the page of all kinds: no place for them,
+	// a plain link to the same line narrowed to them instead.
+	if strings.Contains(page, `data-kind-side="sessions"`) || !strings.Contains(page, `data-total="6"`) {
+		t.Errorf("the frame of all kinds has a place for sessions or the wrong count:\n%s", page)
+	}
+	if !strings.Contains(page, `href="/ui/search?kind=sessions&amp;q=zebrafish"`) {
+		t.Errorf("no link to search in sessions:\n%s", page)
+	}
+	_, sessions := e.get(t, e.Owner, "/ui/search?q=zebrafish&live=1&kind=sessions")
+	if !strings.Contains(sessions, `data-kind-body="sessions"`) || strings.Contains(sessions, `search.in_sessions`) || strings.Contains(sessions, "Search in sessions too") {
+		t.Errorf("the frame narrowed to sessions has no place for them or still offers the link:\n%s", sessions)
 	}
 	if !strings.Contains(page, `/static/ui-search.js`) {
 		t.Error("the page script is not loaded")
@@ -286,8 +299,9 @@ func TestSearchLivePageIsTheFrame(t *testing.T) {
 	}
 	_, narrowed := e.get(t, e.Owner, "/ui/search?q=zebrafish&live=1&kind=pains")
 	// The page script switches kinds without a new page, so the frame keeps the
-	// place of every kind and says which one is chosen.
-	if !strings.Contains(narrowed, `data-kind-body="sessions"`) || !strings.Contains(narrowed, `data-kind-body="pains"`) || !strings.Contains(narrowed, `data-kind="pains"`) {
+	// place of every kind it searches and says which one is chosen; the sessions
+	// are not searched unless the page is narrowed to them.
+	if strings.Contains(narrowed, `data-kind-body="sessions"`) || !strings.Contains(narrowed, `data-kind-body="requests"`) || !strings.Contains(narrowed, `data-kind-body="pains"`) || !strings.Contains(narrowed, `data-kind="pains"`) {
 		t.Errorf("the frame narrowed to pains lost the place of a kind or does not name the chosen one")
 	}
 	if _, bad := e.get(t, e.Owner, "/ui/search?q=zebrafish+bogus:1&live=1"); strings.Contains(bad, "data-search-live") {
@@ -337,5 +351,39 @@ func TestSearchStreamMarksTheNarrowedKind(t *testing.T) {
 	// A kind the viewer does not get marks nothing and is not passed on.
 	if _, frame := e.get(t, e.Guest, "/ui/search?q=zebrafish&live=1&kind=sessions"); strings.Contains(frame, "kind=sessions") {
 		t.Error("the guest's frame passes on a kind he does not get")
+	}
+}
+
+// The page of all kinds does not search sessions (decision #4447). Below the hits
+// stands a plain link to the same line narrowed to the sessions; the link asks
+// nothing and carries no number. The sessions are searched when the page is
+// narrowed to them, or a line names them.
+func TestSearchPageOfAllKindsLeavesSessionsOutAndLinksToThem(t *testing.T) {
+	e := seedSearchAll(t)
+	const link = `href="/ui/search?kind=sessions&amp;q=zebrafish"`
+	_, all := e.get(t, e.Owner, "/ui/search?q=zebrafish")
+	if strings.Contains(all, `class="frow`+` `) && strings.Contains(all, `>Sessions<`) {
+		t.Errorf("the page of all kinds lists a sessions group:\n%s", all)
+	}
+	if !strings.Contains(all, link) || !strings.Contains(all, "Search in sessions too") {
+		t.Errorf("no link to search in sessions:\n%s", all)
+	}
+	for _, name := range []string{"anna-private", "alice-private", "hidden-project", "anna-project"} {
+		if strings.Contains(all, "/ui/sessions/"+e.pid[name]) {
+			t.Errorf("the page of all kinds links session %s", name)
+		}
+	}
+	_, narrowed := e.get(t, e.Owner, "/ui/search?q=zebrafish&kind=sessions")
+	if !strings.Contains(narrowed, "/ui/sessions/") || strings.Contains(narrowed, "Search in sessions too") {
+		t.Errorf("the page narrowed to the sessions has none or offers the link:\n%s", narrowed)
+	}
+	_, named := e.get(t, e.Owner, "/ui/search?q="+url.QueryEscape("zebrafish is:session"))
+	if !strings.Contains(named, "/ui/sessions/") || strings.Contains(named, "Search in sessions too") {
+		t.Errorf("a line that names the sessions does not search them or offers the link:\n%s", named)
+	}
+	// A guest has no sessions group, so no link.
+	_, guest := e.get(t, e.Guest, "/ui/search?q=zebrafish")
+	if strings.Contains(guest, "Search in sessions too") {
+		t.Errorf("the guest is offered the sessions:\n%s", guest)
 	}
 }

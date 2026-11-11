@@ -218,7 +218,10 @@ func (s *Store) hybridSessions(q string, o SessionSearch, qvec []float32, cfg *E
 			}
 		}
 	}
-	best, err := s.sessionVectorRanking(context.Background(), cfg, qvec, o.ExcludeSession, r)
+	// The reads end with the view's context (WithContext): a search that is given a
+	// time budget must be able to stop its vector ranking too, which is the part
+	// that took seconds on a large archive.
+	best, err := s.sessionVectorRanking(s.ctx(), cfg, qvec, o.ExcludeSession, r)
 	if err != nil {
 		return nil, err
 	}

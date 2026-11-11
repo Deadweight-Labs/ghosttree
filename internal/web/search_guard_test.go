@@ -104,3 +104,47 @@ func TestSearchKindSurvivesAPanic(t *testing.T) {
 		release()
 	}
 }
+
+// The search of the sessions page is a long read like the others: it takes a place
+// among the searches, so the hooks and the other pages keep their connection. With
+// every place taken it answers 503 with Retry-After after sessionsSearchWait; the
+// page without a search does not need a place.
+func TestSessionsPageSearchTakesAPlaceAmongTheSearches(t *testing.T) {
+	e := seedSessions(t)
+	old := sessionsSearchWait
+	sessionsSearchWait = 100 * time.Millisecond
+	t.Cleanup(func() { sessionsSearchWait = old })
+
+	var held []func()
+	for {
+		release, ok := e.St.AcquireSearchSlot(context.Background(), time.Millisecond)
+		if !ok {
+			break
+		}
+		held = append(held, release)
+	}
+	if len(held) == 0 {
+		t.Fatal("the store has no places")
+	}
+	code, _ := e.get(t, e.Owner, "/ui/sessions?q=zebrafish")
+	if code != http.StatusServiceUnavailable {
+		t.Errorf("the search with no place free answered %d", code)
+	}
+	if code, _ := e.get(t, e.Owner, "/ui/sessions"); code != http.StatusOK {
+		t.Errorf("the page without a search answered %d", code)
+	}
+	for _, r := range held {
+		r()
+	}
+	if code, page := e.get(t, e.Owner, "/ui/sessions?q=zebrafish"); code != http.StatusOK || !strings.Contains(page, `data-kind="user"`) {
+		t.Errorf("after the places are free: %d", code)
+	}
+	// The place was given back by the search: all of them are free again.
+	for range len(held) {
+		release, ok := e.St.AcquireSearchSlot(context.Background(), 100*time.Millisecond)
+		if !ok {
+			t.Fatal("the search of the page kept its place")
+		}
+		defer release()
+	}
+}

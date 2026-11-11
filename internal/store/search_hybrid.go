@@ -208,16 +208,18 @@ func ftsConditions(o KnowledgeSearch) string {
 
 // ftsKnowledge is the full-text ranking as it has always been answered.
 func (s *Store) ftsKnowledge(q, where string, args []any, limit int, o KnowledgeSearch) ([]Knowledge, error) {
-	args = append([]any{ftsQuery(q)}, args...)
-	args = append(args, limit)
-	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+prefix(knowledgeCols, "k.")+`
+	return andThenOr(q, limit, limit, func(k Knowledge) int64 { return k.ID }, func(expr string) ([]Knowledge, error) {
+		args := append([]any{expr}, args...)
+		args = append(args, limit)
+		rows, err := s.db.QueryContext(s.ctx(), `SELECT `+prefix(knowledgeCols, "k.")+`
 		FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
 		WHERE knowledge_fts MATCH ? AND `+where+ftsConditions(o)+`
 		ORDER BY f.rank LIMIT ?`, args...)
-	if err != nil {
-		return nil, err
-	}
-	return s.scanKnowledge(rows)
+		if err != nil {
+			return nil, err
+		}
+		return s.scanKnowledge(rows)
+	})
 }
 
 func (s *Store) hybridKnowledge(q, where string, args []any, limit int, qvec []float32, cfg *EmbedSearchConfig, o KnowledgeSearch) ([]Knowledge, error) {
@@ -418,15 +420,17 @@ func (s *Store) textRanking(q, where string, args []any, pool int, o KnowledgeSe
 	if o.Keep != nil {
 		scan = keepScanCap
 	}
-	args = append([]any{ftsQuery(q)}, args...)
-	args = append(args, scan)
-	rows, err := s.db.QueryContext(s.ctx(), `SELECT k.id FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
+	ids, err := andThenOr(q, scan, scan, idKey, func(expr string) ([]int64, error) {
+		args := append([]any{expr}, args...)
+		args = append(args, scan)
+		rows, err := s.db.QueryContext(s.ctx(), `SELECT k.id FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
 		WHERE knowledge_fts MATCH ? AND `+where+ftsConditions(o)+`
 		ORDER BY f.rank LIMIT ?`, args...)
-	if err != nil {
-		return nil, err
-	}
-	ids, err := scanIDs(rows)
+		if err != nil {
+			return nil, err
+		}
+		return scanIDs(rows)
+	})
 	if err != nil {
 		return nil, err
 	}

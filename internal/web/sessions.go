@@ -604,7 +604,19 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if v.Searching {
+		// The search of transcripts is as long a read as the search page's: it
+		// takes a place among the searches too, so that the hooks and the other
+		// pages keep their connection.
+		release, ok := a.store.AcquireSearchSlot(r.Context(), sessionsSearchWait)
+		if !ok {
+			if r.Context().Err() == nil {
+				w.Header().Set("Retry-After", "2")
+				http.Error(w, "the server is busy with other searches, try again in a moment", http.StatusServiceUnavailable)
+			}
+			return
+		}
 		page, err := a.store.SearchTranscripts(pa, store.SearchQuery{Q: query, Kind: kind, Filter: filter, Sort: sortBy, Cursor: cursor, Limit: pageSize})
+		release()
 		if err != nil {
 			http.Error(w, "search failed", http.StatusInternalServerError)
 			return

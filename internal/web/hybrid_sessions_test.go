@@ -116,9 +116,10 @@ func TestSessionPagesFindByMeaningForWhoMayReadThem(t *testing.T) {
 		t.Errorf("the sort by time is ranked by meaning: %v", e.addresses(page))
 	}
 
-	// The search of everything has a group of sessions, for members only.
-	_, owner := e.get(t, e.Owner, "/ui/search?q=auto+defekt")
-	_, guest := e.get(t, e.Guest, "/ui/search?q=auto+defekt")
+	// The search of everything has no group of sessions (decision #4447); narrowed
+	// to them it has one, for members only.
+	_, owner := e.get(t, e.Owner, "/ui/search?q=auto+defekt&kind=sessions")
+	_, guest := e.get(t, e.Guest, "/ui/search?q=auto+defekt&kind=sessions")
 	if !strings.Contains(owner, `href="/ui/sessions/`) || strings.Contains(guest, `href="/ui/sessions/`) {
 		t.Errorf("the group of sessions: owner %v, guest %v", strings.Contains(owner, `href="/ui/sessions/`), strings.Contains(guest, `href="/ui/sessions/`))
 	}
