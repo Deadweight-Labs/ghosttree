@@ -81,8 +81,9 @@ func ParseRef(input string) (Ref, error) {
 		return Ref{Kind: KindCriterion, ID: atoi(m[3]), Num: num(m[4])}, nil
 	}
 	if t, ok := ParseNumber(in); ok {
-		// In running text and in the terminal #N is a knowledge entry (the pill of a
-		// text, ctx open #4295); a search asks NumberTerm.Kinds for the other kinds.
+		// A bare #N given as a reference (ctx open #4295) is the old way of writing a
+		// knowledge entry, now KN-N; in running text of a repository #N is the pull
+		// request. A search asks NumberTerm.Kinds for every kind #N can mean.
 		if t.Kind == "" {
 			return Ref{Kind: KindKnowledge, ID: t.N}, nil
 		}
