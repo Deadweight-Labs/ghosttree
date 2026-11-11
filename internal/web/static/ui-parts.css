@@ -31,6 +31,8 @@
   & .ref.pill .num { flex: none; min-width: 0; letter-spacing: .01em; }
   & .ref.pill .pt { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 400; color: var(--fg-default); }
   & .ref.pill .pt::before { content: ""; display: inline-block; width: 1px; height: 10px; margin-right: 6px; vertical-align: -1px; background: var(--border-default); }
+  /* A pill without a title (a link, a bare number) lets its text shrink and ends it with an ellipsis, so it never outgrows a narrow side column. */
+  & .ref.pill > .num:last-child { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
   & .ref.pill.mono .num { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; font-family: var(--ui-mono); font-weight: 400; letter-spacing: 0; }
   & .ref.pill + .ref.pill { margin-left: 4px; }
   & .rn { color: var(--fg-subtle); font-size: 14px; font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; }

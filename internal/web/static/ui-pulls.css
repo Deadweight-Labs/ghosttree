@@ -101,8 +101,11 @@
 
 @media (max-width: 767px) {
   :is(.g2) {
-    & details.rq > summary { grid-template-columns: 16px minmax(0, 1fr) auto; min-height: 44px; }
+    /* The title has the whole width and wraps at word boundaries; the label and the progress go under it. */
+    & details.rq > summary { grid-template-columns: 16px minmax(0, 1fr); gap: 4px 12px; min-height: 44px; }
+    & details.rq > summary .rqs { grid-column: 2; justify-self: start; }
     & details.rq > summary .nn { display: none; }
+    & details.rq > summary .rqt { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: break-word; }
     & details.rq .inner .crit { padding-left: 16px; }
     & .crow { grid-template-columns: 20px minmax(0, 1fr) auto; }
     & .crow .chip { display: none; }
@@ -117,5 +120,11 @@
     & .ctl4::before, & .cgh .i { display: none; }
     & .cgh { margin-left: 0; }
     &.pr .dmeta .ghb, &.cd .dmeta .ghb { margin-left: 0; }
+    /* Head of a commit: who and when on the first line, then the chips (hash with its copy button, pull request, branch), then each button across the full width */
+    & .chead { gap: 8px; }
+    & .chead .sp { display: none; }
+    & .chead .ref.k-pr { order: 1; }
+    & .chead .ref.k-branch { order: 2; }
+    & .chead > .gbtn { order: 3; flex: 1 1 100%; justify-content: center; }
   }
 }

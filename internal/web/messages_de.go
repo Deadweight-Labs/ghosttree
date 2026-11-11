@@ -1083,7 +1083,7 @@ var messagesDE = map[string]string{
 	"usage.limit.day":          "Tagesgrenze",
 	"usage.limit.month":        "Monatsgrenze",
 	"usage.limit":              "%[1]s erreicht (%[2]s). Neue Aufrufe warten.",
-	"garden.admin.title":       "Gärtner",
+	"garden.admin.title":       "Gärtner-Verbrauch",
 	"garden.admin.checked":     "%[1]d Einträge bisher geprüft, die älteste Prüfung ist vom %[2]s",
 	"explain.admin.counts":     "%[1]d von Agenten geschrieben, %[2]d erzeugt",
 	"explain.admin.days":       "Letzte Tage",
