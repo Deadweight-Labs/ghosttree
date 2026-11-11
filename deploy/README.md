@@ -409,7 +409,74 @@ Going back: set `--session-text=stored`, run `ctx db slim-text --restore`
 where the derivation was equal, the derived version for `cut` and `other`), then start the older binary. Without
 `--restore` an older binary sees empty transcripts.
 
-### Shrinking and checking the database
+### Sessions on commits and pull requests: reflog and backfill
+
+The collector ties a session to the commits and pull requests it produced
+(IDEA-31). Claude Code commits with `-q` in nine of ten calls, so the hash is
+not in the transcript. There are three sources, and the coverage report names
+them: `reported` (the hash a commit printed, the number `gh pr create` printed),
+`observed` (the collector read the reflog of `HEAD` in the working directory of
+the call: full hash, kind, patch ID) and `matched` (the server laid the time
+window of the call over the commits of a pull request).
+
+`observed` needs nothing from the operator. It runs in `ctx watch` on the
+machine of the session, only after a successful commit call, with at most three
+`git` processes (`log -g`, `log -p`, `patch-id`), only in the directory the tool
+ran in, below it or in a worktree of the same repository, with no network access.
+The server checks an observed hash like a reported one against window and
+author, and an older server ignores it.
+
+`ctx db backfill-session-git` does for the transcripts already in the database
+what the collector does live, minus the reflog (the server has no repository):
+
+```bash
+RUN="..."                                   # as in "Running maintenance commands"
+$RUN db backfill-session-git --db $DB --dry-run   # same steps on temporary copies; nothing is written
+$RUN db backfill-session-git --db $DB             # beside the running server
+$RUN db backfill-session-git --db $DB --resume    # after an interruption
+```
+
+It needs the server of this version to have started once (the three tables
+`session_git_events`, `session_commits`, `session_prs`). It reads
+`session_chunks.raw` session by session (not the `text` column, which is empty
+after `slim-text` and cuts the arguments of a call at 600 characters) and runs
+the recognition of the collector over each session. It writes what
+`POST /api/session-git-events` writes, then checks the reported hashes against
+`git_pr_commits` and lays the time window of every commit call without a hash
+over the pull request commits, under the author rules of the server: a commit
+by another known person is not assigned, an author that cannot be checked gives
+a weak assignment (shown as weak, never as proof).
+
+The report ends with the coverage of the whole database: commit calls, pull
+requests and commits of pull requests that have a session now, split into
+`reported`, `observed` and `matched` (with the weak part of `matched`) and
+`none`. The first time on a database there is no `observed`; run the report
+again after the collectors have been updated and have seen new commits.
+
+Only those three tables are written, in transactions of at most `--batch`
+events (100) or `--match-batch` commits (20), each opened with
+`BEGIN IMMEDIATE` and followed by a pause at least as long as the write lock was
+held (`--pause`, 20 ms). Reading takes no lock. `--dry-run` creates temporary
+copies of the three tables in the connection and runs the same steps against
+them, so its numbers are those the real run produces, and it leaves the file as
+it was (it can take as long as the real run, minus the pauses). A second run
+writes nothing new (a call whose time has since come into the past of the
+server's clock check is the only exception); an interrupted one is continued
+with `--resume` (behind the last session it finished) or `--after-id`. A session
+whose lines cannot be read is counted and skipped. The command prints numbers
+only.
+
+Measured on a generated database of 8000 sessions and 2.05 million lines
+(2.0 GiB on disk, 13 % of the sessions with commit calls, 88 % of them with
+`-q`, 3589 commit calls, 1016 pull requests): the real run took 37 s (31 s reading
+and recognising, 5 s match) on an NVMe disk, 5012 events and 1873 matched commits
+written in 230 transactions. The write lock per transaction was p50 6 ms, p95
+11 ms, 26 ms at most (1.4 s in total); a second writer beside it, one write every
+5 ms, waited 70 ms at most (p99 13 ms). The dry run took 56 s, a second run 32 s
+and wrote nothing. Reading dominates and is linear (about 65,000 lines per second
+here): the 3 million lines of the production database should take about a minute.
+The generator is the test `TestBackfillScale` in `internal/collector`
+(`GHOSTTREE_BACKFILL_SCALE_SESSIONS=8000`).
 
 Deleting rows (`ctx strip-images`, a cleanup after a redaction) leaves free pages
 inside the file; it only shrinks when `VACUUM` rewrites it. Run `ctx db vacuum`

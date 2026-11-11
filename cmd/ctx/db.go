@@ -23,6 +23,7 @@ const dbUsage = `usage: ctx db vacuum --db <path> [--tmpdir <dir>] [--fts-optimi
        ctx db slim-sessions --db <path> [--dry-run] [--batch N] [--pause D] [--json]
        ctx db slim-search --db <path> [--dry-run] [--batch N] [--pause D] [--json]
        ctx db slim-text --db <path> [--dry-run] [--restore] [--batch N] [--pause D] [--json]
+       ctx db backfill-session-git --db <path> [--dry-run] [--resume] [--batch N] [--pause D] [--json]
        ctx db migrate-owners --db <path> --dry-run|--apply --backup <file> [--plan <file>]
 
 Maintenance of the database file with the SQL functions of the schema. The
@@ -37,6 +38,7 @@ ghosttree_valid_utf8, which only ctx registers, so "sqlite3 <db> VACUUM" and
   slim-sessions  slim and pack the stored transcript lines (may run beside the server)
   slim-search    one search index over sessions, no text copies (may run beside the server)
   slim-text      empty session_chunks.text, readers derive it from the stored line (may run beside the server)
+  backfill-session-git  tie stored sessions to their commits and pull requests, with a coverage report (may run beside the server)
   migrate-owners   projects to their owners (organization or person), REQ-623`
 
 const dbChunkStatsUsage = `usage: ctx db chunk-stats --db <path> [--sample N] [--json]
@@ -129,6 +131,8 @@ func cmdDB(args []string, stdout io.Writer) int {
 		return cmdDBSlimSearch(args[1:], stdout)
 	case "slim-text":
 		return cmdDBSlimText(args[1:], stdout)
+	case "backfill-session-git":
+		return cmdDBBackfillSessionGit(args[1:], stdout)
 	case "migrate-owners":
 		return cmdDBMigrateOwners(args[1:], stdout)
 	case "help", "--help", "-h":
