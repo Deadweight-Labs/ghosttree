@@ -33,6 +33,7 @@ func (r *backfillRun) withBackfillTx(fn func(tx *sql.Tx) error) error {
 		if !isBusy(err) || attempt >= len(slimBusyBackoff) {
 			return err
 		}
+		r.rep.BusyRetries++
 		if err := r.sleep(slimBusyBackoff[attempt]); err != nil {
 			return err
 		}
@@ -87,6 +88,134 @@ func (r *backfillRun) settleClaims() error {
 			return err
 		}
 		r.rep.ClaimsChecked += int64(n)
+	}
+}
+
+// matchEvidence legt die Nachrichten und Push-Bereiche der Vorgänge über die Commits der PRs
+// (P6): erst jeder Commit, dessen Titel ein Vorgang trägt, dann jeder Push gegen die Commits
+// seines Branches. Beides in Scheiben zu MatchBatch, je Scheibe eine Transaktion. Alle
+// Vorgänge sind geschrieben, bevor es beginnt; eine Zuordnung, die ein zweiter Lauf erneut
+// findet, ändert nichts (putEvidence).
+func (r *backfillRun) matchEvidence() error {
+	if err := r.matchMessages(); err != nil {
+		return err
+	}
+	return r.matchPushes()
+}
+
+func (r *backfillRun) matchMessages() error {
+	var lastProject, lastSHA string
+	for {
+		if err := r.ctx.Err(); err != nil {
+			return err
+		}
+		rows, err := r.db.QueryContext(r.ctx, `SELECT c.project, c.sha, c.committed_at, c.author, c.title_key, c.msg_key FROM git_pr_commits c
+			WHERE c.title_key != '' AND c.committed_at != '' AND (c.project, c.sha) > (?, ?)
+			AND EXISTS (SELECT 1 FROM session_git_events e WHERE e.project=c.project AND e.msg_title=c.title_key AND e.kind='commit')
+			GROUP BY c.project, c.sha ORDER BY c.project, c.sha LIMIT ?`, lastProject, lastSHA, r.opts.MatchBatch)
+		if err != nil {
+			return err
+		}
+		type item struct {
+			project string
+			c       evidenceCommit
+		}
+		var todo []item
+		seen := 0
+		for rows.Next() {
+			var it item
+			var at string
+			if err := rows.Scan(&it.project, &it.c.SHA, &at, &it.c.Author, &it.c.title, &it.c.full); err != nil {
+				rows.Close()
+				return err
+			}
+			seen++
+			lastProject, lastSHA = it.project, it.c.SHA
+			if t, ok := parseGitTime(at); ok {
+				it.c.CommittedAt = t
+				todo = append(todo, it)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if len(todo) > 0 {
+			err = r.withBackfillTx(func(tx *sql.Tx) error {
+				m := newMatcher(tx, r.owner)
+				for _, it := range todo {
+					if _, err := m.resolveEvidence(it.project, it.c); err != nil {
+						return err
+					}
+				}
+				r.rep.EvidenceAdded += int64(m.evAdded)
+				r.rep.EvidenceUpgraded += int64(m.evUpgraded)
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			r.rep.EvidenceCommits += int64(len(todo))
+		}
+		if seen < r.opts.MatchBatch {
+			return nil
+		}
+	}
+}
+
+func (r *backfillRun) matchPushes() error {
+	var lastSession, lastSeq int64
+	for {
+		if err := r.ctx.Err(); err != nil {
+			return err
+		}
+		rows, err := r.db.QueryContext(r.ctx, `SELECT DISTINCT session_id, seq, project FROM session_git_pushes
+			WHERE (session_id, seq) > (?, ?) ORDER BY session_id, seq LIMIT ?`, lastSession, lastSeq, r.opts.MatchBatch)
+		if err != nil {
+			return err
+		}
+		type push struct {
+			session int64
+			seq     int
+			project string
+		}
+		var todo []push
+		for rows.Next() {
+			var p push
+			if err := rows.Scan(&p.session, &p.seq, &p.project); err != nil {
+				rows.Close()
+				return err
+			}
+			todo = append(todo, p)
+			lastSession, lastSeq = p.session, int64(p.seq)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if len(todo) == 0 {
+			return nil
+		}
+		err = r.withBackfillTx(func(tx *sql.Tx) error {
+			m := newMatcher(tx, r.owner)
+			for _, p := range todo {
+				if _, err := m.resolvePush(p.project, p.session, p.seq); err != nil {
+					return err
+				}
+			}
+			r.rep.EvidenceAdded += int64(m.evAdded)
+			r.rep.EvidenceUpgraded += int64(m.evUpgraded)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		r.rep.EvidencePushes += int64(len(todo))
+		if len(todo) < r.opts.MatchBatch {
+			return nil
+		}
 	}
 }
 
@@ -165,8 +294,9 @@ func (r *backfillRun) matchEvents() error {
 
 // ---------------------------------------------------------------- Abdeckung
 
-// Rang einer Quelle: kleiner ist stärker.
-const sqlSourceRank = `CASE sc.source WHEN 'reported' THEN 0 WHEN 'observed' THEN 1 ELSE 2 END`
+// Rang einer Quelle: kleiner ist stärker (rankReported …).
+const sqlSourceRank = `CASE sc.source WHEN 'reported' THEN 0 WHEN 'observed' THEN 1 WHEN 'message+pushed' THEN 2
+	WHEN 'message' THEN 3 WHEN 'pushed' THEN 4 ELSE 5 END`
 
 // coverage zählt, was die Datenbank nach dem Lauf weiß. Nur lesen.
 func (r *backfillRun) coverage() error {
@@ -178,16 +308,15 @@ func (r *backfillRun) coverage() error {
 		return err
 	}
 	// Commit-Aufrufe: je erfolgreichem Vorgang die stärkste Quelle der SHA, die an seiner
-	// Zeile hängt.
-	if err := r.rank(`SELECT (SELECT MIN(`+sqlSourceRank+`) FROM session_commits sc WHERE sc.session_id=e.session_id AND sc.chunk_seq=e.seq),
-			COALESCE((SELECT MIN(sc.weak) FROM session_commits sc WHERE sc.session_id=e.session_id AND sc.chunk_seq=e.seq
-				AND `+sqlSourceRank+`=2), 0)
+	// Zeile hängt, und ob sie schwach ist (rank*2+weak, die schwächste Zeile der stärksten Quelle).
+	if err := r.rank(`SELECT (SELECT `+sqlSourceRank+`*2 + sc.weak FROM session_commits sc WHERE sc.session_id=e.session_id AND sc.chunk_seq=e.seq
+				ORDER BY `+sqlSourceRank+`, sc.weak LIMIT 1)
 		FROM session_git_events e WHERE e.kind='commit' AND e.ok=1`, &c.CommitCalls); err != nil {
 		return err
 	}
 	// Commits in PRs, über die SHA selbst.
-	if err := r.rank(`SELECT (SELECT MIN(`+sqlSourceRank+`) FROM session_commits sc WHERE sc.project=k.project AND sc.sha=k.sha),
-			COALESCE((SELECT MIN(sc.weak) FROM session_commits sc WHERE sc.project=k.project AND sc.sha=k.sha AND `+sqlSourceRank+`=2), 0)
+	if err := r.rank(`SELECT (SELECT `+sqlSourceRank+`*2 + sc.weak FROM session_commits sc WHERE sc.project=k.project AND sc.sha=k.sha
+				ORDER BY `+sqlSourceRank+`, sc.weak LIMIT 1)
 		FROM (SELECT DISTINCT project, sha FROM git_pr_commits WHERE in_pr=1) k`, &c.CommitsBy); err != nil {
 		return err
 	}
@@ -198,7 +327,8 @@ func (r *backfillRun) coverage() error {
 	return r.pullCoverage()
 }
 
-// rank führt eine Abfrage aus, die je Zeile (Rang, schwach) liefert, und zählt sie ein.
+// rank führt eine Abfrage aus, die je Zeile rank*2+weak liefert (NULL ohne Quelle), und zählt
+// sie ein.
 func (r *backfillRun) rank(query string, into *BySource) error {
 	rows, err := r.db.QueryContext(r.ctx, query)
 	if err != nil {
@@ -206,16 +336,15 @@ func (r *backfillRun) rank(query string, into *BySource) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var rank sql.NullInt64
-		var weak int
-		if err := rows.Scan(&rank, &weak); err != nil {
+		var v sql.NullInt64
+		if err := rows.Scan(&v); err != nil {
 			return err
 		}
-		if !rank.Valid {
+		if !v.Valid {
 			into.add(-1, false)
 			continue
 		}
-		into.add(int(rank.Int64), weak == 1)
+		into.add(int(v.Int64/2), v.Int64%2 == 1)
 	}
 	return rows.Err()
 }
@@ -260,16 +389,29 @@ func (r *backfillRun) pullCoverage() error {
 		if err := st.sessionsForPull(p.project, p.number, "", set); err != nil {
 			return err
 		}
-		rank, weak := 3, false
+		rank, weak := rankMatched+1, false
 		for _, l := range set.list() {
-			lr := 2
+			lr := rankMatched
+			var message, pushed bool
 			for _, src := range l.Sources {
 				switch src {
 				case CommitSourceReported, PRSourceCreated, PRSourceMerged:
-					lr = min(lr, 0)
+					lr = min(lr, rankReported)
 				case CommitSourceObserved:
-					lr = min(lr, 1)
+					lr = min(lr, rankObserved)
+				case CommitSourceMessage:
+					message = true
+				case CommitSourcePushed:
+					pushed = true
 				}
+			}
+			switch {
+			case message && pushed:
+				lr = min(lr, rankMessagePushed)
+			case message:
+				lr = min(lr, rankMessage)
+			case pushed:
+				lr = min(lr, rankPushed)
 			}
 			if lr < rank || (lr == rank && weak && !l.Weak) {
 				rank, weak = lr, l.Weak

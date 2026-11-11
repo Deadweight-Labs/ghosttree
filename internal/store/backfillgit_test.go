@@ -383,8 +383,9 @@ func TestBackfillWritesInShortTransactionsBesideAWriter(t *testing.T) {
 	}
 	// Ohne BEGIN IMMEDIATE scheiterte die Transaktion des Abgleichs an dem Schreiber daneben und
 	// wartete eine Wiederholungspause ab (fünf Sekunden und mehr).
-	if rep.Duration > 3*time.Second {
-		t.Errorf("the run waited for retries instead of for the lock: %s", rep.Duration)
+	// Counted, not timed: a loaded CI runner makes the wall clock unreliable.
+	if rep.BusyRetries != 0 {
+		t.Errorf("the run waited for %d retries instead of for the lock (%s)", rep.BusyRetries, rep.Duration)
 	}
 	if writes == 0 || worst > 2*time.Second {
 		t.Errorf("the other writer kept going: %d writes, worst wait %s", writes, worst)

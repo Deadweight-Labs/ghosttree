@@ -8,8 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitmsg"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
+
+// keys sind die Schlüssel, unter denen der Vorgang die Nachricht meldet: nie der Text.
+func keys(msg string) (title, full string) {
+	k := gitmsg.Of(msg)
+	return k.Title, k.Full
+}
 
 // Die Testdaten testdata/git_claude.jsonl und git_codex.jsonl sind Transkriptzeilen
 // in der Form, die Claude Code (2.1.x) und Codex (0.139) schreiben, mit
@@ -45,6 +52,12 @@ func scanAll(t *testing.T, harness, id, file string) []store.SessionGitEvent {
 	return g.queue
 }
 
+// withKeys trägt die Schlüssel einer Nachricht an einem Vorgang ein.
+func withKeys(e store.SessionGitEvent, msg string) store.SessionGitEvent {
+	e.MsgTitle, e.MsgFull = keys(msg)
+	return e
+}
+
 func TestGitScanReadsClaudeTranscript(t *testing.T) {
 	const id = "11111111-2222-4333-8444-555555555555"
 	got := scanAll(t, "claude-code", id, "git_claude.jsonl")
@@ -52,16 +65,20 @@ func TestGitScanReadsClaudeTranscript(t *testing.T) {
 		e.Harness, e.SessionExternalID = "claude-code", id
 		return e
 	}
+	title := func(msg string) string { t, _ := keys(msg); return t }
 	want := []store.SessionGitEvent{
 		// git commit -q: nichts in der Ausgabe, nur Zeit und Ergebnis.
-		h(store.SessionGitEvent{Seq: 1, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T16:06:33.854Z", EndedAt: "2026-11-08T16:06:33.965Z", OK: true, Branch: "feat/example"}),
+		h(store.SessionGitEvent{Seq: 1, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T16:06:33.854Z", EndedAt: "2026-11-08T16:06:33.965Z", OK: true, Branch: "feat/example", MsgTitle: title("fix: handle empty input")}),
 		// Ohne -q steht die SHA in der Ausgabe.
-		h(store.SessionGitEvent{Seq: 3, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T16:10:00.100Z", EndedAt: "2026-11-08T16:10:00.420Z", OK: true, Branch: "feat/example", SHAs: []string{"1a2b3c4"}}),
+		h(store.SessionGitEvent{Seq: 3, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T16:10:00.100Z", EndedAt: "2026-11-08T16:10:00.420Z", OK: true, Branch: "feat/example", SHAs: []string{"1a2b3c4"}, MsgTitle: title("feat: add parser")}),
 		// Fehlgeschlagen: der Vorgang bleibt (Abdeckung), mit ok=false.
-		h(store.SessionGitEvent{Seq: 5, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T16:11:00.000Z", EndedAt: "2026-11-08T16:11:00.200Z", OK: false, Branch: "feat/example"}),
+		h(store.SessionGitEvent{Seq: 5, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T16:11:00.000Z", EndedAt: "2026-11-08T16:11:00.200Z", OK: false, Branch: "feat/example", MsgTitle: title("wip")}),
 		// Der Commit mit Heredoc ist einer; das "git push" im Text der Nachricht nicht.
-		h(store.SessionGitEvent{Seq: 11, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T16:11:40.000Z", EndedAt: "2026-11-08T16:11:40.300Z", OK: true, Branch: "feat/example"}),
-		h(store.SessionGitEvent{Seq: 13, Kind: "push", StartedAt: "2026-11-08T16:12:00.000Z", EndedAt: "2026-11-08T16:12:02.500Z", OK: true, Branch: "feat/example"}),
+		h(withKeys(store.SessionGitEvent{Seq: 11, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T16:11:40.000Z", EndedAt: "2026-11-08T16:11:40.300Z", OK: true, Branch: "feat/example"},
+			"fix: tidy the parser\n\nThe agent used to run git push here, which is not part of this commit.")),
+		// Ein neuer Branch: kein Bereich, aber das Ref.
+		h(store.SessionGitEvent{Seq: 13, Kind: "push", StartedAt: "2026-11-08T16:12:00.000Z", EndedAt: "2026-11-08T16:12:02.500Z", OK: true, Branch: "feat/example",
+			PushRefs: []store.PushedRef{{Branch: "feat/example", Src: "feat/example", NewBranch: true}}}),
 		h(store.SessionGitEvent{Seq: 15, Kind: "pr_create", StartedAt: "2026-11-08T16:13:00.000Z", EndedAt: "2026-11-08T16:13:03.100Z", OK: true, Branch: "feat/example", PR: 12, PRRemote: "github.com/example-org/example-repo"}),
 		h(store.SessionGitEvent{Seq: 17, Kind: "pr_merge", StartedAt: "2026-11-08T17:00:00.000Z", EndedAt: "2026-11-08T17:00:04.000Z", OK: true, Branch: "feat/example", PR: 12}),
 	}
@@ -87,14 +104,16 @@ func TestGitScanReadsCodexTranscript(t *testing.T) {
 		e.Harness, e.SessionExternalID = "codex", id
 		return e
 	}
+	title := func(msg string) string { t, _ := keys(msg); return t }
 	want := []store.SessionGitEvent{
-		h(store.SessionGitEvent{Seq: 1, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T10:01:00.100Z", EndedAt: "2026-11-08T10:01:00.140Z", OK: true, SHAs: []string{"711290f"}}),
-		h(store.SessionGitEvent{Seq: 3, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T10:02:00.000Z", EndedAt: "2026-11-08T10:02:00.050Z", OK: false}),
+		h(store.SessionGitEvent{Seq: 1, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T10:01:00.100Z", EndedAt: "2026-11-08T10:01:00.140Z", OK: true, SHAs: []string{"711290f"}, MsgTitle: title("init project")}),
+		h(store.SessionGitEvent{Seq: 3, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T10:02:00.000Z", EndedAt: "2026-11-08T10:02:00.050Z", OK: false, MsgTitle: title("nothing new")}),
 		// Der Befehl steht als Liste ["bash","-lc","…"]; das Ergebnis im alten
 		// Umschlag {"output":…,"metadata":{"exit_code":0}}.
-		h(store.SessionGitEvent{Seq: 5, Kind: "push", StartedAt: "2026-11-08T10:03:00.000Z", EndedAt: "2026-11-08T10:03:03.000Z", OK: true, Branch: "main"}),
+		h(store.SessionGitEvent{Seq: 5, Kind: "push", StartedAt: "2026-11-08T10:03:00.000Z", EndedAt: "2026-11-08T10:03:03.000Z", OK: true, Branch: "main", PushOld: "0a1b2c3", PushNew: "4d5e6f7",
+			PushRefs: []store.PushedRef{{Branch: "main", Src: "main", Old: "0a1b2c3", New: "4d5e6f7"}}}),
 		// Aufruf und Ergebnis in einer Zeile (item_completed), Befehl als Liste.
-		h(store.SessionGitEvent{Seq: 9, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T10:05:00.000Z", EndedAt: "2026-11-08T10:05:00.000Z", OK: true}),
+		h(store.SessionGitEvent{Seq: 9, Kind: "commit", Op: "commit", StartedAt: "2026-11-08T10:05:00.000Z", EndedAt: "2026-11-08T10:05:00.000Z", OK: true, MsgTitle: title("fix: quiet commit")}),
 		h(store.SessionGitEvent{Seq: 9, Kind: "pr_create", StartedAt: "2026-11-08T10:05:00.000Z", EndedAt: "2026-11-08T10:05:00.000Z", OK: true, PR: 7, PRRemote: "github.com/example-org/example-repo"}),
 	}
 	if !reflect.DeepEqual(got, want) {

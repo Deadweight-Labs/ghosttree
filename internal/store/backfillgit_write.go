@@ -30,6 +30,7 @@ func (r *backfillRun) flush(batch []backfillSession, upTo int64) error {
 				total += len(s.events)
 			}
 			r.rep.Recorded += int64(res.Recorded)
+			r.rep.Enriched += int64(res.Enriched)
 			r.rep.Capped += int64(res.Capped)
 			r.rep.ReportedAdded += int64(added)
 			r.rep.Known += int64(total - res.Recorded - res.Capped)
@@ -40,6 +41,7 @@ func (r *backfillRun) flush(batch []backfillSession, upTo int64) error {
 		if !isBusy(err) || attempt >= len(slimBusyBackoff) {
 			return err
 		}
+		r.rep.BusyRetries++
 		if err := r.sleep(slimBusyBackoff[attempt]); err != nil {
 			return err
 		}
@@ -109,6 +111,7 @@ func (r *backfillRun) commitCursor(upTo int64) error {
 		if !isBusy(err) || attempt >= len(slimBusyBackoff) {
 			return err
 		}
+		r.rep.BusyRetries++
 		if err := r.sleep(slimBusyBackoff[attempt]); err != nil {
 			return err
 		}

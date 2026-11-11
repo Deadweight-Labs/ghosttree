@@ -39,7 +39,9 @@ func TestBackfillSessionGitCommand(t *testing.T) {
 		t.Fatalf("dry run exit %d:\n%s", code, out.String())
 	}
 	for _, want := range []string{"dry run: nothing is written", "read 1 sessions", "commit 1", "that would be written: 1 events",
-		"coverage of the whole database", "commit calls", "reported 0, observed 0, matched 0 (0 weak), none 1", "write lock per transaction"} {
+		"coverage of the whole database", "commit calls",
+		"reported 0, observed 0, message+pushed 0, message 0, pushed 0 (0 of these three weak), matched 0 (0 weak), none 1",
+		"message and push range: 0 commits with a message checked, 0 pushes checked", "write lock per transaction"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("dry run output lacks %q:\n%s", want, out.String())
 		}
