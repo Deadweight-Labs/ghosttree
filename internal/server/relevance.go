@@ -50,11 +50,11 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 	account := principalOf(r).ID
 	session := store.CleanSessionKey(r.URL.Query().Get("session"))
 	text := r.URL.Query().Get("q")
-	// The hint searches the sessions, so it is made only for a prompt that asks
-	// about earlier work (PAIN-70, PAIN-76).
-	wantHint := asksAboutEarlierWork(text)
+	// The hint searches the sessions, so it looks there only for a prompt that asks
+	// about earlier work (PAIN-70, PAIN-76). The pointer to a request is cheap
+	// (requests are few and small) and stays for every prompt.
+	inSessions := asksAboutEarlierWork(text)
 	res, err := a.st.RelevantFor(store.RelevanceQuery{
-		NoHints: !wantHint,
 		Text:    text,
 		Axes:    axes,
 		Limit:   a.overfetch(limit),
@@ -92,12 +92,10 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 		}
 		hits = filterTo(hits, 0, func(h store.RelevantHit) bool { return won[h.ID] })
 	}
-	hint := ""
-	if wantHint {
-		if hint, err = a.relevanceHint(r, pa, res.Hints, axes, account, session); err != nil {
-			writeStoreError(w, http.StatusInternalServerError, err)
-			return
-		}
+	hint, err := a.relevanceHint(r, pa, res.Hints, axes, account, session, inSessions)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)
@@ -147,14 +145,15 @@ func (a *api) rememberDelivered(r *http.Request, via string, ids []int64) {
 // word that occurs nowhere.
 //
 // At most one line per prompt and, through the delivery memory, one per word
-// and session.
-func (a *api) relevanceHint(r *http.Request, pa *store.ProjectAccess, terms []store.HintTerm, axes scope.Axes, account, session string) (string, error) {
+// and session. Without inSessions the sessions are neither searched nor counted:
+// only a request can be named then, and a word that names none gets no line.
+func (a *api) relevanceHint(r *http.Request, pa *store.ProjectAccess, terms []store.HintTerm, axes scope.Axes, account, session string, inSessions bool) (string, error) {
 	where := scope.Axes{Project: axes.Project}
 	for _, t := range terms {
 		if answered(pa, t.Known) {
 			continue
 		}
-		line, err := a.hintLine(r, pa, t.Term, where, session)
+		line, err := a.hintLine(r, pa, t.Term, where, session, inSessions)
 		if err != nil {
 			return "", err
 		}
@@ -186,13 +185,18 @@ func answered(pa *store.ProjectAccess, known []store.Knowledge) bool {
 	return false
 }
 
-func (a *api) hintLine(r *http.Request, pa *store.ProjectAccess, term string, where scope.Axes, session string) (string, error) {
+func (a *api) hintLine(r *http.Request, pa *store.ProjectAccess, term string, where scope.Axes, session string, inSessions bool) (string, error) {
 	page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{Query: term, Scope: where, Limit: maxHintSources + 1}))
 	if err != nil {
 		return "", err
 	}
-	if len(page.Results) > maxHintSources {
+	if len(page.Results) > maxHintSources || (!inSessions && len(page.Results) == 0) {
 		return "", nil
+	}
+	if !inSessions {
+		// The prompt asks nothing about earlier work: the request is named, and
+		// the sessions that would confirm the word as a codename are not read.
+		return requestHintLine(pa, term, page.Results[0]), nil
 	}
 	// The session the prompt is in is left out: it contains the word because it
 	// was just typed, which says nothing. Sessions are counted even when a
@@ -206,9 +210,7 @@ func (a *api) hintLine(r *http.Request, pa *store.ProjectAccess, term string, wh
 		return "", nil
 	}
 	if len(page.Results) > 0 {
-		h := pa.RequestHitView(page.Results[0])
-		return fmt.Sprintf("- [hint] %q also came up in REQ-%d %q (%s). context_search finds more.\n",
-			term, h.Request.ID, truncate(oneLine(h.Request.Title), maxHintTitle), h.Request.State), nil
+		return requestHintLine(pa, term, page.Results[0]), nil
 	}
 	if len(hits) == 0 {
 		return "", nil
@@ -223,6 +225,13 @@ func (a *api) hintLine(r *http.Request, pa *store.ProjectAccess, term string, wh
 		date = date[:len("2006-01-02")]
 	}
 	return fmt.Sprintf("- [hint] %q also came up in session %s on %s. context_search finds more.\n", term, label, date), nil
+}
+
+// requestHintLine points at the request that names the word.
+func requestHintLine(pa *store.ProjectAccess, term string, hit requestdomain.SearchHit) string {
+	h := pa.RequestHitView(hit)
+	return fmt.Sprintf("- [hint] %q also came up in REQ-%d %q (%s). context_search finds more.\n",
+		term, h.Request.ID, truncate(oneLine(h.Request.Title), maxHintTitle), h.Request.State)
 }
 
 // distinctSessions counts the sessions behind a list of hits, by the label a

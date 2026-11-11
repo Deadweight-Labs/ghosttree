@@ -779,18 +779,24 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   words that are rare together, cost the same.
 - The prompt hook searches the sessions for its hint ("X also came up in session
   #n") only when the prompt asks about earlier work: a time behind us ("damals",
-  "last week"), "did we", "wie hatten wir", or a question about a thing ("was
-  ist mit X"). Any other prompt skips the hint and the lookup of its
-  candidates. A prompt with one rare word and no such question takes 4.3 ms of
-  server time instead of 7.2 ms, with 88 KB instead of 2.1 MB allocated, on an
-  archive of 310,000 chunks; a question costs what it did.
+  "last week"), "did we", "wie hatten wir", "schon besprochen", or a question
+  about a thing ("was ist mit X"). Any other prompt does not read the sessions
+  for it; a request that names the word is still pointed at ("also came up in
+  REQ-n"), because that costs little. On an archive of 100,000 chunks a prompt
+  with one rare word and no such question takes 3.4 ms of server time with
+  106 KB allocated, where the session lookup took 6.4 ms and 2.4 MB.
 - Searches wait for a place of their own, one less than there are read
   connections, so a hook always finds a connection free. With three connections
   and 12 searchers the read of a hook took 26 ms, or 3.4 s when the searches
   went through sessions, and now takes 0.6 ms in both cases (0.46 ms idle,
-  310,000 chunks). The API (`/api/search`) and the web interface share the
-  places; a search that cannot get one in time answers `search_busy` (503),
-  which the client retries.
+  310,000 chunks). The API (`/api/search`), the web search and the search of the
+  Sessions page share the places. An API search that gets none within two
+  seconds answers `search_busy` (503) with `Retry-After`. A read repeats such an
+  answer, like a 502, 503 or 504, up to the number of repetitions the client is
+  set to (the MCP server sets two), pausing at least as long as `Retry-After`
+  says, at most three seconds; a write and the prompt hook never repeat.
+- A search of one area (`kind=sessions`) ends with its request: when the caller
+  hangs up, the query stops and frees its place and its connection.
 
 ### Fixed
 

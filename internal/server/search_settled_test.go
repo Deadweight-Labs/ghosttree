@@ -1,7 +1,13 @@
 package server
 
 import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,5 +155,85 @@ func TestSearchAreaOutOfTimeIsAGapAndTheOthersAnswer(t *testing.T) {
 	res = decode[searchResult](t, f.expect(t, "robin", 200, "GET", "/api/search?"+v.Encode(), nil))
 	if len(res.Knowledge) != 0 || len(res.Unavailable) != 1 || res.Unavailable[0] != (store.SearchGap{Area: "knowledge", Reason: store.GapTimeout}) {
 		t.Errorf("all, knowledge out of time: %+v / %+v", res.Knowledge, res.Unavailable)
+	}
+}
+
+// With every place among the searches taken, a search waits only for searchSlotWait
+// and then answers search_busy with Retry-After, so that a client with a timeout
+// sees the answer and not its own timeout. A place freed in time is used.
+func TestSearchAnswersBusyWithRetryAfterWhenNoPlaceIsFree(t *testing.T) {
+	f := accessAPI(t, true)
+	old := searchSlotWait
+	searchSlotWait = 150 * time.Millisecond
+	t.Cleanup(func() { searchSlotWait = old })
+
+	var held []func()
+	for {
+		release, ok := f.st.AcquireSearchSlot(context.Background(), time.Millisecond)
+		if !ok {
+			break
+		}
+		held = append(held, release)
+	}
+	t.Cleanup(func() {
+		for _, r := range held {
+			r()
+		}
+	})
+	if len(held) == 0 {
+		t.Fatal("the store has no places at all")
+	}
+
+	get := func() *http.Response {
+		req, _ := http.NewRequest("GET", f.srv.URL+"/api/search?q=zentrifol&project="+accProject, nil)
+		req.Header.Set("Authorization", "Bearer "+f.tok["robin"])
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	began := time.Now()
+	resp := get()
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), `"search_busy"`) {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Errorf("no Retry-After: %v", resp.Header)
+	}
+	if took := time.Since(began); took < 140*time.Millisecond || took > 3*time.Second {
+		t.Errorf("the search waited %v, not about the limit", took)
+	}
+
+	// A place freed within the wait: the search runs.
+	go func() { time.Sleep(40 * time.Millisecond); held[0](); held = held[1:] }()
+	resp2 := get()
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("a place was freed in time, the answer is %d", resp2.StatusCode)
+	}
+}
+
+// A search of one area is bound to the request: when the caller hangs up, the SQL
+// stops. Before, the store of the single area had no context, and the query ran on
+// holding its place and its connection.
+func TestSingleAreaSearchEndsWithTheRequest(t *testing.T) {
+	f := accessAPI(t, true)
+	a := &api{st: f.st}
+	ctx, cancel := context.WithCancel(context.Background())
+	r := httptest.NewRequest("GET", "/api/search?q=secretterm&kind=sessions", nil).WithContext(ctx)
+	gaps := a.newSearchGaps(r, false)
+	defer gaps.close()
+	st, done := gaps.budget("sessions")
+
+	if _, err := st.SearchSessions("secretterm", scope.Axes{}, "", 10); err != nil {
+		t.Fatalf("the search of a live request: %v", err)
+	}
+	cancel()
+	_, err := st.SearchSessions("secretterm", scope.Axes{}, "", 10)
+	if err := done(err); !errors.Is(err, context.Canceled) {
+		t.Fatalf("after the caller hung up the search went on: %v", err)
 	}
 }

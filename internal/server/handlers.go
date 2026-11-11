@@ -721,10 +721,15 @@ type searchResult struct {
 
 func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	// A search waits for a place of its own, so that the hooks keep a read
-	// connection (Store.AcquireSearchSlot).
-	release, ok := a.st.AcquireSearchSlot(r.Context())
+	// connection (Store.AcquireSearchSlot), but only for a moment: a server that
+	// stays busy says so with Retry-After, and the client asks again. A caller who
+	// has hung up gets no answer.
+	release, ok := a.st.AcquireSearchSlot(r.Context(), searchSlotWait)
 	if !ok {
-		writeCoded(w, http.StatusServiceUnavailable, "search_busy", "too many searches at once; retry")
+		if r.Context().Err() == nil {
+			w.Header().Set("Retry-After", strconv.Itoa(int(searchSlotWait.Round(time.Second)/time.Second)))
+			writeCoded(w, http.StatusServiceUnavailable, "search_busy", "too many searches at once; retry")
+		}
 		return
 	}
 	defer release()

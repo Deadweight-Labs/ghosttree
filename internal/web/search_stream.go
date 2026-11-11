@@ -38,12 +38,19 @@ var (
 
 // searchLimiter gives a kind a place among the searches of the server. The places
 // are the store's (Store.AcquireSearchSlot), shared with the API: one less than
-// the read connections, at least one.
+// the read connections, at least one. A kind waits as long as its own budget
+// lasts (ctx): the page tells a kind that ran out of time as slow and offers to
+// load it again, so a place that comes too late costs nothing that is not said.
+// The wait of a page that has no budget of its own is wait.
 type searchLimiter struct{}
 
 func (l *searchLimiter) acquire(ctx context.Context, st *store.Store) (release func(), ok bool) {
-	return st.AcquireSearchSlot(ctx)
+	return st.AcquireSearchSlot(ctx, 0)
 }
+
+// sessionsSearchWait is how long the search of the sessions page waits for a place
+// among the searches before it answers that the server is busy.
+var sessionsSearchWait = 5 * time.Second
 
 // searchStreams are the running search streams by account: the search itself
 // under the key of the account, a kind loaded again under the account and the

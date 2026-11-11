@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // Searches are the long reads of the server, and they share its read connections
@@ -25,9 +26,12 @@ type searchGate struct {
 	slots chan struct{}
 }
 
-// AcquireSearchSlot waits for a place among the searches of the server. ok is
-// false when ctx ended first. release gives the place back.
-func (s *Store) AcquireSearchSlot(ctx context.Context) (release func(), ok bool) {
+// AcquireSearchSlot waits for a place among the searches of the server, at most
+// wait; with wait <= 0 until ctx ends. ok is false when the time or ctx ran out
+// first: the caller tells apart a busy server (ctx.Err() == nil) from a caller who
+// has gone. A place is never given to a caller whose ctx has ended already.
+// release gives the place back.
+func (s *Store) AcquireSearchSlot(ctx context.Context, wait time.Duration) (release func(), ok bool) {
 	g := &s.embedShared().gate
 	g.once.Do(func() {
 		n := s.ReadPoolSize() - 1
@@ -36,10 +40,21 @@ func (s *Store) AcquireSearchSlot(ctx context.Context) (release func(), ok bool)
 		}
 		g.slots = make(chan struct{}, max(n, 1))
 	})
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	var limit <-chan time.Time
+	if wait > 0 {
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		limit = t.C
+	}
 	select {
 	case g.slots <- struct{}{}:
 		return func() { <-g.slots }, true
 	case <-ctx.Done():
+		return nil, false
+	case <-limit:
 		return nil, false
 	}
 }

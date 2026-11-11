@@ -21,6 +21,12 @@ const (
 	searchBudget = 24 * time.Second
 )
 
+// searchSlotWait is how long a search waits for a place among the searches of the
+// server (Store.AcquireSearchSlot) before it answers search_busy with Retry-After;
+// a variable only so that a test need not wait. Two seconds are a few of the usual
+// searches, and well below what the client waits for an answer.
+var searchSlotWait = 2 * time.Second
+
 // areaBudgetFor is the budget of one area; a variable only so that a test can
 // make one area run out of time and no other.
 var areaBudgetFor = func(string) time.Duration { return areaBudget }
@@ -78,10 +84,12 @@ func (g *searchGaps) add(area string, err error) bool {
 
 // budget is the store for an area with its own time limit, and a function that
 // ends it and turns an interruption caused by the limit into a deadline error.
-// With one area there is no budget of its own: the request's time is the area's.
+// With one area there is no budget of its own: the request's time is the area's,
+// and the store is bound to it, so that a caller who hangs up stops the SQL and
+// frees the place and the connection it holds.
 func (g *searchGaps) budget(area string) (*store.Store, func(error) error) {
 	if !g.multi {
-		return g.a.st, func(err error) error { return err }
+		return g.a.st.WithContext(g.ctx), func(err error) error { return err }
 	}
 	ctx, cancel := context.WithTimeout(g.ctx, areaBudgetFor(area))
 	return g.a.st.WithContext(ctx), func(err error) error {

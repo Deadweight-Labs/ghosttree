@@ -39,10 +39,10 @@ func asksAboutEarlierWork(prompt string) bool {
 		case w == "vor" && i+2 < len(words) && (earlierUnits[words[i+2]] || i+3 < len(words) && words[i+2] == "paar" && earlierUnits[words[i+3]]):
 			// "vor zwei Tagen", "vor 3 Wochen", "vor ein paar Tagen"
 			return true
-		case (w == "schon" || w == "schonmal" || w == "bereits") && withinAfter(words, i, 5, earlierParticiples, true):
+		case (w == "schon" || w == "schonmal" || w == "bereits") && withinAfter(words, i, 5, earlierParticiples):
 			// "schon mal gebaut", "schon einmal besprochen"
 			return true
-		case earlierPronouns[w] && i+1 < len(words) && earlierAuxiliaries[words[i+1]] && withinAfter(words, i+1, 6, earlierParticiples, false):
+		case earlierPronouns[w] && i+1 < len(words) && earlierAuxiliaries[words[i+1]] && withinAfter(words, i+1, 6, earlierParticiples):
 			// "wir haben das doch besprochen"
 			return true
 		case earlierQuestionWords[w] && i+2 < len(words) && earlierAuxiliaries[words[i+1]] && earlierPronouns[words[i+2]]:
@@ -83,14 +83,12 @@ func hasPhrase(words []string, phrase []string) bool {
 	return true
 }
 
-// withinAfter says whether one of the n words after words[i] is in set; with
-// skipSecond, the word right after "schon" ("mal", "einmal") is not counted.
-func withinAfter(words []string, i, n int, set map[string]bool, skipSecond bool) bool {
-	from := i + 1
-	if skipSecond {
-		from++
-	}
-	for j := from; j <= i+n && j < len(words); j++ {
+// withinAfter says whether one of the n words after words[i] is in set. The word
+// right after "schon" counts like any other: "schon besprochen" is as much a
+// question about earlier work as "schon mal besprochen" ("mal" and "einmal" are not
+// in the set, so they need no skipping).
+func withinAfter(words []string, i, n int, set map[string]bool) bool {
+	for j := i + 1; j <= i+n && j < len(words); j++ {
 		if set[words[j]] {
 			return true
 		}
