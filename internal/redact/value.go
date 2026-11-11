@@ -194,6 +194,12 @@ var (
 	plusRe = regexp.MustCompile(`^\+[A-Za-z_]`)
 )
 
+// namedSlotRe is a name with a part left to fill in: ap2-<id>, token_<user-name>,
+// <env>-key. The slot is bounded by - _ or . on both sides, and everything else
+// in the value is plain letters and digits. A real value with a bracket in it
+// (Hx7&kQ2<pz>) has symbols around the bracket and is not it.
+var namedSlotRe = regexp.MustCompile(`^(?:[A-Za-z0-9]+[-_.])*<[A-Za-z][A-Za-z0-9_-]{0,30}>(?:[-_.][A-Za-z0-9]+)*$`)
+
 var placeholderWords = map[string]bool{
 	"password": true, "passwort": true, "passwd": true, "pass": true, "pwd": true,
 	"secret": true, "token": true, "apikey": true, "username": true, "user": true,
@@ -223,6 +229,10 @@ func isPlaceholder(v string) bool {
 		return true
 	}
 	if strings.HasPrefix(v, "%(") || strings.HasPrefix(v, "<%") || v == "%s" || v == "%v" || v == "%d" {
+		return true
+	}
+	// ap2-<id>, token-<name>: a name with a part left to fill in
+	if namedSlotRe.MatchString(v) {
 		return true
 	}
 	// ******, xxxxxx, 000000, ......, xxxx-xxxx

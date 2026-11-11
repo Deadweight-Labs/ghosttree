@@ -39,6 +39,9 @@ func appendChunks(t *testing.T, s *Store, session int64, from, n int, text func(
 	if err := s.AppendChunks(session, chunks); err != nil {
 		t.Fatal(err)
 	}
+	// A test that changes the text of the sessions wants the gate to count it at
+	// once; the server lets the sample age (relevance_language_cache.go).
+	s.ResetRelevanceCache()
 }
 
 // prose is text with no word of interest, for the chunks around the ones a test

@@ -433,3 +433,43 @@ func TestFindSecretsReportsLabeledAndURLWithoutTheValue(t *testing.T) {
 		t.Fatal("matches left after redaction")
 	}
 }
+
+func TestNamedSlotInAValueIsAPlaceholder(t *testing.T) {
+	for _, in := range []string{
+		"Proxy-Token ap2-<id> für jeden Nutzer",
+		"token: user-<name>-v2",
+		"password = acme-<env>",
+	} {
+		if got := FindSecrets(in); len(got) != 0 {
+			t.Errorf("%q: %d hits, want none", in, len(got))
+		}
+	}
+	// A bracket is no excuse for a real value next to it.
+	for _, in := range []string{
+		"Passwort: Hx7!kQ2pz<",
+		"Passwort: Hx7!<kQ2pz",
+		"token: ab<12>cd<",
+	} {
+		if got := FindSecrets(in); len(got) == 0 {
+			t.Errorf("%q: no hit, want one", in)
+		}
+	}
+}
+
+func TestSecretMatchWhereNamesPlaceAndLabelNeverTheValue(t *testing.T) {
+	text := "erste Zeile\nMail Passwort: Hx7!kQ2pz"
+	m := FindSecrets(text)
+	if len(m) != 1 {
+		t.Fatalf("matches = %+v", m)
+	}
+	where := m[0].Where()
+	if where != `line 2, column 6, after the label "Passwort"` {
+		t.Errorf("where = %q", where)
+	}
+	if strings.Contains(where, "Hx7") {
+		t.Errorf("where repeats the value: %q", where)
+	}
+	if got := (SecretMatch{Line: 1, Column: 3}).Where(); got != "line 1, column 3" {
+		t.Errorf("without label: %q", got)
+	}
+}

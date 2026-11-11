@@ -318,7 +318,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(title, body, content
 CREATE TRIGGER IF NOT EXISTS knowledge_ai AFTER INSERT ON knowledge BEGIN
   INSERT INTO knowledge_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
 END;
-CREATE TRIGGER IF NOT EXISTS knowledge_au AFTER UPDATE ON knowledge BEGIN
+CREATE TRIGGER IF NOT EXISTS knowledge_au AFTER UPDATE OF title, body ON knowledge BEGIN
   INSERT INTO knowledge_fts(knowledge_fts, rowid, title, body) VALUES('delete', old.id, old.title, old.body);
   INSERT INTO knowledge_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
 END;
@@ -1314,6 +1314,10 @@ func openWithOptions(path string, options OpenOptions, seed bool) (*Store, error
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureKnowledgeFTSTrigger(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureCommitQueryIndexes(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1518,6 +1522,11 @@ func (s *Store) Close() error {
 		}
 		if s.reader != nil {
 			s.closeErr = s.reader.Close()
+		}
+		// Statements go before the connections they are prepared on. Views never
+		// close; the cache belongs to the store they were made from.
+		if s.qctx == nil {
+			s.embedShared().stmts.close()
 		}
 		if err := s.db.Close(); s.closeErr == nil {
 			s.closeErr = err

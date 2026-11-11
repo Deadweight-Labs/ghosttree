@@ -197,6 +197,9 @@ func (a *app) commentActor(r *http.Request) store.CommentActor {
 // commentFail answers a failed write: a rule error goes back to the page with a
 // message, no right is 403, an unknown comment or object is 404.
 func (a *app) commentFail(w http.ResponseWriter, r *http.Request, back string, err error) {
+	if a.secretRefused(w, r, err, back) {
+		return
+	}
 	switch {
 	case errors.Is(err, store.ErrAccessForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)

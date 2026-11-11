@@ -204,6 +204,9 @@ func (a *ProjectAccess) CreateIdea(in CreateIdeaInput) (idea.Idea, error) {
 		return idea.Idea{}, err
 	}
 	in.Title, in.Body = title, body
+	if err := refuseSecrets("title", in.Title, "body", in.Body); err != nil {
+		return idea.Idea{}, err
+	}
 	if in.Project == "" {
 		return idea.Idea{}, requestdomain.NewRuleError("project_required", "an idea belongs to a project", "name the project", nil)
 	}
@@ -400,6 +403,9 @@ func (s *Store) searchIdeas(f idea.Filter) ([]idea.Idea, error) {
 // SetIdeaState nimmt eine Idee an, verwirft sie (mit Grund) oder öffnet eine
 // verworfene wieder.
 func (a *ProjectAccess) SetIdeaState(id int64, to, reason string) (idea.Idea, error) {
+	if err := refuseSecrets("reason", reason); err != nil {
+		return idea.Idea{}, err
+	}
 	i, err := a.st.IdeaByID(id)
 	if err != nil {
 		a.Filtered()

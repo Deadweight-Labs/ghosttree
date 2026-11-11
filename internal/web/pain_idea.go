@@ -93,6 +93,9 @@ func (a *app) painCorrect(w http.ResponseWriter, r *http.Request) {
 	accountID, _ := store.AccountNumericID(browserPrincipal(r).ID)
 	by := pain.Actor{AccountID: accountID, Person: personOf(r), GitAnchor: gitanchor.Web()}
 	if _, err := pa.CorrectPain(id, newTitle, newBody, reason, by); err != nil {
+		if a.secretRefused(w, r, err, back) {
+			return
+		}
 		if code := requestdomain.Code(err); code != "" {
 			http.Redirect(w, r, back+"?fail="+url.QueryEscape(code)+"&panel=edit#edit", http.StatusSeeOther)
 			return

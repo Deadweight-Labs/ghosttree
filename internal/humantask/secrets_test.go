@@ -68,3 +68,29 @@ func TestCheckTextRejectsSecretsAndKeepsPaths(t *testing.T) {
 		}
 	}
 }
+
+// "Passwort: ..." has no prefix and no entropy to go by; it is found by its
+// label, with the place and without the value (PAIN-17).
+func TestCheckTextFindsALabeledValueAndSaysWhere(t *testing.T) {
+	err := CheckText("description", "Konto anlegen\nMail Passwort: Hx7!kQ2pzWm bitte merken")
+	if err == nil || err.ErrorCode != "secret_detected" {
+		t.Fatalf("not refused: %v", err)
+	}
+	for _, want := range []string{"description", "line 2, column 6", `after the label "Passwort"`, "nothing was stored", "Do not repeat the value"} {
+		if !strings.Contains(err.Message, want) {
+			t.Errorf("message lacks %q: %s", want, err.Message)
+		}
+	}
+	if strings.Contains(err.Message+err.Resolution, "Hx7") {
+		t.Errorf("the error repeats the value: %s", err.Message)
+	}
+	for _, ok := range []string{
+		"Das Passwort liegt im Tresor unter secrets/mail.",
+		"Bitte Passwort rotieren und Bescheid geben",
+		"Befehl `pw export` nutzen",
+	} {
+		if err := CheckText("description", ok); err != nil {
+			t.Errorf("%q refused: %s", ok, err.Message)
+		}
+	}
+}

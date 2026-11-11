@@ -22,6 +22,9 @@ func (s *Store) ReopenCriterion(id int64, reason, person string, anchor *gitanch
 	if strings.TrimSpace(reason) == "" {
 		return requestdomain.NewRuleError("reopen_reason_required", "reopening a criterion has to say why", "pass what the evidence does not show", nil)
 	}
+	if err := refuseSecrets("reason", reason); err != nil {
+		return err
+	}
 	if s.writer != nil {
 		return queueWrite(s, []any{id, reason, person, anchor}, func(d *Store, p []any) error {
 			return d.ReopenCriterion(p[0].(int64), p[1].(string), p[2].(string), p[3].(*gitanchor.Anchor))

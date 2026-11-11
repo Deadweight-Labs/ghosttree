@@ -162,6 +162,9 @@ func (a *ProjectAccess) CreatePain(in CreatePainInput) (pain.Detail, error) {
 	if err := a.Check(in.Project, ResPain, ActCreate, Object{Own: true}); err != nil {
 		return pain.Detail{}, err
 	}
+	if err := refuseSecrets("title", in.Title, "body", in.Body); err != nil {
+		return pain.Detail{}, err
+	}
 	targets, err := a.resolveTargets(in.Project, in.Motivates)
 	if err != nil {
 		return pain.Detail{}, err
@@ -229,6 +232,9 @@ func (a *ProjectAccess) SetPainState(id int64, to, remaining string, ev pain.Evi
 	}
 	remaining, note = strings.TrimSpace(remaining), strings.TrimSpace(note)
 	ev.Kind, ev.Ref = strings.TrimSpace(ev.Kind), strings.TrimSpace(ev.Ref)
+	if err := refuseSecrets("remaining", remaining, "note", note, "evidence_ref", ev.Ref); err != nil {
+		return pain.Detail{}, err
+	}
 	if err := pain.ValidateTransition(p.State, to, remaining, ev, note); err != nil {
 		return pain.Detail{}, err
 	}
@@ -355,6 +361,9 @@ func (a *ProjectAccess) CorrectPain(id int64, title, body *string, reason string
 	if len(changed) == 0 {
 		return pain.Detail{}, requestdomain.NewRuleError("nothing_to_change", "give a new title or body", "pass title or body", nil)
 	}
+	if err := refuseSecretsChanged(map[string]string{"title": p.Title, "body": p.Body}, "title", newTitle, "body", newBody, "reason", reason); err != nil {
+		return pain.Detail{}, err
+	}
 	if err := a.st.commitPainCorrection(id, newTitle, newBody, reason, strings.Join(changed, ","), actor); err != nil {
 		return pain.Detail{}, err
 	}
@@ -395,6 +404,9 @@ func (a *ProjectAccess) AddPainLink(id int64, target pain.Target, actor pain.Act
 		return pain.Detail{}, err
 	}
 	if err := a.CheckPain(p, ActWork); err != nil {
+		return pain.Detail{}, err
+	}
+	if err := refuseSecrets("external_ref", target.ExternalRef); err != nil {
 		return pain.Detail{}, err
 	}
 	targets, err := a.resolveTargets(p.Project, []pain.Target{target})
@@ -450,6 +462,9 @@ func (a *ProjectAccess) RemovePainLink(linkID int64, reason string, actor pain.A
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return pain.ReasonRequired()
+	}
+	if err := refuseSecrets("reason", reason); err != nil {
+		return err
 	}
 	return a.st.commitPainUnlink(linkID, painID, resolvedTarget{Kind: dstKind, ID: dstID, Ref: dstRef}, reason, actor)
 }

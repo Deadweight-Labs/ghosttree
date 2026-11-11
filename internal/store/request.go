@@ -18,6 +18,13 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 	if strings.TrimSpace(r.Title) == "" {
 		return requestdomain.Detail{}, requestdomain.NewRuleError("title_required", "request title is required", "provide a concise outcome-oriented title", nil)
 	}
+	fields := []string{"title", r.Title, "description", r.Description}
+	for i, c := range in.Criteria {
+		fields = append(fields, indexed("criteria", i), c)
+	}
+	if err := refuseSecrets(fields...); err != nil {
+		return requestdomain.Detail{}, err
+	}
 	if r.Origin == "" {
 		r.Origin = "agent"
 	}
@@ -346,6 +353,9 @@ func (s *Store) AddCriterion(requestID int64, description, person string, anchor
 	if strings.TrimSpace(description) == "" {
 		return requestdomain.Criterion{}, requestdomain.NewRuleError("criterion_required", "acceptance criterion cannot be empty", "describe an observable outcome", nil)
 	}
+	if err := refuseSecrets("description", description); err != nil {
+		return requestdomain.Criterion{}, err
+	}
 	if s.writer != nil {
 		return queueValue(s, []any{requestID, description, person, firstAnchor(anchor)}, func(d *Store, p []any) (requestdomain.Criterion, error) {
 			return d.AddCriterion(p[0].(int64), p[1].(string), p[2].(string), p[3].(*gitanchor.Anchor))
@@ -397,6 +407,9 @@ func (s *Store) SetCriterionState(id int64, state string, evidence requestdomain
 	if err := requestdomain.ValidateEvidence(evidence); err != nil {
 		return err
 	}
+	if err := refuseSecrets("evidence_ref", evidence.Ref); err != nil {
+		return err
+	}
 	if s.writer != nil {
 		return queueWrite(s, []any{id, state, evidence}, func(d *Store, p []any) error {
 			return d.SetCriterionState(p[0].(int64), p[1].(string), p[2].(requestdomain.Evidence))
@@ -441,6 +454,9 @@ func (s *Store) SetCriterionState(id int64, state string, evidence requestdomain
 
 func (s *Store) CompleteRequest(id int64, evidence requestdomain.Evidence) error {
 	if err := requestdomain.ValidateEvidence(evidence); err != nil {
+		return err
+	}
+	if err := refuseSecrets("evidence_ref", evidence.Ref); err != nil {
 		return err
 	}
 	if s.writer != nil {
@@ -502,6 +518,9 @@ func (s *Store) CompleteRequest(id int64, evidence requestdomain.Evidence) error
 func (s *Store) DropRequest(id int64, reason, person string, anchor ...*gitanchor.Anchor) error {
 	if strings.TrimSpace(reason) == "" {
 		return requestdomain.NewRuleError("reason_required", "dropping a request requires a reason", "explain why the requested outcome is no longer wanted", nil)
+	}
+	if err := refuseSecrets("reason", reason); err != nil {
+		return err
 	}
 	if s.writer != nil {
 		return queueWrite(s, []any{id, reason, person, firstAnchor(anchor)}, func(d *Store, p []any) error {
@@ -570,6 +589,9 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 	}
 	if targets != 1 {
 		return requestdomain.Relation{}, requestdomain.NewRuleError("relation_target_required", "relation requires exactly one target", "provide one request, knowledge, or external reference", nil)
+	}
+	if err := refuseSecrets("external_ref", relation.ExternalRef); err != nil {
+		return requestdomain.Relation{}, err
 	}
 	var other, knowledge any
 	if relation.OtherRequestID != 0 {
@@ -734,6 +756,9 @@ func (s *Store) FinishRequestWork(workID int64, state, summary, person string) (
 	}
 	if strings.TrimSpace(summary) == "" {
 		return requestdomain.Work{}, requestdomain.NewRuleError("summary_required", "finishing work requires a handoff summary", "record what changed, what remains, and the next useful step", nil)
+	}
+	if err := refuseSecrets("summary", summary); err != nil {
+		return requestdomain.Work{}, err
 	}
 	if s.writer != nil {
 		return queueValue(s, []any{workID, state, summary, person}, func(d *Store, p []any) (requestdomain.Work, error) {

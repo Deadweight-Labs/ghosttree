@@ -967,6 +967,9 @@ func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.UpdateKnowledgeFromWeb(k.ID, plan.patch, personOf(r)); err != nil {
+		if a.secretRefused(w, r, err, "") {
+			return
+		}
 		http.Error(w, "could not save", http.StatusBadRequest)
 		return
 	}
@@ -1111,6 +1114,9 @@ func (a *app) knowledgeEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(patch) > 0 {
 		if err := a.store.UpdateKnowledgeFromWeb(k.ID, patch, personOf(r)); err != nil {
+			if a.secretRefused(w, r, err, "") {
+				return
+			}
 			http.Error(w, "could not save", http.StatusBadRequest)
 			return
 		}

@@ -789,6 +789,7 @@ var messages = map[string]string{
 	"tasks.result.failed":             "Could not save.",
 	"tasks.result.too_long":           "The note is too long: 500 characters at most. Nothing was saved, your text is still in the field.",
 	"tasks.result.secret":             "That looks like a secret. Write where it lives, not the value.",
+	"err.write_secret":                "That looks like it contains a secret (a password, key or token). Nothing was saved. Write where it lives, not the value.",
 	"tasks.kind.secret":               "Secret",
 	"tasks.kind.file":                 "File",
 	"tasks.kind.input":                "Input",
