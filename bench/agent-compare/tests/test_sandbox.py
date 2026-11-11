@@ -1002,3 +1002,40 @@ class ProbeScriptTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContainerStopTest(unittest.TestCase):
+    """A container that docker cannot remove keeps the agent's processes alive: stop() must say so."""
+
+    def fake_docker(self, d, rm_exit, inspect_exit):
+        path = Path(d) / "docker"
+        path.write_text(f"""#!/bin/sh
+case "$1" in
+  rm) exit {rm_exit} ;;
+  inspect) [ {inspect_exit} -eq 0 ] && echo abc; exit {inspect_exit} ;;
+esac
+exit 0
+""")
+        path.chmod(0o755)
+        return str(path)
+
+    def test_a_container_that_survives_rm_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            box = sbx.ContainerSandbox(make_spec(), d, docker=self.fake_docker(d, 1, 0))
+            box.started = True
+            with self.assertRaises(sbx.IsolationError):
+                box.stop()
+
+    def test_a_removed_container_stops_quietly(self):
+        with tempfile.TemporaryDirectory() as d:
+            box = sbx.ContainerSandbox(make_spec(), d, docker=self.fake_docker(d, 0, 1))
+            box.started = True
+            box.stop()
+
+    def test_remove_containers_raises_when_rm_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            docker = Path(d) / "docker"
+            docker.write_text("#!/bin/sh\ncase \"$1\" in ps) echo abc ;; rm) exit 1 ;; esac\n")
+            docker.chmod(0o755)
+            with self.assertRaises(sbx.IsolationError):
+                sbx.remove_containers(run_id="r1", docker=str(docker))

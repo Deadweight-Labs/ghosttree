@@ -460,7 +460,14 @@ class ContainerSandbox(Sandbox):
 
     def stop(self):
         if self.started or self.facts:
-            subprocess.run([self.docker, "rm", "-f", self.name], capture_output=True, stdin=subprocess.DEVNULL)
+            r = subprocess.run([self.docker, "rm", "-f", self.name], capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL)
+            # A container that survives keeps the agent's background processes running: then neither
+            # "the session instance has ended" nor "no concurrent writer before mounting" holds.
+            gone = subprocess.run([self.docker, "inspect", "--format", "{{.Id}}", self.name], capture_output=True,
+                                  text=True, stdin=subprocess.DEVNULL)
+            if gone.returncode == 0:
+                raise IsolationError(f"Container {self.name} ließ sich nicht entfernen: {r.stderr.strip()[:200]}")
         super().stop()
 
 
@@ -663,7 +670,9 @@ def remove_containers(run_id=None, docker=None):
         elif len(parts) == 2 and parts[1].isdigit() and not _pid_alive(int(parts[1])):
             ids.append(parts[0])
     if ids:
-        subprocess.run([docker, "rm", "-f", *ids], capture_output=True, stdin=subprocess.DEVNULL)
+        r = subprocess.run([docker, "rm", "-f", *ids], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        if r.returncode != 0:
+            raise IsolationError(f"Container ließen sich nicht entfernen: {r.stderr.strip()[:200]}")
     return ids
 
 

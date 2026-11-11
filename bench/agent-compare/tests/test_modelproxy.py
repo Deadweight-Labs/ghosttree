@@ -212,6 +212,20 @@ class ProxyTest(unittest.TestCase):
             self.assertTrue(reply.startswith(b"HTTP/1.0 400"), (body, reply[:60]))
         self.assertEqual(FakeUpstream.seen, [])
 
+    def test_numbers_and_nesting_that_cannot_be_forwarded_are_refused(self):
+        """1e999 would be forwarded as Infinity (no JSON), deep nesting broke json.dumps without an answer."""
+        deep = b'{"model": "claude-opus-5-5", "x": ' + b"[" * 50000 + b"]" * 50000 + b"}"
+        for body in (b'{"model": "claude-opus-5-5", "t": 1e999}', deep):
+            reply = self.post_raw(body)
+            self.assertTrue(reply.startswith(b"HTTP/1.0 400"), (body[:60], reply[:60]))
+        self.assertEqual(FakeUpstream.seen, [])
+
+    def test_the_upstream_always_gets_application_json(self):
+        FakeUpstream.seen.clear()
+        reply = self.post_raw(b'{"model": "claude-opus-5-5"}', b"content-type: text/x-agent\r\n")
+        self.assertTrue(reply.startswith(b"HTTP/1.0 200"), reply[:80])
+        self.assertEqual(FakeUpstream.seen[0]["headers"]["content-type"], "application/json")
+
     def test_upstream_gets_the_checked_request_not_the_raw_bytes(self):
         """M2: weitergeleitet wird json.dumps der geprüften Anfrage, nie die Rohbytes (auch nicht UTF-16 oder Leerraum)."""
         raw_bodies = [b'  {"model" :\n "claude-opus-5-5",   "x": [1,  2], "t": "\\u00e4"}  ',

@@ -46,7 +46,7 @@ ALLOWED_POST = ("/v1/messages", "/v1/messages/count_tokens")
 PING_PATH = "/_bench/ping"
 MAX_BODY = 32 * 1024 * 1024
 # Kopfzeilen, die vom Agenten zum Modell mitgehen. Anmeldung setzt der Proxy selbst.
-FORWARD_REQUEST_HEADERS = ("anthropic-version", "anthropic-beta", "content-type", "accept", "user-agent",
+FORWARD_REQUEST_HEADERS = ("anthropic-version", "anthropic-beta", "accept", "user-agent",
                            "x-stainless-lang", "x-stainless-package-version", "x-app")
 FORWARD_RESPONSE_HEADERS = ("content-type", "request-id", "retry-after", "x-should-retry", "anthropic-ratelimit-requests-remaining")
 
@@ -85,6 +85,14 @@ def _no_duplicates(pairs):
 
 def _no_constants(name):
     raise ValueError(f"unzulässige Zahl {name}")
+
+
+def _finite_float(text):
+    """parse_float: 1e999 would become Infinity, which json.dumps writes as a non-JSON token."""
+    value = float(text)
+    if value != value or value in (float("inf"), float("-inf")):
+        raise ValueError(f"unzulässige Zahl {text}")
+    return value
 
 
 class ProxyError(Exception):
@@ -211,7 +219,8 @@ class ModelProxy:
         if path not in ALLOWED_POST:
             raise ProxyError(403, "permission_error", f"Pfad nicht erlaubt: {path}")
         try:
-            req = json.loads(body, object_pairs_hook=_no_duplicates, parse_constant=_no_constants)
+            req = json.loads(body, object_pairs_hook=_no_duplicates, parse_constant=_no_constants,
+                             parse_float=_finite_float)
         except (ValueError, RecursionError) as ex:
             raise ProxyError(400, "invalid_request_error", f"Anfrage ist kein gültiges JSON ({type(ex).__name__})") from None
         model = req.get("model") if isinstance(req, dict) else None
@@ -222,7 +231,10 @@ class ModelProxy:
     @staticmethod
     def forward_body(req):
         """Der Upstream bekommt genau die geprüfte Anfrage, neu serialisiert, nie die Rohbytes des Agenten."""
-        return json.dumps(req).encode("ascii")
+        try:
+            return json.dumps(req, allow_nan=False).encode("ascii")
+        except (ValueError, RecursionError) as ex:
+            raise ProxyError(400, "invalid_request_error", f"Anfrage lässt sich nicht weitergeben ({type(ex).__name__})") from None
 
     def reserve(self):
         with self._lock:
@@ -247,6 +259,7 @@ class ModelProxy:
     # ---------- Weiterleitung ----------
     def upstream_headers(self, headers):
         out = {k: v for k, v in headers.items() if k.lower() in FORWARD_REQUEST_HEADERS}
+        out["content-type"] = "application/json"  # the body is always the re-serialised JSON
         if any(("\r" in v or "\n" in v) for v in out.values()):
             raise ProxyError(400, "invalid_request_error", "Kopfzeile mit Zeilenumbruch")
         key = os.environ.get(self.key_env)
