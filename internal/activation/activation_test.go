@@ -59,3 +59,17 @@ func TestContextWithoutTaskGateNormalizesCleanly(t *testing.T) {
 		t.Errorf("RepoPath = %q, want it kept", got.RepoPath)
 	}
 }
+
+func TestNormalizeContextLeavesCallerPathsAlone(t *testing.T) {
+	paths := []string{"./a/b", "c//d"}
+	got, err := NormalizeContext(Context{Paths: paths})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths[0] != "./a/b" || paths[1] != "c//d" {
+		t.Fatalf("caller slice changed: %q", paths)
+	}
+	if got.Paths[0] == "./a/b" {
+		t.Fatalf("paths not normalized: %q", got.Paths)
+	}
+}

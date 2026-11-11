@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -169,11 +170,24 @@ func parseTemplates(l lang) *template.Template {
 	}).Funcs(identityFuncs(l)).Funcs(pillFuncs(l)).ParseFS(files, "templates/*.html"))
 }
 
-var pages = map[lang]*template.Template{langEN: parseTemplates(langEN), langDE: parseTemplates(langDE)}
+// pages are parsed when the first one is asked for, not when the package is
+// loaded: ctx is one binary, and a hook or a command that never serves a page
+// paid for both languages at every start. The server parses them before it
+// listens (parsePages), so a broken template still stops it at once.
+var pages = map[lang]func() *template.Template{
+	langEN: sync.OnceValue(func() *template.Template { return parseTemplates(langEN) }),
+	langDE: sync.OnceValue(func() *template.Template { return parseTemplates(langDE) }),
+}
+
+func parsePages() {
+	for _, parse := range pages {
+		parse()
+	}
+}
 
 func (l lang) page() *template.Template {
 	if p, ok := pages[l]; ok {
-		return p
+		return p()
 	}
-	return pages[langEN]
+	return pages[langEN]()
 }
