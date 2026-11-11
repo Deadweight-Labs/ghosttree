@@ -35,7 +35,10 @@ that no entry covers, one hint line may point at a request or session you can re
 (`context_search` finds more); it follows the same visibility rules as search.
 Everyday German and English words never get a hint, and neither does a word that
 more than three of the requests or sessions you can read contain: that is
-vocabulary, not a codename.
+vocabulary, not a codename. The hint searches the sessions, so it is made only
+when the prompt asks about earlier work (a time behind us such as "damals" or
+"last week", "did we", "wie hatten wir", or a question about a thing such as
+"was ist mit X"); any other prompt gets none.
 `ctx usage --relevance --db <path>` replays archived prompts through the rule.
 
 ## Descriptions for removed paths

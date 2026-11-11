@@ -720,6 +720,19 @@ type searchResult struct {
 }
 
 func (a *api) search(w http.ResponseWriter, r *http.Request) {
+	// A search waits for a place of its own, so that the hooks keep a read
+	// connection (Store.AcquireSearchSlot), but only for a moment: a server that
+	// stays busy says so with Retry-After, and the client asks again. A caller who
+	// has hung up gets no answer.
+	release, ok := a.st.AcquireSearchSlot(r.Context(), searchSlotWait)
+	if !ok {
+		if r.Context().Err() == nil {
+			w.Header().Set("Retry-After", strconv.Itoa(int(searchSlotWait.Round(time.Second)/time.Second)))
+			writeCoded(w, http.StatusServiceUnavailable, "search_busy", "too many searches at once; retry")
+		}
+		return
+	}
+	defer release()
 	q := r.URL.Query().Get("q")
 	kind := r.URL.Query().Get("kind")
 	if kind == "" {
@@ -749,6 +762,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	pa.Filtered()
 	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}, Requests: []requestdomain.SearchHit{}}
 	gaps := a.newSearchGaps(r, kind == "all")
+	defer gaps.close()
 	if kind == "knowledge" || kind == "all" {
 		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
 		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
@@ -758,7 +772,8 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		// Rangfusion an, damit eine verborgene Zeile keine sichtbare verschiebt.
 		// Gezählt wird, was ausgeliefert wird, und nur das: der Überhang, den die
 		// Abfrage für die Filter holt, und was die Regel verwirft, ist nicht benutzt.
-		ks, err := a.st.SearchKnowledgeWith(q, store.KnowledgeSearch{
+		st, done := gaps.budget("knowledge")
+		ks, err := st.SearchKnowledgeWith(q, store.KnowledgeSearch{
 			Axes: filter, Union: r.URL.Query().Get("scope") == "union",
 			Limit: fetch, Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
 			NoRecord: true, Anchor: anchor, Origin: origin,
@@ -767,6 +782,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 			// author:gardener, das ist der qualifizierte Weg.
 			Settled: true,
 		})
+		err = done(err)
 		if err != nil {
 			if !gaps.add("knowledge", err) {
 				writeStoreError(w, http.StatusInternalServerError, err)
@@ -781,8 +797,10 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	}
 	// Transkripte tragen keinen Git-Anker: mit einem Anker-Filter gibt es
 	// keine Session-Treffer, statt Treffer zu zeigen, die der Filter nicht prüfen kann.
-	if (kind == "sessions" || kind == "all") && !anchor.Active() && !origin.Active() {
-		st, done := gaps.budget()
+	// Die Standardsuche (all) enthält keine Sessions (Entscheidung #4447): sie
+	// laufen nur mit kind=sessions.
+	if kind == "sessions" && !anchor.Active() && !origin.Active() {
+		st, done := gaps.budget("sessions")
 		hits, err := a.searchSessions(st, pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch, store.SearchAuto)
 		err = done(err)
 		if err != nil {
@@ -798,7 +816,9 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	if kind == "requests" || kind == "all" {
 		// With embeddings the requests are ranked by words and by meaning; the
 		// filter, with the visibility of the reader, is the same SQL for both.
-		page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit, Commit: anchor.Commit, PR: anchor.PR, Origin: origin}), store.SearchAuto)
+		st, done := gaps.budget("requests")
+		page, err := st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit, Commit: anchor.Commit, PR: anchor.PR, Origin: origin}), store.SearchAuto)
+		err = done(err)
 		if err != nil {
 			if !gaps.add("requests", err) {
 				writeStoreError(w, http.StatusInternalServerError, err)

@@ -38,7 +38,7 @@ func Table() []Core { return table }
 var table = []Core{
 	{
 		Name:    "context_search",
-		Lead:    "Search what ghosttree knows before you write or re-derive it: knowledge (pitfalls, decisions, notes, plans), past session transcripts, file descriptions and the ledger. Defaults to this project, branch and machine; project or all_projects looks further.",
+		Lead:    "Search what ghosttree knows before you write or re-derive it: knowledge (pitfalls, decisions, notes, plans), file descriptions and the ledger. The default search leaves out session transcripts: ask for them with kind=sessions or action=sessions. Defaults to this project, branch and machine; project or all_projects looks further.",
 		Default: "search",
 		Actions: []Action{
 			{Name: "search", Tool: "context_search", Line: "words and/or qualifiers in query; knowledge_id reads one entry in full (plans, specs); kind narrows to knowledge, requests, sessions, files"},

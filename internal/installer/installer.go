@@ -91,7 +91,9 @@ A wish you voice in passing, without working it out, belongs in ` + "`idea actio
 (look in ` + "`idea action=search`" + ` first); ` + "`idea action=promote`" + ` makes a request of it.
 ` + "`context_search`" + ` also takes qualifiers (is:open, label:bug, area:internal/store,
 pr:12, branch:...; the tool description lists them), and ` + "`context_search action=preset_run`" + ` runs saved
-searches such as pr-ergebnis (what was done in a pull request).
+searches such as pr-ergebnis (what was done in a pull request). The default search leaves out
+session transcripts; search them on purpose with ` + "`kind=sessions`" + `, ` + "`is:session`" + ` or
+` + "`context_search action=sessions`" + `.
 
 What only the human can provide (a key, a file, a decision, a manual step) you
 create with ` + "`human_task action=create`" + `, with where it lives and how to check it, instead

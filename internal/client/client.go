@@ -148,7 +148,9 @@ func unavailable(status int) bool {
 }
 
 // SetReadRetries makes the client repeat a read up to n times when the server
-// is not there: the connection fails, or a proxy answers 502, 503 or 504. A
+// is not there or busy: the connection fails, a proxy answers 502, 503 or 504, or
+// the server answers search_busy (an answer with a JSON body counts as well; a
+// Retry-After of up to three seconds lengthens the pause). A
 // restart of the server takes a few seconds, and an agent that reads during
 // them otherwise gets an error it can only answer by calling again. Writes are
 // never repeated: whether one arrived is not known. A hook leaves this off,
@@ -158,11 +160,35 @@ func (c *Client) SetReadRetries(n int) { c.readRetries = n }
 // readRetryWait is the pause before the n-th repetition (from 0).
 var readRetryWait = func(n int) time.Duration { return time.Duration(n+1) * 700 * time.Millisecond }
 
+// maxRetryAfter caps the pause a server asks for with Retry-After: the call of an
+// agent must not sleep for as long as a server is willing to be asked again.
+const maxRetryAfter = 3 * time.Second
+
+// retryPause is the pause before the n-th repetition: the usual backoff, or the
+// Retry-After of the server when that is longer, up to maxRetryAfter.
+func retryPause(err error, n int) time.Duration {
+	d := readRetryWait(n)
+	var ae *APIError
+	if errors.As(err, &ae) && ae.RetryAfterSeconds > 0 {
+		if asked := min(time.Duration(ae.RetryAfterSeconds)*time.Second, maxRetryAfter); asked > d {
+			d = asked
+		}
+	}
+	return d
+}
+
 // worthRepeating says whether a failed read may succeed a moment later.
 func worthRepeating(err error) bool {
 	var se *StatusError
 	if errors.As(err, &se) {
 		return unavailable(se.Status)
+	}
+	// An answer with a JSON body is an APIError, not a StatusError: a server that
+	// is busy (search_busy, writer_busy) or a proxy that passes on its 502, 503
+	// or 504 says "not now", whatever the body looks like.
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return unavailable(ae.Status) || ae.Code == "search_busy"
 	}
 	var ue *url.Error
 	if errors.As(err, &ue) {
@@ -247,7 +273,7 @@ func (c *Client) doContext(ctx context.Context, method, path string, query url.V
 		select {
 		case <-ctx.Done():
 			return err
-		case <-time.After(readRetryWait(n)):
+		case <-time.After(retryPause(err, n)):
 		}
 		err = c.doOnce(ctx, method, path, query, in, out)
 	}

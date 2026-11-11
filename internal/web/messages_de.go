@@ -725,6 +725,7 @@ var messagesDE = map[string]string{
 	"search.total":                    "%d Treffer",
 	"search.total_one":                "1 Treffer",
 	"search.total_capped":             "Mehr als %d Treffer",
+	"search.in_sessions":              "Auch in Sitzungen suchen",
 	"search.more_hits":                "Weitere Treffer",
 	"search.none":                     "Keine Treffer.",
 	"search.lines":                    "Suchzeilen",

@@ -5,7 +5,9 @@ The complete list of what Ghosttree does in the current development version. The
 - Scoped context by repository, branch, and machine, with path-activated
   instructions.
 - Full-text search across knowledge, requests, file descriptions, pains,
-  documents, and captured sessions. Search can optionally be hybrid: with a local
+  documents, and, on request, captured sessions (the default search leaves
+  sessions out: `kind=sessions`, `is:session` or the Sessions tab). Search can
+  optionally be hybrid: with a local
   embedding server (`GHOSTTREE_EMBED_URL`, see `deploy/README.md`) it also finds
   entries by meaning, for the kinds you switch on (`GHOSTTREE_EMBED_KINDS`);
   without one nothing changes.
