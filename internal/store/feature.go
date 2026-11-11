@@ -463,7 +463,24 @@ func (a *ProjectAccess) ideaImplemented(i idea.Idea) bool {
 // CreateFeature legt ein Feature an. Der Name ist je Projekt eindeutig. Aus einer
 // umgesetzten Idee wird ein Feature mit FromIdea; betrifft die Idee schon ein
 // Feature, wird keines neu angelegt, sondern dessen Beschreibung fortgeschrieben.
+// featureFields lists the texts of a feature patch for the secret check.
+func featureFields(p feature.Patch, message string) []string {
+	var f []string
+	for _, s := range []struct {
+		name string
+		text *string
+	}{{"name", p.Name}, {"summary", p.Summary}, {"behavior", p.Behavior}, {"limits", p.Limits}, {"cli", p.CLI}, {"mcp", p.MCP}, {"api", p.API}, {"ui", p.UI}} {
+		if s.text != nil {
+			f = append(f, s.name, *s.text)
+		}
+	}
+	return append(f, "message", message)
+}
+
 func (a *ProjectAccess) CreateFeature(in CreateFeatureInput) (feature.Feature, error) {
+	if err := refuseSecrets(featureFields(in.Content, in.Message)...); err != nil {
+		return feature.Feature{}, err
+	}
 	in.Project = scope.NormalizeRemote(strings.TrimSpace(in.Project))
 	if in.Project == "" {
 		return feature.Feature{}, requestdomain.NewRuleError("project_required", "a feature belongs to a project", "name the project", nil)
@@ -622,6 +639,9 @@ type UpdateFeatureInput struct {
 // keine Fassung (unchanged). Nennt er eine Idee, die das Feature betrifft, ist
 // deren Beschreibung damit fortgeschrieben.
 func (a *ProjectAccess) UpdateFeature(id int64, in UpdateFeatureInput) (feature.Version, bool, error) {
+	if err := refuseSecrets(featureFields(in.Patch, in.Message)...); err != nil {
+		return feature.Version{}, false, err
+	}
 	f, err := a.featureFor(id, ActWork)
 	if err != nil {
 		return feature.Version{}, false, err
@@ -720,6 +740,9 @@ func (s *Store) commitFeatureVersion(id int64, w featureWrite) (int, bool, error
 
 // SetFeatureState stellt ein Feature ein (mit Grund) oder nimmt es wieder auf.
 func (a *ProjectAccess) SetFeatureState(id int64, to, reason string) (feature.Feature, error) {
+	if err := refuseSecrets("reason", reason); err != nil {
+		return feature.Feature{}, err
+	}
 	f, err := a.featureFor(id, ActEdit)
 	if err != nil {
 		return feature.Feature{}, err

@@ -392,6 +392,16 @@ func cleanDetail(s string) (string, error) {
 // Agent entscheidet selbst, was umkehrbar, lokal und konventionsgemäß ist; alles
 // andere wartet auf einen Menschen. Ein Mensch kann die Art ausdrücklich setzen.
 func (a *ProjectAccess) OpenDecision(in OpenDecisionInput) (idea.Decision, error) {
+	fields := []string{"question", in.Question, "detail", in.Detail}
+	for i, v := range in.Variants {
+		fields = append(fields, variantFields(indexed("variants", i), v)...)
+	}
+	for i, as := range in.Aspects {
+		fields = append(fields, indexed("aspects", i), as)
+	}
+	if err := refuseSecrets(fields...); err != nil {
+		return idea.Decision{}, err
+	}
 	project, err := a.decisionSubject(in.Subject, in.SubjectID, ActWork)
 	if err != nil {
 		return idea.Decision{}, err
@@ -490,7 +500,16 @@ func decisionEventTx(tx *sql.Tx, id int64, kind string, actor idea.Actor, note s
 
 // AddVariant fügt einer offenen Entscheidung eine Variante hinzu (der nächste
 // Buchstabe).
+// variantFields lists the texts of a variant for the secret check; prefix is
+// the name of the variant in the message.
+func variantFields(prefix string, v idea.VariantInput) []string {
+	return []string{prefix + ".title", v.Title, prefix + ".text", v.Text, prefix + ".pro", v.Pro, prefix + ".contra", v.Contra}
+}
+
 func (a *ProjectAccess) AddVariant(decisionID int64, v idea.VariantInput, actor idea.Actor) (idea.Decision, error) {
+	if err := refuseSecrets(variantFields("variant", v)...); err != nil {
+		return idea.Decision{}, err
+	}
 	d, err := a.workableDecision(decisionID)
 	if err != nil {
 		return idea.Decision{}, err
@@ -568,6 +587,9 @@ func (s *Store) commitVariant(decisionID int64, v idea.VariantInput, actor idea.
 // letzte Stimme; die Stimmen sind je Person sichtbar. Eine Stimme entscheidet
 // nichts.
 func (a *ProjectAccess) VoteDecision(decisionID int64, variant, reason string, actor idea.Actor) (idea.Decision, error) {
+	if err := refuseSecrets("reason", reason); err != nil {
+		return idea.Decision{}, err
+	}
 	d, err := a.workableDecision(decisionID)
 	if err != nil {
 		return idea.Decision{}, err
@@ -703,6 +725,9 @@ func (s *Store) commitDecisionWay(id int64, way string, actor idea.Actor) error 
 // wieder, wenn ihr Auslöser eintritt. Das alte Wissen (decision) bleibt, bis die
 // neue Entscheidung es ablöst.
 func (a *ProjectAccess) ReopenDecision(id int64, reason string, actor idea.Actor) (idea.Decision, error) {
+	if err := refuseSecrets("reason", reason); err != nil {
+		return idea.Decision{}, err
+	}
 	d, err := a.st.decisionByID(id)
 	if err != nil {
 		a.Filtered()
@@ -794,6 +819,9 @@ type CloseDecisionInput struct {
 // deferred: braucht einen Auslöser, die Entscheidung kehrt im Briefing zurück,
 // wenn er zum Branch oder Paket passt. dropped: braucht einen Grund.
 func (a *ProjectAccess) CloseDecision(in CloseDecisionInput) (idea.Decision, error) {
+	if err := refuseSecrets("answer", in.Answer, "reason", in.Reason, "trigger", in.Trigger); err != nil {
+		return idea.Decision{}, err
+	}
 	d, err := a.workableDecision(in.ID)
 	if err != nil {
 		return idea.Decision{}, err

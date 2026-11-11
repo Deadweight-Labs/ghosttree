@@ -221,6 +221,9 @@ func writeActFor(i idea.Idea) Action {
 // Die Rohfassung bleibt unverändert und versioniert; mehrere Fassungen sind
 // mehrere Quellen (ein Transkript, dann ein zweites Gespräch).
 func (a *ProjectAccess) PutIdeaText(id int64, in PutIdeaTextInput) (idea.Text, bool, error) {
+	if err := refuseSecrets("body", in.Body, "source", in.Source, "message", in.Message); err != nil {
+		return idea.Text{}, false, err
+	}
 	i, err := a.ideaFor(id, ActWork)
 	if err != nil {
 		return idea.Text{}, false, err
@@ -339,9 +342,33 @@ type PutIdeaConceptInput struct {
 	Actor idea.Actor
 }
 
+// conceptFields lists the texts of a concept patch for the secret check, a
+// section by its name and a requirement by its number.
+func conceptFields(in PutIdeaConceptInput) []string {
+	p := in.Patch
+	var f []string
+	for _, s := range []struct {
+		name string
+		text *string
+	}{{"about", p.About}, {"what", p.What}, {"how", p.How}, {"not", p.Not}, {"questions", p.Questions}} {
+		if s.text != nil {
+			f = append(f, s.name, *s.text)
+		}
+	}
+	if p.Requirements != nil {
+		for i, r := range *p.Requirements {
+			f = append(f, indexed("requirements", i), r)
+		}
+	}
+	return append(f, "message", in.Message)
+}
+
 // PutIdeaConcept legt eine neue Fassung des Konzepts an: die jüngste mit dem
 // Patch darüber. Abschnitte, die der Patch nicht nennt, bleiben stehen.
 func (a *ProjectAccess) PutIdeaConcept(id int64, in PutIdeaConceptInput) (ConceptVersion, bool, error) {
+	if err := refuseSecrets(conceptFields(in)...); err != nil {
+		return ConceptVersion{}, false, err
+	}
 	i, err := a.ideaFor(id, ActWork)
 	if err != nil {
 		return ConceptVersion{}, false, err

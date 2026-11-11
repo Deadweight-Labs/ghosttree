@@ -341,6 +341,10 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 // newIssueError shows a refusal of the store on the form: an access refusal as
 // the missing page it is, a rule as its code.
 func (a *app) newIssueError(fail func(key, detail string), err error) {
+	if requestdomain.Code(err) == "secret_detected" {
+		fail("err.write_secret", "")
+		return
+	}
 	if code := requestdomain.Code(err); code != "" {
 		fail("newissue.err.rule", code)
 		return

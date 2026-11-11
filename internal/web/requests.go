@@ -755,6 +755,9 @@ func (a *app) requestResult(r *http.Request, d requestdomain.Detail) *requestRes
 // offene Prüfung wird auf der Seite gezeigt, alles andere ist ein Fehlerstatus
 // wie bei der API.
 func (a *app) requestFail(w http.ResponseWriter, r *http.Request, id int64, err error) {
+	if a.secretRefused(w, r, err, requestURL(id)) {
+		return
+	}
 	var rule *requestdomain.RuleError
 	switch {
 	case errors.As(err, &rule) && rule.ErrorCode == "open_criteria":

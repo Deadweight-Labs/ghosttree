@@ -311,6 +311,9 @@ func (a *ProjectAccess) AddComment(kind string, objectID int64, body string, act
 	if err != nil {
 		return Comment{}, err
 	}
+	if err := refuseSecrets("body", body); err != nil {
+		return Comment{}, err
+	}
 	actor.AccountID = a.account
 	id, err := a.st.commitComment(project, kind, objectID, body, actor)
 	if err != nil {
@@ -390,6 +393,9 @@ func (a *ProjectAccess) EditComment(id int64, body string, actor CommentActor) (
 	}
 	actor.AccountID = a.account
 	if body != c.Body {
+		if err := refuseSecrets("body", body); err != nil {
+			return Comment{}, err
+		}
 		if err := a.st.commitCommentEdit(id, body, actor); err != nil {
 			return Comment{}, err
 		}

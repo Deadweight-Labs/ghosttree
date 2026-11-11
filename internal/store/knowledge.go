@@ -259,6 +259,9 @@ func withKnowledgeDefaults(k Knowledge) Knowledge {
 }
 
 func insertKnowledgeTx(tx *sql.Tx, k Knowledge) (int64, error) {
+	if err := refuseSecrets("title", k.Title, "body", k.Body); err != nil {
+		return 0, err
+	}
 	if k.Scope.Project != "" && len(k.ShareOrgIDs) > 0 {
 		return 0, fmt.Errorf("%w: an entry with a project is seen through the project; machine sharing is only for entries without one", ErrInvalidInput)
 	}
@@ -398,11 +401,29 @@ func (s *Store) UpdateKnowledgeFromWeb(id int64, patch map[string]string, editor
 	return s.updateKnowledge(id, patch, editor, true)
 }
 
+// refuseChangedKnowledgeText checks the title and the body of an edit, and only
+// the one that differs from what is stored: an entry written before the check
+// existed stays editable in its other parts.
+func (s *Store) refuseChangedKnowledgeText(id int64, patch map[string]string) error {
+	title, hasTitle := patch["title"]
+	body, hasBody := patch["body"]
+	if !hasTitle && !hasBody {
+		return nil
+	}
+	var stored struct{ title, body string }
+	// A missing row is the update's own error to report.
+	_ = s.db.QueryRow(`SELECT title, body FROM knowledge WHERE id=?`, id).Scan(&stored.title, &stored.body)
+	return refuseSecretsChanged(map[string]string{"title": stored.title, "body": stored.body}, "title", title, "body", body)
+}
+
 func (s *Store) updateKnowledge(id int64, patch map[string]string, editor string, web bool) error {
 	for col := range patch {
 		if !patchable[col] {
 			return fmt.Errorf("field %q is not patchable", col)
 		}
+	}
+	if err := s.refuseChangedKnowledgeText(id, patch); err != nil {
+		return err
 	}
 	var sets []string
 	var args []any

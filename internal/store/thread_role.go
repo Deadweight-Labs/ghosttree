@@ -13,7 +13,8 @@ const (
 	MaxThreadQuestion = 16 << 10
 )
 
-// ValidateThreadText refuses a title or question over the limits.
+// ValidateThreadText refuses a title or question over the limits, or one that
+// carries a secret.
 func ValidateThreadText(t Thread) error {
 	if len(t.Title) > MaxThreadTitle {
 		return fmt.Errorf("%w: a thread title is at most %d bytes", ErrInvalidInput, MaxThreadTitle)
@@ -21,7 +22,7 @@ func ValidateThreadText(t Thread) error {
 	if len(t.Question) > MaxThreadQuestion {
 		return fmt.Errorf("%w: a thread question is at most %d bytes", ErrInvalidInput, MaxThreadQuestion)
 	}
-	return nil
+	return refuseSecrets("title", t.Title, "question", t.Question)
 }
 
 // CreateThreadByRole opens a thread in a project the caller has a role in

@@ -790,6 +790,7 @@ var messagesDE = map[string]string{
 	"tasks.result.failed":             "Konnte nicht speichern.",
 	"tasks.result.too_long":           "Die Notiz ist zu lang: höchstens 500 Zeichen. Nichts wurde gespeichert, dein Text steht noch im Feld.",
 	"tasks.result.secret":             "Das sieht nach einem Secret aus. Schreib, wo es liegt, nicht den Wert.",
+	"err.write_secret":                "Das sieht nach einem Geheimnis aus (Passwort, Schlüssel oder Token). Es wurde nichts gespeichert. Schreib, wo es liegt, nicht den Wert.",
 	"tasks.kind.secret":               "Secret",
 	"tasks.kind.file":                 "Datei",
 	"tasks.kind.input":                "Eingabe",

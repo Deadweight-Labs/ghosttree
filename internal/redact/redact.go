@@ -9,6 +9,7 @@
 package redact
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -24,6 +25,16 @@ type SecretMatch struct {
 	Line    int
 	Column  int
 	Keyword string
+}
+
+// Where says where the secret is, for a message to the writer: "line 3, column
+// 14, after the label "Passwort"". Never the value.
+func (m SecretMatch) Where() string {
+	where := fmt.Sprintf("line %d, column %d", m.Line, m.Column)
+	if m.Keyword != "" {
+		where += fmt.Sprintf(", after the label %q", m.Keyword)
+	}
+	return where
 }
 
 // Mode says what kind of string is being redacted.

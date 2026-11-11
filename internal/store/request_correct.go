@@ -59,6 +59,9 @@ func (s *Store) UpdateRequest(id int64, patch map[string]string, person, reason 
 			return err
 		}
 	}
+	if err := refuseSecrets("title", patch["title"], "description", patch["description"], "reason", reason); err != nil {
+		return err
+	}
 
 	if s.writer != nil {
 		return queueWrite(s, []any{id, patch, person, reason, firstAnchor(anchor)}, func(d *Store, p []any) error {
@@ -122,6 +125,9 @@ func (s *Store) RemoveRequestRelation(relationID int64, person, reason string) e
 	if strings.TrimSpace(reason) == "" {
 		return requestdomain.NewRuleError("removal_reason_required",
 			"removing a relation has to say why", "pass the reason the edge was wrong", nil)
+	}
+	if err := refuseSecrets("reason", reason); err != nil {
+		return err
 	}
 	if s.writer != nil {
 		return queueWrite(s, []any{relationID, person, reason}, func(d *Store, p []any) error {
