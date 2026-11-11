@@ -11,6 +11,8 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/query"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -42,7 +44,38 @@ var suggestKeyLabels = map[string]string{
 	query.KeyIs: "search.key.is", query.KeyKind: "search.key.kind", query.KeyType: "search.key.type", query.KeyRepo: "search.key.repo",
 	query.KeyBranch: "search.key.branch", query.KeyPackage: "search.key.package", query.KeyAuthor: "search.key.author", query.KeyFor: "search.key.for",
 	query.KeyLabel: "search.key.label", query.KeyArea: "search.key.area", query.KeyCreated: "search.key.created", query.KeyUpdated: "search.key.updated",
-	query.KeyPR: "search.key.pr",
+	query.KeyPR: "search.key.pr", "priority": "search.key.priority",
+}
+
+// suggestList is what the filter field of a list offers: the qualifiers that list
+// reads (parseIssueQuery, parsePullQuery) with the values of its own, and no jump to
+// an object or search for the whole text, because the field filters the list and
+// goes nowhere else. A guest is offered less in every list (guestQualifiers).
+type suggestList struct {
+	keys []string
+	// states are the values of is:.
+	states []string
+	// packageOpen says which packages the list can show: an issue list the open ones,
+	// a pull list the ones with a pull request.
+	packageOpen func(p requestdomain.Package) bool
+	// pullHeads: branch: offers the heads of the pull requests, not every branch.
+	pullHeads bool
+}
+
+// suggestLists are the lists that carry the field, by the name the field gives
+// in data-suggest-list.
+var suggestLists = map[string]suggestList{
+	"issues": {
+		keys:        []string{query.KeyIs, query.KeyType, "priority", query.KeyLabel, query.KeyAuthor, query.KeyBranch, query.KeyPackage},
+		states:      []string{"open", "closed", "done", "all", "issue", "idea", "pain"},
+		packageOpen: func(p requestdomain.Package) bool { return p.State == requestdomain.PackageOpen },
+	},
+	"pulls": {
+		keys:        []string{query.KeyIs, query.KeyAuthor, query.KeyBranch, query.KeyPackage},
+		states:      []string{"open", "merged", "closed", "all"},
+		packageOpen: func(p requestdomain.Package) bool { return p.PR > 0 },
+		pullHeads:   true,
+	},
 }
 
 // suggestStates are the values of is: that tell open from finished work.
@@ -58,6 +91,20 @@ var suggestKindValues = []string{query.KindRequest, query.KindIdea, query.KindKn
 // suggestSpans are the ages created: and updated: are offered with.
 var suggestSpans = []string{"1d", "7d", "30d"}
 
+// suggestListOf is the list the request names with list=, nil for the field of the
+// header. ok is false for a name that is none.
+func suggestListOf(r *http.Request) (list *suggestList, ok bool) {
+	name := r.URL.Query().Get("list")
+	if name == "" {
+		return nil, true
+	}
+	l, ok := suggestLists[name]
+	if !ok {
+		return nil, false
+	}
+	return &l, true
+}
+
 // suggestRow is one line of the list. Kind "hit" leads to an object, "qual"
 // replaces the word being typed by Insert, "all" searches for the whole text.
 type suggestRow struct {
@@ -70,10 +117,12 @@ type suggestRow struct {
 
 type suggestView struct{ Rows []suggestRow }
 
-// searchSuggest is GET /ui/search/suggest?q=<line>&project=<remote>. It answers
-// the rows as list items, empty when there is nothing to suggest. project is the
-// repository of the page the field sits on; the viewer must be able to read it,
-// otherwise it counts as not given.
+// searchSuggest is GET /ui/search/suggest?q=<line>&project=<remote>[&list=issues|pulls].
+// It answers the rows as list items, empty when there is nothing to suggest. project
+// is the repository of the page the field sits on; the viewer must be able to read
+// it, otherwise it counts as not given. With list the field is the filter of that list
+// of the repository: only the qualifiers the list reads, with its own values, and
+// nothing without a repository the viewer can read.
 func (a *app) searchSuggest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -88,6 +137,10 @@ func (a *app) searchSuggest(w http.ResponseWriter, r *http.Request) {
 	if project != "" && pa.Role(project).Role == "" {
 		project = ""
 	}
+	list, known := suggestListOf(r)
+	if !known || (list != nil && project == "") {
+		return
+	}
 	// The same rule as parseSearchLine: with a repository on the page a guest is
 	// who does not see all its branches there, whatever the roles elsewhere are.
 	if project != "" {
@@ -95,7 +148,7 @@ func (a *app) searchSuggest(w http.ResponseWriter, r *http.Request) {
 	}
 	var rows []suggestRow
 	if trimmed := strings.TrimSpace(line); trimmed != "" {
-		if term, ok := links.ParseNumber(trimmed); ok {
+		if term, ok := links.ParseNumber(trimmed); ok && list == nil {
 			kinds := []string{"requests", "ideas", "knowledge", "docs"}
 			if !guest {
 				kinds = append(kinds, "tasks", "pains")
@@ -107,8 +160,8 @@ func (a *app) searchSuggest(w http.ResponseWriter, r *http.Request) {
 				rows = append(rows, suggestRow{Kind: "hit", Href: h.Href, Title: h.Title, Lead: h.Lead, Mark: h.Mark, RefKind: h.RefKind, RefN: h.RefN, PRState: h.PRState})
 			}
 		}
-		rows = append(rows, a.suggestQualifiers(r, pa, l, guest, project, line)...)
-		if utf8.RuneCountInString(trimmed) >= minSearchRunes {
+		rows = append(rows, a.suggestQualifiers(r, pa, l, guest, project, line, list)...)
+		if list == nil && utf8.RuneCountInString(trimmed) >= minSearchRunes {
 			rows = append(rows, suggestRow{Kind: "all", Href: "/ui/search?q=" + url.QueryEscape(trimmed), Mark: "search", Title: l.msg("search.suggest_for", trimmed)})
 		}
 	}
@@ -127,7 +180,7 @@ func (a *app) searchSuggest(w http.ResponseWriter, r *http.Request) {
 // still being typed, a value once the colon is there. A word with a quote in it
 // is text, and so is everything after an opening quote that is not closed yet:
 // the words inside a phrase are not qualifiers.
-func (a *app) suggestQualifiers(r *http.Request, pa *store.ProjectAccess, l lang, guest bool, project, line string) []suggestRow {
+func (a *app) suggestQualifiers(r *http.Request, pa *store.ProjectAccess, l lang, guest bool, project, line string, list *suggestList) []suggestRow {
 	if strings.Count(line, `"`)%2 == 1 {
 		return nil
 	}
@@ -142,7 +195,11 @@ func (a *app) suggestQualifiers(r *http.Request, pa *store.ProjectAccess, l lang
 	key, val, colon := strings.Cut(strings.ToLower(token), ":")
 	if !colon {
 		var rows []suggestRow
-		for _, k := range suggestKeys {
+		keys := suggestKeys
+		if list != nil {
+			keys = list.keys
+		}
+		for _, k := range keys {
 			if (guest && slices.Contains(guestQualifiers, k)) || !strings.HasPrefix(k, key) {
 				continue
 			}
@@ -156,8 +213,11 @@ func (a *app) suggestQualifiers(r *http.Request, pa *store.ProjectAccess, l lang
 	if guest && slices.Contains(guestQualifiers, key) {
 		return nil
 	}
+	if list != nil && !slices.Contains(list.keys, key) {
+		return nil
+	}
 	var rows []suggestRow
-	for _, c := range a.suggestValues(r, pa, l, guest, project, key) {
+	for _, c := range a.suggestValues(r, pa, l, guest, project, key, list) {
 		if !strings.HasPrefix(strings.ToLower(c.value), val) || strings.EqualFold(c.value, val) {
 			continue
 		}
@@ -184,7 +244,7 @@ func quoteValue(v string) string {
 // suggestValues are the values the key can be completed with. The ones that name
 // something of a repository (branch, package, label) need the repository of the
 // page and are read through the rights of the viewer.
-func (a *app) suggestValues(r *http.Request, pa *store.ProjectAccess, l lang, guest bool, project, key string) []suggestValue {
+func (a *app) suggestValues(r *http.Request, pa *store.ProjectAccess, l lang, guest bool, project, key string, list *suggestList) []suggestValue {
 	plain := func(list ...string) []suggestValue {
 		out := make([]suggestValue, 0, len(list))
 		for _, v := range list {
@@ -194,6 +254,9 @@ func (a *app) suggestValues(r *http.Request, pa *store.ProjectAccess, l lang, gu
 	}
 	switch key {
 	case query.KeyIs:
+		if list != nil {
+			return plain(list.states...)
+		}
 		return plain(suggestStates...)
 	case query.KeyKind:
 		kinds := slices.Clone(suggestKindValues)
@@ -204,7 +267,27 @@ func (a *app) suggestValues(r *http.Request, pa *store.ProjectAccess, l lang, gu
 	case query.KeyType:
 		return plain(suggestTypes...)
 	case query.KeyAuthor:
+		if list != nil {
+			// The lists compare the name, they do not know "@me".
+			return nil
+		}
 		return plain("@me")
+	case "priority":
+		if list == nil || project == "" {
+			return nil
+		}
+		known, err := a.store.RequestPriorities(pa.RequestFilter(requestdomain.SearchFilter{Scope: scope.Axes{Project: project}}))
+		if err != nil {
+			return nil
+		}
+		slices.Sort(known)
+		var out []suggestValue
+		for _, p := range slices.Compact(known) {
+			if p != "" && !strings.ContainsAny(p, " \t:\"") {
+				out = append(out, suggestValue{value: p})
+			}
+		}
+		return out
 	case query.KeyFor:
 		return plain("@me")
 	case query.KeyCreated, query.KeyUpdated:
@@ -221,6 +304,9 @@ func (a *app) suggestValues(r *http.Request, pa *store.ProjectAccess, l lang, gu
 	case query.KeyBranch:
 		if project == "" {
 			return nil
+		}
+		if list != nil && list.pullHeads {
+			return a.suggestPullHeads(r, pa, project)
 		}
 		names, def := a.codeBranches(r, pa, project)
 		out := make([]suggestValue, 0, len(names))
@@ -241,6 +327,9 @@ func (a *app) suggestValues(r *http.Request, pa *store.ProjectAccess, l lang, gu
 		}
 		var out []suggestValue
 		for _, p := range packageChoices(pa, project) {
+			if list != nil && !list.packageOpen(p) {
+				continue
+			}
 			out = append(out, suggestValue{value: strconv.FormatInt(p.ID, 10), lead: packageName(l, p)})
 		}
 		return out
@@ -261,4 +350,26 @@ func (a *app) suggestValues(r *http.Request, pa *store.ProjectAccess, l lang, gu
 		return out
 	}
 	return nil
+}
+
+// suggestPullHeads are the head branches of the pull requests of the repository, the
+// ones the branch menu of the pull list offers, and only those the viewer may see.
+func (a *app) suggestPullHeads(r *http.Request, pa *store.ProjectAccess, project string) []suggestValue {
+	all, err := pa.PullRequests(project, store.PullListFilter{Limit: store.PullMaxLimit})
+	if err != nil {
+		return nil
+	}
+	visible := a.branchRule(r, pa, project)
+	var heads []string
+	for _, it := range all.Items {
+		if it.Head != "" && visible(it.Head) && !strings.ContainsAny(it.Head, " \t\"") && !slices.Contains(heads, it.Head) {
+			heads = append(heads, it.Head)
+		}
+	}
+	slices.Sort(heads)
+	out := make([]suggestValue, 0, len(heads))
+	for _, h := range heads {
+		out = append(out, suggestValue{value: h})
+	}
+	return out
 }

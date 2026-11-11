@@ -53,6 +53,8 @@
   & .k-row .tt a:hover { color: var(--accent-fg); }
   & .k-row small { display: block; font-size: 12px; color: var(--fg-muted); }
   & .k-more { display: block; padding: 8px 16px; font-size: 14px; border-top: 1px solid var(--border-muted); }
+  & .sess-row { display: block; padding: 8px 16px; }
+  & .sess-row + .sess-row { border-top: 1px solid var(--border-muted); }
   & .grow { padding: 8px 16px; }
   & .grow a { color: var(--fg-default); }
   & .grow a:hover { color: var(--accent-fg); }

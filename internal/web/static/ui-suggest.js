@@ -85,6 +85,7 @@
       const u = new URL(input.dataset.suggest, location.href);
       u.searchParams.set("q", input.value);
       if (input.dataset.suggestProject) u.searchParams.set("project", input.dataset.suggestProject);
+      if (input.dataset.suggestList) u.searchParams.set("list", input.dataset.suggestList);
       const ctl = window.AbortController ? new AbortController() : null;
       pending = ctl;
       const init = { credentials: "same-origin", headers: { Accept: "text/html" } };

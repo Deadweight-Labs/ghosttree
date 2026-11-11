@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/knref"
+	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -55,6 +58,15 @@ func ensurePullRequests(db *sql.DB) error {
 	if err := ensureColumn(db, "git_pull_requests", "head_at", `TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("git_pull_requests.head_at: %w", err)
 	}
+	// body: der Text des PRs (REQ-601 AC-13), bereinigt und begrenzt (cleanPullBody);
+	// body_at ist die Zeit des Ereignisses, das ihn gebracht hat, damit ein verspätetes
+	// älteres Ereignis einen neueren Text nicht überschreibt. Altzeilen bleiben leer.
+	if err := ensureColumn(db, "git_pull_requests", "body", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("git_pull_requests.body: %w", err)
+	}
+	if err := ensureColumn(db, "git_pull_requests", "body_at", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("git_pull_requests.body_at: %w", err)
+	}
 	if _, err := db.Exec(lastenheftSchema); err != nil {
 		return err
 	}
@@ -100,6 +112,36 @@ type PullRequestChange struct {
 	Author string
 	// State: open, closed oder merged.
 	State string
+	// Body ist der Text des PRs (Fremddaten, wird bereinigt und gekürzt). nil: das
+	// Ereignis sagt ihn nicht, der gespeicherte bleibt; ein leerer Text löscht ihn.
+	Body *string
+}
+
+// maxPullBody begrenzt den gespeicherten PR-Text in Zeichen.
+const maxPullBody = 20000
+
+// cleanPullBody macht aus dem Text eines PRs, was die Seite zeigen darf: gültiges
+// UTF-8, Zeilenenden als \n, ohne Steuer- und Formatzeichen (außer Tab, Zeilenumbruch
+// und dem Zeichenverbinder der Emoji), Geheimnisse geschwärzt, gekürzt.
+func cleanPullBody(s string) string {
+	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\t':
+			b.WriteRune(r)
+		case r == '‍':
+			b.WriteRune(r)
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r), r == utf8.RuneError:
+		default:
+			b.WriteRune(r)
+		}
+	}
+	out := strings.TrimSpace(redact.Redact(b.String()))
+	if r := []rune(out); len(r) > maxPullBody {
+		out = string(r[:maxPullBody])
+	}
+	return out
 }
 
 // PullRequestResult sagt, was ein Ereignis bewirkt hat.
@@ -265,6 +307,13 @@ func (s *Store) RecordPullRequest(c PullRequestChange) (PullRequestResult, error
 			merged_at=CASE WHEN git_pull_requests.merged_at!='' THEN git_pull_requests.merged_at ELSE excluded.merged_at END`,
 		remote, c.Number, title, state, head, base, defaultBranch, mergeSHA, ts, ts, mergedAt, author, headSHA, headAt); err != nil {
 		return res, err
+	}
+	if c.Body != nil {
+		at := normalizeEventTime(c.HeadAt)
+		if _, err := tx.Exec(`UPDATE git_pull_requests SET body=?1, body_at=CASE WHEN ?2!='' THEN ?2 ELSE body_at END
+			WHERE project=?3 AND number=?4 AND (?2='' OR ?2>=body_at)`, cleanPullBody(*c.Body), at, remote, c.Number); err != nil {
+			return res, err
+		}
 	}
 	if c.RepoPrivate != nil {
 		if err := setRepoPrivateTx(tx, remote, *c.RepoPrivate, ts); err != nil {

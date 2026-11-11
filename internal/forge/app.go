@@ -429,7 +429,8 @@ func (g *GitHubApp) OrgProfile(ctx context.Context, installationID int64, login 
 type PullRequest struct {
 	Number    int       `json:"number"`
 	Title     string    `json:"title"`
-	State     string    `json:"state"` // open, closed oder merged
+	Body      string    `json:"body,omitempty"` // Fremdtext; der Store bereinigt ihn
+	State     string    `json:"state"`          // open, closed oder merged
 	Draft     bool      `json:"draft"`
 	HeadRef   string    `json:"head_ref"`
 	HeadSHA   string    `json:"head_sha"`
@@ -458,6 +459,7 @@ func (g *GitHubApp) PullRequests(ctx context.Context, installationID int64, repo
 	var raw []struct {
 		Number   int        `json:"number"`
 		Title    string     `json:"title"`
+		Body     *string    `json:"body"`
 		State    string     `json:"state"`
 		Draft    bool       `json:"draft"`
 		HTMLURL  string     `json:"html_url"`
@@ -488,7 +490,11 @@ func (g *GitHubApp) PullRequests(ctx context.Context, installationID int64, repo
 		if r.MergedAt != nil {
 			st = "merged"
 		}
-		out = append(out, PullRequest{Number: r.Number, Title: r.Title, State: st, Draft: r.Draft,
+		body := ""
+		if r.Body != nil {
+			body = *r.Body
+		}
+		out = append(out, PullRequest{Number: r.Number, Title: r.Title, Body: body, State: st, Draft: r.Draft,
 			HeadRef: r.Head.Ref, HeadSHA: r.Head.SHA, BaseRef: r.Base.Ref, Author: r.User.Login, URL: r.HTMLURL, UpdatedAt: r.Updated})
 	}
 	return out, nil

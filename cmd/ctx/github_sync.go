@@ -29,7 +29,7 @@ func pullChange(ev forge.PullEvent) store.PullRequestChange {
 	return store.PullRequestChange{
 		InstallationID: ev.InstallationID, Remote: ev.Remote, HeadRemote: ev.HeadRemote, Number: int64(ev.Number),
 		Action: ev.Action, Title: ev.Title, Head: ev.Head, Base: ev.Base, DefaultBranch: ev.DefaultBranch,
-		MergeSHA: ev.MergeSHA, HeadSHA: ev.HeadSHA, HeadAt: ev.UpdatedAt, RepoPrivate: ev.RepoPrivate, Author: ev.Author, State: ev.State,
+		MergeSHA: ev.MergeSHA, HeadSHA: ev.HeadSHA, HeadAt: ev.UpdatedAt, RepoPrivate: ev.RepoPrivate, Author: ev.Author, State: ev.State, Body: ev.Body,
 	}
 }
 
@@ -482,7 +482,7 @@ func syncPulls(ctx context.Context, st *store.Store, lister pullLister, project 
 				}
 				res, err := st.RecordPullRequest(store.PullRequestChange{
 					InstallationID: t.InstallationID, Remote: t.Project, HeadRemote: t.Project, Number: int64(pr.Number),
-					Action: "sync", Title: pr.Title, Head: pr.HeadRef, Base: pr.BaseRef, Author: pr.Author, State: state,
+					Action: "sync", Title: pr.Title, Head: pr.HeadRef, Base: pr.BaseRef, Author: pr.Author, State: state, Body: &pr.Body,
 				})
 				if err != nil {
 					fmt.Fprintf(stdout, "%s #%d: %v\n", t.Project, pr.Number, err)

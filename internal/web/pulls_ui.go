@@ -592,8 +592,15 @@ type pullView struct {
 	KnowledgeHref string
 	// LiveIDs are the issues of the checklist, for the live stream.
 	LiveIDs string
-	// Sess is the block "Built in" of the side column (nil when there is none).
+	// Sess is the block "Built in" (nil when there is none): in the side column, and
+	// on the knowledge tab as a list of its own.
 	Sess *sessBlock
+	// Blocks is the text of the pull request, First the head of the bubble that opens
+	// the conversation with it (no blocks: the opening stays a line of the history).
+	Blocks []bodyBlock
+	First  firstHead
+	// KnowEmptyKey is the sentence of an empty knowledge tab: it says what was looked at.
+	KnowEmptyKey string
 }
 
 // pullDetail ist /ui/{org}/{repo}/pulls/{n}.
@@ -682,6 +689,23 @@ func (a *app) pullDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 	}
 	v.CommitsTotal = len(v.Commits)
 	v.Items = a.pullItems(l, view, d, cl.Items, v)
+	// The text of the pull request is the first post of the conversation, and the
+	// line "opened the pull request" it would repeat goes.
+	if v.Blocks = bodyBlocks(d.Body, 0); len(v.Blocks) > 0 {
+		opened := parseTime(d.OpenedAt)
+		v.First = firstOf(l, actorView{}, firstNonEmpty(d.Author, l.msg("pulls.author_unknown")), l.msg("pulls.ev.opened"), shortAgo(l, now, opened), "", "")
+		if !opened.IsZero() {
+			v.First.Long = l.dateTime(opened.Local())
+		}
+		v.Items = slices.DeleteFunc(v.Items, func(it tlItem) bool { return it.ID == "opened" })
+	}
+	switch {
+	case len(v.Know) > 0 || v.KnowMore > 0:
+	case v.Sess != nil:
+		v.KnowEmptyKey = "pulls.know_empty_sessions"
+	default:
+		v.KnowEmptyKey = "pulls.know_empty_all"
+	}
 	// What was said in the project room at the pull request or at one of its
 	// commits stands between the events by time.
 	if said, err := pa.PullMessages(remote, n); err == nil && len(said) > 0 {

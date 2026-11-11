@@ -172,6 +172,21 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   written in quotes, and nothing is completed inside a phrase that is still
   open. The interface scripts have tests that run in CI in under a second.
 
+- The filter fields of the issue list and the pull list complete the
+  qualifiers the way the search field does, with only what their list reads
+  (`is:`, `type:`, `priority:`, `label:`, `branch:`, `package:` for issues;
+  `is:`, `author:`, `branch:`, `package:` for pull requests). The values come
+  from the repository, with the same rights; a guest is offered no `branch:`
+  and no `package:`. A pull request page shows the text of the pull request as
+  the first post of its conversation, as Markdown, and its Knowledge tab lists
+  the sessions that worked on the branch (with the same three levels of
+  visibility as the side column) and says why it is empty. ghosttree keeps the
+  pull request text from GitHub's pull request events and from `ctx github
+  sync-prs` (new column `git_pull_requests.body`, added on start; secrets in it
+  are blacked out, at most 20,000 characters). Pull requests that were
+  recorded before this change show no text until GitHub sends their next event
+  or `ctx github sync-prs` has run.
+
 - `ctx doctor` sets this ctx against the server's version: a ctx older than
   its server fails with the fix (`ctx update`, and the channel when the server
   runs another one); a server older than this ctx, two dev builds and a server

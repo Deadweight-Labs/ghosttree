@@ -244,6 +244,24 @@ type PullEvent struct {
 	Author string
 	// State ist open, closed oder merged.
 	State string
+	// Body ist der Text des PRs. nil heißt: das Ereignis sagt ihn nicht; ein leerer
+	// Text ist ein PR ohne Beschreibung (GitHub schickt dann null).
+	Body *string
+}
+
+// optText ist ein Textfeld, das sich merkt, ob es im JSON vorkam: null ist "leer",
+// fehlt es, ist es "nicht gesagt".
+type optText struct {
+	Set bool
+	V   string
+}
+
+func (o *optText) UnmarshalJSON(b []byte) error {
+	o.Set = true
+	if string(b) == "null" {
+		return nil
+	}
+	return json.Unmarshal(b, &o.V)
 }
 
 // ParsePullEvent übersetzt ein pull_request-Ereignis. ok ist false für alles
@@ -265,12 +283,13 @@ func ParsePullEvent(event string, body []byte) (PullEvent, bool) {
 			Private       *bool  `json:"private"`
 		} `json:"repository"`
 		PullRequest struct {
-			UpdatedAt      string `json:"updated_at"`
-			Number         int64  `json:"number"`
-			Title          string `json:"title"`
-			State          string `json:"state"`
-			Merged         bool   `json:"merged"`
-			MergeCommitSHA string `json:"merge_commit_sha"`
+			UpdatedAt      string  `json:"updated_at"`
+			Number         int64   `json:"number"`
+			Title          string  `json:"title"`
+			Body           optText `json:"body"`
+			State          string  `json:"state"`
+			Merged         bool    `json:"merged"`
+			MergeCommitSHA string  `json:"merge_commit_sha"`
 			User           struct {
 				Login string `json:"login"`
 			} `json:"user"`
@@ -302,6 +321,10 @@ func ParsePullEvent(event string, body []byte) (PullEvent, bool) {
 		InstallationID: p.Installation.ID, Remote: remoteOf(p.Repository.FullName), Number: n, Action: p.Action,
 		Title: p.PullRequest.Title, Head: p.PullRequest.Head.Ref, Base: p.PullRequest.Base.Ref,
 		DefaultBranch: p.Repository.DefaultBranch, MergeSHA: p.PullRequest.MergeCommitSHA, HeadSHA: p.PullRequest.Head.SHA, UpdatedAt: p.PullRequest.UpdatedAt, RepoPrivate: p.Repository.Private, Author: p.PullRequest.User.Login, State: "open",
+	}
+	if p.PullRequest.Body.Set {
+		body := p.PullRequest.Body.V
+		ev.Body = &body
 	}
 	if p.PullRequest.Head.Repo != nil {
 		ev.HeadRemote = remoteOf(p.PullRequest.Head.Repo.FullName)

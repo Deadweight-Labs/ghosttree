@@ -313,3 +313,58 @@ test("typing waits for a pause: one request for what was typed in a burst, none 
   clock.advance(500);
   assert.equal(calls.length, 1, "the field was left before the pause was over: nothing is asked");
 });
+
+// REQ-599 AC-10: the filter field of the issue list and the pull list is the same
+// component; it tells the address which list it is the filter of.
+function listPage(list, answer = () => "") {
+  const calls = [];
+  const fetch = (url) => {
+    calls.push(url);
+    return Promise.resolve({ ok: true, text: () => Promise.resolve(answer(url)) });
+  };
+  const hooks = { fetch, setTimeout: (fn) => { fn(); return 1; }, clearTimeout: () => {} };
+  const p = loadPage(fixture("suggest-list-" + list + ".html"), { url: "http://localhost/ui/x/shell/" + list, scripts: ["ui-suggest.js"], hooks });
+  const input = p.document.querySelector("input[data-suggest]");
+  const dropdown = p.document.querySelector("ul.sg-list");
+  const type = async (text) => {
+    input.focus();
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+  };
+  return { ...p, calls, input, dropdown, type, rows: () => [...dropdown.querySelectorAll("li.sg")] };
+}
+
+for (const list of ["issues", "pulls"]) {
+  test(`the filter field of the ${list} list asks with its repository and its list, and writes a value over the word being typed`, async () => {
+    const p = listPage(list, () => qual("is:merged") + qual("is:open"));
+    await p.type("is:pr is:");
+    assert.equal(p.calls.length, 1);
+    const url = new URL(p.calls[0], "http://localhost");
+    assert.equal(url.pathname, "/ui/search/suggest");
+    assert.deepEqual([url.searchParams.get("q"), url.searchParams.get("project"), url.searchParams.get("list")], ["is:pr is:", REPO, list]);
+    assert.equal(p.dropdown.hidden, false);
+    assert.equal(p.input.getAttribute("role"), "combobox");
+    p.key("ArrowDown", {}, p.input);
+    p.key("Enter", {}, p.input);
+    assert.equal(p.input.value, "is:pr is:merged ", "the word is replaced, the rest of the filter stays");
+    assert.equal(p.document.activeElement, p.input);
+  });
+}
+
+test("a list field without a chosen row sends the filter on Enter, and the header keeps Ctrl+K", async () => {
+  const p = loadPage(FRAME + fixture("suggest-list-issues.html"), { url: "http://localhost/ui/x/shell/issues", scripts: ["ui-suggest.js"],
+    hooks: { fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve(qual("type:bug")) }), setTimeout: (fn) => { fn(); return 1; }, clearTimeout: () => {} } });
+  const header = p.document.getElementById("shell-search");
+  const field = [...p.document.querySelectorAll("input[data-suggest]")].find((i) => i.dataset.suggestList === "issues");
+  assert.ok(field, "the list field carries its list");
+  field.focus();
+  field.value = "type:";
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+  await tick();
+  assert.equal(p.key("Enter", {}, field).defaultPrevented, false, "no row chosen: the form is sent");
+  field.blur();
+  p.key("k", { ctrlKey: true });
+  assert.equal(p.document.activeElement, header, "Ctrl+K belongs to the field of the header");
+  assert.equal(header.dataset.suggestList, undefined, "the header asks for the global search");
+});
