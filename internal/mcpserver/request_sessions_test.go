@@ -30,7 +30,7 @@ func TestRequestGetNamesTheSessionsBehindThePullRequestOfThePackage(t *testing.T
 		t.Fatal(err)
 	}
 	ax := scope.Axes{Project: linkProject, Branch: "feat/a"}
-	sid, err := st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "s-alice", AccountID: 1, Scope: ax, })
+	sid, err := st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "s-alice", AccountID: 1, Scope: ax})
 	if err != nil {
 		t.Fatal(err)
 	}

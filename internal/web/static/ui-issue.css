@@ -50,6 +50,7 @@
   & .side .sblk .v { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
   & .side .sblk .v > * { display: inline-flex; }
   & .side .sblk .v > .sub { flex-basis: 100%; }
+  & .side .sblk .v > .sess { display: grid; flex-basis: 100%; }
   /* The label picker shrinks with the column instead of pushing its button out of it */
   & .side .sblk .v > .lbadd { gap: 8px; min-width: 0; max-width: 100%; }
   & .side .sblk .lbadd .selx { flex: 1 1 auto; min-width: 0; }
