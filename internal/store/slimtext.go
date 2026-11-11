@@ -51,10 +51,14 @@ type SlimTextReport struct {
 	// (lange Werkzeugausgaben, die raw an anderer Stelle kürzt als der Sammler),
 	// Other weicht sonst ab. StoredBytes ist die Länge des gespeicherten Textes
 	// dieser Zeilen, DerivedBytes die des abgeleiteten.
-	WithText     int64 `json:"with_text"`
-	Same         int64 `json:"same"`
-	Cut          int64 `json:"cut"`
-	Other        int64 `json:"other"`
+	WithText int64 `json:"with_text"`
+	Same     int64 `json:"same"`
+	Cut      int64 `json:"cut"`
+	Other    int64 `json:"other"`
+	// Underivable sind Zeilen mit Text, aus deren raw sich nichts ableiten lässt
+	// (eine Zeile, die der Parser nicht versteht): ihr Text ist die einzige Kopie.
+	// Der echte Lauf lässt sie unberührt, der Probelauf zählt sie hier.
+	Underivable  int64 `json:"underivable"`
 	StoredBytes  int64 `json:"stored_bytes"`
 	DerivedBytes int64 `json:"derived_bytes"`
 
@@ -99,13 +103,21 @@ func hasCutMarker(s string) bool {
 // Zeilen steht in einer kurzen Transaktion
 //
 //	UPDATE session_chunks SET text_chars = length(text), text = ''
-//	 WHERE id > ? AND id <= ? AND text != ''
+//	 WHERE id = ? AND text = ?
+//
+// für jede Zeile des Stapels, deren Text sich aus raw ableiten lässt. Das
+// Ableiten geschieht davor, außerhalb der Transaktion; die Bedingung text = ?
+// lässt eine Zeile stehen, die inzwischen jemand anders geändert hat. Eine
+// Zeile, aus der chunktext.Derive nichts liefert (Klasse Underivable), bleibt
+// mit ihrem Text stehen: er ist die einzige Kopie, und leer gelesen wäre er
+// verloren.
 //
 // Der Lauf geht in der Reihenfolge von id (Keyset) und ist wiederholbar: eine
 // geleerte Zeile erfüllt text != ” nicht mehr, ein zweiter Lauf schreibt
-// nichts, ein abgebrochener setzt an derselben Stelle fort (oder mit AfterID).
-// Zeilen, die ein Server daneben schreibt, werden mit dem Keyset erfasst oder
-// bleiben mit ihrem Text stehen, was die Leseregel verträgt.
+// nichts (und zählt die nicht ableitbaren Zeilen erneut), ein abgebrochener setzt
+// an derselben Stelle fort (oder mit AfterID). Zeilen, die ein Server daneben
+// schreibt, werden mit dem Keyset erfasst oder bleiben mit ihrem Text stehen,
+// was die Leseregel verträgt.
 //
 // Vorbedingungen für einen echten Lauf, sonst ein Fehler mit Hinweis:
 //   - text_chars und chunk_index sind da (der Server dieser Version lief einmal);
@@ -116,11 +128,14 @@ func hasCutMarker(s string) bool {
 //     abgeleitet abweichen, könnte es scheitern.
 //
 // Der Probelauf prüft nichts davon, nennt es aber in Blocked, und zählt die
-// Zeilen nach Klasse (Same, Cut, Other).
+// Zeilen nach Klasse (Same, Cut, Other, Underivable).
 //
-// Restore schreibt für jede Zeile mit leerem Text und text_chars > 0 den
-// abgeleiteten Text zurück. Für Zeilen, bei denen die Ableitung gleich ist, ist
-// er bytegleich mit dem früheren, für die anderen die abgeleitete Fassung.
+// Zurück gibt es nur, was sich ableiten lässt: Restore schreibt für jede Zeile
+// mit leerem Text und text_chars > 0 den abgeleiteten Text zurück. Für Zeilen,
+// bei denen die Ableitung gleich ist (Same), ist er bytegleich mit dem früheren.
+// Bei Cut und Other bleibt der frühere Text nur im Backup der Datenbank; eine
+// eigene Kopie legt der Lauf nicht an, denn jede Kopie müsste redact-sessions
+// und slim-sessions mitführen.
 // Davor ist der Server auf -session-text=stored zu stellen, sonst entstehen
 // hinter dem Lauf wieder leere Zeilen.
 func SlimText(ctx context.Context, path string, opts SlimTextOptions) (SlimTextReport, error) {
@@ -201,7 +216,7 @@ func SlimText(ctx context.Context, path string, opts SlimTextOptions) (SlimTextR
 		case opts.DryRun:
 			err = slimTextCount(ctx, db, raw, &rep, hi)
 		default:
-			held, err = slimTextEmpty(ctx, db, &rep, hi)
+			held, err = slimTextEmpty(ctx, db, raw, &rep, hi)
 		}
 		if err != nil {
 			return fail(err)
@@ -275,14 +290,30 @@ func slimTextBlockers(ctx context.Context, db *sql.DB, has func(string) (bool, e
 	return out, nil
 }
 
-// slimTextEmpty leert den Text der Zeilen bis hi in einer Transaktion und gibt
-// zurück, wie lange sie die Schreibsperre hielt.
-func slimTextEmpty(ctx context.Context, db *sql.DB, rep *SlimTextReport, hi int64) (time.Duration, error) {
+// slimTextEmpty leert den Text der Zeilen bis hi, die sich ableiten lassen, in
+// einer Transaktion und gibt zurück, wie lange sie die Schreibsperre hielt. Gelesen
+// und abgeleitet wird davor, ohne Sperre.
+func slimTextEmpty(ctx context.Context, db *sql.DB, raw *rawState, rep *SlimTextReport, hi int64) (time.Duration, error) {
+	rows, lines, err := slimTextRead(ctx, db, raw, `SELECT c.id, c.text, c.raw, se.harness FROM session_chunks c
+		JOIN sessions se ON se.id = c.session_id WHERE c.id > ? AND c.id <= ? AND c.text != ''`, rep.LastID, hi)
+	if err != nil {
+		return 0, err
+	}
+	var todo []slimTextRow
+	var underivable int64
+	for i, r := range rows {
+		if _, derived := chunktext.Derive(r.harness, lines[i]); derived == "" {
+			underivable++
+			continue
+		}
+		todo = append(todo, r)
+	}
 	for attempt := 0; ; attempt++ {
-		held, emptied, chars, err := slimTextEmptyOnce(ctx, db, rep.LastID, hi)
+		held, emptied, chars, err := slimTextEmptyOnce(ctx, db, todo, hi)
 		if err == nil {
 			rep.Emptied += emptied
 			rep.Chars += chars
+			rep.Underivable += underivable
 			return held, nil
 		}
 		if !isBusy(err) || attempt >= len(slimBusyBackoff) {
@@ -296,7 +327,7 @@ func slimTextEmpty(ctx context.Context, db *sql.DB, rep *SlimTextReport, hi int6
 	}
 }
 
-func slimTextEmptyOnce(ctx context.Context, db *sql.DB, lo, hi int64) (held time.Duration, emptied, chars int64, err error) {
+func slimTextEmptyOnce(ctx context.Context, db *sql.DB, todo []slimTextRow, hi int64) (held time.Duration, emptied, chars int64, err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, 0, 0, err
@@ -305,24 +336,25 @@ func slimTextEmptyOnce(ctx context.Context, db *sql.DB, lo, hi int64) (held time
 	// Die Sperre beginnt mit dem ersten Schreibzugriff; die Zeit läuft von dort
 	// bis zum Festschreiben.
 	began := time.Now()
-	rows, err := tx.QueryContext(ctx, `UPDATE session_chunks SET text_chars = length(text), text = ''
-		WHERE id > ? AND id <= ? AND text != '' RETURNING text_chars`, lo, hi)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	for rows.Next() {
-		var n int64
-		if err := rows.Scan(&n); err != nil {
-			rows.Close()
+	if len(todo) > 0 {
+		stmt, err := tx.PrepareContext(ctx, `UPDATE session_chunks SET text_chars = length(text), text = ''
+			WHERE id = ? AND text = ? RETURNING text_chars`)
+		if err != nil {
 			return 0, 0, 0, err
 		}
-		emptied++
-		chars += n
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return 0, 0, 0, err
+		defer stmt.Close()
+		for _, r := range todo {
+			var n int64
+			err := stmt.QueryRowContext(ctx, r.id, r.text).Scan(&n)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue // changed since it was read: the next run sees it
+			}
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			emptied++
+			chars += n
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO index_state(key, val) VALUES('slim_text_cursor', ?)`, hi); err != nil {
 		// index_state fehlt in einer Datei ohne Suchindex: der Lauf braucht es nicht.
@@ -385,6 +417,8 @@ func slimTextCount(ctx context.Context, db *sql.DB, raw *rawState, rep *SlimText
 		rep.StoredBytes += int64(len(r.text))
 		rep.DerivedBytes += int64(len(derived))
 		switch {
+		case derived == "":
+			rep.Underivable++
 		case derived == r.text:
 			rep.Same++
 		case hasCutMarker(r.text) || hasCutMarker(derived):

@@ -361,11 +361,19 @@ sudo systemctl start ghosttree
 The dry run derives the text of every row that has some and counts: `same`
 (derived equals stored), `cut` (differs, and a truncation mark is involved: the
 stored line shortens a long tool output at another place than the collector
-did) and `other`. After the run those rows read the derived, shorter view of
-the same output. Quotes already stored live verbatim in the evidence and do not
+did), `other` and `underivable` (the parsers get nothing out of the stored line,
+so the stored text is the only copy: the real run leaves those rows with their
+text and counts them again on every run). After the run the `cut` and `other`
+rows read the derived view, which is shorter or otherwise different. The run
+keeps no copy of their old text: only the database backup above brings it back
+byte for byte, `--restore` gives the derived version. Quotes already stored live verbatim in the evidence and do not
 depend on the column. A quote of a distillation batch that was submitted before
 the run and collected after it is checked against the derived text, which is why
 the command refuses while a batch is open.
+
+With `--session-text=derived` the server writes a chunk without text only when
+its line yields some; otherwise it keeps the text it received, and `text_chars`
+is the length of the derived text, which is what `ctx cost` should count.
 
 The command takes the write lock for one `UPDATE` per batch of 500 rows and
 pauses at least as long as the lock was held. A second run finds nothing; an
@@ -373,7 +381,7 @@ interrupted one is simply started again (or continued with `--after-id`).
 
 Going back: set `--session-text=stored`, run `ctx db slim-text --restore`
 (writes the derived text into every emptied row; byte for byte the old text
-where the derivation was equal), then start the older binary. Without
+where the derivation was equal, the derived version for `cut` and `other`), then start the older binary. Without
 `--restore` an older binary sees empty transcripts.
 
 ### Shrinking and checking the database

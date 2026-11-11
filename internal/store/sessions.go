@@ -80,9 +80,9 @@ type Chunk struct {
 	Stored any `json:"-"`
 
 	// TextChars ist die Länge von Text in Zeichen, wie AppendChunks sie nach dem
-	// Schwärzen und Kürzen sieht. Sie geht in session_chunks.text_chars, auch
-	// wenn der Server den Text selbst nicht speichert (-session-text=derived).
-	// Nie auf dem Draht.
+	// Schwärzen und Kürzen sieht. Sie geht in session_chunks.text_chars; bei
+	// -session-text=derived ersetzt AppendChunks sie durch die Länge des
+	// abgeleiteten Textes, den die Leser sehen. Nie auf dem Draht.
 	TextChars int `json:"-"`
 }
 
@@ -283,13 +283,18 @@ func (s *Store) appendChunkBatches(batches []ChunkBatch) error {
 			if stored == nil {
 				stored = enc.Encode(c.Raw)
 			}
-			text := c.Text
+			text, chars := c.Text, c.TextChars
 			if s.textDerived {
-				// -session-text=derived: readers derive the text from raw; text_chars
-				// keeps its length for ctx cost.
-				text = ""
+				// -session-text=derived: readers derive the text from raw, so
+				// text_chars is the length of that text (what readers see and what
+				// ctx cost sums), not of the one the client sent. If nothing can be
+				// derived from the line, the client's text is the only copy and is
+				// stored as in the other mode.
+				if derived := chunkTextOf(h, "", c.Raw); derived != "" {
+					text, chars = "", utf8.RuneCountInString(derived)
+				}
 			}
-			res, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, text, stored, slim.Version, c.TextChars)
+			res, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, text, stored, slim.Version, chars)
 			if err != nil {
 				return err
 			}

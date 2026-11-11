@@ -312,3 +312,52 @@ func TestRuntimeStoreWritesNoTextWhenDerived(t *testing.T) {
 		t.Fatalf("read %+v, %v", got, err)
 	}
 }
+
+// In derived mode text_chars is the length of the text the readers see, not of
+// the one the client sent, and a line that yields nothing keeps the client's
+// text, since that text is the only copy.
+func TestSessionTextDerivedCountsTheDerivedText(t *testing.T) {
+	s := openTest(t)
+	if err := s.setSessionText(SessionTextDerived); err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.UpsertSession(Session{Harness: "claude-code", ExternalID: "d", Scope: scope.Axes{Project: "p"}, StartedAt: "2026-11-01T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := redactUserLine("kurz")
+	if err := s.AppendChunks(id, []Chunk{
+		{Seq: 0, Role: "user", Text: "viel länger als das, was sich ableiten lässt", Raw: line},
+		{Seq: 1, Role: "other", Text: "only copy", Raw: `{"type":"summary","summary":"x","leafUuid":"y"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	type row struct {
+		text  string
+		chars int
+	}
+	got := map[int]row{}
+	rows, err := s.db.Query(`SELECT seq, text, text_chars FROM session_chunks WHERE session_id = ?`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var seq int
+		var r row
+		if err := rows.Scan(&seq, &r.text, &r.chars); err != nil {
+			t.Fatal(err)
+		}
+		got[seq] = r
+	}
+	if got[0].text != "" || got[0].chars != len([]rune("kurz")) {
+		t.Errorf("derivable row: %+v, want no text and 4 characters", got[0])
+	}
+	if got[1].text != "only copy" || got[1].chars != len("only copy") {
+		t.Errorf("row with nothing to derive: %+v, want its text kept", got[1])
+	}
+	read := readTexts(t, s, id)
+	if read[0] != "kurz" || read[1] != "only copy" {
+		t.Errorf("reads %v", read)
+	}
+}

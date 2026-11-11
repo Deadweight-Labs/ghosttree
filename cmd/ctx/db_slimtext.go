@@ -23,7 +23,10 @@ the text of a line as the collector read it; it can be derived from the stored
 line (session_chunks.raw), and readers do so whenever the column is empty. This
 command empties the column: per batch of --batch rows, in one short transaction,
 text_chars takes the length of the text (ctx cost counts it) and text becomes
-empty. Searching, the session page, the API and quotes stay as they are.
+empty. Searching, the session page, the API and quotes stay as they are. A row
+is emptied only if something can be derived from its stored line; a row whose
+line the parsers do not understand keeps its text (class underivable), since
+that text is the only copy.
 
 Before it runs, ctx db slim-search must have run (the old search index
 chunks_fts stands on text), and no distillation batch may be open (--force
@@ -33,8 +36,9 @@ new chunks are written without text.
 --dry-run writes nothing. It derives the text of every row that still has one
 and counts by class: same (derived equals stored), cut (differs, a truncation
 mark is involved: long tool outputs that the stored line cuts somewhere else
-than the collector did), other. Only numbers are printed. Run it on a copy of
-the production database first.
+than the collector did), other, underivable (nothing can be derived; the real
+run leaves these rows alone). Only numbers are printed. Run it on a copy of the
+production database first.
 
 It may run while the server is up; the server must already run the version that
 brings this command, since that one creates the column text_chars. It walks
@@ -44,7 +48,9 @@ interrupted run may be started again.
 
 --restore goes back: it writes the derived text into every row that is empty
 but had text (text_chars > 0). Rows whose derived text equals the old one get
-it byte for byte, the others the derived version. Do this before going back to
+it byte for byte. For cut and other the old text is not kept anywhere else
+than in the backup of the database: --restore gives the derived version, so
+take that backup before the run. Do this before going back to
 a binary older than this command (it would read empty transcripts), and set
 --session-text=stored first, or new rows are written empty again.
 
@@ -126,9 +132,16 @@ func reportSlimText(stdout io.Writer, r store.SlimTextReport, interrupted bool) 
 		fmt.Fprintf(stdout, "  derived equal to stored: %d\n", r.Same)
 		fmt.Fprintf(stdout, "  derived differs, truncation mark involved: %d\n", r.Cut)
 		fmt.Fprintf(stdout, "  derived differs otherwise: %d\n", r.Other)
+		fmt.Fprintf(stdout, "  nothing derivable, text stays: %d\n", r.Underivable)
+		if r.Cut+r.Other > 0 {
+			fmt.Fprintf(stdout, "  %d rows (cut, other) would read the derived text; only the database backup brings the old text back\n", r.Cut+r.Other)
+		}
 		fmt.Fprintf(stdout, "  derived text of these rows: %s\n", humanSize(r.DerivedBytes))
 	default:
 		fmt.Fprintf(stdout, "text emptied in %d rows (%d characters kept in text_chars)\n", r.Emptied, r.Chars)
+		if r.Underivable > 0 {
+			fmt.Fprintf(stdout, "%d rows keep their text: nothing can be derived from their line\n", r.Underivable)
+		}
 		if r.Batches > 0 {
 			fmt.Fprintf(stdout, "write lock per batch: p50 %s, p95 %s, max %s (%d batches)\n",
 				r.LockP50.Round(10*time.Microsecond), r.LockP95.Round(10*time.Microsecond), r.LockMax.Round(10*time.Microsecond), r.Batches)

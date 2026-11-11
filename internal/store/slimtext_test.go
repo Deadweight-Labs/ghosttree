@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/chunktext"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -96,7 +97,7 @@ func TestSlimTextDryRunCountsByClass(t *testing.T) {
 		}
 	}
 	rep := slimText(t, path, SlimTextOptions{DryRun: true})
-	if rep.WithText != int64(withText) || rep.Same+rep.Cut+rep.Other != rep.WithText {
+	if rep.WithText != int64(withText) || rep.Same+rep.Cut+rep.Other+rep.Underivable != rep.WithText {
 		t.Fatalf("report %+v, rows with text %d", rep, withText)
 	}
 	// Two long blocks cut in raw (the claude fixture, seq 4), one text edited by
@@ -470,5 +471,112 @@ func BenchmarkReadWindow(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// onlyCopy is a line the parsers do not understand, with a text next to it that
+// nothing else holds.
+const (
+	onlyCopyLine = `{"type":"summary","summary":"leaf","leafUuid":"x"}`
+	onlyCopyText = "the only copy of this text"
+)
+
+// underivableDB is textDB plus one row whose text cannot be derived from its raw.
+func underivableDB(t *testing.T) (path string, session int64, id int64) {
+	t.Helper()
+	path, sessions := textDB(t)
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, text := chunktext.Derive("claude", onlyCopyLine); text != "" {
+		t.Fatalf("the line is derivable after all: %q", text)
+	}
+	if err := s.AppendChunks(sessions[0], []Chunk{{Seq: 90, Role: "other", Text: onlyCopyText, Raw: onlyCopyLine}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow(`SELECT id FROM session_chunks WHERE session_id = ? AND seq = 90`, sessions[0]).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := s.db.QueryRow(`SELECT text FROM session_chunks WHERE id = ?`, id).Scan(&stored); err != nil || stored != onlyCopyText {
+		t.Fatalf("the row was not written with its text: %q, %v", stored, err)
+	}
+	return path, sessions[0], id
+}
+
+// A row whose line yields nothing keeps its text: emptied, it would read as an
+// empty chunk and the text would be gone for good. The dry run says so.
+func TestSlimTextKeepsTextThatCannotBeDerived(t *testing.T) {
+	path, session, id := underivableDB(t)
+
+	dry := slimText(t, path, SlimTextOptions{DryRun: true})
+	if dry.Underivable != 1 || dry.Same+dry.Cut+dry.Other+dry.Underivable != dry.WithText {
+		t.Fatalf("dry run: %+v", dry)
+	}
+
+	rep := slimText(t, path, SlimTextOptions{Batch: 4})
+	if rep.Underivable != 1 {
+		t.Fatalf("the run did not count the row: %+v", rep)
+	}
+	if rep.Emptied != dry.WithText-1 {
+		t.Fatalf("emptied %d, rows with text %d, one of them underivable", rep.Emptied, dry.WithText)
+	}
+	if got := rowsWithText(t, path)[id]; got != onlyCopyText {
+		t.Fatalf("the text of the underivable row is %q", got)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var read string
+	chunks, err := s.ReadSession(session, 0, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range chunks {
+		if c.Seq == 90 {
+			read = c.Text
+		}
+	}
+	if read != onlyCopyText {
+		t.Fatalf("ReadSession gives %q for the row", read)
+	}
+
+	// A second run leaves it alone and says so again; restore has nothing to do for it.
+	again := slimText(t, path, SlimTextOptions{})
+	if again.Emptied != 0 || again.Underivable != 1 {
+		t.Fatalf("second run: %+v", again)
+	}
+	slimText(t, path, SlimTextOptions{Restore: true})
+	if got := rowsWithText(t, path)[id]; got != onlyCopyText {
+		t.Fatalf("after restore the text is %q", got)
+	}
+}
+
+// The UPDATE only empties a row that still holds the text that was derived
+// against: a change between reading and writing leaves the row alone.
+func TestSlimTextEmptiesOnlyTheRowItRead(t *testing.T) {
+	path, _ := textDB(t)
+	rows := rowsWithText(t, path)
+	var id int64
+	for i, text := range rows {
+		if text != "" {
+			id = i
+			break
+		}
+	}
+	db := openRaw(t, path)
+	if _, err := db.Exec(`UPDATE session_chunks SET text = 'changed meanwhile' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := slimTextEmptyOnce(context.Background(), db, []slimTextRow{{id: id, text: rows[id]}}, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rowsWithText(t, path)[id]; got != "changed meanwhile" {
+		t.Fatalf("a row that was changed since it was read was emptied: %q", got)
 	}
 }

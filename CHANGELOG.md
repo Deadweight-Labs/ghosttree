@@ -564,8 +564,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   `ctx db slim-text --db <path>` empties the column of existing rows beside the
   running server, in batches of 500 rows with short write locks (first
   `--dry-run`, which counts rows whose derived text equals, differs by a
-  truncation mark, or differs otherwise, and prints no text; then `ctx db
-  vacuum` with the server stopped). It refuses while `ctx db slim-search` has
+  truncation mark, or differs otherwise, or cannot be derived at all, and prints
+  no text; then `ctx db vacuum` with the server stopped). A row with nothing to
+  derive keeps its text; for the rows that read the derived view afterwards only
+  the database backup brings the old text back. It refuses while `ctx db slim-search` has
   not run and while a distillation batch is open (`--force` overrides the
   latter). `--restore` writes the derived text back, which a rollback to an
   older binary needs first. `ctx cost` and `ctx usage` read `text_chars`,
