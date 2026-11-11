@@ -247,7 +247,8 @@ func relevantContext(stdin io.Reader) string {
 	rb := <-runbooks
 	traceParts(md.Parts...)
 	traceParts(rb.Parts...)
-	return joinHookContext(md.Text, rb.Text)
+	// The runbook comes first, see ghostContext.
+	return joinHookContext(rb.Text, md.Text)
 }
 
 // runbookTrigger ist, woran die Auslöser der Abläufe geprüft werden: ein Prompt,
@@ -266,10 +267,17 @@ func triggeredRunbooks(cfg config.Config, gitCtx collector.GitContext, session s
 	if t.prompt == "" && t.command == "" && len(t.paths) == 0 {
 		return client.Delivered{}
 	}
-	md, err := client.NewWithTimeout(cfg, relevanceTimeout).TriggeredRunbooksDelivered(client.RunbookTrigger{
+	trigger := client.RunbookTrigger{
 		Prompt: t.prompt, Command: t.command, Paths: t.paths, RepoPath: gitCtx.RepoPath,
 		Session: session, Project: gitCtx.Project, Machine: cfg.Machine,
-	})
+	}
+	// The server remembers a runbook as delivered, so it must know how much the
+	// budget of this session can still carry whole: a runbook the budget cut in
+	// half would never come again.
+	if left, ok := hookbudget.Remaining(session, hookbudget.ChannelMemory); ok {
+		trigger.Budget = &left
+	}
+	md, err := client.NewWithTimeout(cfg, relevanceTimeout).TriggeredRunbooksDelivered(trigger)
 	if err != nil {
 		return client.Delivered{}
 	}
@@ -379,7 +387,9 @@ func ghostContext(stdin io.Reader) string {
 	ghosts := ghostContextFor(cfg, gitCtx, in.SessionID, in.ToolName, targets)
 	rb := <-runbooks
 	traceParts(rb.Parts...)
-	return joinHookContext(ghosts, rb.Text)
+	// The runbook comes first: its size was fitted to the budget that is left
+	// before anything else is added, so what the budget cuts is the rest.
+	return joinHookContext(rb.Text, ghosts)
 }
 
 func ghostContextFor(cfg config.Config, gitCtx collector.GitContext, sessionID, toolName string, targets []string) string {

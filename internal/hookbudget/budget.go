@@ -124,10 +124,7 @@ func DeliverChannel(sessionID, channel, text string, emit func(string) error) er
 		return emit("")
 	}
 	limit := LimitFor(channel, profile.FromEnv())
-	cut := noticeFor(limit)
-	if channel == ChannelCoord {
-		cut = coordNotice
-	}
+	cut := cutNotice(channel, limit)
 	text = strings.ToValidUTF8(text, "�")
 	n := utf8.RuneCountInString(text)
 	wasExhausted := r.Exhausted
@@ -136,7 +133,7 @@ func DeliverChannel(sessionID, channel, text string, emit func(string) error) er
 		if available < 0 {
 			available = 0
 		}
-		text = string([]rune(text)[:available]) + cut
+		text = cutAtLine(text, available) + cut
 		n = utf8.RuneCountInString(text)
 		r.Exhausted = true
 	}

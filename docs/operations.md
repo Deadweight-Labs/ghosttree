@@ -169,12 +169,54 @@ installed hooks need no change):
 | context the hooks may add | 24,000 characters | 6,000 characters |
 
 Tools not loaded up front (`feature`, `runbook` and `comment` always, the rest
-under `lean`) stay in the tool list by name. Claude Code loads one when the
-agent searches for it, Codex through `tool_search`, and every one answers under
-either profile. The profile is set on purpose only: without the variable, and
-with a value other than `lean` or `full`, the session is `full`. `ctx status`
-shows which profile applies to the shell it runs in. The profile of a session
-that a harness started with its own environment is not visible from there.
+under `lean`) stay in the tool list by name, and every one answers under either
+profile. What a harness does with that differs:
+
+- Claude Code loads such a tool on demand through tool search and keeps the four
+  of the core tier up front (the `anthropic/alwaysLoad` mark in `tools/list`).
+  The measurements in the changelog are from Claude Code.
+- Codex defers all MCP tools behind its own `tool_search` when the model and the
+  provider support it, and lists them directly otherwise
+  ([openai/codex#29486](https://github.com/openai/codex/pull/29486)). Whether it
+  reads the `alwaysLoad` mark is not stated there, so do not expect the saving
+  of the tool list under Codex to match the figures for Claude Code.
+- Any other harness loads the tools the way it does.
+
+The profile is set on purpose only: without the variable, and with a value other
+than `lean` or `full`, the session is `full`. `ctx status` shows which profile
+applies to the shell it runs in, and `ctx doctor --only budget` names the hook
+budget of both profiles ("bis zu 24.000 (lean: 6.000)") next to the profile of
+that shell; a budget receipt does not record the profile of its session. The
+profile of a session that a harness started with its own environment is not
+visible from there.
+
+### What the profile does not change
+
+- **`context_get` without paths** returns the whole briefing under `lean` too.
+  Asking for it with a tool is deliberate, and the notice that closes a spent
+  hook budget names `context_get` as the way to the rest. A lean session that
+  wants the short briefing already has it from its start.
+- **Subagents** do not follow the profile. The briefing the SubagentStart hook
+  puts in front of a Claude Code subagent (up to 6,000 characters: the working
+  rules, the work package, matching pitfalls, the mirror) and the rules in it
+  are the same under `lean` and `full`, and they do not count against the hook
+  budget of the session.
+- **The coordination channel** keeps its own budget (12,000 characters per five
+  minutes) under both profiles; messages from other agents arrive as before.
+
+### How the hook budget treats a runbook
+
+A runbook that matches a prompt, a command or a path is delivered once per
+session, so it must not be cut: the server remembers it as delivered, and it
+would never come again. The hook therefore tells the server how many characters
+of the budget are left, and the server claims a runbook only if it fits whole
+(shortened to the steps' titles if need be, with the line that asks for the
+report). One that does not fit is neither sent nor remembered and waits for a
+later call. In the text of a hook the runbook comes before other knowledge, and
+if the budget has to cut, it cuts after the last whole line and leaves no half
+runbook. A hook that runs at the very moment another uses up the budget can
+still lose the race for the last characters; the cut is then still clean, but
+the runbook has been remembered.
 
 ## The gardener's schedule
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/profile"
+	"github.com/Deadweight-Labs/ghosttree/internal/runbook"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -135,8 +136,10 @@ func TestHooksOfALeanSessionStopAtTheSmallerBudget(t *testing.T) {
 		total += utf8.RuneCountInString(text)
 		notices += strings.Count(text, "Session hook context budget reached (6000 characters)")
 	}
-	if total != profile.LeanHookBudget || notices != 1 {
-		t.Fatalf("a lean session got %d characters from its hooks and %d notices, want %d and 1", total, notices, profile.LeanHookBudget)
+	// The last answer is cut after its last whole line: at most the budget, and
+	// less than one line short of it.
+	if total > profile.LeanHookBudget || total < profile.LeanHookBudget-500 || notices != 1 {
+		t.Fatalf("a lean session got %d characters from its hooks and %d notices, want at most %d (and no more than 500 short) and 1", total, notices, profile.LeanHookBudget)
 	}
 }
 
@@ -233,4 +236,97 @@ func TestMCPProcessUnderLeanDoesTheCoreTasks(t *testing.T) {
 	if got, want := strings.Join(preloaded(child("")), " "), "context_search context_get context_remember request pain idea coord human_task package"; got != want {
 		t.Errorf("a session without a profile preloads %q, want %q", got, want)
 	}
+}
+
+// REQ-643 review: under lean, the briefing and several runbooks share 6,000
+// characters. A runbook goes out whole or not at all, and one that did not go
+// out is not remembered as delivered: the server's memory and the text the
+// session got say the same.
+func TestLeanSessionGetsRunbooksWholeOrNotAtAll(t *testing.T) {
+	repo := newRepo(t)
+	st := leanHookServer(t)
+	t.Setenv(profile.EnvVar, "lean")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	proj := scope.Axes{Project: "github.com/test/repo"}
+	for i := range 8 {
+		if _, err := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: fmt.Sprintf("rule %d", i),
+			Body: strings.Repeat("Keep the change small and say what you did not check. ", 3), Scope: proj}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A runbook is delivered by itself only once an owner of the project approved it.
+	if _, err := st.CreateOrg("person:1", "Acme", "acme"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := claimInOrg(st, "person:1", proj.Project); err != nil {
+		t.Fatal(err)
+	}
+	const session = "lean-runbooks-session"
+	var names []string
+	for _, word := range []string{"alpha", "beta", "gamma", "delta"} {
+		var steps []runbook.Step
+		for i := range 40 {
+			steps = append(steps, runbook.Step{Title: fmt.Sprintf("%s step %d: %s", word, i, strings.Repeat("work ", 10))})
+		}
+		spec, err := runbook.Normalize(runbook.Spec{Purpose: "do " + word, Steps: steps, Triggers: runbook.Triggers{Keywords: []string{word}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.WriteRunbook(store.RunbookWrite{Project: proj.Project, Name: "rb-" + word, Spec: spec, Person: "test", AuthorID: 1, Approve: true}); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, "rb-"+word)
+	}
+	run := func(event string, extra map[string]any) string {
+		payload := map[string]any{"session_id": session, "cwd": repo}
+		for k, v := range extra {
+			payload[k] = v
+		}
+		raw, _ := json.Marshal(payload)
+		var out bytes.Buffer
+		if code := cmdHookWith(bytes.NewReader(raw), []string{event}, &out); code != 0 {
+			t.Fatalf("hook %s exited %d", event, code)
+		}
+		_, text := decodeHook(t, &out)
+		return text
+	}
+	var got strings.Builder
+	got.WriteString(run("session-start", nil))
+	for _, word := range []string{"alpha", "beta", "gamma", "delta"} {
+		got.WriteString("\n" + run("user-prompt-submit", map[string]any{"prompt": "please " + word + " now"}))
+	}
+	all := got.String()
+	if total := utf8.RuneCountInString(all); total > profile.LeanHookBudget {
+		t.Fatalf("a lean session got %d characters from its hooks, at most %d", total, profile.LeanHookBudget)
+	}
+	remembered := func(name string) bool {
+		ref, err := st.RunbookRefByScope(proj.Project, "", name, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := st.DB().QueryRow(`SELECT COUNT(*) FROM context_deliveries WHERE session_key=? AND term=?`,
+			session, fmt.Sprintf("runbook:%d", ref.ID)).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n > 0
+	}
+	whole := 0
+	for _, name := range names {
+		header, report := "[runbook "+name+", triggered by", "ctx runbook report "+name+" ok|failed"
+		in, closed := strings.Contains(all, header), strings.Contains(all, report)
+		if in != closed {
+			t.Errorf("%s: header in the text %v, report line %v: the runbook is cut\n%s", name, in, closed, all)
+		}
+		if closed {
+			whole++
+		}
+		if remembered(name) != closed {
+			t.Errorf("%s: remembered as delivered %v, but whole in the text %v", name, remembered(name), closed)
+		}
+	}
+	if whole < 2 || whole == len(names) {
+		t.Errorf("%d of %d runbooks delivered; the fixture should deliver some and leave some for lack of room", whole, len(names))
+	}
+	t.Logf("%d of %d runbooks delivered in %d characters", whole, len(names), utf8.RuneCountInString(all))
 }

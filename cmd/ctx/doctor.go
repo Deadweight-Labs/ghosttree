@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
@@ -17,6 +18,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
 	"github.com/Deadweight-Labs/ghosttree/internal/hookbudget"
 	"github.com/Deadweight-Labs/ghosttree/internal/installer"
+	"github.com/Deadweight-Labs/ghosttree/internal/profile"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -469,24 +471,42 @@ func describedBulk(stored []store.GhostFile) string {
 	return fmt.Sprintf("%s Beschreibungstext, größte %s", humanBytes(total), humanBytes(largest))
 }
 
+// budgetLimits is what the hooks may add to one session, by profile: the full
+// limit and the one of a lean session (REQ-643). A receipt does not say which
+// profile its session had, so every line names both.
+func budgetLimits() string {
+	return fmt.Sprintf("bis zu %s (lean: %s)", groupThousands(profile.FullHookBudget), groupThousands(profile.LeanHookBudget))
+}
+
+// groupThousands writes 24000 as 24.000, the way the other output of ctx
+// doctor is read.
+func groupThousands(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "." + s[i:]
+	}
+	return s
+}
+
 func hookBudgetChecks() []installer.Check {
+	own := fmt.Sprintf("Profil dieser Shell: %s (%s)", profile.FromEnv(), profile.EnvVar)
 	receipts, err := hookbudget.Recent()
 	if err != nil {
 		return []installer.Check{{Name: "context budget", Detail: err.Error(), Fix: "lokale Budgetdateien prüfen; nicht löschen, da dies die Sitzungsgrenze zurücksetzen würde"}}
 	}
 	if len(receipts) == 0 {
 		return []installer.Check{{Name: "context budget", Unverified: true,
-			Detail: fmt.Sprintf("%d Zeichen je Sitzung; keine lokalen Ausgabebelege, bisherige Ausgabe unbekannt", hookbudget.Limit)}}
+			Detail: fmt.Sprintf("%s Zeichen je Sitzung; %s; keine lokalen Ausgabebelege, bisherige Ausgabe unbekannt", budgetLimits(), own)}}
 	}
 	checks := []installer.Check{{Name: "context budget", OK: true,
-		Detail: fmt.Sprintf("%d Unicode-Zeichen je Sitzung für alle drei Hooks; lokale stdout-Belege, frühere Ausgabe vor Zählbeginn unbekannt", hookbudget.Limit)}}
+		Detail: fmt.Sprintf("%s Unicode-Zeichen je Sitzung für alle drei Hooks; %s; lokale stdout-Belege, frühere Ausgabe vor Zählbeginn unbekannt", budgetLimits(), own)}}
 	if len(receipts) > 5 {
 		receipts = receipts[:5]
 	}
 	for _, r := range receipts {
 		pending := r.ReservedChars - r.EmittedChars
-		detail := fmt.Sprintf("%d/%d Zeichen ausgegeben; %d unbestätigt reserviert; seit %s",
-			r.EmittedChars, hookbudget.Limit, pending, r.StartedAt.Format("2006-01-02 15:04:05Z07:00"))
+		detail := fmt.Sprintf("%d Zeichen ausgegeben (von %s); %d unbestätigt reserviert; seit %s",
+			r.EmittedChars, budgetLimits(), pending, r.StartedAt.Format("2006-01-02 15:04:05Z07:00"))
 		if r.Exhausted {
 			detail += "; weitere automatische Ausgabe gesperrt"
 		}

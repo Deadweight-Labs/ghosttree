@@ -29,7 +29,7 @@ const leanPitfallChars = 160
 // whether or not anyone reads them, so a project whose instructions alone are
 // longer gets those and no pitfalls.
 func (a *api) leanBootstrap(w http.ResponseWriter, r *http.Request, entries []store.Knowledge) {
-	body, shown, sizes := renderLeanBootstrap(entries)
+	body, shown, sizes := renderLeanBootstrap(entries, a.clientVersionNote(r))
 	a.rememberDelivered(r, store.DeliveredByBootstrap, shown)
 	parts := make([]deliverylog.Part, 0, len(shown))
 	for i, id := range shown {
@@ -43,8 +43,12 @@ func (a *api) leanBootstrap(w http.ResponseWriter, r *http.Request, entries []st
 }
 
 // renderLeanBootstrap builds the lean briefing and says which entries it carries
-// and how many characters each took, in that order.
-func renderLeanBootstrap(entries []store.Knowledge) (string, []int64, []int) {
+// and how many characters each took, in that order. versionNote is the hint that
+// the client is too old (clientVersionNote), empty if there is none: a lean
+// session is the one that is started by a script on a machine nobody looks at,
+// so it needs the hint as much as a full one. It comes before the pitfalls and
+// is counted in the length; the instructions bind either way.
+func renderLeanBootstrap(entries []store.Knowledge, versionNote string) (string, []int64, []int) {
 	var instructions, pitfalls []store.Knowledge
 	for _, k := range entries {
 		switch {
@@ -72,6 +76,9 @@ func renderLeanBootstrap(entries []store.Knowledge) (string, []int64, []int) {
 			shown = append(shown, k.ID)
 			sizes = append(sizes, deliverylog.Runes(line))
 		}
+	}
+	if versionNote != "" {
+		fmt.Fprintf(&b, "\n> ghosttree: %s\n", versionNote)
 	}
 	footer := leanFooter()
 	room := profile.LeanStartChars - deliverylog.Runes(b.String()) - deliverylog.Runes(footer)

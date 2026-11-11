@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ const leanProject = "github.com/x/y"
 // leanFixture is a project with what a working repository has: binding
 // instructions, many pitfalls of the project and of the machine, decisions and
 // notes, open requests.
-func leanFixture(t *testing.T) (*httptest.Server, string, *store.Store, []int64) {
+func leanFixture(t *testing.T, opts ...Option) (*httptest.Server, string, *store.Store, []int64) {
 	t.Helper()
 	st, err := store.Open(":memory:")
 	if err != nil {
@@ -55,7 +56,7 @@ func leanFixture(t *testing.T) (*httptest.Server, string, *store.Store, []int64)
 	if _, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "open work", Scope: proj}}); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(New(st))
+	srv := httptest.NewServer(New(st, opts...))
 	t.Cleanup(srv.Close)
 	return srv, token, st, instructionIDs
 }
@@ -131,7 +132,7 @@ func TestLeanBootstrapNeverCutsAnInstruction(t *testing.T) {
 	out, shown, _ := renderLeanBootstrap([]store.Knowledge{
 		{ID: 1, Type: "instruction", Title: "long rule", Body: long, Scope: scope.Axes{Project: leanProject}},
 		{ID: 2, Type: "pitfall", Title: "a pitfall", Body: "b", Scope: scope.Axes{Project: leanProject}, Confidence: "trusted"},
-	})
+	}, "")
 	if !strings.Contains(out, long) {
 		t.Errorf("an instruction was cut")
 	}
@@ -146,7 +147,7 @@ func TestLeanBootstrapIgnoresStagedAndAnswersForAnEmptyProject(t *testing.T) {
 	out, shown, _ := renderLeanBootstrap([]store.Knowledge{
 		{ID: 1, Type: "instruction", Title: "unreviewed rule", Body: "b", Confidence: "staged"},
 		{ID: 2, Type: "pitfall", Title: "unreviewed pitfall", Body: "b", Scope: scope.Axes{Project: leanProject}, Confidence: "staged"},
-	})
+	}, "")
 	if strings.Contains(out, "unreviewed") || len(shown) != 0 {
 		t.Errorf("a staged entry went out: %s", out)
 	}
@@ -181,5 +182,55 @@ func TestLeanBootstrapRemembersOnlyWhatItDelivered(t *testing.T) {
 	}
 	if n != ids {
 		t.Errorf("%d deliveries remembered, %d announced", n, ids)
+	}
+}
+
+// REQ-643 review: a lean briefing carries the hint that this machine's ctx is
+// too old, as the full one does, within the length of a lean briefing, and is
+// as it was for a client that fits or sends no version.
+func TestLeanBootstrapCarriesTheVersionNote(t *testing.T) {
+	srv, token, _, _ := leanFixture(t, WithBuildVersion("0.1.0-dev+b0cd1b9"))
+	get := func(query string, hdr map[string]string) string {
+		t.Helper()
+		rq, _ := http.NewRequest("GET", srv.URL+"/api/context/bootstrap?project="+leanProject+"&machine=builder"+query, nil)
+		rq.Header.Set("Authorization", "Bearer "+token)
+		for k, v := range hdr {
+			rq.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(rq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return string(raw)
+	}
+	stale := map[string]string{"X-Ctx-Version": "0.1.0-dev+1c48c74", "X-Ctx-Protocol": "1"}
+	fits := map[string]string{"X-Ctx-Version": "0.1.0-dev+b0cd1b9", "X-Ctx-Protocol": "1"}
+
+	lean := get("&profile=lean", stale)
+	if !strings.Contains(lean, "ctx update") || !strings.Contains(lean, "0.1.0-dev+b0cd1b9") || !strings.Contains(lean, "0.1.0-dev+1c48c74") {
+		t.Fatalf("the lean briefing carries no update hint:\n%s", lean)
+	}
+	// The full briefing says the same thing in the same words.
+	if full := get("", stale); !strings.Contains(full, "> ghosttree: This server runs ctx 0.1.0-dev+b0cd1b9") ||
+		!strings.Contains(lean, "> ghosttree: This server runs ctx 0.1.0-dev+b0cd1b9") {
+		t.Errorf("the note differs between the profiles:\n%s\n--\n%s", full, lean)
+	}
+	if n := deliverylog.Runes(lean); n > profile.LeanStartChars {
+		t.Errorf("a lean briefing with the hint has %d characters, at most %d:\n%s", n, profile.LeanStartChars, lean)
+	}
+	for _, rule := range []string{"rule 0", "rule 1", "rule 2"} {
+		if !strings.Contains(lean, rule) {
+			t.Errorf("the hint pushed out the binding instruction %q", rule)
+		}
+	}
+	if !strings.Contains(lean, "project pitfall") || !strings.Contains(lean, "context_search") {
+		t.Errorf("the hint pushed out the pitfalls or the way to the rest:\n%s", lean)
+	}
+	// No version, or one that fits: no hint, and the briefing is the same.
+	plain := get("&profile=lean", nil)
+	if strings.Contains(plain, "ctx update") || get("&profile=lean", fits) != plain {
+		t.Errorf("a client that fits got a hint:\n%s", get("&profile=lean", fits))
 	}
 }

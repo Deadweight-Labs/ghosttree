@@ -28,7 +28,8 @@ const ruleText = `## ghosttree
 ghosttree has twelve MCP tools; each takes an ` + "`action`" + `: ` + "`context_search`" + `,
 ` + "`context_get`" + `, ` + "`context_remember`" + `, ` + "`request`" + `, ` + "`pain`" + `, ` + "`idea`" + `, ` + "`coord`" + `,
 ` + "`human_task`" + `, ` + "`package`" + `, ` + "`feature`" + `, ` + "`runbook`" + `, ` + "`comment`" + `.
-` + "`feature`, `runbook` and `comment`" + ` load on demand (tool search). A short helper run
+` + "`feature`, `runbook` and `comment`" + ` load on demand where the harness
+supports it (Claude Code: tool search). A short helper run
 starts with ` + "`GHOSTTREE_PROFILE=lean`" + `: the first four tools, a short briefing, a small
 hook budget, the rest on demand. Without it the profile is ` + "`full`" + `; ` + "`ctx status`" + ` names it.
 

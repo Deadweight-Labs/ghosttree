@@ -675,13 +675,24 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   on where the rest is; no work ledger, package, task list or unfinished work),
   and the hooks may add 6,000 characters in all instead of 24,000. A tool that
   is not loaded up front stays in `tools/list` with its name, so Claude Code
-  finds it with tool search and Codex with `tool_search`, and the server
-  instructions name them; every tool answers under either profile. On the first
+  loads it on demand through tool search and the server instructions name them
+  (Codex defers all MCP tools behind its own `tool_search` when model and
+  provider support it, openai/codex#29486; other harnesses load them as they
+  do); every tool answers under either profile. On the first
   request of a Claude Code session the profile took the input from 56.8k to 48.1k
   tokens (`full`: 54.6k). `ctx status` names the profile, and the rule section
   `ctx install` writes names `GHOSTTREE_PROFILE` in three lines. A server older
   than the client ignores the briefing request and answers with the full one,
-  which the 6,000 characters still bound.
+  which the 6,000 characters still bound. `ctx doctor` names the budget of both
+  profiles ("bis zu 24.000 (lean: 6.000)"). Not part of the profile:
+  `context_get` without paths still returns the whole briefing, and the briefing
+  and rules of a Claude Code subagent are the same under both.
+  A runbook the hook budget cannot carry whole is no longer cut in half and then
+  remembered as delivered: the hook reports what is left, the server claims a
+  runbook only if it fits (shortened to its steps' titles, with the line that
+  asks for the report), and a cut after a spent budget falls on a whole line.
+  The briefing of a lean session carries the "ctx too old, run `ctx update`" hint
+  like the full one.
 
 ### Changed
 
@@ -689,7 +700,8 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   session (REQ-643). In the last days they were called in 2.0 %, 0 % and 3.9 %
   of the sessions on the production instance; the work tier (`pain`, `idea`,
   `coord`, `human_task`, `package`) stays loaded under `full`. The tools are
-  listed by name and answer as before; the first call costs one tool search.
+  listed by name and answer as before; where the harness loads tools on demand
+  (Claude Code), the first call costs one tool search.
   `tools/list` loads 34.9 KB up front under `full` instead of 41.7 KB.
 - The web interface's static files are cached by the browser and sent
   compressed. Every address carries a hash of the file's content

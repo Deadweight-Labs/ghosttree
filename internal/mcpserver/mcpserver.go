@@ -525,6 +525,9 @@ func (s *Server) handleGet(ctx context.Context, _ *mcp.CallToolRequest, in GetIn
 		}
 		return textResult(text), nil, nil
 	}
+	// Whatever the profile, this is the whole briefing: asking for it with a tool
+	// is the way to the rest that the hook budget's notice names, and a lean
+	// session that wants the short one already has it from its start.
 	md, err := s.client.Bootstrap(s.ctxAxes, normalized, 0, "")
 	if err != nil {
 		return nil, nil, err

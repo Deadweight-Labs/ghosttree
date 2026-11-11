@@ -181,3 +181,29 @@ func TestLeanSessionDoesTheCoreTasks(t *testing.T) {
 		t.Fatalf("a pain written through a deferred tool is not found: %v %s", failed, text)
 	}
 }
+
+// REQ-643 review: context_get without paths is the deliberate way to the whole
+// briefing, also for a lean session. The notice that closes a spent hook budget
+// sends the agent there ("Fetch full context with `context_get`"), so it must
+// not hand back the short briefing the session got at its start.
+func TestContextGetWithoutPathsIsTheFullBriefingUnderLean(t *testing.T) {
+	c, _ := newTestClient(t)
+	axes := scope.Axes{Project: "github.com/x/y", Branch: "main", Machine: "workstation-a"}
+	for _, p := range []profile.Profile{profile.Lean, profile.Full} {
+		s := &Server{client: c, ctxAxes: axes, profile: p}
+		for i := range 6 {
+			if _, _, err := s.handleRemember(context.Background(), nil, RememberInput{Type: "pitfall", Title: "pitfall " + string(rune('a'+i)),
+				Body: strings.Repeat("The cache hides a stale file. ", 8), ScopeHint: "project"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		res, _, err := s.handleGet(context.Background(), nil, GetInput{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := text(t, res)
+		if strings.Count(got, "- [") < 6 || strings.Contains(got, "Not loaded up front, find them by tool search") {
+			t.Errorf("profile %s: context_get did not return the full briefing:\n%s", p, got)
+		}
+	}
+}

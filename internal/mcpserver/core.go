@@ -281,10 +281,13 @@ func (r *coreRouter) coreTool(c coretools.Core, tools []*mcp.Tool) *mcp.Tool {
 		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &closed, ReadOnlyHint: readOnly},
 	}
 	// A tool the profile does not load up front is still listed, with its name,
-	// and a harness that defers tools loads it when the agent looks for it
-	// (Claude Code through tool search, Codex through tool_search). Dropping the
-	// tool from the list instead would leave a harness that only calls listed
-	// tools no way to reach it.
+	// and a harness that defers tools loads it when the agent looks for it.
+	// Claude Code does, and honours the alwaysLoad mark below. Codex defers all
+	// MCP tools behind its own tool_search when model and provider support it
+	// and lists them directly otherwise (openai/codex#29486); whether it looks
+	// at the mark is not documented there. Other harnesses do what they do.
+	// Dropping the tool from the list instead would leave a harness that only
+	// calls listed tools no way to reach it.
 	if r.srv.profile.Preloads(c.Tier) {
 		tool.Meta = mcp.Meta{alwaysLoadMeta: true}
 	}

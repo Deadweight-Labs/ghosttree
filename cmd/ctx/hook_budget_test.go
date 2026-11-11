@@ -56,7 +56,9 @@ func TestHookBudgetWith308DistinctStoredDescriptions(t *testing.T) {
 		total += utf8.RuneCountInString(text)
 		notices += strings.Count(text, "Session hook context budget reached")
 	}
-	if total != 24000 || notices != 1 {
+	// The last answer is cut after its last whole line, so the total is the
+	// budget less at most that line's worth (REQ-643 review).
+	if total > 24000 || total < 24000-500 || notices != 1 {
 		t.Fatalf("308 actual descriptions: chars=%d notices=%d", total, notices)
 	}
 	full, err := client.New(cfg).GhostTree("github.com/test/repo", "path307.go")
