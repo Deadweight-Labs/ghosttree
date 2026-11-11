@@ -27,7 +27,7 @@ func TestJoinPageTellsAMemberTheyAreAlreadyIn(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("%s: %d", name, resp.StatusCode)
 		}
-		for _, want := range []string{"You are already a member of", "app", `href="/ui/knowledge?project=` + url.QueryEscape(joinProject) + `"`} {
+		for _, want := range []string{"You are already a member of", "app", `href="/ui/alpha/app"`} {
 			if !strings.Contains(page, want) {
 				t.Errorf("%s: page lacks %q: %s", name, want, page)
 			}
@@ -81,7 +81,7 @@ func TestJoinPageForANewcomerIsUnchanged(t *testing.T) {
 // page, which says so; it does not drop the person silently on the overview.
 func TestOIDCSignInFromAnInvitationAsAMemberSaysSo(t *testing.T) {
 	env, org := inviteEnv(t)
-	if _, err := env.store.EnsureProject("person:1", joinProject); err != nil {
+	if _, err := claimInOrg(env.store, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	invite := func() string {

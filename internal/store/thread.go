@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 )
 
 // DormantAfter ist die Frist, nach der ein offener Thread ohne Aktivität als
@@ -54,6 +56,9 @@ type Thread struct {
 	// Link is applied together with CreateThread in one transaction: a link
 	// that is refused leaves no thread behind. Never set on reads.
 	Link *ThreadLink `json:"link,omitempty"`
+	// GitAnchor ist der Git-Stand des Anlegens (REQ-597). Der Server setzt ihn aus
+	// dem Header; json:"-", damit der Body nie die Quelle ist.
+	GitAnchor *gitanchor.Anchor `json:"-"`
 }
 
 // ThreadLink hängt einen Thread an ein bestehendes Ghosttree-Objekt. Derselbe
@@ -69,6 +74,9 @@ type ThreadLink struct {
 	ID        string `json:"id"`
 	Revision  string `json:"revision,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
+	// GitAnchor ist der Git-Stand des Schreibers (REQ-597), vom Server aus dem
+	// Header gesetzt, nie aus dem Body.
+	GitAnchor *gitanchor.Anchor `json:"-"`
 }
 
 // ThreadSummary ist eine ABGELEITETE Ansicht, kein Ersatz für den Verlauf.
@@ -84,6 +92,9 @@ type ThreadSummary struct {
 	CoversThrough int64  `json:"covers_through_sequence"`
 	Person        string `json:"person,omitempty"`
 	CreatedAt     string `json:"created_at,omitempty"`
+	// GitAnchor ist der Git-Stand des Schreibers (REQ-597), vom Server aus dem
+	// Header gesetzt, nie aus dem Body.
+	GitAnchor *gitanchor.Anchor `json:"-"`
 }
 
 // Zustände eines Thread-Ergebnisses. Ein Thread SCHLÄGT VOR; die Übernahme
@@ -109,6 +120,9 @@ type ThreadOutcome struct {
 	Note      string `json:"note,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
 	DecidedAt string `json:"decided_at,omitempty"`
+	// GitAnchor ist der Git-Stand des Vorschlags (REQ-597), vom Server aus dem
+	// Header gesetzt, nie aus dem Body.
+	GitAnchor *gitanchor.Anchor `json:"-"`
 }
 
 // ThreadDestinationID bildet die Ziel-Kennung, unter der die Beiträge eines

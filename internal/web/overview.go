@@ -36,7 +36,6 @@ const (
 	// Agent in einem Projekt erscheint.
 	connectedShownFor = 15 * time.Minute
 
-	overviewMaxNext = 6
 	// overviewMaxProposals: how far the count of proposals waiting for review
 	// is taken; beyond it the row says "100+".
 	overviewMaxProposals = 100
@@ -178,78 +177,65 @@ func selectedProject(sh shellView) string {
 	return ""
 }
 
+// overviewPage is /ui/overview. For an owner whose instance has nothing in it
+// yet, or who asked to connect a machine (?connect=1), it is the setup page with
+// the command to run; otherwise the inbox is home and the address leads there.
 func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	now := overviewNow().UTC()
 	pa := a.access(r)
 	who := a.shellBaseFor(r).who
-	shell := a.shellFor(r, "overview")
-	project := selectedProject(shell)
-	view := overviewView{Guest: who.kind == viewerGuest, CSRFToken: csrfOf(r)}
+	if who.kind == viewerGuest || (who.kind != viewerOwner && r.URL.Query().Get("connect") == "") {
+		http.Redirect(w, r, "/ui/inbox", http.StatusFound)
+		return
+	}
+	project := selectedProject(a.shellFor(r, "overview"))
+	hasContent := false
+	if r.URL.Query().Get("connect") == "" {
+		var err error
+		if hasContent, err = a.hasAnyContent(r, pa, project, now); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	setup, err := a.setupFor(r, who, hasContent, now)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if setup == nil {
+		http.Redirect(w, r, "/ui/inbox", http.StatusFound)
+		return
+	}
 	data := pageData{Title: l.msg("overview.title")}
+	if r.URL.Query().Get("connect") == "" {
+		data.Refresh = setupRefreshSeconds
+	}
+	a.renderBrowser(w, r, "setup", data.withOverview(overviewView{Setup: setup, CSRFToken: csrfOf(r)}))
+}
 
-	var agents []agentRow
-	var err error
-	if !view.Guest {
-		if agents, err = a.overviewAgents(r, pa, project, now); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+// hasAnyContent says whether the instance has anything the viewer can see: an
+// agent, an issue, something learned or knowledge. Nothing at all is the case
+// the setup page is for.
+func (a *app) hasAnyContent(r *http.Request, pa *store.ProjectAccess, project string, now time.Time) (bool, error) {
+	l := a.langFor(r)
+	agents, err := a.overviewAgents(r, pa, project, now)
+	if err != nil {
+		return false, err
 	}
-	if view.Requests, err = a.overviewRequests(pa, project); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	requests, err := a.overviewRequests(pa, project)
+	if err != nil {
+		return false, err
 	}
-	if view.Learned, err = a.overviewLearned(l, pa, project, now); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	learned, err := a.overviewLearned(l, pa, project, now)
+	if err != nil {
+		return false, err
 	}
-	if !view.Guest {
-		hasContent := len(agents) > 0 || len(view.Requests) > 0 || len(view.Learned) > 0
-		if !hasContent && r.URL.Query().Get("connect") == "" {
-			if hasContent, err = a.overviewHasKnowledge(pa, project); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-		setup, err := a.setupFor(r, who, hasContent, now)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if setup != nil {
-			view.Setup = setup
-			if r.URL.Query().Get("connect") == "" {
-				data.Refresh = setupRefreshSeconds
-			}
-			a.renderBrowser(w, r, "overview", data.withOverview(overviewView{Setup: setup, CSRFToken: view.CSRFToken}))
-			return
-		}
+	if len(agents) > 0 || len(requests) > 0 || len(learned) > 0 {
+		return true, nil
 	}
-	if view.ForYou, err = a.homeForYou(r, pa, who, project, now); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if view.Guest {
-		view.NoContent = len(view.Requests) == 0 && len(view.Learned) == 0
-		a.renderBrowser(w, r, "overview", data.withOverview(view))
-		return
-	}
-	if view.Run, err = a.homeRunning(r, pa, project, now); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if view.Week, err = a.homeWeek(l, pa, project, now, view.Requests); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if tokens, terr := a.deviceTokens(r); terr == nil {
-		view.Machines = ownMachines(l, tokens, now)
-		view.Example = l.msg("setup.example")
-	}
-	view.Connect = "/ui/overview?connect=1"
-	a.renderBrowser(w, r, "overview", data.withOverview(view))
+	return a.overviewHasKnowledge(pa, project)
 }
 
 func (d pageData) withOverview(v overviewView) pageData {
@@ -489,11 +475,29 @@ func hostUnlessNamed(name, host string) string {
 // owner, machine). A name the person chose stays; an ID or the bare tool name
 // is replaced. The raw ID goes to the title of the row.
 func peerName(l lang, peer store.CoordAgent) string {
-	// A peer that reported its machine has a unique name: Person · Machine · Branch.
+	// A peer that reported its machine has a unique name: Person · Machine ·
+	// Branch. The tool (or its own name) goes first, so the agent is never
+	// called by its owner alone.
 	if peer.Label != "" && peer.Machine != "" {
-		return peer.Label
+		return agentTitle(l, peer) + agentLabelSep + peer.Label
 	}
 	return agentLabel(l, peer.DisplayName, peer.Provider, peer.ExternalID, peer.Owner)
+}
+
+// agentTitle is what an agent is called: the name it has of its own, unless that
+// is an ID, the tool or its owner, else the tool ("Claude", "Codex").
+func agentTitle(l lang, peer store.CoordAgent) string {
+	tool := providerLabel(l, peer.Provider, peer.ExternalID)
+	name := strings.TrimSpace(peer.DisplayName)
+	if name == "" || looksLikeIdentifier(name, peer.ExternalID) || strings.Contains(name, agentLabelSep) {
+		return tool
+	}
+	for _, same := range []string{peer.Provider, tool, peer.Owner, peer.Person, store.NormalizeAccountName(peer.Owner)} {
+		if same != "" && strings.EqualFold(name, same) {
+			return tool
+		}
+	}
+	return name
 }
 
 // agentLabel builds the readable name of an agent from what is known about it.
@@ -806,8 +810,10 @@ func (a *app) setupFor(r *http.Request, who viewer, hasContent bool, now time.Ti
 	view.Example = l.msg("setup.example")
 	a.guideSetup(r, view)
 	if machines := ownMachines(l, tokens, now); len(machines) > 0 {
-		// A machine is there, so the status says so, however long ago it signed in.
-		if _, recent := recentMachine(tokens, now); recent || forced {
+		// "Fertig" only follows a machine that has just connected. "Weiteren Agent
+		// verbinden" (?connect=1) is asked by someone who already has a machine and
+		// wants the command for the next one, so it never shows "Fertig".
+		if _, recent := recentMachine(tokens, now); recent && !forced {
 			view.State, view.Machine = "connected", machines[0].Name
 			return view, nil
 		}
@@ -893,8 +899,14 @@ func shortAgo(l lang, now, t time.Time) string {
 		return l.msg("age.min_ago", int(d/time.Minute))
 	case d < 48*time.Hour:
 		return l.msg("age.hours_ago", int(d/time.Hour))
+	case d < 2*week:
+		return l.msg("age.days_ago", int(d/day))
+	case d < 8*week:
+		return l.msg("age.weeks_ago", int(d/week))
+	case d < year:
+		return l.msg("age.months_ago", int(d/month))
 	}
-	return l.msg("age.days_ago", int(d/(24*time.Hour)))
+	return l.msg("age.years_ago", int(d/year))
 }
 
 func recentMachine(tokens []store.TokenInfo, now time.Time) (string, bool) {

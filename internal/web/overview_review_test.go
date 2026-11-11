@@ -59,7 +59,8 @@ func TestOverviewListsNoOpenDeviceLogins(t *testing.T) {
 	for name, c := range clients {
 		for _, path := range []string{"/ui/overview", "/ui/overview?connect=1"} {
 			status, page := fetchPage(t, c, srv.URL+path)
-			if status != http.StatusOK {
+			// Without ?connect=1 the address leads on to the inbox once there is content or no right to set up.
+			if status != http.StatusOK && !(status == http.StatusFound && path == "/ui/overview") {
 				t.Fatalf("%s %s = %d", name, path, status)
 			}
 			if strings.Contains(page, leakMachine) || strings.Contains(page, leakIP) || strings.Contains(page, "wants to connect") {
@@ -88,7 +89,7 @@ func TestAdminWithoutRolesGetsTheOwnerSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, loginInteractive(t, srv, st, "root"), srv.URL+"/ui/overview")
-	if !strings.Contains(page, "Connect your first agent") {
+	if !strings.Contains(page, "Set up ghosttree") {
 		t.Errorf("an admin without roles gets no setup: %s", page)
 	}
 }
@@ -107,7 +108,7 @@ func TestOldestAccountWithoutAdminOrRoleGetsNoOwnerSetup(t *testing.T) {
 	t.Cleanup(srv.Close)
 	revokeAdmin(t, path, 1)
 	_, page := fetchPage(t, loginInteractive(t, srv, st, "alice"), srv.URL+"/ui/overview")
-	if strings.Contains(page, "Connect your first agent") || strings.Contains(page, "ctx login") {
+	if strings.Contains(page, "Set up ghosttree") || strings.Contains(page, "ctx login") {
 		t.Errorf("the oldest account keeps owner treatment after losing admin: %s", page)
 	}
 }
@@ -122,38 +123,6 @@ func revokeAdmin(t *testing.T, path string, id int) {
 	defer db.Close()
 	if _, err := db.Exec(`UPDATE persons SET is_admin=0 WHERE id=?`, id); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestGuestInOneProjectAndMemberInAnotherSeesOnlyWhatEachRoleAllows(t *testing.T) {
-	e := ovEnv(t)
-	if _, err := e.St.AddPerson("mia"); err != nil {
-		t.Fatal(err)
-	}
-	account := "person:6"
-	orgs, err := e.St.ListOrgs("person:1")
-	if err != nil || len(orgs) == 0 {
-		t.Fatal(err)
-	}
-	code, _, _ := e.St.CreateInvitation("person:1", orgs[0].ID, "", store.OrgMember, 0)
-	if _, err := e.St.AcceptInvitation(account, code); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.St.SetProjectRole("person:1", shellProject, account, store.RoleGuest, false, store.RoleViaCLI); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.St.SetProjectRole("person:1", shellHiddenProject, account, store.RoleMember, false, store.RoleViaCLI); err != nil {
-		t.Fatal(err)
-	}
-	ovAgent(t, e.St, shellProject, "claude:a", "AGENT-IN-A", "person:1")
-	ovAgent(t, e.St, shellHiddenProject, "claude:b", "AGENT-IN-B", account)
-	c := loginInteractive(t, e.Srv, e.St, "mia")
-	_, page := fetchPage(t, c, e.Base+"/ui/overview")
-	if strings.Contains(page, "AGENT-IN-A") {
-		t.Error("the guest role in A leaks A's agents")
-	}
-	if !strings.Contains(page, "AGENT-IN-B") {
-		t.Error("the member role in B does not show B's agents")
 	}
 }
 
@@ -224,12 +193,11 @@ func TestUIPagesWorkUnderTheCSP(t *testing.T) {
 	}
 }
 
-func TestProjectSelectorShowsTheShortNameAndKeepsTheRemote(t *testing.T) {
+func TestHeaderNamesTheNarrowedProjectByItsShortNameAndKeepsTheRemote(t *testing.T) {
 	e := shellWebAll(t)
-	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	want := `<option value="` + shellProject + `" title="` + shellProject + `">shell</option>`
-	if !strings.Contains(page, want) && !strings.Contains(page, strings.Replace(want, `">shell`, `" selected>shell`, 1)) {
-		t.Errorf("project option lacks the short name with the remote as value and title: %s", page)
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview?project="+shellProject)
+	if want := `title="` + shellProject + `">shell</a>`; !strings.Contains(page, want) {
+		t.Errorf("the scope in the header lacks the short name with the remote as title: %s", page)
 	}
 }
 

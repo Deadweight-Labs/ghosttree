@@ -104,14 +104,14 @@ func (j cookieJar) Cookies(*url.URL) []*http.Cookie     { return j.cookies }
 func TestShellAuthAndNavigation(t *testing.T) {
 	srv, _, token := testWeb(t)
 	anon := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, _ := anon.Get(srv.URL + "/ui/requests")
+	resp, _ := anon.Get(srv.URL + "/ui/inbox")
 	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(resp.Header.Get("Location"), "/ui/login") {
 		t.Fatalf("anonymous response=%d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	client := login(t, srv, token)
-	resp, _ = client.Get(srv.URL + "/ui/requests")
+	resp, _ = client.Get(srv.URL + "/ui/inbox")
 	html := body(t, resp)
-	for _, want := range []string{"Home", "Agents", "Rooms", "Requests", "Knowledge", `data-clay-theme="ghosttree"`} {
+	for _, want := range []string{"Inbox", "Agents", "Rooms", "Requests", "Knowledge"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page missing %q", want)
 		}
@@ -145,7 +145,7 @@ func TestLoginUsesFixedReturnTarget(t *testing.T) {
 	} {
 		resp := sameOriginPostForm(t, client, srv.URL+"/ui/login", url.Values{"token": {token}, "next": {next}})
 		resp.Body.Close()
-		if got := resp.Header.Get("Location"); got != "/ui/overview" {
+		if got := resp.Header.Get("Location"); got != "/ui/inbox" {
 			t.Errorf("next %q redirected to %q", next, got)
 		}
 	}
@@ -254,11 +254,11 @@ func TestOperatorSectionsUseStoredData(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]string{
-		"/ui/knowledge?q=SQLite":          "SQLite stays",
-		"/ui/review":                      "SQLite stays",
-		"/ui/sessions":                    "/ui/sessions/" + stored.PublicID,
-		"/ui/sessions/" + stored.PublicID: "ledger context",
-		"/ui/context?project=p":           "SQLite runtime",
+		"/ui/knowledge?q=SQLite": "SQLite stays",
+		"/ui/review":             "SQLite stays",
+		"/ui/sessions":           "/ui/sessions/" + stored.PublicID,
+		"/ui/sessions/" + stored.PublicID + "?view=raw": "ledger context",
+		"/ui/context?project=p":                         "SQLite runtime",
 	} {
 		resp, err := client.Get(srv.URL + path)
 		if err != nil {
@@ -279,7 +279,7 @@ func TestWebSessionEndsWhenTokenOrAccountStopsBeingValid(t *testing.T) {
 	srv, st, _ := testWeb(t)
 	st.AddAccount("bob", "", false)
 	status := func(c *http.Client) (int, string) {
-		resp, err := c.Get(srv.URL + "/ui/requests")
+		resp, err := c.Get(srv.URL + "/ui/inbox")
 		if err != nil {
 			t.Fatal(err)
 		}

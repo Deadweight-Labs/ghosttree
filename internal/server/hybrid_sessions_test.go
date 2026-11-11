@@ -185,11 +185,11 @@ func TestSessionHintStaysWithWordsWhileSearchUsesMeaning(t *testing.T) {
 	a := &api{st: f.st}
 	pa := f.st.Access(store.Principal{ID: "person:3", Label: "mia"})
 	before := f.fake.Inputs()
-	hits, err := a.searchSessions(pa, "q1 q2 q3", scope.Axes{}, "", 5, 5, store.SearchFullTextOnly)
+	hits, err := a.searchSessions(a.st, pa, "q1 q2 q3", scope.Axes{}, "", 5, 5, store.SearchFullTextOnly)
 	if err != nil || len(hits) != 0 || f.fake.Inputs() != before {
 		t.Fatalf("a hint was answered by meaning or sent to the server: %d hits, %d texts sent, %v", len(hits), f.fake.Inputs()-before, err)
 	}
-	hits, err = a.searchSessions(pa, "q1 q2 q3", scope.Axes{}, "", 5, 5, store.SearchAuto)
+	hits, err = a.searchSessions(a.st, pa, "q1 q2 q3", scope.Axes{}, "", 5, 5, store.SearchAuto)
 	if err != nil || len(hits) != 2 || f.fake.Inputs() != before+1 {
 		t.Fatalf("a search: %d hits, %d texts sent, %v", len(hits), f.fake.Inputs()-before, err)
 	}

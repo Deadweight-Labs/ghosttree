@@ -35,6 +35,12 @@ func (a *ProjectAccess) resolveLinkTarget(project, kind string, id int64) (strin
 			return "", linkTargetMissing()
 		}
 		return a.st.requestTitle(id), nil
+	case "idea":
+		i, err := a.st.IdeaByID(id)
+		if err != nil || i.Project != project || !a.CanSeeIdea(i) {
+			return "", linkTargetMissing()
+		}
+		return i.Title, nil
 	case "knowledge":
 		k, err := a.st.KnowledgeRef(id)
 		if err != nil || k.Scope.Project != project || a.CheckKnowledge(k, ActRead) != nil {
@@ -97,6 +103,26 @@ func (a *ProjectAccess) requestAttachments(requestID int64) ([]requestdomain.Pai
 	return pains, tasks
 }
 
+// requestIdeasAndLabels lists the ideas a request came out of (as far as the
+// viewer may read them) and its labels.
+func (a *ProjectAccess) requestIdeasAndLabels(requestID int64) ([]requestdomain.IdeaRef, []requestdomain.LabelRef) {
+	var ideas []requestdomain.IdeaRef
+	if rows, err := a.st.ideasOfRequest(requestID); err == nil {
+		for _, i := range rows {
+			if a.CanSeeIdea(i) {
+				ideas = append(ideas, requestdomain.IdeaRef{ID: i.ID, Title: i.Title, State: i.State})
+			}
+		}
+	}
+	var labels []requestdomain.LabelRef
+	if m, err := a.st.LabelsFor("request", []int64{requestID}); err == nil {
+		for _, l := range m[requestID] {
+			labels = append(labels, requestdomain.LabelRef{Name: l.Name, Color: l.Color})
+		}
+	}
+	return ideas, labels
+}
+
 // PainsFor lists the pains that motivate a request or a knowledge entry, for
 // the viewer.
 func (a *ProjectAccess) PainsFor(dstKind string, dstID int64) []pain.Pain {
@@ -142,15 +168,21 @@ func (s *Store) tasksOfRequest(requestID int64) ([]humantask.Task, error) {
 // -------- visibility, the one filter every list goes through
 
 func (a *ProjectAccess) painObject(p pain.Pain) Object {
-	return Object{Own: a.valid && a.account != 0 && p.AuthorID == a.account}
+	return Object{Own: a.valid && a.account != 0 && p.AuthorID == a.account, HeldAuthor: a.heldAuthor(HeldPain, p.ID)}
 }
 
 // CanSeePain is the read filter for every list of pains.
 func (a *ProjectAccess) CanSeePain(p pain.Pain) bool {
+	if a.heldBack(HeldPain, p.ID, p.Project, ResPain) {
+		return false
+	}
 	return a.Allow(p.Project, ResPain, ActRead, a.painObject(p))
 }
 
 func (a *ProjectAccess) CheckPain(p pain.Pain, act Action) error {
+	if a.heldBack(HeldPain, p.ID, p.Project, ResPain) {
+		return ErrAccessNotFound
+	}
 	return a.Check(p.Project, ResPain, act, a.painObject(p))
 }
 
@@ -166,6 +198,12 @@ func (a *ProjectAccess) taskObject(t humantask.Task) Object {
 // a guest only what is assigned to them.
 func (a *ProjectAccess) CanSeeTask(t humantask.Task) bool {
 	return a.Allow(t.Project, ResTask, ActRead, a.taskObject(t))
+}
+
+// CanSeeTaskVia is canSeeTaskVia for a caller outside the package, with no cache
+// of its own to share: a list of tasks (a session's) asks it once per task.
+func (a *ProjectAccess) CanSeeTaskVia(t humantask.Task, cache map[int64]bool) bool {
+	return a.canSeeTaskVia(t, cache)
 }
 
 // canSeeTaskVia is CanSeeTask plus the request it hangs on: a member does not
@@ -198,6 +236,20 @@ func (a *ProjectAccess) CheckTask(t humantask.Task, act Action) error {
 		}
 	}
 	return a.Check(t.Project, ResTask, act, obj)
+}
+
+// checkTaskWorkable prüft, ob der Betrachter an der Aufgabe arbeiten darf, in
+// dieser Reihenfolge: Lesen und die Sicht über den Auftrag dahinter (beides
+// antwortet wie eine unbekannte Aufgabe), erst danach das Recht zu arbeiten, das
+// „verboten“ sagen darf. Sonst verriete „verboten“, dass es die Aufgabe gibt.
+func (a *ProjectAccess) checkTaskWorkable(t humantask.Task, cache map[int64]bool) error {
+	if err := a.CheckTask(t, ActRead); err != nil {
+		return ErrAccessNotFound
+	}
+	if !a.canSeeTaskVia(t, cache) {
+		return ErrAccessNotFound
+	}
+	return a.CheckTask(t, ActWork)
 }
 
 // -------- helpers shared by pain.go and humantask.go

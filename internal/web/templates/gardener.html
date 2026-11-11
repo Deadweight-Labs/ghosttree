@@ -1,0 +1,19 @@
+{{define "gardentab"}}{{template "head" .}}{{template "nav" .}}<main class="g2 kn org gt-garden"><div class="wrap">
+{{with .GardenTabV}}<div class="gt-grid"><div>
+<div class="gt-pills">{{range .Verdicts}}<a class="gbtn sm{{if .Current}} on{{end}}" href="{{.Href}}">{{.Label}}<span class="counter">{{.Count}}</span></a>{{end}}{{if .Repos}}<span class="sp"></span>{{range .Repos}}<a class="gbtn sm quiet{{if .Current}} on{{end}}" href="{{.Href}}">{{mi "repo"}}{{.Label}}<span class="counter">{{.Count}}</span></a>{{end}}{{end}}</div>
+<div class="box"><div class="box-h lh"><span class="t">{{if eq .All 1}}{{t "gardener.n_open_one"}}{{else}}{{t "gardener.n_open" .All}}{{end}}</span></div>
+{{range .Rows}}{{template "rvrow" .}}{{else}}<div class="box-empty">{{t "gardener.none_open"}}</div>{{end}}</div>
+<h2 class="gt-sec" id="auto">{{t "gardener.auto"}}</h2>
+<div class="box">{{range .Auto}}<div class="row prow">{{mi "check"}}<div><b>{{.Rule}}</b> <a href="{{.Href}}">{{.What}}</a><div class="muted">{{if .Before}}{{.Before}} → {{end}}{{.After}} · {{.When}}</div></div>
+{{if .Undone}}<span class="lb out">{{t "gardener.undone"}}</span>{{else if .CanUndo}}<form method="post" action="/ui/gardener/undo"><input type="hidden" name="csrf_token" value="{{$.GardenTabV.Token}}"><input type="hidden" name="id" value="{{.ID}}"><button class="gbtn sm">{{t "gardener.undo"}}</button></form>{{end}}</div>
+{{else}}<div class="box-empty">{{t "gardener.no_auto"}}</div>{{end}}</div>
+<h2 class="gt-sec">{{t "gardener.runs"}}</h2>
+<div class="box">{{range .Runs}}<div class="row prow">{{mi "clock"}}<div><b>{{.Repo}}</b> <span class="lb {{if .Tone}}warn{{else}}out{{end}}">{{.State}}</span><div class="muted">{{.When}} · {{t "gardener.proposals" .Proposals}}</div></div><span class="mono">{{.Cost}}</span></div>
+{{else}}<div class="box-empty">{{t "gardener.no_runs"}}</div>{{end}}</div>
+</div>
+<aside><div class="box"><div class="box-h"><span class="t">{{t "gardener.next"}}</span></div><div class="box-r">
+{{if .Next}}<p>{{.Next}}</p>{{else}}<p class="muted">{{t "gardener.off"}}</p>{{end}}
+<p class="muted">{{t "gardener.month"}}</p><progress class="gt-meter" max="100" value="{{.Percent}}" aria-label="{{.Spent}} / {{.Budget}}"></progress><p class="muted">{{.Spent}} / {{.Budget}}</p>
+{{if .Settings}}<a class="gbtn sm" href="{{.Settings}}">{{mi "gear"}}{{t "ui.org.tab.settings"}}</a>{{end}}</div></div></aside>
+</div>{{end}}
+</div>{{template "foot" .}}{{end}}

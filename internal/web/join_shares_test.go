@@ -13,12 +13,12 @@ func TestJoinPageSaysWhatIsSharedAndWhatTheRoleSees(t *testing.T) {
 	srv, st, _, org, _ := joinWeb(t)
 	for role, want := range map[string][]string{
 		store.RoleMember: {
-			"Your sessions stay private. Only you see them until you share one.",
-			"Members of " + joinProject + " see its knowledge, requests and room messages.",
+			"Your sessions stay private until you share one.",
+			"Members of app see its knowledge, issues and room messages.",
 		},
 		store.RoleGuest: {
-			"Your sessions stay private. Only you see them until you share one.",
-			"As a guest you see released knowledge, requests and the room of " + joinProject + ", and only the sessions shared with guests.",
+			"Your sessions stay private until you share one.",
+			"As a guest you see released knowledge, issues and the room.",
 		},
 	} {
 		code := projectInvite(t, st, org, role)

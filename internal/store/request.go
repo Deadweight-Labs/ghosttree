@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -73,7 +74,11 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 			return requestdomain.Detail{}, err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'request.created',?,?,?)`, id, r.Person, r.Title, ts); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, in.GitAnchor, in.Origin)
+	if err != nil {
+		return requestdomain.Detail{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'request.created',?,?,?,?,?)`, id, r.Person, r.Title, ts, anchorID, originID); err != nil {
 		return requestdomain.Detail{}, err
 	}
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('request',?,?,?,?,?,?)`, id, r.Title, r.Description, r.Scope.Project, r.Scope.Branch, r.Scope.Machine); err != nil {
@@ -81,6 +86,11 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 	}
 	if err := recordRequestAuthorTx(tx, id, author); err != nil {
 		return requestdomain.Detail{}, err
+	}
+	if !in.Links.Empty() {
+		if err := s.insertRequestLinksTx(tx, id, r.Scope.Project, r.Person, author, in.Links, ts, in.GitAnchor, anchorID, originID, in.Origin); err != nil {
+			return requestdomain.Detail{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return requestdomain.Detail{}, err
@@ -131,6 +141,9 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 		if err := evidenceRows.Close(); err != nil {
 			return d, err
 		}
+		if err := s.attachEvidenceAnchors(d.Criteria[i].Evidence); err != nil {
+			return d, err
+		}
 	}
 	activityRows, err := s.db.Query(`SELECT id,request_id,kind,person,data,created_at,session_id FROM request_activity WHERE request_id=? ORDER BY id`, id)
 	if err != nil {
@@ -147,14 +160,17 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 	if err := activityRows.Err(); err != nil {
 		return d, err
 	}
-	relationRows, err := s.db.Query(`SELECT id,request_id,COALESCE(other_request_id,0),COALESCE(knowledge_id,0),kind,external_ref,created_at FROM request_relations WHERE request_id=? ORDER BY id`, id)
+	if err := s.attachActivityAnchors(d.Activity); err != nil {
+		return d, err
+	}
+	relationRows, err := s.db.Query(`SELECT id,request_id,COALESCE(other_request_id,0),COALESCE(knowledge_id,0),kind,external_ref,COALESCE(package_id,0),created_at FROM request_relations WHERE request_id=? ORDER BY id`, id)
 	if err != nil {
 		return d, err
 	}
 	defer relationRows.Close()
 	for relationRows.Next() {
 		var relation requestdomain.Relation
-		if err := relationRows.Scan(&relation.ID, &relation.RequestID, &relation.OtherRequestID, &relation.KnowledgeID, &relation.Kind, &relation.ExternalRef, &relation.CreatedAt); err != nil {
+		if err := relationRows.Scan(&relation.ID, &relation.RequestID, &relation.OtherRequestID, &relation.KnowledgeID, &relation.Kind, &relation.ExternalRef, &relation.PackageID, &relation.CreatedAt); err != nil {
 			return d, err
 		}
 		d.Relations = append(d.Relations, relation)
@@ -255,6 +271,18 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 		}
 		where = append(where, `(`+clause+`)`)
 	}
+	if af := (AnchorFilter{Commit: filter.Commit, PR: filter.PR}); af.Active() {
+		cond, cargs := af.Where("ra.anchor_id")
+		where = append(where, `EXISTS (SELECT 1 FROM request_activity ra WHERE ra.request_id=r.id AND `+cond+`)`)
+		args = append(args, cargs...)
+	}
+	if filter.Origin.Active() {
+		// Der Kontext des Requests ist der seines Anlegens.
+		cr := `(SELECT origin_id FROM request_activity WHERE request_id=r.id AND kind='request.created' ORDER BY id LIMIT 1)`
+		cond, cargs := originWhere(filter.Origin, cr, "r.created_at")
+		where = append(where, cond)
+		args = append(args, cargs...)
+	}
 	if filter.HideHeld {
 		where = append(where, `NOT (r.origin='distilled' AND r.person='' AND EXISTS (
 			SELECT 1 FROM sessions hs WHERE 'session:'||hs.id = substr(r.session_ref,1,length('session:'||hs.id))
@@ -262,6 +290,13 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 			  AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private')
 			  AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END) != ?))`)
 		args = append(args, filter.HeldInstanceOwner, filter.HeldViewer)
+	}
+	if filter.HideHeldEntries {
+		// A viewer without an account (0) is nobody's author, not the author
+		// of entries nobody could be told apart for (author 0).
+		where = append(where, `NOT EXISTS (SELECT 1 FROM held_entries he WHERE he.kind='request' AND he.entry_id=r.id
+			AND he.state<>'released' AND (?=0 OR he.author_id<>?))`)
+		args = append(args, filter.HeldViewer, filter.HeldViewer)
 	}
 	return where, args
 }
@@ -298,13 +333,22 @@ func (s *Store) CountOpenRequestsFor(v SessionViewer, ax scope.Axes) (int, error
 	return count, err
 }
 
-func (s *Store) AddCriterion(requestID int64, description, person string) (requestdomain.Criterion, error) {
+// firstAnchor nimmt den optionalen Git-Anker einer Schreibfunktion: ohne Angabe
+// (Weboberfläche, Verwaltungsbefehle) bleibt der Ledger-Eintrag unverankert.
+func firstAnchor(a []*gitanchor.Anchor) *gitanchor.Anchor {
+	if len(a) == 0 {
+		return nil
+	}
+	return a[0]
+}
+
+func (s *Store) AddCriterion(requestID int64, description, person string, anchor ...*gitanchor.Anchor) (requestdomain.Criterion, error) {
 	if strings.TrimSpace(description) == "" {
 		return requestdomain.Criterion{}, requestdomain.NewRuleError("criterion_required", "acceptance criterion cannot be empty", "describe an observable outcome", nil)
 	}
 	if s.writer != nil {
-		return queueValue(s, []any{requestID, description, person}, func(d *Store, p []any) (requestdomain.Criterion, error) {
-			return d.AddCriterion(p[0].(int64), p[1].(string), p[2].(string))
+		return queueValue(s, []any{requestID, description, person, firstAnchor(anchor)}, func(d *Store, p []any) (requestdomain.Criterion, error) {
+			return d.AddCriterion(p[0].(int64), p[1].(string), p[2].(string), p[3].(*gitanchor.Anchor))
 		})
 	}
 
@@ -333,7 +377,11 @@ func (s *Store) AddCriterion(requestID int64, description, person string) (reque
 	if err != nil {
 		return requestdomain.Criterion{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'criterion.added',?,?,?)`, requestID, person, description, ts); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, firstAnchor(anchor), nil)
+	if err != nil {
+		return requestdomain.Criterion{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'criterion.added',?,?,?,?,?)`, requestID, person, description, ts, anchorID, originID); err != nil {
 		return requestdomain.Criterion{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -375,10 +423,16 @@ func (s *Store) SetCriterionState(id int64, state string, evidence requestdomain
 	if _, err := tx.Exec(`UPDATE request_criteria SET state=?,updated_at=? WHERE id=?`, state, ts, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,criterion_id,kind,ref,person,created_at) VALUES(?,?,?,?,?,?)`, requestID, id, evidence.Kind, evidence.Ref, evidence.Person, ts); err != nil {
+	// Ein Anker je Vorgang, von Nachweis und Aktivität geteilt: beide halten
+	// dasselbe Ereignis fest.
+	anchorID, originID, err := insertWriteMetaTx(tx, evidence.GitAnchor, evidence.Origin)
+	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,?,?,?,?)`, requestID, "criterion."+state, evidence.Person, fmt.Sprintf("AC-%d", id), ts)
+	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,criterion_id,kind,ref,person,created_at,anchor_id,origin_id) VALUES(?,?,?,?,?,?,?,?)`, requestID, id, evidence.Kind, evidence.Ref, evidence.Person, ts, anchorID, originID); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,?,?,?,?,?,?)`, requestID, "criterion."+state, evidence.Person, fmt.Sprintf("AC-%d", id), ts, anchorID, originID)
 	if err != nil {
 		return err
 	}
@@ -432,21 +486,27 @@ func (s *Store) CompleteRequest(id int64, evidence requestdomain.Evidence) error
 	if n, _ := res.RowsAffected(); n != 1 {
 		return requestdomain.NewRuleError("request_not_completable", fmt.Sprintf("request REQ-%d changed while completing", id), "reload the request and resolve its current criteria", nil)
 	}
-	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,kind,ref,person,created_at) VALUES(?,?,?,?,?)`, id, evidence.Kind, evidence.Ref, evidence.Person, ts); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, evidence.GitAnchor, evidence.Origin)
+	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'request.done',?,?,?)`, id, evidence.Person, evidence.Ref, ts); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,kind,ref,person,created_at,anchor_id,origin_id) VALUES(?,?,?,?,?,?,?)`, id, evidence.Kind, evidence.Ref, evidence.Person, ts, anchorID, originID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'request.done',?,?,?,?,?)`, id, evidence.Person, evidence.Ref, ts, anchorID, originID); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *Store) DropRequest(id int64, reason, person string) error {
+func (s *Store) DropRequest(id int64, reason, person string, anchor ...*gitanchor.Anchor) error {
 	if strings.TrimSpace(reason) == "" {
 		return requestdomain.NewRuleError("reason_required", "dropping a request requires a reason", "explain why the requested outcome is no longer wanted", nil)
 	}
 	if s.writer != nil {
-		return queueWrite(s, []any{id, reason, person}, func(d *Store, p []any) error { return d.DropRequest(p[0].(int64), p[1].(string), p[2].(string)) })
+		return queueWrite(s, []any{id, reason, person, firstAnchor(anchor)}, func(d *Store, p []any) error {
+			return d.DropRequest(p[0].(int64), p[1].(string), p[2].(string), p[3].(*gitanchor.Anchor))
+		})
 	}
 
 	tx, err := s.db.Begin()
@@ -466,7 +526,11 @@ func (s *Store) DropRequest(id int64, reason, person string) error {
 		}
 		return terminalRequestError(id, state)
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'request.dropped',?,?,?)`, id, person, reason, ts); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, firstAnchor(anchor), nil)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'request.dropped',?,?,?,?,?)`, id, person, reason, ts, anchorID, originID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -489,10 +553,10 @@ func relationAddedData(r requestdomain.Relation) string {
 	return r.Kind + " ext " + r.ExternalRef
 }
 
-func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relation, person string) (requestdomain.Relation, error) {
-	valid := map[string]bool{"parent": true, "related": true, "blocks": true, "duplicates": true, "supersedes": true, "knowledge": true, "external": true}
+func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relation, person string, anchor ...*gitanchor.Anchor) (requestdomain.Relation, error) {
+	valid := map[string]bool{"parent": true, "related": true, "blocks": true, "duplicates": true, "supersedes": true, "knowledge": true, "external": true, "derived": true}
 	if !valid[relation.Kind] {
-		return requestdomain.Relation{}, requestdomain.NewRuleError("invalid_relation", "unsupported request relation", "use parent, related, blocks, duplicates, supersedes, knowledge, or external", nil)
+		return requestdomain.Relation{}, requestdomain.NewRuleError("invalid_relation", "unsupported request relation", "use parent, related, blocks, duplicates, supersedes, derived, knowledge, or external", nil)
 	}
 	targets := 0
 	if relation.OtherRequestID != 0 {
@@ -515,8 +579,8 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 		knowledge = relation.KnowledgeID
 	}
 	if s.writer != nil {
-		return queueValue(s, []any{requestID, relation, person}, func(d *Store, p []any) (requestdomain.Relation, error) {
-			return d.AddRequestRelation(p[0].(int64), p[1].(requestdomain.Relation), p[2].(string))
+		return queueValue(s, []any{requestID, relation, person, firstAnchor(anchor)}, func(d *Store, p []any) (requestdomain.Relation, error) {
+			return d.AddRequestRelation(p[0].(int64), p[1].(requestdomain.Relation), p[2].(string), p[3].(*gitanchor.Anchor))
 		})
 	}
 
@@ -534,7 +598,11 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 	if err != nil {
 		return requestdomain.Relation{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'relation.added',?,?,?)`, requestID, person, relationAddedData(relation), ts); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, firstAnchor(anchor), nil)
+	if err != nil {
+		return requestdomain.Relation{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'relation.added',?,?,?,?,?)`, requestID, person, relationAddedData(relation), ts, anchorID, originID); err != nil {
 		return requestdomain.Relation{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -544,7 +612,7 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 	return relation, nil
 }
 
-func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string) (requestdomain.Work, []string, error) {
+func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string, anchor ...*gitanchor.Anchor) (requestdomain.Work, []string, error) {
 	if role != "primary" && role != "related" {
 		return requestdomain.Work{}, nil, requestdomain.NewRuleError("invalid_work_role", "work role must be primary or related", "choose primary or related", nil)
 	}
@@ -553,8 +621,8 @@ func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string
 			work     requestdomain.Work
 			warnings []string
 		}
-		out, err := queueValue(s, []any{requestID, sessionID, role, person}, func(d *Store, p []any) (result, error) {
-			work, warnings, err := d.StartRequestWork(p[0].(int64), p[1].(int64), p[2].(string), p[3].(string))
+		out, err := queueValue(s, []any{requestID, sessionID, role, person, firstAnchor(anchor)}, func(d *Store, p []any) (result, error) {
+			work, warnings, err := d.StartRequestWork(p[0].(int64), p[1].(int64), p[2].(string), p[3].(string), p[4].(*gitanchor.Anchor))
 			return result{work: work, warnings: warnings}, err
 		})
 		return out.work, out.warnings, err
@@ -612,7 +680,11 @@ func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string
 	if err != nil {
 		return requestdomain.Work{}, nil, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id) VALUES(?,'work.started',?,?,?,?)`, requestID, person, fmt.Sprintf("session:%d role:%s", sessionID, role), ts, sessionID); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, firstAnchor(anchor), nil)
+	if err != nil {
+		return requestdomain.Work{}, nil, err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id,anchor_id,origin_id) VALUES(?,'work.started',?,?,?,?,?,?)`, requestID, person, fmt.Sprintf("session:%d role:%s", sessionID, role), ts, sessionID, anchorID, originID); err != nil {
 		return requestdomain.Work{}, nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -716,33 +788,44 @@ func (s *Store) SearchRequestSessions(requestID int64, query string, limit int, 
 			return requestdomain.SessionPage{}, requestdomain.NewRuleError("invalid_cursor", "session search cursor is invalid", "use the opaque cursor returned by the previous page", nil)
 		}
 	}
-	rows, err := s.db.Query(`SELECT se.id,c.seq,se.harness,w.state,w.summary,
-		snippet(chunks_fts,0,'','','…',12)
-		FROM chunks_fts f
-		JOIN session_chunks c ON c.id=f.rowid
-		JOIN sessions se ON se.id=c.session_id
+	expr := ftsQuery(query)
+	rows, err := s.db.Query(`SELECT se.id,ci.seq,se.harness,w.state,w.summary,ci.chunk_id
+		FROM (`+wordHits("")+`) h
+		JOIN chunk_index ci ON ci.chunk_id=h.rid
+		JOIN sessions se ON se.id=ci.session_id
 		JOIN request_work w ON w.session_id=se.id AND w.request_id=?
-		WHERE chunks_fts MATCH ? AND (?=0 OR se.id<? OR (se.id=? AND c.seq<?))
-		ORDER BY se.id DESC,c.seq DESC LIMIT ?`, requestID, ftsQuery(query), cursorSession, cursorSession, cursorSession, cursorSeq, limit+1)
+		WHERE (?=0 OR se.id<? OR (se.id=? AND ci.seq<?))
+		ORDER BY se.id DESC,ci.seq DESC LIMIT ?`, append(wordArgs(expr), requestID, cursorSession, cursorSession, cursorSession, cursorSeq, limit+1)...)
 	if err != nil {
 		return requestdomain.SessionPage{}, err
 	}
 	defer rows.Close()
 	var page requestdomain.SessionPage
+	var cids []int64
 	for rows.Next() {
 		var hit requestdomain.SessionHit
-		if err := rows.Scan(&hit.SessionID, &hit.ChunkSeq, &hit.Harness, &hit.Outcome, &hit.Handoff, &hit.Snippet); err != nil {
+		var cid int64
+		if err := rows.Scan(&hit.SessionID, &hit.ChunkSeq, &hit.Harness, &hit.Outcome, &hit.Handoff, &cid); err != nil {
 			return page, err
 		}
 		page.Results = append(page.Results, hit)
+		cids = append(cids, cid)
 	}
 	if err := rows.Err(); err != nil {
 		return page, err
 	}
+	rows.Close()
 	if len(page.Results) > limit {
 		last := page.Results[limit-1]
 		page.NextCursor = fmt.Sprintf("%d:%d", last.SessionID, last.ChunkSeq)
-		page.Results = page.Results[:limit]
+		page.Results, cids = page.Results[:limit], cids[:limit]
+	}
+	snips, err := s.chunkSnippets(s.ctx(), expr, cids, "\x02", "\x03", 12)
+	if err != nil {
+		return page, err
+	}
+	for i := range page.Results {
+		page.Results[i].Snippet = plainSnippet(snips[cids[i]])
 	}
 	return page, nil
 }

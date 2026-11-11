@@ -7,8 +7,9 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
-// Entries of a project nobody has claimed belong to their author and to the
-// instance admin, and the prefilter has to let exactly those through.
+// Entries of a project nobody has claimed are delivered to their author only;
+// the instance admin may read them but gets none of them delivered, and the
+// prefilter has to let exactly those through.
 func TestPrefilterKeepsTheOwnEntriesOfAnUnclaimedProject(t *testing.T) {
 	st := accessFixture(t)
 	st.SetAccessMode(AccessMode{Enforce: true})
@@ -24,7 +25,7 @@ func TestPrefilterKeepsTheOwnEntriesOfAnUnclaimedProject(t *testing.T) {
 		{ID: "person:6", Label: "nora"}:  {"U-nora"},
 		{ID: "person:3", Label: "mia"}:   {"M-anywhere", "U-mia"},
 		{ID: "person:5", Label: "gus"}:   {"M-anywhere"},
-		{ID: "person:1", Label: "robin"}: {"M-anywhere", "U-mia", "U-nora"},
+		{ID: "person:1", Label: "robin"}: {"M-anywhere"},
 	} {
 		base := visibleSet(t, st, who, true, false)
 		slices.Sort(base)

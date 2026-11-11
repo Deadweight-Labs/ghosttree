@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -15,8 +16,9 @@ import (
 // Nach der Annahme einer Einladung (oder auf Wunsch eines angemeldeten Kontos)
 // ist die Join-Sitzung an das Konto gebunden, und die Seite zeigt den
 // Paarungscode samt Befehl. Der Installer meldet sich damit bei
-// POST /api/join/claim; die Seite zeigt dann "<Gerät> wants to connect" mit
-// Maschinenname, Absenderadresse und (wenn aussagekräftig) "Same network".
+// POST /api/join/claim; die Seite zeigt dann "<Gerät> will sich verbinden" mit
+// Maschinenname, Absenderadresse, Zeit der Meldung und (wenn aussagekräftig)
+// "im selben Netz".
 // Freigabe und Ablehnung kommen nur vom Konto aus einer interaktiven Sitzung
 // (CSRF, gleiche Origin, Kontobestätigung, Kennung der gezeigten Anfrage).
 //
@@ -53,6 +55,8 @@ type joinPairView struct {
 	Message, MailIntro, MailTo            string
 	CmdParts                              []cmdPart
 	NeedsHTTPS                            bool
+	// ClaimedAt: wann sich das Gerät gemeldet hat (RFC 3339), leer ohne Meldung.
+	ClaimedAt string
 }
 
 // cmdPart ist ein Stück des Befehls für die Anzeige. Der Umbruch soll nur an den
@@ -129,6 +133,9 @@ func (a *app) joinPairPage(w http.ResponseWriter, r *http.Request) {
 	view := joinPairView{State: v.State, Pair: v.Pair, Machine: v.Machine, Remote: v.Remote, Nonce: v.Nonce,
 		SameNet: v.Net != "" && v.Net == a.joinClientKey(r), ShowNet: a.sameNetworkMeaningful(), Callback: v.Callback, NeedsCode: v.Mode == store.JoinModeCode, Mode: v.Mode,
 		Person: p.Label, CSRFToken: csrfOf(r)}
+	if !v.ClaimedAt.IsZero() {
+		view.ClaimedAt = v.ClaimedAt.UTC().Format(time.RFC3339)
+	}
 	switch v.State {
 	case store.JoinWaiting:
 		view.Command = a.joinCommand(r, v.Pair)
@@ -194,6 +201,12 @@ func (a *app) joinPairCreate(w http.ResponseWriter, r *http.Request) {
 		a.joinPairMessage(l, w, http.StatusInternalServerError, l.msg("join.msg_setup_t"), l.msg("join.msg_setup"))
 		return
 	}
+	// Die Einrichtung (/ui/overview) holt den Code von hier und zeigt den Befehl
+	// selbst; sie schickt "to_overview" mit, damit die Person dort bleibt.
+	if r.FormValue("to_overview") == "1" {
+		http.Redirect(w, r, "/ui/overview", http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
 }
 
@@ -242,4 +255,9 @@ func (a *app) joinPairDecide(w http.ResponseWriter, r *http.Request) {
 	default:
 		a.joinPairMessage(l, w, http.StatusInternalServerError, l.msg("join.msg_setup_t"), l.msg("join.msg_setup"))
 	}
+}
+
+// Cmd is the command of the pairing for the block with the tabs of the two systems.
+func (v joinPairView) Cmd() cmdBlock {
+	return cmdBlock{ID: "join-cmd", Mac: v.Command, Linux: v.Command}
 }

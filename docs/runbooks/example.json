@@ -1,0 +1,66 @@
+{
+  "runbooks": [
+    {
+      "name": "rollout-prod",
+      "project": "github.com/example/app",
+      "machine": "",
+      "note": "Example runbook: roll a new ctx release out to a server that runs ghosttree under systemd.",
+      "spec": {
+        "purpose": "Roll ghosttree out on the production host: build, install the binary, take a cold copy of the database, switch the release link, start and check health",
+        "params": [
+          {"name": "sha", "type": "sha", "description": "Commit to roll out (at least 7 hex characters)"}
+        ],
+        "preconditions": [
+          "The deploy key is loaded in the ssh agent: check its fingerprint with ssh-add -l, not its comment",
+          "The commit is merged and its CI checks passed"
+        ],
+        "steps": [
+          {"title": "Build the release binaries for {{sha}}", "command": "VERSION=0.1.0-dev+{{sha}} scripts/build-dist.sh", "check": "The linux binary for the target architecture is in the output directory"},
+          {"title": "Copy the binary to the host", "command": "scp ctx prod:/tmp/ctx-{{sha}}"},
+          {"title": "Install it into a new release directory", "command": "sudo install -o root -g ghosttree -m 755 /tmp/ctx-{{sha}} /srv/ghosttree/releases/{{sha}}/bin/ctx", "check": "ls -l shows -rwxr-xr-x"},
+          {"title": "Stop the service", "command": "sudo systemctl stop ghosttree"},
+          {"title": "Take a cold copy of the database", "command": "sudo -u ghosttree cp /srv/ghosttree/data/ghosttree.db /srv/ghosttree/backups/ghosttree-pre-{{sha}}.db"},
+          {"title": "Switch the release link and start", "command": "sudo ln -sfn releases/{{sha}} /srv/ghosttree/current && sudo systemctl start ghosttree"},
+          {"title": "Wait for health", "command": "curl -fsS http://127.0.0.1:8474/api/health", "check": "{\"ok\":true}"}
+        ],
+        "rollback": [
+          {"title": "Point the release link back to the previous release and restart", "command": "sudo ln -sfn releases/<previous> /srv/ghosttree/current && sudo systemctl restart ghosttree"}
+        ],
+        "pitfalls": [],
+        "triggers": {
+          "keywords": ["rollout", "deploy"],
+          "commands": ["scripts/build-dist.sh", "sudo systemctl stop ghosttree", "sudo ln -sfn releases/*"],
+          "paths": ["scripts/build-dist.sh"]
+        },
+        "targets": [
+          {"name": "build", "comment": "Build the release binaries for sha", "steps": [{"argv": ["env", "VERSION=0.1.0-dev+{{sha}}", "scripts/build-dist.sh"]}]}
+        ]
+      }
+    },
+    {
+      "name": "prod-ssh-zugang",
+      "project": "github.com/example/app",
+      "machine": "",
+      "note": "Example runbook: reach the production host without tripping its fail2ban.",
+      "spec": {
+        "purpose": "Connect to the production host with the right user and key",
+        "params": [],
+        "preconditions": [
+          "Use the host alias from ~/.ssh/config, which sets user and key"
+        ],
+        "steps": [
+          {"title": "Check the key in the agent", "command": "ssh-add -l", "check": "The deploy key's fingerprint is listed"},
+          {"title": "Connect through the alias", "command": "ssh prod 'hostname'", "check": "The host name of the production server"}
+        ],
+        "rollback": [],
+        "pitfalls": [],
+        "triggers": {
+          "keywords": [],
+          "commands": ["ssh prod", "ssh *prod.example.com*"],
+          "paths": []
+        },
+        "targets": []
+      }
+    }
+  ]
+}

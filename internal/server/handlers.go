@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +13,12 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
+	"github.com/Deadweight-Labs/ghosttree/internal/feature"
+	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/pain"
+	"github.com/Deadweight-Labs/ghosttree/internal/query"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -27,8 +34,15 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Scope = scope.CanonicalAxes(s.Scope)
-	if !a.gateMachine(w, r, s.Scope.Machine, true) || !a.gateProject(w, r, s.Scope.Project) {
+	if !a.gateMachine(w, r, s.Scope.Machine, true) {
 		return
+	}
+	var placed bool
+	if s.Scope.Project, placed = a.sessionProject(w, r, s.Scope.Project); !placed {
+		return
+	}
+	if s.Scope.Project == "" {
+		s.Scope.Branch, s.Scope.Lineage = "", nil
 	}
 	// Besitz kommt aus dem Token, nie aus dem Rumpf.
 	acct, ok := accountOf(principalOf(r))
@@ -227,6 +241,11 @@ type knowledgeRequest struct {
 	// checked before anything is written and hidden right after.
 	Supersedes      []int64 `json:"supersedes"`
 	SupersedeReason string  `json:"supersede_reason"`
+	// ShareWithOrgs gibt einen Eintrag mit Maschinen-Scope gleich beim Anlegen an
+	// Orgs frei, für die die Maschine freigegeben ist. Fehlt das Feld, bleibt er
+	// privat, nur auf einer Maschine, die einer Org gehört, geht er an diese Org.
+	// Ein leeres Feld hält ihn auch dort privat.
+	ShareWithOrgs *[]string `json:"share_with_orgs"`
 }
 
 func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -250,12 +269,28 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if !a.gateGardener(w, r, k) {
 		return
 	}
-	if !a.gateMachineNote(w, r, k.Scope.Machine) || !a.gateProject(w, r, k.Scope.Project) {
+	shareOrgs, ok := a.shareOrgsForNewEntry(w, r, k.Scope.Project, k.Scope.Machine, req.ShareWithOrgs)
+	if !ok {
+		return
+	}
+	k.ShareOrgIDs = shareOrgs
+	// Ein Mitglied einer Org mit Schreib-Freigabe darf den Namen nicht tragen
+	// (DEC-5); es schreibt über die Freigabe, die CheckKnowledgeCreate prüft. Mit
+	// Projekt ist die Maschine Zuordnung und kein Anspruch auf den Namen: es
+	// entscheidet die Projektrolle (gateProject, CheckKnowledgeCreate).
+	if (len(k.ShareOrgIDs) == 0 && k.Scope.Project == "" && !a.gateMachineNote(w, r, k.Scope.Machine)) || !a.gateProject(w, r, k.Scope.Project) {
 		return
 	}
 	// Die Zuschreibung kommt aus dem Token und ist danach unveränderlich.
 	k.Person, k.ConfirmedBy = personOf(r), ""
+	// Ein Token-Aufruf ist nie ein Mensch (REQ-620).
+	if k.Origin == "human" && principalOf(r).TokenKind != store.WebSessionKind {
+		k.Origin = "agent"
+	}
 	k.AuthorID = authorIDOf(r)
+	k.GitAnchor = anchorFromRequest(r)
+	a.dropForeignPlainSessionRef(r, &k.SessionRef)
+	k.OriginContext = a.originFor(r, k.SessionRef, originNamedFromGlobs(k.Activation.Paths)...)
 	if k.Confidence == "verified" {
 		k.ConfirmedBy = k.Person
 	}
@@ -285,11 +320,16 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	} else {
 		id, err = a.st.InsertKnowledge(k)
 	}
+	if errors.Is(err, store.ErrNoMachineShare) {
+		writeCoded(w, http.StatusConflict, "machine_not_shared", err.Error())
+		return
+	}
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	a.saveExplanation(explain.KindKnowledge, id, explanation)
+	a.stampActor(r, actor.Knowledge, id, 0)
 	saved, err := a.st.KnowledgeByID(id)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -326,7 +366,7 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("include_archived") == "1" {
 		ks, err = a.st.KnowledgeForProject(scope.NormalizeRemote(r.URL.Query().Get("project")))
 	} else {
-		ks, err = a.st.KnowledgeForContext(axesFromQuery(r), a.access(r).Viewer())
+		ks, err = a.st.KnowledgeForContext(a.guestAxes(r), a.access(r).Viewer())
 	}
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -529,6 +569,9 @@ func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	k.Closure = a.access(r).KnowledgeClosure(k)
+	if k.Scope.Machine != "" {
+		k.SharedWith = a.st.EntryShareOrgs(principalOf(r), store.EntryKnowledge, k.ID)
+	}
 	writeJSON(w, 200, a.access(r).KnowledgeView(k))
 }
 
@@ -661,6 +704,19 @@ type searchResult struct {
 	Knowledge []store.Knowledge         `json:"knowledge"`
 	Sessions  []store.SessionHit        `json:"sessions"`
 	Requests  []requestdomain.SearchHit `json:"requests"`
+	// Die folgenden kommen nur aus einer Suchzeile mit Qualifiern (REQ-600).
+	Pains    []pain.Pain          `json:"pains,omitempty"`
+	Ideas    []idea.Idea          `json:"ideas,omitempty"`
+	Features []feature.Feature    `json:"features,omitempty"`
+	Criteria []store.CriterionHit `json:"criteria,omitempty"`
+	Tasks    []humantask.Task     `json:"tasks,omitempty"`
+	Files    []store.GhostFile    `json:"files,omitempty"`
+	Messages []store.MessageHit   `json:"messages,omitempty"`
+	// Query ist die Suchzeile, wie der Server sie gelesen hat.
+	Query string `json:"query,omitempty"`
+	// Unavailable nennt die Bereiche, die bei einer Suche über mehrere Bereiche
+	// ausfielen. Die übrigen Treffer sind vollständig.
+	Unavailable []store.SearchGap `json:"unavailable,omitempty"`
 }
 
 func (a *api) search(w http.ResponseWriter, r *http.Request) {
@@ -669,12 +725,30 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = "all"
 	}
-	filter := axesFromQuery(r)
+	filter := a.guestAxes(r)
 	limit := intParam(r, "limit", 20)
+	anchor, ok := anchorFilterFromQuery(w, r)
+	if !ok {
+		return
+	}
+	origin, ok := originFilterFromQuery(w, r)
+	if !ok {
+		return
+	}
+	parsed, err := query.Parse(q, time.Now())
+	if err != nil {
+		writeCoded(w, http.StatusBadRequest, "invalid_query", err.Error())
+		return
+	}
+	if parsed.Qualified() {
+		a.searchQualified(w, r, parsed, kind, filter, limit, anchor, origin)
+		return
+	}
 	pa := a.access(r)
 	fetch := a.overfetch(limit)
 	pa.Filtered()
 	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}, Requests: []requestdomain.SearchHit{}}
+	gaps := a.newSearchGaps(r, kind == "all")
 	if kind == "knowledge" || kind == "all" {
 		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
 		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
@@ -687,38 +761,63 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		ks, err := a.st.SearchKnowledgeWith(q, store.KnowledgeSearch{
 			Axes: filter, Union: r.URL.Query().Get("scope") == "union",
 			Limit: fetch, Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
-			NoRecord: true,
+			NoRecord: true, Anchor: anchor, Origin: origin,
+			// Unbestätigtes und die Notizen des Gärtners bleiben draußen wie bei
+			// der Auslieferung; holen lassen sie sich mit is:staged oder
+			// author:gardener, das ist der qualifizierte Weg.
+			Settled: true,
 		})
 		if err != nil {
-			writeStoreError(w, http.StatusInternalServerError, err)
-			return
+			if !gaps.add("knowledge", err) {
+				writeStoreError(w, http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			delivered := filterTo(ks, limit, readable)
+			a.st.RecordKnowledgeSearchHits(delivered)
+			res.Knowledge = pa.KnowledgeViews(delivered)
+			gaps.done()
 		}
-		delivered := filterTo(ks, limit, readable)
-		a.st.RecordKnowledgeSearchHits(delivered)
-		res.Knowledge = pa.KnowledgeViews(delivered)
 	}
-	if kind == "sessions" || kind == "all" {
-		hits, err := a.searchSessions(pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch, store.SearchAuto)
+	// Transkripte tragen keinen Git-Anker: mit einem Anker-Filter gibt es
+	// keine Session-Treffer, statt Treffer zu zeigen, die der Filter nicht prüfen kann.
+	if (kind == "sessions" || kind == "all") && !anchor.Active() && !origin.Active() {
+		st, done := gaps.budget()
+		hits, err := a.searchSessions(st, pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch, store.SearchAuto)
+		err = done(err)
 		if err != nil {
-			writeStoreError(w, http.StatusInternalServerError, err)
-			return
+			if !gaps.add("sessions", err) {
+				writeStoreError(w, http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			res.Sessions = hits
+			gaps.done()
 		}
-		res.Sessions = hits
 	}
 	if kind == "requests" || kind == "all" {
 		// With embeddings the requests are ranked by words and by meaning; the
 		// filter, with the visibility of the reader, is the same SQL for both.
-		page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit}), store.SearchAuto)
+		page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit, Commit: anchor.Commit, PR: anchor.PR, Origin: origin}), store.SearchAuto)
 		if err != nil {
-			writeStoreError(w, http.StatusInternalServerError, err)
-			return
+			if !gaps.add("requests", err) {
+				writeStoreError(w, http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			for i := range page.Results {
+				page.Results[i] = pa.RequestHitView(page.Results[i])
+			}
+			res.Requests = page.Results
+			a.noteRequestHits(r, page.Results)
+			gaps.done()
 		}
-		for i := range page.Results {
-			page.Results[i] = pa.RequestHitView(page.Results[i])
-		}
-		res.Requests = page.Results
-		a.noteRequestHits(r, page.Results)
 	}
+	if err := gaps.allFailed(); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	res.Unavailable = gaps.list
 	writeJSON(w, 200, res)
 }
 
@@ -731,7 +830,10 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 // sessions switched on ranks by words and by meaning (one hit for each session,
 // marked when only the meaning found it), and SearchFullTextOnly for the hint,
 // which asks for one word and is never sent to the embedding server.
-func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axes, excludeSession string, limit, fetch int, mode store.SearchMode) ([]store.SessionHit, error) {
+//
+// st is the store to read through: a.st, or a view of it that ends with the
+// time budget of the area (searchGaps.budget).
+func (a *api) searchSessions(st *store.Store, pa *store.ProjectAccess, q string, filter scope.Axes, excludeSession string, limit, fetch int, mode store.SearchMode) ([]store.SessionHit, error) {
 	dbFilter, viewFilter, fetchSessions := a.sessionFilters(filter, fetch)
 	// Mit Durchsetzung steht die lesbare Menge vor dem Rang fest: ein
 	// verborgener Treffer darf weder einen sichtbaren verdrängen noch
@@ -752,7 +854,7 @@ func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axe
 			}
 		}
 	}
-	hits, err := a.st.SearchSessionsWith(q, store.SessionSearch{
+	hits, err := st.SearchSessionsWith(q, store.SessionSearch{
 		Filter: dbFilter, ExcludeSession: excludeSession, Limit: fetchSessions, Keep: readable, Prefilter: pre, Mode: mode,
 	})
 	if err != nil {
@@ -807,8 +909,12 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	// later, and the briefing is not worth failing for that.
 	a.rememberDelivered(r, store.DeliveredByBootstrap, shown)
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(200)
 	fmt.Fprint(w, body)
+	if note := a.clientVersionNote(r); note != "" {
+		fmt.Fprintf(w, "\n> ghosttree: %s\n", note)
+	}
 	if openRequests > 0 {
 		plural := "request"
 		if openRequests != 1 {
@@ -816,6 +922,9 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Fprintf(w, "\n## Work ledger (ghosttree)\n\n%d open %s in this scope. For substantial feature, architecture, migration, or multi-session work, search the request ledger first; continue a match or create one with explicit acceptance criteria. Trivial local fixes and routine maintenance do not require a request.\n", openRequests, plural)
 	}
+	// Das Arbeitspaket des Branches (REQ-601), geerbt vom Ursprung, wenn der
+	// Branch keines hat.
+	a.writePackageBriefing(w, r, pa)
 	// Vor der Prüfung auf Session-Metadaten: ein Gast mit einer zugewiesenen
 	// Aufgabe liest keine Sessions und bekommt den Abschnitt trotzdem.
 	if waiting, err := a.st.WaitingTasksFor(pa, axesFromQuery(r).Project, waitingMaxEach); err == nil {
@@ -1106,22 +1215,28 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.Project = scope.NormalizeRemote(g.Project)
+	g.Branch = strings.TrimSpace(g.Branch)
+	if g.Branch != "" && !store.ValidBranchName(g.Branch) {
+		writeCoded(w, http.StatusBadRequest, "invalid_branch", "the branch name must be one line without control characters")
+		return
+	}
 	if !a.gateProject(w, r, g.Project) {
 		return
 	}
 	if denyAccess(w, a.access(r).Check(g.Project, store.ResGhost, store.ActCreate, store.Object{})) {
 		return
 	}
-	// "From the gardener, adopted by <person>" is written on a description only by
-	// the review page, when a person confirms a proposal of the gardener, with
-	// the text and the content hashes of the note the gardener's account wrote.
-	// Nobody may claim it through this call, the gardener's own account included:
-	// the gardener proposes, it does not describe.
-	if store.ReservedForGardener(store.Knowledge{Harness: g.Harness, SessionRef: g.SessionRef}) {
-		writeCoded(w, http.StatusForbidden, "gardener_reserved", `harness "gardener" and "gardener:" references on a description are set only when a person adopts a proposal of the gardener on the review page`)
+	g.GitAnchor = anchorFromRequest(r)
+	if store.ReservedForGardener(store.Knowledge{Harness: g.Harness, SessionRef: g.SessionRef}) && !a.gardenerDescribes(w, r, g) {
 		return
 	}
 	g.Person = personOf(r)
+	a.dropForeignSessionRef(r, &g.SessionRef)
+	if g.Kind == "dir" {
+		g.OriginContext = a.originFor(r, g.SessionRef, strings.TrimSuffix(g.Path, "/")+"/")
+	} else {
+		g.OriginContext = a.originFor(r, g.SessionRef, g.Path)
+	}
 	id, err := a.st.PutGhostFile(g)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -1142,7 +1257,10 @@ func (a *api) ghostsForPath(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, []store.GhostFile{})
 		return
 	}
-	entries, err := a.st.GhostFilesForDelivery(q.Get("project"), q.Get("path"), q.Get("session"))
+	// Mit Branch und Abstammung gilt je Pfad die Beschreibung des Branches, sonst
+	// eines Vorfahren, sonst der Projektebene (#713); ohne Branch die Projektebene.
+	ax := axesFromQuery(r)
+	entries, err := a.st.GhostFilesForDeliveryAt(q.Get("project"), q.Get("path"), q.Get("session"), ax.Branch, ax.Lineage)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -1211,7 +1329,8 @@ func (a *api) ghostTree(w http.ResponseWriter, r *http.Request) {
 	if !a.listGateEntries(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
 		return
 	}
-	entries, err := a.st.GhostFilesUnder(q.Get("project"), q.Get("prefix"))
+	ax := axesFromQuery(r)
+	entries, err := a.st.GhostFilesUnderAt(q.Get("project"), q.Get("prefix"), ax.Branch, ax.Lineage)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -1227,18 +1346,55 @@ func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
 	}
 	pa.Filtered()
 	limit := intParam(r, "limit", 20)
+	anchor, ok := anchorFilterFromQuery(w, r)
+	if !ok {
+		return
+	}
+	origin, ok := originFilterFromQuery(w, r)
+	if !ok {
+		return
+	}
 	readable := func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }
+	parsed, err := query.Parse(q.Get("q"), time.Now())
+	if err != nil {
+		writeCoded(w, http.StatusBadRequest, "invalid_query", err.Error())
+		return
+	}
+	project := q.Get("project")
+	fetch, keep := a.overfetch(limit), readable
+	if parsed.Qualified() {
+		// Beschreibungen kennen die Qualifier nur zum Teil (Bereich, Zeit, Anker,
+		// Autor); was sie nicht tragen, trifft nie, ein verneinter Qualifier schon.
+		ax := scope.Axes{Project: scope.NormalizeRemote(project)}
+		if parsed, ok = a.resolveQuery(w, r, parsed, &ax, &anchor, &origin); !ok {
+			return
+		}
+		if ax.Project != scope.NormalizeRemote(project) {
+			project = ax.Project
+			if !a.listGateEntries(w, r, project, store.ResGhost) {
+				return
+			}
+		}
+		if !parsed.WantsKind(query.KindFile) {
+			writeJSON(w, 200, []store.GhostFile{})
+			return
+		}
+		fetch = a.overfetch(min(max(limit*10, 100), 500))
+		q0 := parsed
+		keep = func(g store.GhostFile) bool { return readable(g) && q0.Match(ghostFacts(g)) }
+	}
 	// The rule goes into the search: the hybrid search applies it to both rankings
 	// before it fuses them, so a description the reader may not see can neither
 	// appear nor move a visible one.
-	entries, err := a.st.SearchGhostFilesWith(q.Get("q"), store.GhostSearch{
-		Project: q.Get("project"), Limit: a.overfetch(limit), Keep: readable, Prefilter: pa.GhostPrefilter(),
+	entries, err := a.st.SearchGhostFilesWith(parsed.Text, store.GhostSearch{
+		Project: project, Limit: fetch, Keep: readable, Prefilter: pa.GhostPrefilter(),
+		Anchor: anchor, Origin: origin,
 	})
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, filterTo(entries, limit, readable))
+	writeJSON(w, 200, filterTo(entries, limit, keep))
 }
 
 // sessionFilters trennt den Filter für die Datenbank von dem, der auf das
@@ -1258,4 +1414,33 @@ func (a *api) sessionFilters(f scope.Axes, fetch int) (db, view scope.Axes, limi
 func authorIDOf(r *http.Request) int64 {
 	id, _ := store.AccountNumericID(principalOf(r).ID)
 	return id
+}
+
+// gardenerDescribes lets the gardener's account write a description itself
+// (REQ-629) and refuses every other use of its marks. "From the gardener,
+// adopted by <person>" stays the review page's; through this call only the
+// gardener's account may write harness "gardener", with the reference of a
+// merge or a run (ghost.IsGardenerWriteRef), on the project level, anchored on
+// the very commit the reference names. The paragraphs an agent or a person
+// wrote must all stand in the new text, word for word.
+func (a *api) gardenerDescribes(w http.ResponseWriter, r *http.Request, g store.GhostFile) bool {
+	commit := strings.TrimPrefix(strings.TrimPrefix(g.SessionRef, ghost.GardenerMergeRef), ghost.GardenerRunRef)
+	if !a.st.IsGardenerPrincipal(principalOf(r)) || g.Harness != store.GardenerHarness || !ghost.IsGardenerWriteRef(g.SessionRef) ||
+		g.Branch != "" || g.GitAnchor == nil || g.GitAnchor.Commit != commit {
+		writeCoded(w, http.StatusForbidden, "gardener_reserved", `harness "gardener" and "gardener:" references on a description are the gardener's: its own account writes them with the merge or run commit as reference and anchor, and the review page when a person adopts a proposal`)
+		return false
+	}
+	chain, err := a.st.GhostFileChain(g.Project, g.Path, 0)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return false
+	}
+	if len(chain) == 0 {
+		return true
+	}
+	if missing := ghost.MissingKept(ghost.Attribute(chain[0].Description, chain), g.Description); len(missing) > 0 {
+		writeCoded(w, http.StatusConflict, "kept_paragraphs", fmt.Sprintf("%d paragraph(s) written by an agent or a person are missing or changed; the gardener keeps them word for word", len(missing)))
+		return false
+	}
+	return true
 }

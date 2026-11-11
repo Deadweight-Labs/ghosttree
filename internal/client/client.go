@@ -16,21 +16,66 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/feature"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"github.com/Deadweight-Labs/ghosttree/internal/version"
 )
+
+// ClientVersion is the version of this ctx binary; main sets it. Every request
+// carries it so the server can tell the briefing when this client is old.
+var ClientVersion string
+
+// TerminalPerson says that this process runs for a person typing in a
+// terminal, not inside an agent (main decides it once). Every client of the
+// process then marks its writes with actor.ViaHeader; the server takes it as a
+// self-report (REQ-620).
+var TerminalPerson bool
 
 type Client struct {
 	cfg  config.Config
 	http *http.Client
+	// anchor ermittelt den Git-Anker für schreibende Aufrufe (SetAnchorSource).
+	anchor func() gitanchor.Anchor
+	// originSession ist die Session, die beim Schreiben mitgeht (SetOriginSession).
+	originSession string
+	// readOnly refuses every request that is not a read (SetReadOnly).
+	readOnly bool
+	// readRetries is how often a read is repeated when the server is not there
+	// (SetReadRetries).
+	readRetries int
 }
+
+// ErrReadOnly answers a write of a client that only reads: GHOSTTREE_HOOKS=off
+// keeps a test run's agents from writing to a real server (REQ-623).
+var ErrReadOnly = errors.New("GHOSTTREE_HOOKS=off: this session only reads; nothing was written")
+
+// SetReadOnly makes the client refuse every request but GET and HEAD before it
+// leaves the machine.
+func (c *Client) SetReadOnly() { c.readOnly = true }
 
 type SearchResult struct {
 	Knowledge []store.Knowledge         `json:"knowledge"`
 	Sessions  []store.SessionHit        `json:"sessions"`
 	Requests  []requestdomain.SearchHit `json:"requests"`
+	// Die folgenden kommen nur aus einer Suchzeile mit Qualifiern (REQ-600).
+	Pains    []pain.Pain          `json:"pains,omitempty"`
+	Ideas    []idea.Idea          `json:"ideas,omitempty"`
+	Features []feature.Feature    `json:"features,omitempty"`
+	Criteria []store.CriterionHit `json:"criteria,omitempty"`
+	Tasks    []humantask.Task     `json:"tasks,omitempty"`
+	Files    []store.GhostFile    `json:"files,omitempty"`
+	Messages []store.MessageHit   `json:"messages,omitempty"`
+	// Query ist die Suchzeile, wie der Server sie gelesen hat.
+	Query string `json:"query,omitempty"`
+	// Unavailable nennt die Bereiche, die ausfielen; die übrigen sind vollständig.
+	Unavailable []store.SearchGap `json:"unavailable,omitempty"`
 }
 
 type APIError struct {
@@ -73,7 +118,58 @@ type StatusError struct {
 func (e *StatusError) HTTPStatus() int { return e.Status }
 
 func (e *StatusError) Error() string {
-	return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, e.Body)
+	if !isHTML(e.Body) {
+		return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, e.Body)
+	}
+	// An error page comes from a proxy in front of the server, not from the
+	// server: the reader is an agent, and the markup tells it nothing.
+	msg := fmt.Sprintf("%s %s: %d %s", e.Method, e.Path, e.Status, http.StatusText(e.Status))
+	if !unavailable(e.Status) {
+		return msg + " (an HTML error page from a proxy, not an answer of the server)"
+	}
+	msg += ": the server is not answering behind its proxy, usually because it restarts. Try again in a few seconds."
+	if e.Method != http.MethodGet && e.Method != http.MethodHead {
+		msg += " Whether this write arrived is not known; read the state before you repeat it."
+	}
+	return msg
+}
+
+func isHTML(body string) bool {
+	head := strings.ToLower(strings.TrimSpace(body))
+	if len(head) > 200 {
+		head = head[:200]
+	}
+	return strings.HasPrefix(head, "<!doctype html") || strings.HasPrefix(head, "<html") || strings.Contains(head, "<head>")
+}
+
+// unavailable are the answers of a proxy whose server is not there.
+func unavailable(status int) bool {
+	return status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+}
+
+// SetReadRetries makes the client repeat a read up to n times when the server
+// is not there: the connection fails, or a proxy answers 502, 503 or 504. A
+// restart of the server takes a few seconds, and an agent that reads during
+// them otherwise gets an error it can only answer by calling again. Writes are
+// never repeated: whether one arrived is not known. A hook leaves this off,
+// because it must not make a person wait.
+func (c *Client) SetReadRetries(n int) { c.readRetries = n }
+
+// readRetryWait is the pause before the n-th repetition (from 0).
+var readRetryWait = func(n int) time.Duration { return time.Duration(n+1) * 700 * time.Millisecond }
+
+// worthRepeating says whether a failed read may succeed a moment later.
+func worthRepeating(err error) bool {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return unavailable(se.Status)
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		// A timeout already cost the whole budget of the call.
+		return !ue.Timeout() && !errors.Is(err, context.Canceled)
+	}
+	return false
 }
 
 // IsRouteMissing sagt, ob der Server die Route gar nicht kennt. Das tut ein
@@ -126,6 +222,11 @@ func (c *Client) Relevant(text string, ax scope.Axes, limit int, session string)
 
 func (c *Client) Machine() string { return c.cfg.Machine }
 
+// ServerURL is the server's base address, the root of the web addresses that
+// cards and links carry (REQ-603). It is the address the client talks to; a
+// token never belongs to it.
+func (c *Client) ServerURL() string { return c.cfg.ServerURL }
+
 func (c *Client) WhoAmI() (store.Principal, error) {
 	var principal store.Principal
 	err := c.do("GET", "/api/whoami", nil, nil, &principal)
@@ -138,6 +239,25 @@ func (c *Client) do(method, path string, query url.Values, in, out any) error {
 }
 
 func (c *Client) doContext(ctx context.Context, method, path string, query url.Values, in, out any) error {
+	err := c.doOnce(ctx, method, path, query, in, out)
+	if method != http.MethodGet && method != http.MethodHead {
+		return err
+	}
+	for n := 0; n < c.readRetries && err != nil && worthRepeating(err); n++ {
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(readRetryWait(n)):
+		}
+		err = c.doOnce(ctx, method, path, query, in, out)
+	}
+	return err
+}
+
+func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values, in, out any) error {
+	if c.readOnly && method != http.MethodGet && method != http.MethodHead {
+		return ErrReadOnly
+	}
 	u := strings.TrimSuffix(c.cfg.ServerURL, "/") + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -159,6 +279,11 @@ func (c *Client) doContext(ctx context.Context, method, path string, query url.V
 	}
 	if c.cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	}
+	c.setAnchor(req, method, path)
+	if ClientVersion != "" {
+		req.Header.Set("X-Ctx-Version", ClientVersion)
+		req.Header.Set("X-Ctx-Protocol", strconv.Itoa(version.Protocol))
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -325,6 +450,14 @@ func (c *Client) Health() error {
 	return nil
 }
 
+// Version reads GET /api/version. A server that predates the route answers 404
+// or 401; that comes back as the error, and callers treat it as "unknown".
+func (c *Client) Version() (version.Info, error) {
+	var res version.Info
+	err := c.do("GET", "/api/version", nil, nil, &res)
+	return res, err
+}
+
 func (c *Client) UpsertSession(s store.Session) (int64, error) {
 	var res struct {
 		ID int64 `json:"id"`
@@ -400,6 +533,14 @@ func (c *Client) Remember(k store.Knowledge, autoCtx scope.Axes) (store.Knowledg
 // ones: the server checks the right on every one of them before it writes
 // anything, so a refusal leaves no follow-up entry behind.
 func (c *Client) RememberSuperseding(k store.Knowledge, autoCtx scope.Axes, supersedes []int64, reason string) (store.Knowledge, error) {
+	return c.RememberShared(k, autoCtx, supersedes, reason, nil)
+}
+
+// RememberShared is RememberSuperseding that also shares an entry with a machine
+// scope with organizations for which the machine is shared. Without orgs the
+// entry stays private (on a machine that belongs to an organization it goes to
+// that organization, the server decides).
+func (c *Client) RememberShared(k store.Knowledge, autoCtx scope.Axes, supersedes []int64, reason string, shareWithOrgs []string) (store.Knowledge, error) {
 	body := map[string]any{
 		"type": k.Type, "title": k.Title, "body": k.Body,
 		"scope": k.Scope, "confidence": k.Confidence, "status": k.Status,
@@ -413,6 +554,9 @@ func (c *Client) RememberSuperseding(k store.Knowledge, autoCtx scope.Axes, supe
 	if len(supersedes) > 0 {
 		body["supersedes"] = supersedes
 		body["supersede_reason"] = reason
+	}
+	if len(shareWithOrgs) > 0 {
+		body["share_with_orgs"] = shareWithOrgs
 	}
 	var saved store.Knowledge
 	err := c.do("POST", "/api/knowledge", nil, body, &saved)
@@ -557,7 +701,22 @@ func (c *Client) SearchUnion(q, kind string, ax scope.Axes, limit int) (SearchRe
 }
 
 func (c *Client) search(q, kind string, filter scope.Axes, excludeSession string, limit int, union bool) (SearchResult, error) {
+	return c.searchWith(q, kind, filter, excludeSession, limit, union, AnchorFilter{})
+}
+
+func (c *Client) searchWith(q, kind string, filter scope.Axes, excludeSession string, limit int, union bool, af AnchorFilter) (SearchResult, error) {
+	return c.searchContext(context.Background(), q, kind, filter, excludeSession, limit, union, af)
+}
+
+// SearchContext is one search that ends with ctx: an area of context_search
+// with a time budget of its own. excludeSession leaves out the asking session.
+func (c *Client) SearchContext(ctx context.Context, q, kind string, filter scope.Axes, excludeSession string, limit int, union bool, af AnchorFilter) (SearchResult, error) {
+	return c.searchContext(ctx, q, kind, filter, excludeSession, limit, union, af)
+}
+
+func (c *Client) searchContext(ctx context.Context, q, kind string, filter scope.Axes, excludeSession string, limit int, union bool, af AnchorFilter) (SearchResult, error) {
 	query := axesQuery(filter)
+	af.apply(query)
 	query.Set("q", q)
 	if union {
 		query.Set("scope", "union")
@@ -572,7 +731,7 @@ func (c *Client) search(q, kind string, filter scope.Axes, excludeSession string
 		query.Set("limit", strconv.Itoa(limit))
 	}
 	var out SearchResult
-	err := c.do("GET", "/api/search", query, nil, &out)
+	err := c.doContext(ctx, "GET", "/api/search", query, nil, &out)
 	return out, err
 }
 
@@ -614,6 +773,16 @@ func (c *Client) PutGhost(g store.GhostFile) (int64, error) {
 	}
 	err := c.do("POST", "/api/ghosts", nil, g, &out)
 	return out.ID, err
+}
+
+// PutGhostAnchored writes a description at the git state given, not at the one
+// of the working directory: the gardener anchors what it writes on the merge
+// commit it describes.
+func (c *Client) PutGhostAnchored(g store.GhostFile, a gitanchor.Anchor) (int64, error) {
+	prev := c.anchor
+	c.anchor = func() gitanchor.Anchor { return a }
+	defer func() { c.anchor = prev }()
+	return c.PutGhost(g)
 }
 
 // GhostsForPath liefert die Beschreibung dieses Pfades und die seiner
@@ -679,6 +848,29 @@ func (c *Client) ghostVersions(project, path string, limit int, chain bool) ([]s
 	}
 	var out []store.GhostVersion
 	err := c.do("GET", "/api/ghosts/history", q, nil, &out)
+	return out, err
+}
+
+// GhostsForPathAt ist GhostsForPath auf einem Branch: je Pfad gilt die
+// Beschreibung des Branches, sonst eines Vorfahren, sonst der Projektebene.
+func (c *Client) GhostsForPathAt(project, path, sessionKey string, ax scope.Axes) ([]store.GhostFile, error) {
+	q := axesQuery(scope.Axes{Branch: ax.Branch, Lineage: ax.Lineage})
+	q.Set("project", project)
+	q.Set("path", path)
+	q.Set("session", sessionKey)
+	var out []store.GhostFile
+	err := c.do("GET", "/api/ghosts", q, nil, &out)
+	return out, err
+}
+
+// GhostTreeAt ist GhostTree auf einem Branch: der Baum folgt Branch und
+// Abstammung wie das Wissen.
+func (c *Client) GhostTreeAt(project, prefix string, ax scope.Axes) ([]store.GhostFile, error) {
+	q := axesQuery(scope.Axes{Branch: ax.Branch, Lineage: ax.Lineage})
+	q.Set("project", project)
+	q.Set("prefix", prefix)
+	var out []store.GhostFile
+	err := c.do("GET", "/api/ghosts/tree", q, nil, &out)
 	return out, err
 }
 

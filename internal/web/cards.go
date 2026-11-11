@@ -39,15 +39,3 @@ func olderThan(created string, now time.Time, limit time.Duration) bool {
 	t := parseTime(created)
 	return !t.IsZero() && now.Sub(t) >= limit
 }
-
-// commandLines teilt einen mehrzeiligen Prüfhinweis: je Zeile eine Mulde, nie
-// als Fließtext.
-func commandLines(icon, s string) []cmdLine {
-	var out []cmdLine
-	for _, line := range strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			out = append(out, cmdLine{Icon: icon, Text: line})
-		}
-	}
-	return out
-}

@@ -1,0 +1,60 @@
+{{define "tasks"}}{{template "head" .}}{{template "nav" .}}<main class="g2 is ft"><div class="wrap">
+{{with .TasksV}}<div class="ilayout"><div class="imain">
+<div class="box">{{if or .Rows (not .Mine)}}<div class="box-h lh">{{range .Tabs}}<a class="tab{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Icon}}<span><span class="n">{{.Count}}</span> {{t .Label}}</span></a>{{end}}</div>{{end}}
+{{if .Rows}}{{range .Rows}}{{template "uirow" .}}
+{{end}}{{else}}<div class="empty"><span>{{t .EmptyKey}}</span></div>{{end}}</div>
+</div></div>
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "task"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id ft tk"><div class="wrap">
+{{with .TaskV}}{{template "resultbanner" (dict "R" .Result "Strip" "done fail")}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">#{{.ID}}</span></h1></div>
+<div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "tasks"}}{{.StateLabel}}</span><span class="lb neu">{{.KindLabel}}</span>{{if and .Assignee (eq .State "open")}}<span class="wl"><span>{{t "tasks.waits_for"}}</span><span class="person">{{avatarWait .Assignee}}{{.Assignee}}</span>{{if .SameAsker}}<span class="wl-age">· {{.Age}}</span>{{end}}</span>{{else if .Assignee}}<span class="wl"><span class="person">{{avatarOf .Assignee}}{{.Assignee}}</span>{{if .SameAsker}}<span class="wl-age">· {{t "tasks.asked" .Age}}</span>{{end}}</span>{{end}}{{if and .CreatedBy (not .SameAsker)}}<span class="wl"><span class="person">{{avatarOf .CreatedBy}}{{.CreatedBy}}</span><span>{{t "tasks.asked" .Age}}</span></span>{{end}}</div></div>
+<div class="dgrid"><div class="dmain">
+{{if .HasFirst}}<div class="tlx tl0">{{template "firstopen" .First}}
+{{if or .Blocks .Where}}<div class="cb prose">{{template "knbody" .Blocks}}{{if .Where}}<p class="twhere"><span class="muted">{{t "tasks.where"}}</span> <span class="mono">{{.Where}}</span></p>{{end}}</div>{{end}}
+{{with .Note}}{{if .Text}}<div class="cs"><div class="cs-h">{{mi "book"}}<span>{{.Title}}</span></div><div class="cs-b"><p>{{.Text}}</p></div></div>{{end}}{{end}}
+{{if .Steps}}<div class="cs" id="steps"><div class="cs-h">{{mi "tasks"}}<span>{{t "tasks.steps"}}</span><span class="sp"></span><span class="cs-n">{{t "tasks.steps_done" .StepsDone (len .Steps)}}</span></div>
+{{range .Steps}}<div class="tstep{{if .Done}} done{{end}}" id="step-{{.N}}"><span class="cbx{{if .Done}} on{{end}}" role="img" aria-label="{{if .Done}}{{t "tasks.step_done"}}{{else}}{{t "tasks.step_open"}}{{end}}">{{if .Done}}{{mi "check"}}{{end}}</span><div class="tx">{{if .URL}}<a href="{{.URL}}" rel="noopener noreferrer">{{.Text}}</a>{{else}}{{.Text}}{{end}}{{if .Done}}<span class="muted tby">{{if .By}}{{avatarOf .By}}{{.By}} {{end}}{{.Age}}</span>{{end}}</div>
+{{if .Action}}<form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{$.TaskV.Token}}"><input type="hidden" name="done" value="{{if .Done}}0{{else}}1{{end}}"><button class="gbtn sm quiet">{{if .Done}}{{t "tasks.step_undo"}}{{else}}{{t "tasks.step_tick"}}{{end}}</button></form>{{end}}</div>
+{{end}}</div>{{end}}
+{{if .CheckHint}}<div class="cs"><div class="cs-h">{{mi "check"}}<span>{{t "tasks.check_hint"}}</span></div><div class="cs-b">{{.CheckHint}}</div></div>{{end}}
+{{template "firstclose"}}</div>{{end}}
+{{if .DoneBy}}<div class="callout" role="status">{{mi "done"}}<div><div class="k">{{t "tasks.done_by" .DoneBy .DoneAge}}</div>{{if .DoneNote}}<div class="tt">{{md .DoneNote}}</div>{{end}}</div></div>{{end}}
+{{if .Reason}}<div class="callout neu" role="note">{{mi "drop"}}<div><div class="k">{{t "tasks.state_note"}}</div><div class="tt">{{md .Reason}}</div></div></div>{{end}}
+{{with .Composer}}{{template "uicomposer" .}}{{end}}
+</div>
+<aside class="side" aria-label="{{t "tasks.side.facts"}}">
+{{if .Request}}<div class="sblk"><h3>{{t "tasks.side.issue"}}</h3><div class="v">{{with .Request}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "packages"}}{{template "head" .}}{{template "nav" .}}<main class="g2 is ft"><div class="wrap">
+{{with .PackagesV}}<div class="ilayout"><div class="imain">
+<div class="box"><div class="box-h lh">{{range .Tabs}}<a class="tab{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Icon}}<span><span class="n">{{.Count}}</span> {{t .Label}}</span></a>{{end}}{{if .Branch}}<span class="sp"></span><a class="chip br" href="{{.ClearHref}}" title="{{t "packages.clear_branch"}}">{{mi "branch"}}{{.Branch}}{{mi "x"}}</a>{{end}}</div>
+{{if .Rows}}{{range .Rows}}{{template "uirow" .}}
+{{end}}{{else}}<div class="empty"><span>{{t .EmptyKey}}</span></div>{{end}}</div>
+</div></div>
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "package"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id ft pk"><div class="wrap">
+{{with .PackageV}}<div class="dhead"><div class="dtitle"><h1>{{.Name}}<span class="n">#{{.ID}}</span></h1></div>
+<div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "list"}}{{.StateLabel}}</span>{{if .Branch}}{{branchPill .Branch ""}}{{end}}{{if .PRText}}{{.PRPill}}{{end}}{{if .Total}}<span class="prog wide"><span class="bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{t "packages.met_x_of_y" .Done .Total}}</span>{{end}}</div></div>
+<div class="dgrid"><div class="dmain">
+{{if .Members}}<div class="sec"><h2>{{t "packages.requests"}}</h2><span class="counter">{{len .Members}}</span></div>
+<div class="box">{{range $i, $m := .Members}}<details class="rq"{{if .Open}} open{{end}}><summary><span class="car">{{mi "chevr"}}</span><span class="nn">{{ref "request" .N .Href}}</span><span class="ell rqt">{{.Title}}</span><span class="rqs"><span class="lb {{if .Optional}}out{{else}}neu{{end}}">{{index $.PackageV.Roles $i}}</span><span class="prog{{if .Warn}} amber{{end}}" title="{{.Progress.Title}}"><span class="bar" aria-hidden="true"><i data-pct="{{.Progress.Percent}}"></i></span>{{.Progress.Text}}</span></span></summary>
+<div class="inner">{{range .Criteria}}<div class="crit{{if .Done}} done{{end}}"><span class="cbx{{if .Done}} on{{else if .Waived}} waived{{end}}" role="img" aria-label="{{if .Done}}{{t "pulls.crit.met"}}{{else if .Waived}}{{t "pulls.crit.waived"}}{{else}}{{t "pulls.crit.open"}}{{end}}">{{if .Done}}{{mi "check"}}{{end}}</span><div><div class="tx">{{.Text}}</div>{{if or .Evidence .NoProof .Waived}}<div class="pf">{{proofs .Evidence}}{{range .Evidence}}{{template "gitanchor" .Git}}{{end}}{{if .NoProof}}<span class="chip noproof">{{mi "tri"}}{{t "issue.no_proof"}}</span>{{end}}{{if .Waived}}<span class="lb neu">{{t "pulls.crit.waived"}}</span>{{end}}</div>{{end}}</div></div>
+{{end}}{{range .Tasks}}<div class="crit rqtask"><span class="rqti">{{mi "pin"}}</span><div><div class="tx">{{.Title}}</div><div class="pf"><span>{{t "pulls.waits_for_task"}}</span>{{refPill "task" .N ""}}</div></div></div>
+{{end}}</div></details>
+{{end}}</div>{{else}}<div class="box"><div class="box-empty"><span>{{t "packages.no_requests"}}</span></div></div>{{end}}
+{{if .Sessions}}<div class="sec"><h2>{{t "packages.sessions"}}</h2><span class="counter">{{len .Sessions}}</span></div>
+<div class="box">{{range .Sessions}}<div class="box-r psess">{{avatarX "lg" .Kind "" "" false}}<a class="ell" href="{{.Href}}">{{.Title}}</a>{{if .Handle}}<span class="muted mono">{{.Handle}}</span>{{end}}<span class="sp"></span><span class="lb {{if .Active}}ok{{else}}neu{{end}}">{{.StateLabel}}</span><span class="muted">{{.Age}}</span></div>
+{{end}}</div>{{end}}
+</div>
+<aside class="side" aria-label="{{t "packages.side.facts"}}">
+<div class="sblk"><h3>{{t "packages.side.state"}}</h3><div class="v"><span class="lb {{.Tone}}">{{.StateLabel}}</span></div></div>
+{{if .Branch}}<div class="sblk"><h3>{{t "packages.side.branch"}}</h3><div class="v">{{branchPill .Branch ""}}{{if .Inherited}}<span class="muted">{{t "packages.inherited" .Inherited}}</span>{{end}}</div></div>{{end}}
+{{if .PRText}}<div class="sblk"><h3>{{t "packages.side.pull"}}</h3><div class="v">{{.PRPill}}{{if .PRGitHub}}{{pillx "url" (t "packages.on_github") .PRGitHub (t "packages.on_github") .PRGitHub}}{{end}}</div></div>{{end}}
+{{if .Required}}<div class="sblk"><h3>{{t "packages.side.required"}}</h3><div class="v"><span>{{t "packages.required_open" .RequiredOpen .Required}}</span></div></div>{{end}}
+<div class="sblk"><h3>{{t "packages.side.list"}}</h3><div class="v"><a href="{{.Base}}">{{t "packages.side.all"}}</a></div></div>
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}

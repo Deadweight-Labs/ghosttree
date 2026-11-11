@@ -72,6 +72,11 @@ func (a *app) knowledgeMove(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		to.Project = resolved
+		// The form preselects the entry's own project. For an entry with project AND
+		// machine, submitting it unchanged keeps the machine instead of dropping it.
+		if resolved == k.Scope.Project {
+			to.Machine = k.Scope.Machine
+		}
 	case machine != "":
 		if err := a.store.MachineClaimable(machine, browserPrincipal(r).ID); err != nil {
 			http.Error(w, "nothing to change", http.StatusConflict)
@@ -105,7 +110,7 @@ func (a *app) requestMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pa := a.access(r)
-	reason, valid := cleanText(r.FormValue("reason"), maxFieldBytes)
+	reason, valid := cleanText(r.FormValue("reason"), maxFieldChars)
 	if !valid {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return

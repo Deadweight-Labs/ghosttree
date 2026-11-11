@@ -25,7 +25,7 @@ func TestUsageRelevanceReplayNamesTheWordBehindEachHit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "wie ist der stand von ollama", Raw: "{}"}}); err != nil {
+	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "wie ist der stand von ollama", Raw: promptRaw("claude-code", "wie ist der stand von ollama")}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {

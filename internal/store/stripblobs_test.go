@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
 )
 
@@ -45,9 +46,13 @@ func rawRows(t *testing.T, db *sql.DB) map[int64]string {
 	out := map[int64]string{}
 	for rows.Next() {
 		var id int64
-		var raw string
-		if err := rows.Scan(&id, &raw); err != nil {
+		var v rawcodec.Value
+		if err := rows.Scan(&id, &v); err != nil {
 			t.Fatal(err)
+		}
+		raw, err := rawStateFor(db).line(context.Background(), db, v)
+		if err != nil {
+			t.Fatalf("chunk %d: %v", id, err)
 		}
 		out[id] = raw
 	}
@@ -111,9 +116,8 @@ func TestAppendChunksStoresPlaceholdersInsteadOfImages(t *testing.T) {
 			if before, after := transcript.Parse("claude-code", 0, original[0].Raw), transcript.Parse("claude-code", 0, got[0].Raw); !reflect.DeepEqual(before, after) {
 				t.Fatalf("parse differs: %+v vs %+v", before, after)
 			}
-			var hits int
-			if err := s.db.QueryRow(`SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH 'screenshot'`).Scan(&hits); err != nil || hits != 1 {
-				t.Fatalf("fts hits %d, %v", hits, err)
+			if hits := wordCount(t, s.db, "screenshot"); hits != 1 {
+				t.Fatalf("fts hits %d", hits)
 			}
 		})
 	}
@@ -177,6 +181,7 @@ func openSeeded(t *testing.T, n int) (string, *Store, int) {
 	}
 	t.Cleanup(func() { s.Close() })
 	_, withImage := seedImages(t, s, n)
+	legacySearchLayout(t, s)
 	return path, s, withImage
 }
 
@@ -243,17 +248,10 @@ func TestStripSessionBlobsReplacesTheStock(t *testing.T) {
 			}
 
 			// raw ist in keinem Volltextindex: das UPDATE lässt sie unberührt.
-			var hits int
-			if err := s.db.QueryRow(`SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH 'screenshot'`).Scan(&hits); err != nil || hits == 0 {
-				t.Fatalf("fts lost rows: %d, %v", hits, err)
+			if hits := ftsHits(t, s.db, "chunks_fts", "screenshot"); hits == 0 {
+				t.Fatalf("fts lost rows: %d", hits)
 			}
-			var ok string
-			if err := s.db.QueryRow(`PRAGMA integrity_check`).Scan(&ok); err != nil || ok != "ok" {
-				t.Fatalf("integrity_check: %q, %v", ok, err)
-			}
-			if _, err := s.db.Exec(`INSERT INTO chunks_fts(chunks_fts) VALUES('integrity-check')`); err != nil {
-				t.Fatalf("fts integrity-check: %v", err)
-			}
+			checkSearchIntegrity(t, s.db)
 		})
 	}
 }

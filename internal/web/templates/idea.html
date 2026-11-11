@@ -1,0 +1,31 @@
+{{define "idea"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id"><div class="wrap">
+{{with .IdeaV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">#{{.ID}}</span></h1>
+{{if .Edit}}<div class="gacts"><a class="gbtn sm" href="{{.Edit.Close}}?panel=edit#edit">{{mi "pencil"}}{{t "issue.action.edit"}}</a></div>{{end}}</div>
+<div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "idea"}}{{.StateLabel}}</span>{{if .Person}}<span>{{actor .Actor .Person}} {{t "ideas.proposed" .Age}}</span>{{end}}{{template "gitanchor" .Git}}</div></div>
+{{with .Edit}}{{template "editpanel" .}}{{end}}
+{{template "resultbanner" (dict "R" .Result "Strip" "done fail")}}
+<div class="dgrid"><div class="dmain">
+{{if or .Blocks .Items}}<div class="tlx tl0">
+{{if .Blocks}}{{template "firstopen" .First}}
+<div class="cb prose">{{template "knbody" .Blocks}}</div>{{with .Reactions}}<div class="cf">{{template "uireactions" .}}</div>{{end}}{{template "firstclose"}}{{end}}
+{{template "uitlitems" .Items}}</div>{{end}}
+{{if or .Images .CanAttach}}<section class="box ws-imgbox" id="images" aria-labelledby="img-h"><div class="box-h"><h2 class="t" id="img-h">{{mi "image"}} {{t "workshop.images"}}</h2></div>
+{{if .Images}}<div class="ws-imgs ws-imgs-idea">{{range .Images}}{{template "wsimage" .}}{{end}}</div>{{end}}
+{{if .CanAttach}}<form class="ws-up" method="post" action="/ui/ideas/{{.ID}}/attach" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="owner" value="idea">
+{{template "uifile" (fileField "file" "image/png,image/jpeg,image/webp" (t "workshop.img.pick") (t "workshop.img.file"))}}
+<input class="gfield" name="alt" maxlength="200" autocomplete="off" placeholder="{{t "workshop.img.alt"}}" aria-label="{{t "workshop.img.alt"}}">
+<button class="gbtn">{{mi "plus"}}{{t "workshop.img.add"}}</button></form>{{end}}</section>{{end}}
+{{if .HasImages}}<dialog class="ws-lb" id="ws-lb" aria-label="{{t "workshop.zoom_title"}}"><form method="dialog"><button class="ws-lb-x" aria-label="{{t "workshop.zoom_close"}}">{{mi "x"}}</button></form><img alt=""><p class="ws-lb-cap"></p></dialog>{{end}}
+{{if .Reason}}<div class="callout neu" role="note">{{mi "drop"}}<div><div class="k">{{t "ideas.dismissed_because"}}</div><div class="tt">{{md .Reason}}</div></div></div>{{end}}
+{{with .Workshop}}{{template "workshop" .}}{{end}}
+{{with .Composer}}{{template "uicomposer" .}}{{end}}
+</div>
+<aside class="side" aria-label="{{t "ideas.side.facts"}}">
+{{if and $.Interactive (eq .State "open")}}<a class="gbtn pri blk" href="{{.Base}}/issues/new?derived_from=IDEA-{{.ID}}">{{mi "issue"}}{{t "ideas.make_issue"}}</a>{{end}}
+<div class="sblk"><h3>{{t "pains.side.status"}}</h3><div class="v"><span class="lb {{.Tone}}">{{.StateLabel}}</span></div></div>
+{{with .LabelBox}}{{template "uilabelbox" .}}{{end}}
+{{if .Pains}}<div class="sblk"><h3>{{t "ideas.side.pains"}}</h3><div class="v">{{range .Pains}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
+{{if .Issues}}<div class="sblk"><h3>{{t "ideas.side.issues"}}</h3><div class="v">{{range .Issues}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
+{{if .People}}<div class="sblk"><h3>{{t "pains.side.people"}}</h3><div class="v">{{range .People}}<span class="person">{{avatarOf .}}<span>{{.}}</span></span>{{end}}</div></div>{{end}}
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}

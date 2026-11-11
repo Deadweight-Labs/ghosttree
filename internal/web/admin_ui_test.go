@@ -54,7 +54,7 @@ func TestAdminTimeTagIsRelativeBothWays(t *testing.T) {
 		want  string
 	}{
 		{now.Add(-3 * 60 * 60 * 1e9).Format("2006-01-02T15:04:05Z"), "3h ago"},
-		{now.Add(5*24*60*60*1e9 + 60*1e9).Format("2006-01-02T15:04:05Z"), "in 5d"},
+		{now.Add(5*24*60*60*1e9 + 60*1e9).Format("2006-01-02T15:04:05Z"), "in 5 days"},
 		{now.Format("2006-01-02T15:04:05Z"), ">now<"},
 	} {
 		if got := string(timeTag(langEN, c.stamp)); !strings.Contains(got, c.want) {
@@ -77,16 +77,16 @@ func TestOrgInviteResultIsFormAndLinkOnly(t *testing.T) {
 	}
 	resp = postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "role": {"member"}, "days": {"2"}})
 	page = body(t, resp)
-	if !strings.Contains(page, `class="adm-link"`) || !strings.Contains(page, "Invitation ready") || !strings.Contains(page, "data-copy") {
+	if !strings.Contains(page, "Invitation ready") || !strings.Contains(page, "data-copy") {
 		t.Fatalf("invite result lacks the link and copy action: %s", page)
 	}
 	// The link is text on the page (selectable, wrapping), not only the payload of
 	// the copy button and not a field that cuts it short.
-	if !regexp.MustCompile(`<code class="adm-link"[^>]*data-select>https?://[^<]+/join/[0-9a-f]{20,}</code>`).MatchString(page) &&
-		!regexp.MustCompile(`<code class="adm-link"[^>]*data-select>[^<]*[0-9a-f]{40,}[^<]*</code>`).MatchString(page) {
+	if !regexp.MustCompile(`<code tabindex="0"[^>]*data-select>https?://[^<]+/join/[0-9a-f]{20,}</code>`).MatchString(page) &&
+		!regexp.MustCompile(`<code tabindex="0"[^>]*data-select>[^<]*[0-9a-f]{40,}[^<]*</code>`).MatchString(page) {
 		t.Errorf("the invitation link is not shown as text: %s", page)
 	}
-	if strings.Contains(page, `<input class="adm-link"`) {
+	if strings.Contains(page, `<input data-select`) {
 		t.Errorf("the link is a truncating input again")
 	}
 	if !regexp.MustCompile(`>in \d+[hd]<`).MatchString(page) {
@@ -191,7 +191,7 @@ func TestOrgPageGivesAMemberOnlyTheirOwnControls(t *testing.T) {
 			t.Errorf("member sees %q", hidden)
 		}
 	}
-	if !strings.Contains(page, "Leave") || !strings.Contains(page, "For new projects") {
+	if !strings.Contains(page, "Leave") || strings.Contains(page, "For new projects") {
 		t.Errorf("member lacks own controls: %s", page)
 	}
 }
@@ -251,9 +251,11 @@ func TestTokensPageIsRowsNotATableAndKeepsRevoke(t *testing.T) {
 	if _, _, err := st.CreateToken("anna", store.TokenSpec{Label: "annas"}); err != nil {
 		t.Fatal(err)
 	}
+	// An administrator sees only the own tokens, never those of other
+	// machines (14 A, #4376).
 	resp, _ := alice.Get(base + "/ui/account/tokens")
 	page := body(t, resp)
-	if strings.Contains(page, "<table") || !strings.Contains(page, "annas") || !strings.Contains(page, "/ui/account/tokens/revoke") {
+	if strings.Contains(page, "<table") || strings.Contains(page, "annas") || !strings.Contains(page, "/ui/account/tokens/revoke") {
 		t.Fatalf("admin tokens: %s", page)
 	}
 	resp, _ = anna.Get(base + "/ui/account/tokens")
@@ -266,7 +268,7 @@ func TestDevicePagesUseTheCatalogAndTheCodeField(t *testing.T) {
 	base, _, alice, _ := adminSeed(t)
 	resp, _ := alice.Get(base + "/ui/device?user_code=ABCD-EFGH")
 	page := body(t, resp)
-	if !strings.Contains(page, `class="ov-code"`) || !strings.Contains(page, `value="ABCD-EFGH"`) || strings.Contains(page, "Only approve") {
+	if !strings.Contains(page, `class="gfield big"`) || !strings.Contains(page, `value="ABCD-EFGH"`) || strings.Contains(page, "Only approve") {
 		t.Fatalf("device page: %s", page)
 	}
 	resp = sameOriginPostForm(t, alice, base+"/ui/device", url.Values{"csrf_token": {renderedCSRFToken(t, alice, base+"/ui/device")}, "user_code": {"ZZZZ-ZZZZ"}})
@@ -281,7 +283,7 @@ func TestLoginRequiredPageIsEnglishAndShort(t *testing.T) {
 	pasted := login(t, srv, tok)
 	resp := sameOriginPostForm(t, pasted, srv.URL+"/ui/device", url.Values{"csrf_token": {renderedCSRFToken(t, pasted, srv.URL+"/ui/overview")}, "user_code": {"x"}})
 	page := body(t, resp)
-	if resp.StatusCode != http.StatusForbidden || strings.Contains(page, "Diese Aktion") || strings.Contains(page, "Anmeldung per Login") || !strings.Contains(page, "read-only session") {
+	if resp.StatusCode != http.StatusForbidden || strings.Contains(page, "Diese Aktion") || strings.Contains(page, "Anmeldung per Login") || !strings.Contains(page, "can only read") {
 		t.Fatalf("login required page: %d %s", resp.StatusCode, page)
 	}
 }

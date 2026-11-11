@@ -255,14 +255,18 @@ func TestHeldAndMachinePrivateObjectsAreNotExplainable(t *testing.T) {
 	st := f.st
 	ref := "session:" + strconv.FormatInt(f.b.ID, 10) + "#1"
 	ts := "'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'"
-	insK := func(title, machine, confidence, origin, sref string) int64 {
+	insKIn := func(title, project, machine, confidence, origin, sref string) int64 {
 		res, err := st.db.Exec(`INSERT INTO knowledge(type,title,body,project,machine,confidence,status,origin,session_ref,created_at,updated_at)
-			VALUES('note',?,'body',?,?,?,'active',?,?,`+ts+`)`, title, roleProject, machine, confidence, origin, sref)
+			VALUES('note',?,'body',?,?,?,'active',?,?,`+ts+`)`, title, project, machine, confidence, origin, sref)
 		if err != nil {
 			t.Fatal(err)
 		}
 		id, _ := res.LastInsertId()
 		return id
+	}
+	insK := func(title, machine, confidence, origin, sref string) int64 {
+		// A machine on an entry WITH a project only says where it applies.
+		return insKIn(title, roleProject, machine, confidence, origin, sref)
 	}
 	insR := func(title, origin, person, sref string) int64 {
 		res, err := st.db.Exec(`INSERT INTO requests(type,title,description,state,project,origin,person,session_ref,created_at,updated_at)
@@ -274,7 +278,10 @@ func TestHeldAndMachinePrivateObjectsAreNotExplainable(t *testing.T) {
 		return id
 	}
 	heldK := insK("held finding", "", "quarantined", "distilled", ref)
-	machK := insK("machine note", "box", "staged", "agent", "")
+	// Machine-axis knowledge has no project: only the machine's owner reads it.
+	machK := insKIn("machine note", "", "box", "staged", "agent", "")
+	// Project knowledge that names a machine is project knowledge: explainable.
+	projMachK := insK("project note on a machine", "box", "staged", "agent", "")
 	openK := insK("open note", "", "staged", "agent", ref)
 	heldR := insR("HELD REQUEST TITLE", "distilled", "", "session:"+strconv.FormatInt(f.b.ID, 10))
 	openR := insR("visible request", "agent", "", "")
@@ -293,7 +300,7 @@ func TestHeldAndMachinePrivateObjectsAreNotExplainable(t *testing.T) {
 	for _, c := range []struct {
 		kind string
 		id   int64
-	}{{explain.KindKnowledge, openK}, {explain.KindRequest, openR}} {
+	}{{explain.KindKnowledge, openK}, {explain.KindKnowledge, projMachK}, {explain.KindRequest, openR}} {
 		if src, _ := st.ExplainSource(c.kind, c.id); src.Project != roleProject {
 			t.Errorf("%s %d should stay explainable: %+v", c.kind, c.id, src)
 		}
@@ -307,8 +314,8 @@ func TestHeldAndMachinePrivateObjectsAreNotExplainable(t *testing.T) {
 			t.Errorf("candidate %+v is held back", c)
 		}
 	}
-	if len(cands) != 2 {
-		t.Errorf("want the two open objects, got %+v", cands)
+	if len(cands) != 3 {
+		t.Errorf("want the open objects (two notes, one request), got %+v", cands)
 	}
 
 	// A public entry that names a held request must not carry its title.

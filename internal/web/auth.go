@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,10 @@ import (
 )
 
 const sessionCookie = "gt_session"
+
+// multipartMemory is how much of a form with a file stays in memory; the rest
+// goes to a temporary file that net/http removes after the request.
+const multipartMemory = 1 << 20
 
 type personKey struct{}
 type csrfKey struct{}
@@ -89,7 +94,7 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				if !a.store.PrincipalValid(session.principal) {
 					a.sessions.remove(cookie.Value)
 					http.SetCookie(w, a.sessionCookieFor(r, "", -1))
-					http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+					a.loginRedirect(w, r)
 					return
 				}
 				ctx := context.WithValue(r.Context(), personKey{}, session.principal)
@@ -97,11 +102,15 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				ctx = context.WithValue(ctx, shellMemoKey{}, &shellMemo{})
 				r = r.WithContext(ctx)
 				a.rememberProject(w, r)
-				next.ServeHTTP(w, r)
+				// A plain 404 or 403 of a page becomes a page in the shell.
+				r, keep := withFormKeep(r)
+				ew := &errorPageWriter{ResponseWriter: w, a: a, r: r, keep: keep}
+				next.ServeHTTP(ew, r)
+				ew.finish()
 				return
 			}
 		}
-		http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+		a.loginRedirect(w, r)
 	})
 }
 
@@ -133,12 +142,42 @@ func (a *app) notInteractive(w http.ResponseWriter, r *http.Request) {
 	a.renderBrowser(w, r, "interactive", pageData{Title: l.msg("adm.login.title"), OIDC: a.oidc != nil})
 }
 
-func (a *app) requireCSRF(next http.Handler) http.Handler {
+func (a *app) requireCSRF(next http.Handler) http.Handler { return a.csrfGate(next, false) }
+
+// requireCSRFMultipart is requireCSRF for the one kind of form that carries a
+// file (the image upload): its token is a field of the multipart body, which
+// ParseForm does not read. Only routes that wrap the body in limitBodyN first use
+// it; every other route never parses multipart, so a large multipart body cannot
+// reach the temporary files of net/http there. A body over the limit is 413.
+func (a *app) requireCSRFMultipart(next http.Handler) http.Handler { return a.csrfGate(next, true) }
+
+func (a *app) csrfGate(next http.Handler, multipart bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			if err := r.ParseForm(); err != nil ||
-				subtle.ConstantTimeCompare([]byte(r.FormValue("csrf_token")), []byte(csrfOf(r))) != 1 ||
-				!a.sameOrigin(r) {
+			var err error
+			if multipart && strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+				err = r.ParseMultipartForm(multipartMemory)
+				var tooBig *http.MaxBytesError
+				if errors.As(err, &tooBig) {
+					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+					return
+				}
+			} else {
+				err = r.ParseForm()
+			}
+			tokenOK := err == nil && subtle.ConstantTimeCompare([]byte(r.FormValue("csrf_token")), []byte(csrfOf(r))) == 1
+			// What was typed is only kept for a form of this site with a valid token: a
+			// refused token (or a body that did not parse) keeps nothing in the server's memory.
+			if tokenOK && a.sameOrigin(r) {
+				rememberForm(r)
+			}
+			var tooBig *http.MaxBytesError
+			if errors.As(err, &tooBig) {
+				a.formTooLarge(w, r)
+				return
+			}
+			if !tokenOK || !a.sameOrigin(r) {
+				w.Header().Set(rejectHeader, "csrf")
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
@@ -231,20 +270,61 @@ func codeHeaders(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "strict-origin")
 }
 
-// loginRejected zeigt die Anmeldeseite mit dem Fehler im Formular.
+// authView trägt, was die Anmelde- und Einmalcode-Seite über pageData hinaus
+// brauchen.
+type authView struct {
+	// Linked: der Code stammt aus der Adresse (Login-Link); das Feld bleibt dann
+	// verborgen, die Person bestätigt nur noch.
+	Linked bool
+}
+
+// loginRejected zeigt die Anmeldeseite mit dem Fehler über der Karte. Ein
+// Formularfehler ist 422: die Seite ist richtig ausgeliefert, nur die Eingabe
+// taugt nicht (Konsole und Zugriffslog sehen keinen Fehlschlag der Seite).
 func (a *app) loginRejected(l lang, w http.ResponseWriter, status int, errKey string, tokenOpen bool) {
 	codeHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	data := a.loginData(l.msg("login.title"), l.msg(errKey))
+	data := a.loginData(l.msg("login.tab"), l.msg(errKey))
 	data.TokenOpen = tokenOpen
 	a.render(l, w, "login", data)
+}
+
+// codeRejected bleibt auf der Einmalcode-Seite: Fehler über der Karte, der
+// getippte Code und, wenn die Seite danach fragte, der Name stehen noch im Formular.
+func (a *app) codeRejected(l lang, w http.ResponseWriter, status int, errKey, code string, needsName bool) {
+	codeHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	data := a.loginData(l.msg("login.code_title"), l.msg(errKey))
+	data.Code, data.NeedsName = code, needsName
+	a.render(l, w, "logincode", data)
+}
+
+// rejectedCode wählt die Meldung für einen Code, der nichts einlöst. Ein Link,
+// den man angeklickt hat, lässt sich nicht "prüfen"; auf einer frischen Instanz
+// steht der Code im Log des Servers.
+func (a *app) rejectedCode(r *http.Request) string {
+	switch {
+	case a.oidc == nil && a.bootstrapPending():
+		return "login.error_bootstrap"
+	case r.FormValue("linked") == "1" || strings.Contains(r.FormValue("code"), "://"):
+		return "login.error_link"
+	}
+	return "login.error_code"
 }
 
 func (a *app) loginPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	codeHeaders(w)
-	a.render(l, w, "login", a.loginData(l.msg("login.title"), ""))
+	a.rememberNext(w, r)
+	// Wer schon angemeldet ist, sieht kein Anmeldeformular, sondern landet dort,
+	// wo die Anmeldung hinführt.
+	if _, ok := a.joinSession(r); ok {
+		http.Redirect(w, r, a.takeNext(w, r, "/ui/inbox"), http.StatusSeeOther)
+		return
+	}
+	a.render(l, w, "login", a.loginData(l.msg("login.tab"), ""))
 }
 func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
@@ -257,7 +337,7 @@ func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	principal, ok := a.store.AuthenticatePrincipal(r.FormValue("token"))
 	if !ok {
-		a.loginRejected(l, w, http.StatusUnauthorized, "login.error_token", true)
+		a.loginRejected(l, w, http.StatusUnprocessableEntity, "login.error_token", true)
 		return
 	}
 	a.store.TouchToken(principal.TokenID)
@@ -267,14 +347,20 @@ func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
 // finishLogin startet eine Websitzung für ein Konto, ohne Token. Die Sitzung
 // gilt, solange das Konto aktiv ist (TokenKind "web").
 func (a *app) finishLogin(w http.ResponseWriter, r *http.Request, account store.Account) {
-	a.startSession(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind})
+	a.finishLoginTo(w, r, account, "/ui/inbox")
+}
+
+// finishLoginTo ist finishLogin mit einem eigenen Ziel für den Fall, dass keine
+// Rücksprungadresse gemerkt ist.
+func (a *app) finishLoginTo(w http.ResponseWriter, r *http.Request, account store.Account, fallback string) {
+	a.startSessionAt(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, a.takeNext(w, r, fallback))
 }
 
 // finishJoinLogin ist finishLogin für eine Anmeldung über die Join-Seite: das
 // Konto kommt aus der Einladung, für das Konto entsteht die Join-Sitzung, und die
 // Seite danach zeigt den Paarungscode und später die Freigabe des Geräts.
 func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account store.Account) {
-	next := "/ui/requests"
+	next := "/ui/inbox"
 	if _, err := a.store.Join().Create(account.ID); err == nil {
 		next = "/join/pair"
 	}
@@ -284,7 +370,7 @@ func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account st
 // startSession vergibt immer eine neue Sitzungs-ID und verwirft eine
 // mitgebrachte (keine Session-Fixation).
 func (a *app) startSession(w http.ResponseWriter, r *http.Request, principal store.Principal) {
-	a.startSessionAt(w, r, principal, "/ui/overview")
+	a.startSessionAt(w, r, principal, a.takeNext(w, r, "/ui/inbox"))
 }
 
 func (a *app) startSessionAt(w http.ResponseWriter, r *http.Request, principal store.Principal, next string) {
@@ -317,20 +403,41 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 	// Eine Einladung braucht lokal einen Namen; mit OIDC trägt der IdP ihn bei.
 	data.Invite = kind == store.CodeInvitation
 	data.NeedsName = kind == store.CodeBootstrap || (data.Invite && a.oidc == nil)
-	if data.Invite {
-		if p, err := a.store.PreviewOrgInvitation(code, a.store.AccessEnforced(), a.oidc != nil); err == nil {
-			target := p.Project
-			if target == "" {
-				target = p.Org
-			}
-			data.InviteV = &joinView{Inviter: p.Inviter, Target: target, Org: p.Org, ExpiresAt: p.ExpiresAt, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context())}
-			if p.Project == "" {
-				data.InviteV.Org = ""
-			}
+	if code != "" {
+		// Ein Link, der nichts mehr einlöst, sagt es gleich, statt einen Knopf zu
+		// zeigen, der ins Leere führt; das Feld bleibt dann zum Korrigieren offen.
+		if kind == "" {
+			data.Error = l.msg("login.error_link")
+		} else {
+			data.Auth.Linked = true
 		}
+	}
+	if data.Invite {
+		data.InviteV = a.orgInviteView(r, l, code)
 	}
 	a.render(l, w, "logincode", data)
 }
+
+// orgInviteView ist die Vorschau einer Einladung in eine Organisation, oder nil,
+// wenn sie sich nicht zeigen lässt.
+func (a *app) orgInviteView(r *http.Request, l lang, code string) *joinView {
+	p, err := a.store.PreviewOrgInvitation(code, a.store.AccessEnforced(), a.oidc != nil)
+	if err != nil {
+		return nil
+	}
+	target := p.Project
+	if target == "" {
+		target = p.Org
+	}
+	v := &joinView{Inviter: p.Inviter, Target: target, Short: shortName(target), Org: p.Org, ExpiresAt: p.ExpiresAt,
+		ExpiresIn: expiresIn(l, p.ExpiresAt), Code: code, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context()),
+		Provider: a.oidcName, OIDC: a.oidc != nil, OrgMark: initialOf(firstNonEmpty(p.Org, shortName(target)))}
+	if p.Project == "" {
+		v.Org = ""
+	}
+	return v
+}
+
 func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Referrer-Policy", "strict-origin")
@@ -344,6 +451,18 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(code) > maxCodeLength || len(r.FormValue("name")) > maxNameLength {
 		http.Error(w, "field too long", http.StatusBadRequest)
+		return
+	}
+	onCodePage := r.FormValue("codepage") == "1"
+	reject := func(key string) {
+		if onCodePage {
+			a.codeRejected(l, w, http.StatusUnprocessableEntity, key, code, r.Form.Has("name"))
+			return
+		}
+		a.loginRejected(l, w, http.StatusUnprocessableEntity, key, false)
+	}
+	if code == "" {
+		reject("login.error_empty")
 		return
 	}
 	var account store.Account
@@ -373,12 +492,35 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 			a.beginOIDC(w, r, code)
 			return
 		}
+		// Die Namensprüfung verrät, welche Konten es gibt. Darum zählt jeder Aufruf
+		// gegen die Grenze der Beitrittswege, und je Einladung sind nur wenige
+		// abgelehnte Namen erlaubt; ist sie gesperrt, wird gar nicht mehr geprüft.
+		if !a.joinGate(w, r) {
+			return
+		}
+		if a.inviteNames.locked(code) {
+			a.inviteNameRejected(l, w, r, code, "join.error_name_locked", http.StatusTooManyRequests)
+			return
+		}
+		if !a.store.InviteNameFree(r.FormValue("name")) {
+			// Kein stilles Umbenennen in "robin-2" oder "user": die Person ändert den
+			// Namen selbst.
+			key, status := "join.error_name", http.StatusUnprocessableEntity
+			if a.inviteNames.miss(code) {
+				key, status = "join.error_name_locked", http.StatusTooManyRequests
+			}
+			a.inviteNameRejected(l, w, r, code, key, status)
+			return
+		}
 		account, err = a.store.InviteLocal(code, r.FormValue("name"))
+		if err == nil {
+			a.inviteNames.accepted(code)
+		}
 	default:
 		err = store.ErrCodeInvalid
 	}
 	if errors.Is(err, store.ErrCodeInvalid) {
-		a.loginRejected(l, w, http.StatusForbidden, "login.error_code", false)
+		reject(a.rejectedCode(r))
 		return
 	}
 	if err != nil {
@@ -389,8 +531,40 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		a.finishJoinLogin(w, r, account)
 		return
 	}
+	if kind == store.CodeBootstrap {
+		// Die erste Anmeldung einer neuen Instanz führt in die Einrichtung, nicht in
+		// einen leeren Posteingang.
+		a.finishLoginTo(w, r, account, "/ui/overview")
+		return
+	}
 	a.finishLogin(w, r, account)
 }
+
+// inviteNameRejected zeigt dort, wo der Name getippt wurde (Einladungsseite oder
+// Einmalcode-Seite), die Meldung am Feld.
+func (a *app) inviteNameRejected(l lang, w http.ResponseWriter, r *http.Request, code, msgKey string, status int) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if r.FormValue("join") == "1" {
+		a.joinNameRejected(l, w, r, code, name, msgKey, status)
+		return
+	}
+	codeHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if status == http.StatusTooManyRequests {
+		w.Header().Set("Retry-After", strconv.Itoa(int(inviteNameLockFor/time.Second)))
+	}
+	w.WriteHeader(status)
+	data := a.loginData(l.msg("login.code_title"), "")
+	data.Code, data.NeedsName, data.Invite = code, true, true
+	data.InviteV = a.orgInviteView(r, l, code)
+	if data.InviteV != nil {
+		data.InviteV.NameError, data.InviteV.NameValue = l.msg(msgKey), name
+	} else {
+		data.Error = l.msg(msgKey)
+	}
+	a.render(l, w, "logincode", data)
+}
+
 func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(sessionCookie); err == nil {
 		a.sessions.remove(cookie.Value)

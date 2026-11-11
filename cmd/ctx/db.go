@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,6 +18,11 @@ import (
 
 const dbUsage = `usage: ctx db vacuum --db <path> [--tmpdir <dir>] [--fts-optimize] [--yes]
        ctx db check --db <path> [--full]
+       ctx db backfill-actors --db <path> [--dry-run] [--batch N] [--kind k,...] [--no-models] [--json]
+       ctx db chunk-stats --db <path> [--sample N] [--json]
+       ctx db slim-sessions --db <path> [--dry-run] [--batch N] [--pause D] [--json]
+       ctx db slim-search --db <path> [--dry-run] [--batch N] [--pause D] [--json]
+       ctx db migrate-owners --db <path> --dry-run|--apply --backup <file> [--plan <file>]
 
 Maintenance of the database file with the SQL functions of the schema. The
 sqlite3 CLI cannot do this: the CHECK constraints of the snapshot tables call
@@ -24,7 +30,26 @@ ghosttree_valid_utf8, which only ctx registers, so "sqlite3 <db> VACUUM" and
 "sqlite3 <db> 'PRAGMA quick_check'" stop with "no such function".
 
   vacuum  give the free pages back to the filesystem (server stopped)
-  check   quick_check or integrity_check, writes nothing (may run beside the server)`
+  check   quick_check or integrity_check, writes nothing (may run beside the server)
+  backfill-actors  who wrote existing entries (agent or person), only where proven
+  chunk-stats  bytes of stored transcript lines per line type, from a sample
+  slim-sessions  slim and pack the stored transcript lines (may run beside the server)
+  slim-search    one search index over sessions, no text copies (may run beside the server)
+  migrate-owners   projects to their owners (organization or person), REQ-623`
+
+const dbChunkStatsUsage = `usage: ctx db chunk-stats --db <path> [--sample N] [--json]
+
+Draw N random transcript lines from session_chunks (default 2000) and count the
+bytes of their raw JSON per line type (claude:assistant,
+codex:event_msg:item_completed:CommandExecution, ...): how many lines, how
+large as text, what they take as stored now (packed or not), what the current
+slim rule would leave of them, and what of that would be left packed with the
+newest dictionary (the state after "ctx db slim-sessions"). Percentages are of
+the text. Use it to spot new ballast that a harness started to write.
+
+Each line is one lookup by its number; nothing scans the table, and it pauses
+between batches. Nothing is written (query_only), so the server may keep
+running. Shares are of the sample, not exact.`
 
 const dbVacuumUsage = `usage: ctx db vacuum --db <path> [--tmpdir <dir>] [--fts-optimize] [--yes]
 
@@ -92,6 +117,16 @@ func cmdDB(args []string, stdout io.Writer) int {
 		return cmdDBVacuum(args[1:], stdout)
 	case "check":
 		return cmdDBCheck(args[1:], stdout)
+	case "backfill-actors":
+		return cmdDBBackfillActors(args[1:], stdout)
+	case "chunk-stats":
+		return cmdDBChunkStats(args[1:], stdout)
+	case "slim-sessions":
+		return cmdDBSlimSessions(args[1:], stdout)
+	case "slim-search":
+		return cmdDBSlimSearch(args[1:], stdout)
+	case "migrate-owners":
+		return cmdDBMigrateOwners(args[1:], stdout)
 	case "help", "--help", "-h":
 		fmt.Fprintln(stdout, dbUsage)
 		return 0
@@ -252,4 +287,64 @@ func printCheckFindings(stdout io.Writer, pragma string, msgs []string) {
 	for _, m := range msgs {
 		fmt.Fprintf(stdout, "  %s\n", m)
 	}
+}
+
+func cmdDBChunkStats(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("db chunk-stats", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	dbPath := fs.String("db", "", "path to the ghosttree database")
+	sample := fs.Int("sample", 2000, "number of lines to sample")
+	asJSON := fs.Bool("json", false, "print the report as JSON")
+	fs.Usage = func() { fmt.Fprintln(stdout, dbChunkStatsUsage) }
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *dbPath == "" || fs.NArg() > 0 || *sample <= 0 || *sample > 1_000_000 {
+		fmt.Fprintln(stdout, dbChunkStatsUsage)
+		return 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	rep, err := store.ChunkStats(ctx, *dbPath, store.ChunkStatsOptions{Sample: *sample})
+	if err != nil {
+		fmt.Fprintf(stdout, "chunk-stats failed: %v\n", err)
+		return 1
+	}
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(rep); err != nil {
+			return 1
+		}
+		return 0
+	}
+	printChunkStats(stdout, rep)
+	return 0
+}
+
+func printChunkStats(stdout io.Writer, rep store.ChunkStatsReport) {
+	dict := "no dictionary"
+	if rep.Dict > 0 {
+		dict = fmt.Sprintf("dictionary %d", rep.Dict)
+	}
+	fmt.Fprintf(stdout, "chunks: at most %d (highest id), sampled %d lines, %s as text, %s stored (%d packed), slim rule version %d, %s, %s\n",
+		rep.HighestID, rep.Sampled, humanBytes(int(rep.Bytes)), humanBytes(int(rep.StoredBytes)), rep.Packed, rep.SlimVersion, dict,
+		rep.Duration.Round(time.Millisecond))
+	if rep.Sampled == 0 {
+		return
+	}
+	fmt.Fprintf(stdout, "%-56s %7s %7s %10s %8s %8s %8s\n", "line type", "text", "lines", "avg bytes", "stored", "slim", "packed")
+	pct := func(a, b int64) string {
+		if b <= 0 {
+			return "-"
+		}
+		return fmt.Sprintf("%.0f%%", 100*float64(a)/float64(b))
+	}
+	for _, k := range rep.Kinds {
+		fmt.Fprintf(stdout, "%-56s %6.1f%% %7d %10d %8s %8s %8s\n", k.Kind,
+			100*float64(k.Bytes)/float64(rep.Bytes), k.Chunks, k.Bytes/int64(k.Chunks),
+			pct(k.StoredBytes, k.Bytes), pct(k.SlimBytes, k.Bytes), pct(k.PackedBytes, k.Bytes))
+	}
+	fmt.Fprintf(stdout, "stored now: %s of the text; after slim: %s; after slim and packing (what slim-sessions leaves): %s\n",
+		pct(rep.StoredBytes, rep.Bytes), pct(rep.SlimBytes, rep.Bytes), pct(rep.PackedBytes, rep.Bytes))
 }

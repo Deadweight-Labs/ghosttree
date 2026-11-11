@@ -9,13 +9,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type DescribeInput struct {
-	Path string `json:"path" jsonschema:"repository-relative path of the file or directory this describes; \".\" for the repository root"`
+	Path string `json:"path" jsonschema:"repository-relative path this describes, \".\" for the root; absolute when the file is in another worktree of this repo"`
 	// omitempty ist hier keine Kosmetik. Ohne es steht das Feld als Pflichtfeld
 	// im generierten Schema, und der nothing_to_say-Aufruf, den die
 	// Werkzeugbeschreibung verspricht, würde vom SDK abgewiesen, bevor der
@@ -64,20 +66,21 @@ func (s *Server) handleDescribe(ctx context.Context, _ *mcp.CallToolRequest, in 
 		// Review zu erfinden.
 		return nil, nil, fmt.Errorf("description and nothing_to_say are mutually exclusive")
 	}
-	rel, err := normalizeGhostPath(in.Path)
+	root, rel, branch, err := s.describeTarget(ctx, in.Path)
 	if err != nil {
 		return nil, nil, err
 	}
-	if s.repoRoot == "" {
-		return nil, nil, fmt.Errorf("this session is not inside a repository, so there is no path to attach a description to")
-	}
-	full := filepath.Join(s.repoRoot, filepath.FromSlash(rel))
+	full := filepath.Join(root, filepath.FromSlash(rel))
 	info, err := os.Stat(full)
 	if err != nil {
+		if os.IsNotExist(err) && !filepath.IsAbs(strings.TrimSpace(in.Path)) {
+			return nil, nil, fmt.Errorf("cannot describe %q: there is no such path under %s, the checkout this session started in. "+
+				"If you work in another worktree of this repository, pass the absolute path", in.Path, root)
+		}
 		return nil, nil, fmt.Errorf("cannot describe %q: %w", in.Path, err)
 	}
 	if !info.IsDir() {
-		if err := trackedInRepo(s.repoRoot, rel); err != nil {
+		if err := trackedInRepo(root, rel); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -105,7 +108,7 @@ func (s *Server) handleDescribe(ctx context.Context, _ *mcp.CallToolRequest, in 
 		return textResult(fmt.Sprintf("vermerkt: %s — angesehen, nichts zu sagen", rel)), nil, nil
 	}
 
-	g := store.GhostFile{Project: s.ctxAxes.Project, Path: rel, Description: in.Description, Harness: "mcp"}
+	g := store.GhostFile{Project: s.ctxAxes.Project, Path: rel, Description: in.Description, Harness: "mcp", Branch: branch}
 	if info.IsDir() {
 		names, err := ghost.ChildNames(full)
 		if err != nil {
@@ -136,6 +139,68 @@ func (s *Server) handleDescribe(ctx context.Context, _ *mcp.CallToolRequest, in 
 		s.afterWrite()
 	}
 	return textResult(msg), nil, nil
+}
+
+// describeTarget finds the checkout a path to describe lies in, the path
+// relative to it, and the branch level the description goes to.
+//
+// A relative path is meant against the checkout this server started in. An
+// agent that was sent into another worktree of the same repository knows
+// nothing of that: its file exists, the server looks for it in the first
+// checkout and reports it missing. An absolute path names the checkout itself,
+// and with it the branch the description belongs to. Another project is
+// refused, the description would be filed under the wrong one.
+func (s *Server) describeTarget(ctx context.Context, given string) (root, rel, branch string, err error) {
+	given = strings.TrimSpace(given)
+	if !filepath.IsAbs(given) {
+		if rel, err = normalizeGhostPath(given); err != nil {
+			return "", "", "", err
+		}
+		if s.repoRoot == "" {
+			return "", "", "", fmt.Errorf("this session is not inside a repository, so there is no path to attach a description to")
+		}
+		return s.repoRoot, rel, s.ghostBranch(), nil
+	}
+	abs := filepath.Clean(given)
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
+	}
+	dir := abs
+	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
+		dir = filepath.Dir(abs)
+	}
+	g := collector.ResolveGitContext(dir)
+	if g.Root == "" {
+		return "", "", "", fmt.Errorf("cannot describe %q: it is not inside a git checkout", given)
+	}
+	if g.Project == "" || g.Project != s.ctxAxes.Project {
+		return "", "", "", fmt.Errorf("cannot describe %q: it belongs to %s, this session to %s", given, orUnknown(g.Project), orUnknown(s.ctxAxes.Project))
+	}
+	top := g.Root
+	if real, err := filepath.EvalSymlinks(top); err == nil {
+		top = real
+	}
+	inside, err := filepath.Rel(top, abs)
+	if err != nil {
+		return "", "", "", fmt.Errorf("cannot describe %q: %w", given, err)
+	}
+	if rel, err = normalizeGhostPath(filepath.ToSlash(inside)); err != nil {
+		return "", "", "", err
+	}
+	if top == s.repoRoot {
+		return top, rel, s.ghostBranch(), nil
+	}
+	if g.Branch != "" && !collector.IsDefaultBranch(ctx, top, g.Branch) {
+		branch = g.Branch
+	}
+	return top, rel, branch, nil
+}
+
+func orUnknown(project string) string {
+	if project == "" {
+		return "no project"
+	}
+	return project
 }
 
 // trackedInRepo weist ab, was `git ls-files` nicht kennt.
@@ -194,7 +259,7 @@ func (s *Server) firstMentionOf(path string) bool {
 // genau das Rauschen, gegen das die Auslieferung mit ihrer Einmal-je-Sitzung-
 // Regel antritt.
 func undescribedAncestor(s *Server, rel string) string {
-	tree, err := s.client.GhostTree(s.ctxAxes.Project, "")
+	tree, err := s.client.GhostTreeAt(s.ctxAxes.Project, "", s.currentAxes())
 	if err != nil {
 		return ""
 	}
@@ -282,5 +347,19 @@ func renderGhostHit(g store.GhostFile) string {
 		// should weigh it differently from an exact word hit.
 		label += "|match:" + g.Match
 	}
-	return fmt.Sprintf("- %s [%s] — %s\n", name, label, body)
+	return fmt.Sprintf("- %s [%s%s%s] — %s\n", name, label, anchorLabel(g.GitAnchor), originctx.Label(g.OriginContext, g.DescribedAt), body)
+}
+
+// ghostBranch ist die Ebene, auf die eine Beschreibung jetzt geschrieben wird:
+// auf einem Feature-Branch dessen Name (sie gilt dort und in abgezweigten
+// Branches und geht beim Merge auf den Base-Branch), auf dem Default-Branch
+// oder ohne Git-Stand die Projektebene (leer).
+func (s *Server) ghostBranch() string {
+	if s.live == nil {
+		return ""
+	}
+	if l := s.live(); l.Branch != "" && !l.Trunk {
+		return l.Branch
+	}
+	return ""
 }

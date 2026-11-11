@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -58,6 +59,8 @@ type RequestListItem struct {
 	// Match is "semantic" for a request that a search found by its meaning alone:
 	// its words do not match the query. Absent for a hit of the words.
 	Match string `json:"match,omitempty"`
+	// URL is the web address of the issue: a hit carries nothing but the link.
+	URL string `json:"url,omitempty"`
 }
 
 // maxListChars bounds the whole answer. It is enforced while building the list
@@ -65,7 +68,7 @@ type RequestListItem struct {
 // has already produced the thing it was meant to prevent.
 const maxListChars = 6000
 
-func listFromPage(page requestdomain.SearchPage) RequestSearchOutput {
+func listFromPage(page requestdomain.SearchPage, b links.Builder) RequestSearchOutput {
 	// A ranked search that was cut at its depth says so on its last page: more
 	// requests match than any cursor reaches.
 	out := RequestSearchOutput{Results: []RequestListItem{}, NextCursor: page.NextCursor, Truncated: page.Truncated}
@@ -76,8 +79,9 @@ func listFromPage(page requestdomain.SearchPage) RequestSearchOutput {
 			State: hit.Request.State, Priority: hit.Request.Priority,
 			OpenCriteria: hit.OpenCriteria, Handoff: firstLine(hit.LatestHandoff, 160),
 			Sightings: hit.Sightings, Match: hit.Match,
+			URL: b.WithProject(hit.Request.Scope.Project).Issue(hit.Request.ID),
 		}
-		size += len(item.Title) + len(item.Handoff) + 64
+		size += len(item.Title) + len(item.Handoff) + len(item.URL) + 64
 		if size > maxListChars && len(out.Results) > 0 {
 			out.Truncated = true
 			break
@@ -153,7 +157,9 @@ type RequestCreateInput struct {
 	Criteria       []string `json:"criteria" jsonschema:"observable acceptance criteria"`
 	IdempotencyKey string   `json:"idempotency_key,omitempty" jsonschema:"stable retry key for this creation attempt"`
 	Project        string   `json:"project,omitempty" jsonschema:"the project this request belongs to when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
-	Explanation    string   `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
+	Explanation    string   `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the people who review it: two to four plain sentences in their language, in everyday words: what it is about, why it matters, what has to be done or decided, your recommendation. No markdown or links, never a secret; without it the server writes one later from the text alone"`
+	Parent         string   `json:"parent,omitempty" jsonschema:"optional parent issue, REQ-n of the same project, that you can read. This request becomes its child"`
+	DerivedFrom    []string `json:"derived_from,omitempty" jsonschema:"optional sources this request came out of, in the same project and readable by you: IDEA-n, PAIN-n, REQ-n or thread:n. Set at creation, in one step. An idea you may edit is accepted by it; a pain is linked as motivating this request"`
 }
 
 type RequestStartWorkInput struct {
@@ -165,6 +171,10 @@ type RequestStartWorkInput struct {
 type RequestWorkOutput struct {
 	Work     requestdomain.Work `json:"work"`
 	Warnings []string           `json:"warnings,omitempty"`
+	// IdeaBriefing is set when the request came out of an idea: the summary of
+	// its concept, the decisions already made and the open questions. Ask what is
+	// unclear as an open decision on the idea instead of in the chat.
+	IdeaBriefing string `json:"idea_briefing,omitempty"`
 }
 
 type RequestFinishWorkInput struct {
@@ -175,17 +185,17 @@ type RequestFinishWorkInput struct {
 
 type RequestProgressInput struct {
 	RequestID      int64  `json:"request_id" jsonschema:"request being updated"`
-	Action         string `json:"action" jsonschema:"criterion_add, criterion_met, criterion_waive, complete, drop, relation_add, relation_remove, or correct"`
-	CriterionID    int64  `json:"criterion_id,omitempty" jsonschema:"criterion for met or waive"`
+	Action         string `json:"action" jsonschema:"criterion_add, criterion_met, criterion_waive, criterion_reopen, complete, drop, relation_add, relation_remove, or correct"`
+	CriterionID    int64  `json:"criterion_id,omitempty" jsonschema:"criterion for met, waive or reopen"`
 	Description    string `json:"description,omitempty" jsonschema:"new criterion description for criterion_add; the replacement description for correct"`
 	EvidenceKind   string `json:"evidence_kind,omitempty" jsonschema:"commit, test, file, decision, session, or url"`
 	EvidenceRef    string `json:"evidence_ref,omitempty" jsonschema:"concrete evidence reference"`
-	Reason         string `json:"reason,omitempty" jsonschema:"why: required for drop, for correct, and for relation_remove"`
+	Reason         string `json:"reason,omitempty" jsonschema:"why: required for drop, for correct, for criterion_reopen and for relation_remove"`
 	Title          string `json:"title,omitempty" jsonschema:"replacement title for correct"`
 	Type           string `json:"type,omitempty" jsonschema:"replacement type for correct: feature, change, bug, or investigation"`
 	Priority       string `json:"priority,omitempty" jsonschema:"replacement priority for correct"`
-	RelationID     int64  `json:"relation_id,omitempty" jsonschema:"relation to remove; request_get lists every relation with its id. Pass request_id alongside it — that is the request the edge hangs off"`
-	RelationKind   string `json:"relation_kind,omitempty" jsonschema:"parent, related, blocks, duplicates, supersedes, knowledge, or external. The edge is read subject first: request_id <kind> other_request_id. \"blocks\" therefore means request_id blocks other_request_id — the one named in request_id is the one that has to be finished first. Same for parent: request_id is the child, other_request_id is the parent."`
+	RelationID     int64  `json:"relation_id,omitempty" jsonschema:"relation to remove; request action=get lists every relation with its id. Pass request_id alongside it — that is the request the edge hangs off"`
+	RelationKind   string `json:"relation_kind,omitempty" jsonschema:"parent, related, blocks, duplicates, supersedes, derived, knowledge, or external. The edge is read subject first: request_id <kind> other_request_id. \"blocks\" therefore means request_id blocks other_request_id — the one named in request_id is the one that has to be finished first. Same for parent: request_id is the child, other_request_id is the parent. derived: request_id came out of other_request_id."`
 	OtherRequestID int64  `json:"other_request_id,omitempty" jsonschema:"the object of the relation, read after the kind: request_id <kind> other_request_id"`
 	KnowledgeID    int64  `json:"knowledge_id,omitempty"`
 	ExternalRef    string `json:"external_ref,omitempty"`
@@ -269,7 +279,7 @@ func renderRequestDetail(detail requestdomain.Detail, concise bool) string {
 	}
 	b.WriteString("\nCriteria\n")
 	for _, criterion := range detail.Criteria {
-		fmt.Fprintf(&b, "- %s [%s] %s\n", criterion.HumanID(), criterion.State, criterion.Description)
+		fmt.Fprintf(&b, "- %s (criterion_id %d) [%s] %s\n", criterion.HumanID(), criterion.ID, criterion.State, criterion.Description)
 		if concise {
 			continue
 		}
@@ -352,7 +362,7 @@ func (s *Server) handleRequestSearch(_ context.Context, _ *mcp.CallToolRequest, 
 		for _, thread := range threads {
 			out.Results = append(out.Results, RequestListItem{ID: thread.RequestID, Type: thread.Type,
 				Title: thread.Title, State: "open", Priority: thread.Priority,
-				OpenCriteria: thread.OpenCriteria, Handoff: firstLine(thread.Handoff, 160)})
+				OpenCriteria: thread.OpenCriteria, Handoff: firstLine(thread.Handoff, 160), URL: s.builder().Issue(thread.RequestID)})
 		}
 		return requestResult(out), out, err
 	}
@@ -363,7 +373,7 @@ func (s *Server) handleRequestSearch(_ context.Context, _ *mcp.CallToolRequest, 
 		interpretation = "open_request_inventory"
 	}
 	page, err := s.client.SearchRequests(requestdomain.SearchFilter{Scope: scope.Axes{Project: s.ctxAxes.Project}, Query: query, State: state, Type: in.Type, Cursor: in.Cursor, Limit: in.Limit})
-	out := listFromPage(page)
+	out := listFromPage(page, s.builder())
 	out.Interpretation = interpretation
 	return requestResult(out), out, err
 }
@@ -381,7 +391,11 @@ func (s *Server) handleRequestGet(_ context.Context, _ *mcp.CallToolRequest, in 
 		}
 	}
 	out := RequestDetailOutput{Detail: detail}
-	return requestDetailResult(detail, concise), out, err
+	res := requestDetailResult(detail, concise)
+	if err == nil {
+		res = s.withCard(res, s.builder().RequestCard(detail))
+	}
+	return res, out, err
 }
 
 func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, in RequestCreateInput) (*mcp.CallToolResult, RequestChangeOutput, error) {
@@ -400,7 +414,7 @@ func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, 
 	}
 	detail, err := s.client.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
 		Type: in.Type, Title: in.Title, Description: in.Description, Priority: in.Priority, Scope: ax, Origin: "agent", SessionRef: ref,
-	}, Criteria: in.Criteria, IdempotencyKey: in.IdempotencyKey, Explanation: in.Explanation})
+	}, Criteria: in.Criteria, IdempotencyKey: in.IdempotencyKey, Explanation: in.Explanation, Parent: in.Parent, DerivedFrom: in.DerivedFrom})
 	out := changeOutput(detail, "created", 0)
 	// Creation is the one mutation that has to list its criteria: their ids
 	// exist nowhere else yet, and without them the next step is a request_get
@@ -408,7 +422,11 @@ func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, 
 	for _, c := range detail.Criteria {
 		out.Criteria = append(out.Criteria, CriterionRef{ID: c.ID, Number: c.Number, State: c.State})
 	}
-	return requestResult(out), out, err
+	res := requestResult(out)
+	if err == nil {
+		res = s.withCard(res, s.builder().RequestCard(detail))
+	}
+	return res, out, err
 }
 
 func (s *Server) handleRequestStartWork(_ context.Context, _ *mcp.CallToolRequest, in RequestStartWorkInput) (*mcp.CallToolResult, RequestWorkOutput, error) {
@@ -418,37 +436,27 @@ func (s *Server) handleRequestStartWork(_ context.Context, _ *mcp.CallToolReques
 	}
 	sessionID := in.SessionID
 	if sessionID == 0 {
-		sessions, err := s.client.Sessions(scope.Axes{Project: s.ctxAxes.Project}, 20)
+		found, err := s.ownSession()
 		if err != nil {
 			return nil, RequestWorkOutput{}, err
 		}
-		cutoff := time.Now().Add(-30 * time.Minute)
-		for _, candidate := range sessions {
-			seen, err := time.Parse(time.RFC3339Nano, candidate.LastSeenAt)
-			if err == nil && seen.After(cutoff) && (s.ctxAxes.Branch == "" || candidate.Scope.Branch == s.ctxAxes.Branch) && (s.ctxAxes.Machine == "" || candidate.Scope.Machine == s.ctxAxes.Machine) {
-				sessionID = candidate.ID
-				break
-			}
-		}
-		if sessionID == 0 {
-			return nil, RequestWorkOutput{}, fmt.Errorf("no recently active session matches this project, branch, and machine; sync the collector or provide session_id")
-		}
+		sessionID = found
 	}
-	work, warnings, err := s.client.StartRequestWork(in.RequestID, sessionID, role)
-	out := RequestWorkOutput{Work: work, Warnings: warnings}
-	return requestResult(out), out, err
+	work, warnings, briefing, err := s.client.StartRequestWorkBriefing(in.RequestID, sessionID, role)
+	out := RequestWorkOutput{Work: work, Warnings: warnings, IdeaBriefing: briefing}
+	return s.withRequestLink(requestResult(out), work.RequestID, err), out, err
 }
 
 func (s *Server) handleRequestFinishWork(_ context.Context, _ *mcp.CallToolRequest, in RequestFinishWorkInput) (*mcp.CallToolResult, RequestWorkOutput, error) {
 	work, err := s.client.FinishRequestWork(in.WorkID, in.State, in.Summary)
 	out := RequestWorkOutput{Work: work}
-	return requestResult(out), out, err
+	return s.withRequestLink(requestResult(out), work.RequestID, err), out, err
 }
 
 func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest, in RequestProgressInput) (*mcp.CallToolResult, RequestChangeOutput, error) {
 	evidence := requestdomain.Evidence{Kind: in.EvidenceKind, Ref: in.EvidenceRef}
 	if in.Action == "relation_remove" && in.RelationID == 0 {
-		return nil, RequestChangeOutput{}, fmt.Errorf("relation_remove needs relation_id; request_get lists each relation with its id")
+		return nil, RequestChangeOutput{}, fmt.Errorf("relation_remove needs relation_id; request action=get lists each relation with its id")
 	}
 	var err error
 	switch in.Action {
@@ -458,6 +466,10 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 		err = s.client.SetRequestCriterion(in.CriterionID, "met", evidence)
 	case "criterion_waive":
 		err = s.client.SetRequestCriterion(in.CriterionID, "waived", evidence)
+	case "criterion_reopen":
+		// Der Rückweg des Prüfmodus: das Kriterium war erfüllt oder verzichtet,
+		// der Nachweis hält gegen den Code nicht. Die Begründung prüft der Server.
+		err = s.client.ReopenCriterion(in.CriterionID, in.Reason)
 	case "complete":
 		err = s.client.CompleteRequest(in.RequestID, evidence)
 	case "drop":
@@ -483,12 +495,72 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 			err = s.client.CorrectRequest(in.RequestID, patch, in.Reason)
 		}
 	default:
-		err = fmt.Errorf("unknown request progress action %q; use criterion_add, criterion_met, criterion_waive, complete, drop, relation_add, relation_remove, or correct", in.Action)
+		err = fmt.Errorf("unknown request progress action %q; use criterion_add, criterion_met, criterion_waive, criterion_reopen, complete, drop, relation_add, relation_remove, or correct", in.Action)
 	}
 	if err != nil {
 		return nil, RequestChangeOutput{}, err
 	}
 	detail, err := s.client.GetRequest(in.RequestID)
 	out := changeOutput(detail, in.Action, in.CriterionID)
-	return requestResult(out), out, err
+	res := requestResult(out)
+	if err == nil {
+		res = s.withCard(res, s.builder().RequestCard(detail))
+	}
+	return res, out, err
+}
+
+// ownSession findet die Session dieses MCP-Prozesses, wenn der Agent ihre Nummer
+// nicht nennt (PAIN-57).
+//
+// Der Branch der Session-Zeile ist der vom Sessionstart: der Sammler liest ihn
+// einmal aus den ersten Zeilen des Transkripts. Der Agent legt mitten in der
+// Arbeit einen Branch an (der Ablauf aus REQ-601), und dann stimmt der Branch
+// weder der Zeile noch dem MCP-Prozess, der ihn beim Start gelesen hat, mit dem
+// des Arbeitsverzeichnisses überein. Wer nach dem Branch sucht, findet die
+// eigene Session genau dann nicht mehr, wenn er sie braucht. Deshalb, in dieser
+// Reihenfolge: die Harness-Session-ID dieses Prozesses (sicher, wo gesetzt),
+// dann das Arbeitsverzeichnis (ein Branchwechsel ändert es nicht), zuletzt der
+// Branch von früher, wie es vorher allein galt.
+func (s *Server) ownSession() (int64, error) {
+	sessions, err := s.client.Sessions(scope.Axes{Project: s.ctxAxes.Project}, 20)
+	if err != nil {
+		return 0, err
+	}
+	if s.sessionRef != "" {
+		for _, candidate := range sessions {
+			if candidate.ExternalID == s.sessionRef {
+				return candidate.ID, nil
+			}
+		}
+	}
+	cutoff := time.Now().Add(-30 * time.Minute)
+	var cwd string
+	branches := map[string]bool{}
+	if s.ctxAxes.Branch != "" {
+		branches[s.ctxAxes.Branch] = true
+	}
+	if s.live != nil {
+		l := s.live()
+		cwd = l.CWD
+		if l.Branch != "" {
+			branches[l.Branch] = true
+		}
+	}
+	recent := func(candidate store.Session) bool {
+		seen, err := time.Parse(time.RFC3339Nano, candidate.LastSeenAt)
+		return err == nil && seen.After(cutoff) && (s.ctxAxes.Machine == "" || candidate.Scope.Machine == s.ctxAxes.Machine)
+	}
+	if cwd != "" {
+		for _, candidate := range sessions {
+			if recent(candidate) && candidate.CWD == cwd {
+				return candidate.ID, nil
+			}
+		}
+	}
+	for _, candidate := range sessions {
+		if recent(candidate) && (len(branches) == 0 || branches[candidate.Scope.Branch]) {
+			return candidate.ID, nil
+		}
+	}
+	return 0, fmt.Errorf("no recently active session matches this project, working directory, and machine; sync the collector or provide session_id")
 }

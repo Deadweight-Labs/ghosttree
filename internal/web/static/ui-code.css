@@ -1,0 +1,164 @@
+/* Code pages of a repository: top of the tree, folder, file. Mock: git-native-v2
+   repo.html, dir-internal.html, blob.html. Names carry the prefix ct-. */
+
+:is(.g2.ct) {
+  & [hidden] { display: none !important; }
+  & .ct-mono { font: 12px/18px var(--ui-mono); }
+  & .ct-ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  & .ct-nw { white-space: nowrap; }
+  & .ct-sp { flex: 1; }
+  & .ct .i, & .i { flex: none; }
+
+  /* Branch button and file search, GitHub button on the right. */
+  & .ct-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+  & .ct-dd { position: relative; }
+  & .ct-btn { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid var(--btn-border); border-radius: 6px; background: var(--btn-bg); color: var(--fg-default); font-size: 14px; font-weight: 500; cursor: pointer; list-style: none; white-space: nowrap; }
+  & .ct-btn::-webkit-details-marker { display: none; }
+  & .ct-btn:hover { background: var(--btn-hover); }
+  & .ct-btn .i { color: var(--fg-muted); }
+  & .ct-btn .ct-mono { font-size: 13px; max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
+  & .ct-pop { position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; width: 20rem; max-width: calc(100vw - 32px); padding: 8px 0; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-pop); font-size: 14px; }
+  & .ct-ph { margin: 0 0 4px; padding: 4px 16px 8px; border-bottom: 1px solid var(--border-muted); color: var(--fg-muted); font-size: 12px; font-weight: 600; }
+  & .ct-pf { width: calc(100% - 16px); display: flex; align-items: center; gap: 8px; height: 32px; margin: 0 8px 4px; padding: 0 8px; border: 1px solid var(--border-default); border-radius: 6px; color: var(--fg-muted); }
+  & .ct-pf input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg-default); font: inherit; }
+  & .ct-opt { display: flex; align-items: center; gap: 8px; margin: 0 8px; padding: 6px 8px; border-radius: 6px; color: var(--fg-default); }
+  & .ct-opt:hover { background: var(--row-hover); text-decoration: none; }
+  & .ct-opt.is-cur { font-weight: 600; }
+  & .ct-pop hr { height: 0; margin: 4px 0; border: 0; border-top: 1px solid var(--border-muted); }
+  & .ct-opt small { margin-left: auto; padding-left: 8px; color: var(--fg-muted); font-size: 12px; font-weight: 400; white-space: nowrap; }
+  & .ct-chk { display: inline-flex; width: 16px; }
+  & .ct-field { display: flex; align-items: center; gap: 8px; width: 300px; max-width: 100%; height: 32px; padding: 0 12px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); color: var(--fg-muted); }
+  & .ct-field:focus-within { border-color: var(--accent-emphasis); box-shadow: inset 0 0 0 1px var(--accent-emphasis); }
+  & .ct-field input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg-default); font: inherit; font-size: 14px; }
+  & .ct-field input::placeholder { color: var(--fg-muted); opacity: 1; }
+  & .ct-field kbd { padding: 0 5px; border: 1px solid var(--border-default); border-radius: 4px; color: var(--fg-muted); font: 11px/16px var(--ui-mono); }
+  & .ct-ghb { height: 32px; }
+
+  /* Boxes, path, the commit line and the table of the tree. */
+  & .ct-box { margin: 0; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); }
+  & .ct-box > :first-child { border-top-left-radius: 6px; border-top-right-radius: 6px; }
+  & .ct-box > :last-child { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+  & .ct-blank { margin: 0; padding: 24px 16px; color: var(--fg-muted); text-align: center; }
+  & .ct-blank-act { padding-top: 0; }
+  & .ct-path { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; font-size: 16px; }
+  & .ct-sep { color: var(--fg-muted); }
+  & .ct-path .copy { margin-left: 6px; }
+  /* A command or path with its copy button: one block, the text wraps, the button stays at the right */
+  & .g-cmd { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 4px 4px 12px; background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; }
+  & .g-cmd > .i { color: var(--fg-muted); }
+  & .g-cmd code { flex: 1; min-width: 0; font: 13px/1.5 var(--ui-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  & .ct-path b { font-weight: 600; }
+  & .ct-last { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); color: var(--fg-muted); font-size: 14px; }
+  & .ct-last b { color: var(--fg-default); font-weight: 600; }
+  & .ct-sha { padding: 0 6px; border-radius: 6px; background: var(--neutral-muted); color: var(--accent-fg); font: 12px/20px var(--ui-mono); white-space: nowrap; }
+  & a.ct-sha:hover { background: var(--accent-subtle); text-decoration: none; }
+  & .ct-cc { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-default); font-weight: 600; }
+  & .ct-cc .i { width: 14px; height: 14px; }
+  & a.ct-cc:hover { color: var(--accent-fg); text-decoration: none; }
+  & .ct-row { display: grid; grid-template-columns: 16px minmax(120px, 220px) minmax(0, 1fr) 72px 72px 96px; gap: 16px; align-items: center; min-height: 40px; padding: 0 16px; font-size: 14px; }
+  & .ct-row + .ct-row { border-top: 1px solid var(--border-muted); }
+  & .ct-row:not(.ct-head):hover, & .ct-row:focus-within { background: var(--row-hover); }
+  & .ct-head { min-height: 32px; border-top: 0; font-size: 12px; font-weight: 600; color: var(--fg-muted); border-bottom: 1px solid var(--border-muted); }
+  & .ct-head .ct-mkc { cursor: help; }
+  & .ct-fi { display: inline-flex; color: var(--fg-muted); }
+  & .ct-fi.is-dir { color: var(--accent-fg); }
+  /* a long name is cut with an ellipsis (the link carries it in its title) and never reaches into the next column */
+  & .ct-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .ct-nm a { color: var(--fg-default); }
+  & .ct-nm a:hover { color: var(--accent-fg); }
+  & .ct-gh { color: var(--fg-muted); }
+  & .ct-mkc { display: inline-flex; justify-content: flex-end; color: var(--fg-muted); font-size: 12px; position: relative; }
+  & .ct-mkc span { display: inline-flex; align-items: center; gap: 4px; }
+  & .ct-mkc.p span { color: var(--attention-fg); }
+  & .ct-mkc:not(.p) span:not(:empty) .i { color: var(--done-fg); }
+  & .ct-head .ct-mkc[data-tip]::after { content: attr(data-tip); display: none; position: absolute; z-index: 80; top: calc(100% + 2px); right: 0; width: max-content; max-width: 16rem; padding: 4px 8px; border-radius: 6px; background: var(--fg-default); color: var(--canvas-default); font-size: 12px; font-weight: 500; line-height: 16px; white-space: normal; text-align: left; pointer-events: none; }
+  & .ct-head .ct-mkc[data-tip]:hover::after { display: block; }
+  & .ct-tm { text-align: right; color: var(--fg-muted); font-size: 12px; }
+
+  /* Description box (README of the folder, head of the file page). */
+  & .ct-readme { margin-top: 16px; }
+  & .ct-bh { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 40px; padding: 8px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); font-size: 14px; }
+  & .ct-bh .i { color: var(--fg-muted); }
+  & .ct-t { font-weight: 600; }
+  & .ct-pl, & .ct-by { margin-left: 8px; color: var(--fg-muted); font-weight: 400; }
+  & .ct-edit { position: relative; }
+  & .ct-empty { padding: 12px 16px; }
+  & .ct-edit > summary { list-style: none; }
+  & .ct-edit > summary::-webkit-details-marker { display: none; }
+  & .ct-edit[open] > summary { background: var(--btn-active); }
+  & .ct-edit-b { position: absolute; z-index: 30; right: 0; top: calc(100% + 4px); width: min(30rem, 80vw); padding: 12px; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-pop); }
+  & .ct-gb { padding: 24px 32px; }
+  & .ct-prose { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+  & .ct-prose > :last-child { margin-bottom: 0; }
+  & .ct-prose p, & .ct-prose ul, & .ct-prose blockquote { margin: 0 0 16px; }
+  & .ct-prose ul { padding-left: 2em; }
+  & .ct-prose h2, & .ct-prose h3 { margin: 24px 0 16px; font-weight: 600; }
+  & .ct-prose h2 { padding-bottom: .3em; font-size: 20px; border-bottom: 1px solid var(--border-muted); }
+  & .ct-prose h3 { font-size: 16px; }
+  & .ct-prose :is(h2, h3):first-child { margin-top: 0; }
+  & .ct-prose code { padding: .2em .4em; border-radius: 6px; background: var(--neutral-muted); font: 85% var(--ui-mono); }
+  & .ct-prose blockquote { padding: 0 1em; border-left: .25em solid var(--border-default); color: var(--fg-muted); }
+
+  /* File page: tree at the left, description and what belongs to the path at the right. */
+  & .ct-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 24px; align-items: start; }
+  & .ct-nav { display: flex; flex-direction: column; padding: 8px; font-size: 14px; }
+  & .ct-nav > a, & .ct-more { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 6px; color: var(--fg-default); }
+  & .ct-nav > a:hover { background: var(--row-hover); text-decoration: none; }
+  & .ct-nav .i { color: var(--fg-muted); }
+  & .ct-nav > a.is-dir .i { color: var(--accent-fg); }
+  & .ct-nav .d1 { padding-left: 24px; } & .ct-nav .d2 { padding-left: 40px; } & .ct-nav .d3 { padding-left: 56px; } & .ct-nav .d4 { padding-left: 72px; } & .ct-nav .d5 { padding-left: 88px; }
+  & .ct-nav > a.is-cur { position: relative; background: var(--row-hover); font-weight: 600; }
+  & .ct-nav > a.is-cur::before { content: ""; position: absolute; left: -8px; top: 6px; bottom: 6px; width: 3px; border-radius: 6px; background: var(--accent-emphasis); }
+  & .ct-more { color: var(--fg-muted); }
+  & .ct-main { min-width: 0; }
+  & .ct-main > .ct-box + .ct-sec { margin-top: 24px; }
+  & .ct-sec { display: flex; align-items: center; gap: 8px; margin: 24px 0 8px; }
+  & .ct-sec:first-child { margin-top: 0; }
+  & .ct-sec h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0; }
+  & .ct-sub { color: var(--fg-muted); font-size: 12px; }
+  /* fixed columns: the commit, the time and the diff button stand in one place whether a row has them or not */
+  & .ct-rev { display: grid; grid-template-columns: 20px minmax(0, 1fr) 72px 80px 72px; gap: 12px; align-items: center; padding: 8px 16px; }
+  & .ct-rev > :nth-child(3), & .ct-rev > :nth-child(4) { justify-self: end; }
+  & .ct-rev + .ct-rev, & .ct-know + .ct-know, & .ct-work + .ct-work { border-top: 1px solid var(--border-muted); }
+  & .ct-rm { min-width: 0; font-size: 14px; }
+  & .ct-quiet { border-color: transparent; background: transparent; box-shadow: none; color: var(--fg-muted); }
+  & .ct-diffd { position: relative; }
+  & .ct-diffd > summary { list-style: none; }
+  & .ct-diffd > summary::-webkit-details-marker { display: none; }
+  & .ct-diff { position: absolute; z-index: 30; right: 0; top: calc(100% + 4px); width: min(34rem, 80vw); margin: 0; padding: 8px 12px; list-style: none; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-pop); font-size: 13px; }
+  & .ct-diff li { padding: 2px 8px; border-radius: 4px; overflow-wrap: anywhere; }
+  & .ct-diff li.is-add { background: var(--success-subtle); }
+  & .ct-diff li.is-del { background: var(--danger-subtle); text-decoration: line-through; }
+  & .ct-know { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 8px 16px; }
+  & .ct-type { justify-self: start; margin-top: 2px; padding: 0 8px; border: 1px solid var(--border-default); border-radius: 2em; color: var(--fg-muted); font-size: 12px; font-weight: 500; line-height: 18px; white-space: nowrap; }
+  & .ct-type.t-pitfall { background: var(--attention-subtle); border-color: transparent; color: var(--attention-fg); }
+  & .ct-type.t-decision { background: var(--accent-subtle); border-color: transparent; color: var(--accent-fg); }
+  & .ct-kt a { color: var(--fg-default); font-weight: 600; }
+  & .ct-kt a:hover { color: var(--accent-fg); }
+  & .ct-kt small { display: block; margin-top: 2px; color: var(--fg-muted); font-size: 12px; }
+  & .ct-work { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 16px; }
+  & .ct-wm { min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+  & .ct-icon { width: 28px; height: 28px; min-height: 28px; padding: 0; }
+}
+
+@media (max-width: 1011px) {
+  :is(.g2.ct) .ct-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 767px) {
+  :is(.g2.ct) {
+    & .ct-row { grid-template-columns: 16px minmax(0, 1fr) auto auto; gap: 12px; min-height: 44px; }
+    & .ct-gh, & .ct-hide-m, & .ct-hdesc { display: none; }
+    & .ct-table .ct-head { display: none; }
+    & .ct-last:not(:has(b)) { display: none; }
+    & .ct-last .ct-sha { display: none; }
+    & .ct-row .ct-mkc { min-width: 36px; }
+    & .ct-field { width: 100%; }
+    & .ct-gb { padding: 16px; }
+    & .ct-rev { grid-template-columns: 20px minmax(0, 1fr) auto; }
+    & .ct-rev .ct-sub.ct-nw, & .ct-rev .ct-diffd { display: none; }
+    & .ct-know { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    & .ct-edit { position: static; }
+    & .ct-edit-b { left: 8px; right: 8px; width: auto; }
+    & .ct-pop { width: calc(100vw - 32px); }
+  }
+}

@@ -30,6 +30,9 @@ const (
 	DeliveredByBootstrap = "bootstrap"
 	DeliveredByRelevance = "relevance"
 	DeliveredByHint      = "hint"
+	// DeliveredByRunbook: ein Ablauf, dessen Auslöser (Stichwort, Befehl, Pfad)
+	// getroffen hat. Die Zeile trägt ihn als Term "runbook:<id>".
+	DeliveredByRunbook = "runbook"
 )
 
 // ContextDelivery is one thing a session was shown without asking: an entry, or

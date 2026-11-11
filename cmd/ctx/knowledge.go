@@ -15,7 +15,7 @@ import (
 )
 
 const knowledgeUsage = `usage: ctx knowledge move <id> --project P | --machine M | --global
-       ctx knowledge add --type T --title X --body B --scope S [--explanation E] [--supersedes ID[,ID...] --reason R]
+       ctx knowledge add --type T --title X --body B --scope S [--machine M] [--explanation E] [--supersedes ID[,ID...] --reason R]
        ctx knowledge supersede <id> --old ID[,ID...] --reason R
        ctx knowledge retire <id> --reason R
        ctx knowledge show <id>
@@ -36,6 +36,13 @@ add     Writes a pitfall, decision, note or plan. Search first. When a known
 
   --scope S     project, branch, machine or global (required)
   --project P   with --scope project: another project than the current one
+  --machine M   with --scope project: the machine this project knowledge is about
+                (use "here" for this one); the entry stays a project entry, seen
+                by everyone with a role in the project, marked with the machine.
+                With --scope machine: another machine than this one.
+                Knowledge about running a repository on a host gets project AND
+                machine; only what concerns the host alone gets --scope machine
+                without a project and stays private to the machine's owner.
   --explanation E  two to four plain sentences for the people who review it:
                 what it is about, why it matters, what you recommend
 
@@ -112,6 +119,7 @@ func cmdKnowledgeAdd(args []string, stdout io.Writer) int {
 	body := fs.String("body", "", "the knowledge itself")
 	scopeFlag := fs.String("scope", "", "project, branch, machine or global")
 	project := fs.String("project", "", "with --scope project: another project")
+	machine := fs.String("machine", "", `with --scope project: the machine it is about ("here" for this one); with --scope machine: another machine`)
 	supersedes := fs.String("supersedes", "", "comma-separated ids of older entries this one replaces")
 	reason := fs.String("reason", "", "with --supersedes: what changed")
 	explanation := fs.String("explanation", "", "short plain-language note for the people who review it")
@@ -140,17 +148,21 @@ func cmdKnowledgeAdd(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "no config (%s) - run 'ctx setup'\n", config.Path())
 		return 1
 	}
-	return addKnowledge(client.New(cfg), currentAxes(cfg.Machine),
+	return addKnowledge(anchoredClient(cfg), currentAxes(cfg.Machine),
 		store.Knowledge{Type: *typ, Title: *title, Body: *body, Harness: "cli", Explanation: *explanation},
-		*scopeFlag, *project, ids, *reason, stdout)
+		*scopeFlag, *project, *machine, ids, *reason, stdout)
 }
 
-func addKnowledge(c *client.Client, here scope.Axes, k store.Knowledge, scopeHint, project string, supersedes []int64, reason string, stdout io.Writer) int {
+func addKnowledge(c *client.Client, here scope.Axes, k store.Knowledge, scopeHint, project, machine string, supersedes []int64, reason string, stdout io.Writer) int {
 	autoCtx := here
 	switch scopeHint {
 	case "project", "branch":
 		if scopeHint == "branch" && (here.Branch == "" || project != "") {
 			fmt.Fprintln(stdout, "--scope branch needs a named branch of the current project; use project otherwise")
+			return 2
+		}
+		if scopeHint == "branch" && machine != "" {
+			fmt.Fprintln(stdout, "--machine goes with --scope project (knowledge about a repository on a host) or --scope machine, not with branch")
 			return 2
 		}
 		target, err := c.WriteTarget(project, here.Project)
@@ -162,12 +174,32 @@ func addKnowledge(c *client.Client, here scope.Axes, k store.Knowledge, scopeHin
 		if scopeHint == "branch" {
 			k.Scope.Branch = here.Branch
 		}
+		if machine != "" {
+			name := machine
+			if strings.TrimSpace(machine) == "here" {
+				name = here.Machine
+			}
+			name = scope.CanonicalAxes(scope.Axes{Machine: name}).Machine
+			if name == "" {
+				fmt.Fprintln(stdout, "this machine has no name configured; pass --machine <name>")
+				return 1
+			}
+			k.Scope.Machine = name
+		}
 	case "machine":
-		if here.Machine == "" {
+		if project != "" {
+			fmt.Fprintln(stdout, "a machine entry is not tied to a project. Knowledge about a repository on a machine is a project entry that names the machine: --scope project --machine M")
+			return 2
+		}
+		name := here.Machine
+		if machine != "" && strings.TrimSpace(machine) != "here" {
+			name = scope.CanonicalAxes(scope.Axes{Machine: machine}).Machine
+		}
+		if name == "" {
 			fmt.Fprintln(stdout, "this machine has no name configured")
 			return 1
 		}
-		k.Scope = scope.Axes{Machine: here.Machine}
+		k.Scope = scope.Axes{Machine: name}
 	case "global":
 		k.Scope, autoCtx = scope.Axes{}, scope.Axes{}
 	default:
@@ -188,6 +220,7 @@ func addKnowledge(c *client.Client, here scope.Axes, k store.Knowledge, scopeHin
 		msg += "; superseded " + strings.Join(parts, ", ")
 	}
 	fmt.Fprintln(stdout, msg)
+	cliCard(stdout, clientBuilder(c, here.Project).KnowledgeCard(saved))
 	return 0
 }
 
@@ -263,6 +296,7 @@ func cmdKnowledgeRetire(args []string, stdout io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "retired #%d\n", saved.ID)
+	cliCard(stdout, cliBuilder(cfg, requestProjectAxes(cfg.Machine).Project).KnowledgeCard(saved))
 	return 0
 }
 
@@ -305,6 +339,7 @@ func cmdKnowledgeSupersede(args []string, stdout io.Writer) int {
 		parts[i] = "#" + strconv.FormatInt(older, 10)
 	}
 	fmt.Fprintf(stdout, "#%d now supersedes %s\n", saved.ID, strings.Join(parts, ", "))
+	cliCard(stdout, cliBuilder(cfg, requestProjectAxes(cfg.Machine).Project).KnowledgeCard(saved))
 	return 0
 }
 
@@ -328,6 +363,7 @@ func cmdKnowledgeShow(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, k.Closure.Summary())
 	}
 	fmt.Fprintf(stdout, "\n%s\n", k.Body)
+	cliCard(stdout, cliBuilder(cfg, requestProjectAxes(cfg.Machine).Project).KnowledgeCard(k))
 	return 0
 }
 
@@ -381,5 +417,6 @@ func moveKnowledge(c *client.Client, id int64, project, machine string, global b
 		return 1
 	}
 	fmt.Fprintf(stdout, "moved #%d to %s\n", saved.ID, saved.Scope.Label())
+	cliCard(stdout, clientBuilder(c, requestProjectAxes("").Project).KnowledgeCard(saved))
 	return 0
 }

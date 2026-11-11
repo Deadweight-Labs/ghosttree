@@ -1,8 +1,11 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/embed"
@@ -81,12 +84,8 @@ type sessionBest struct {
 // text is below the minimum similarity is left out. Only the vectors of the
 // configured model and text format are read, and of the sessions of r (the
 // asking session excepted): nothing outside is compared.
-func (s *Store) sessionVectorRanking(cfg *EmbedSearchConfig, qvec []float32, exclude string, r readableSessions) ([]sessionBest, error) {
-	rows, err := s.db.Query(`SELECT c.session_id, c.id, c.seq, e.scale, e.vec
-		FROM session_embeddings e
-		JOIN session_chunks c ON c.id = e.chunk_id
-		JOIN sessions se ON se.id = c.session_id
-		WHERE e.model = ? AND e.prefix_version = ? AND (? = '' OR se.external_id != ?) AND `+r.where,
+func (s *Store) sessionVectorRanking(ctx context.Context, cfg *EmbedSearchConfig, qvec []float32, exclude string, r readableSessions) ([]sessionBest, error) {
+	rows, err := s.db.QueryContext(ctx, sessionVectorQuery(s.hasChunkMap(), r),
 		append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion(), exclude, exclude}, r.args...)...)
 	if err != nil {
 		return nil, err
@@ -141,6 +140,28 @@ func (s *Store) sessionVectorRanking(cfg *EmbedSearchConfig, qvec []float32, exc
 	return out, nil
 }
 
+// sessionVectorQuery is the query of sessionVectorRanking over the readable set
+// r; its arguments are model, text format, the asking session twice, then r.args.
+//
+// It starts from the embeddings (a few ten thousand rows) and finds the session
+// of each chunk in the narrow map chunk_index_chunk. Without the forced order
+// SQLite would start from the readable set and read every chunk of every
+// readable session. The unary plus keeps SQLite from carrying the list of
+// readable sessions (se.id IN json_each) over to ci.session_id: it would then
+// look up every embedding once per readable session, which with a thousand
+// readable sessions turned a 0.1 s query into 40 s.
+func sessionVectorQuery(chunkMap bool, r readableSessions) string {
+	byChunk := ""
+	if chunkMap {
+		byChunk = "INDEXED BY chunk_index_chunk"
+	}
+	return `SELECT ci.session_id, e.chunk_id, ci.seq, e.scale, e.vec
+		FROM session_embeddings e
+		CROSS JOIN chunk_index ci ` + byChunk + ` ON ci.chunk_id = e.chunk_id
+		CROSS JOIN sessions se ON se.id = +ci.session_id
+		WHERE e.model = ? AND e.prefix_version = ? AND (? = '' OR se.external_id != ?) AND ` + r.where
+}
+
 // semanticSnippetRunes is how much of the text that came closest a hit shows.
 const semanticSnippetRunes = 200
 
@@ -155,7 +176,7 @@ func (s *Store) semanticText(harness string, b sessionBest) (snippet, kind strin
 	snippet = transcript.OneLine(cleanSessionText(harness, b.seq, raws[b.chunk]), semanticSnippetRunes)
 	kind = "assistant"
 	var role string
-	if err := s.db.QueryRow(`SELECT role FROM chunk_index WHERE chunk_id = ?`, b.chunk).Scan(&role); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := s.db.QueryRowContext(s.ctx(), `SELECT role FROM chunk_index WHERE chunk_id = ?`, b.chunk).Scan(&role); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", "", err
 	}
 	if role == "user" {
@@ -197,7 +218,7 @@ func (s *Store) hybridSessions(q string, o SessionSearch, qvec []float32, cfg *E
 			}
 		}
 	}
-	best, err := s.sessionVectorRanking(cfg, qvec, o.ExcludeSession, r)
+	best, err := s.sessionVectorRanking(context.Background(), cfg, qvec, o.ExcludeSession, r)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +249,7 @@ func (s *Store) hybridSessions(q string, o SessionSearch, qvec []float32, cfg *E
 		for i, id := range onlyVec {
 			args[i] = id
 		}
-		rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions WHERE id IN (`+placeholders(len(args))+`)`, args...)
+		rows, err := s.db.QueryContext(s.ctx(), `SELECT `+sessionCols+` FROM sessions WHERE id IN (`+placeholders(len(args))+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -296,22 +317,60 @@ func transcriptKindUsesVectors(kind string) bool {
 // for search, and the query is not one of ordinary words. It returns nil for a
 // search that is answered by words alone. A failure of the vectors is logged, and
 // the search goes on without them.
-func (s *Store) transcriptVectors(q SearchQuery, readable []Session) ([]sessionBest, *EmbedSearchConfig) {
-	if q.Sort == "newest" || !transcriptKindUsesVectors(q.Kind) {
+func (s *Store) transcriptVectors(q SearchQuery, query func() ([]float32, *EmbedSearchConfig), byID map[int64]Session) ([]sessionBest, *EmbedSearchConfig) {
+	if query == nil {
 		return nil, nil
 	}
-	qvec, cfg, _ := s.queryVector(q.Q, SearchAuto, KindSession)
+	qvec, cfg := query()
 	if qvec == nil {
 		return nil, nil
 	}
-	best, err := s.sessionVectorRanking(cfg, qvec, "", readableSessions{
-		where: `(1=1) AND se.id IN (SELECT value FROM json_each(?))`, args: []any{idsJSON(readable)}, restricted: true})
+	// Die lesbare Menge steht schon fest (byID); sie wird in Go angewandt, nicht
+	// als Liste aller ihrer Nummern in der Abfrage.
+	best, err := s.sessionVectorRanking(q.ctx(), cfg, qvec, "", readableSessions{where: `(1=1)`, restricted: true})
 	if err != nil {
-		s.embedShared().logFallback(cfg, err)
+		if q.ctx().Err() == nil {
+			s.embedShared().logFallback(cfg, err)
+		}
 		return nil, nil
 	}
+	kept := best[:0]
+	for _, b := range best {
+		if _, ok := byID[b.session]; ok {
+			kept = append(kept, b)
+		}
+	}
+	best = kept
 	s.embedShared().hybrid.Add(1)
 	return best, cfg
+}
+
+// transcriptQueryVector starts the embedding of the query of a transcript search,
+// so that it runs while the full-text index is read; the function it returns waits
+// for it. Nil when the search does not use the vectors.
+func (s *Store) transcriptQueryVector(q SearchQuery) func() ([]float32, *EmbedSearchConfig) {
+	if q.Sort == "newest" || !transcriptKindUsesVectors(q.Kind) {
+		return nil
+	}
+	type answer struct {
+		vec []float32
+		cfg *EmbedSearchConfig
+	}
+	ch := make(chan answer, 1)
+	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				slog.Error("search_panic", "part", "transcript query vector", "panic", fmt.Sprint(v))
+				ch <- answer{}
+			}
+		}()
+		vec, cfg, _ := s.queryVectorCtx(q.ctx(), q.Q, SearchAuto, KindSession)
+		ch <- answer{vec, cfg}
+	}()
+	return func() ([]float32, *EmbedSearchConfig) {
+		a := <-ch
+		return a.vec, a.cfg
+	}
 }
 
 // fuseTranscripts fuses the sessions the words found (kept, in the order of the

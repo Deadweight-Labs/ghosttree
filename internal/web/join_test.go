@@ -28,7 +28,7 @@ func joinWeb(t *testing.T) (srv *httptest.Server, st *store.Store, alice *http.C
 	if org, err = st.CreateOrg("person:1", "Alpha", "alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = st.EnsureProject("person:1", joinProject); err != nil {
+	if _, err = claimInOrg(st, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	return srv, st, loginInteractive(t, srv, st, "alice"), org, aliceTok
@@ -106,7 +106,7 @@ func TestJoinEveryInvalidVariantIsByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.EnsureProject("person:1", "github.com/alpha/moving"); err != nil {
+	if _, err := claimInOrg(st, "person:1", "github.com/alpha/moving"); err != nil {
 		t.Fatal(err)
 	}
 	moved, _, err := st.CreateProjectInvitation("person:1", org.ID, "github.com/alpha/moving", store.RoleMember, 0)
@@ -190,7 +190,7 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d: %s", resp.StatusCode, page)
 	}
-	for _, want := range []string{"Alpha", joinProject, "Guest", "alice invited you to " + joinProject, "Your coding agents share what they learn with your team.", "<time "} {
+	for _, want := range []string{"Alpha", joinProject, "Guest", "alice invited you to app", "<time "} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q: %s", want, page)
 		}
@@ -212,7 +212,7 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 			t.Errorf("CSP %q lacks %s", csp, want)
 		}
 	}
-	if !strings.Contains(page, `href="/static/tokens.css"`) {
+	if !strings.Contains(page, `href="/static/ui-tokens.css"`) {
 		t.Error("join page does not load the self-hosted font faces")
 	}
 	if strings.Contains(csp, "script-src") || strings.Contains(csp, "unsafe") {
@@ -222,7 +222,8 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 	if cookies := h.Values("Set-Cookie"); len(cookies) != 0 {
 		t.Errorf("cookies: %v", cookies)
 	}
-	if regexp.MustCompile(`(?i)(src|href|action)="(https?:)?//`).MatchString(page) {
+	// The footer's links to the privacy note and the help leave the page; they load nothing.
+	if regexp.MustCompile(`(?i)(src|href|action)="(https?:)?//`).MatchString(regexp.MustCompile(`(?s)<footer.*?</footer>`).ReplaceAllString(page, "")) {
 		t.Errorf("page loads or links something external: %s", page)
 	}
 	if strings.Contains(page, "<script") {
@@ -287,7 +288,7 @@ func TestJoinAcceptNeedsInteractiveLoginAndCSRFAndHappensOnce(t *testing.T) {
 	// Die Seite für ein angemeldetes Konto bietet den Beitritt an.
 	page, _ := anna.Get(srv.URL + "/join/" + code)
 	text := body(t, page)
-	if !strings.Contains(text, "This is me, anna") || !strings.Contains(text, `action="/join/`+code+`/accept"`) {
+	if !strings.Contains(plainText(text), "This is me, anna") || !strings.Contains(text, `action="/join/`+code+`/accept"`) {
 		t.Fatalf("signed-in page: %s", text)
 	}
 	csrf := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)[1]
@@ -442,7 +443,7 @@ func TestJoinOIDCSignInCreatesAccountWithProjectRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.store.EnsureProject("person:1", joinProject); err != nil {
+	if _, err := claimInOrg(env.store, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	code, _, err := env.store.CreateProjectInvitation("person:1", org.ID, joinProject, store.RoleGuest, 0)
@@ -474,7 +475,7 @@ func TestOrgPageCreatesProjectInvitationLinks(t *testing.T) {
 	base, st, alice, anna, org := orgWeb(t)
 	_ = anna
 	st.SetAccessMode(store.AccessMode{Enforce: true})
-	if _, err := st.EnsureProject("person:1", joinProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
@@ -539,7 +540,7 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 	code := projectInvite(t, st, org, store.RoleMember)
 	page, _ := anna.Get(srv.URL + "/join/" + code)
 	text := body(t, page)
-	for _, want := range []string{"<strong>anna</strong>", "This is me, anna", `name="confirm_account"`, "Not you?", `action="/join/` + code + `/signout"`} {
+	for _, want := range []string{"<b>anna</b>", "This is me,", `name="confirm_account"`, "Not you?", `action="/join/` + code + `/signout"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("page lacks %q: %s", want, text)
 		}
@@ -547,14 +548,15 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 	if strings.Contains(text, "person:") {
 		t.Fatal("the page shows an internal id")
 	}
-	// The protective question stays: the box is not ticked for the person. Until it
-	// is, the reason stands next to the button and the page shows the box as open
-	// (acceptance finding 7, security review of PR #101).
+	// The protective question stays: the box is not ticked for the person and the
+	// form cannot be sent until it is (acceptance finding 7, security review of PR #101).
 	if regexp.MustCompile(`<input type="checkbox" name="confirm_account"[^>]*\bchecked\b`).MatchString(text) {
 		t.Fatalf("the confirmation is ticked for the person: %s", text)
 	}
-	if !strings.Contains(text, `class="join-confirm-hint"`) || !strings.Contains(text, "Confirm first that this is your account.") {
-		t.Fatalf("no visible reason next to the button: %s", text)
+	// Without script the browser itself refuses the form until the box is ticked and says
+	// why next to the box; a sentence under it that never goes away would say it twice.
+	if !regexp.MustCompile(`<input type="checkbox" name="confirm_account"[^>]*\brequired\b`).MatchString(text) || strings.Contains(text, "Confirm first that this is your account.") {
+		t.Fatalf("the box is not required, or a permanent hint stands next to the button: %s", text)
 	}
 	csrf := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)[1]
 	// Ohne Bestätigung des Kontonamens wird nichts verbraucht.
@@ -588,7 +590,7 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 
 func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 	base, st, alice, _, org := orgWeb(t)
-	if _, err := st.EnsureProject("person:1", joinProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
 	resp, _ := alice.Get(base + "/ui/orgs")
@@ -605,7 +607,7 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`data-select>http://127\.0\.0\.1:[0-9]+/join/[0-9a-f]{64}<`).MatchString(page) {
 		t.Fatalf("link: %d %s", resp.StatusCode, page)
 	}
-	if !strings.Contains(page, `<span class="ov-name">`+joinProject+`</span><span class="ov-meta adm-parts"><span>Pending</span><span>guest</span>`) {
+	if !strings.Contains(page, `<b class="ov-name">`+joinProject+`</b><div class="mt muted"><span>Pending</span><span>guest</span>`) {
 		t.Fatalf("the invitation list does not show project and role: %s", page)
 	}
 }
@@ -635,7 +637,7 @@ func TestOrgPageShowsOnlyWhoSharesAProject(t *testing.T) {
 		st.AddPerson(n)
 	}
 	const secret = "github.com/alpha/secret"
-	if _, err := st.EnsureProject("person:1", secret); err != nil {
+	if _, err := claimInOrg(st, "person:1", secret); err != nil {
 		t.Fatal(err)
 	}
 	a, _, _ := st.CreateProjectInvitation("person:1", org.ID, joinProject, store.RoleMember, 0)
@@ -654,8 +656,13 @@ func TestOrgPageShowsOnlyWhoSharesAProject(t *testing.T) {
 			t.Errorf("the page leaks %q", leak)
 		}
 	}
-	if !strings.Contains(page, "alice") || !strings.Contains(page, "anna") {
-		t.Fatalf("anna lacks owner or herself: %s", page)
+	// anna came in through a project invitation: a guest of the organization,
+	// who sees her project and no organization page (14 A, #4376).
+	if strings.Contains(page, `id="members"`) {
+		t.Fatalf("a project guest gets the organization's settings: %s", page)
+	}
+	if status, _ := fetchPage(t, anna, srv.URL+"/ui/alpha"); status != http.StatusNotFound {
+		t.Errorf("a project guest opens the organization page: %d", status)
 	}
 	// Auch ein Gast sieht keine anderen Mitglieder.
 	g, _, _ := st.CreateProjectInvitation("person:1", org.ID, joinProject, store.RoleGuest, 0)

@@ -67,7 +67,7 @@ func TestSessionDetailAndSearchWorkWithStrippedImages(t *testing.T) {
 		t.Fatalf("search status %d: %.300s", code, page)
 	}
 	csess, _ := e.St.SessionByID(cid)
-	code, page = e.get(t, e.Owner, "/ui/sessions/"+csess.PublicID)
+	code, page = e.get(t, e.Owner, "/ui/sessions/"+csess.PublicID+"?view=raw")
 	if code != 200 || !strings.Contains(page, "look at the screenshot") || !strings.Contains(page, "the screenshot shows a login form") {
 		t.Fatalf("codex detail status %d: %.300s", code, page)
 	}

@@ -30,11 +30,12 @@ type CoordSendInput struct {
 	ReplyTo int64 `json:"reply_to,omitempty" jsonschema:"id of the message you are answering"`
 	// Expires ist für Meldungen mit Verfallsdatum. Ohne sie steht 'der Port
 	// ist 20 Sekunden weg' morgen noch als gegenwärtige Lage da.
-	Expires     string `json:"expires_at,omitempty" jsonschema:"RFC3339 time after which this stops being current, for time-critical notices like 'the API is down for 20 seconds'. It stays readable as history either way"`
-	Mention     string `json:"mention,omitempty" jsonschema:"session id of one peer who should get this promptly rather than bundled with ordinary room traffic"`
-	Intent      string `json:"intent,omitempty" jsonschema:"question, approval, blocker, handoff or ack. The first four ask the mentioned peer for an answer or a decision: they open an attention item for them, take part in wait-cycle detection, and need mention. Omit it for plain information"`
-	Explanation string `json:"explanation,omitempty" jsonschema:"only with question, approval, blocker or handoff, which people have to answer: optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
-	As          string `json:"as,omitempty" jsonschema:"post as a named subagent of this session, for example \"tests\" or \"frontend\". Use it when you are a subagent so peers can address you directly. It is a self-declaration: ghosttree cannot verify it, and the peer list says so"`
+	Expires     string   `json:"expires_at,omitempty" jsonschema:"RFC3339 time after which this stops being current, for time-critical notices like 'the API is down for 20 seconds'. It stays readable as history either way"`
+	Mention     string   `json:"mention,omitempty" jsonschema:"session id of one peer who should get this promptly rather than bundled with ordinary room traffic"`
+	Intent      string   `json:"intent,omitempty" jsonschema:"question, approval, blocker, handoff or ack. The first four ask the mentioned peer for an answer or a decision: they open an attention item for them, take part in wait-cycle detection, and need mention. Omit it for plain information"`
+	Explanation string   `json:"explanation,omitempty" jsonschema:"only with question, approval, blocker or handoff: optional \"Kurz erklärt\" for the people who review it: two to four plain sentences in their language, in everyday words: what it is about, why it matters, what has to be done or decided, your recommendation. No markdown or links, never a secret; without it the server writes one later from the text alone"`
+	Options     []string `json:"options,omitempty" jsonschema:"only with intent question to a person: two to six short answers you propose, one line each (at most 120 characters), for example [\"Yes, merge it\", \"No, wait for review\"]. The person sees them as buttons next to a field for their own answer; picking one writes it as their reply. Not for approval, blocker or handoff"`
+	As          string   `json:"as,omitempty" jsonschema:"post as a named subagent of this session, for example \"tests\" or \"frontend\". Use it when you are a subagent so peers can address you directly. It is a self-declaration: ghosttree cannot verify it, and the peer list says so"`
 }
 
 type CoordInboxInput struct {
@@ -185,6 +186,12 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	if intent != "" && intent != store.IntentAck && strings.TrimSpace(in.Mention) == "" {
 		return nil, nil, fmt.Errorf("intent %s needs a mention: say which peer should answer", intent)
 	}
+	if len(in.Options) > 0 && intent != store.IntentQuestion {
+		return nil, nil, fmt.Errorf("options go with intent question only")
+	}
+	if _, err := store.CleanAnswerOptions(in.Options); err != nil {
+		return nil, nil, err
+	}
 	key, err := s.roomKeyFor(in.Room)
 	if err != nil {
 		return nil, nil, err
@@ -207,7 +214,7 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: key,
 		SenderExternalID: sender, ClientID: clientID,
-		Body: in.Body, ReplyTo: in.ReplyTo, ExpiresAt: in.Expires, Intent: intent, Explanation: in.Explanation,
+		Body: in.Body, ReplyTo: in.ReplyTo, ExpiresAt: in.Expires, Intent: intent, Explanation: in.Explanation, Options: in.Options,
 	}
 	if in.As != "" {
 		msg.ParentExternalID = s.coordRef()
@@ -222,8 +229,9 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	// Bewusst nicht "delivered" oder "sent": gespeichert ist, was dieser
 	// Aufruf weiß. Ob ein anderer Agent das liest, hängt an dessen Harness
 	// und wird hier nicht behauptet (Spec §A7).
-	return coordText(fmt.Sprintf("stored as message %d in %s. Other agents see it when they read their inbox; "+
-		"whether a running session is interrupted for it depends on its harness.", id, key) + s.mentionNote(id, in.Body)), nil, nil
+	return s.withCard(coordText(fmt.Sprintf("stored as message %d in %s. Other agents see it when they read their inbox; "+
+		"whether a running session is interrupted for it depends on its harness.", id, key)+s.mentionNote(id, in.Body)),
+		s.builder().MessageCard(store.MessageHit{ID: id, RoomKey: key, Sender: sender, Body: in.Body})), nil, nil
 }
 
 // mentionNote says whom an @name in the body reached, so the sender can see
@@ -407,7 +415,7 @@ func (s *Server) handleCoordStatus(ctx context.Context, _ *mcp.CallToolRequest, 
 // room's members. One text for every refusal: it must not tell a guest apart
 // from anything else, so it names no role and no project.
 const peersNotVisible = "The agent list of this room is not available to you (guests of a project do not see its members). " +
-	"coord_send and coord_inbox work as usual; address people and agents by @name in the text if you know them."
+	"coord action=send and coord action=inbox work as usual; address people and agents by @name in the text if you know them."
 
 // peersError turns the server's refusal into that text and leaves every other
 // failure (network, server error) as it is.
@@ -423,7 +431,7 @@ func peersError(err error) error {
 }
 
 type CoordDMInput struct {
-	To   []string `json:"to" jsonschema:"session ids of the peers to talk to privately — one for a DM, more for a small group. Get them from coord_peers"`
+	To   []string `json:"to" jsonschema:"session ids of the peers to talk to privately — one for a DM, more for a small group. Get them from coord action=peers"`
 	Body string   `json:"body" jsonschema:"what you want to say"`
 	// Label hilft dem Menschen in der Übersicht und ist sonst folgenlos.
 	Label string `json:"label,omitempty" jsonschema:"short name for this conversation, for example 'API-Vertrag'"`
@@ -432,7 +440,7 @@ type CoordDMInput struct {
 
 type CoordDMReadInput struct {
 	With []string `json:"with,omitempty" jsonschema:"session ids of the other participants. Omit to list the private conversations you are part of"`
-	Room string   `json:"room,omitempty" jsonschema:"opaque group room id from coord_dm or the private-conversation list"`
+	Room string   `json:"room,omitempty" jsonschema:"opaque group room id from coord action=dm or the private-conversation list"`
 }
 
 // handleCoordDM eröffnet ein privates Gespräch und schreibt hinein. Beides in
@@ -449,7 +457,7 @@ func (s *Server) handleCoordDM(ctx context.Context, _ *mcp.CallToolRequest, in C
 	key := strings.TrimSpace(in.Room)
 	kind := store.RoomGroup
 	if key != "" && !strings.HasPrefix(key, "group:") {
-		return nil, nil, fmt.Errorf("room must be an opaque group id returned by coord_dm")
+		return nil, nil, fmt.Errorf("room must be an opaque group id returned by coord action=dm")
 	}
 	if key == "" {
 		members := append([]string{s.coordRef()}, in.To...)
@@ -498,9 +506,10 @@ func (s *Server) handleCoordDM(ctx context.Context, _ *mcp.CallToolRequest, in C
 	if err != nil {
 		return nil, nil, err
 	}
-	return coordText(fmt.Sprintf("stored as message %d in a private %s room with %s. "+
+	return s.withCard(coordText(fmt.Sprintf("stored as message %d in a private %s room with %s. "+
 		"Nobody outside it can read this, including through search or summaries.",
-		id, kind, strings.Join(in.To, ", ")+" ("+key+")")), nil, nil
+		id, kind, strings.Join(in.To, ", ")+" ("+key+")")),
+		s.builder().MessageCard(store.MessageHit{ID: id, RoomKey: key, Sender: s.coordRef(), Body: in.Body})), nil, nil
 }
 
 func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, in CoordDMReadInput) (*mcp.CallToolResult, any, error) {
@@ -523,12 +532,12 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 		return coordText(b.String()), nil, nil
 	}
 	if len(in.With) > 1 {
-		return nil, nil, fmt.Errorf("group conversations must be read by the opaque room id returned by coord_dm")
+		return nil, nil, fmt.Errorf("group conversations must be read by the opaque room id returned by coord action=dm")
 	}
 
 	key := strings.TrimSpace(in.Room)
 	if key != "" && !strings.HasPrefix(key, "group:") {
-		return nil, nil, fmt.Errorf("room must be an opaque group id returned by coord_dm")
+		return nil, nil, fmt.Errorf("room must be an opaque group id returned by coord action=dm")
 	}
 	if key == "" {
 		members := append([]string{s.coordRef()}, in.With...)
@@ -678,7 +687,7 @@ func (s *Server) handleCoordTouched(ctx context.Context, _ *mcp.CallToolRequest,
 		fmt.Fprintf(&b, "  %s — %s %s (%s), %s\n",
 			who, e.Tool, e.Path, e.Quality, store.DescribeConflict(kind))
 	}
-	b.WriteString("\nNothing is locked. Decide whether to coordinate with coord_send before you change it.")
+	b.WriteString("\nNothing is locked. Decide whether to coordinate with coord action=send before you change it.")
 	return coordText(b.String()), nil, nil
 }
 

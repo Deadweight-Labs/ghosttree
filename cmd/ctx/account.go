@@ -20,6 +20,20 @@ const accountUsage = `usage: ctx account add <name> [--email E] [--admin] --db <
        ctx account login-link <name> [--url https://host] --db <path>
        ctx account set-gardener <name|person:N|N> --db <path>
        ctx account set-gardener --clear --db <path>
+       ctx account link-github <name|person:N|N> --login <github login> [--id N] --db <path>
+       ctx account set-kind <name|person:N|N> --kind person|service [--org <slug>] --db <path>
+
+set-kind makes an account a service (the gardener, an operations runner, CI)
+or a person again. A service signs in nowhere, owns nothing, is listed under
+Services instead of People, and gets no role from "shared with the org": it
+works only in the projects that name it. --org says which organization it works
+for (shown on that organization's page). Only someone with the host can do it.
+
+link-github records the GitHub account of a person; the web interface shows its
+profile picture (fetched by the server, never by the browser). Only someone with
+the host can set it from here; the number is optional. People link (and unlink)
+their own GitHub account on their profile page in the web interface, where GitHub
+itself says who they are; this command stays for administrators.
 
 set-gardener makes one account the gardener's, once and for good: the number of
 the account is stored (name, or person:N, or the bare number is looked up once),
@@ -49,6 +63,10 @@ func cmdAccount(args []string, stdout io.Writer) int {
 		return cmdAccountLoginLink(args[1:], stdout)
 	case "set-gardener":
 		return cmdAccountSetGardener(args[1:], stdout)
+	case "link-github":
+		return cmdAccountLinkGitHub(args[1:], stdout)
+	case "set-kind":
+		return cmdAccountSetKind(args[1:], stdout)
 	case "token":
 		if len(args) > 1 && args[1] == "create" {
 			return cmdAccountTokenCreate(args[2:], stdout)
@@ -133,7 +151,7 @@ func cmdAccountList(args []string, stdout io.Writer) int {
 	}
 	gardener := st.GardenerAccountID()
 	for _, a := range accounts {
-		fmt.Fprintf(stdout, "%s\t%s\tstate=%s admin=%t email=%s", a.ID, a.Name, a.State, a.Admin, a.Email)
+		fmt.Fprintf(stdout, "%s\t%s\tkind=%s state=%s admin=%t email=%s", a.ID, a.Name, a.Kind, a.State, a.Admin, a.Email)
 		if id, ok := store.AccountNumericID(a.ID); ok && id == gardener {
 			fmt.Fprint(stdout, " gardener=true")
 		}
@@ -185,6 +203,37 @@ func cmdAccountSetGardener(args []string, stdout io.Writer) int {
 	if wasSet && before.ID != acct.ID {
 		fmt.Fprintf(stdout, "it was %s (%s); that account may not write gardener entries any more\n", before.ID, before.Name)
 	}
+	return 0
+}
+
+// cmdAccountLinkGitHub links an account to a GitHub login for the profile
+// picture. Like the other account commands it needs the database, not a token.
+func cmdAccountLinkGitHub(args []string, stdout io.Writer) int {
+	var login *string
+	var number *int64
+	_, who, db, ok := accountFlags("account link-github", args, stdout, func(fs *flag.FlagSet) {
+		login = fs.String("login", "", "the GitHub login")
+		number = fs.Int64("id", 0, "the GitHub user number, if known (gives a stable picture address)")
+	})
+	if !ok || who == "" || *login == "" {
+		fmt.Fprintln(stdout, "usage: ctx account link-github <name|person:N|N> --login <github login> [--id N] --db <path>")
+		return 2
+	}
+	st, ok := openAccountStore(*db, stdout)
+	if !ok {
+		return 1
+	}
+	defer st.Close()
+	acct, err := resolveAccountRef(st, who)
+	if err != nil {
+		fmt.Fprintf(stdout, "%v\n", err)
+		return 1
+	}
+	if err := st.SetAccountGitHub(acct.ID, *login, *number); err != nil {
+		fmt.Fprintf(stdout, "link github: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "%s (%s) is linked to the GitHub login %s\n", acct.ID, acct.Name, *login)
 	return 0
 }
 
@@ -338,4 +387,45 @@ func cmdAccountLoginLink(args []string, stdout io.Writer) int {
 // oder Anführungszeichen im ausgegebenen Hinweis als eines gilt.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// cmdAccountSetKind turns an account into a service or back into a person. It
+// works on the database itself, like set-gardener: what an account is must not
+// be changeable by whoever holds a token.
+func cmdAccountSetKind(args []string, stdout io.Writer) int {
+	var kind, org *string
+	_, who, db, ok := accountFlags("account set-kind", args, stdout, func(fs *flag.FlagSet) {
+		kind = fs.String("kind", "", "person or service")
+		org = fs.String("org", "", "organization a service works for (slug); empty: the instance")
+	})
+	if !ok || who == "" || (*kind != store.AccountKindPerson && *kind != store.AccountKindService) {
+		fmt.Fprintln(stdout, "usage: ctx account set-kind <name|person:N|N> --kind person|service [--org <slug>] --db <path>")
+		return 2
+	}
+	st, ok := openAccountStore(*db, stdout)
+	if !ok {
+		return 1
+	}
+	defer st.Close()
+	acct, err := resolveAccountRef(st, who)
+	if err != nil {
+		fmt.Fprintf(stdout, "%v\n", err)
+		return 1
+	}
+	var orgID int64
+	if *org != "" {
+		o, err := st.OrgByRef(*org)
+		if err != nil {
+			fmt.Fprintf(stdout, "organization %s: %v\n", *org, err)
+			return 1
+		}
+		orgID = o.ID
+	}
+	id, _ := store.AccountNumericID(acct.ID)
+	if err := st.SetAccountKindAsOperator(id, *kind, orgID); err != nil {
+		fmt.Fprintf(stdout, "set kind: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "%s (%s) is now a %s\n", acct.ID, acct.Name, *kind)
+	return 0
 }

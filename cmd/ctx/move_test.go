@@ -43,7 +43,7 @@ func moveCLIFixture(t *testing.T) *store.Store {
 		t.Fatal(err)
 	}
 	for _, p := range []string{cliHere, cliInfra} {
-		if _, err := st.EnsureProject("person:1", p); err != nil {
+		if _, err := claimInOrg(st, "person:1", p); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -108,8 +108,9 @@ func TestRequestCLICreateTargetsAndMove(t *testing.T) {
 	if code := run([]string{"request", "move", strconv.FormatInt(id, 10), "--project", cliHere, "--reason", "wrong repo"}, &out); code != 0 {
 		t.Fatalf("move: %d %s", code, out.String())
 	}
-	if want := "moved REQ-" + strconv.FormatInt(id, 10) + " to "; !strings.HasPrefix(out.String(), want) || strings.Count(out.String(), "\n") != 1 {
-		t.Errorf("move prints %q, want one line starting %q", out.String(), want)
+	// One line for the move, then the card of the request (REQ-603).
+	if want := "moved REQ-" + strconv.FormatInt(id, 10) + " to "; !strings.HasPrefix(out.String(), want) || !strings.Contains(out.String(), "\nlink: ") {
+		t.Errorf("move prints %q, want a line starting %q and the card", out.String(), want)
 	}
 	d, _ := st.RequestByID(id)
 	if d.Request.Scope.Project != cliHere || d.Activity[len(d.Activity)-1].Kind != "request.moved" {

@@ -24,7 +24,7 @@ type ThreadOpenInput struct {
 	// Alle weiteren Felder optional, deshalb omitempty (#846).
 	Question   string `json:"question,omitempty" jsonschema:"the leading question in full, if the title is too short to carry it"`
 	First      string `json:"first_post,omitempty" jsonschema:"your opening contribution — what you already know or suspect"`
-	LinkKind   string `json:"link_kind,omitempty" jsonschema:"attach this thread to an existing object: knowledge, request or document"`
+	LinkKind   string `json:"link_kind,omitempty" jsonschema:"attach this thread to an existing object: knowledge, request, document or idea (link_id IDEA-n: the thread is then the discussion of that idea)"`
 	LinkID     string `json:"link_id,omitempty" jsonschema:"id of that object, for example 846 for a knowledge entry"`
 	LinkRev    string `json:"link_revision,omitempty" jsonschema:"revision of that object, if you mean one exact version rather than whatever it says today"`
 	DiscussNow bool   `json:"announce,omitempty" jsonschema:"also announce this thread in the project room so other agents see it exists"`
@@ -88,13 +88,26 @@ func (s *Server) joinThreadProject() error {
 // to; agents often pass the bare number.
 func canonicalLinkID(kind, id string) string {
 	id = strings.TrimSpace(id)
-	if kind != "request" || id == "" {
+	prefix := linkPrefix(kind)
+	if prefix == "" || id == "" {
 		return id
 	}
 	if _, err := strconv.ParseInt(id, 10, 64); err == nil {
-		return "REQ-" + id
+		return prefix + id
 	}
 	return id
+}
+
+// linkPrefix is the human form of the number of a linked object: REQ-n for a
+// request, IDEA-n for an idea. Other kinds have none.
+func linkPrefix(kind string) string {
+	switch kind {
+	case "request":
+		return "REQ-"
+	case "idea":
+		return "IDEA-"
+	}
+	return ""
 }
 
 // threadsForObjectEitherForm asks for both spellings of a request link (REQ-n
@@ -105,8 +118,8 @@ func (s *Server) threadsForObjectEitherForm(kind, id string) ([]store.Thread, er
 	if err != nil {
 		return nil, err
 	}
-	other := strings.TrimPrefix(canonical, "REQ-")
-	if kind != "request" || other == canonical {
+	other := strings.TrimPrefix(canonical, linkPrefix(kind))
+	if linkPrefix(kind) == "" || other == canonical {
 		return found, nil
 	}
 	more, err := s.client.ThreadsForObject(kind, other, s.coordRef())
@@ -199,7 +212,8 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 			}
 		}
 	}
-	return coordText(b.String()), nil, nil
+	opened := store.Thread{ID: id, Project: project, Title: in.Title, State: store.ThreadOpen}
+	return s.withCard(coordText(b.String()), s.builder().ThreadCard(opened, 0)), nil, nil
 }
 
 func (s *Server) postToThread(id int64, body string) error {
@@ -230,7 +244,8 @@ func (s *Server) handleThreadReply(ctx context.Context, _ *mcp.CallToolRequest, 
 	if err != nil {
 		return nil, nil, err
 	}
-	return coordText(fmt.Sprintf("posted to thread %d", in.ID) + s.mentionNote(id, in.Body)), nil, nil
+	posted := store.Thread{ID: in.ID, Title: "thread " + strconv.FormatInt(in.ID, 10)}
+	return s.withCard(coordText(fmt.Sprintf("posted to thread %d", in.ID)+s.mentionNote(id, in.Body)), s.builder().ThreadCard(posted, id)), nil, nil
 }
 
 // handleThreadRead ist das Werkzeug, an dem sich entscheidet, ob Threads
@@ -352,7 +367,7 @@ func (s *Server) handleThreadRead(ctx context.Context, _ *mcp.CallToolRequest, i
 	if !hasSummary && !in.Full && len(posts) > limit {
 		b.WriteString("\nThere is no summary yet, so this is raw history.\n")
 	}
-	return coordText(b.String()), nil, nil
+	return s.withCard(coordText(b.String()), s.builder().ThreadCard(t, 0)), nil, nil
 }
 
 func (s *Server) handleThreadFind(ctx context.Context, _ *mcp.CallToolRequest, in ThreadFindInput) (*mcp.CallToolResult, any, error) {
@@ -385,7 +400,7 @@ func (s *Server) handleThreadFind(ctx context.Context, _ *mcp.CallToolRequest, i
 		if t.Archived {
 			b.WriteString(", archived")
 		}
-		fmt.Fprintf(&b, " (last activity %s)\n", t.UpdatedAt)
+		fmt.Fprintf(&b, " (last activity %s) %s\n", t.UpdatedAt, s.builder().WithProject(t.Project).Room(t.ID, 0))
 	}
 	return coordText(b.String()), nil, nil
 }
@@ -411,8 +426,9 @@ func (s *Server) handleThreadResolve(ctx context.Context, _ *mcp.CallToolRequest
 	}
 	// Der Nachsatz ist der Punkt aus §B6: eine beendete Diskussion ist keine
 	// erledigte Arbeit, und kein verknüpfter Request wird dadurch grün.
-	return coordText(fmt.Sprintf("thread %d is now %s. This closes the discussion, not any work: "+
-		"linked requests keep their own criteria and evidence.", in.ID, state)), nil, nil
+	closed := store.Thread{ID: in.ID, Title: "thread " + strconv.FormatInt(in.ID, 10), State: state}
+	return s.withCard(coordText(fmt.Sprintf("thread %d is now %s. This closes the discussion, not any work: "+
+		"linked requests keep their own criteria and evidence.", in.ID, state)), s.builder().ThreadCard(closed, 0)), nil, nil
 }
 
 func (s *Server) handleThreadPropose(ctx context.Context, _ *mcp.CallToolRequest, in ThreadProposeInput) (*mcp.CallToolResult, any, error) {
@@ -431,6 +447,10 @@ func (s *Server) handleThreadPropose(ctx context.Context, _ *mcp.CallToolRequest
 		State: store.OutcomeProposed, Note: in.Note}, s.coordRef()); err != nil {
 		return nil, nil, err
 	}
-	return coordText(fmt.Sprintf("recorded as a proposal on thread %d. It is not knowledge yet: "+
-		"promoting it needs its own write through context_remember and the usual review.", in.ID)), nil, nil
+	res := coordText(fmt.Sprintf("recorded as a proposal on thread %d. It is not knowledge yet: "+
+		"promoting it needs its own write through context_remember and the usual review.", in.ID))
+	if t, err := s.client.ThreadByID(in.ID, s.coordRef()); err == nil {
+		res = s.withCard(res, s.builder().ThreadCard(t, 0))
+	}
+	return res, nil, nil
 }

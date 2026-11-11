@@ -77,7 +77,8 @@ func TestSearchPageAsksOnceForThePainsOfAllProjects(t *testing.T) {
 	if !strings.Contains(page, "Echter Treffer") {
 		t.Fatalf("the pain that matches the words is not in the group:\n%s", page)
 	}
-	if neighbours := strings.Count(page, "Nachbar "); neighbours > 3 {
+	// The hover card of each hit repeats its title, so count the hits, not the text.
+	if neighbours := strings.Count(page, `class="ht rl" href="/ui/x/`) - strings.Count(page, `Echter Treffer</a>`); neighbours > 3 {
 		t.Fatalf("%d neighbours in a group of five: the share is counted per project, not per group", neighbours)
 	}
 }

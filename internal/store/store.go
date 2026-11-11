@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -32,6 +33,10 @@ type Store struct {
 	accessOnce    sync.Once
 	esh           *embedShared
 	embedOnce     sync.Once
+	chunkMap      *chunkMapState
+	chunkMapOnce  sync.Once
+	// qctx ends the reads of a view made by WithContext; nil elsewhere.
+	qctx context.Context
 }
 
 type OpenOptions struct {
@@ -55,6 +60,9 @@ CREATE TABLE IF NOT EXISTS account_identities(
   account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
   issuer TEXT NOT NULL, subject TEXT NOT NULL, created_at TEXT NOT NULL,
   PRIMARY KEY(issuer, subject));
+CREATE TABLE IF NOT EXISTS account_github(
+  account_id INTEGER PRIMARY KEY REFERENCES persons(id) ON DELETE RESTRICT,
+  login TEXT NOT NULL, github_id INTEGER NOT NULL DEFAULT 0, linked_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS account_codes(
   code_hash TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK(kind IN ('bootstrap','claim','login')),
@@ -189,7 +197,7 @@ CREATE TABLE IF NOT EXISTS request_relations(
   request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE RESTRICT,
   other_request_id INTEGER REFERENCES requests(id) ON DELETE RESTRICT,
   knowledge_id INTEGER REFERENCES knowledge(id) ON DELETE RESTRICT,
-  kind TEXT NOT NULL CHECK(kind IN ('parent','related','blocks','duplicates','supersedes','knowledge','external')),
+  kind TEXT NOT NULL CHECK(kind IN ('parent','related','blocks','duplicates','supersedes','knowledge','external','derived')),
   external_ref TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS request_work(
   id INTEGER PRIMARY KEY,
@@ -361,10 +369,10 @@ CREATE TABLE IF NOT EXISTS session_chunks(
   seq INTEGER NOT NULL, role TEXT NOT NULL DEFAULT '',
   text TEXT NOT NULL DEFAULT '', raw TEXT NOT NULL,
   UNIQUE(session_id, seq));
+-- chunks_fts was the first search path over sessions; chunk_fts replaced it
+-- (REQ-622). A database that still has the trigger chunks_ai keeps it up to
+-- date until ctx db slim-search drops the trigger and empties the table.
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content='session_chunks', content_rowid='id');
-CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON session_chunks BEGIN
-  INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
-END;
 -- prompt_version is part of the identity, not a note beside it. Keyed on the
 -- transcript alone, a session was retired against whichever prompt happened to
 -- reach it first, and no later improvement could ever touch it again.
@@ -625,6 +633,12 @@ CREATE TABLE IF NOT EXISTS document_revisions(
   person TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   UNIQUE(document_id,revision));
+CREATE TABLE IF NOT EXISTS document_slugs(
+  project TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  moved_at TEXT NOT NULL,
+  PRIMARY KEY(project,slug)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS coord_agents(
   id INTEGER PRIMARY KEY,
   external_id TEXT NOT NULL UNIQUE,
@@ -739,6 +753,14 @@ CREATE TABLE IF NOT EXISTS thread_outcomes(
   created_at TEXT NOT NULL,
   decided_at TEXT,
   PRIMARY KEY(thread_id,kind,ref_id));
+CREATE TABLE IF NOT EXISTS thread_events(
+  id INTEGER PRIMARY KEY,
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  person TEXT NOT NULL DEFAULT '',
+  data TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS thread_events_thread ON thread_events(thread_id,id);
 CREATE TABLE IF NOT EXISTS path_activity(
   id INTEGER PRIMARY KEY,
   project TEXT NOT NULL DEFAULT '',
@@ -1048,6 +1070,16 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// Right after the accounts: every later step may read accounts, orgs and
+	// projects through the shared column lists, which name the new columns.
+	if err := ensureOwnerNamespaces(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureGardenSettings(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateCoordRoomMemberships(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1096,6 +1128,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureTaskSteps(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureEmbeddings(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1112,7 +1148,15 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureMachineSharing(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateOrgs(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := migrateSourceInstallation(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -1125,6 +1169,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureSessionIndex(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureRawCodec(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -1160,6 +1208,74 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := EnsureContextSnapshotSchema(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureLabelsAndIdeas(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureIdeaEdits(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureIdeaWorkshop(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureComments(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureReactions(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureAnswerOptions(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureGitAnchors(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureGhostBranches(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensurePullRequests(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureWorkPackages(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := allowDerivedRelation(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureOriginContexts(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureActors(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureToolCounts(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureRunbooks(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureFeatures(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCommitQueryIndexes(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

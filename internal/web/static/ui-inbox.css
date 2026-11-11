@@ -1,0 +1,78 @@
+/* Inbox: the row is one link (the title or the message covers it), the buttons
+   and the reply field sit above that link. Mock: git-native-v2 index.html. */
+
+:is(.g2) {
+  & .ifilter { flex: 0 1 auto; }
+  & .nrow { position: relative; }
+  & .nrow .nb { min-width: 0; }
+  & .nrow .lnk { color: inherit; }
+  & .nrow .lnk:hover { text-decoration: none; }
+  & .nrow .lnk::after { content: ""; position: absolute; inset: 0; }
+  & .nrow:has(.lnk:hover) .t, & .nrow:has(.lnk:hover) .q { color: var(--accent-fg); }
+  & .nrow .t .lnk { color: var(--fg-default); }
+  & .nrow .inreply:has(.dd.open, details[open]) { z-index: 60; }
+  & .nrow .top2 a, & .nrow .ref, & .nrow .acts, & .nrow .inreply, & .nrow .rquote { position: relative; z-index: 1; }
+  /* plain text above the row link lets the click through, so the whole row opens */
+  & .nrow .rquote, & .nrow .brief { pointer-events: none; }
+  & .nrow .acts { align-self: center; }
+  & .nrow .q { margin-top: 4px; padding: 0 12px; color: var(--fg-default); border-left: 3px solid var(--border-default); font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
+  & .nrow .rquote { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 0 12px; border-left: 3px solid var(--border-default); font-size: 12px; line-height: 20px; color: var(--fg-muted); }
+  & .nrow .rquote .i { width: 12px; height: 12px; flex: none; }
+  & .nrow .rquote b { color: var(--fg-default); font-weight: 600; }
+  & .nrow .sub { margin-top: 2px; font-size: 12px; line-height: 20px; color: var(--fg-muted); display: flex; flex-wrap: wrap; gap: 0 12px; align-items: center; }
+  & .nrow.open { background: var(--row-hover); }
+  & .nrow .inreply { grid-column: 2 / -1; margin-top: 10px; }
+  & .nrow .inreply .cx textarea { min-height: 72px; }
+  & .nrow .inreply .cx.compact textarea { min-height: 56px; }
+  & .nrow .inreply form { display: block; }
+  & .nrow.is-done .nb { opacity: .78; }
+  & .nrow.is-done .gav.mk { background: var(--neutral-muted); color: var(--fg-muted); }
+  & a.tog { color: var(--fg-default); }
+  & a.tog:hover { text-decoration: none; }
+  /* A decision: one full line per proposal, the letter in front, the whole line is the button. "Open" stands at
+     the top right on the line of the head, "With a reason" flush below the lines. */
+  & .nrow:has(.opts) { align-items: start; }
+  & .nrow:has(.opts) .acts { align-self: start; margin-top: -4px; }
+  & .opts { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-top: 10px; position: relative; z-index: 1; }
+  & .opts .ol { display: inline-flex; align-items: center; gap: 4px; margin: 0 0 2px; font-size: 12px; color: var(--fg-muted); }
+  & .opts .ol .i { width: 12px; height: 12px; }
+  & .opts .orow { display: block; margin: 0; }
+  & .opts .orow .gbtn { width: 100%; height: auto; min-height: 32px; justify-content: flex-start; gap: 8px; padding: 6px 12px; line-height: 20px; font-weight: 400; text-align: left; white-space: normal; }
+  & .opts .orow .gbtn .ok { flex: none; width: 20px; color: var(--fg-muted); font-weight: 600; }
+  & .opts .orow .gbtn span { min-width: 0; overflow-wrap: anywhere; }
+  & .opts .own { align-self: flex-start; margin-left: -1px; padding-left: 0; padding-right: 0; }
+  & .nrow.answered .acts, & .nrow.answered .inreply { display: none; }
+  & .nrow .sub.qa { color: var(--fg-muted); }
+  & .nrow .brief { position: relative; z-index: 1; margin-top: 2px; font-size: 13px; line-height: 20px; color: var(--fg-muted); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  & .nrow .t .ref.pill { margin-right: 6px; }
+
+  /* "Kurz erklärt" and the steps of a task: a muted line, unfolding to the whole text and a checklist */
+  & .nrow .tnote { position: relative; z-index: 1; margin-top: 6px; font-size: 12px; line-height: 20px; color: var(--fg-muted); min-width: 0; }
+  & .tnote .k { flex: none; font-weight: 600; color: var(--fg-muted); }
+  & .tnote .lead { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .tnote.one { display: flex; align-items: baseline; gap: 6px; }
+  & .tnote summary { display: flex; align-items: baseline; gap: 6px; list-style: none; cursor: pointer; border-radius: 4px; }
+  & .tnote summary::-webkit-details-marker { display: none; }
+  & .tnote summary::before { content: ""; flex: none; align-self: center; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform .12s; }
+  & .tnote[open] summary::before { transform: rotate(45deg); }
+  & .tnote[open] .lead { display: none; }
+  & .tnote summary:hover { color: var(--fg-default); }
+  & .tnote summary:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
+  & .tnote .tbody { margin: 4px 0 0 2px; padding: 0 0 0 12px; border-left: 3px solid var(--border-default); }
+  & .tnote .tbody p { margin: 0 0 6px; font-size: 13px; line-height: 1.5; color: var(--fg-default); overflow-wrap: anywhere; }
+  & .tnote .steps { margin: 0; padding: 0; list-style: none; counter-reset: step; }
+  & .tnote .steps li { counter-increment: step; display: flex; align-items: baseline; gap: 6px; padding: 2px 0; font-size: 13px; color: var(--fg-default); }
+  & .tnote .steps li::before { content: counter(step) "."; flex: none; min-width: 18px; text-align: right; color: var(--fg-muted); }
+  & .tnote .steps label { display: flex; align-items: baseline; gap: 8px; min-width: 0; cursor: pointer; }
+  & .tnote .steps input { flex: none; margin: 0; align-self: center; accent-color: var(--accent-emphasis); }
+  & .tnote .steps span { min-width: 0; overflow-wrap: anywhere; }
+  & .tnote .steps input:checked + span { color: var(--fg-muted); text-decoration: line-through; }
+}
+
+@media (max-width: 767px) {
+  :is(.g2) {
+    & .nrow .inreply { grid-column: 1 / -1; }
+    & .ntools .ifilter { width: 100%; }
+    & .ntools .sp { display: none; }
+  }
+}

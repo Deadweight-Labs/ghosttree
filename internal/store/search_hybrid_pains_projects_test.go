@@ -18,7 +18,7 @@ func TestPainSearchOverSeveralProjectsIsOneSearch(t *testing.T) {
 	srv, c := newFakeEmbedder(t)
 	projects := []string{"github.com/dw/a", "github.com/dw/b", "github.com/dw/c"}
 	for _, p := range projects {
-		if _, err := st.EnsureProject("person:1", p); err != nil {
+		if _, err := claimInOrg(st, "person:1", p); err != nil {
 			t.Fatal(err)
 		}
 	}

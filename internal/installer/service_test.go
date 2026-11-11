@@ -277,3 +277,72 @@ func TestWatchServiceUpdatesItsOwnDefinitionForAnotherPathOnBothPlatforms(t *tes
 		}
 	}
 }
+
+// Ein von außen beendeter Collector (SIGTERM, Exit 0) startet wieder: on-failure
+// ließ ihn nach einem pkill dauerhaft aus.
+func TestWatchServiceRestartsAfterACleanExit(t *testing.T) {
+	if unit := watchUnitText("/usr/bin/ctx"); !strings.Contains(unit, "\nRestart=always\n") {
+		t.Fatalf("systemd unit restarts only on failure:\n%s", unit)
+	}
+	plist := watchPlistText("/usr/bin/ctx", "/tmp/watch.log")
+	if !strings.Contains(plist, "<key>KeepAlive</key>\n\t<true/>") {
+		t.Fatalf("launchd agent keeps alive only after a failed exit:\n%s", plist)
+	}
+}
+
+// Eine Unit aus der Zeit vor Restart=always ist die eigene: sie wird ersetzt,
+// statt dass ctx install sie für fremd hält und abbricht.
+func TestWatchServiceUpgradesTheOnFailureUnit(t *testing.T) {
+	home := t.TempDir()
+	ctx := fakeBinary(t, filepath.Join(home, ".local", "bin", "ctx"))
+	useCtx(t, ctx)
+	log := &ctlLog{}
+	defer SetServiceBackend("linux", log.run, 1000)()
+	unit := filepath.Join(home, ".config", "systemd", "user", "ghosttree-watch.service")
+	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unit, []byte(legacyWatchUnitText(ctx)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changes, err := InstallWatchService(home)
+	if err != nil || changes[0].Action != "updated" {
+		t.Fatalf("legacy unit: err=%v changes=%+v", err, changes)
+	}
+	raw, _ := os.ReadFile(unit)
+	if !strings.Contains(string(raw), "\nRestart=always\n") {
+		t.Fatalf("unit after the upgrade:\n%s", raw)
+	}
+}
+
+func TestRestartWatchServiceRestartsAfterInstall(t *testing.T) {
+	home := t.TempDir()
+	useCtx(t, fakeBinary(t, filepath.Join(home, "ctx")))
+	log := &ctlLog{}
+	defer SetServiceBackend("linux", log.run, 1000)()
+	changes, err := RestartWatchService(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := log.calls[len(log.calls)-1]; last != "systemctl --user restart ghosttree-watch.service" {
+		t.Fatalf("last call = %q, calls %v", last, log.calls)
+	}
+	if got := changes[len(changes)-1].Action; got != "collector restarted" {
+		t.Fatalf("last change = %q", got)
+	}
+}
+
+func TestRestartWatchServiceWithoutBusDoesNotRestart(t *testing.T) {
+	home := t.TempDir()
+	useCtx(t, fakeBinary(t, filepath.Join(home, "ctx")))
+	log := &ctlLog{fail: map[string]error{"daemon-reload": errors.New("exit status 1: Failed to connect to bus: No medium found")}}
+	defer SetServiceBackend("linux", log.run, 1000)()
+	if _, err := RestartWatchService(home); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range log.calls {
+		if strings.Contains(c, "restart") {
+			t.Fatalf("restarted without a bus: %v", log.calls)
+		}
+	}
+}

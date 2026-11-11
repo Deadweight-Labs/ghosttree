@@ -203,36 +203,49 @@ type MigratedDocument struct {
 	Message  string   `json:"message"`
 }
 
-func (s *Store) ImportDocument(in MigratedDocument) (Document, error) {
+// importOutcome carries both answers of ImportDocument through the write queue.
+type importOutcome struct {
+	doc     Document
+	created bool
+}
+
+// ImportDocument stores an imported document as revision 1. Importing the same
+// artifact again answers with the document of the first import and created
+// false: nothing was written, so the caller has nothing to attribute.
+func (s *Store) ImportDocument(in MigratedDocument) (Document, bool, error) {
 	if Digest(in.Body) != in.Digest {
-		return Document{}, fmt.Errorf("document body does not match migration digest")
+		return Document{}, false, fmt.Errorf("document body does not match migration digest")
 	}
 	if s.writer != nil {
-		return queueValue(s, []any{in}, func(d *Store, p []any) (Document, error) { return d.ImportDocument(p[0].(MigratedDocument)) })
+		out, err := queueValue(s, []any{in}, func(d *Store, p []any) (importOutcome, error) {
+			doc, created, err := d.ImportDocument(p[0].(MigratedDocument))
+			return importOutcome{doc, created}, err
+		})
+		return out.doc, out.created, err
 	}
 	itemKey := "document-import:" + Digest(strings.Join([]string{in.Document.Project, in.Source, in.Digest}, "\x00"))
 	tx, err := s.db.Begin()
 	if err != nil {
-		return Document{}, err
+		return Document{}, false, err
 	}
 	defer tx.Rollback()
 	var existingID int64
 	err = tx.QueryRow(`SELECT document_id FROM migration_evidence WHERE item_key=?`, itemKey).Scan(&existingID)
 	if err == nil {
 		d, err := scanDocument(tx.QueryRow(`SELECT `+documentColumns+` FROM documents WHERE id=?`, existingID))
-		return d, err
+		return d, false, err
 	}
 	if err != sql.ErrNoRows {
-		return Document{}, err
+		return Document{}, false, err
 	}
 	var valid int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM migration_runs r JOIN migration_artifacts a ON a.run_id=r.id
 		WHERE r.id=? AND r.project=? AND r.state='pending' AND a.path=? AND a.digest=?`,
 		in.RunID, in.Document.Project, in.Source, in.Digest).Scan(&valid); err != nil {
-		return Document{}, err
+		return Document{}, false, err
 	}
 	if valid != 1 {
-		return Document{}, fmt.Errorf("document import does not match a pending migration artifact")
+		return Document{}, false, fmt.Errorf("document import does not match a pending migration artifact")
 	}
 	d := in.Document
 	if d.Status == "" {
@@ -242,24 +255,24 @@ func (s *Store) ImportDocument(in MigratedDocument) (Document, error) {
 	res, err := tx.Exec(`INSERT INTO documents(project,slug,kind,title,head_revision,status,person,created_at,updated_at)
 		VALUES(?,?,?,?,1,?,?,?,?)`, d.Project, d.Slug, d.Kind, d.Title, d.Status, d.Person, ts, ts)
 	if err != nil {
-		return Document{}, err
+		return Document{}, false, err
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
-		return Document{}, err
+		return Document{}, false, err
 	}
 	if err := insertRevisionTx(tx, id, 1, in.Body, in.Message, d.Person, ts); err != nil {
-		return Document{}, err
+		return Document{}, false, err
 	}
 	if _, err := tx.Exec(`INSERT INTO migration_evidence(document_id,revision,run_id,source,digest,item_key)
 		VALUES(?,1,?,?,?,?)`, id, in.RunID, in.Source, in.Digest, itemKey); err != nil {
-		return Document{}, err
+		return Document{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return Document{}, err
+		return Document{}, false, err
 	}
 	d.ID, d.HeadRevision, d.CreatedAt, d.UpdatedAt = id, 1, ts, ts
-	return d, nil
+	return d, true, nil
 }
 
 func (s *Store) CompletedDocumentArtifacts(project string) (map[string][]string, error) {

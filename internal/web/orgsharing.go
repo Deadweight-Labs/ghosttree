@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,14 +21,22 @@ import (
 func WithSourceProver(p forge.Prover) Option { return func(a *app) { a.prover = p } }
 
 const (
-	sourceFlowTTL    = 10 * time.Minute
-	maxSourceFlows   = 200
-	sourcePathPrefix = "/ui/orgs/source/"
+	sourceFlowTTL            = 10 * time.Minute
+	maxSourceFlows           = 200
+	maxSourceFlowsPerAccount = 3
+	sourcePathPrefix         = "/ui/orgs/source/"
 )
+
+// flowLink ist der Zweck eines Ablaufs, der das GitHub-Konto des Menschen mit
+// seinem ghosttree-Konto verbindet (Profilbild). Ein Ablauf ohne Zweck verbindet
+// eine GitHub-Organisation. Beide teilen die Rückkehradresse, weil die App nur zu
+// hinterlegten Adressen zurückleitet.
+const flowLink = "link"
 
 type sourceFlow struct {
 	account string
 	org     string
+	purpose string
 	until   time.Time
 	// accounts ist gesetzt, sobald der Nachweis geliefert wurde.
 	accounts []forge.Account
@@ -55,6 +64,15 @@ func randomToken() (string, error) {
 }
 
 func (f *sourceFlows) start(account, org string) (string, error) {
+	return f.begin(sourceFlow{account: account, org: org})
+}
+
+// startLink beginnt einen Ablauf, der nur das eigene GitHub-Konto verbindet.
+func (f *sourceFlows) startLink(account string) (string, error) {
+	return f.begin(sourceFlow{account: account, purpose: flowLink})
+}
+
+func (f *sourceFlows) begin(fl sourceFlow) (string, error) {
 	tok, err := randomToken()
 	if err != nil {
 		return "", err
@@ -62,10 +80,12 @@ func (f *sourceFlows) start(account, org string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pruneLocked()
-	if len(f.flows) >= maxSourceFlows {
-		f.flows = map[string]sourceFlow{}
-	}
-	f.flows[tok] = sourceFlow{account: account, org: org, until: f.now().Add(sourceFlowTTL)}
+	// One account cannot push out the flows of others: it keeps a few of its
+	// own, and a full table drops its oldest entry instead of all of them.
+	f.dropOldestLocked(func(v sourceFlow) bool { return v.account == fl.account }, maxSourceFlowsPerAccount)
+	f.dropOldestLocked(func(sourceFlow) bool { return true }, maxSourceFlows)
+	fl.until = f.now().Add(sourceFlowTTL)
+	f.flows[tok] = fl
 	return tok, nil
 }
 
@@ -97,6 +117,27 @@ func (f *sourceFlows) put(tok string, fl sourceFlow) {
 	f.flows[tok] = fl
 }
 
+// dropOldestLocked removes the entries that expire first among those matching
+// keep until fewer than limit match.
+func (f *sourceFlows) dropOldestLocked(match func(sourceFlow) bool, limit int) {
+	for {
+		n, oldest, first := 0, "", time.Time{}
+		for k, v := range f.flows {
+			if !match(v) {
+				continue
+			}
+			n++
+			if oldest == "" || v.until.Before(first) {
+				oldest, first = k, v.until
+			}
+		}
+		if n < limit {
+			return
+		}
+		delete(f.flows, oldest)
+	}
+}
+
 func (f *sourceFlows) pruneLocked() {
 	now := f.now()
 	for k, v := range f.flows {
@@ -118,8 +159,16 @@ type sourceRow struct {
 // sourcePick sind die GitHub-Organisationen, in denen der Mensch Admin ist und
 // die er jetzt verbinden kann.
 type sourcePick struct {
-	Token    string
+	Token string
+	// Accounts sind alle nachgewiesenen Organisationen. Ist eine davon schon als
+	// Quelle verbunden, steht sie auch in Adopt: dann hängt "Hinzufügen" nur die
+	// nachgewiesene Installation an die bestehende Quelle ("Installation
+	// übernehmen") und lässt Präfix und Sichtbarkeit unberührt.
 	Accounts []string
+	Adopt    map[string]bool
+	// InstallURL führt zur Installation der App, für Organisationen ohne
+	// Installation. Leer, wenn der Prover keine kennt.
+	InstallURL string
 }
 
 func (a *app) sourceReady() bool { return a.prover != nil && a.prover.Configured() }
@@ -178,7 +227,11 @@ func (a *app) orgSourceCallback(w http.ResponseWriter, r *http.Request) {
 	me := browserPrincipal(r).ID
 	fl, ok := a.sourceFlows.take(r.URL.Query().Get("state"), me)
 	if !ok {
-		http.Redirect(w, r, "/ui/orgs?notice=source_failed", http.StatusSeeOther)
+		http.Redirect(w, r, "/ui/orgs?notice=source_failed"+noticeAnchor("source_failed"), http.StatusSeeOther)
+		return
+	}
+	if fl.purpose == flowLink {
+		a.finishGitHubLink(w, r, me)
 		return
 	}
 	if !a.sourceReady() || r.URL.Query().Get("code") == "" {
@@ -187,7 +240,20 @@ func (a *app) orgSourceCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
-	accounts, err := a.prover.Prove(ctx, r.URL.Query().Get("code"), a.callbackURL(r))
+	var accounts []forge.Account
+	var err error
+	// Die Installation aus der Adresse kommt vom Browser und gilt nur als
+	// Hinweis: die GitHub-App prüft sie gegen die Installationen des Nutzers.
+	if ip, ok := a.prover.(forge.InstallProver); ok && r.URL.Query().Get("installation_id") != "" {
+		id, perr := strconv.ParseInt(r.URL.Query().Get("installation_id"), 10, 64)
+		if perr != nil || id <= 0 {
+			orgRedirect(w, r, fl.org, "source_failed")
+			return
+		}
+		accounts, err = ip.ProveInstallation(ctx, r.URL.Query().Get("code"), a.callbackURL(r), id)
+	} else {
+		accounts, err = a.prover.Prove(ctx, r.URL.Query().Get("code"), a.callbackURL(r))
+	}
 	if err != nil {
 		orgRedirect(w, r, fl.org, "source_failed")
 		return
@@ -199,7 +265,7 @@ func (a *app) orgSourceCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	fl.accounts, fl.until = accounts, a.sourceFlows.now().Add(sourceFlowTTL)
 	a.sourceFlows.put(pick, fl)
-	http.Redirect(w, r, "/ui/orgs?org="+url.QueryEscape(fl.org)+"&pick="+pick, http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/orgs?org="+url.QueryEscape(fl.org)+"&notice=source_proved&pick="+pick+noticeAnchor("source_proved"), http.StatusSeeOther)
 }
 
 // orgSourceAdd verbindet eine der nachgewiesenen GitHub-Organisationen und
@@ -227,11 +293,22 @@ func (a *app) orgSourceAdd(w http.ResponseWriter, r *http.Request) {
 		orgRedirect(w, r, o.Slug, "source_failed")
 		return
 	}
+	for _, src := range a.sourceListFor(me, o.ID) {
+		if src.Login == proven.Login {
+			// Schon verbunden: nur die Installation (und die Repo-Liste) nachtragen.
+			if _, err := a.store.ConnectSourceWithInstallation(me, o.ID, store.SourceGitHub, proven.Login, proven.InstallationID, proven.Repos); err != nil {
+				a.orgFailure(w, r, err)
+				return
+			}
+			orgRedirect(w, r, a.mirrorGitHubOrg(r.Context(), o, proven.Login, proven.InstallationID).Slug, "source_added")
+			return
+		}
+	}
 	visibility := store.VisibilityPrivate
 	if r.FormValue("visibility") == store.VisibilityShared {
 		visibility = store.VisibilityShared
 	}
-	if _, err := a.store.ConnectSource(me, o.ID, store.SourceGitHub, proven.Login, proven.Repos); err != nil {
+	if _, err := a.store.ConnectSourceWithInstallation(me, o.ID, store.SourceGitHub, proven.Login, proven.InstallationID, proven.Repos); err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
@@ -239,7 +316,27 @@ func (a *app) orgSourceAdd(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "source_added")
+	orgRedirect(w, r, a.mirrorGitHubOrg(r.Context(), o, proven.Login, proven.InstallationID).Slug, "source_added")
+}
+
+// mirrorGitHubOrg takes over name, picture and address of the connected GitHub
+// organization (REQ-623). Without the GitHub App, or when GitHub does not
+// answer, the org stays as it is; the next connect or refresh tries again.
+func (a *app) mirrorGitHubOrg(ctx context.Context, o store.Org, login string, installationID int64) store.Org {
+	profiler, ok := a.prover.(forge.OrgProfiler)
+	if !ok || installationID <= 0 || !a.sourceReady() {
+		return o
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	p, err := profiler.OrgProfile(ctx, installationID, login)
+	if err != nil {
+		return o
+	}
+	if got, err := a.store.MirrorGitHubOrg(o.ID, login, p.Login, p.Name); err == nil {
+		return got
+	}
+	return o
 }
 
 func (a *app) orgSourceRemove(w http.ResponseWriter, r *http.Request) {
@@ -257,19 +354,40 @@ func (a *app) orgSourceRemove(w http.ResponseWriter, r *http.Request) {
 func (a *app) orgSourceImport(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
 	if err == nil {
-		var id int64
+		var src store.Source
 		for _, s := range a.sourceListFor(browserPrincipal(r).ID, o.ID) {
 			if s.Login == strings.ToLower(strings.TrimSpace(r.FormValue("login"))) {
-				id = s.ID
+				src = s
 			}
 		}
-		_, err = a.store.ImportSourceRepos(browserPrincipal(r).ID, o.ID, id)
+		a.refreshSourceRepos(r.Context(), browserPrincipal(r).ID, o.ID, src)
+		_, err = a.store.ImportSourceRepos(browserPrincipal(r).ID, o.ID, src.ID)
+		if err == nil && src.ID != 0 {
+			o = a.mirrorGitHubOrg(r.Context(), o, src.Login, src.InstallationID)
+		}
 	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
 	orgRedirect(w, r, o.Slug, "imported")
+}
+
+// refreshSourceRepos liest die Repo-Liste einer Quelle über ihre Installation neu,
+// damit "Projekte anlegen" auch Repos erfasst, deren Webhook ausblieb. Scheitert
+// das, gilt die bisherige Liste.
+func (a *app) refreshSourceRepos(ctx context.Context, me string, orgID int64, src store.Source) {
+	lister, ok := a.prover.(forge.RepoLister)
+	if !ok || src.InstallationID <= 0 || !a.sourceReady() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+	defer cancel()
+	repos, err := lister.InstallationRepos(ctx, src.InstallationID)
+	if err != nil {
+		return
+	}
+	_, _ = a.store.ConnectSourceWithInstallation(me, orgID, src.Kind, src.Login, 0, repos)
 }
 
 // orgPrefixVisibility ändert, was ein Präfix neuen Projekten als Sichtbarkeit mitgibt.
@@ -283,6 +401,34 @@ func (a *app) orgPrefixVisibility(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgRedirect(w, r, o.Slug, "visibility")
+}
+
+// orgFollowGitHub lets an owner decide whether name and address follow the
+// connected GitHub organization (security review 4). Switched on, the mirror
+// runs right away through the first source with an installation.
+func (a *app) orgFollowGitHub(w http.ResponseWriter, r *http.Request) {
+	o, err := a.formOrg(r)
+	follow := r.FormValue("follow") == "1"
+	me := browserPrincipal(r).ID
+	if err == nil {
+		err = a.store.SetOrgFollowGitHub(me, o.ID, follow)
+	}
+	if err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	if follow {
+		if cur, err := a.store.OrgByRef(o.Slug); err == nil {
+			o = cur
+		}
+		for _, src := range a.sourceListFor(me, o.ID) {
+			if src.InstallationID > 0 {
+				o = a.mirrorGitHubOrg(r.Context(), o, src.Login, src.InstallationID)
+				break
+			}
+		}
+	}
+	orgRedirect(w, r, o.Slug, "follow")
 }
 
 func (a *app) sourceListFor(me string, orgID int64) []store.Source {
@@ -311,10 +457,16 @@ func (a *app) fillSources(r *http.Request, v *orgsView, me string) {
 	}
 	if tok := r.URL.Query().Get("pick"); tok != "" && v.Owner {
 		if fl, ok := a.sourceFlows.get(tok, me); ok && fl.org == v.Selected.Slug {
-			pick := &sourcePick{Token: tok, Accounts: []string{}}
+			pick := &sourcePick{Token: tok, Accounts: []string{}, Adopt: map[string]bool{}}
 			for _, acct := range fl.accounts {
-				if !connected[acct.Login] {
-					pick.Accounts = append(pick.Accounts, acct.Login)
+				pick.Accounts = append(pick.Accounts, acct.Login)
+				if connected[acct.Login] {
+					pick.Adopt[acct.Login] = true
+				}
+			}
+			if ins, ok := a.prover.(forge.Installer); ok {
+				if state, err := a.sourceFlows.start(me, v.Selected.Slug); err == nil {
+					pick.InstallURL = ins.InstallURL(state)
 				}
 			}
 			v.Pick = pick

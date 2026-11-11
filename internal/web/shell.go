@@ -46,6 +46,9 @@ type shellMemo struct {
 	// review is the number of proposals waiting for the viewer's review.
 	review    int
 	reviewSet bool
+	// waiting are the rows of "Waiting for you", read once for the inbox count.
+	waiting    []forYouRow
+	waitingSet bool
 }
 
 // shellBaseFor liefert Betrachter und Projektliste. Ohne gültige Wahl gilt für
@@ -91,6 +94,87 @@ type shellView struct {
 	TabsLabel string
 	// Team is the account menu entry "Team & devices"; empty for a guest.
 	Team string
+	// Inbox is the number of rows waiting for the viewer, 0 shows nothing.
+	Inbox int
+	// Orgs is the organization switcher in the header; nil without an organization.
+	Orgs *orgSwitch
+	// Scope is the repository a global page is narrowed to (?project= or the
+	// remembered choice), shown behind the page name in the header. nil for all.
+	Scope *shellScope
+	// New is the "+" menu of the header: what the viewer can create from here.
+	New *newMenu
+}
+
+// shellScope names the repository the page is narrowed to.
+type shellScope struct {
+	Remote, Label, Href string
+}
+
+// newMenu are the targets of the "+" menu. Issue, idea and pain lead to the form
+// of one repository (the one of the page, else the chosen or first one); Repo
+// leads to where an organization owner creates one; Org leads to the form for a
+// new organization. A target the viewer cannot reach is empty and not shown.
+type newMenu struct {
+	Issue, Idea, Pain, Repo, Org string
+}
+
+// Any is true when the menu has at least one target.
+func (m *newMenu) Any() bool { return m != nil && (m.Issue != "" || m.Repo != "" || m.Org != "") }
+
+// newMenuFor builds the "+" menu for the viewer on this request.
+func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
+	if base.who.kind == viewerGuest {
+		return nil
+	}
+	m := &newMenu{}
+	repo := ""
+	if rv := repoFrom(r); rv != nil {
+		repo = rv.Href
+	} else {
+		for _, p := range base.projects {
+			if repo == "" || p.Selected {
+				repo = repoHref(p.Remote)
+			}
+		}
+	}
+	if repo != "" {
+		m.Issue = repo + "/issues/new"
+		m.Idea = m.Issue + "?kind=idea"
+		m.Pain = m.Issue + "?kind=pain"
+	}
+	if interactive(r) {
+		m.Org = newOrgHref
+	}
+	if orgs, err := a.store.ListOrgs(browserPrincipal(r).ID); err == nil {
+		for _, o := range orgs {
+			// Every member creates projects in the organization (17 A, #4376).
+			if !o.Guest && !o.IsUser() && m.Repo == "" {
+				m.Repo = "/ui/orgs?org=" + url.QueryEscape(o.Slug) + "#projects"
+			}
+		}
+	}
+	if !m.Any() {
+		return nil
+	}
+	return m
+}
+
+// orgSwitch is the header menu to jump to an organization: the one the viewer
+// has chosen as default (else the first) is the label.
+type orgSwitch struct {
+	Current string
+	Items   []orgSwitchItem
+	// New leads to the form for a new organization; empty when the viewer
+	// cannot create one from here.
+	New string
+}
+
+// newOrgHref is the page with the form for a new organization.
+const newOrgHref = "/ui/orgs/new"
+
+type orgSwitchItem struct {
+	Label, Href string
+	Current     bool
 }
 
 type viewerKind int
@@ -141,20 +225,20 @@ func (a *app) viewerOf(r *http.Request, pa *store.ProjectAccess) viewer {
 }
 
 // projectAware sind die Seiten, die ?project= auswerten.
-var projectAware = map[string]bool{"overview": true, "knowledge": true, "review": true, "context": true, "sessions": true, "agents": true, "requests": true, "tasks": true, "pains": true, "coord": true, "search": true}
+var projectAware = map[string]bool{"inbox": true, "overview": true, "setup": true, "knowledge": true, "review": true, "context": true, "sessions": true, "agents": true, "coord": true, "search": true}
 
 // projectNeutral sind die Seiten über Konto und Verwaltung. Sie filtern nach
 // nichts; die Projektauswahl steht dort nicht, damit sie keinen Filter vortäuscht.
-var projectNeutral = map[string]bool{"request": true, "pain": true, "knowledgeitem": true, "session": true, "orgs": true, "tokens": true, "device": true, "devicecheck": true, "devicedone": true, "interactive": true, "profile": true}
+var projectNeutral = map[string]bool{"issue": true, "pain": true, "knowledgeitem": true, "session": true, "orgs": true, "tokens": true, "device": true, "devicecheck": true, "devicedone": true, "interactive": true, "profile": true}
 
 // navSection ist der Eintrag der Seitenleiste, unter dem eine Seite steht.
 func navKeyFor(section string, kind viewerKind) string {
 	switch section {
-	case "overview":
+	case "inbox", "overview", "setup":
 		return "overview"
 	case "agents":
 		return "agents"
-	case "requests", "request", "requesttoolarge", "tasks", "pains", "pain":
+	case "requesttoolarge", "pain", "issue", "issues", "newissue", "idea":
 		return "requests"
 	case "knowledge", "knowledgeitem", "review", "context":
 		return "knowledge"
@@ -163,7 +247,7 @@ func navKeyFor(section string, kind viewerKind) string {
 			return "sessions"
 		}
 		return "agents"
-	case "coord", "roomforbidden", "roomnotfound":
+	case "coord":
 		return "rooms"
 	}
 	return ""
@@ -184,7 +268,7 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 
 	// Five entries: Home, Agents, Requests, Rooms, Knowledge. A guest has no
 	// agents and no rooms; what is left of Agents for them is the sessions list.
-	v.Primary = []navItem{item("overview", "nav.overview", "/ui/overview")}
+	v.Primary = []navItem{item("overview", "nav.overview", "/ui/inbox")}
 	if kind != viewerGuest {
 		v.Primary = append(v.Primary, item("agents", "nav.agents", "/ui/agents"))
 	} else {
@@ -207,14 +291,10 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 		return navItem{Key: key, Label: label, Href: href, Current: on}
 	}
 	switch name {
-	case "requests", "tasks", "pains":
-		tasks := tab("tasks", "nav.tab_tasks", "/ui/tasks", name == "tasks")
-		tasks.Count = open
-		v.Tabs = []navItem{tab("requests", "nav.tab_requests", "/ui/requests", name == "requests"), tasks, tab("pains", "nav.tab_pains", "/ui/pains", name == "pains")}
-		v.TabsLabel = "nav.requests"
-	case "agents", "sessions":
+	case "agents", "sessions", "agentmodels":
 		if kind != viewerGuest {
-			v.Tabs = []navItem{tab("agents", "nav.tab_agents", "/ui/agents", name == "agents"), tab("sessions", "nav.sessions", "/ui/sessions", name == "sessions")}
+			v.Tabs = []navItem{tab("agents", "nav.tab_agents", "/ui/agents", name == "agents"), tab("sessions", "nav.sessions", "/ui/sessions", name == "sessions"),
+				tab("models", "nav.tab_models", "/ui/agents/models", name == "agentmodels")}
 			v.TabsLabel = "nav.agents"
 		}
 	case "knowledge", "review", "context":
@@ -235,16 +315,60 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 		v.Team = "/ui/orgs"
 	}
 
+	v.Inbox = len(a.waitingFor(r, selectedProjectOf(base)))
+	v.Orgs = a.orgSwitchFor(r)
+	v.New = a.newMenuFor(r, base)
+
 	v.ProjectAction = "/ui/knowledge"
 	if projectAware[name] {
 		v.ProjectAction = r.URL.Path
-	} else if name == "request" {
-		v.ProjectAction = "/ui/requests"
 	}
-	if !projectNeutral[name] {
+	if !projectNeutral[name] && repoFrom(r) == nil {
 		v.Projects, v.AllSelected = base.projects, base.all
+		if sel := selectedProjectOf(base); sel != "" {
+			for _, p := range base.projects {
+				if p.Remote == sel {
+					v.Scope = &shellScope{Remote: p.Remote, Label: p.Label, Href: repoHref(p.Remote)}
+				}
+			}
+		}
 	}
 	return v
+}
+
+// orgSwitchFor lists the organizations of the viewer for the header. Each entry
+// leads to the organization's page.
+func (a *app) orgSwitchFor(r *http.Request) *orgSwitch {
+	all, err := a.store.ListOrgs(browserPrincipal(r).ID)
+	if err != nil {
+		return nil
+	}
+	// A guest's organizations are not in the menu: guests see their project
+	// only (14 A, #4376).
+	var orgs []store.Org
+	for _, o := range all {
+		if !o.Guest {
+			orgs = append(orgs, o)
+		}
+	}
+	if len(orgs) == 0 {
+		return nil
+	}
+	current := 0
+	for i, o := range orgs {
+		if o.Default {
+			current = i
+			break
+		}
+	}
+	sw := &orgSwitch{Current: orgs[current].Name}
+	if interactive(r) {
+		sw.New = newOrgHref
+	}
+	for i, o := range orgs {
+		sw.Items = append(sw.Items, orgSwitchItem{Label: o.Name, Href: "/ui/" + url.PathEscape(o.Slug), Current: i == current})
+	}
+	return sw
 }
 
 // selectedProjectOf is the project chosen in the shell, "" for all projects.
@@ -264,7 +388,6 @@ func selectedProjectOf(base shellBase) string {
 // project (or all they can see): assigned to them, or for everyone. It counts
 // what ListHumanTasks lets through, nothing else, and once per request.
 func (a *app) openTaskCount(r *http.Request, project string) int {
-	l := a.langFor(r)
 	memo, _ := r.Context().Value(shellMemoKey{}).(*shellMemo)
 	if memo != nil && memo.tasksSet {
 		return memo.tasks
@@ -276,8 +399,8 @@ func (a *app) openTaskCount(r *http.Request, project string) int {
 		if err != nil {
 			continue
 		}
-		for _, row := range a.taskRows(l, pa, tasks) {
-			if row.CanDone {
+		for _, t := range tasks {
+			if t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil {
 				n++
 			}
 		}

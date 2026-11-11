@@ -14,6 +14,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/mcpserver"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -32,6 +33,19 @@ func currentSessionRef() string {
 		if ref := os.Getenv(key); ref != "" {
 			return ref
 		}
+	}
+	return ""
+}
+
+// mcpUsageHarness is the harness whose ghosttree tool calls ctx mcp counts
+// itself. Claude Code's are counted by its PostToolUse hook, which also knows
+// whether a subagent made the call.
+func mcpUsageHarness() string {
+	switch {
+	case os.Getenv("CODEX_SESSION_ID") != "" || os.Getenv("CODEX_THREAD_ID") != "":
+		return "codex"
+	case os.Getenv("OPENCODE_SESSION_ID") != "":
+		return "opencode"
 	}
 	return ""
 }
@@ -185,8 +199,48 @@ func cmdMCP(args []string, stdout io.Writer) int {
 	}
 	hctx := currentGitContext(cfg.Machine)
 	c := client.New(cfg)
+	// An agent reads while the server restarts; two more tries span that.
+	c.SetReadRetries(2)
+	if hooksOff() {
+		// A test harness's agents read what they need and write nothing.
+		c.SetReadOnly()
+	}
+	// Jeder Schreibzugriff dieser Sitzung trägt den Git-Stand des
+	// Arbeitsverzeichnisses mit (REQ-597). Das Verzeichnis wird je Aufruf
+	// gelesen, weil der Agent HEAD zwischen zwei Schreibzugriffen verschiebt;
+	// ohne Git ist der Anker leer und der Schreibzugriff läuft ohne.
+	c.SetAnchorSource(func() gitanchor.Anchor {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return gitanchor.Anchor{}
+		}
+		return collector.ResolveAnchor(cwd)
+	})
+	// Dieselbe Sitzung geht auf den verankerten Routen als Kennung mit; Pfade und
+	// Bereiche ermittelt der Server (REQ-600).
+	c.SetOriginSession(currentSessionRef())
 	srv := mcpserver.NewServer(c, hctx.axes, hctx.activation)
+	srv.SetLineageResolver(func(branch string) []string {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil
+		}
+		return collector.BranchLineageOf(cwd, branch)
+	})
+	// Branch und Kette werden je Aufruf neu gelesen: der Agent legt mitten in
+	// der Sitzung einen Branch an (REQ-601, PAIN-57).
+	srv.SetLive(func() mcpserver.Live {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return mcpserver.Live{}
+		}
+		g := collector.ResolveGitContext(cwd)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return mcpserver.Live{Branch: g.Branch, Lineage: g.Lineage, CWD: cwd, Trunk: collector.IsDefaultBranch(ctx, cwd, g.Branch)}
+	})
 	srv.SetSessionRef(currentSessionRef())
+	srv.SetUsageHarness(mcpUsageHarness())
 	srv.SetCoordRef(coordAgentOverride())
 	srv.SetAgentRole(agentRoleFromEnv())
 	srv.SetSessionID(agentSessionFromEnv())

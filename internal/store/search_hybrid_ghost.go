@@ -1,5 +1,11 @@
 package store
 
+import (
+	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
+)
+
 // GhostSearch describes one search over the descriptions of paths.
 type GhostSearch struct {
 	// Project limits the search to one project; empty means every project.
@@ -14,7 +20,11 @@ type GhostSearch struct {
 	// Prefilter is a condition in SQL on the alias g of ghost_files that every row
 	// Keep lets through satisfies; see Prefilter.
 	Prefilter Prefilter
-	Mode      SearchMode
+	// Anchor filtert nach dem Git-Anker der aktuellen Beschreibung (REQ-597).
+	Anchor AnchorFilter
+	// Origin filtert nach Zeitpunkt und Bereich des Entstehungskontexts (REQ-600).
+	Origin originctx.Filter
+	Mode   SearchMode
 }
 
 // SearchGhostFilesWith runs a search over path and description, hybrid when an
@@ -34,6 +44,11 @@ func (s *Store) searchGhostFiles(q string, o GhostSearch) ([]GhostFile, error) {
 	if limit <= 0 {
 		limit = 20
 	}
+	if strings.TrimSpace(q) == "" {
+		// Ohne Suchwörter (nur Qualifier der Suchsprache, REQ-600): die zuletzt
+		// geänderten Beschreibungen, die Filter und Sichtbarkeit lassen.
+		return s.listGhostFilesFiltered(o, limit)
+	}
 	qvec, cfg, err := s.queryVector(q, o.Mode, KindGhost)
 	if err != nil {
 		return nil, err
@@ -49,7 +64,7 @@ func (s *Store) searchGhostFiles(q string, o GhostSearch) ([]GhostFile, error) {
 		}
 		s.embedShared().logFallback(cfg, err)
 	}
-	return s.ftsGhostFiles(q, o.Project, limit)
+	return s.ftsGhostFiles(q, o.Project, limit, o.Anchor, o.Origin)
 }
 
 func (s *Store) ghostFilesByID(ids []int64) (map[int64]GhostFile, error) {
@@ -61,7 +76,7 @@ func (s *Store) ghostFilesByID(ids []int64) (map[int64]GhostFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	gs, err := scanGhostFiles(rows)
+	gs, err := s.scanGhostFiles(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -75,6 +90,14 @@ func (s *Store) ghostFilesByID(ids []int64) (map[int64]GhostFile, error) {
 func (s *Store) hybridGhostFiles(q string, o GhostSearch, limit int, qvec []float32, cfg *EmbedSearchConfig) ([]GhostFile, error) {
 	pool := poolFor(limit)
 	where, args := o.Prefilter.with(`(? = '' OR g.project = ?)`, []any{o.Project, o.Project})
+	if af, afArgs := o.Anchor.Where("g.anchor_id"); af != "" {
+		where += " AND " + af
+		args = append(args, afArgs...)
+	}
+	if of, ofArgs := originWhere(o.Origin, "g.origin_id", "g.described_at"); of != "" {
+		where += " AND " + of
+		args = append(args, ofArgs...)
+	}
 	var textIDs []int64
 	if o.Mode != SearchVectorOnly {
 		scan := pool
@@ -113,4 +136,21 @@ func (s *Store) hybridGhostFiles(q string, o GhostSearch, limit int, qvec []floa
 		semantic: func(g *GhostFile) { g.Match = MatchSemantic },
 		load:     s.ghostFilesByID,
 	}, textIDs, vecIDs, pool, limit, room, o.Keep)
+}
+
+func (s *Store) listGhostFilesFiltered(o GhostSearch, limit int) ([]GhostFile, error) {
+	where, args := o.Prefilter.with(`(? = '' OR g.project = ?)`, []any{o.Project, o.Project})
+	if af, afArgs := o.Anchor.Where("g.anchor_id"); af != "" {
+		where += " AND " + af
+		args = append(args, afArgs...)
+	}
+	if of, ofArgs := originWhere(o.Origin, "g.origin_id", "g.described_at"); of != "" {
+		where += " AND " + of
+		args = append(args, ofArgs...)
+	}
+	rows, err := s.db.Query(`SELECT `+prefix(ghostCols, "g.")+` FROM ghost_files g WHERE `+where+` ORDER BY g.updated_at DESC, g.id DESC LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	return s.scanGhostFiles(rows)
 }

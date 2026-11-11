@@ -456,7 +456,7 @@ func (a *app) refuseGardenAction(w http.ResponseWriter, r *http.Request, err err
 // confirmGardenNote closes the note as confirmed by the person, the way approving
 // it does.
 func (a *app) confirmGardenNote(note store.Knowledge, person string) error {
-	return a.store.UpdateKnowledgeBy(note.ID, map[string]string{"confidence": "verified", "confirmed_by": person}, person)
+	return a.store.UpdateKnowledgeFromWeb(note.ID, map[string]string{"confidence": "verified", "confirmed_by": person}, person)
 }
 
 // reviewMerge merges the duplicates a note of the gardener names: the newest entry

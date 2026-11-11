@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
 	"github.com/Deadweight-Labs/ghosttree/internal/embed"
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
 )
@@ -119,7 +121,7 @@ type sessionRef struct {
 // for the prompts: the answers are not read here, and nor are the 8 KB of a tool
 // call.
 func (s *Store) sessionPicked(id int64) ([]transcript.Picked, error) {
-	rows, err := s.db.Query(`SELECT chunk_id, seq, role, is_prompt, tool_calls, CASE WHEN role = 'user' AND is_prompt = 1 THEN text ELSE '' END
+	rows, err := s.db.Query(`SELECT chunk_id, seq, role, is_prompt, tool_calls, CASE WHEN role = 'user' AND is_prompt = 1 THEN `+promptTextCol+` ELSE '' END
 		FROM chunk_index WHERE session_id = ? AND (role != '' OR tool_calls > 0) ORDER BY seq`, id)
 	if err != nil {
 		return nil, err
@@ -169,9 +171,13 @@ func (s *Store) chunkRaws(ids []int64) (map[int64]string, error) {
 		defer rows.Close()
 		for rows.Next() {
 			var id int64
-			var raw string
-			if err := rows.Scan(&id, &raw); err != nil {
+			var v rawcodec.Value
+			if err := rows.Scan(&id, &v); err != nil {
 				return err
+			}
+			raw, err := s.rawLine(v)
+			if err != nil {
+				return fmt.Errorf("chunk %d: %w", id, err)
 			}
 			out[id] = raw
 		}
@@ -646,7 +652,9 @@ func (s *Store) purgeSessionEmbeddings() (int, error) {
 }
 
 // sessionSource is the hash that says which stored line a document was made
-// from (EmbedItem.Source).
+// from (EmbedItem.Source). It is taken over the line as read, unpacked: packing
+// a line again (another dictionary, the backfill) leaves the line and so the
+// vector as they are.
 func sessionSource(raw string) string { return embed.TextHash(raw) }
 
 // verifySessionSource says whether the line of a chunk is still the line a
@@ -664,15 +672,19 @@ func sessionSource(raw string) string { return embed.TextHash(raw) }
 // on logs and tokens of that size, with every other write waiting. The document is
 // a function of the line (and of the rules, which are the code of this very
 // process), so the same line gives the same document.
-func verifySessionSource(tx *sql.Tx, chunk int64, source string) (bool, error) {
+func verifySessionSource(tx *sql.Tx, state *rawState, chunk int64, source string) (bool, error) {
 	if _, err := tx.Exec(`UPDATE session_embedding_sync SET read_at = read_at WHERE session_id = -1`); err != nil {
 		return false, err
 	}
-	var raw string
-	err := tx.QueryRow(`SELECT raw FROM session_chunks WHERE id = ?`, chunk).Scan(&raw)
+	var v rawcodec.Value
+	err := tx.QueryRow(`SELECT raw FROM session_chunks WHERE id = ?`, chunk).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
+	if err != nil {
+		return false, err
+	}
+	raw, err := state.line(context.Background(), tx, v)
 	if err != nil {
 		return false, err
 	}

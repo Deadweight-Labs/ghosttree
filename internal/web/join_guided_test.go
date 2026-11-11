@@ -23,7 +23,7 @@ func TestJoinGuidedPairPageStatesAndNewCodeEverywhere(t *testing.T) {
 	pair := pairRE.FindString(e.pairPage(t, b))
 
 	resp, text := e.get(t, b, "/join/pair")
-	for _, want := range []string{"Open a terminal on your computer", "Copy this command and run it", "Confirm here", "Waiting for your computer", "Send this to your computer", `data-join-state="waiting"`, `data-copy="#join-cmd"`, "mailto:?subject=", "| sh -s -- --pair " + pair, "New code"} {
+	for _, want := range []string{"Run this command in a terminal", "Confirm here", "Waiting for your computer", `data-join-state="waiting"`, `data-copy-from="#join-cmd-lin"`, "mailto:?subject=", "| sh -s -- --pair " + pair, "New code"} {
 		if !strings.Contains(text, want) && !strings.Contains(plainText(text), want) {
 			t.Errorf("waiting page lacks %q", want)
 		}
@@ -43,8 +43,8 @@ func TestJoinGuidedPairPageStatesAndNewCodeEverywhere(t *testing.T) {
 	// Code-Weg: großes Feld, sprechende Bestätigung ohne Kennung.
 	claim := e.claimCode(t, pair, "annas-laptop")
 	text = e.pairPage(t, b)
-	for _, want := range []string{"annas-laptop wants to connect", "Code from your terminal", `class="clay join-code"`, "This is me, anna", "Connect annas-laptop", "New code"} {
-		if !strings.Contains(text, want) {
+	for _, want := range []string{"annas-laptop wants to connect", "Code from your terminal", `class="join-code"`, "This is me, anna", "Connect annas-laptop", "New code"} {
+		if !strings.Contains(text, want) && !strings.Contains(plainText(text), want) {
 			t.Errorf("claimed page lacks %q", want)
 		}
 	}
@@ -60,7 +60,7 @@ func TestJoinGuidedPairPageStatesAndNewCodeEverywhere(t *testing.T) {
 	}
 	e.decide(t, b, url.Values{"decision": {"approve"}, "confirm_account": {"anna"}, "confirm_code": {claim.Confirm}}).Body.Close()
 	text = e.pairPage(t, b)
-	if !strings.Contains(text, "Connecting annas-laptop") || !strings.Contains(text, "New code") {
+	if !strings.Contains(plainText(text), "annas-laptop is being connected") || !strings.Contains(text, "New code") {
 		t.Fatalf("approved page: %s", text)
 	}
 	if err := e.poll(t, claim.DeviceCode); err != nil {
@@ -69,7 +69,7 @@ func TestJoinGuidedPairPageStatesAndNewCodeEverywhere(t *testing.T) {
 	e.st.Join().DeliveredDevice(claim.DeviceCode)
 	text = e.pairPage(t, b)
 	for _, want := range []string{"annas-laptop is connected", `href="/ui/overview"`, "Go to overview", "New code"} {
-		if !strings.Contains(text, want) {
+		if !strings.Contains(text, want) && !strings.Contains(plainText(text), want) {
 			t.Errorf("connected page lacks %q", want)
 		}
 	}
@@ -115,37 +115,28 @@ func TestJoinLapsedRequestSaysSoAndNeverBlocksTheNextCode(t *testing.T) {
 	}
 }
 
-// Der Befehl bricht nur an Leerzeichen um: "--pair" und der Code bleiben je in
-// einem unteilbaren Stück, allein die Adresse darf überall brechen. Kopiert wird
-// weiter derselbe Befehl.
-func TestJoinCommandWrapsOnlyAtSpaces(t *testing.T) {
+// Der Befehl steht in einem Kasten mit Kopierknopf, der Kopierinhalt ist der ganze
+// Befehl, und der Kasten bricht an Leerzeichen um, nicht mitten im Wort.
+func TestJoinCommandCopiesTheWholeCommandAndWrapsAtSpaces(t *testing.T) {
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
 	e.accept(t, b, e.code)
 	_, page := e.get(t, b, "/join/pair")
 	pair := pairRE.FindString(page)
-	for _, tok := range []string{"curl", "-fsSL", "|", "sh", "-s", "--", "--pair", pair} {
-		if !strings.Contains(page, `<span class="join-tok">`+tok+`</span>`) {
-			t.Errorf("command piece %q is not one unbreakable piece", tok)
-		}
-	}
-	if !strings.Contains(page, `<span class="join-url">http://`) {
-		t.Error("the address is not marked as the breakable piece")
-	}
-	if !strings.Contains(page, `<span class="join-tok">|</span><wbr>`) {
-		t.Error("no break hint after the pipe")
-	}
 	want := "curl -fsSL " + e.srv + "/install.sh | sh -s -- --pair " + pair
-	m := regexp.MustCompile(`(?s)<code id="join-cmd">(.*?)</code>`).FindStringSubmatch(page)
+	m := regexp.MustCompile(`(?s)<pre class="cmd" id="join-cmd-lin">(.*?)</pre>`).FindStringSubmatch(page)
 	if m == nil || plainText(m[1]) != want {
-		t.Fatalf("copied text differs from the command: %q", plainText(m[1]))
+		t.Fatalf("copied text differs from the command: %v", m)
 	}
-	css, err := os.ReadFile("static/shell.css")
+	if strings.Contains(page, `class="join-msg"`) || strings.Contains(m[1], "Open a terminal") {
+		t.Error("the page repeats the instruction inside the copied block")
+	}
+	css, err := os.ReadFile("static/ui-parts.css")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(css), ".join-tok { white-space: nowrap; }") || strings.Contains(string(css), "overflow-wrap: break-word; white-space: pre-wrap") {
+	if strings.Contains(string(css), "word-break: break-all") {
 		t.Error("css lets the command break anywhere")
 	}
 }

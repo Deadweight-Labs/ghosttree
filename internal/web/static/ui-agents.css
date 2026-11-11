@@ -1,0 +1,83 @@
+/* Agents in the GitHub-like look: list grouped by machine, page of one agent with
+   its composer. Mock: git-native-v2 agents.html, agent.html. */
+
+:is(.g2.ag) {
+  & .sbar { margin-bottom: 16px; }
+  & .agroups { margin-top: 16px; }
+  & .agroup { margin-bottom: 16px; }
+  & .agroup .box-h .t { display: inline-flex; align-items: center; gap: 8px; }
+  & .mst { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 400; color: var(--fg-muted); }
+  & .arow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; padding: 12px 16px; }
+  & .arow.is-asking { box-shadow: inset 3px 0 0 var(--danger-fg); }
+  & .ahead { display: flex; gap: 12px; min-width: 0; }
+  & .ahead .gav.lg { width: 28px; height: 28px; border-radius: 6px; }
+  & .ahead .gav.lg .i { width: 16px; height: 16px; }
+  & .ainfo { min-width: 0; }
+  /* the first line is as high as the logo (28 px): logo, name and state have one middle */
+  & .at { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-height: 28px; line-height: 24px; }
+  & .at .title { font-size: 14px; font-weight: 600; color: var(--fg-default); }
+  & .at .title:hover { color: var(--accent-fg); }
+  & .at .mono { font-size: 12px; }
+  & .at .by { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--fg-muted); }
+  & .at .by .gav { width: 18px; height: 18px; font-size: 8px; }
+  & .aq { margin-top: 2px; color: var(--fg-default); }
+  & .arow .meta, & .box-r .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-size: 12px; color: var(--fg-muted); }
+  & .meta .fgd { color: var(--fg-default); }
+  & .meta .rp, & .meta .bn { display: inline-flex; align-items: center; gap: 4px; }
+  & .meta .bn { font: 12px var(--ui-mono); }
+  & .meta a { color: var(--fg-muted); }
+  & .meta a:hover { color: var(--accent-fg); }
+  & .meta a.ref.pill { color: var(--fg-default); }
+  & .apost { margin-top: 6px; padding-left: 12px; border-left: 3px solid var(--border-default); color: var(--fg-default); }
+  /* Sections of the list: waiting on you, active, and the folded inactive rest. */
+  & .asec > .box-h .t { font-size: 14px; font-weight: 600; margin: 0; }
+  & .asec > .box-h .counter, & .asec > summary.box-h .counter { margin-left: 8px; }
+  & .awaits { border-color: var(--danger-muted); }
+  & .awaits > .box-h { background: var(--danger-subtle); }
+  /* The heading already says it waits on you; the row keeps age and the two actions. */
+  & .awaits .astate .ast { display: none; }
+  & details.asec > summary.box-h { display: flex; align-items: center; cursor: pointer; list-style: none; user-select: none; }
+  & details.asec > summary.box-h::-webkit-details-marker { display: none; }
+  & details.asec > summary .chv { display: inline-flex; margin-right: 6px; color: var(--fg-muted); transform: rotate(-90deg); transition: transform .12s; }
+  & details.asec[open] > summary .chv { transform: none; }
+  & details.asec:not([open]) > summary.box-h { border-bottom: 0; }
+  & .aseen { display: inline-flex; margin: 0; }
+  & .astate { display: flex; align-items: center; gap: 12px; align-self: start; min-height: 28px; font-size: 12px; white-space: nowrap; }
+  & .ast { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+  & .ast.st-work { color: var(--success-fg); }
+  & .ast.st-wait_you, & .ast.st-stuck { color: var(--danger-fg); }
+  & .ast.st-wait_other { color: var(--attention-fg); }
+  & .ast.st-idle, & .ast.st-off { color: var(--fg-muted); }
+  & .ast .dot.pulse { animation: gpulse 1.8s ease-out infinite; }
+  & .mrow { display: flex; justify-content: space-between; gap: 16px; padding: 8px 16px; }
+  & .gap { margin-top: 24px; }
+  & .fw4 { font-weight: 400; }
+  & .dmeta .gav.lg { width: 28px; height: 28px; border-radius: 6px; }
+  & .dmeta .rp { display: inline-flex; align-items: center; gap: 4px; font-family: var(--ui-mono); font-size: 12px; }
+  & .ag-detail .sec h2 { font-size: 20px; }
+  & .ag-detail .cx-cmt, & .ag-detail .cx { margin-bottom: 16px; }
+  & .ag-detail .tlx { margin-top: 0; }
+  & .coord-agent-control { display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+  & .coord-agent-control form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  & .coord-agent-control input { height: 28px; padding: 0 8px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); flex: 1 1 12rem; }
+  & .coord-control-state { margin: 0; }
+  & .coord-note { font-size: 12px; color: var(--fg-muted); }
+}
+
+@media (max-width: 767px) {
+  :is(.g2.ag) {
+    & .arow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    & .astate { padding-left: 40px; flex-wrap: wrap; gap: 8px 12px; white-space: normal; }
+  }
+}
+
+/* Statistik je Harness und Modell (/ui/agents/models) */
+.mstats { width: 100%; border-collapse: collapse; font-size: 14px; }
+.mstats th, .mstats td { padding: 8px 16px; text-align: left; border-top: 1px solid var(--border-muted); }
+.mstats thead th { border-top: 0; color: var(--fg-muted); font-weight: 500; font-size: 12px; }
+.mstats .n { text-align: right; font-variant-numeric: tabular-nums; }
+.mstats tr.people td { color: var(--fg-muted); }
+@media (max-width: 640px) { .mstats th, .mstats td { padding: 6px 8px; } }
+.tusage { margin-top: 16px; }
+.tusage .mstats + .mstats { margin-top: 8px; }
+.tusage .box-h .muted { font-size: 12px; }

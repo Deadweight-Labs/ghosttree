@@ -49,167 +49,6 @@ func rqPost(t *testing.T, e shellEnv, c *http.Client, id int64, rest string, for
 	return sameOriginPostForm(t, c, e.Base+rqPath(id, rest), form)
 }
 
-func TestRequestListShowsTitleNumberKindPriorityProgressAndAge(t *testing.T) {
-	e := seedSessions(t)
-	d := rqMake(t, e.St, rqSpec{Title: "Ship the exporter", Desc: "Export all.", Type: "bug", Priority: "hoch", Criteria: []string{"a", "b", "c"}})
-	if err := e.St.SetCriterionState(d.Criteria[0].ID, "met", requestdomain.Evidence{Kind: "test", Ref: "go test", Person: "alice"}); err != nil {
-		t.Fatal(err)
-	}
-	rqMake(t, e.St, rqSpec{Title: "Plain feature", Type: "feature", Priority: "mittel"})
-	if _, _, err := e.St.StartRequestWork(d.Request.ID, e.id["anna-project"], "primary", "anna"); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := e.St.StartRequestWork(d.Request.ID, e.id["alice-private"], "related", "alice"); err != nil {
-		t.Fatal(err)
-	}
-	code, page := e.get(t, e.Member, "/ui/requests")
-	if code != 200 {
-		t.Fatalf("status %d", code)
-	}
-	for _, want := range []string{"Ship the exporter", "REQ-" + strconv.FormatInt(d.Request.ID, 10), "Bug", "hoch", "1/3", `data-pct="33"`,
-		`href="/ui/requests/` + strconv.FormatInt(d.Request.ID, 10) + `"`, `/ui/sessions/` + e.pid["anna-project"], "/static/requests.css", `aria-current="page"`} {
-		if !strings.Contains(page, want) {
-			t.Errorf("member list lacks %q", want)
-		}
-	}
-	if strings.Contains(page, e.pid["alice-private"]) {
-		t.Error("the list links a session the viewer may not read")
-	}
-	if strings.Contains(page, "<style") || strings.Contains(page, " style=") || strings.Contains(page, "onclick") {
-		t.Error("requests page breaks the CSP")
-	}
-	for query, want := range map[string]string{"type=bug": "Ship the exporter", "priority=mittel": "Plain feature", "q=exporter": "Ship the exporter"} {
-		_, narrowed := e.get(t, e.Member, "/ui/requests?"+query)
-		other := "Plain feature"
-		if want == other {
-			other = "Ship the exporter"
-		}
-		if !strings.Contains(narrowed, want) || strings.Contains(narrowed, other) {
-			t.Errorf("filter %s does not narrow the list", query)
-		}
-	}
-	_, prio := e.get(t, e.Member, "/ui/requests?priority=hoch")
-	if !strings.Contains(prio, `<option value="mittel">`) {
-		t.Error("the priority filter lost the other priorities")
-	}
-}
-
-func TestRequestListStateFilterAndPaging(t *testing.T) {
-	e := ovEnv(t)
-	done := rqMake(t, e.St, rqSpec{Title: "Finished one"})
-	if err := e.St.CompleteRequest(done.Request.ID, requestdomain.Evidence{Kind: "commit", Ref: "abc", Person: "alice"}); err != nil {
-		t.Fatal(err)
-	}
-	dropped := rqMake(t, e.St, rqSpec{Title: "Dropped one"})
-	if err := e.St.DropRequest(dropped.Request.ID, "not needed", "alice"); err != nil {
-		t.Fatal(err)
-	}
-	rqMake(t, e.St, rqSpec{Title: "Still open"})
-	for state, want := range map[string][]string{"": {"Still open"}, "done": {"Finished one"}, "dropped": {"Dropped one"}, "all": {"Still open", "Finished one", "Dropped one"}} {
-		_, page := fetchPage(t, e.Owner, e.Base+"/ui/requests?state="+state)
-		for _, title := range []string{"Still open", "Finished one", "Dropped one"} {
-			has := strings.Contains(page, title)
-			wanted := false
-			for _, w := range want {
-				wanted = wanted || w == title
-			}
-			if has != wanted {
-				t.Errorf("state=%q: %q shown=%v want %v", state, title, has, wanted)
-			}
-		}
-	}
-	for i := 0; i < requestsShown+3; i++ {
-		rqMake(t, e.St, rqSpec{Title: "Bulk " + strconv.Itoa(i)})
-	}
-	_, first := fetchPage(t, e.Owner, e.Base+"/ui/requests")
-	m := regexp.MustCompile(`href="(/ui/requests\?[^"]*cursor=[^"]*)"`).FindStringSubmatch(first)
-	if m == nil {
-		t.Fatal("no link to older requests")
-	}
-	_, older := fetchPage(t, e.Owner, e.Base+strings.ReplaceAll(m[1], "&amp;", "&"))
-	if !strings.Contains(older, "Still open") || strings.Contains(older, "Bulk 20") {
-		t.Error("the older page does not continue the list")
-	}
-}
-
-func TestRequestListEmptyIsOneLineAndOneAction(t *testing.T) {
-	e := ovEnv(t)
-	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/requests")
-	if !strings.Contains(owner, "No requests yet.") || strings.Count(owner, `href="/ui/overview?connect=1"`) != 1 {
-		t.Error("empty list lacks the line or the single action")
-	}
-	_, guest := fetchPage(t, e.Guest, e.Base+"/ui/requests")
-	if !strings.Contains(guest, "Nothing here yet.") || strings.Contains(guest, "connect=1") {
-		t.Error("guest empty state offers an action or lacks the line")
-	}
-	_, none := fetchPage(t, e.Owner, e.Base+"/ui/requests?q=nothingmatchesthis")
-	if !strings.Contains(none, "Nothing matches.") || !strings.Contains(none, "Clear filters") {
-		t.Error("no-match state lacks its line or action")
-	}
-}
-
-func TestRequestListHidesWhatTheViewerMayNotRead(t *testing.T) {
-	e := seedSessions(t)
-	rqMake(t, e.St, rqSpec{Title: "Visible request"})
-	rqMake(t, e.St, rqSpec{Title: "SECRET-REQ", Project: shellHiddenProject})
-	hidden := rqMake(t, e.St, rqSpec{Title: "Open work", Criteria: []string{"x"}})
-	for _, who := range []string{"anna-private", "alice-private"} {
-		if _, _, err := e.St.StartRequestWork(hidden.Request.ID, e.id[who], "related", "x"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest, "lead": e.Lead} {
-		_, page := e.get(t, c, "/ui/requests")
-		if strings.Contains(page, "SECRET") || strings.Contains(page, shellHiddenProject) {
-			t.Errorf("%s list leaks the hidden project", name)
-		}
-		if !strings.Contains(page, "Visible request") {
-			t.Errorf("%s list lacks the visible request", name)
-		}
-	}
-	_, guest := e.get(t, e.Guest, "/ui/requests")
-	for _, leak := range []string{e.pid["anna-private"], e.pid["alice-private"], "session:", `class="rq-working"`} {
-		if strings.Contains(guest, leak) {
-			t.Errorf("guest list leaks %q", leak)
-		}
-	}
-	if _, err := e.St.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "Global request", Priority: "global-prio", Person: "alice"}}); err != nil {
-		t.Fatal(err)
-	}
-	rqMake(t, e.St, rqSpec{Title: "SECRET-PRIO", Priority: "secret-prio", Project: shellHiddenProject})
-	hiddenCode, hiddenPage := e.get(t, e.Guest, "/ui/requests?project="+url.QueryEscape(shellHiddenProject))
-	unknownCode, unknownPage := e.get(t, e.Guest, "/ui/requests?project="+url.QueryEscape("github.com/nobody/unknown"))
-	if hiddenCode != http.StatusOK || unknownCode != http.StatusOK {
-		t.Errorf("guest asking for hidden / unknown project = %d / %d, want 200 for both", hiddenCode, unknownCode)
-	}
-	if strings.Contains(hiddenPage, "SECRET") {
-		t.Error("the hidden project's list shows its requests")
-	}
-	if strings.ReplaceAll(hiddenPage, url.QueryEscape(shellHiddenProject), "P") != strings.ReplaceAll(unknownPage, url.QueryEscape("github.com/nobody/unknown"), "P") &&
-		strings.ReplaceAll(hiddenPage, shellHiddenProject, "P") != strings.ReplaceAll(unknownPage, "github.com/nobody/unknown", "P") {
-		t.Error("a hidden project answers differently from an unknown one")
-	}
-	// A request without a project belongs to no project's ledger (REQ-458); it
-	// stays findable in the list that names no project.
-	if strings.Contains(hiddenPage, "Global request") || strings.Contains(unknownPage, "Global request") {
-		t.Error("a request without a project shows up in a project's list")
-	}
-	if _, all := e.get(t, e.Owner, "/ui/requests"); !strings.Contains(all, "Global request") {
-		t.Error("the request without a project is nowhere")
-	}
-	if strings.Contains(hiddenPage, "secret-prio") {
-		t.Error("the priority menu of a hidden project leaks its priorities")
-	}
-	_, owner := e.get(t, e.Owner, "/ui/requests")
-	if !strings.Contains(owner, "SECRET-REQ") {
-		t.Error("the owner does not see every project")
-	}
-	_, scoped := e.get(t, e.Owner, "/ui/requests?project="+url.QueryEscape(shellProject))
-	if strings.Contains(scoped, "SECRET-REQ") {
-		t.Error("the project selector does not narrow the list")
-	}
-}
-
 func TestRequestDetailShowsDescriptionCriteriaProofWorkAndRelations(t *testing.T) {
 	e := seedSessions(t)
 	d := rqMake(t, e.St, rqSpec{Title: "Detail request", Desc: "First paragraph.\n\nSecond with `code`.", Priority: "hoch", Criteria: []string{"Exports run", "Docs updated"}})
@@ -239,8 +78,8 @@ func TestRequestDetailShowsDescriptionCriteriaProofWorkAndRelations(t *testing.T
 		t.Fatalf("status %d", code)
 	}
 	for _, want := range []string{"Detail request", "REQ-" + strconv.FormatInt(d.Request.ID, 10), "hoch", "First paragraph.", "<code>code</code>", "2/2",
-		"AC-" + strconv.FormatInt(d.Request.ID, 10) + ".1", "Exports run", `href="/ui/sessions/` + e.pid["anna-project"] + `#c3"`,
-		"Working", "Related one", `href="/ui/requests/` + strconv.FormatInt(other.Request.ID, 10) + `"`, "https://example.com/x", "Criterion met", "Work started"} {
+		`id="criterion-1"`, "Exports run", `href="/ui/sessions/` + e.pid["anna-project"] + `#c3"`,
+		"Working", "Related one", `href="/ui/requests/` + strconv.FormatInt(other.Request.ID, 10) + `"`, "https://example.com/x", `data-act="criterion.met"`, `data-act="work.started"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("member detail lacks %q", want)
 		}
@@ -298,8 +137,13 @@ func TestRequestDetailForAGuestCarriesNoHiddenSessionAndNoNumbers(t *testing.T) 
 		}
 	}
 	// 2/2 criteria are met, but only one proof is readable: the hidden one is dropped, not blanked.
-	if strings.Count(page, `class="rq-evidence"`) != 1 {
-		t.Errorf("guest sees %d proofs, want 1", strings.Count(page, `class="rq-evidence"`))
+	end := strings.Index(page, `class="cmt ev tev"`)
+	if end < 0 {
+		end = len(page)
+	}
+	checklist := page[:end]
+	if strings.Count(checklist, `class="chip ar"`) != 1 {
+		t.Errorf("guest sees %d proofs in the checklist, want 1", strings.Count(checklist, `class="chip ar"`))
 	}
 }
 
@@ -413,12 +257,15 @@ func TestRequestCorrectNeedsAReasonAndEditRight(t *testing.T) {
 		t.Errorf("guest correcting = %d", resp.StatusCode)
 	}
 	for name, change := range map[string]map[string]string{
-		"no reason": {"title": "New", "reason": " "}, "no change": {}, "empty title": {"title": " "},
-		"bad type": {"type": "epic"},
+		"no reason": {"title": "New", "reason": " "}, "no change": {}, "bad type": {"type": "epic"},
 	} {
 		if resp := rqPost(t, e, e.Lead, id, "/correct", form(change)); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s: %d", name, resp.StatusCode)
 		}
+	}
+	// An empty title goes back to the issue with the refusal and what was typed.
+	if resp := rqPost(t, e, asBrowser(e.Lead), id, "/correct", form(map[string]string{"title": " "})); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("empty title: %d", resp.StatusCode)
 	}
 	if got, _ := e.St.RequestByID(id); got.Request.Title != "Old title" {
 		t.Fatal("a refused correction changed the request")
@@ -436,7 +283,7 @@ func TestRequestCorrectNeedsAReasonAndEditRight(t *testing.T) {
 		t.Errorf("the reason is not in the activity: %+v", last)
 	}
 	_, page := fetchPage(t, e.Lead, e.Base+resp.Header.Get("Location"))
-	if !strings.Contains(page, "Saved.") || !strings.Contains(page, "New title") || !strings.Contains(page, "Corrected") {
+	if !strings.Contains(page, "Saved.") || !strings.Contains(page, "New title") || !strings.Contains(page, `data-act="request.corrected"`) {
 		t.Error("result line, new title or history entry missing")
 	}
 	// The author may correct their own request as a member.
@@ -622,7 +469,7 @@ func TestRequestCorrectAcceptsALongDescription(t *testing.T) {
 	if got := rqBody(t, e, d.Request.ID).Description; got != strings.ReplaceAll(long, "\r\n", "\n") {
 		t.Errorf("long description not stored (%d bytes)", len(got))
 	}
-	tooLong := strings.Repeat("x", maxTextBytes+1)
+	tooLong := strings.Repeat("x", maxLongText+1)
 	if resp := rqPost(t, e, e.Lead, d.Request.ID, "/correct", rqCorrectForm("Long", tooLong, "too much")); resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("a description over the limit = %d", resp.StatusCode)
 	}
@@ -655,14 +502,14 @@ func TestRequestCorrectMayEmptyTheDescriptionAndKeepsIndentation(t *testing.T) {
 		t.Errorf("description not emptied: %q", got)
 	}
 	_, page := fetchPage(t, e.Lead, e.Base+rqPath(id, "?edit=1"))
-	if strings.Contains(page, `<textarea class="clay-field kn-textarea" name="description" required`) {
+	if strings.Contains(page, `<textarea name="description" required`) {
 		t.Error("the description field is still required")
 	}
 }
 
 func TestRequestCorrectChecksLengthsOnlyOnChangedFields(t *testing.T) {
 	e := ovEnv(t)
-	legacyTitle := strings.Repeat("t", maxTitleBytes+100)
+	legacyTitle := strings.Repeat("t", maxTitleChars+100)
 	legacyPrio := strings.Repeat("p", maxPriority+10)
 	d := rqMake(t, e.St, rqSpec{Title: legacyTitle, Desc: "old", Priority: legacyPrio, Type: "bug"})
 	id := d.Request.ID
@@ -673,7 +520,7 @@ func TestRequestCorrectChecksLengthsOnlyOnChangedFields(t *testing.T) {
 	if got := rqBody(t, e, id); got.Description != "new" || got.Title != legacyTitle || got.Priority != legacyPrio {
 		t.Errorf("legacy fields were touched: %d %d", len(got.Title), len(got.Priority))
 	}
-	form.Set("title", strings.Repeat("u", maxTitleBytes+1))
+	form.Set("title", strings.Repeat("u", maxTitleChars+1))
 	form.Set("description", "newer")
 	if resp := rqPost(t, e, e.Lead, id, "/correct", form); resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("a changed over-long title = %d", resp.StatusCode)
@@ -695,8 +542,10 @@ func TestRequestCorrectWorksOnADoneRequest(t *testing.T) {
 	}
 }
 
-func rqActivityCount(page, label string) int {
-	return strings.Count(page, `<span class="rq-act">`+label+`</span>`)
+// rqActivityCount counts the entries of one kind ("relation.added") in the
+// history of an issue page; the sentences themselves are for people.
+func rqActivityCount(page, kind string) int {
+	return strings.Count(page, `data-act="`+kind+`"`)
 }
 
 func TestRequestHistoryDropsRelationEntriesAboutHiddenCounterparts(t *testing.T) {
@@ -720,10 +569,10 @@ func TestRequestHistoryDropsRelationEntriesAboutHiddenCounterparts(t *testing.T)
 		}
 	}
 	_, member := e.get(t, e.Member, rqPath(d.Request.ID, ""))
-	if n := rqActivityCount(member, "Relation added"); n != 1 {
+	if n := rqActivityCount(member, "relation.added"); n != 1 {
 		t.Errorf("member sees %d relation-added entries, want 1", n)
 	}
-	if n := rqActivityCount(member, "Relation removed"); n != 0 {
+	if n := rqActivityCount(member, "relation.removed"); n != 0 {
 		t.Errorf("member sees %d relation-removed entries about a hidden request, want 0", n)
 	}
 	for _, leak := range []string{"SECRET", "REQ-" + strconv.FormatInt(secret.Request.ID, 10)} {
@@ -732,7 +581,7 @@ func TestRequestHistoryDropsRelationEntriesAboutHiddenCounterparts(t *testing.T)
 		}
 	}
 	_, owner := e.get(t, e.Owner, rqPath(d.Request.ID, ""))
-	if n := rqActivityCount(owner, "Relation removed"); n != 1 {
+	if n := rqActivityCount(owner, "relation.removed"); n != 1 {
 		t.Errorf("owner sees %d relation-removed entries, want 1", n)
 	}
 }
@@ -779,24 +628,6 @@ func TestRequestDetailListsOnlyDiscussionsInReadableRooms(t *testing.T) {
 	}
 }
 
-func TestRequestPriorityMenuDoesNotDependOnThePage(t *testing.T) {
-	e := seedSessions(t)
-	rqMake(t, e.St, rqSpec{Title: "Oldest", Priority: "selten"})
-	for i := 0; i < requestsShown+3; i++ {
-		rqMake(t, e.St, rqSpec{Title: "Filler " + strconv.Itoa(i), Priority: "mittel"})
-	}
-	rqMake(t, e.St, rqSpec{Title: "Hidden prio", Priority: "GEHEIM", Project: shellHiddenProject})
-	for _, path := range []string{"/ui/requests", "/ui/requests?priority=mittel"} {
-		_, page := e.get(t, e.Member, path)
-		if !strings.Contains(page, `value="selten"`) || !strings.Contains(page, `value="mittel"`) {
-			t.Errorf("%s: the priority menu changes with the page", path)
-		}
-		if strings.Contains(page, "GEHEIM") {
-			t.Errorf("%s: the menu offers a priority of a hidden project", path)
-		}
-	}
-}
-
 func TestRequestHistoryHasNoOracleForSameKindSameSecondRelations(t *testing.T) {
 	e := seedSessions(t)
 	d := rqMake(t, e.St, rqSpec{Title: "Linked"})
@@ -823,14 +654,14 @@ func TestRequestHistoryHasNoOracleForSameKindSameSecondRelations(t *testing.T) {
 		}
 	}
 	_, member := e.get(t, e.Member, rqPath(d.Request.ID, ""))
-	if n := rqActivityCount(member, "Relation added"); n != 2 {
+	if n := rqActivityCount(member, "relation.added"); n != 2 {
 		t.Errorf("member sees %d relation-added entries, want 2 (the hidden one is gone)", n)
 	}
 	_, owner := e.get(t, e.Owner, rqPath(d.Request.ID, ""))
-	if n := rqActivityCount(owner, "Relation added"); n != 3 {
+	if n := rqActivityCount(owner, "relation.added"); n != 3 {
 		t.Errorf("owner sees %d relation-added entries, want 3", n)
 	}
-	if n := rqActivityCount(owner, "Relation removed"); n != 1 {
+	if n := rqActivityCount(owner, "relation.removed"); n != 1 {
 		t.Errorf("owner sees %d relation-removed entries, want 1", n)
 	}
 }
@@ -853,11 +684,11 @@ func TestRequestHistoryLegacyRelationEntriesPairOncePerRelation(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, member := e.get(t, e.Member, rqPath(d.Request.ID, ""))
-	if n := rqActivityCount(member, "Relation added"); n != 1 {
+	if n := rqActivityCount(member, "relation.added"); n != 1 {
 		t.Errorf("member sees %d legacy relation-added entries, want 1", n)
 	}
 	_, owner := e.get(t, e.Owner, rqPath(d.Request.ID, ""))
-	if n := rqActivityCount(owner, "Relation added"); n != 2 {
+	if n := rqActivityCount(owner, "relation.added"); n != 2 {
 		t.Errorf("owner sees %d legacy relation-added entries, want 2", n)
 	}
 }
@@ -865,7 +696,7 @@ func TestRequestHistoryLegacyRelationEntriesPairOncePerRelation(t *testing.T) {
 func TestRequestCorrectTooLargeIs413WithADesignedPage(t *testing.T) {
 	e := ovEnv(t)
 	d := rqMake(t, e.St, rqSpec{Title: "Big", Desc: "old", Priority: "mittel", Type: "bug"})
-	resp := rqPost(t, e, e.Lead, d.Request.ID, "/correct", rqCorrectForm("Big", strings.Repeat("x", requestCorrectForm+1), "too much"))
+	resp := rqPost(t, e, e.Lead, d.Request.ID, "/correct", rqCorrectForm("Big", strings.Repeat("x", maxFormBody+1), "too much"))
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("an oversize correction = %d, want 413", resp.StatusCode)
 	}

@@ -489,3 +489,60 @@ func TestTomlStringEscapesControlCharactersAndRoundTrips(t *testing.T) {
 		t.Errorf("round trip = %q, want %q", back, in)
 	}
 }
+
+// Abläufe (REQ-604) lösen an Bash-Befehlen aus. Der Claude-Hook für PreToolUse
+// muss Bash deshalb einschließen, und eine Installation mit dem alten Matcher
+// ohne Bash wird beim nächsten ctx install umgestellt.
+func TestClaudePreToolUseHookIncludesBashAndUpgradesTheOldMatcher(t *testing.T) {
+	home := t.TempDir()
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".claude", "settings.json")
+	matcherOf := func() string {
+		t.Helper()
+		settings, err := readJSONFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range settings["hooks"].(map[string]any)["PreToolUse"].([]any) {
+			group := g.(map[string]any)
+			for _, h := range group["hooks"].([]any) {
+				if strings.Contains(h.(map[string]any)["command"].(string), "hook pre-tool-use") {
+					return group["matcher"].(string)
+				}
+			}
+		}
+		t.Fatal("no pre-tool-use hook")
+		return ""
+	}
+	if m := matcherOf(); !strings.Contains("|"+m+"|", "|Bash|") {
+		t.Fatalf("matcher %q leaves out Bash", m)
+	}
+	// Alter Stand: Matcher ohne Bash.
+	settings, err := readJSONFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range settings["hooks"].(map[string]any)["PreToolUse"].([]any) {
+		group := g.(map[string]any)
+		for _, h := range group["hooks"].([]any) {
+			if strings.Contains(h.(map[string]any)["command"].(string), "hook pre-tool-use") {
+				group["matcher"] = "Read|Edit|Write|NotebookEdit"
+			}
+		}
+	}
+	if err := writeJSONFile(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	if m := matcherOf(); !strings.Contains("|"+m+"|", "|Bash|") {
+		t.Fatalf("ctx install kept the old matcher %q", m)
+	}
+	raw, _ := os.ReadFile(path)
+	if n := strings.Count(string(raw), "hook pre-tool-use"); n != 1 {
+		t.Fatalf("pre-tool-use hook registered %d times after the upgrade:\n%s", n, raw)
+	}
+}

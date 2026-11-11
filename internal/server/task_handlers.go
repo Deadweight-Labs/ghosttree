@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ func (a *api) createHumanTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.saveExplanation(explain.KindTask, task.ID, explanation)
+	a.stampActor(r, actor.Task, task.ID, in.SessionID)
 	writeJSON(w, http.StatusCreated, task)
 }
 

@@ -2,6 +2,8 @@ package server
 
 import (
 	"errors"
+	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,9 +31,13 @@ func writeCoordAccessError(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, "coordination target not found")
 	case errors.Is(err, store.ErrCoordForbidden):
 		writeErr(w, http.StatusForbidden, "coordination target forbidden")
+	case errors.Is(err, store.ErrCoordOriginConflict):
+		writeErr(w, http.StatusConflict, "origin_event_id is already used by another message")
 	case errors.Is(err, store.ErrCoordUnknownRecipient):
 		// Fester Text: die Antwort darf die geprüfte Id nicht zurückgeben.
 		writeErr(w, http.StatusBadRequest, "coordination recipient is not available")
+	case errors.Is(err, store.ErrCoordBodyTooLong):
+		writeCoded(w, http.StatusRequestEntityTooLarge, "body_too_long", fmt.Sprintf("the message body is too long: at most %d bytes", store.CoordMaxBody))
 	case errors.Is(err, store.ErrCoordAmbiguousMention):
 		// Only members reach this: a guest never gets an error for a name.
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -164,12 +170,40 @@ func (a *api) sendCoordMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Explanation = ""
-	id, err := a.coordAccess(r, in.SenderExternalID).Send(in)
+	// Antwortvorschläge gehören zu einer Frage an Menschen. Sie werden vor dem
+	// Senden geprüft: eine ungültige Liste lässt die Frage nicht halb entstehen.
+	options, err := store.CleanAnswerOptions(in.Options)
+	if err != nil {
+		writeRequestError(w, err)
+		return
+	}
+	if len(options) > 0 && in.Intent != store.IntentQuestion {
+		writeCoded(w, http.StatusBadRequest, "options_not_allowed", "answer options go with a question: set intent to question, or drop the options")
+		return
+	}
+	in.Options = nil
+	// Nie aus dem Body: nur der Header trägt einen gemessenen Stand.
+	in.GitAnchor = anchorFromRequest(r)
+	in.OriginContext = a.originFor(r, "")
+	id, created, err := a.coordAccess(r, in.SenderExternalID).SendNew(in)
 	if err != nil {
 		writeCoordAccessError(w, err)
 		return
 	}
+	if !created {
+		// Eine Wiederholung gehört dem, der sie zuerst gesendet hat: weder
+		// Erklärung noch Optionen noch Zustellstatus werden nachträglich
+		// an die vorhandene Nachricht gehängt.
+		writeJSON(w, 200, map[string]int64{"id": id})
+		return
+	}
 	a.saveExplanation(explain.KindQuestion, id, explanation)
+	a.stampActor(r, actor.Message, id, 0)
+	if len(options) > 0 {
+		if err := a.st.SaveAnswerOptions(store.AnswerOnMessage, id, options); err != nil {
+			a.logger.Warn("answer_options_not_stored", "message", id, "error", err.Error())
+		}
+	}
 	// Gespeichert ist der einzige Zustand, den dieser Aufruf belegen kann.
 	// Alles Weitere setzt der Adapter, wenn er es beobachtet.
 	if err := a.coordAccess(r, in.SenderExternalID).MarkDelivery(id, store.DeliveryStored); err != nil {
@@ -245,10 +279,12 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Ein Projektraum gehört zu einem Projekt: eine fremde Remote gibt es für
-	// diesen Aufrufer nicht, eine unbekannte wird wie bei jedem Schreiben
-	// zugeordnet.
+	// diesen Aufrufer nicht. Eine unbekannte wird hier NICHT angelegt: dem Raum
+	// beizutreten (auch vor dem Lesen, ctx coord inbox) ist keine Arbeit am
+	// Projekt. Ein Projekt entsteht durch ausdrückliches Anlegen oder durch
+	// eine Session oder geschriebenen Inhalt (REQ-623, PAIN-67).
 	if project, ok := strings.CutPrefix(in.RoomKey, "project:"); ok {
-		if !a.gateProject(w, r, project) {
+		if !a.gateKnownProject(w, r, project) {
 			return
 		}
 		// Org-Mitgliedschaft allein genügt nicht: in den Projektraum kommt nur,

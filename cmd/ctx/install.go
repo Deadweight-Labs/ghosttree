@@ -24,13 +24,14 @@ func (v *repeatedStrings) Set(value string) error {
 }
 
 const installUsage = `usage: ctx install claude|codex|opencode [--only component]... [--no-watch]
-       ctx install watch
+       ctx install watch [--restart]
        ctx install ghclaude
 
-  claude, codex, opencode  wire the harness: hooks, MCP server, rules, skills.
+  claude, codex, opencode  wire the harness: hooks, MCP server, rules, skills, and the /ghost shortcuts (open, task, req, preset; Codex: $ghost).
                            claude and codex also set up the collector service.
   watch                    set up only the collector service (ctx watch as a
-                           systemd user unit on Linux, a LaunchAgent on macOS)
+                           systemd user unit on Linux, a LaunchAgent on macOS);
+                           --restart restarts it afterwards (new binary, new config)
   --only component         install only this component (mcp, hooks, rules,
                            skills; repeatable)
   ghclaude                 link ghclaude next to ctx: starts claude with the
@@ -102,6 +103,7 @@ func cmdInstall(args []string, stdout io.Writer) int {
 	fs.Var(&only, "only", "install only this component (repeatable)")
 	noWatch := fs.Bool("no-watch", false, "do not set up the collector service")
 	noGhclaude := fs.Bool("no-ghclaude", false, "do not offer ghclaude")
+	restart := fs.Bool("restart", false, "with watch: restart the collector service")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -133,6 +135,9 @@ func cmdInstall(args []string, stdout io.Writer) int {
 		if len(only) != 0 {
 			fmt.Fprintln(stdout, "ctx install watch takes no --only")
 			return 2
+		}
+		if *restart {
+			return restartCollector(stdout, home)
 		}
 		return installCollector(stdout, home)
 	}
@@ -183,6 +188,23 @@ func cmdInstall(args []string, stdout io.Writer) int {
 // ghosttree connection. Without one `ctx watch` would only fail and restart
 // every thirty seconds, so the service waits for the join or setup that
 // writes the config.
+// restartCollector is ctx install watch --restart.
+func restartCollector(stdout io.Writer, home string) int {
+	if _, err := config.Load(); err != nil {
+		fmt.Fprintf(stdout, "collector   not set up: this machine is not connected yet; run 'ctx join' or 'ctx setup', then '%s install watch'\n", ctxHint())
+		return 1
+	}
+	changes, err := installer.RestartWatchService(home)
+	for _, c := range changes {
+		fmt.Fprintf(stdout, "%-12s %s\n", c.Action, c.Path)
+	}
+	if err != nil {
+		fmt.Fprintf(stdout, "collector service: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 func installCollector(stdout io.Writer, home string) int {
 	if _, err := config.Load(); err != nil {
 		fmt.Fprintf(stdout, "collector   not set up: this machine is not connected yet; run 'ctx join' or 'ctx setup', then '%s install watch'\n", ctxHint())

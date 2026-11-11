@@ -91,10 +91,23 @@ func resolveRepoContext(cwd string) GitContext {
 // The alternative, treating any shared merge base as ancestry, would make every
 // branch an ancestor of every other, which is not a lineage but a repository.
 func BranchLineage(cwd, branch string) []string {
+	return branchLineageOf(cwd, branch, "HEAD")
+}
+
+// BranchLineageOf ist BranchLineage für einen benannten Branch statt für HEAD:
+// die Vorfahren, die der Branch enthält. Für eine Suche auf einem anderen
+// Branch als dem ausgecheckten (context_search mit branch). Gibt es den Branch
+// hier nicht (kein lokaler Ref), ist die Kette leer und die Suche liest auf
+// Projektebene, wie ohne Lineage.
+func BranchLineageOf(cwd, branch string) []string {
+	return branchLineageOf(cwd, branch, "refs/heads/"+branch)
+}
+
+func branchLineageOf(cwd, branch, ref string) []string {
 	if branch == "" {
 		return nil
 	}
-	out, err := gitOut(cwd, "branch", "--format=%(refname:short)", "--merged", "HEAD")
+	out, err := gitOut(cwd, "branch", "--format=%(refname:short)", "--merged", ref)
 	if err != nil {
 		// No repository, a detached head, or a git too old for --format. A
 		// session with no derivable chain reads at project scope, which is what
@@ -133,9 +146,13 @@ func nearestExistingAncestor(path string) string {
 }
 
 // GitInfo derives the project and branch axes from a working directory.
-// Both are empty outside a repo or without an origin remote.
+// Both are empty outside a repo or without an origin remote; the project is
+// also empty for a throwaway remote (scope.IsThrowawayRemote).
 func GitInfo(cwd string) (project, branch string) {
-	if out, err := gitOut(cwd, "remote", "get-url", "origin"); err == nil {
+	if out, err := gitOut(cwd, "remote", "get-url", "origin"); err == nil && !scope.IsThrowawayRemote(out) {
+		// A throwaway remote (a local path, a temporary checkout, a test host)
+		// names no shared repository: the directory counts as one without a
+		// remote, so a test run never creates a project on the server.
 		project = scope.NormalizeRemote(out)
 	}
 	if out, err := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD"); err == nil && out != "HEAD" {

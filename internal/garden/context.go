@@ -27,6 +27,10 @@ type Entry struct {
 	// for it in this run: an open pitfall with no proposal of the gardener standing.
 	Regression string
 	AskCover   bool
+	// AnchorCommit is the full HEAD commit the entry was written on (its anchor,
+	// REQ-597); empty for an entry without one. Staleness is measured from it:
+	// the commits since the entry's own state, not since a clock time.
+	AnchorCommit string
 }
 
 func (e Entry) Since() string {
@@ -43,7 +47,10 @@ type CodeContext struct {
 	Files   []string
 	Symbols []string
 	Commits int
-	Text    string
+	// Since names what Commits counts from: "Anker <short commit>" when the
+	// entry's anchor commit is in the checkout, otherwise the observation date.
+	Since string
+	Text  string
 	// Lines and Hashes are what Text lets a verdict cite: file:line pairs on
 	// its lines and the full-length commit hashes of its log.
 	Lines  map[string]bool
@@ -241,7 +248,16 @@ func (r *Repo) Gather(e Entry, maxChars int) (CodeContext, error) {
 		}
 	}
 
-	since := e.Since()
+	// From the anchor commit when the entry has one and this checkout knows it,
+	// else from the observation date. An anchor the checkout cannot resolve (not
+	// fetched, rewritten away) is no reason to look at nothing: the date still
+	// bounds the question, as it did before anchors existed.
+	since, rangeFrom := e.Since(), ""
+	if full, ok := r.anchorCommit(e.AnchorCommit); ok {
+		rangeFrom = full + "..HEAD"
+		since = "Anker " + full[:12]
+	}
+	cc.Since = since
 	commits := map[string]bool{}
 	var log []string
 	addLog := func(out string) {
@@ -253,7 +269,9 @@ func (r *Repo) Gather(e Entry, maxChars int) (CodeContext, error) {
 		}
 	}
 	base := []string{"log", "--date=short", "--abbrev=12", "--format=%h %ad %s", "-n", fmt.Sprint(maxLogPerQuery)}
-	if since != "" {
+	if rangeFrom != "" {
+		base = append(base, rangeFrom)
+	} else if since != "" {
 		base = append(base, "--since="+since)
 	}
 	if len(touched) > 0 {
@@ -289,6 +307,22 @@ func (r *Repo) Gather(e Entry, maxChars int) (CodeContext, error) {
 	cc.Text = commitText + "\n" + symText + fileText
 	cc.Lines, cc.Hashes = citable(cc.Text)
 	return cc, nil
+}
+
+// anchorCommit resolves an entry's anchor commit to its full hash, if it is a
+// commit of this checkout. The value is checked against the hex shape before it
+// reaches the command line, so it can never be taken for an option.
+func (r *Repo) anchorCommit(commit string) (string, bool) {
+	commit = strings.ToLower(strings.TrimSpace(commit))
+	if !hashRe.MatchString(commit) {
+		return "", false
+	}
+	out, err := r.git("rev-parse", "--verify", "--quiet", commit+"^{commit}")
+	full := strings.TrimSpace(out)
+	if err != nil || len(full) < 12 {
+		return "", false
+	}
+	return full, true
 }
 
 var (

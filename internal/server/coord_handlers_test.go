@@ -454,6 +454,7 @@ func TestAgentOwnershipSurvivesPersonRename(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	token, _ := st.AddPerson("robin")
 	other, _ := st.AddPerson("philipp")
+	shareRemoteInTeam(t, st, "github.com/x/y", "person:2")
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 	room := store.RoomKeyForProject("github.com/x/y")
@@ -579,6 +580,7 @@ func twoPersonServer(t *testing.T) (*httptest.Server, string, string) {
 	t.Cleanup(func() { st.Close() })
 	robin, _ := st.AddPerson("robin")
 	philipp, _ := st.AddPerson("philipp")
+	shareRemoteInTeam(t, st, "github.com/x/y", "person:2")
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 	return srv, robin, philipp
@@ -1041,5 +1043,35 @@ func TestCoordAPISendAcceptsAttentionIntentAndRejectsReservedOnes(t *testing.T) 
 	}
 	if !q {
 		t.Fatalf("question intent not stored: %+v", msgs)
+	}
+}
+
+// A message body over 64 KB is refused with 413 and a code a client can read;
+// one of exactly 64 KB goes through.
+func TestCoordAPIRefusesABodyOverTheLimit(t *testing.T) {
+	srv, st, token, _ := coordinationAccessServer(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{ExternalID: "sess-a", PrincipalID: "person:1", Person: "owner", Provider: "test", RoomKey: room}); err != nil {
+		t.Fatal(err)
+	}
+	send := func(client, body string) *http.Response {
+		return req(t, "POST", srv.URL+"/api/coord/messages", token, store.CoordMessage{
+			DestinationKind: store.DestinationRoom, DestinationID: room,
+			SenderExternalID: "sess-a", ClientID: client, Body: body,
+		})
+	}
+	ok := send("fits", strings.Repeat("a", store.CoordMaxBody))
+	ok.Body.Close()
+	if ok.StatusCode != http.StatusOK {
+		t.Fatalf("a body of the limit: status %d", ok.StatusCode)
+	}
+	res := send("over", strings.Repeat("a", store.CoordMaxBody+1))
+	defer res.Body.Close()
+	var out map[string]string
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusRequestEntityTooLarge || out["code"] != "body_too_long" || !strings.Contains(out["error"], "65536") {
+		t.Fatalf("a body over the limit: status %d, %v", res.StatusCode, out)
 	}
 }

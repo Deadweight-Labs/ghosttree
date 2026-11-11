@@ -39,7 +39,7 @@ func TestWebShowsAgentIdentityAndSelfReportedNote(t *testing.T) {
 		t.Error("the note is not marked as self-reported in the member list and next to the message")
 	}
 	agents := namesGetShell(t, e, "/ui/agents")
-	if !strings.Contains(visibleText(agents), "mac-lab") || !strings.Contains(agents, `class="ag-note" title="`+messages["coord.self_reported"]+`"`) || !strings.Contains(agents, "PR #77 feat/mac-sync") {
+	if !strings.Contains(agents, "mac-lab") || !strings.Contains(agents, `class="aq" title="`+messages["coord.self_reported"]+`"`) || !strings.Contains(agents, "PR #77 feat/mac-sync") {
 		t.Errorf("agent list lacks identity or note: %s", visibleText(agents))
 	}
 }
@@ -58,7 +58,7 @@ func namesGetShell(t *testing.T, e shellEnv, path string) string {
 func TestComposerOffersTheBroadcastChipAndItAddressesActiveAgents(t *testing.T) {
 	e, room := identityEnv(t)
 	page := namesGetShell(t, e, "/ui/coord?room="+url.QueryEscape(room))
-	if !strings.Contains(page, `name="mentions" value="all-agents"`) || !strings.Contains(visibleText(page), messages["coord.broadcast"]) {
+	if !strings.Contains(page, `data-val="all-agents"`) || !strings.Contains(visibleText(page), messages["coord.broadcast"]) {
 		t.Error("the broadcast chip is missing in the composer")
 	}
 	if st := postRoom(t, e, e.Lead, "/ui/coord/send", room, url.Values{"body": {"wer arbeitet an welchem PR?"}, "mentions": {"all-agents"}}); st != 303 {

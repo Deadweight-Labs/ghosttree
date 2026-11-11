@@ -158,7 +158,7 @@ func TestCoordParticipantsShowRoles(t *testing.T) {
 
 // roleForm schneidet das Rollenformular eines Kontos aus der Seite.
 func roleForm(page, account string) string {
-	marker := `name="account" value="` + account + `"><select class="clay-select adm-sel" name="role"`
+	marker := `name="account" value="` + account + `"><select class="gfield" name="role"`
 	i := strings.Index(page, marker)
 	if i < 0 {
 		return ""
@@ -267,9 +267,10 @@ func TestOrgPageRoleTableHidesMembersFromGuests(t *testing.T) {
 		}
 		return page[i:]
 	}
-	got := roles(anna)
-	if !strings.Contains(got, "anna") || strings.Contains(got, "alice") {
-		t.Fatalf("guest must see only their own role row: %s", got)
+	// A guest gets no organization settings at all (14 A, #4376).
+	resp, _ := anna.Get(base + "/ui/orgs?org=alpha")
+	if page := body(t, resp); strings.Contains(page, "<h2>Projects</h2>") || strings.Contains(page, "alice") {
+		t.Fatalf("guest sees the organization's settings: %s", page)
 	}
 	if owner := roles(alice); !strings.Contains(owner, "alice") || !strings.Contains(owner, "anna") {
 		t.Fatalf("owner lost rows: %s", owner)

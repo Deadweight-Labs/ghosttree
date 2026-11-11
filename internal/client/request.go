@@ -17,6 +17,12 @@ func (c *Client) CreateRequest(in requestdomain.CreateInput) (requestdomain.Deta
 	if in.Explanation != "" {
 		body["explanation"] = in.Explanation
 	}
+	if in.Parent != "" {
+		body["parent"] = in.Parent
+	}
+	if len(in.DerivedFrom) > 0 {
+		body["derived_from"] = in.DerivedFrom
+	}
 	var out requestdomain.Detail
 	err := c.do("POST", "/api/requests", nil, body, &out)
 	return out, err
@@ -42,6 +48,7 @@ func (c *Client) SearchRequests(filter requestdomain.SearchFilter) (requestdomai
 	if filter.FullDescription {
 		q.Set("full", "1")
 	}
+	AnchorFilter{Commit: filter.Commit, PR: filter.PR, Origin: OriginFilter(filter.Origin)}.apply(q)
 	var out requestdomain.SearchPage
 	err := c.do("GET", "/api/requests/search", q, nil, &out)
 	return out, err
@@ -53,19 +60,30 @@ func (c *Client) GetRequest(id int64) (requestdomain.Detail, error) {
 	return out, err
 }
 
+// Der Git-Anker eines Nachweises geht nie im Body mit, sondern im Header
+// (SetAnchorSource): der Body ist nicht die Quelle.
 func (c *Client) CompleteRequest(id int64, evidence requestdomain.Evidence) error {
 	body := map[string]string{"evidence_kind": evidence.Kind, "evidence_ref": evidence.Ref}
 	return c.do("POST", "/api/requests/"+strconv.FormatInt(id, 10)+"/complete", nil, body, nil)
 }
 
 func (c *Client) StartRequestWork(requestID, sessionID int64, role string) (requestdomain.Work, []string, error) {
+	work, warnings, _, err := c.StartRequestWorkBriefing(requestID, sessionID, role)
+	return work, warnings, err
+}
+
+// StartRequestWorkBriefing trägt zusätzlich den Idee-Abschnitt (REQ-611) mit:
+// Kurzfassung, getroffene Entscheidungen und offene Fragen, leer, wenn das Issue
+// nicht aus einer Idee stammt.
+func (c *Client) StartRequestWorkBriefing(requestID, sessionID int64, role string) (requestdomain.Work, []string, string, error) {
 	var out struct {
-		Work     requestdomain.Work `json:"work"`
-		Warnings []string           `json:"warnings"`
+		Work         requestdomain.Work `json:"work"`
+		Warnings     []string           `json:"warnings"`
+		IdeaBriefing string             `json:"idea_briefing"`
 	}
 	err := c.do("POST", "/api/requests/"+strconv.FormatInt(requestID, 10)+"/work", nil,
 		map[string]any{"session_id": sessionID, "role": role}, &out)
-	return out.Work, out.Warnings, err
+	return out.Work, out.Warnings, out.IdeaBriefing, err
 }
 
 func (c *Client) FinishRequestWork(workID int64, state, summary string) (requestdomain.Work, error) {

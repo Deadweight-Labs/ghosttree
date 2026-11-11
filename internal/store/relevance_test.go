@@ -137,3 +137,17 @@ func RelevantTitles(s *Store, text string) ([]string, error) {
 	}
 	return out, nil
 }
+
+// Everyday words of either language never reach the index, however rare the
+// knowledge makes them look.
+func TestDistinctiveTermsDropEverydayWords(t *testing.T) {
+	got := distinctiveTerms("Wohin hattest du den zorbulax-Host gestellt? Where would you put it")
+	for _, w := range got {
+		if everydayWords[w] || commonWords[w] {
+			t.Errorf("%q kept", w)
+		}
+	}
+	if strings.Join(got, " ") != "zorbulax host" {
+		t.Errorf("terms: %v", got)
+	}
+}

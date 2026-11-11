@@ -1,9 +1,9 @@
 package web
 
 import (
+	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -174,13 +174,27 @@ func TestTheLastOwnerIsOfferedNeitherDemotionNorLeaving(t *testing.T) {
 	}
 }
 
-func TestTheDefaultOrganisationIsMarkedByWhatItDoes(t *testing.T) {
+// REQ-623: there is no "organization for new projects" any more, and founding
+// an organization is not a tab in the settings of another one.
+func TestOrgSettingsHaveNoDefaultAndNoNewOrganizationTab(t *testing.T) {
 	base, _, alice, _, _ := orgWeb(t)
 	page := getOrgs(t, alice, base, "?org=alpha")
-	if !regexp.MustCompile(`<span class="adm-pill is-soft">For new projects</span>`).MatchString(page) {
-		t.Fatalf("the default badge is not explained: %s", page)
+	for _, gone := range []string{"For new projects", `href="#neworg"`, `action="/ui/orgs/create"`, `action="/ui/orgs/default"`} {
+		if strings.Contains(page, gone) {
+			t.Errorf("settings still contain %q", gone)
+		}
 	}
-	if regexp.MustCompile(`adm-pill is-soft">Default<`).MatchString(page) {
-		t.Fatal("a bare \"Default\" badge is back")
+	resp, err := alice.Get(base + "/ui/orgs/new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	page = string(raw)
+	if !strings.Contains(page, `action="/ui/orgs/create"`) {
+		t.Errorf("the page for a new organization lacks its form")
+	}
+	if strings.Contains(page, `href="#members"`) {
+		t.Errorf("the page for a new organization shows the settings of another one")
 	}
 }

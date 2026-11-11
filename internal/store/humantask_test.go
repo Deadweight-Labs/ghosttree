@@ -167,16 +167,17 @@ func TestMarkTasksDoneIsAllOrNothing(t *testing.T) {
 	b := w.task(t, "mia", humantask.CreateInput{RequestID: rid, Kind: "input", Title: "b", Assignee: "lena"})
 	gus := w.pa["gus"]
 	forGus := w.task(t, "mia", humantask.CreateInput{RequestID: rid, Kind: "input", Title: "c", Assignee: "gus"})
-	// Gus darf nur die ihm zugewiesene; die erste verbotene Id bricht alles ab und
-	// antwortet wie eine unbekannte.
-	if _, err := gus.MarkTasksDone([]int64{forGus.ID, a.ID}, "", humantask.Actor{AccountID: 5, Person: "gus", Web: true}); !errors.Is(err, ErrAccessNotFound) {
+	// Ein Gast liest nur (Robin, 2026-11-09): auch die ihm zugewiesene Aufgabe
+	// meldet er nicht als erledigt, und eine Id, die er nicht sieht, antwortet
+	// wie eine unbekannte.
+	if _, err := gus.MarkTasksDone([]int64{a.ID, forGus.ID}, "", humantask.Actor{AccountID: 5, Person: "gus", Web: true}); !errors.Is(err, ErrAccessNotFound) {
 		t.Errorf("hidden id: %v", err)
 	}
-	if got, _ := w.st.TaskByID(forGus.ID); got.State != humantask.Open {
-		t.Errorf("the allowed id was written despite the abort: %s", got.State)
-	}
-	if _, err := gus.MarkTasksDone([]int64{forGus.ID}, "erledigt", humantask.Actor{AccountID: 5, Person: "gus", Web: true}); err != nil {
+	if _, err := gus.MarkTasksDone([]int64{forGus.ID}, "erledigt", humantask.Actor{AccountID: 5, Person: "gus", Web: true}); !errors.Is(err, ErrAccessForbidden) {
 		t.Errorf("assigned guest marks done: %v", err)
+	}
+	if got, _ := w.st.TaskByID(forGus.ID); got.State != humantask.Open {
+		t.Errorf("a guest marked his task done: %s", got.State)
 	}
 	if _, err := gus.ConfirmHumanTask(forGus.ID, humantask.Actor{AccountID: 5}); err == nil {
 		t.Errorf("a guest confirmed")
@@ -309,7 +310,7 @@ func TestMatrixPainAndTask(t *testing.T) {
 		{"member marks a task assigned to another", member, ResTask, ActWork, other, false},
 		{"lead marks any task", lead, ResTask, ActWork, other, true},
 		{"owner marks any task", owner, ResTask, ActWork, other, true},
-		{"guest marks an assigned task", guest, ResTask, ActWork, assigned, true},
+		{"guest marks an assigned task", guest, ResTask, ActWork, assigned, false},
 		{"guest marks an unassigned task", guest, ResTask, ActWork, unassigned, false},
 		{"guest confirms", guest, ResTask, ActEdit, assigned, false},
 		{"member confirms own", member, ResTask, ActEdit, own, true},
@@ -343,7 +344,7 @@ func TestPainAndTasksThroughTheRuntimeWriter(t *testing.T) {
 	if _, err := s.AcceptInvitation("person:2", code); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.EnsureProject("person:1", roleProject); err != nil {
+	if _, err := claimInOrg(s, "person:1", roleProject); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetProjectRole("person:1", roleProject, "person:2", RoleMember, false, RoleViaAPI); err != nil {
@@ -438,5 +439,33 @@ func TestHumanTaskWithoutRecipientBelongsToTheCreator(t *testing.T) {
 	}
 	if got := titles(rex, TaskFilter{Mine: true}); got != "alle,rex" {
 		t.Errorf("rex mine = %q, want his own and the one for everyone, not mia's", got)
+	}
+}
+
+// REQ-603: die Schritte eines Tasks werden gespeichert und kommen mit dem Task
+// zurück; ein Schritt mit Token-Muster wird wie jedes andere Feld abgelehnt.
+func TestHumanTaskStepsRoundTripAndSecretCheck(t *testing.T) {
+	w := newPainWorld(t)
+	rid := w.request(t, "Verbinden")
+	steps := []humantask.Step{{Text: "GitHub öffnen"}, {Text: "App installieren", URL: "https://github.com/apps/x"}}
+	task := w.task(t, "mia", humantask.CreateInput{RequestID: rid, Kind: "action", Title: "GitHub verbinden", Steps: steps})
+	if len(task.Steps) != 2 || task.Steps[1].URL != "https://github.com/apps/x" || task.Steps[0].Text != "GitHub öffnen" {
+		t.Fatalf("steps after create: %+v", task.Steps)
+	}
+	again, err := w.st.TaskByID(task.ID)
+	if err != nil || len(again.Steps) != 2 || again.Steps[0].Text != "GitHub öffnen" {
+		t.Fatalf("steps after reload: %+v %v", again.Steps, err)
+	}
+	plain := w.task(t, "mia", humantask.CreateInput{RequestID: rid, Kind: "action", Title: "ohne Schritte"})
+	if len(plain.Steps) != 0 {
+		t.Errorf("a task without steps got %+v", plain.Steps)
+	}
+	pa := w.pa["mia"]
+	if _, err := pa.CreateHumanTask(humantask.CreateInput{RequestID: rid, Kind: "action", Title: "x", Steps: []humantask.Step{{Text: "a\nb"}}}, humantask.Actor{Person: "mia"}); ruleCode(err) != "steps_invalid" {
+		t.Errorf("bad step: %v", err)
+	}
+	leak := "ghp_" + strings.Repeat("a1B2c3D4", 5)
+	if _, err := pa.CreateHumanTask(humantask.CreateInput{RequestID: rid, Kind: "action", Title: "x", Steps: []humantask.Step{{Text: "Token " + leak}}}, humantask.Actor{Person: "mia"}); ruleCode(err) != "secret_detected" {
+		t.Errorf("secret in a step: %v", err)
 	}
 }

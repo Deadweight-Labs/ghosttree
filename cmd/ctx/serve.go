@@ -67,6 +67,15 @@ const (
 	envLanguage = "GHOSTTREE_LANGUAGE"
 )
 
+// indexGapDelay is how long after the index backfill the search for chunks
+// without an index row waits, so that it does not compete with the requests
+// that follow a start.
+var indexGapDelay = 2 * time.Minute
+
+// rawDictDelay is how long after the start the server looks whether the
+// database has a dictionary for packing transcript lines.
+var rawDictDelay = 90 * time.Second
+
 type snapshotRootValues []string
 
 func (v *snapshotRootValues) String() string { return strings.Join(*v, ",") }
@@ -89,6 +98,11 @@ func cmdServe(args []string, stdout io.Writer) int {
 		return 1
 	}
 	defer st.Close()
+	// Das Ausführen von Abläufen (REQ-604, Stufe 2) ist ein Schalter und steht
+	// aus: erst der Betreiber schaltet es ein.
+	if os.Getenv("GHOSTTREE_RUNBOOK_EXEC") == "1" {
+		store.SetRunbookExecution(true)
+	}
 	code := runServer(ctx, st, cfg, stdout, os.Stderr)
 	if err := st.Close(); err != nil {
 		fmt.Fprintf(stdout, "close store: %v\n", err)
@@ -329,17 +343,61 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 			return
 		}
 		logger.Info("session_index_backfill", "state", "complete", "seconds", int(time.Since(started).Seconds()))
+		// Once per start, after serving has settled: chunks without an index
+		// row below the highest indexed one, which the cheap check at
+		// startup cannot see.
+		select {
+		case <-indexCtx.Done():
+			return
+		case <-time.After(indexGapDelay):
+		}
+		started = time.Now()
+		rep, err := st.RepairIndexGaps(indexCtx, store.IndexGapOptions{})
+		if err != nil {
+			if indexCtx.Err() == nil {
+				logger.Error("session_index_gaps", "error", err.Error())
+			}
+			return
+		}
+		logger.Info("session_index_gaps", "checked", rep.Checked, "missing", rep.Missing, "sessions", rep.Sessions, "repaired", rep.Repaired, "seconds", int(time.Since(started).Seconds()))
+	}()
+	// Transcript lines are packed with a dictionary learned from the database
+	// itself (REQ-622). A database without one learns it once, a little after
+	// the start; until then lines are packed without one. The sample is read
+	// through the reader, the writer only stores the one row.
+	dictDone := make(chan struct{})
+	go func() {
+		defer close(dictDone)
+		select {
+		case <-indexCtx.Done():
+			return
+		case <-time.After(rawDictDelay):
+		}
+		info, trained, err := store.EnsureRawDict(indexCtx, st)
+		logger := slog.New(slog.NewJSONHandler(stderr, nil))
+		switch {
+		case err != nil && indexCtx.Err() == nil:
+			logger.Error("raw_dictionary", "error", err.Error())
+		case trained:
+			logger.Info("raw_dictionary", "version", info.Version, "bytes", info.Bytes, "sample_lines", info.SampleLines)
+		}
 	}()
 	// Hybrid search and the background job that feeds it are only started with an
 	// embedding server configured. The job begins late and works in small, paused
 	// steps in a goroutine of its own, so serving does not wait for it either.
 	embedCtx, stopEmbed := context.WithCancel(ctx)
 	waitEmbed := startEmbedding(embedCtx, st, cfg.Embed, slog.New(slog.NewJSONHandler(stderr, nil)))
+	mirrorCtx, stopMirror := context.WithCancel(ctx)
+	mirrorApp := forge.NewGitHubApp(forge.AppConfigFromOS())
+	waitMirror := startOrgMirror(mirrorCtx, st, mirrorApp, mirrorApp.Configured(), slog.New(slog.NewJSONHandler(stderr, nil)))
 	err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)))
+	stopMirror()
+	waitMirror()
 	stopEmbed()
 	waitEmbed()
 	stopIndex()
 	<-indexDone
+	<-dictDone
 	if err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)
 		return 1
@@ -358,6 +416,9 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 		server.WithBuildVersion(version),
 		server.WithTrustedProxies(cfg.TrustedProxies),
 	}
+	if forge.NewGitHubApp(forge.AppConfigFromOS()).Configured() {
+		options = append(options, server.WithCapabilities("github_app"))
+	}
 	if cfg.PublicURL != "" {
 		options = append(options, server.WithPublicURL(cfg.PublicURL))
 	}
@@ -368,7 +429,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	apiHandler := server.New(st, options...)
 	root.Handle("/api/", apiHandler)
 	root.Handle("/metrics", apiHandler)
-	webOptions := []web.Option{web.WithBootstrapFile(bootstrapCodePath(cfg.DB)), web.WithTrustedProxies(cfg.TrustedProxies)}
+	webOptions := []web.Option{web.WithBootstrapFile(bootstrapCodePath(cfg.DB)), web.WithTrustedProxies(cfg.TrustedProxies), web.WithLogger(logger)}
 	if cfg.PublicURL != "" {
 		webOptions = append(webOptions, web.WithPublicURL(cfg.PublicURL))
 	}
@@ -378,12 +439,28 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	if cfg.OIDC.Enabled() {
 		webOptions = append(webOptions, web.WithOIDC(cfg.OIDC))
 	}
-	webOptions = append(webOptions, web.WithLanguage(cfg.Language))
+	webOptions = append(webOptions, web.WithLanguage(cfg.Language), web.WithAvatarCache(filepath.Join(filepath.Dir(cfg.DB), "avatars")), web.WithBuildVersion(version))
 	explainCfg := cfg.Explain
 	explainCfg.Language = cfg.Language
 	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))
 	webOptions = append(webOptions, web.WithGardenLimits(cfg.GardenLimits))
-	webOptions = append(webOptions, web.WithSourceProver(forge.NewGitHub(forge.ConfigFromOS())))
+	// Automatic approvals of the gardener (REQ-624), for the namespaces whose
+	// owners switched rules on. They run in the server because they act through
+	// the same plans as the review page; the loop lives as long as the process.
+	webOptions = append(webOptions, web.WithGardenAuto(context.Background(), 10*time.Minute, slog.New(slog.NewJSONHandler(stderr, nil))))
+	// Die GitHub-App hat Vorrang, sobald sie eingerichtet ist; ohne sie bleibt die
+	// OAuth-App der Rückfall. Der Webhook der App antwortet nur mit gültiger Signatur.
+	ghApp := forge.NewGitHubApp(forge.AppConfigFromOS())
+	webOptions = append(webOptions, web.WithSourceProver(forge.Prefer(ghApp, forge.NewGitHub(forge.ConfigFromOS()))))
+	if ghApp.WebhookConfigured() {
+		root.Handle("/api/github/webhook", ghApp.WebhookHandlerWithRenames(func(installationID int64, add, remove []string) error {
+			_, err := st.SyncInstallationRepos(installationID, add, remove)
+			return err
+		}, pullWebhook(st, ghApp, func(err error) { logger.Error("github_pull_commits", "error", err.Error()) }), func(installationID int64, from, to string) error {
+			_, err := st.RenameInstallationRepo(installationID, from, to)
+			return err
+		}, func(err error) { logger.Error("github_webhook", "error", err.Error()) }))
+	}
 	root.Handle("/", web.New(st, webOptions...))
 	return root
 }

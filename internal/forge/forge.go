@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -31,6 +32,67 @@ type Prover interface {
 type Account struct {
 	Login string
 	Repos []string
+	// InstallationID ist die Installation der GitHub-App, die den Nachweis trägt;
+	// 0 beim Nachweis über die OAuth-App.
+	InstallationID int64
+}
+
+// InstallProver ist ein Prover, der die Installation aus der Rückkehr-Adresse
+// prüfen kann (GitHub-App).
+type InstallProver interface {
+	Prover
+	ProveInstallation(ctx context.Context, code, redirectURI string, installationID int64) ([]Account, error)
+}
+
+// Installer nennt die Adresse, unter der die App für eine Organisation
+// installiert wird (GitHub-App).
+type Installer interface {
+	InstallURL(state string) string
+}
+
+// RepoLister liest die Repo-Liste einer Installation neu, ohne neuen Nachweis
+// des Nutzers (GitHub-App).
+type RepoLister interface {
+	InstallationRepos(ctx context.Context, installationID int64) ([]string, error)
+}
+
+// Identity ist das GitHub-Konto, das ein Mensch beim Login nachgewiesen hat:
+// der Login-Name und die Nummer, beide aus der Antwort von GitHub selbst.
+type Identity struct {
+	Login string
+	ID    int64
+}
+
+// Identifier ist ein Prover, der sagen kann, wer sich eingeloggt hat (GitHub-App
+// und OAuth-App). Das Token des Nutzers lebt nur während des Aufrufs: es wird
+// weder gespeichert noch zurückgegeben.
+type Identifier interface {
+	Identify(ctx context.Context, code, redirectURI string) (Identity, error)
+}
+
+// ErrBadIdentity: GitHub hat auf /user kein brauchbares Konto geliefert.
+var ErrBadIdentity = errors.New("github returned no usable account")
+
+// loginSyntax ist die Syntax eines GitHub-Logins, dieselbe wie store.ValidGitHubLogin
+// (das Paket forge kennt den Store nicht, ein Test hält beide gleich).
+var loginSyntax = regexp.MustCompile(`^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$`)
+
+// parseIdentity prüft die Antwort von GET /user. Der Login muss die Syntax eines
+// GitHub-Logins haben (er landet später in Adressen) und die Nummer positiv sein.
+func parseIdentity(login string, id int64) (Identity, error) {
+	if len(login) < 1 || len(login) > 39 || !loginSyntax.MatchString(login) || id <= 0 {
+		return Identity{}, ErrBadIdentity
+	}
+	return Identity{Login: login, ID: id}, nil
+}
+
+// Prefer wählt den Prover: die GitHub-App, sobald sie eingerichtet ist, sonst die
+// OAuth-App als Rückfall.
+func Prefer(app *GitHubApp, oauth *GitHub) Prover {
+	if app != nil && app.Configured() {
+		return app
+	}
+	return oauth
 }
 
 // ErrNotConfigured: die App-Zugangsdaten fehlen auf dem Server.
@@ -148,6 +210,26 @@ func (g *GitHub) Prove(ctx context.Context, code, redirectURI string) ([]Account
 		out = append(out, acct)
 	}
 	return out, nil
+}
+
+// Identify tauscht den Code gegen das Token des Nutzers und liest damit, wer er
+// auf GitHub ist (GET /user). Das Token bleibt in diesem Aufruf.
+func (g *GitHub) Identify(ctx context.Context, code, redirectURI string) (Identity, error) {
+	if !g.Configured() {
+		return Identity{}, ErrNotConfigured
+	}
+	token, err := g.exchange(ctx, code, redirectURI)
+	if err != nil {
+		return Identity{}, err
+	}
+	var u struct {
+		Login string `json:"login"`
+		ID    int64  `json:"id"`
+	}
+	if err := g.get(ctx, token, "/user", &u); err != nil {
+		return Identity{}, err
+	}
+	return parseIdentity(u.Login, u.ID)
 }
 
 func (g *GitHub) exchange(ctx context.Context, code, redirectURI string) (string, error) {

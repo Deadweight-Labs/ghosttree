@@ -16,6 +16,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	docwork "github.com/Deadweight-Labs/ghosttree/internal/doc"
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -53,7 +54,7 @@ func cmdDoc(args []string, stdout io.Writer) int {
 		return 1
 	}
 	if args[0] == "new" {
-		return docNew(gitCtx.Root, args[1:], stdout)
+		return docNew(gitCtx.Root, gitCtx.Project, args[1:], stdout)
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -136,7 +137,7 @@ func docCLIUsage(stdout io.Writer) int {
 	return 2
 }
 
-func docNew(repoRoot string, args []string, stdout io.Writer) int {
+func docNew(repoRoot, project string, args []string, stdout io.Writer) int {
 	if len(args) != 2 {
 		return docCLIUsage(stdout)
 	}
@@ -170,6 +171,15 @@ func docNew(repoRoot string, args []string, stdout io.Writer) int {
 		return 1
 	}
 	fmt.Fprintln(stdout, filepath.Join(docwork.Dir(repoRoot), filepath.FromSlash(rel)))
+	// The draft is local until the first push; the address it will have is
+	// known now, so an agent can name it in the same breath.
+	if project != "" {
+		if cfg, err := config.Load(); err == nil {
+			if link := links.New(client.New(cfg).ServerURL(), project).Document(slug); link != "" {
+				fmt.Fprintf(stdout, "after ctx doc push %s: %s\n", slug, link)
+			}
+		}
+	}
 	return 0
 }
 
@@ -284,6 +294,7 @@ func docPull(repoRoot, project string, c *client.Client, slug string, force bool
 		return 1
 	}
 	fmt.Fprintf(stdout, "%s rev %d -> %s\n", slug, document.HeadRevision, filepath.Join(docwork.Dir(repoRoot), rel))
+	cliCard(stdout, clientBuilder(c, project).DocumentCard(document))
 	return 0
 }
 
@@ -310,6 +321,10 @@ func docPush(repoRoot, project string, c *client.Client, slug, message string, c
 	if message == "" {
 		fmt.Fprintln(stdout, "push requires a revision message: -m \"...\"")
 		return 2
+	}
+	if len(body) > docwork.MaxBodyBytes {
+		fmt.Fprintf(stdout, "%s: %v; nothing was sent\n", slug, docwork.TooLarge(len(body)))
+		return 1
 	}
 	var document store.Document
 	if entry.DocumentID == 0 {
@@ -340,6 +355,7 @@ func docPush(repoRoot, project string, c *client.Client, slug, message string, c
 		return 1
 	}
 	fmt.Fprintf(stdout, "%s rev %d\n", slug, document.HeadRevision)
+	cliCard(stdout, clientBuilder(c, project).DocumentCard(document))
 	if clean {
 		if err := os.Remove(filepath.Join(docwork.Dir(repoRoot), filepath.FromSlash(entry.Path))); err != nil {
 			fmt.Fprintf(stdout, "remove worktree copy: %v\n", err)
@@ -437,6 +453,10 @@ func docSearch(project string, c *client.Client, query, kind string, limit int, 
 	return 0
 }
 
+// docShowCardOut is where "ctx doc show" puts the card of the document, so
+// that stdout stays the document text alone.
+var docShowCardOut io.Writer = os.Stderr
+
 func docShow(project string, c *client.Client, slug string, revision int, stdout io.Writer) int {
 	document, err := findDocument(c, project, slug)
 	if err != nil {
@@ -452,6 +472,8 @@ func docShow(project string, c *client.Client, slug string, revision int, stdout
 		return 1
 	}
 	fmt.Fprint(stdout, got.Body)
+	// The body is what a pipe wants from stdout; the card goes beside it.
+	cliCard(docShowCardOut, clientBuilder(c, project).DocumentCard(document))
 	return 0
 }
 
@@ -589,11 +611,13 @@ func docClose(project string, c *client.Client, slug string, stdout io.Writer) i
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
-	if _, err := c.PatchDocument(document.ID, map[string]string{"status": "archived"}); err != nil {
+	archived, err := c.PatchDocument(document.ID, map[string]string{"status": "archived"})
+	if err != nil {
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "%s archived\n", slug)
+	cliCard(stdout, clientBuilder(c, project).DocumentCard(archived))
 	return 0
 }
 
@@ -622,6 +646,10 @@ func importDocument(repoRoot, project string, c *client.Client, source, kind, sl
 	}
 	if !utf8.Valid(raw) {
 		fmt.Fprintf(stdout, "%s is not valid UTF-8; nothing was imported\n", source)
+		return 1
+	}
+	if len(raw) > docwork.MaxBodyBytes {
+		fmt.Fprintf(stdout, "%s: %v; nothing was imported\n", source, docwork.TooLarge(len(raw)))
 		return 1
 	}
 	body := string(raw)
@@ -668,6 +696,7 @@ func importDocument(repoRoot, project string, c *client.Client, source, kind, sl
 		}
 	}
 	fmt.Fprintf(stdout, "%s -> document %d rev 1 sha256:%s\n", evidenceSource, document.ID, digest)
+	cliCard(stdout, clientBuilder(c, project).DocumentCard(document))
 	return 0
 }
 

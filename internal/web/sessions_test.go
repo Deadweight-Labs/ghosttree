@@ -144,7 +144,7 @@ func TestSessionListShowsTitlesWithRandomAddressesToTheOwner(t *testing.T) {
 		t.Fatalf("status %d", code)
 	}
 	for _, name := range []string{"alice-private", "anna-project", "anna-guests", "hidden-project"} {
-		if !strings.Contains(page, `href="/ui/sessions/`+e.pid[name]+`"`) {
+		if !strings.Contains(page, `/sessions/`+e.pid[name]+`"`) {
 			t.Errorf("owner list lacks %s", name)
 		}
 	}
@@ -163,14 +163,14 @@ func TestSessionListHidesForeignPrivateSessionsCompletely(t *testing.T) {
 	e := seedSessions(t)
 	_, page := e.get(t, e.Member, "/ui/sessions")
 	for _, name := range []string{"anna-private", "anna-project", "anna-guests"} {
-		if !strings.Contains(page, `href="/ui/sessions/`+e.pid[name]+`"`) {
+		if !strings.Contains(page, `/sessions/`+e.pid[name]+`"`) {
 			t.Errorf("member lacks own/shared %s", name)
 		}
 	}
 	if strings.Contains(page, e.pid["alice-private"]) {
 		t.Error("the foreign private session's address is rendered")
 	}
-	if n := strings.Count(page, `class="srow is-private"`); n != 0 {
+	if n := strings.Count(page, `class="row srow is-private"`); n != 0 {
 		t.Errorf("%d private rows, want none: foreign private sessions leave no row", n)
 	}
 	// Das Hidden-Projekt hat der Member nicht.
@@ -185,7 +185,7 @@ func TestSessionListForAGuestHasOnlyGuestSharedSessionsAndNoHostDetails(t *testi
 	if code != 200 {
 		t.Fatalf("status %d", code)
 	}
-	if !strings.Contains(page, `href="/ui/sessions/`+e.pid["anna-guests"]+`"`) {
+	if !strings.Contains(page, `/sessions/`+e.pid["anna-guests"]+`"`) {
 		t.Error("guest-shared session missing")
 	}
 	for _, name := range []string{"alice-private", "anna-private", "anna-project", "hidden-project"} {
@@ -271,8 +271,8 @@ func TestSessionListPagesWithAnOlderLink(t *testing.T) {
 		_ = e.St.AppendChunks(id, chunks(uLine(fmt.Sprintf("bulk session number %d", i))))
 	}
 	_, page := e.get(t, e.Owner, "/ui/sessions")
-	if strings.Count(page, `class="srow`) != 50 {
-		t.Errorf("first page has %d rows", strings.Count(page, `class="srow`))
+	if strings.Count(page, `class="row srow`) != 50 {
+		t.Errorf("first page has %d rows", strings.Count(page, `class="row srow`))
 	}
 	m := regexp.MustCompile(`href="(/ui/sessions\?[^"]*cursor=[^"]+)"`).FindStringSubmatch(page)
 	if m == nil {
@@ -280,8 +280,8 @@ func TestSessionListPagesWithAnOlderLink(t *testing.T) {
 	}
 	next := strings.ReplaceAll(m[1], "&amp;", "&")
 	_, page2 := e.get(t, e.Owner, next)
-	if strings.Count(page2, `class="srow`) != 14 || strings.Contains(page2, "cursor=") {
-		t.Errorf("second page: rows=%d", strings.Count(page2, `class="srow`))
+	if strings.Count(page2, `class="row srow`) != 14 || strings.Contains(page2, "cursor=") {
+		t.Errorf("second page: rows=%d", strings.Count(page2, `class="row srow`))
 	}
 }
 
@@ -387,16 +387,16 @@ func TestSessionDetailRendersBlocksReadably(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Fix the zebrafish login",                       // Titel
-		`class="blk blk-user clay"`,                     // Nutzerprompt als Block
+		`class="blk blk-user"`,                          // Nutzerprompt als Block
 		"Please look at zebrafish in the login handler", // Text
-		`<details class="think clay"`,                   // Denkblock eingeklappt
+		`<details class="think"`,                        // Denkblock eingeklappt
 		`<details class="tool`,                          // Werkzeugaufruf eingeklappt
 		"Show all 30 lines",                             // Ergebnis gekürzt
-		`class="diff clay"`,                             // Diff
+		`class="diff"`,                                  // Diff
 		`class="dl dl-del"`,
 		`class="dl dl-add"`,
-		`class="tr is-bad">error`, // Fehler fällt im Ergebnis auf
-		`class="tool clay is-failed"`,
+		`class="tr is-bad">failed`, // Fehler fällt im Ergebnis auf
+		`class="tool is-failed"`,
 		"Prompts",
 		"3 tool calls",
 	} {
@@ -404,7 +404,7 @@ func TestSessionDetailRendersBlocksReadably(t *testing.T) {
 			t.Errorf("detail lacks %q", want)
 		}
 	}
-	if strings.Contains(page, `<details class="think clay" open`) || strings.Contains(page, `<details class="tool" open`) {
+	if strings.Contains(page, `<details class="think" open`) || strings.Contains(page, `<details class="tool" open`) {
 		t.Error("blocks are open in the resting state")
 	}
 	// Von den 30 Zeilen stehen 12 offen, der Rest hinter dem Schalter.
@@ -480,7 +480,7 @@ func TestSessionLongTranscriptIsShownInWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess, _ := e.St.SessionByID(id)
-	_, tail := e.get(t, e.Owner, "/ui/sessions/"+sess.PublicID)
+	_, tail := e.get(t, e.Owner, "/ui/sessions/"+sess.PublicID+"?view=raw")
 	if !strings.Contains(tail, "prompt number 699 about") || strings.Contains(tail, "prompt number 100 about") {
 		t.Error("default window is not the latest 200")
 	}
@@ -533,7 +533,7 @@ func TestSessionDetailDegradesToARetryLineWhenTheTranscriptCannotBeLoaded(t *tes
 	if _, err := e.St.DB().Exec(`ALTER TABLE session_chunks RENAME TO session_chunks_gone`); err != nil {
 		t.Skipf("cannot break the table: %v", err)
 	}
-	code, page := e.get(t, e.Owner, "/ui/sessions/"+e.pid["anna-project"])
+	code, page := e.get(t, e.Owner, "/ui/sessions/"+e.pid["anna-project"]+"?view=raw")
 	if code != 200 || !strings.Contains(page, "Retry") || !strings.Contains(page, "Fix the zebrafish login") {
 		t.Errorf("status %d, error state: %.300s", code, page)
 	}
@@ -577,7 +577,7 @@ func TestSessionMissingPageIsTheSameForAbsentAndHidden(t *testing.T) {
 	if codeA != 404 || codeB != 404 {
 		t.Fatalf("codes %d %d", codeA, codeB)
 	}
-	if !strings.Contains(absent, "Session not found.") || !strings.Contains(absent, "All sessions") {
+	if !strings.Contains(absent, msg("err.404.session")) || !strings.Contains(absent, msg("err.back_sessions")) {
 		t.Error("missing page text")
 	}
 	strip := func(s string) string {

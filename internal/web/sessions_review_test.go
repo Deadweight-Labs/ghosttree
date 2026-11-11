@@ -16,15 +16,15 @@ import (
 func TestThinkingIsOffUntilAsked(t *testing.T) {
 	e := seedSessions(t)
 	base := "/ui/sessions/" + e.pid["anna-project"]
-	_, page := e.get(t, e.Owner, base)
-	if strings.Contains(page, `<details class="think clay"`) {
+	_, page := e.get(t, e.Owner, base+"?view=raw")
+	if strings.Contains(page, `<details class="think"`) {
 		t.Error("thinking blocks are shown by default")
 	}
 	if !strings.Contains(page, "thinking=1") {
 		t.Error("no link to turn thinking on")
 	}
 	_, page = e.get(t, e.Owner, base+"?thinking=1")
-	if !strings.Contains(page, `<details class="think clay"`) {
+	if !strings.Contains(page, `<details class="think"`) {
 		t.Error("thinking=1 does not show thinking")
 	}
 	// A search the viewer scoped to thinking finds thinking, even while the blocks are hidden.
@@ -83,7 +83,7 @@ func TestRenderingIsBoundedPerBlockAndPerPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess, _ := e.St.SessionByID(id)
-	_, page := e.get(t, e.Owner, "/ui/sessions/"+sess.PublicID)
+	_, page := e.get(t, e.Owner, "/ui/sessions/"+sess.PublicID+"?view=raw")
 	if len(page) > 600<<10 {
 		t.Errorf("a 1 MB message renders %d bytes", len(page))
 	}
@@ -92,11 +92,14 @@ func TestRenderingIsBoundedPerBlockAndPerPage(t *testing.T) {
 	}
 
 	long, _ := e.St.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "long-out", AccountID: 1, Scope: scope.Axes{Project: shellProject}})
-	if err := e.St.AppendChunks(long, bigTranscript(1, 50000)); err != nil {
+	// Lange Ausgaben kürzt schon das Speichern (internal/slim) auf rund 8 KB;
+	// viele kurze Zeilen bleiben darunter und treffen die Zeilengrenze.
+	longOut := []store.Chunk{{Seq: 0, Raw: aLine(bash("big0", "ls -la"))}, {Seq: 1, Raw: rLine("big0", strings.Repeat("a\n", 4000), false)}}
+	if err := e.St.AppendChunks(long, longOut); err != nil {
 		t.Fatal(err)
 	}
 	ls, _ := e.St.SessionByID(long)
-	_, page = e.get(t, e.Owner, "/ui/sessions/"+ls.PublicID)
+	_, page = e.get(t, e.Owner, "/ui/sessions/"+ls.PublicID+"?view=raw")
 	if n := strings.Count(page, `class="ol"`); n > 2010 {
 		t.Errorf("one output block renders %d lines", n)
 	}
@@ -113,7 +116,7 @@ func TestRenderingIsBoundedPerBlockAndPerPage(t *testing.T) {
 	if n := strings.Count(page, `class="ol"`); n > maxRenderedRows {
 		t.Errorf("a page renders %d rows, limit %d", n, maxRenderedRows)
 	}
-	later := regexp.MustCompile(`class="wlink" href="([^"]*from=\d+[^"]*)">Show \d+ later`).FindStringSubmatch(page)
+	later := regexp.MustCompile(`class="morelink wlink" href="([^"]*from=\d+[^"]*)">Show \d+ later`).FindStringSubmatch(page)
 	if later == nil {
 		t.Fatal("a page cut at the row limit offers no way to continue")
 	}

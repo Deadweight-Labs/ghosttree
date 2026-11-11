@@ -28,7 +28,9 @@ import (
 // diese Datei bildet keine zweite Zählung.
 
 const (
-	pageSize      = 50
+	pageSize = 50
+	// listAreas is how many folder pills a session row shows.
+	listAreas     = 3
 	resultLines   = 12
 	liveWindow    = 3 * time.Minute
 	promptsShown  = 30
@@ -51,6 +53,8 @@ var maxBlocksPerPage = 2000
 
 type chip struct {
 	Href, Text string
+	// Pill is the reference as a pill (pill.go); when it is set, the template writes it instead of Text.
+	Pill template.HTML
 }
 
 type filterOption struct {
@@ -72,6 +76,16 @@ type listRow struct {
 	Href, Title, Meta, Messages, Duration, Time, Stamp string
 	Private, Live                                      bool
 	Linked                                             []chip
+	// Kind is the avatar of the agent (claude, codex, system), Machine and Branch
+	// the second line, Project the repository's short name.
+	Kind, Machine, Branch, Project string
+	// Owner is the person the session belongs to, as far as the viewer may know
+	// it; the picture of the owner sits in the corner of the agent's avatar.
+	Owner string
+	// MachineHref is the machine page, empty when the viewer cannot reach it.
+	MachineHref string
+	// Areas are the folders the session worked in ("internal/web"), heaviest first.
+	Areas []string
 }
 
 type dayGroup struct {
@@ -82,6 +96,49 @@ type dayGroup struct {
 type partView struct {
 	Text string
 	Hit  bool
+	// CodeStart and CodeEnd open and close a piece between backticks; the
+	// backticks themselves are not shown. A hit inside stays inside the code.
+	CodeStart, CodeEnd bool
+}
+
+// codePieces cuts the pieces of a snippet at its backticks: what stands between
+// two of them is code, even when a hit lies inside. A backtick without a partner
+// (an odd number: the last one) stays a character.
+func codePieces(parts []partView) []partView {
+	total := 0
+	for _, p := range parts {
+		total += strings.Count(p.Text, "`")
+	}
+	var out []partView
+	code, seen := false, 0
+	for _, p := range parts {
+		for i, seg := range strings.Split(p.Text, "`") {
+			if i > 0 {
+				seen++
+				switch {
+				case total%2 == 1 && seen == total:
+					seg = "`" + seg
+				case code:
+					code = false
+					if n := len(out); n > 0 {
+						out[n-1].CodeEnd = true
+					}
+				default:
+					code = true
+					if seg != "" {
+						out = append(out, partView{Text: seg, Hit: p.Hit, CodeStart: true})
+						seg = ""
+					} else {
+						out = append(out, partView{CodeStart: true})
+					}
+				}
+			}
+			if seg != "" {
+				out = append(out, partView{Text: seg, Hit: p.Hit})
+			}
+		}
+	}
+	return out
 }
 
 type hitView struct {
@@ -194,7 +251,6 @@ type levelForm struct {
 }
 
 type sessionView struct {
-	Missing             bool
 	Confirm             *shareConfirm
 	PID, Title          string
 	Live                bool
@@ -220,6 +276,17 @@ type sessionView struct {
 	WindowError         bool
 	RetryHref           string
 	Empty               bool
+	// The head of the page: avatar of the agent, machine, branch, how long it ran.
+	Kind, Machine, Branch, Project, Duration string
+	Owner                                    string
+	Messages                                 int
+	MachineHref                              string
+	// RawView is the raw log; otherwise the page shows the ghosttree view
+	// (session_ghost.go). GhostHref and RawHref are the two tabs. Side holds the
+	// results of the session for the side bar, Items the entries of the view.
+	RawView            bool
+	GhostHref, RawHref string
+	Side               sessionGhost
 }
 
 // ------------------------------------------------------------------- Helfer
@@ -296,7 +363,7 @@ func parseStamp(s string) time.Time {
 	return t.In(time.Local)
 }
 
-func formatDuration(from, to string) string {
+func formatDuration(l lang, from, to string) string {
 	a, b := parseStamp(from), parseStamp(to)
 	if a.IsZero() || b.IsZero() || b.Before(a) {
 		return ""
@@ -304,11 +371,13 @@ func formatDuration(from, to string) string {
 	d := b.Sub(a)
 	switch {
 	case d < time.Minute:
-		return "<1m"
+		return l.msg("sessions.dur_short")
 	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
+		return l.msg("age.short.min", int(d.Minutes()))
+	case int(d.Minutes())%60 == 0:
+		return l.msg("age.short.hours", int(d.Hours()))
 	}
-	return fmt.Sprintf("%dh %02dm", int(d.Hours()), int(d.Minutes())%60)
+	return l.msg("sessions.dur_hm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 func dayLabel(l lang, t, now time.Time) string {
@@ -478,8 +547,10 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 	who := a.viewerOf(r, pa)
 	guest := who.kind == viewerGuest
 	filter, keep := sessionFilterFromQuery(r, guest)
-	// Das Projekt kommt aus der Auswahl im Kopf, nicht aus einem eigenen Filter.
-	filter.Project = selectedProject(a.shellFor(r, "sessions"))
+	// Das Projekt kommt aus dem Repo der Seite oder der Auswahl im Kopf, nicht aus
+	// einem eigenen Filter (projectParam; auf Repo-Seiten ist die Auswahl leer).
+	filter.Project = a.projectParam(r)
+	r = a.repoScoped(r, filter.Project, "sessions")
 	keep.Del("project")
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if utf8.RuneCountInString(query) > maxQueryRunes {
@@ -585,9 +656,19 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		links, _ := a.store.SessionLinks(pa, readableIDs)
+		var readable []store.Session
+		for _, row := range page.Rows {
+			if row.Readable {
+				readable = append(readable, row.Session)
+			}
+		}
+		areas := a.store.SessionAreas(readable, listAreas)
+		machineLink := a.machineLinker(r)
 		var lastDay string
 		for _, row := range page.Rows {
 			lr := a.listRow(l, row, links[row.Session.ID], now)
+			lr.Areas = areas[row.Session.ID]
+			lr.MachineHref = machineLink(lr.Machine)
 			v.HasLinked = v.HasLinked || len(lr.Linked) > 0
 			label := dayLabel(l, parseStamp(row.Session.LastSeenAt), now)
 			if label != lastDay || len(v.Days) == 0 {
@@ -646,10 +727,12 @@ func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, n
 	s := row.Session
 	lr := listRow{
 		Meta:     sessionMeta(s),
-		Duration: formatDuration(s.StartedAt, s.LastSeenAt),
+		Duration: formatDuration(l, s.StartedAt, s.LastSeenAt),
 		Time:     clock(s.LastSeenAt),
 		Stamp:    s.LastSeenAt,
 		Private:  !row.Readable,
+		Kind:     harnessKind(s.Harness), Machine: s.Scope.Machine, Branch: s.Scope.Branch, Project: projectName(s.Scope.Project),
+		Owner: s.Owner,
 	}
 	if t := parseStamp(s.LastSeenAt); !t.IsZero() && now.Sub(t) < liveWindow {
 		lr.Live = true
@@ -659,7 +742,7 @@ func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, n
 		lr.Title = l.msg("sessions.private")
 		return lr
 	}
-	lr.Href = "/ui/sessions/" + s.PublicID
+	lr.Href = sessionPageHref(s.Scope.Project, s.PublicID)
 	lr.Title = s.Title
 	if lr.Title == "" {
 		lr.Title = l.msg("sessions.untitled")
@@ -671,7 +754,8 @@ func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, n
 
 // linkChips fasst die Verknüpfungen für die Liste zusammen: bis zu zwei
 // Requests, dazu die Zahl der Wissenseinträge.
-func linkChips(l lang, links []store.SessionLink) []chip {
+func linkChips(lg lang, links []store.SessionLink) []chip {
+	l := lg
 	var out []chip
 	knowledge, requests := 0, 0
 	for _, l := range links {
@@ -679,7 +763,8 @@ func linkChips(l lang, links []store.SessionLink) []chip {
 		case "request":
 			requests++
 			if requests <= 2 {
-				out = append(out, chip{Href: "/ui/requests/" + strconv.FormatInt(l.ID, 10), Text: fmt.Sprintf("REQ-%d", l.ID)})
+				href := "/ui/requests/" + strconv.FormatInt(l.ID, 10)
+				out = append(out, chip{Href: href, Text: fmt.Sprintf("REQ-%d", l.ID), Pill: refHTML(lg, "request", l.ID, href)})
 			}
 		case "knowledge":
 			knowledge++
@@ -727,7 +812,7 @@ func (a *app) groupView(l lang, g store.SearchGroup, query, kind string, now tim
 		// Found by meaning: no word of the query is in it to be counted.
 		count = ""
 	}
-	gv := groupView{PID: s.PublicID, Href: "/ui/sessions/" + s.PublicID, Title: title, Meta: sessionMeta(s), Count: count, Time: dayAndClock(l, s.LastSeenAt, now)}
+	gv := groupView{PID: s.PublicID, Href: sessionPageHref(s.Scope.Project, s.PublicID), Title: title, Meta: sessionMeta(s), Count: count, Time: dayAndClock(l, s.LastSeenAt, now)}
 	for _, h := range g.Hits {
 		q := url.Values{"at": {strconv.Itoa(h.Seq)}, "q": {query}, "back": {"1"}}
 		if kind != "" {
@@ -737,6 +822,7 @@ func (a *app) groupView(l lang, g store.SearchGroup, query, kind string, now tim
 		for _, p := range h.Parts {
 			hv.Parts = append(hv.Parts, partView{Text: p.Text, Hit: p.Hit})
 		}
+		hv.Parts = codePieces(hv.Parts)
 		gv.Hits = append(gv.Hits, hv)
 	}
 	if more := g.Total - len(g.Hits); more > 0 {
@@ -766,11 +852,10 @@ func dayAndClock(l lang, stamp string, now time.Time) template.HTML {
 
 // ------------------------------------------------------------------ Detail
 
+// sessionMissing answers for a session that is not there and for one the viewer may not
+// read, the same: the plain 404 becomes the error page of the shell (errorViewFor).
 func (a *app) sessionMissing(w http.ResponseWriter, r *http.Request) {
-	l := a.langFor(r)
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusNotFound)
-	a.renderBrowser(w, r, "session", pageData{Title: l.msg("nav.sessions"), SessionV: &sessionView{Missing: true}})
+	http.NotFound(w, r)
 }
 
 // lookupSession löst die Adresse auf. Nur die zufällige Adresse führt zu einer
@@ -792,6 +877,12 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 		a.sessionMissing(w, r)
 		return
 	}
+	// The old address leads to the page in the repository of the session.
+	if r.PathValue("a") == "" && sess.Scope.Project != "" && a.canOpenRepo(r, pa, sess.Scope.Project) {
+		http.Redirect(w, r, withRawQuery(sessionPageHref(sess.Scope.Project, sess.PublicID), r), http.StatusFound)
+		return
+	}
+	r = a.repoScoped(r, sess.Scope.Project, "sessions")
 	qv := r.URL.Query()
 	q := strings.TrimSpace(qv.Get("q"))
 	if utf8.RuneCountInString(q) > maxQueryRunes {
@@ -809,6 +900,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	if !slices.Contains(kindKeys, kind) {
 		kind = ""
 	}
+	raw := rawWanted(qv)
 
 	if !a.store.IndexProgress().Done {
 		if err := a.store.IndexSessionContext(r.Context(), sess.ID); err != nil && r.Context().Err() == nil {
@@ -822,6 +914,10 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	if v.Title == "" {
 		v.Title = l.msg("sessions.untitled")
 	}
+	v.Kind, v.Machine, v.Branch, v.Project = harnessKind(sess.Harness), view.Scope.Machine, view.Scope.Branch, projectName(sess.Scope.Project)
+	v.Owner = view.Owner
+	v.Duration, v.Messages = formatDuration(l, sess.StartedAt, sess.LastSeenAt), sess.Messages
+	v.MachineHref = a.machineLinker(r)(v.Machine)
 	if t := parseStamp(sess.LastSeenAt); !t.IsZero() && time.Since(t) < liveWindow {
 		v.Live = true
 	}
@@ -830,6 +926,9 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	// Zustand der Seite, der in jedem Link erhalten bleibt.
 	state := func(extra url.Values, drop ...string) url.Values {
 		out := url.Values{}
+		if raw {
+			out.Set("view", viewRaw)
+		}
 		if q != "" {
 			out.Set("q", q)
 		}
@@ -905,6 +1004,14 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	for _, link := range created {
 		v.Created = append(v.Created, linkChip(l, link))
 	}
+	v.RawView = raw
+	v.GhostHref = sessionURL(sess.PublicID, url.Values{"view": {viewGhost}}, "")
+	v.RawHref = sessionURL(sess.PublicID, url.Values{"view": {viewRaw}}, "")
+	v.Side = a.ghostView(l, pa, sess, view, created, !raw)
+	if !raw {
+		a.renderBrowser(w, r, "session", pageData{Title: v.Title, SessionV: v})
+		return
+	}
 
 	// Suche in der Session: Positionen gelten für die ganze Session.
 	hlKind := kind
@@ -918,7 +1025,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	v.HasFind = q != ""
 	v.FindAction = "/ui/sessions/" + sess.PublicID
 	v.Hidden = nil
-	for _, key := range []string{"tools", "thinking", "open", "back", "kind"} {
+	for _, key := range []string{"view", "tools", "thinking", "open", "back", "kind"} {
 		if val := state(nil).Get(key); val != "" {
 			v.Hidden = append(v.Hidden, chip{Text: key, Href: val})
 		}
@@ -1048,25 +1155,22 @@ func toggleParam(name string, on bool) url.Values {
 func linkChip(l lang, link store.SessionLink) chip {
 	switch link.Kind {
 	case "request":
-		return chip{Href: "/ui/requests/" + strconv.FormatInt(link.ID, 10), Text: fmt.Sprintf("REQ-%d %s", link.ID, ellipsize(link.Label, 40))}
+		href := "/ui/requests/" + strconv.FormatInt(link.ID, 10)
+		return chip{Href: href, Text: fmt.Sprintf("REQ-%d %s", link.ID, ellipsize(link.Label, 40)), Pill: numberedPill(l, "request", link.ID, href, ellipsize(link.Label, 40))}
 	}
-	return chip{Href: "/ui/knowledge", Text: l.msg("sessions.knowledge_ref", link.ID)}
+	href := "/ui/knowledge/" + strconv.FormatInt(link.ID, 10)
+	return chip{Href: href, Text: l.msg("sessions.knowledge_ref", link.ID), Pill: numberedPill(l, "knowledge", link.ID, href, "")}
 }
 
-// detailMeta is the line under the title of a session. Its start time is a
-// <time> element that app.js shows in the reader's zone, like every other time.
+// detailMeta is the start time of a session under the title, a <time> element
+// that localtime.js shows in the reader's zone. Agent, machine, branch and
+// duration are pills of their own and are not said again.
 func detailMeta(l lang, s store.Session) template.HTML {
-	parts := []string{html.EscapeString(sessionMeta(s))}
-	if t := parseStamp(s.StartedAt); !t.IsZero() {
-		parts = append(parts, `<time datetime="`+html.EscapeString(t.UTC().Format(time.RFC3339))+`" data-local="datetime">`+html.EscapeString(l.dateTime(t))+`</time>`)
+	t := parseStamp(s.StartedAt)
+	if t.IsZero() {
+		return ""
 	}
-	if d := formatDuration(s.StartedAt, s.LastSeenAt); d != "" {
-		parts = append(parts, html.EscapeString(d))
-	}
-	if s.Messages > 0 {
-		parts = append(parts, html.EscapeString(l.msg("sessions.n_messages", s.Messages)))
-	}
-	return template.HTML(strings.Join(parts, " · "))
+	return template.HTML(`<time datetime="` + html.EscapeString(t.UTC().Format(time.RFC3339)) + `" data-local="datetime">` + html.EscapeString(l.dateTime(t)) + `</time>`)
 }
 
 // sessionShare stellt die Freigabestufe ein (POST, CSRF, interaktive Sitzung).
@@ -1441,7 +1545,10 @@ func firstLine(s string) string {
 func resultSummary(l lang, b transcript.Block) string {
 	switch {
 	case b.Failed:
-		return b.Status
+		if b.Status != "" && b.Status != "error" {
+			return b.Status
+		}
+		return l.msg("sessions.failed")
 	case !b.HasOutput:
 		return ""
 	}
@@ -1453,4 +1560,25 @@ func resultSummary(l lang, b transcript.Block) string {
 		return l.msg("sessions.one_line")
 	}
 	return l.msg("sessions.n_lines", n)
+}
+
+// Total is the number of sessions the list shows, LiveCount how many of them run.
+func (v sessionsView) Total() int {
+	n := 0
+	for _, d := range v.Days {
+		n += len(d.Rows)
+	}
+	return n
+}
+
+func (v sessionsView) LiveCount() int {
+	n := 0
+	for _, d := range v.Days {
+		for _, r := range d.Rows {
+			if r.Live {
+				n++
+			}
+		}
+	}
+	return n
 }

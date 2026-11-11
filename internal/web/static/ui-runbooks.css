@@ -1,0 +1,70 @@
+/* Runbooks in the GitHub-like look: list with last run, approval and commit;
+   page with the commands to copy, parameters, steps and rollback.
+   Mock: git-native-v2 runbooks.html, runbook.html. */
+
+:is(.g2.rb) {
+  & .sbar { margin-bottom: 16px; }
+  & .fw4 { font-weight: 400; }
+  & .rbrow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 16px; }
+  /* the icon sits in a box as high as the name's line, so it is centred on the name, also when the purpose wraps */
+  & .rbrow > .st { display: inline-flex; align-items: center; height: 24px; }
+  & .rbmeta { align-self: center; }
+  & .rbname { display: inline-block; font-size: 14px; line-height: 24px; font-weight: 600; color: var(--accent-fg); }
+  & .rbname + .lb { margin-left: 8px; }
+  & .rbpurpose { color: var(--fg-muted); margin-top: 2px; }
+  & .rbmeta { display: flex; align-items: center; gap: 16px; }
+  & .rbrun { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--success-fg); }
+  & .rbsha { display: inline-block; min-width: 76px; text-align: right; }
+  & .st.open { color: var(--success-fg); }
+  & .dhead .mono { font-size: 32px; font-weight: 400; }
+  & .dmeta .rbrun { font-size: 14px; }
+  & .sec { margin: 24px 0 8px; }
+  & .box-r .rbcl { margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .rbparam { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; gap: 16px; padding: 8px 16px; font-size: 14px; }
+  & .rbparam .mono { font-size: 12px; }
+  & .rbstep { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; padding: 16px; }
+  & .rbstep + .rbstep { border-top: 1px solid var(--border-muted); }
+  & .rbn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 1px solid var(--border-default); border-radius: 50%; font-size: 12px; }
+  & .rbstep pre.cmd { margin: 8px 0; padding: 8px 12px; }
+  & .rbcheck { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
+  & .rbcheck .i { color: var(--success-fg); }
+  & .rbcheck code { padding: 0 6px; font: 12px/18px var(--ui-mono); background: var(--neutral-muted); border-radius: 6px; color: var(--fg-default); }
+  & .cmdc .gbtn { right: 6px; }
+}
+@media (max-width: 767px) {
+  :is(.g2.rb) {
+    & .rbrow { grid-template-columns: 16px minmax(0, 1fr); }
+    & .rbmeta { grid-column: 2; flex-wrap: wrap; gap: 4px 12px; }
+    & .rbparam { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  }
+}
+
+/* The form that writes a version: rows of fields, the executable targets as a read-only block. */
+:is(.g2.rb) {
+  & .rbform { display: grid; gap: 12px; max-width: 920px; }
+  & .rbform .pfield { display: grid; gap: 4px; font-size: 14px; }
+  & .rbform .pfield > span { font-weight: 600; font-size: 13px; }
+  & .rbset { margin: 0; padding: 12px 16px 16px; border: 1px solid var(--border-default); border-radius: 6px; display: grid; gap: 8px; min-width: 0; }
+  & .rbset legend { padding: 0 6px; font-weight: 600; font-size: 13px; }
+  & .rbfrow { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(200px, 2fr) minmax(120px, 1fr); gap: 8px; }
+  & .rbprow { grid-template-columns: minmax(90px, 1fr) 100px minmax(120px, 2fr) 100px minmax(80px, 1fr) minmax(80px, 1fr); }
+  /* All fields of a row: one size and one line. Typed code is mono; the placeholders are all in the
+     interface font, so they stand on one line across the row (a mono face sits 1.5 px higher). */
+  & .rbfrow .gfield { min-width: 0; width: 100%; font-size: 13px; line-height: 20px; }
+  & .rbfrow .selx > .gbtn { font-size: 13px; }
+  & .rbfrow .gfield.mono { font: 13px/20px var(--ui-mono); }
+  & .rbfrow .gfield.mono::placeholder { font-family: var(--ui-font); }
+  & .rbhint { margin: 0; font-size: 12px; color: var(--fg-muted); }
+  & .rbtargets { background: var(--canvas-subtle); }
+  & .rbtarget { font-size: 13px; }
+  & .rbtarget pre.cmd { margin: 4px 0 0; padding: 4px 8px; }
+  & .rbcheck2 { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+  & .rbact { display: flex; gap: 8px; }
+  & .sbar { display: flex; gap: 8px; align-items: center; }
+  & .sbar .gfield { flex: 1; }
+}
+@media (max-width: 767px) {
+  :is(.g2.rb) {
+    & .rbfrow, & .rbprow { grid-template-columns: minmax(0, 1fr); }
+  }
+}

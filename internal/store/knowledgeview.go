@@ -1,8 +1,11 @@
 package store
 
 import (
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 )
 
 // KnowledgeView formt einen Wissenseintrag für den Betrachter. Wer die laufenden
@@ -11,6 +14,11 @@ import (
 // und nur, wenn er ihr Transkript lesen darf; sonst fehlt der Verweis, denn auch
 // seine Anwesenheit verriete eine verborgene Session.
 func (a *ProjectAccess) KnowledgeView(k Knowledge) Knowledge {
+	if a.HidesMachines(k.Scope.Project) {
+		k.Scope.Machine = ""
+	}
+	k.Scope.Branch = a.BranchView(k.Scope.Project, k.Scope.Branch)
+	k.GitAnchor = a.AnchorView(k.Scope.Project, k.GitAnchor)
 	if a.seesKnowledgeNumbers(k) {
 		return k
 	}
@@ -20,6 +28,109 @@ func (a *ProjectAccess) KnowledgeView(k Knowledge) Knowledge {
 		k.SessionRef = ""
 	}
 	return k
+}
+
+var defaultBranchNames = []string{"main", "master", "dev"}
+
+// PickDefaultBranch: der Server kennt den Standard-Branch des Hosts nicht. Er
+// nimmt den ersten von main, master, dev, den die Daten erwähnen, sonst main.
+func PickDefaultBranch(known []string) string {
+	for _, n := range defaultBranchNames {
+		if slices.Contains(known, n) {
+			return n
+		}
+	}
+	return "main"
+}
+
+// SeesAllBranches: die Rolle des Betrachters in genau diesem Projekt (nicht die
+// höchste über alle) ist mindestens member, oder es gibt keine Durchsetzung.
+func (a *ProjectAccess) SeesAllBranches(project string) bool {
+	if !a.st.AccessEnforced() || a.IsAdmin() {
+		return true
+	}
+	return RoleRank(a.Role(project).Role) >= RoleRank(RoleMember)
+}
+
+// DefaultBranch ist der Standard-Branch des Projekts nach PickDefaultBranch.
+func (a *ProjectAccess) DefaultBranch(project string) string {
+	if v, ok := a.defBranches.Load(project); ok {
+		return v.(string)
+	}
+	known, _ := a.st.ProjectBranches(project)
+	def := PickDefaultBranch(known)
+	a.defBranches.Store(project, def)
+	return def
+}
+
+// BranchView lässt einen Branch-Namen nur stehen, wenn der Betrachter alle
+// Branches des Projekts sehen darf oder es der Standard-Branch ist: ein Name
+// kann verraten, woran gearbeitet wird, was ein Gast nicht lesen darf.
+func (a *ProjectAccess) BranchView(project, branch string) string {
+	if branch == "" || a.SeesAllBranches(project) || branch == a.DefaultBranch(project) {
+		return branch
+	}
+	return ""
+}
+
+// FactsView lässt von den Eigenschaften eines Objekts im Projekt nur stehen, was
+// der Betrachter dort auch lesen darf: ohne alle Branches nur den Standard-Branch,
+// keine Pakete. Die Suchsprache prüft branch: und package: gegen diese Sicht, nicht
+// gegen die Wahrheit; sonst ließen sich Namen und Nummern erraten. Die Rolle zählt
+// im Projekt des Objekts, nicht die höchste über alle.
+//
+// Das Modell eines Agenten gehört zu seiner Session (REQ-620): model: trifft nur,
+// wenn der Betrachter deren Metadaten sehen darf (ActorView).
+func (a *ProjectAccess) FactsView(project string, of ObjectFacts) ObjectFacts {
+	if of.Model != "" && !a.actorModelVisible(of.ActorSession) {
+		of.Model = ""
+	}
+	if a.SeesAllBranches(project) {
+		return of
+	}
+	def := a.DefaultBranch(project)
+	var kept []string
+	for _, b := range of.Branches {
+		if b == def {
+			kept = append(kept, b)
+		}
+	}
+	of.Branches, of.Packages = kept, nil
+	return of
+}
+
+// AssigneeView: den Zuständigen eines Objekts erfährt nur, wer im Projekt alle
+// Branches sehen darf (for: ist für Gäste kein Suchfilter).
+func (a *ProjectAccess) AssigneeView(project, assignee string) string {
+	if a.SeesAllBranches(project) {
+		return assignee
+	}
+	return ""
+}
+
+// AnchorView ist BranchView für einen Git-Anker; der Anker des Aufrufers bleibt
+// unberührt.
+func (a *ProjectAccess) AnchorView(project string, g *gitanchor.Anchor) *gitanchor.Anchor {
+	if g == nil || a.BranchView(project, g.Branch) == g.Branch {
+		return g
+	}
+	c := *g
+	c.Branch = ""
+	return &c
+}
+
+// HidesMachines: ein Gast des Projekts sieht keine Maschinennamen, wie bei
+// Sessions (guestView). Ohne Projekt gibt es keinen Gastrang; ohne Durchsetzung
+// sieht jeder alles.
+func (a *ProjectAccess) HidesMachines(project string) bool {
+	return project != "" && a.st.AccessEnforced() && RoleRank(a.Role(project).Role) < 2
+}
+
+// IsProjectGuest: der Betrachter ist Gast des Projekts, nicht Fremder ohne Rolle.
+// Für Filter, die ein Gast nicht bekommt; Fremde und Maschinenfreigaben ohne
+// Projektrolle bleiben davon unberührt.
+func (a *ProjectAccess) IsProjectGuest(project string) bool {
+	return project != "" && a.st.AccessEnforced() && RoleRank(a.Role(project).Role) == 1
 }
 
 // seesKnowledgeNumbers: globales Wissen hat kein Projekt, das über die Nummer

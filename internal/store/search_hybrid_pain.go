@@ -4,11 +4,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 )
 
 // SearchPains lists pains of a project for a viewer. Without a state filter it
-// returns active and mitigated; "all" returns every state. With a query it is a
+// returns the open ones (active and mitigated); "all" returns every state. With a query it is a
 // hybrid search when an embedding server is configured and pains are switched on
 // for search (see SearchPainsWith).
 func (a *ProjectAccess) SearchPains(f pain.Filter) ([]pain.Pain, error) {
@@ -39,7 +40,40 @@ func (a *ProjectAccess) SearchPains(f pain.Filter) ([]pain.Pain, error) {
 			f.Projects = open
 		}
 	}
-	return a.st.SearchPainsWith(f, PainSearch{Keep: a.CanSeePain})
+	list, err := a.st.SearchPainsWith(f, PainSearch{Keep: a.CanSeePain})
+	if err == nil {
+		a.attachPainIdeas(list)
+	}
+	return list, err
+}
+
+// attachPainIdeas hängt an jeden Pain die Lösungsideen, die er motiviert, soweit
+// der Betrachter sie lesen darf (REQ-606).
+func (a *ProjectAccess) attachPainIdeas(list []pain.Pain) {
+	for n := range list {
+		for _, i := range a.st.ideasMotivatedBy(list[n].ID) {
+			if a.CanSeeIdea(i) {
+				list[n].Ideas = append(list[n].Ideas, pain.IdeaRef{ID: i.ID, Title: i.Title, State: i.State})
+			}
+		}
+	}
+}
+
+func (s *Store) ideasMotivatedBy(painID int64) []idea.Idea {
+	if s.reader != nil {
+		return s.reader.ideasMotivatedBy(painID)
+	}
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+ideaCols+ideaFrom+` JOIN entity_links l ON l.dst_kind='idea' AND l.dst_id=i.id
+		WHERE l.src_kind='pain' AND l.src_id=? AND l.kind='motivates' ORDER BY i.id`, painID)
+	if err != nil {
+		return nil
+	}
+	list, err := scanIdeas(rows)
+	rows.Close()
+	if err != nil {
+		return nil
+	}
+	return list
 }
 
 // PainSearch describes one search over the pains of a project.
@@ -160,8 +194,8 @@ func (s *Store) painRows(f pain.Filter) ([]pain.Pain, error) {
 		order += ` ELSE ` + strconv.Itoa(len(f.Projects)) + ` END, `
 	}
 	args = append(args, limit)
-	rows, err := s.db.Query(`SELECT `+painCols+painFrom+` WHERE `+strings.Join(where, ` AND `)+
-		` ORDER BY `+order+`CASE p.state WHEN 'active' THEN 0 WHEN 'mitigated' THEN 1 WHEN 'resolved' THEN 2 ELSE 3 END, p.id LIMIT ?`, args...)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+painCols+painFrom+` WHERE `+strings.Join(where, ` AND `)+
+		` ORDER BY `+order+`CASE p.state WHEN 'active' THEN 0 WHEN 'mitigated' THEN 1 WHEN 'accepted' THEN 2 WHEN 'resolved' THEN 3 ELSE 4 END, p.id LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +208,7 @@ func (s *Store) painsByID(ids []int64) (map[int64]pain.Pain, error) {
 	for i, id := range ids {
 		args[i] = id
 	}
-	rows, err := s.db.Query(`SELECT `+painCols+painFrom+` WHERE p.id IN (`+placeholders(len(ids))+`)`, args...)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+painCols+painFrom+` WHERE p.id IN (`+placeholders(len(ids))+`)`, args...)
 	if err != nil {
 		return nil, err
 	}

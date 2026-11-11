@@ -2,6 +2,7 @@ package scope
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,17 @@ func TestNormalizeRemote(t *testing.T) {
 		"ssh://git@github.com/Example/sample-project.git":     "github.com/example/sample-project",
 		"git://github.com/Example/sample-project/":            "github.com/example/sample-project",
 		"github.com/example/sample-project":                   "github.com/example/sample-project",
+		// User and port only say how to reach the repository (review of REQ-623).
+		"ssh://git@github.com:22/Example/sample-project.git": "github.com/example/sample-project",
+		"https://github.com:443/Example/sample-project":      "github.com/example/sample-project",
+		"https://robin@gitlab.example.org/Group/repo.git":    "gitlab.example.org/group/repo",
+		// Only the standard ports go (third review, point 3); another port
+		// can be another server and stays.
+		"ssh://deploy@git.internal:2222/team/repo":            "git.internal:2222/team/repo",
+		"git://git.example.org:9418/team/repo":                "git.example.org/team/repo",
+		"http://git.example.org:80/team/repo":                 "git.example.org/team/repo",
+		"ssh://git@ssh.github.com:443/Example/sample-project": "github.com/example/sample-project",
+		"git@ssh.github.com:Example/sample-project.git":       "github.com/example/sample-project",
 	}
 	for in, want := range cases {
 		if got := NormalizeRemote(in); got != want {
@@ -35,12 +47,46 @@ func TestCanonicalAxesNormalizesEveryClientBoundaryValue(t *testing.T) {
 
 func TestUnionWhere(t *testing.T) {
 	sql, args := Axes{Project: "github.com/x/y", Branch: "main", Machine: "workstation-a"}.UnionWhere()
-	want := `((project = '' AND branch = '' AND machine = '') OR (project = '' AND branch = '' AND machine = ?) OR (project = ? AND branch = '' AND machine = '') OR (project = ? AND branch = ? AND machine = '') OR (project = ? AND branch = '' AND machine = ?))`
+	want := `((project = '' AND branch = '' AND machine = '') OR (project = '' AND branch = '' AND machine = ?) OR (project = ? AND branch = '') OR (project = ? AND branch = ?))`
 	if sql != want {
 		t.Errorf("sql = %s", sql)
 	}
-	if !reflect.DeepEqual(args, []any{"workstation-a", "github.com/x/y", "github.com/x/y", "main", "github.com/x/y", "workstation-a"}) {
+	if !reflect.DeepEqual(args, []any{"workstation-a", "github.com/x/y", "github.com/x/y", "main"}) {
 		t.Errorf("args = %v", args)
+	}
+}
+
+// An entry with project AND machine belongs to the project: the project clauses
+// carry no machine condition, so a session of the project reads it on any machine.
+// The only clause that names a machine is the one without a project, so a session
+// on that machine WITHOUT the project does not.
+func TestUnionWhereReadsProjectMachineEntriesOnAnyMachine(t *testing.T) {
+	sql, _ := Axes{Project: "github.com/x/y", Machine: "build-1"}.UnionWhere()
+	for _, clause := range []string{"(project = ? AND branch = '')"} {
+		if !strings.Contains(sql, clause) {
+			t.Errorf("clause %q missing: %s", clause, sql)
+		}
+	}
+	if strings.Contains(sql, "project = ? AND branch = '' AND machine") {
+		t.Errorf("a project clause still narrows by machine: %s", sql)
+	}
+	// Without the project in the context, no clause can reach a project entry.
+	sql, _ = Axes{Machine: "build-1"}.UnionWhere()
+	if strings.Contains(sql, "project = ?") {
+		t.Errorf("a session without the project reaches project entries: %s", sql)
+	}
+	// Every branch of the project, with or without a machine.
+	sql, args := Axes{Project: "github.com/x/y", AnyBranch: true}.UnionWhere()
+	if !strings.Contains(sql, "(project = ?)") || len(args) != 1 {
+		t.Errorf("any-branch sql = %s args = %v", sql, args)
+	}
+}
+
+// Requests have no machine; their clauses stay exactly as they were.
+func TestRequestUnionWhereKeepsTheMachineCondition(t *testing.T) {
+	sql, _ := Axes{Project: "github.com/x/y", Machine: "build-1"}.RequestUnionWhere()
+	if !strings.Contains(sql, "(project = ? AND branch = '' AND machine = '')") {
+		t.Errorf("request sql = %s", sql)
 	}
 }
 
@@ -83,4 +129,21 @@ func TestDefaultAxesDoesNotBindToABranch(t *testing.T) {
 	if got := DefaultAxes("pitfall", Axes{Machine: "m"}); !got.Same(Axes{Machine: "m"}) {
 		t.Errorf("no-project pitfall = %+v", got)
 	}
+}
+
+// Normalizing twice changes nothing: gates and the store must see the same id.
+func FuzzNormalizeRemoteIsIdempotent(f *testing.F) {
+	for _, seed := range []string{
+		"https://github.com:alice/repo", "ssh://git@github.com:22/a/b", "https://evil.com:abc/x",
+		"https://a@b@c/x", "https://https://x/y", "git@host:1/x", "ssh://u@h:/p", "https://h:/x",
+		"git://x:y:z/w", "https://github.com:443/a/b.git/", "  HTTP://WWW.X.ORG:8080/A/ ",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		once := NormalizeRemote(in)
+		if twice := NormalizeRemote(once); twice != once {
+			t.Fatalf("NormalizeRemote(%q) = %q, again %q", in, once, twice)
+		}
+	})
 }

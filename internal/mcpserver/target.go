@@ -38,7 +38,7 @@ func (s *Server) handleMove(_ context.Context, _ *mcp.CallToolRequest, in MoveIn
 		}
 	}
 	if chosen != 1 {
-		return nil, nil, fmt.Errorf("name exactly one target: project, machine or global. To move a request, use request_record_progress with action=correct and project")
+		return nil, nil, fmt.Errorf("name exactly one target: project, machine or global. To move a request, use request with action=correct and project")
 	}
 	project := in.Project
 	if project != "" {
@@ -51,5 +51,5 @@ func (s *Server) handleMove(_ context.Context, _ *mcp.CallToolRequest, in MoveIn
 	if err != nil {
 		return nil, nil, err
 	}
-	return textResult(fmt.Sprintf("moved #%d to %s", saved.ID, scopeLabel(saved.Scope))), nil, nil
+	return s.withCard(textResult(fmt.Sprintf("moved #%d to %s", saved.ID, scopeLabel(saved.Scope))), s.builder().KnowledgeCard(saved)), nil, nil
 }

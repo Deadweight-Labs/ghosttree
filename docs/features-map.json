@@ -1,0 +1,17 @@
+[
+  {"match": "Scoped context by repository", "name": "Scoped context", "areas": ["internal/scope", "internal/activation"]},
+  {"match": "Full-text search across", "name": "Search", "areas": ["internal/query", "internal/embed", "internal/embedjob", "internal/store/request_search.go", "internal/store/coordsearch.go"]},
+  {"match": "Incremental Claude Code and Codex transcript collection", "name": "Transcript collection", "areas": ["internal/collector", "internal/transcript", "internal/redact", "internal/codexadapter"]},
+  {"match": "MCP tools for context lookup", "name": "MCP tools", "areas": ["internal/mcpserver"]},
+  {"match": "Harness installation and diagnostics", "name": "Harness installation", "areas": ["internal/installer"]},
+  {"match": "A work ledger with acceptance criteria", "name": "Work ledger", "areas": ["internal/request", "internal/store/request.go", "internal/store/requestview.go", "internal/store/requestwork.go"]},
+  {"match": "Work packages:", "name": "Work packages", "areas": ["internal/store/package.go", "internal/store/package_view.go", "internal/server/package_handlers.go", "internal/server/package_briefing.go"]},
+  {"match": "Runbooks (", "name": "Runbooks", "areas": ["internal/runbook", "internal/store/runbook.go", "internal/server/runbook_handlers.go"]},
+  {"match": "Quarantined session distillation", "name": "Session distillation", "areas": ["internal/sessiondistill", "internal/llm", "internal/llmusage"]},
+  {"match": "Versioned documents with local drafts", "name": "Documents", "areas": ["internal/doc", "internal/store/document.go"]},
+  {"match": "Immutable named snapshots", "name": "Context snapshots", "areas": ["internal/snapshot", "internal/snapshotmirror"]},
+  {"match": "Accounts with revocable API tokens", "name": "Accounts and organizations", "areas": ["internal/store/accounts.go", "internal/store/joininvite.go", "internal/server/orgs.go"]},
+  {"match": "A web interface (", "name": "Web interface", "areas": ["internal/web"]},
+  {"match": "Coordination between agents and people", "name": "Coordination", "areas": ["internal/claudechannel", "internal/store/coordmessage.go"]},
+  {"match": "Features (", "name": "Features", "areas": ["internal/feature", "internal/store/feature.go", "internal/store/feature_pr.go", "internal/store/feature_context.go", "internal/store/feature_idea.go", "internal/server/feature_handlers.go", "internal/mcpserver/feature.go", "cmd/ctx/feature.go"]}
+]

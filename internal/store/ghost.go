@@ -3,6 +3,9 @@ package store
 import (
 	"database/sql"
 	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 )
 
 // GhostFile ist die Beschreibung eines Pfades. Die Identität ist
@@ -16,6 +19,9 @@ type GhostFile struct {
 	Description string `json:"description"`
 	ContentSHA  string `json:"content_sha"`
 	GitBlob     string `json:"git_blob,omitempty"`
+	// Branch ist die Ebene der Beschreibung (#713): leer ist die Projektebene,
+	// sonst gilt sie auf diesem Branch und in davon abgezweigten (ghostbranch.go).
+	Branch      string `json:"branch,omitempty"`
 	LineCount   int    `json:"line_count"`
 	Person      string `json:"person,omitempty"`
 	Harness     string `json:"harness,omitempty"`
@@ -26,6 +32,13 @@ type GhostFile struct {
 	// description alone, its words do not match the query. A hit of the full-text
 	// index leaves it empty, which is also how every other read leaves it.
 	Match string `json:"match,omitempty"`
+	// GitAnchor ist der Git-Stand, an dem diese Beschreibung geschrieben wurde
+	// (REQ-597). Der Server setzt ihn beim Schreiben aus dem Header, nie aus
+	// dem Body.
+	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
+	// OriginContext ist der Entstehungskontext dieser Beschreibung (REQ-600).
+	// Der Pfad der Beschreibung selbst zählt darin als ausdrücklich genannt.
+	OriginContext *originctx.Context `json:"origin_context,omitempty"`
 }
 
 const ghostCols = `id, project, path, kind, description, content_sha, git_blob,
@@ -51,6 +64,9 @@ func (s *Store) PutGhostFile(g GhostFile) (int64, error) {
 	if g.DescribedAt == "" {
 		g.DescribedAt = ts
 	}
+	if g.Branch != "" {
+		return s.putGhostBranchFile(g, ts)
+	}
 	// Aufheben und Ersetzen gehören in dieselbe Transaktion. Sonst hinterlässt
 	// ein fehlgeschlagener Upsert eine archivierte Fassung, die nie abgelöst
 	// wurde — eine Historie, die etwas behauptet, das nicht stattgefunden hat.
@@ -60,28 +76,43 @@ func (s *Store) PutGhostFile(g GhostFile) (int64, error) {
 	}
 	defer tx.Rollback()
 
-	if err := archiveGhostFileTx(tx, g.Project, g.Path, ts, "ersetzt"); err != nil {
+	// Der neue Anker ersetzt den alten auf der Kopfzeile; der alte ist mit der
+	// verdrängten Fassung in der Historie (archiveGhostFileTx). Ohne Anker
+	// bleibt die Spalte leer, sie erbt nichts.
+	anchorID, originID, err := insertWriteMetaTx(tx, g.GitAnchor, g.OriginContext)
+	if err != nil {
+		return 0, err
+	}
+	id, err := putProjectGhostTx(tx, g, ts, "ersetzt", anchorID, originID)
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
+}
+
+// putProjectGhostTx hebt die verdrängte Fassung der Projektebene auf und
+// ersetzt sie. Gemeinsam für das Beschreiben und die Merge-Übernahme einer
+// Branch-Beschreibung (ghostbranch.go).
+func putProjectGhostTx(tx *sql.Tx, g GhostFile, ts, reason string, anchorID, originID any) (int64, error) {
+	if err := archiveGhostFileTx(tx, g.Project, g.Path, ts, reason); err != nil {
 		return 0, err
 	}
 	res, err := tx.Exec(`INSERT INTO ghost_files(project,path,kind,description,content_sha,git_blob,
-		line_count,person,harness,session_ref,described_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+		line_count,person,harness,session_ref,described_at,updated_at,anchor_id,origin_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(project,path) DO UPDATE SET
 			kind=excluded.kind, description=excluded.description,
 			content_sha=excluded.content_sha, git_blob=excluded.git_blob,
 			line_count=excluded.line_count, person=excluded.person,
 			harness=excluded.harness, session_ref=excluded.session_ref,
-			described_at=excluded.described_at, updated_at=excluded.updated_at`,
+			described_at=excluded.described_at, updated_at=excluded.updated_at,
+			anchor_id=excluded.anchor_id, origin_id=excluded.origin_id`,
 		g.Project, g.Path, g.Kind, g.Description, g.ContentSHA, g.GitBlob,
-		g.LineCount, g.Person, g.Harness, g.SessionRef, g.DescribedAt, ts)
+		g.LineCount, g.Person, g.Harness, g.SessionRef, g.DescribedAt, ts, anchorID, originID)
 	if err != nil {
 		return 0, err
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
-	return id, tx.Commit()
+	return res.LastInsertId()
 }
 
 func (s *Store) GhostFileByPath(project, path string) (GhostFile, error) {
@@ -92,7 +123,7 @@ func (s *Store) GhostFileByPath(project, path string) (GhostFile, error) {
 	if err != nil {
 		return GhostFile{}, err
 	}
-	gs, err := scanGhostFiles(rows)
+	gs, err := s.scanGhostFiles(rows)
 	if err != nil {
 		return GhostFile{}, err
 	}
@@ -119,7 +150,7 @@ func (s *Store) GhostFilesUnder(project, prefix string) ([]GhostFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanGhostFiles(rows)
+	return s.scanGhostFiles(rows)
 }
 
 // SearchGhostFiles sucht über Pfad und Beschreibung. Dieselbe Verknüpfung wie
@@ -136,21 +167,57 @@ func (s *Store) SearchGhostFiles(q, project string, limit int) ([]GhostFile, err
 }
 
 // ftsGhostFiles is the full-text ranking as it has always been answered.
-func (s *Store) ftsGhostFiles(q, project string, limit int) ([]GhostFile, error) {
+func (s *Store) ftsGhostFiles(q, project string, limit int, anchor AnchorFilter, origin originctx.Filter) ([]GhostFile, error) {
 	if limit <= 0 {
 		limit = 20
 	}
+	where, args := `(? = '' OR g.project = ?)`, []any{ftsQuery(q), project, project}
+	if af, afArgs := anchor.Where("g.anchor_id"); af != "" {
+		where += " AND " + af
+		args = append(args, afArgs...)
+	}
+	if of, ofArgs := originWhere(origin, "g.origin_id", "g.described_at"); of != "" {
+		where += " AND " + of
+		args = append(args, ofArgs...)
+	}
 	rows, err := s.db.Query(`SELECT `+prefix(ghostCols, "g.")+`
 		FROM ghost_files_fts f JOIN ghost_files g ON g.id=f.rowid
-		WHERE ghost_files_fts MATCH ? AND (? = '' OR g.project = ?)
-		ORDER BY f.rank LIMIT ?`, ftsQuery(q), project, project, limit)
+		WHERE ghost_files_fts MATCH ? AND `+where+`
+		ORDER BY f.rank LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
-	return scanGhostFiles(rows)
+	return s.scanGhostFiles(rows)
 }
 
-func scanGhostFiles(rows *sql.Rows) ([]GhostFile, error) {
+// scanGhostFiles liest Zeilen von ghostCols und hängt ihnen den Anker an. Nicht
+// innerhalb einer Transaktion zu benutzen: der Anker kommt über s.db, und bei
+// einer einzigen Verbindung wartete das auf die eigene Transaktion.
+func (s *Store) scanGhostFiles(rows *sql.Rows) ([]GhostFile, error) {
+	out, err := scanGhostFilesRaw(rows)
+	if err != nil || len(out) == 0 {
+		return out, err
+	}
+	ids := make([]int64, len(out))
+	for i, g := range out {
+		ids[i] = g.ID
+	}
+	anchors, err := s.anchorsFor("ghost_files", ids)
+	if err != nil {
+		return nil, err
+	}
+	origins, err := s.originsFor("ghost_files", ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].GitAnchor = anchors[out[i].ID]
+		out[i].OriginContext = origins[out[i].ID]
+	}
+	return out, nil
+}
+
+func scanGhostFilesRaw(rows *sql.Rows) ([]GhostFile, error) {
 	defer rows.Close()
 	out := []GhostFile{}
 	for rows.Next() {
@@ -193,7 +260,19 @@ func ParentPaths(path string) []string {
 func (s *Store) GhostFilesForDelivery(project, path, sessionKey string) ([]GhostFile, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{project, path, sessionKey}, func(d *Store, p []any) ([]GhostFile, error) {
-			return d.GhostFilesForDelivery(p[0].(string), p[1].(string), p[2].(string))
+			return d.GhostFilesForDeliveryAt(p[0].(string), p[1].(string), p[2].(string), "", nil)
+		})
+	}
+	return s.GhostFilesForDeliveryAt(project, path, sessionKey, "", nil)
+}
+
+// GhostFilesForDeliveryAt ist die Auslieferung auf einem Branch: statt der
+// Projektebene allein gilt je Pfad die Beschreibung des Branches, sonst die
+// eines Vorfahren, sonst die der Projektebene (ghostbranch.go).
+func (s *Store) GhostFilesForDeliveryAt(project, path, sessionKey, branch string, lineage []string) ([]GhostFile, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{project, path, sessionKey, branch, lineage}, func(d *Store, p []any) ([]GhostFile, error) {
+			return d.GhostFilesForDeliveryAt(p[0].(string), p[1].(string), p[2].(string), p[3].(string), p[4].([]string))
 		})
 	}
 	tx, err := s.db.Begin()
@@ -221,11 +300,7 @@ func (s *Store) GhostFilesForDelivery(project, path, sessionKey string) ([]Ghost
 			sessionKey, project, p, ts); err != nil {
 			return nil, err
 		}
-		rows, err := tx.Query(`SELECT `+ghostCols+` FROM ghost_files WHERE project=? AND path=?`, project, p)
-		if err != nil {
-			return nil, err
-		}
-		gs, err := scanGhostFiles(rows)
+		gs, err := ghostAtTx(tx, project, p, branch, lineage)
 		if err != nil {
 			return nil, err
 		}

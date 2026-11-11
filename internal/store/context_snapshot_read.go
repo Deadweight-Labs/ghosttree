@@ -10,11 +10,13 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 )
 
-// snapshotEntryVisible lässt Wissen der Maschinen-Achse nie aus einem Snapshot
-// heraus: neue Snapshots nehmen es gar nicht erst auf, Altbestand (Log-Modus,
-// vor der Regel) wird beim Lesen herausgefiltert. Maschinen-Wissen gehört nur
-// dem Besitzer der Maschine, ein Snapshot gehört dem ganzen Projekt.
-const snapshotEntryVisible = ` AND NOT (domain='knowledge' AND COALESCE(json_extract(CAST(payload AS TEXT),'$.machine'),'')<>'')`
+// snapshotEntryVisible lässt Wissen der Maschinen-Achse (Maschine, kein Projekt)
+// nie aus einem Snapshot heraus: neue Snapshots nehmen es gar nicht erst auf,
+// Altbestand (Log-Modus, vor der Regel) wird beim Lesen herausgefiltert.
+// Maschinen-Wissen gehört nur dem Besitzer der Maschine, ein Snapshot gehört dem
+// ganzen Projekt. Wissen mit Projekt UND Maschine ist Projektwissen und bleibt
+// darin.
+const snapshotEntryVisible = ` AND NOT (domain='knowledge' AND COALESCE(json_extract(CAST(payload AS TEXT),'$.machine'),'')<>'' AND COALESCE(json_extract(CAST(payload AS TEXT),'$.project'),'')='')`
 
 const snapshotHeadColumns = `id,project,name,schema_version,state,content_digest,git_object_format,git_commit,git_ref,git_branch,git_dirty,git_worktree_fingerprint_version,git_worktree_fingerprint,allow_dirty_used,git_metadata_source,message,actor_id,actor_label,session_ref,created_at,entry_count,payload_bytes_total,counts_json`
 

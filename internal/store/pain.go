@@ -10,7 +10,7 @@ import (
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
 
-const painCols = `p.id,p.project,p.title,p.body,p.state,p.remaining,p.person,p.created_at,p.updated_at,COALESCE(au.account_id,0)`
+const painCols = `p.id,p.project,p.title,p.body,p.state,p.remaining,p.person,p.created_at,p.updated_at,COALESCE(au.account_id,0),p.accepted_reason`
 
 const painFrom = ` FROM pains p LEFT JOIN pain_authors au ON au.pain_id=p.id`
 
@@ -18,7 +18,7 @@ func scanPains(rows *sql.Rows) ([]pain.Pain, error) {
 	var out []pain.Pain
 	for rows.Next() {
 		var p pain.Pain
-		if err := rows.Scan(&p.ID, &p.Project, &p.Title, &p.Body, &p.State, &p.Remaining, &p.Person, &p.CreatedAt, &p.UpdatedAt, &p.AuthorID); err != nil {
+		if err := rows.Scan(&p.ID, &p.Project, &p.Title, &p.Body, &p.State, &p.Remaining, &p.Person, &p.CreatedAt, &p.UpdatedAt, &p.AuthorID, &p.AcceptedReason); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -64,12 +64,15 @@ func (a *ProjectAccess) resolveTargets(project string, targets []pain.Target) ([
 		if t.KnowledgeID != 0 {
 			n++
 		}
+		if t.IdeaID != 0 {
+			n++
+		}
 		if strings.TrimSpace(t.ExternalRef) != "" {
 			n++
 		}
 		if n != 1 {
 			return nil, requestdomain.NewRuleError("link_target_required", "a link needs exactly one target",
-				"give one of request_id, knowledge_id or external_ref", nil)
+				"give one of request_id, knowledge_id, idea_id or external_ref", nil)
 		}
 		switch {
 		case t.RequestID != 0:
@@ -84,6 +87,12 @@ func (a *ProjectAccess) resolveTargets(project string, targets []pain.Target) ([
 				return nil, err
 			}
 			out = append(out, resolvedTarget{Kind: "knowledge", ID: t.KnowledgeID, Title: title})
+		case t.IdeaID != 0:
+			title, err := a.resolveLinkTarget(project, "idea", t.IdeaID)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, resolvedTarget{Kind: "idea", ID: t.IdeaID, Title: title})
 		default:
 			out = append(out, resolvedTarget{Kind: "external", Ref: strings.TrimSpace(t.ExternalRef)})
 		}
@@ -113,8 +122,12 @@ func insertLinkTx(tx txExec, painID int64, project string, t resolvedTarget, a p
 		return id, false, err
 	}
 	id, _ := res.LastInsertId()
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,data,person,account_id,session_id,created_at) VALUES(?,'link_added',?,?,?,?,?)`,
-		painID, targetData(t), a.Person, a.AccountID, a.SessionID, ts); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, a.GitAnchor, a.Origin)
+	if err != nil {
+		return 0, false, err
+	}
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,data,person,account_id,session_id,created_at,anchor_id,origin_id) VALUES(?,'link_added',?,?,?,?,?,?,?)`,
+		painID, targetData(t), a.Person, a.AccountID, a.SessionID, ts, anchorID, originID); err != nil {
 		return 0, false, err
 	}
 	if t.Kind == "request" {
@@ -171,8 +184,11 @@ func (s *Store) commitPain(in CreatePainInput, targets []resolvedTarget) (int64,
 	}
 	defer tx.Rollback()
 	ts := now()
-	res, err := tx.Exec(`INSERT INTO pains(project,title,body,state,remaining,person,created_at,updated_at) VALUES(?,?,?,'active','',?,?,?)`,
-		in.Project, strings.TrimSpace(in.Title), in.Body, in.Actor.Person, ts, ts)
+	// session_ref ist die Kennung der Session des Schreibers; der Server setzt die
+	// Session-Id nur für eine eigene Session (REQ-620: vorher blieb sie leer).
+	res, err := tx.Exec(`INSERT INTO pains(project,title,body,state,remaining,person,session_ref,created_at,updated_at)
+		VALUES(?,?,?,'active','',?,COALESCE((SELECT external_id FROM sessions WHERE id=?),''),?,?)`,
+		in.Project, strings.TrimSpace(in.Title), in.Body, in.Actor.Person, in.Actor.SessionID, ts, ts)
 	if err != nil {
 		return 0, err
 	}
@@ -183,8 +199,12 @@ func (s *Store) commitPain(in CreatePainInput, targets []resolvedTarget) (int64,
 	}
 	actor := in.Actor
 	actor.AccountID = account
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,to_state,person,account_id,session_id,created_at) VALUES(?,'created','active',?,?,?,?)`,
-		id, actor.Person, account, actor.SessionID, ts); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, actor.GitAnchor, actor.Origin)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,to_state,person,account_id,session_id,created_at,anchor_id,origin_id) VALUES(?,'created','active',?,?,?,?,?,?)`,
+		id, actor.Person, account, actor.SessionID, ts, anchorID, originID); err != nil {
 		return 0, err
 	}
 	for _, t := range targets {
@@ -224,7 +244,13 @@ func (a *ProjectAccess) SetPainState(id int64, to, remaining string, ev pain.Evi
 	if to != pain.Mitigated {
 		remaining = ""
 	}
-	if err := a.st.commitPainState(id, p.State, to, remaining, ev, note, actor); err != nil {
+	// The reason of an accepted pain stays on the pain; it is gone when the pain
+	// leaves the state (the history keeps it in the note of the event).
+	acceptedReason := ""
+	if to == pain.Accepted {
+		acceptedReason = note
+	}
+	if err := a.st.commitPainState(id, p.State, to, remaining, acceptedReason, ev, note, actor); err != nil {
 		return pain.Detail{}, err
 	}
 	return a.st.painDetail(a, id)
@@ -262,10 +288,10 @@ func (a *ProjectAccess) checkEvidenceRef(project string, ev pain.Evidence) (stri
 	return ev.Ref, nil
 }
 
-func (s *Store) commitPainState(id int64, from, to, remaining string, ev pain.Evidence, note string, actor pain.Actor) error {
+func (s *Store) commitPainState(id int64, from, to, remaining, acceptedReason string, ev pain.Evidence, note string, actor pain.Actor) error {
 	if s.writer != nil {
-		return queueWrite(s, []any{id, from, to, remaining, ev, note, actor}, func(d *Store, q []any) error {
-			return d.commitPainState(q[0].(int64), q[1].(string), q[2].(string), q[3].(string), q[4].(pain.Evidence), q[5].(string), q[6].(pain.Actor))
+		return queueWrite(s, []any{id, from, to, remaining, acceptedReason, ev, note, actor}, func(d *Store, q []any) error {
+			return d.commitPainState(q[0].(int64), q[1].(string), q[2].(string), q[3].(string), q[4].(string), q[5].(pain.Evidence), q[6].(string), q[7].(pain.Actor))
 		})
 	}
 	tx, err := s.db.Begin()
@@ -284,11 +310,15 @@ func (s *Store) commitPainState(id int64, from, to, remaining string, ev pain.Ev
 		from = cur
 	}
 	ts := now()
-	if _, err := tx.Exec(`UPDATE pains SET state=?,remaining=?,updated_at=? WHERE id=?`, to, remaining, ts, id); err != nil {
+	if _, err := tx.Exec(`UPDATE pains SET state=?,remaining=?,accepted_reason=?,updated_at=? WHERE id=?`, to, remaining, acceptedReason, ts, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,from_state,to_state,remaining,evidence_kind,evidence_ref,note,person,account_id,session_id,created_at)
-		VALUES(?,'state',?,?,?,?,?,?,?,?,?,?)`, id, from, to, remaining, ev.Kind, ev.Ref, note, actor.Person, actor.AccountID, actor.SessionID, ts); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, actor.GitAnchor, actor.Origin)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,from_state,to_state,remaining,evidence_kind,evidence_ref,note,person,account_id,session_id,created_at,anchor_id,origin_id)
+		VALUES(?,'state',?,?,?,?,?,?,?,?,?,?,?,?)`, id, from, to, remaining, ev.Kind, ev.Ref, note, actor.Person, actor.AccountID, actor.SessionID, ts, anchorID, originID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -345,14 +375,18 @@ func (s *Store) commitPainCorrection(id int64, title, body, reason, changed stri
 	if _, err := tx.Exec(`UPDATE pains SET title=?,body=?,updated_at=? WHERE id=?`, title, body, ts, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at) VALUES(?,'corrected',?,?,?,?,?,?)`,
-		id, reason, changed, actor.Person, actor.AccountID, actor.SessionID, ts); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, actor.GitAnchor, actor.Origin)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at,anchor_id,origin_id) VALUES(?,'corrected',?,?,?,?,?,?,?,?)`,
+		id, reason, changed, actor.Person, actor.AccountID, actor.SessionID, ts, anchorID, originID); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// AddPainLink adds an edge pain -> request, knowledge entry or external text.
+// AddPainLink adds an edge pain -> request, knowledge entry, idea or external text.
 func (a *ProjectAccess) AddPainLink(id int64, target pain.Target, actor pain.Actor) (pain.Detail, error) {
 	p, err := a.st.PainByID(id)
 	if err != nil {
@@ -406,7 +440,7 @@ func (a *ProjectAccess) RemovePainLink(linkID int64, reason string, actor pain.A
 		return err
 	}
 	// An edge to something the viewer may not read answers like an unknown link id.
-	if dstKind == "request" || dstKind == "knowledge" {
+	if dstKind == "request" || dstKind == "knowledge" || dstKind == "idea" {
 		if _, err := a.resolveLinkTarget(p.Project, dstKind, dstID); err != nil {
 			a.Filtered()
 			return sql.ErrNoRows
@@ -434,8 +468,12 @@ func (s *Store) commitPainUnlink(linkID, painID int64, t resolvedTarget, reason 
 		return err
 	}
 	ts := now()
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at) VALUES(?,'link_removed',?,?,?,?,?,?)`,
-		painID, reason, targetData(t), actor.Person, actor.AccountID, actor.SessionID, ts); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, actor.GitAnchor, actor.Origin)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at,anchor_id,origin_id) VALUES(?,'link_removed',?,?,?,?,?,?,?,?)`,
+		painID, reason, targetData(t), actor.Person, actor.AccountID, actor.SessionID, ts, anchorID, originID); err != nil {
 		return err
 	}
 	if t.Kind == "request" {
@@ -479,7 +517,7 @@ func (s *Store) painDetail(pa *ProjectAccess, id int64) (pain.Detail, error) {
 	}
 	visible := map[string]bool{}
 	for _, l := range links {
-		key := targetData(resolvedTarget{Kind: l.Kind, ID: l.RequestID + l.KnowledgeID, Ref: l.ExternalRef})
+		key := targetData(resolvedTarget{Kind: l.Kind, ID: l.RequestID + l.KnowledgeID + l.IdeaID, Ref: l.ExternalRef})
 		switch l.Kind {
 		case "request":
 			title, err := pa.resolveLinkTarget(p.Project, "request", l.RequestID)
@@ -493,6 +531,15 @@ func (s *Store) painDetail(pa *ProjectAccess, id int64) (pain.Detail, error) {
 				continue
 			}
 			l.Title = title
+		case "idea":
+			title, err := pa.resolveLinkTarget(p.Project, "idea", l.IdeaID)
+			if err != nil {
+				continue
+			}
+			l.Title = title
+			if i, err := pa.st.IdeaByID(l.IdeaID); err == nil {
+				d.Pain.Ideas = append(d.Pain.Ideas, pain.IdeaRef{ID: i.ID, Title: i.Title, State: i.State})
+			}
 		}
 		visible[key] = true
 		d.Motivates = append(d.Motivates, l)
@@ -560,7 +607,7 @@ func (a *ProjectAccess) linkDataVisible(project, data string, current map[string
 	switch kind {
 	case "external":
 		return true
-	case "request", "knowledge":
+	case "request", "knowledge", "idea":
 		var n int64
 		fmt.Sscanf(rest, "%d", &n)
 		_, err := a.resolveLinkTarget(project, kind, n)
@@ -590,6 +637,8 @@ func (s *Store) painLinksAndEvents(id int64) ([]pain.Link, []pain.Event, error) 
 			l.RequestID = dst
 		case "knowledge":
 			l.KnowledgeID = dst
+		case "idea":
+			l.IdeaID = dst
 		}
 		links = append(links, l)
 	}
@@ -607,5 +656,26 @@ func (s *Store) painLinksAndEvents(id int64) ([]pain.Link, []pain.Event, error) 
 		}
 		events = append(events, e)
 	}
-	return links, events, erows.Err()
+	if err := erows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if len(events) > 0 {
+		ids := make([]int64, len(events))
+		for i, e := range events {
+			ids[i] = e.ID
+		}
+		anchors, err := s.anchorsFor("pain_events", ids)
+		if err != nil {
+			return nil, nil, err
+		}
+		via, err := s.viaFor("pain_events", ids)
+		if err != nil {
+			return nil, nil, err
+		}
+		for i := range events {
+			events[i].GitAnchor = anchors[events[i].ID]
+			events[i].Via = via[events[i].ID]
+		}
+	}
+	return links, events, nil
 }

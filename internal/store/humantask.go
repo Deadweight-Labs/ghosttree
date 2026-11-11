@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -11,7 +12,7 @@ import (
 
 const taskCols = `t.id,t.project,t.request_id,COALESCE(t.work_id,0),t.kind,t.title,t.description,t.location,t.check_hint,t.state,
 	t.assignee_account,COALESCE(pe.name,''),t.created_by_account,t.created_by_person,t.done_by_person,t.done_note,t.done_via,t.done_at,
-	t.state_note,t.confirmed_at,t.created_at,t.updated_at,COALESCE(w.summary,''),COALESCE(w.session_id,0)`
+	t.state_note,t.confirmed_at,t.created_at,t.updated_at,COALESCE(w.summary,''),COALESCE(w.session_id,0),t.steps`
 
 const taskFrom = ` FROM human_tasks t LEFT JOIN persons pe ON pe.id=t.assignee_account AND t.assignee_account>0
 	LEFT JOIN request_work w ON w.id=t.work_id`
@@ -20,10 +21,14 @@ func scanTasks(rows *sql.Rows) ([]humantask.Task, error) {
 	var out []humantask.Task
 	for rows.Next() {
 		var t humantask.Task
+		var steps string
 		if err := rows.Scan(&t.ID, &t.Project, &t.RequestID, &t.WorkID, &t.Kind, &t.Title, &t.Description, &t.Location, &t.CheckHint, &t.State,
 			&t.AssigneeAccount, &t.Assignee, &t.CreatedByAccount, &t.CreatedBy, &t.DoneBy, &t.DoneNote, &t.DoneVia, &t.DoneAt,
-			&t.StateNote, &t.ConfirmedAt, &t.CreatedAt, &t.UpdatedAt, &t.Handoff, &t.HandoffSession); err != nil {
+			&t.StateNote, &t.ConfirmedAt, &t.CreatedAt, &t.UpdatedAt, &t.Handoff, &t.HandoffSession, &steps); err != nil {
 			return nil, err
+		}
+		if steps != "" {
+			_ = json.Unmarshal([]byte(steps), &t.Steps)
 		}
 		out = append(out, t)
 	}
@@ -35,7 +40,7 @@ func (s *Store) TaskByID(id int64) (humantask.Task, error) {
 	if s.reader != nil {
 		return s.reader.TaskByID(id)
 	}
-	rows, err := s.db.Query(`SELECT `+taskCols+taskFrom+` WHERE t.id=?`, id)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+taskCols+taskFrom+` WHERE t.id=?`, id)
 	if err != nil {
 		return humantask.Task{}, err
 	}
@@ -60,12 +65,17 @@ func (a *ProjectAccess) GetHumanTask(id int64) (humantask.Task, error) {
 	if err := a.CheckTask(t, ActRead); err != nil {
 		return humantask.Task{}, err
 	}
+	// Like the lists: a task on a request the viewer may not read answers like
+	// an unknown one (own assignment excepted).
+	if !a.canSeeTaskVia(t, map[int64]bool{}) {
+		return humantask.Task{}, ErrAccessNotFound
+	}
 	return t, nil
 }
 
 func workInvalid() error {
 	return requestdomain.NewRuleError("work_invalid", "that work does not belong to the request or you may not work on it",
-		"use the work id from request_start_work for this request", nil)
+		"use the work id from request action=start_work for this request", nil)
 }
 
 // CreateHumanTask asks the human for something only they can provide. Secrets
@@ -77,6 +87,9 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 		return humantask.Task{}, err
 	}
 	if err := humantask.CheckFields("title", in.Title, "description", in.Description, "location", in.Location, "check_hint", in.CheckHint); err != nil {
+		return humantask.Task{}, err
+	}
+	if err := humantask.CheckFields(in.StepFields()...); err != nil {
 		return humantask.Task{}, err
 	}
 	requestID, workID := in.RequestID, in.WorkID
@@ -98,8 +111,8 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 		}
 	}
 	if requestID == 0 {
-		return humantask.Task{}, requestdomain.NewRuleError("request_required", "a human task hangs on a request: request_start_work first, or give request_id",
-			"request_start_work first, or give request_id", nil)
+		return humantask.Task{}, requestdomain.NewRuleError("request_required", "a human task hangs on a request: request action=start_work first, or give request_id",
+			"request action=start_work first, or give request_id", nil)
 	}
 	ref, err := st.RequestRef(RefRequest, requestID)
 	if err != nil {
@@ -139,6 +152,27 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 		assignee = a.account
 	}
 	in.Title = strings.TrimSpace(in.Title)
+	in.Steps = humantask.CleanSteps(in.Steps)
+	if len(in.Options) > 0 {
+		// Proposals only make sense where a person types something: a secret or a
+		// file is placed, never answered.
+		if in.Kind != "input" && in.Kind != "action" {
+			return humantask.Task{}, requestdomain.NewRuleError("options_not_allowed", "answer options go with a task of kind input or action",
+				"drop the options, or make it an input or action task", nil)
+		}
+		opts, err := CleanAnswerOptions(in.Options)
+		if err != nil {
+			return humantask.Task{}, err
+		}
+		var fields []string
+		for i, o := range opts {
+			fields = append(fields, fmt.Sprintf("option %d", i+1), o)
+		}
+		if err := humantask.CheckFields(fields...); err != nil {
+			return humantask.Task{}, err
+		}
+		in.Options = opts
+	}
 	id, err := st.commitTask(in, actor, project, requestID, workID, assignee)
 	if err != nil {
 		return humantask.Task{}, err
@@ -162,14 +196,25 @@ func (s *Store) commitTask(in humantask.CreateInput, actor humantask.Actor, proj
 	if workID > 0 {
 		work = workID
 	}
+	steps := ""
+	if len(in.Steps) > 0 {
+		raw, err := json.Marshal(in.Steps)
+		if err != nil {
+			return 0, err
+		}
+		steps = string(raw)
+	}
 	res, err := tx.Exec(`INSERT INTO human_tasks(project,request_id,work_id,kind,title,description,location,check_hint,assignee_account,
-		created_by_account,created_by_person,created_session_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		created_by_account,created_by_person,created_session_id,created_at,updated_at,steps) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		project, requestID, work, in.Kind, in.Title, in.Description, strings.TrimSpace(in.Location), in.CheckHint, assignee,
-		actor.AccountID, actor.Person, actor.SessionID, ts, ts)
+		actor.AccountID, actor.Person, actor.SessionID, ts, ts, steps)
 	if err != nil {
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
+	if err := insertAnswerOptionsTx(tx, AnswerOnTask, id, in.Options); err != nil {
+		return 0, err
+	}
 	if err := linkActivity(tx, requestID, "task.created", fmt.Sprintf("TASK-%d %s %s", id, in.Kind, in.Title), actor.Person, actor.SessionID, ts); err != nil {
 		return 0, err
 	}
@@ -181,7 +226,7 @@ func (s *Store) workRequest(workID int64) (int64, bool) {
 		return s.reader.workRequest(workID)
 	}
 	var id int64
-	err := s.db.QueryRow(`SELECT request_id FROM request_work WHERE id=?`, workID).Scan(&id)
+	err := s.db.QueryRowContext(s.ctx(), `SELECT request_id FROM request_work WHERE id=?`, workID).Scan(&id)
 	return id, err == nil
 }
 
@@ -189,7 +234,7 @@ func (s *Store) activePrimaryWork(sessionID int64) (workID, requestID int64) {
 	if s.reader != nil {
 		return s.reader.activePrimaryWork(sessionID)
 	}
-	_ = s.db.QueryRow(`SELECT id,request_id FROM request_work WHERE session_id=? AND role='primary' AND state='active'`, sessionID).Scan(&workID, &requestID)
+	_ = s.db.QueryRowContext(s.ctx(), `SELECT id,request_id FROM request_work WHERE session_id=? AND role='primary' AND state='active'`, sessionID).Scan(&workID, &requestID)
 	return
 }
 
@@ -198,7 +243,7 @@ func (s *Store) requestState(id int64) string {
 		return s.reader.requestState(id)
 	}
 	var st string
-	_ = s.db.QueryRow(`SELECT state FROM requests WHERE id=?`, id).Scan(&st)
+	_ = s.db.QueryRowContext(s.ctx(), `SELECT state FROM requests WHERE id=?`, id).Scan(&st)
 	return st
 }
 
@@ -207,7 +252,7 @@ func (s *Store) personByName(name string) (int64, bool) {
 		return s.reader.personByName(name)
 	}
 	var id int64
-	err := s.db.QueryRow(`SELECT id FROM persons WHERE lower(name)=lower(?)`, name).Scan(&id)
+	err := s.db.QueryRowContext(s.ctx(), `SELECT id FROM persons WHERE lower(name)=lower(?)`, name).Scan(&id)
 	return id, err == nil
 }
 
@@ -230,13 +275,14 @@ func (a *ProjectAccess) MarkTasksDone(ids []int64, note string, actor humantask.
 	if len(uniq) == 0 {
 		return nil, requestdomain.NewRuleError("task_required", "no task named", "give at least one task id", nil)
 	}
+	cache := map[int64]bool{}
 	for _, id := range uniq {
 		t, err := a.st.TaskByID(id)
 		if err != nil {
 			a.Filtered()
 			return nil, err
 		}
-		if err := a.CheckTask(t, ActWork); err != nil {
+		if err := a.checkTaskWorkable(t, cache); err != nil {
 			return nil, err
 		}
 	}
@@ -347,6 +393,10 @@ func applyTaskChange(tx txExec, op string, t humantask.Task, reason string, acto
 			confirmed_session_id=0,confirmed_at='',updated_at=? WHERE id=?`, reason, ts, t.ID); err != nil {
 			return err
 		}
+		// Die Schnellantwort-Markierung gehörte zur Erledigung, die es nicht mehr gibt.
+		if _, err := tx.Exec(`DELETE FROM quick_answers WHERE subject_kind=? AND subject_id=?`, AnswerOnTask, t.ID); err != nil {
+			return err
+		}
 		return linkActivity(tx, t.RequestID, "task.reopened", ref+": "+reason, actor.Person, actor.SessionID, ts)
 	case "drop":
 		if _, err := tx.Exec(`UPDATE human_tasks SET state='dropped',state_note=?,updated_at=? WHERE id=?`, reason, ts, t.ID); err != nil {
@@ -397,13 +447,17 @@ func (a *ProjectAccess) changeTask(op string, id int64, reason string, actor hum
 }
 
 // TaskFilter limits ListHumanTasks. State: open, done, confirmed, dropped,
-// pending (open and done, the default) or all.
+// pending (open and done, the default), closed (done, confirmed or dropped: what
+// the inbox shows as finished) or all.
 type TaskFilter struct {
 	Project   string
 	State     string
 	Mine      bool
 	RequestID int64
 	Limit     int
+	// Since keeps, with State closed, only tasks finished at or after this time
+	// (RFC3339). Empty keeps all.
+	Since string
 }
 
 func (s *Store) ListHumanTasks(pa *ProjectAccess, f TaskFilter) ([]humantask.Task, error) {
@@ -439,6 +493,12 @@ func (s *Store) taskRows(f TaskFilter, account int64) ([]humantask.Task, error) 
 	case "", "pending":
 		where = append(where, `t.state IN ('open','done')`)
 	case "all":
+	case "closed":
+		where = append(where, `t.state IN ('done','confirmed','dropped')`)
+		if f.Since != "" {
+			where = append(where, `COALESCE(NULLIF(t.done_at,''),t.updated_at)>=?`)
+			args = append(args, f.Since)
+		}
 	default:
 		where = append(where, `t.state=?`)
 		args = append(args, f.State)
@@ -447,12 +507,20 @@ func (s *Store) taskRows(f TaskFilter, account int64) ([]humantask.Task, error) 
 		where = append(where, `t.request_id=?`)
 		args = append(args, f.RequestID)
 	}
-	if f.Mine {
+	if f.Mine && f.State == "closed" {
+		// What I finished or what was assigned to me.
+		where = append(where, `(t.assignee_account=? OR t.done_by_account=?)`)
+		args = append(args, account, account)
+	} else if f.Mine {
 		where = append(where, `(t.assignee_account=? OR (t.assignee_account=0 AND t.state='open'))`)
 		args = append(args, account)
 	}
-	rows, err := s.db.Query(`SELECT `+taskCols+taskFrom+` WHERE `+strings.Join(where, ` AND `)+
-		` ORDER BY CASE t.state WHEN 'open' THEN 0 WHEN 'done' THEN 1 WHEN 'confirmed' THEN 2 ELSE 3 END, t.id LIMIT 2000`, args...)
+	order := `CASE t.state WHEN 'open' THEN 0 WHEN 'done' THEN 1 WHEN 'confirmed' THEN 2 ELSE 3 END, t.id`
+	if f.State == "closed" {
+		order = `COALESCE(NULLIF(t.done_at,''),t.updated_at) DESC, t.id DESC`
+	}
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+taskCols+taskFrom+` WHERE `+strings.Join(where, ` AND `)+
+		` ORDER BY `+order+` LIMIT 2000`, args...)
 	if err != nil {
 		return nil, err
 	}

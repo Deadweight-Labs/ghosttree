@@ -154,7 +154,16 @@ func hitKnowledge(hits []RelevantHit) []Knowledge {
 // its title a word like "gardener" would fire them at every sentence that
 // mentions the gardener. A note a person confirmed is still a note about an
 // entry, not the entry, so the harness excludes it whatever its confidence.
-const deliverable = `k.status = 'active' AND k.confidence NOT IN ('quarantined', 'staged') AND k.harness != 'gardener'`
+const deliverable = `k.status = 'active' AND ` + settled
+
+// settled is deliverable without the status: an entry somebody stands behind
+// and that is not a note of the gardener. Agent search applies it too
+// (KnowledgeSearch.Settled); a search line that asks for staged entries or for
+// the gardener lifts it.
+const settled = `k.confidence NOT IN ('quarantined', 'staged') AND ` + notGardener
+
+// notGardener leaves out the gardener's notes, whatever their confidence.
+const notGardener = `k.harness != '` + GardenerHarness + `'`
 
 // rareTerm is a word that got past both gates: df entries name it.
 type rareTerm struct {
@@ -371,7 +380,7 @@ func distinctiveTerms(text string) []string {
 	for _, field := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	}) {
-		if len(field) < minTermLen || seen[field] || commonWords[field] {
+		if len(field) < minTermLen || seen[field] || commonWords[field] || everydayWords[field] {
 			continue
 		}
 		seen[field] = true

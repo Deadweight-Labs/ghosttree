@@ -211,7 +211,7 @@ func kindWorld(t *testing.T, a kindAdapter, hidden int) (*Store, *embed.Client) 
 	t.Helper()
 	st := accessFixture(t)
 	st.SetAccessMode(AccessMode{Enforce: true})
-	if _, err := st.EnsureProject("person:1", otherProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", otherProject); err != nil {
 		t.Fatal(err)
 	}
 	_, c := newFakeEmbedder(t)
@@ -265,7 +265,8 @@ var (
 
 // expected is what each reader may see in kindWorld, derived from the read rules
 // and not from the code under test: owner and instance admin robin reads everything
-// in his org and every unclaimed project; the members read the claimed project, the
+// in his org and every unclaimed project (ghost descriptions of strangers in an
+// unclaimed project are not delivered to him); the members read the claimed project, the
 // guest too; the stranger only what she wrote in the unclaimed project; mia's
 // project-less request is hers alone, and a project-less document belongs to the
 // instance owner. A project shared with the org opens it to the members of the org.
@@ -279,7 +280,12 @@ func expected(a kindAdapter, who Principal, hidden int, shared bool) []string {
 	}
 	switch who.Label {
 	case "robin":
-		want = append(append(want, claimed...), "U-nora", "U-mia")
+		want = append(want, claimed...)
+		// Ghost descriptions reach agents, and the admin's agents get no entry
+		// a stranger wrote in an unclaimed project; the other kinds are read-only.
+		if a.kind != KindGhost {
+			want = append(want, "U-nora", "U-mia")
+		}
 		opened()
 		if a.kind == KindDocument {
 			want = append(want, "G")

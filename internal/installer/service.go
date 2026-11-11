@@ -74,10 +74,26 @@ func systemdQuote(w string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(w) + `"`
 }
 
+// Restart=always (launchd: KeepAlive true): ctx watch endet auf SIGTERM sauber mit
+// 0. Beendet ihn jemand anderes als systemd, etwa ein pkill, blieb er mit
+// on-failure aus, und keine Session kam mehr beim Server an. Ein bewusstes
+// systemctl stop startet systemd trotzdem nicht neu.
 func watchUnitText(ctx string) string {
 	return "[Unit]\nDescription=ghosttree session collector\nAfter=network-online.target\n\n" +
-		"[Service]\nExecStart=" + systemdQuote(ctx) + " watch\nRestart=on-failure\nRestartSec=30\n\n" +
+		"[Service]\nExecStart=" + systemdQuote(ctx) + " watch\nRestart=always\nRestartSec=30\n\n" +
 		"[Install]\nWantedBy=default.target\n"
+}
+
+// legacyWatchUnitText und legacyWatchPlistText sind die Fassungen vor Restart=always
+// bzw. KeepAlive true. Der Installer erkennt sie als seine eigenen und ersetzt
+// sie, statt sie für fremd zu halten.
+func legacyWatchUnitText(ctx string) string {
+	return strings.Replace(watchUnitText(ctx), "\nRestart=always\n", "\nRestart=on-failure\n", 1)
+}
+
+func legacyWatchPlistText(ctx, logPath string) string {
+	return strings.Replace(watchPlistText(ctx, logPath), "<key>KeepAlive</key>\n\t<true/>",
+		"<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>", 1)
 }
 
 func xmlEscape(s string) string {
@@ -101,10 +117,7 @@ func watchPlistText(ctx, logPath string) string {
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
-	<dict>
-		<key>SuccessfulExit</key>
-		<false/>
-	</dict>
+	<true/>
 	<key>ThrottleInterval</key>
 	<integer>30</integer>
 	<key>StandardOutPath</key>
@@ -207,7 +220,8 @@ func isOurWatchDefinition(old, home string) bool {
 		if xml.Unmarshal([]byte("<s>"+escaped+"</s>"), &v) != nil {
 			return false
 		}
-		return old == watchPlistText(v.S, filepath.Join(home, "Library", "Logs", "ghosttree-watch.log"))
+		log := filepath.Join(home, "Library", "Logs", "ghosttree-watch.log")
+		return old == watchPlistText(v.S, log) || old == legacyWatchPlistText(v.S, log)
 	}
 	for _, line := range strings.Split(old, "\n") {
 		value, ok := strings.CutPrefix(line, "ExecStart=")
@@ -219,7 +233,7 @@ func isOurWatchDefinition(old, home string) bool {
 			return false
 		}
 		ctx := strings.NewReplacer("%%", "%", "$$", "$").Replace(words[0])
-		return old == watchUnitText(ctx)
+		return old == watchUnitText(ctx) || old == legacyWatchUnitText(ctx)
 	}
 	return false
 }
@@ -353,4 +367,25 @@ func SetServiceBackend(goos string, ctl func(name string, args ...string) error,
 	prevOS, prevCtl, prevUID := serviceGOOS, serviceControl, serviceUID
 	serviceGOOS, serviceControl, serviceUID = goos, ctl, func() int { return uid }
 	return func() { serviceGOOS, serviceControl, serviceUID = prevOS, prevCtl, prevUID }
+}
+
+// RestartWatchService installs the collector service where needed and then
+// restarts it, so a running collector picks up a new ctx binary or config.
+// Without a reachable service manager it behaves like InstallWatchService.
+func RestartWatchService(home string) ([]Change, error) {
+	changes, started, err := InstallWatchServiceStarted(home)
+	if err != nil || !started {
+		return changes, err
+	}
+	path := WatchServicePath(home)
+	switch serviceGOOS {
+	case "darwin":
+		err = serviceControl("launchctl", "kickstart", "-k", "gui/"+strconv.Itoa(serviceUID())+"/"+WatchLaunchdLabel)
+	default:
+		err = serviceControl("systemctl", "--user", "restart", WatchUnit)
+	}
+	if err != nil {
+		return append(changes, Change{Path: path, Action: "collector not restarted (" + err.Error() + ")"}), err
+	}
+	return append(changes, Change{Path: path, Action: "collector restarted"}), nil
 }

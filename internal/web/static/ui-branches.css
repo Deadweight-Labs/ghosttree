@@ -1,0 +1,10 @@
+/* The list of all branches: rows as the commit list, the name of the branch is
+   the pill that opens the row. Mock: git-native-v2 repo.html, branch menu. */
+
+:is(.g2.br) {
+  & .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  & .box-h .counter { margin-left: 8px; }
+  & .brrow .ct .pill { margin-left: 0; }
+  & .brrow .ct .pill + :is(.lb, .pill) { margin-left: 8px; }
+  & .brrow .meta .brc { color: var(--fg-default); overflow-wrap: anywhere; }
+}

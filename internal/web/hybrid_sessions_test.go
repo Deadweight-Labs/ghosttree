@@ -16,7 +16,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-var sessionHref = regexp.MustCompile(`href="/ui/sessions/([a-z0-9]{12})[?"#]`)
+var sessionHref = regexp.MustCompile(`href="(?:/ui/sessions|/ui/[a-z0-9.-]+/[a-z0-9._-]+/sessions)/([a-z0-9]{12})[?"#]`)
 
 // addresses are the sessions a page links to, by name.
 func (e sessEnv) addresses(page string) []string {

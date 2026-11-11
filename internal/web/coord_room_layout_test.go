@@ -175,7 +175,7 @@ func TestCoordRoomShowsWhoIsHereWithNoteAndBranchWithoutRightColumn(t *testing.T
 	}
 	_ = srv
 	page := get("/ui/coord?room=" + url.QueryEscape(room))
-	here := segment(t, page, `class="coord-participants rm-here clay"`, "</ul>")
+	here := segment(t, page, `class="coord-participants rm-here"`, "</ul>")
 	for _, want := range []string{"Raum neu bauen", "feat/room", `class="pp-title"`} {
 		if !strings.Contains(here, want) {
 			t.Errorf("who is here lacks %q: %s", want, here)
@@ -218,7 +218,7 @@ func TestCoordEmptyRoomOffersTheActionNotAPickerOrDeadEnd(t *testing.T) {
 	if !strings.Contains(empty, "Nothing here yet.") || !strings.Contains(empty, `href="#coord-message-body"`) || !strings.Contains(empty, "Tell an agent something") {
 		t.Errorf("empty room: %s", empty)
 	}
-	if !strings.Contains(page, `id="rm-here-title"`) {
+	if !strings.Contains(page, `class="coord-participants rm-here"`) {
 		t.Error("who is here shows in an empty room")
 	}
 }
@@ -237,7 +237,7 @@ func TestCoordThreadComposerOffersTheAgentsChip(t *testing.T) {
 	}
 	page := coordPageBody(t, client, srv.URL+loc)
 	form := segment(t, page, `class="coord-thread-composer"`, "</form>")
-	if !strings.Contains(form, `type="checkbox" name="mentions" value="all-agents"`) {
+	if !strings.Contains(form, `data-val="all-agents"`) {
 		t.Errorf("thread composer lacks the @agents chip: %s", form)
 	}
 }
@@ -260,7 +260,7 @@ func TestCoordRoomRendersInGermanWithoutFallbackKeys(t *testing.T) {
 	}
 	appendAgent(t, st, room, "m1", "frage", store.IntentQuestion, "person:1")
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	for _, want := range []string{"Wer ist da", "Agenten schreiben", "Alle im Raum", "Als Bitte senden", ">Senden<", "an robin"} {
+	for _, want := range []string{"Wer ist da", "Alle im Raum", "Als Bitte senden", ">Senden<", "an robin"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("German room lacks %q", want)
 		}
@@ -280,13 +280,13 @@ func TestCoordRoomActionsFollowTheViewersRights(t *testing.T) {
 	if status != http.StatusForbidden {
 		t.Fatalf("guest status = %d, want 403", status)
 	}
-	for _, gone := range []string{`id="rm-here-title"`, `rm-compose`, "Roles first", "rm-here-act"} {
+	for _, gone := range []string{`coord-participants`, `rm-compose`, "Roles first", "rm-here-act"} {
 		if strings.Contains(page, gone) {
 			t.Errorf("the refusal page carries %q", gone)
 		}
 	}
 	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/coord?room="+url.QueryEscape(room))
-	for _, want := range []string{`href="#coord-message-body"`, `id="rm-here-title"`, `class="coord-composer rm-compose"`} {
+	for _, want := range []string{`id="coord-message-body"`, `class="coord-composer rm-compose"`} {
 		if !strings.Contains(owner, want) {
 			t.Errorf("someone who may post lacks %q", want)
 		}

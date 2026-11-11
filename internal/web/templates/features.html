@@ -1,0 +1,31 @@
+{{define "features"}}{{template "head" .}}{{template "nav" .}}<main class="g2 is ft"><div class="wrap">
+{{with .FeaturesV}}<div class="ilayout"><div class="imain">
+<div class="sbarrow"><form class="sbar" method="get" action="{{.Base}}" role="search"><label class="gfield mono-in">{{mi "search"}}<input type="search" name="q" value="{{.Q}}" placeholder="{{t "features.search_hint"}}" aria-label="{{t "features.search_label"}}" autocomplete="off" spellcheck="false"></label><button class="sr">{{t "issues.search_go"}}</button></form></div>
+<div class="box"><div class="box-h lh">{{range .Tabs}}<a class="tab{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Icon}}<span><span class="n">{{.Count}}</span> {{t .Label}}</span></a>{{end}}</div>
+{{if .Rows}}{{range .Rows}}{{template "uirow" .}}
+{{end}}{{else if .NoMatch}}<div class="empty"><span>{{t "features.no_matches"}}</span><a class="gbtn sm" href="{{.ClearHref}}">{{t "requests.clear"}}</a></div>
+{{else}}<div class="empty"><span>{{t .EmptyKey}}</span></div>{{end}}</div>
+</div></div>
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "feature"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id ft"><div class="wrap">
+{{with .FeatureV}}<div class="dhead"><div class="dtitle"><h1>{{.Name}}<span class="n">#{{.ID}}</span></h1></div>
+<div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "feature"}}{{.StateLabel}}</span>{{if .Person}}<span><span class="person">{{avatarOf .Person}}{{.Person}}</span> {{t "features.updated" .Age}}</span>{{end}}</div></div>
+<div class="dgrid"><div class="dmain">
+<div class="tlx tl0">{{template "firstopen" .First}}
+<div class="cb prose"><p class="fsum">{{.Summary}}</p>{{template "knbody" .Blocks}}</div>
+{{if .Limits}}<div class="cs"><div class="cs-h">{{mi "tri"}}<span>{{t "features.limits"}}</span></div><div class="cs-b prose">{{template "knbody" .Limits}}</div></div>{{end}}
+{{if .Usage}}<div class="cs"><div class="cs-h">{{mi "term"}}<span>{{t "features.usage"}}</span></div>{{range .Usage}}<div class="cs-b fuse"><span class="uk">{{.Label}}</span><div class="prose">{{template "knbody" .Blocks}}</div></div>{{end}}</div>{{end}}
+{{if .Areas}}<div class="cs"><div class="cs-h">{{mi "folder"}}<span>{{t "features.areas"}}</span><span class="sp"></span><span class="cs-n">{{len .Areas}}</span></div>{{range .Areas}}<a class="farea" href="{{.Href}}">{{mi .Icon}}<span class="mono">{{.Path}}</span></a>{{end}}</div>{{end}}
+{{template "firstclose"}}
+{{template "uitlitems" .Items}}</div>
+</div>
+<aside class="side" aria-label="{{t "features.side.facts"}}">
+<div class="sblk"><h3>{{t "features.side.state"}}</h3><div class="v"><span class="lb {{.Tone}}">{{.StateLabel}}</span><span class="muted">{{t "features.rev" .Revision}}</span></div></div>
+{{if .Ideas}}<div class="sblk"><h3>{{t "features.side.ideas"}}</h3><div class="v">{{range .Ideas}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
+{{if .Origin}}<div class="sblk"><h3>{{t "features.side.origin"}}</h3><div class="v">{{range .Origin}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
+{{if .Reqs}}<div class="sblk"><h3>{{t "features.side.issues"}}</h3><div class="v">{{range .Reqs}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
+{{if .PRs}}<div class="sblk"><h3>{{t "features.side.pulls"}}</h3><div class="v">{{range .PRs}}{{pillx "pr" .Text .Href .Title ""}}{{end}}</div></div>{{end}}
+{{if .People}}<div class="sblk"><h3>{{t "pains.side.people"}}</h3><div class="v">{{range .People}}<span class="person">{{avatarOf .}}<span>{{.}}</span></span>{{end}}</div></div>{{end}}
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}

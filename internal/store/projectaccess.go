@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
 
@@ -43,6 +44,20 @@ const (
 	// Menschen. Beide haben immer ein Projekt.
 	ResPain Resource = "pain"
 	ResTask Resource = "task"
+	// ResIdea ist ein Wunsch (REQ-606), ResLabel ein Label, ein Thema oder eine
+	// gespeicherte Suche eines Projekts (REQ-600). Beide haben immer ein Projekt.
+	ResIdea  Resource = "idea"
+	ResLabel Resource = "label"
+	// ResRunbook ist ein Ablauf (REQ-604): benannte Anleitung mit Schritten und
+	// optional ausführbaren Zielen. Wie Wissen gilt er für ein Projekt, eine
+	// Maschine oder beides; ohne beides gehört er seinem Autor.
+	ResRunbook Resource = "runbook"
+	// ResFeature ist ein Feature (REQ-612): die lebende Beschreibung dessen, was
+	// das Produkt tut. Es hat immer ein Projekt.
+	ResFeature Resource = "feature"
+	// ResComment ist ein Kommentar an einem Issue, einer Idee oder einem Pain. Wer
+	// das Objekt lesen darf, liest ihn; geprüft wird zusätzlich das Objekt.
+	ResComment Resource = "comment"
 )
 
 // Action ist, was getan werden soll.
@@ -64,6 +79,11 @@ const (
 	ActShare Action = "share"
 	// ActPost: in den Projektraum schreiben (Nachricht, Antwort, Thread).
 	ActPost Action = "post"
+	// ActApprove: eine Fassung eines Ablaufs für die Ausführung freigeben, oder
+	// einen Vorschlag zu einem Ablauf annehmen. Nur Owner und Lead.
+	ActApprove Action = "approve"
+	// ActDelete: einen Kommentar weich löschen.
+	ActDelete Action = "delete"
 )
 
 var (
@@ -84,9 +104,22 @@ type Object struct {
 	Guests bool
 	// Confidence eines Wissenseintrags (für den Gast).
 	Confidence string
-	// Machine: Maschinen-Achse eines Wissenseintrags; nicht leer heißt, dass
-	// nur der Besitzer der Maschine Zugriff hat.
+	// Machine: Maschinen-Achse eines Wissenseintrags OHNE Projekt; nicht leer
+	// heißt, dass nur der Besitzer der Maschine (und freigegebene Orgs) Zugriff
+	// hat. Bei Einträgen mit Projekt bleibt das Feld leer, dort zählt allein die
+	// Projektrolle.
 	Machine string
+	// SharedOrgs: die Orgs, an die dieser Eintrag mit Maschinen-Scope wirksam
+	// freigegeben ist (Freigabe der Maschine besteht, Eintrag liegt noch auf
+	// ihr). Leer heißt privat: nur der Besitzer der Maschine.
+	SharedOrgs []int64
+	// Unentitled: Orgs aus SharedOrgs, über die der Autor die Maschine nicht
+	// verantworten darf (keine Schreib-Freigabe für genau diese Org). Sie geben
+	// dem Betrachter keinen Zugang.
+	Unentitled []int64
+	// HeldAuthor: the entry is held since its project came into existence and
+	// the viewer wrote it; the author keeps reading it without a role there.
+	HeldAuthor bool
 	// OriginOwner: der Betrachter besitzt die private Session, aus der ein noch
 	// nicht freigegebener, distillierter Eintrag stammt; er darf ihn freigeben
 	// oder verwerfen, nie verifizieren.
@@ -108,6 +141,8 @@ type Decision struct {
 	// Hidden: bei Ablehnung 404 statt 403 (Lesen und Nicht-Mitglieder).
 	Hidden bool
 	Reason string
+	// Strict: die Ablehnung gilt auch im Log-Modus (strictDenial).
+	Strict bool
 }
 
 // matrixAllows ist die Matrix aus Spec 8.1 je Rolle, Ressource und Aktion für
@@ -149,6 +184,53 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 		case ActEdit:
 			return rank >= 3 || (rank == 2 && obj.Own)
 		}
+	case ResIdea:
+		// Wie ein Pain: lesen ab Gast, anlegen und bearbeiten wie dort.
+		switch act {
+		case ActRead:
+			return rank >= 1
+		case ActCreate, ActWork:
+			return rank >= 2
+		case ActEdit:
+			return rank >= 3 || (rank == 2 && obj.Own)
+		}
+	case ResFeature:
+		// Lesen ab Gast. Anlegen und eine neue Fassung schreiben (ActWork) ab
+		// member: die Beschreibung pflegt, wer den PR schreibt. Umbenennen,
+		// einstellen und wieder aufnehmen (ActEdit) ab lead. Die Zuordnung steht
+		// hier an einer Stelle: wer sie enger will, ändert nur diese Zeilen.
+		switch act {
+		case ActRead:
+			return rank >= 1
+		case ActCreate, ActWork:
+			return rank >= 2
+		case ActEdit:
+			return rank >= 3
+		}
+	case ResComment:
+		// Lesen ab Gast, schreiben ab member. Ändern darf nur der Autor, löschen
+		// der Autor und jeder Lead oder Owner (Moderation).
+		switch act {
+		case ActRead:
+			return rank >= 1
+		case ActCreate:
+			return rank >= 2
+		case ActEdit:
+			return rank >= 2 && obj.Own
+		case ActDelete:
+			return rank >= 3 || (rank >= 2 && obj.Own)
+		}
+	case ResLabel:
+		// Lesen ab Gast, anlegen ab member, ändern und löschen ab lead. Ein Label
+		// zu setzen prüft das Objekt selbst (ActWork auf dem Objekt).
+		switch act {
+		case ActRead:
+			return rank >= 1
+		case ActCreate:
+			return rank >= 2
+		case ActEdit:
+			return rank >= 3
+		}
 	case ResTask:
 		switch act {
 		case ActRead:
@@ -156,7 +238,9 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 		case ActCreate:
 			return rank >= 2
 		case ActWork:
-			return rank >= 3 || (rank == 2 && (obj.Assigned || obj.Unassigned)) || (rank == 1 && obj.Assigned)
+			// Ein Gast liest nur, auch eine ihm zugewiesene Aufgabe meldet er
+			// nicht als erledigt (Robin, 2026-11-09).
+			return rank >= 3 || (rank == 2 && (obj.Assigned || obj.Unassigned))
 		case ActEdit:
 			return rank >= 3 || (rank == 2 && obj.Own)
 		}
@@ -174,6 +258,19 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 			// Der Besitzer der Session; der Projekt-Owner darf eine freigegebene
 			// Session zurücknehmen, eine private nie erreichen.
 			return obj.Own || (rank >= 4 && obj.Shared)
+		}
+	case ResRunbook:
+		switch act {
+		case ActRead, ActCreate, ActWork:
+			// ActWork: einen Lauf melden.
+			return rank >= 2
+		case ActEdit:
+			// Wie bei Wissen (#1444): wer es besser weiß, schreibt eine neue
+			// Fassung. Ausführbar wird sie dadurch nicht, das tut erst die
+			// Freigabe.
+			return rank >= 2
+		case ActApprove:
+			return rank >= 3
 		}
 	case ResSnapshot:
 		return (act == ActRead || act == ActCreate) && rank >= 2
@@ -282,7 +379,7 @@ func (c *accessConfig) apply(account, project string, res Resource, act Action, 
 	if d.Allowed {
 		return true
 	}
-	if c.enforce.Load() {
+	if c.enforce.Load() || d.Strict {
 		c.denied.Add(1)
 		return false
 	}
@@ -339,15 +436,26 @@ type ProjectAccess struct {
 	machOnce sync.Once
 	machines map[string]int64
 	owner    int64
+	mi       *machineIndex
+	miOnce   sync.Once
+	orgRoles map[string]string
 
 	unclaimed map[string]bool
 	writers   map[string]map[string]bool
+
+	heldOnce sync.Once
+	held     map[string]map[int64]int64
 
 	ownersOnce     sync.Once
 	ownerIDs       map[string]int64
 	ownerDefault   int64
 	entryAuthors   map[int64]int64
 	requestAuthors map[int64]int64
+
+	defBranches sync.Map // Projekt -> Standard-Branch, je Betrachter gemerkt
+
+	// actorSess merkt, welche Sessions hinter Akteur-Stempeln sichtbar sind.
+	actorSess actorSessions
 
 	checks atomic.Int32
 	loads  atomic.Int32
@@ -435,23 +543,10 @@ func (a *ProjectAccess) IsAdmin() bool {
 	return a.admin
 }
 
-func (a *ProjectAccess) loadMachines() {
-	a.machOnce.Do(func() {
-		a.machines, a.owner = a.st.machineOwners()
-	})
-}
-
-// OwnsMachine: die Maschine gehört dem Konto. Altbestand und unbekannte
-// Maschinen gehören dem Instanz-Owner.
+// OwnsMachine: das Konto verwaltet die Maschine (Besitzer, bei Org-Maschinen
+// ein Maintainer). Altbestand und unbekannte Maschinen gehören dem Instanz-Owner.
 func (a *ProjectAccess) OwnsMachine(machine string) bool {
-	if !a.valid {
-		return false
-	}
-	a.loadMachines()
-	if id, ok := a.machines[canonicalMachine(machine)]; ok {
-		return id == a.account
-	}
-	return a.owner == a.account
+	return a.machineLevel(machine, nil) == levelManage
 }
 
 // OwnsSession: die Session gehört dem Konto (Altbestand dem Instanz-Owner).
@@ -475,20 +570,41 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 		return Decision{Hidden: true, Reason: "no account"}
 	}
 	project = strings.TrimSpace(project)
-	// Maschinen-Achse: nur der Besitzer der Maschine, egal welche Rolle. Steht
-	// zugleich ein Projekt am Eintrag, ersetzt der Besitz der Maschine die
-	// Projektrolle nicht: gesehen wird er nur mit Projektrolle UND Maschine.
-	if res == ResKnowledge && obj.Machine != "" {
-		owns := a.OwnsMachine(obj.Machine)
-		if !owns && !a.ownNoteOnUnclaimedMachine(obj, act) {
-			return Decision{Hidden: true, Reason: "machine-axis knowledge of another account"}
-		}
-		if project == "" {
-			if owns {
-				return Decision{Allowed: true}
+	// Maschinen-Achse: der Besitzer der Maschine (bei Org-Maschinen ein
+	// Maintainer) und Mitglieder einer Org, an die der Eintrag ausdrücklich
+	// freigegeben ist, soweit die Freigabe es erlaubt. Sie gilt nur für Einträge
+	// OHNE Projekt. Steht ein Projekt am Eintrag (Wissen zum Betrieb eines Repos
+	// auf einer Maschine), entscheidet allein die Projektrolle über Sehen,
+	// Ändern und Ausliefern; die Maschine ist dann Zuordnung, keine zweite Hürde
+	// und keine zweite Tür (Entscheidung #4349).
+	if (res == ResKnowledge || res == ResRunbook) && obj.Machine != "" && project == "" {
+		level := a.machineLevel(obj.Machine, withoutOrgs(obj.SharedOrgs, obj.Unentitled))
+		note := false
+		switch {
+		case level == levelManage:
+		case level > levelNone:
+			if !shareAllows(level, res, act, obj) {
+				if act == ActRead {
+					return Decision{Hidden: true, Reason: "machine-axis knowledge is not shared with you in this state"}
+				}
+				return Decision{Reason: "machine share does not allow " + string(act)}
 			}
-			return Decision{Allowed: true, Reason: "own note on a machine nobody has claimed"}
+		default:
+			// Der Autor liest und pflegt seine eigene Notiz auch ohne Zugang. Ist
+			// sie an eine Org freigegeben, ändert er sie nicht mehr: ein
+			// ehemaliges Mitglied bearbeitet nichts, was andere noch lesen.
+			note = a.ownNoteOnUnclaimedMachine(obj, act) && !(act == ActEdit && len(obj.SharedOrgs) > 0)
+			if !note {
+				return Decision{Hidden: true, Reason: "machine-axis knowledge of another account"}
+			}
 		}
+		switch {
+		case level == levelManage:
+			return Decision{Allowed: true}
+		case level > levelNone:
+			return Decision{Allowed: true, Reason: "machine knowledge shared with your organization"}
+		}
+		return Decision{Allowed: true, Reason: "own note on a machine nobody has claimed"}
 	}
 	if project == "" {
 		return a.decideGlobal(res, act, obj)
@@ -514,7 +630,7 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 		// Verified setzt nie der Autor selbst: das Recht gibt es nur in einem
 		// beanspruchten Projekt (can_review, lead, owner) oder dem Admin.
 		hiddenSession := res == ResTranscript && !obj.Own && !obj.Shared && !obj.Guests
-		if act == ActCreate || (obj.Own && act != ActVerify) || (a.IsAdmin() && !hiddenSession) {
+		if act == ActCreate || (obj.Own && act != ActVerify && act != ActApprove) || (a.IsAdmin() && !hiddenSession) {
 			return Decision{Allowed: true, Reason: "unclaimed project"}
 		}
 	}
@@ -522,7 +638,10 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	if (res == ResTranscript || res == ResSessionMeta) && act == ActRead && obj.Own {
 		return Decision{Allowed: true}
 	}
-	d := Decision{Hidden: rank == 0 || act == ActRead}
+	if obj.HeldAuthor && act == ActRead {
+		return Decision{Allowed: true, Reason: "own entry, held in the project"}
+	}
+	d := Decision{Hidden: rank == 0 || act == ActRead, Strict: strictDenial(rank, act)}
 	if rank == 0 {
 		d.Reason = "not a member"
 	} else {
@@ -531,12 +650,38 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	return d
 }
 
+// strictDenial sagt, welche Ablehnungen auch im Log-Modus gelten (Robin,
+// 2026-11-09, nach der UI-Durchsicht auf einer Instanz ohne Durchsetzung):
+//
+//   - Ein Gast schreibt nichts, was die Matrix ihm nicht gibt. Gäste sind
+//     Außenstehende; der Log-Modus ist für die Umstellung der Mitglieder da,
+//     nicht dafür, dass ein Gast Aufgaben erledigt, Abläufe anlegt oder Wissen
+//     ändert.
+//   - Wissen freigeben (verified) ohne Prüfrecht. Die Freigabe ist wie die eines
+//     Ablaufs ein Sicherheitsmerkmal: freigegebenes Wissen bekommen Agenten als
+//     geprüft geliefert.
+//
+// Lesen bleibt im Log-Modus offen, wie bisher.
+func strictDenial(rank int, act Action) bool {
+	if act == ActVerify {
+		return true
+	}
+	return rank == 1 && act != ActRead
+}
+
 // decideGlobal: "global" heißt "überall für mich". Wissen, Aufträge und
 // Dokumente ohne Projekt (und ohne Maschine) gehören allein ihrem Autorenkonto,
 // auch der Instanz-Admin hat keinen Sonderblick. Anlegen darf jedes Konto.
 // Sessions ohne Projekt gehören ihrem Besitzer.
 func (a *ProjectAccess) decideGlobal(res Resource, act Action, obj Object) Decision {
 	switch res {
+	case ResRunbook:
+		// Ein Ablauf ohne Projekt und Maschine gehört allein seinem Autor, auch
+		// für die Freigabe: es gibt niemanden sonst, der ihn lesen dürfte.
+		if act == ActCreate || obj.Own {
+			return Decision{Allowed: true}
+		}
+		return Decision{Hidden: true, Reason: "global runbook of another author"}
 	case ResKnowledge, ResRequest, ResDocument:
 		if act == ActCreate {
 			return Decision{Allowed: true}
@@ -578,7 +723,27 @@ func (a *ProjectAccess) Check(project string, res Resource, act Action, obj Obje
 // -------- Hilfen je Ressource
 
 func knowledgeObject(a *ProjectAccess, k Knowledge) Object {
-	obj := Object{Own: a.ownsKnowledge(k), Confidence: k.Confidence, Machine: k.Scope.Machine, EntryID: k.ID}
+	obj := Object{Own: a.ownsKnowledge(k), Confidence: k.Confidence, EntryID: k.ID, HeldAuthor: a.heldAuthor(HeldKnowledge, k.ID)}
+	// Die Maschinen-Achse gibt es nur ohne Projekt; mit Projekt ist die Maschine
+	// Zuordnung und lässt Besitz und Freigaben der Maschine außen vor.
+	if k.Scope.Machine != "" && k.Scope.Project == "" {
+		obj.Machine = k.Scope.Machine
+		obj.SharedOrgs = a.sharedOrgsOf(EntryKnowledge, k.ID, k.Scope.Machine)
+		// Eine Org zählt nur, wenn der Autor über genau sie schreiben darf.
+		if len(obj.SharedOrgs) > 0 {
+			ok := a.entitledSharedOrgs(k.Scope.Machine, a.st.knowledgeAuthorID(k.ID), obj.SharedOrgs)
+			obj.Unentitled = withoutOrgs(obj.SharedOrgs, ok)
+		}
+		if k.ID == 0 {
+			// Anlegen: gilt die Freigabe, die der Schreiber mitschickt, soweit er
+			// über diese Org freigeben darf (mayShareOnCreate).
+			for _, org := range k.ShareOrgIDs {
+				if a.mayShareOnCreate(k.Scope.Machine, org) {
+					obj.SharedOrgs = append(obj.SharedOrgs, org)
+				}
+			}
+		}
+	}
 	if ref := knowledgeHeldRef(k); ref != "" {
 		_, obj.OriginOwner = a.heldOrigin(ref)
 	}
@@ -595,9 +760,29 @@ func (a *ProjectAccess) knowledgeHeld(k Knowledge) bool {
 	return held
 }
 
+// heldAuthor: the entry is held back and the viewer is its author.
+func (a *ProjectAccess) heldAuthor(kind string, id int64) bool {
+	a.heldOnce.Do(func() { a.held = a.st.heldIndex() })
+	author, ok := a.held[kind][id]
+	return ok && a.valid && a.account != 0 && author == a.account
+}
+
+// heldBack: the entry is held back since its project came into existence
+// (held_entries) and the viewer is not its author. Like every read rule it
+// refuses only with enforcement; without, it logs what it would refuse.
+func (a *ProjectAccess) heldBack(kind string, id int64, project string, res Resource) bool {
+	a.heldOnce.Do(func() { a.held = a.st.heldIndex() })
+	author, ok := a.held[kind][id]
+	if !ok || (a.valid && a.account != 0 && author == a.account) {
+		return false
+	}
+	d := Decision{Hidden: true, Reason: "held until a reviewer of the project releases it"}
+	return !a.st.accessCfg().apply(a.principal.ID, project, res, ActRead, d)
+}
+
 // CanSeeKnowledge: Lesefilter für Listen, Suche und Bootstrap.
 func (a *ProjectAccess) CanSeeKnowledge(k Knowledge) bool {
-	if a.knowledgeHeld(k) {
+	if a.knowledgeHeld(k) || a.heldBack(HeldKnowledge, k.ID, k.Scope.Project, ResKnowledge) {
 		return false
 	}
 	return a.Allow(k.Scope.Project, ResKnowledge, ActRead, knowledgeObject(a, k))
@@ -607,7 +792,7 @@ func (a *ProjectAccess) CanSeeKnowledge(k Knowledge) bool {
 // Vertrauensstufe, darunter vielleicht nie freigegebene. Er gilt deshalb wie ein
 // Eintrag der untersten Stufe: ab member, nicht für Gäste.
 func (a *ProjectAccess) CanSeeKnowledgeHistory(k Knowledge) bool {
-	if a.knowledgeHeld(k) {
+	if a.knowledgeHeld(k) || a.heldBack(HeldKnowledge, k.ID, k.Scope.Project, ResKnowledge) {
 		return false
 	}
 	obj := knowledgeObject(a, k)
@@ -617,7 +802,7 @@ func (a *ProjectAccess) CanSeeKnowledgeHistory(k Knowledge) bool {
 
 // CheckKnowledge prüft eine Aktion auf einen vorhandenen Eintrag.
 func (a *ProjectAccess) CheckKnowledge(k Knowledge, act Action) error {
-	if a.knowledgeHeld(k) {
+	if a.knowledgeHeld(k) || a.heldBack(HeldKnowledge, k.ID, k.Scope.Project, ResKnowledge) {
 		return ErrAccessNotFound
 	}
 	return a.Check(k.Scope.Project, ResKnowledge, act, knowledgeObject(a, k))
@@ -626,6 +811,18 @@ func (a *ProjectAccess) CheckKnowledge(k Knowledge, act Action) error {
 // CheckKnowledgeCreate prüft das Anlegen; ein Eintrag mit confidence=verified
 // braucht zusätzlich das Verified-Recht.
 func (a *ProjectAccess) CheckKnowledgeCreate(k Knowledge) error {
+	if k.Scope.Machine != "" && k.Scope.Project == "" {
+		// Ohne Verwaltungsrecht über die Maschine bleibt jede Org, über die der
+		// Schreiber nicht schreiben darf, eine Verweigerung, kein stilles Weglassen.
+		a.loadMachines()
+		if a.machineLevel(k.Scope.Machine, nil) != levelManage {
+			for _, org := range k.ShareOrgIDs {
+				if !a.mayShareOnCreate(k.Scope.Machine, org) {
+					return ErrAccessForbidden
+				}
+			}
+		}
+	}
 	obj := knowledgeObject(a, k)
 	obj.Own = true
 	if err := a.Check(k.Scope.Project, ResKnowledge, ActCreate, obj); err != nil {
@@ -666,6 +863,13 @@ func (a *ProjectAccess) CanSeeProject(project string, res Resource) bool {
 	return a.Allow(project, res, ActRead, Object{})
 }
 
+// CanReadProjectRoom: darf der Aufrufer lesen, was im Raum des Projekts gesagt wird?
+// Dieselbe Regel wie die Raum-Seite (Rang Mitglied aufwärts, nicht der Gast-Lesezugriff
+// ResRoom); sie gilt unabhängig vom Zugriffsmodus, wie der Raum selbst.
+func (a *ProjectAccess) CanReadProjectRoom(project string) bool {
+	return a.st.CanReadProjectRoom(project, a.principal.ID)
+}
+
 // RequestFilter begrenzt eine Auftragssuche auf die Projekte, die der Aufrufer
 // lesen darf. Die Begrenzung steckt in der Abfrage (Seitengröße und Cursor
 // bleiben richtig) und gilt nur bei Durchsetzung; im Log-Modus bleibt die Suche
@@ -682,6 +886,8 @@ func (a *ProjectAccess) RequestFilter(f requestdomain.SearchFilter) requestdomai
 	// bleiben dem Besitzer dieser Session vorbehalten.
 	a.loadMachines()
 	f.HideHeld, f.HeldViewer, f.HeldInstanceOwner = true, a.account, a.owner
+	// Entries held since the project came into existence: only their author.
+	f.HideHeldEntries = true
 	return f
 }
 
@@ -693,6 +899,8 @@ func (a *ProjectAccess) NoteRequestHits(hits []requestdomain.SearchHit) {
 	}
 	for _, h := range hits {
 		a.Allow(h.Request.Scope.Project, ResRequest, ActRead, Object{})
+		// Held requests: logged like heldBack, as the filter would leave them out.
+		a.heldBack(HeldRequest, h.Request.ID, h.Request.Scope.Project, ResRequest)
 	}
 }
 
@@ -715,13 +923,15 @@ func (a *ProjectAccess) writersOf(project string) map[string]bool {
 
 // deliverable: der Autor ist im Projekt aktuell mindestens member. Ein leerer
 // Autor (Betreiberpfade wie der Distiller) zählt als vertrauenswürdig. Im
-// unbeanspruchten Projekt liefert der Aufrufer seine eigenen Einträge aus.
+// unbeanspruchten Projekt liefert der Aufrufer seine eigenen Einträge aus; auch
+// der Instanz-Admin darf dort fremde Einträge nur lesen, in den Kontext seiner
+// Agenten gelangen sie nicht.
 func (a *ProjectAccess) deliverable(project, author, confirmedBy string, verified bool) bool {
 	if project == "" || author == "" {
 		return true
 	}
 	if a.Unclaimed(project) {
-		return a.IsAuthor(author) || a.IsAdmin()
+		return a.IsAuthor(author)
 	}
 	w := a.writersOf(project)
 	if w[author] {
@@ -748,18 +958,31 @@ func (a *ProjectAccess) CanDeliverKnowledge(k Knowledge) bool {
 		}
 		return true
 	}
-	ok := a.deliverable(k.Scope.Project, k.Person, k.ConfirmedBy, k.Confidence == "verified")
-	// An entry with project AND machine needs both: the author is a writer of the
-	// project and owns the machine now.
-	if ok && k.Scope.Machine != "" {
-		ok = a.machineAuthorDelivers(k)
+	if a.heldBack(HeldKnowledge, k.ID, k.Scope.Project, ResDelivery) {
+		return false
 	}
-	return a.applyDelivery(k.Scope.Project, ok)
+	// Mit Projekt gilt allein die Auslieferungssperre des Projekts (der Autor ist
+	// dort jetzt Schreiber, #2581), auch wenn eine Maschine am Eintrag steht: sie
+	// ist Zuordnung, nicht Berechtigung.
+	return a.applyDelivery(k.Scope.Project, a.deliverable(k.Scope.Project, k.Person, k.ConfirmedBy, k.Confidence == "verified"))
 }
 
 // CanDeliverGhost: bei Ghost-Beschreibungen muss der Autor Schreibrecht haben.
 func (a *ProjectAccess) CanDeliverGhost(g GhostFile) bool {
 	return a.applyDelivery(g.Project, a.deliverable(g.Project, g.Person, "", false))
+}
+
+// CanDeliverFeature: ein Feature darf in den Hook-Kontext und die PR-Checkliste,
+// wenn die Schreiber aller seiner Fassungen im Projekt Schreibrecht haben (eine
+// spätere Fassung eines Mitglieds kann den Text einer früheren übernehmen). Ein
+// Fremder kann in einem unbeanspruchten Projekt Features anlegen; der Text
+// erreicht die Agenten des späteren Besitzers nicht.
+func (a *ProjectAccess) CanDeliverFeature(f feature.Feature) bool {
+	ok := a.deliverable(f.Project, f.VersionPerson, "", false) && a.deliverable(f.Project, f.Person, "", false)
+	for _, p := range f.VersionPersons {
+		ok = ok && a.deliverable(f.Project, p, "", false)
+	}
+	return a.applyDelivery(f.Project, ok)
 }
 
 // CanSeeGhost: Lesefilter für Ghost-Listen (der Autor sieht seine eigenen).
@@ -769,7 +992,18 @@ func (a *ProjectAccess) CanSeeGhost(g GhostFile) bool {
 
 // CanSeeDocument: Lesefilter für Dokumentlisten.
 func (a *ProjectAccess) CanSeeDocument(d Document) bool {
-	return a.Allow(d.Project, ResDocument, ActRead, Object{Own: a.IsAuthor(d.Person)})
+	if a.heldBack(HeldDocument, d.ID, d.Project, ResDocument) {
+		return false
+	}
+	return a.Allow(d.Project, ResDocument, ActRead, Object{Own: a.IsAuthor(d.Person), HeldAuthor: a.heldAuthor(HeldDocument, d.ID)})
+}
+
+// CheckDocument prüft eine Aktion auf ein vorhandenes Dokument.
+func (a *ProjectAccess) CheckDocument(d Document, act Action) error {
+	if a.heldBack(HeldDocument, d.ID, d.Project, ResDocument) {
+		return ErrAccessNotFound
+	}
+	return a.Check(d.Project, ResDocument, act, Object{Own: a.IsAuthor(d.Person), HeldAuthor: a.heldAuthor(HeldDocument, d.ID)})
 }
 
 // globalListResource: nur Wissen und Aufträge haben globale Einträge, die sich

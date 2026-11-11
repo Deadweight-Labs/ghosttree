@@ -206,9 +206,14 @@ func mergeDuplicateRequests(tx *sql.Tx) (int, []int64, error) {
 			continue
 		}
 		for _, stmt := range []string{
+			// Die Akteure (REQ-620) zuerst: ihre Ids hängen an den Zeilen darunter.
+			`DELETE FROM entry_actors WHERE kind IN ('request','request_done') AND entry_id=?`,
+			`DELETE FROM entry_actors WHERE kind='criterion' AND entry_id IN (SELECT id FROM request_criteria WHERE request_id=?)`,
+			`DELETE FROM entry_actors WHERE kind='reaction' AND entry_id IN (SELECT id FROM reactions WHERE object_kind='request' AND object_id=?)`,
 			`DELETE FROM request_activity WHERE request_id=?`,
 			`DELETE FROM request_criteria WHERE request_id=?`,
 			`DELETE FROM search_documents WHERE kind='request' AND domain_id=?`,
+			`DELETE FROM reactions WHERE object_kind='request' AND object_id=?`,
 			`DELETE FROM requests WHERE id=?`,
 		} {
 			if _, err := tx.Exec(stmt, r.id); err != nil {

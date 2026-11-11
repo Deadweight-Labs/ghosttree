@@ -73,6 +73,9 @@ func (s *Store) CreateThreadByRole(p Principal, t Thread) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := insertThreadEventTx(tx, id, ThreadEventOpened, p.Label, t.Title, t.GitAnchor); err != nil {
+		return 0, err
+	}
 	if _, err := tx.Exec(`INSERT INTO thread_homes(thread_id,room_key,anchor_message_id,created_at) VALUES(?,?,NULL,?)`, id, room, ts); err != nil {
 		return 0, err
 	}

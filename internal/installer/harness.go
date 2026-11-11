@@ -46,6 +46,10 @@ const (
 	// when a turn ends on an API or rate-limit error. It reports the same thing
 	// as Stop: the turn is over, so the agent is not stuck.
 	ChannelTurnFail Channel = "turn-fail"
+	// ChannelSubagentStart is SubagentStart: a subagent starts with only the
+	// prompt its parent wrote, and this hook puts a short ghosttree briefing in
+	// front of it (REQ-436). Claude Code only.
+	ChannelSubagentStart Channel = "subagent-start"
 	// ChannelMCP is the pull side. Every harness ghosttree supports has it, and
 	// it is the only channel that answers a question rather than anticipating
 	// one.
@@ -92,8 +96,10 @@ func Harnesses() []Harness {
 		{
 			Name:       "claude",
 			Components: append([]Component(nil), componentOrder...),
-			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelCoordInbox, ChannelTurnEnd, ChannelTurnFail, ChannelMCP},
-			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
+			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelCoordInbox, ChannelTurnEnd, ChannelTurnFail, ChannelSubagentStart, ChannelMCP},
+			// SubagentStart measured 2026-11-10 on Claude Code 2.1.319: the
+			// briefing stands in the subagent's transcript as context.
+			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelSubagentStart, ChannelMCP},
 			HooksPath:  func(home string) string { return filepath.Join(home, ".claude", "settings.json") },
 			RulePath:   func(home string) string { return filepath.Join(home, ".claude", "CLAUDE.md") },
 			SkillsRoot: func(home string) string { return filepath.Join(home, ".claude", "skills") },
@@ -208,7 +214,9 @@ func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok b
 		if h.Name == "codex" {
 			return "PreToolUse", withCtx(preToolHookCommand) + " --harness " + h.Name, "", true
 		}
-		return "PreToolUse", withCtx(preToolHookCommand) + " --harness " + h.Name, "Read|Edit|Write|NotebookEdit", true
+		// Bash gehört dazu: Abläufe (REQ-604) lösen an Befehlen aus, ohne Bash
+		// kamen sie in Claude Code nie an.
+		return "PreToolUse", withCtx(preToolHookCommand) + " --harness " + h.Name, "Read|Edit|Write|NotebookEdit|Bash", true
 	case ChannelPauseGate:
 		return "PreToolUse", withCtx(pauseGateHookCommand) + " --harness " + h.Name, "", true
 	case ChannelCoordInbox:
@@ -217,6 +225,8 @@ func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok b
 		return "Stop", withCtx(turnEndHookCommand) + " --harness " + h.Name, "", true
 	case ChannelTurnFail:
 		return "StopFailure", withCtx(turnEndHookCommand) + " --harness " + h.Name, "", true
+	case ChannelSubagentStart:
+		return "SubagentStart", withCtx(subagentHookCommand) + " --harness " + h.Name, "", true
 	}
 	return "", "", "", false
 }

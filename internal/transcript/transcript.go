@@ -451,8 +451,11 @@ type codexPayload struct {
 	Arguments string `json:"arguments"`
 	Input     string `json:"input"`
 	CallID    string `json:"call_id"`
-	Output    string `json:"output"`
-	Content   []struct {
+	// Output is a string, or a list of {type, text} parts in rollouts of the
+	// exec tool.
+	Output  json.RawMessage `json:"output"`
+	Item    json.RawMessage `json:"item"`
+	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
@@ -490,6 +493,13 @@ func parseCodex(seq int, raw string) Parsed {
 		// response_item, token_count and patch_apply_end are bookkeeping.
 		if p.Type == "user_message" && !noiseText(p.Message) {
 			add(Block{Kind: KindUser, Text: strings.TrimSpace(p.Message)})
+		}
+		// A command the exec tool ran: its output often appears nowhere else,
+		// because the tool's own output is what its script chose to print.
+		if p.Type == "item_completed" {
+			if b, ok := codexCommand(p.Item); ok {
+				add(b)
+			}
 		}
 	case "response_item":
 		switch p.Type {
@@ -564,8 +574,63 @@ func codexCall(p codexPayload) Block {
 	return b
 }
 
+// codexOutputText reads a tool output: a string, or the text parts of a list.
+func codexOutputText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &parts) != nil {
+		return ""
+	}
+	var texts []string
+	for _, p := range parts {
+		if p.Text != "" {
+			texts = append(texts, p.Text)
+		}
+	}
+	return strings.Join(texts, "\n")
+}
+
+// codexCommand reads a CommandExecution item: the command and its output in
+// one block.
+func codexCommand(raw json.RawMessage) (Block, bool) {
+	var it struct {
+		Type             string          `json:"type"`
+		ID               string          `json:"id"`
+		Command          json.RawMessage `json:"command"`
+		AggregatedOutput *string         `json:"aggregated_output"`
+		Stdout           *string         `json:"stdout"`
+		ExitCode         *int            `json:"exit_code"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &it) != nil || it.Type != "CommandExecution" {
+		return Block{}, false
+	}
+	var cmd string
+	if json.Unmarshal(it.Command, &cmd) != nil {
+		var argv []string
+		_ = json.Unmarshal(it.Command, &argv)
+		cmd = strings.Join(argv, " ")
+	}
+	b := Block{Kind: KindTool, Tool: "shell", Input: strings.TrimSpace(cmd), CallID: it.ID}
+	switch {
+	case it.AggregatedOutput != nil:
+		b.Output, b.HasOutput = strings.TrimRight(*it.AggregatedOutput, "\n"), true
+	case it.Stdout != nil:
+		b.Output, b.HasOutput = strings.TrimRight(*it.Stdout, "\n"), true
+	}
+	if c := it.ExitCode; c != nil && *c != 0 {
+		b.Failed, b.Status = true, "exit "+strconv.Itoa(*c)
+	}
+	return b, b.Input != "" || b.HasOutput
+}
+
 func codexResult(p codexPayload) Block {
-	out := p.Output
+	out := codexOutputText(p.Output)
 	// Older rollouts wrap the output in {"output": "...", "metadata": {...}}.
 	if strings.HasPrefix(out, "{") {
 		var wrapped struct {

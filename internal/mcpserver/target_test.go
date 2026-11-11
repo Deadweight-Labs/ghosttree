@@ -53,7 +53,8 @@ func targetFixture(t *testing.T) (*client.Client, *store.Store) {
 	_ = acme
 	_ = other
 	for _, p := range []struct{ who, remote string }{{"person:1", tgtHere}, {"person:1", tgtInfra}, {"person:2", tgtForeign}} {
-		if _, err := st.EnsureProject(p.who, p.remote); err != nil {
+		// A write alone claims nothing any more (REQ-623); the fixture claims.
+		if _, err := claimOrPlace(st, p.who, p.remote, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -163,7 +164,7 @@ func TestAProjectWithoutWriteRightLooksLikeOneThatDoesNotExist(t *testing.T) {
 
 func TestAmbiguousShortNameIsRefused(t *testing.T) {
 	c, st := targetFixture(t)
-	if _, err := st.EnsureProject("person:1", "gitlab.com/acme/infra"); err != nil {
+	if _, err := claimInOrg(st, "person:1", "gitlab.com/acme/infra"); err != nil {
 		t.Fatal(err)
 	}
 	s := targetServer(c, tgtHere)
@@ -194,16 +195,95 @@ func TestRememberForAMachineNoAgentEverRanOn(t *testing.T) {
 	if k := knowledgeNamed(t, st, "mainex fact"); k.Scope.Machine != "mainex" {
 		t.Errorf("scope = %+v", k.Scope)
 	}
-	// machine does not mix with another placement.
+	// A machine entry is not tied to a project, and a machine does not go with
+	// branch or global. Project plus machine is the one combination (a repository
+	// on a host); it has its own test below.
 	for _, in := range []RememberInput{
-		{ScopeHint: "project", Machine: "media-vm"},
+		{ScopeHint: "branch", Machine: "media-vm"},
 		{ScopeHint: "machine", Project: "infra"},
 		{ScopeHint: "global", Project: "infra"},
+		{ScopeHint: "global", Machine: "media-vm"},
 	} {
 		in.Type, in.Title, in.Body = "note", "mixed", "b"
 		if _, _, err := s.handleRemember(context.Background(), nil, in); err == nil {
 			t.Errorf("%+v was accepted", in)
 		}
+	}
+}
+
+// Knowledge about a repository on a host carries project AND machine (REQ-615,
+// decision #4349): scope_hint project plus machine. It stays a project entry, so
+// a session of the project reads it on any machine, marked with the machine.
+func TestRememberForAProjectOnAMachineTakesBothAxes(t *testing.T) {
+	c, st := targetFixture(t)
+	s := targetServer(c, tgtHere)
+	for _, in := range []RememberInput{
+		{Title: "deploy on build-1", ScopeHint: "project", Machine: "Build-1"},
+		{Title: "deploy on here", ScopeHint: "project", Machine: "here"},
+		{Title: "infra on build-2", ScopeHint: "project", Project: "infra", Machine: "build-2"},
+	} {
+		in.Type, in.Body = "pitfall", "run the deploy script as the service user"
+		if _, _, err := s.handleRemember(context.Background(), nil, in); err != nil {
+			t.Fatalf("%+v: %v", in, err)
+		}
+	}
+	if k := knowledgeNamed(t, st, "deploy on build-1"); k.Scope.Project != tgtHere || k.Scope.Machine != "build-1" || k.Scope.Branch != "" {
+		t.Errorf("scope = %+v, want project and machine", k.Scope)
+	}
+	if k := knowledgeNamed(t, st, "deploy on here"); k.Scope.Machine != "mainex" {
+		t.Errorf(`"here" is the session's machine: %+v`, k.Scope)
+	}
+	if k := knowledgeNamed(t, st, "infra on build-2"); k.Scope.Project != tgtInfra || k.Scope.Machine != "build-2" {
+		t.Errorf("another project on a machine: %+v", k.Scope)
+	}
+	// A session of the project on ANOTHER machine reads it, with the machine named
+	// in the briefing; a session on build-1 without the project does not.
+	md, err := c.Bootstrap(scope.Axes{Project: tgtHere, Machine: "laptop"}, activation.Context{}, 0, "")
+	if err != nil || !strings.Contains(md, "deploy on build-1") || !strings.Contains(md, "machine:build-1") {
+		t.Errorf("a session of the project on another machine: %v\n%s", err, md)
+	}
+	md, err = c.Bootstrap(scope.Axes{Machine: "build-1"}, activation.Context{}, 0, "")
+	if err != nil || strings.Contains(md, "deploy on build-1") {
+		t.Errorf("a session on the machine without the project is handed the project entry: %v\n%s", err, md)
+	}
+	// The write is refused without write access to the project, with or without a machine.
+	if _, _, err := s.handleRemember(context.Background(), nil, RememberInput{Type: "note", Title: "foreign", Body: "b", ScopeHint: "project", Project: "secret", Machine: "build-1"}); err == nil {
+		t.Error("project plus machine for a project without write access was accepted")
+	}
+	// share_with_orgs is the machine path only.
+	if _, _, err := s.handleRemember(context.Background(), nil, RememberInput{Type: "note", Title: "shared", Body: "b", ScopeHint: "project", Machine: "build-1", ShareWithOrgs: []string{"acme"}}); err == nil {
+		t.Error("share_with_orgs with a project was accepted")
+	}
+}
+
+// The tool descriptions carry the rule to the agent: knowledge that belongs to a
+// repository gets project AND machine, only what concerns the host alone gets the
+// machine without a project.
+func TestToolDescriptionsStateTheProjectAndMachineRule(t *testing.T) {
+	c, _ := targetFixture(t)
+	session := connect(t, targetServer(c, tgtHere))
+	listed, err := listRegistered(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := map[string]string{}
+	for _, tool := range listed.Tools {
+		schema, _ := json.Marshal(tool.InputSchema)
+		texts[tool.Name] = tool.Description + " " + string(schema)
+	}
+	for _, name := range []string{"context_remember", "runbook_write"} {
+		text, ok := texts[name]
+		if !ok {
+			t.Fatalf("tool %s is not registered", name)
+		}
+		for _, want := range []string{"BOTH", "host alone"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s: the rule lacks %q", name, want)
+			}
+		}
+	}
+	if !strings.Contains(texts["machine_get"], "role in the project") {
+		t.Error("machine_get does not say which entries the machine page lists")
 	}
 }
 
@@ -342,7 +422,7 @@ func TestMovingKnowledgeAndRequestsFromTheTools(t *testing.T) {
 func TestTargetFieldsAreOptionalInTheSchema(t *testing.T) {
 	c, _ := targetFixture(t)
 	session := connect(t, targetServer(c, tgtHere))
-	tools, err := session.ListTools(context.Background(), nil)
+	tools, err := listRegistered(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}

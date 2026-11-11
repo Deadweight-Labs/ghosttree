@@ -148,6 +148,8 @@ type JoinView struct {
 	Net     string
 	Nonce   string
 	Mode    string
+	// ClaimedAt: wann sich das Gerät gemeldet hat; null, solange keins da ist.
+	ClaimedAt time.Time
 	// Callback: Loopback-Weg, wenn die Sitzung kompromittiert ist; Ziel, auf das
 	// der Browser den wartenden Installer abbrechen lassen kann.
 	Callback string
@@ -727,6 +729,9 @@ func (j *JoinSessions) View(account string) JoinView {
 	}
 	v := JoinView{State: state, Pair: FormatUserCode(s.pair), Machine: s.machine, Remote: s.remote, Net: s.net,
 		Nonce: s.nonce, Mode: s.mode}
+	if !s.claimExpires.IsZero() {
+		v.ClaimedAt = s.claimExpires.Add(-JoinClaimTTL)
+	}
 	if state == JoinApproved && s.usesAuthCode() && s.authCode != "" {
 		v.Code = FormatAuthCode(s.authCode)
 		if s.mode == JoinModeLoopback {

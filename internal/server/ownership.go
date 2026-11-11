@@ -68,16 +68,28 @@ func ownerFilter(r *http.Request) string {
 }
 
 func (a *api) listMachines(w http.ResponseWriter, r *http.Request) {
+	// Maschinennamen sind Metadaten ihres Besitzers: mit Durchsetzung sieht jedes
+	// Konto die eigenen, die seiner Orgs und die an seine Orgs freigegebenen,
+	// der Instanz-Admin alle.
+	pa := a.access(r)
+	if a.st.AccessEnforced() && !pa.IsAdmin() {
+		machines, err := a.st.MachinesFor(principalOf(r).ID)
+		if err != nil {
+			writeStoreError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if r.URL.Query().Get("owner") == "me" {
+			machines = filterTo(machines, 0, func(m store.Machine) bool {
+				return m.Relation == store.RelOwner || m.Relation == store.RelMaintainer
+			})
+		}
+		writeJSON(w, http.StatusOK, machines)
+		return
+	}
 	machines, err := a.st.ListMachines(ownerFilter(r))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
-	}
-	// Maschinennamen sind Metadaten ihres Besitzers: mit Durchsetzung sieht jedes
-	// Konto die eigenen, der Instanz-Admin alle.
-	if pa := a.access(r); a.st.AccessEnforced() && !pa.IsAdmin() {
-		me := principalOf(r).ID
-		machines = filterTo(machines, 0, func(m store.Machine) bool { return m.AccountID == me })
 	}
 	writeJSON(w, http.StatusOK, machines)
 }

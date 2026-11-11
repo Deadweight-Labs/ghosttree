@@ -61,6 +61,13 @@ func WithBuildVersion(version string) Option {
 	return func(a *api) { a.buildVersion = version }
 }
 
+// WithCapabilities adds capabilities to what /api/version reports on top of
+// the ones every build has (for example github_app, which depends on the
+// server's configuration).
+func WithCapabilities(caps ...string) Option {
+	return func(a *api) { a.extraCaps = append(a.extraCaps, caps...) }
+}
+
 func withRequestIDGenerator(generator requestIDGenerator) Option {
 	return func(a *api) { a.requestIDGenerator = generator }
 }
@@ -79,6 +86,7 @@ type api struct {
 	snapshotErrorLogger  snapshotErrorLogger
 	logger               *slog.Logger
 	buildVersion         string
+	extraCaps            []string
 	requestIDGenerator   requestIDGenerator
 	metrics              *metricsRegistry
 	registered           []string
@@ -98,6 +106,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
+	a.routeFunc(mux, "GET /api/version", a.versionInfo)
 	a.route(mux, "GET /metrics", a.metrics)
 	a.routeFunc(mux, "GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.whoAmI(r))
@@ -119,12 +128,18 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "DELETE /api/orgs/{org}/invitations/{id}", a.revokeOrgInvitation)
 	a.routeFunc(mux, "POST /api/invitations/accept", a.acceptInvitation)
 	a.routeFunc(mux, "PUT /api/account/default-org", a.setDefaultOrg)
+	a.routeFunc(mux, "GET /api/garden/due", a.gardenDue)
+	a.routeFunc(mux, "POST /api/garden/runs", a.gardenRunStart)
+	a.routeFunc(mux, "POST /api/garden/runs/{id}/finish", a.gardenRunFinish)
 	a.routeFunc(mux, "GET /api/projects", a.listProjects)
 	a.routeFunc(mux, "GET /api/projects/writable", a.writableProjects)
 	a.routeFunc(mux, "GET /api/projects/{id}/members", a.listProjectMembers)
 	a.routeFunc(mux, "PUT /api/projects/{id}/members/{account}", a.setProjectMemberRole)
 	a.routeFunc(mux, "DELETE /api/projects/{id}/members/{account}", a.removeProjectMemberRole)
 	a.routeFunc(mux, "POST /api/projects/claim", a.claimProject)
+	a.routeFunc(mux, "POST /api/projects/reassign", a.reassignProject)
+	a.routeFunc(mux, "GET /api/projects/held", a.listHeldEntries)
+	a.routeFunc(mux, "POST /api/projects/held", a.decideHeldEntry)
 	a.routeFunc(mux, "POST /api/projects", a.createProject)
 	a.routeFunc(mux, "POST /api/projects/move", a.moveProject)
 	a.routeFunc(mux, "POST /api/context-snapshots", a.createContextSnapshot)
@@ -132,8 +147,10 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "GET /api/context-snapshots/{name}", a.getContextSnapshot)
 	a.routeFunc(mux, "GET /api/context-snapshots/{name}/entries", a.contextSnapshotEntries)
 	a.routeFunc(mux, "POST /api/sessions", a.createSession)
+	a.routeFunc(mux, "POST /api/tool-uses", a.recordToolUses)
 	a.routeFunc(mux, "GET /api/sessions", a.listSessions)
 	a.routeFunc(mux, "GET /api/machines", a.listMachines)
+	a.registerMachineRoutes(mux)
 	a.routeFunc(mux, "POST /api/sessions/{id}/chunks", a.appendChunks)
 	a.routeFunc(mux, "GET /api/sessions/{id}/raw", a.rawSession)
 	a.routeFunc(mux, "PUT /api/sessions/{id}/share", a.shareSession)
@@ -153,6 +170,19 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "POST /api/requests/{id}/move", a.moveRequest)
 	a.routeFunc(mux, "DELETE /api/request-relations/{id}", a.removeRequestRelation)
 	a.registerPainTaskRoutes(mux)
+	a.registerPackageRoutes(mux)
+	a.registerPullRoutes(mux)
+	a.registerCommitRoutes(mux)
+	a.registerRefRoutes(mux)
+	a.registerCommentRoutes(mux)
+	a.registerReactionRoutes(mux)
+	a.registerActorRoutes(mux)
+	a.registerInboxRoutes(mux)
+	a.registerRequestCountRoutes(mux)
+	a.registerLabelRoutes(mux)
+	a.registerIdeaWorkshopRoutes(mux)
+	a.registerFeatureRoutes(mux)
+	a.registerRunbookRoutes(mux)
 	a.routeFunc(mux, "POST /api/knowledge", a.createKnowledge)
 	a.routeFunc(mux, "GET /api/knowledge", a.listKnowledge)
 	a.routeFunc(mux, "GET /api/knowledge/pending", a.pendingKnowledge)
@@ -287,7 +317,7 @@ func fallbackOperationID() string {
 
 func (a *api) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/health" || r.URL.Path == "/metrics" || (r.Method == http.MethodPost && isDevicePath(r.URL.Path)) {
+		if r.URL.Path == "/api/health" || r.URL.Path == "/api/version" || r.URL.Path == "/metrics" || (r.Method == http.MethodPost && isDevicePath(r.URL.Path)) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -302,7 +332,9 @@ func (a *api) auth(next http.Handler) http.Handler {
 			record.actor = principal.Label
 		}
 		ctx := context.WithValue(r.Context(), personKey{}, principal)
-		next.ServeHTTP(w, r.WithContext(withAccessHolder(ctx, a.st, principal)))
+		r = r.WithContext(withAccessHolder(ctx, a.st, principal))
+		movedProjects(r)
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -342,6 +374,16 @@ func axesFromQuery(r *http.Request) scope.Axes {
 		Lineage:   q["lineage"],
 		AnyBranch: q.Get("any_branch") == "1",
 	})
+}
+
+// guestAxes is axesFromQuery for lists a guest may read: a guest gets no
+// machine filter, it would tell a machine with entries from one without.
+func (a *api) guestAxes(r *http.Request) scope.Axes {
+	ax := axesFromQuery(r)
+	if a.access(r).IsProjectGuest(ax.Project) {
+		ax.Machine = ""
+	}
+	return ax
 }
 
 func intParam(r *http.Request, name string, def int) int {
@@ -405,5 +447,9 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 
 func readJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
-	return json.NewDecoder(r.Body).Decode(v)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		return err
+	}
+	movedProjectFields(r, v)
+	return nil
 }

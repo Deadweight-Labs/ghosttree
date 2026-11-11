@@ -77,6 +77,16 @@ func RelPath(kind, createdAt, slug string) (string, error) {
 	return filepath.ToSlash(filepath.Join(dir, day+"-"+slug+".md")), nil
 }
 
+// MaxBodyBytes is the largest text a document revision may have. The server
+// refuses more, and ctx doc says so before it sends anything.
+const MaxBodyBytes = 5 << 20
+
+// TooLarge is the one wording of a text over MaxBodyBytes, for the server's
+// answer and the CLI alike.
+func TooLarge(n int) error {
+	return fmt.Errorf("the document has %.1f MB; a document may have at most %d MB", float64(n)/(1<<20), MaxBodyBytes>>20)
+}
+
 func ValidateSlug(slug string) error {
 	if !slugPattern.MatchString(slug) || reservedWindowsNames[strings.Split(slug, ".")[0]] {
 		return fmt.Errorf("invalid slug %q; use lowercase ASCII letters, digits, dots and hyphens", slug)

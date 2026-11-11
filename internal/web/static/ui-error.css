@@ -1,0 +1,23 @@
+/* Error pages in the shell: icon in a circle, the code in mono, a heading, one
+   sentence and one or two ways back. Mock: git-native-v2 404.html, toolarge.html. */
+
+:is(.g2.err) {
+  & .errbox { display: flex; flex-direction: column; align-items: center; max-width: 544px; margin: 48px auto 0; text-align: center; }
+  & .erricon { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; color: var(--fg-muted); background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 50%; }
+  & .erricon .i { width: 24px; height: 24px; }
+  & .errcode { margin: 16px 0 0; font: 12px var(--ui-mono); letter-spacing: .1em; color: var(--fg-subtle); }
+  & .errbox h1 { margin-top: 8px; font-size: 24px; font-weight: 400; line-height: 1.25; }
+  & .errtext { margin-top: 8px; color: var(--fg-muted); font-size: 14px; }
+  & .erracts { display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 24px; }
+}
+@media (max-width: 767px) {
+  :is(.g2.err) .errbox { margin-top: 24px; }
+}
+
+/* A form that was not accepted and has no page to go back to (formfail.go): the note, what was typed, the way back. */
+:is(.g2.err) {
+  & .formfailed { max-width: 720px; margin: 24px auto 0; }
+  & .formfailed .pfield { margin-bottom: 16px; }
+  & .formfailed textarea { width: 100%; }
+  & .formfailed .erracts { justify-content: flex-start; margin-top: 0; }
+}

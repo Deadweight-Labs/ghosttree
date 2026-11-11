@@ -2,9 +2,11 @@ package web
 
 import (
 	"fmt"
+	"html"
 	"html/template"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -65,7 +67,32 @@ func (l lang) msg(key string, args ...any) string {
 	if len(args) == 0 {
 		return text
 	}
+	if one, ok := l.singular(key, args[0]); ok {
+		if !strings.Contains(one, "%") {
+			return one
+		}
+		text = one
+	}
 	return fmt.Sprintf(text, args...)
+}
+
+// singular is the text of key for exactly one thing, if the catalog has one under
+// key+"_one": "1 Token" instead of "1 Tokens". The first argument is the count.
+func (l lang) singular(key string, first any) (string, bool) {
+	switch n := first.(type) {
+	case int:
+		if n != 1 {
+			return "", false
+		}
+	case int64:
+		if n != 1 {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	text, ok := catalogs[l][key+"_one"]
+	return text, ok
 }
 
 var (
@@ -88,6 +115,14 @@ func (l lang) date(t time.Time, withYear bool) string {
 	return s
 }
 
+// weekdayName is the short name of a weekday: "Mon" or "Mo".
+func (l lang) weekdayName(d time.Weekday) string {
+	if l != langDE {
+		return d.String()[:3]
+	}
+	return weekdaysDE[d]
+}
+
 // weekdayDate schreibt Wochentag und Datum: "Mon 2 Jan" bzw. "Mo 2. Jan".
 func (l lang) weekdayDate(t time.Time) string {
 	if l != langDE {
@@ -105,19 +140,54 @@ func (l lang) dateTime(t time.Time) string {
 // Vorlagen sind an ihre Sprache gebunden.
 func parseTemplates(l lang) *template.Template {
 	return template.Must(template.New("").Funcs(template.FuncMap{
-		"t":    l.msg,
-		"ago":  func(stamp string) template.HTML { return timeTag(l, stamp) },
-		"lbl":  func(group, value string) string { return adminLabel(l, group, value) },
-		"lang": func() string { return string(l) },
-		"lead": func(s string) string { return leadSentence(s, 200) },
-	}).ParseFS(files, "templates/*.html"))
+		"t":   l.msg,
+		"ago": func(stamp string) template.HTML { return timeTag(l, stamp) },
+		// agot writes a sentence around a time: the text of key has %s where the time goes.
+		"agot": func(key, stamp string) template.HTML {
+			return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), timeTag(l, stamp)))
+		},
+		// dict builds a map for a partial that needs the page and one row.
+		"dict": func(kv ...any) map[string]any {
+			m := map[string]any{}
+			for i := 0; i+1 < len(kv); i += 2 {
+				if k, ok := kv[i].(string); ok {
+					m[k] = kv[i+1]
+				}
+			}
+			return m
+		},
+		// mdblocks and md write the text of a person for the one Markdown renderer
+		// (ui-md.js): the blocks it was split into, or the text itself.
+		"mdblocks": mdBlocks,
+		"md":       mdText,
+		"lbl":      func(group, value string) string { return adminLabel(l, group, value) },
+		"lang":     func() string { return string(l) },
+		"lead":     func(s string) string { return leadSentence(s, 200) },
+		// lower writes an agent's name the way the mock does: claude, codex.
+		"lower": strings.ToLower,
+		// more is how many of n entries are left after the first k.
+		"more": func(n, k int) int { return n - k },
+	}).Funcs(identityFuncs(l)).Funcs(pillFuncs(l)).ParseFS(files, "templates/*.html"))
 }
 
-var pages = map[lang]*template.Template{langEN: parseTemplates(langEN), langDE: parseTemplates(langDE)}
+// pages are parsed when the first one is asked for, not when the package is
+// loaded: ctx is one binary, and a hook or a command that never serves a page
+// paid for both languages at every start. The server parses them before it
+// listens (parsePages), so a broken template still stops it at once.
+var pages = map[lang]func() *template.Template{
+	langEN: sync.OnceValue(func() *template.Template { return parseTemplates(langEN) }),
+	langDE: sync.OnceValue(func() *template.Template { return parseTemplates(langDE) }),
+}
+
+func parsePages() {
+	for _, parse := range pages {
+		parse()
+	}
+}
 
 func (l lang) page() *template.Template {
 	if p, ok := pages[l]; ok {
-		return p
+		return p()
 	}
-	return pages[langEN]
+	return pages[langEN]()
 }

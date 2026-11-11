@@ -88,7 +88,7 @@ func accountIsGuestOnlyTx(tx *sql.Tx, id int64) (bool, error) {
 	var guest bool
 	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM project_members WHERE account_id=? AND role='guest')
 		AND NOT EXISTS(SELECT 1 FROM project_members WHERE account_id=? AND role<>'guest')
-		AND NOT EXISTS(SELECT 1 FROM org_members WHERE account_id=? AND role='owner')
+		AND NOT EXISTS(SELECT 1 FROM org_members m JOIN orgs o ON o.id=m.org_id WHERE m.account_id=? AND m.role='owner' AND o.kind<>'user')
 		AND NOT EXISTS(SELECT 1 FROM persons WHERE id=? AND is_admin=1)`, id, id, id, id).Scan(&guest)
 	return guest, err
 }

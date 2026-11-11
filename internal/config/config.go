@@ -13,7 +13,28 @@ type Config struct {
 	ServerURL string `json:"server_url"`
 	Token     string `json:"token"`
 	Machine   string `json:"machine"` // default: os.Hostname()
+	// Channel is the update channel, "stable" or "dev"; empty means stable.
+	// REQ-610 (several servers): it becomes a per-profile field then, and this
+	// top-level value stays the fallback for the default server, so an existing
+	// config.json keeps its meaning.
+	Channel string `json:"channel,omitempty"`
 }
+
+const (
+	ChannelStable = "stable"
+	ChannelDev    = "dev"
+)
+
+// UpdateChannel is the channel with the default applied.
+func (c Config) UpdateChannel() string {
+	if c.Channel == ChannelDev {
+		return ChannelDev
+	}
+	return ChannelStable
+}
+
+// ValidChannel reports whether s names an update channel.
+func ValidChannel(s string) bool { return s == ChannelStable || s == ChannelDev }
 
 func Path() string {
 	if dir, err := os.UserConfigDir(); err == nil {

@@ -49,7 +49,7 @@ func TestRequestPagesFindByMeaningNeverReachAHiddenProjectAndPage(t *testing.T) 
 		}
 	}
 	const search = "/ui/search?q=auto+defekt"
-	const list = "/ui/requests?state=all&q=auto+defekt"
+	const list = "/ui/x/shell/issues?q=is%3Aall+auto+defekt"
 	_, before := fetchPage(t, e.Owner, e.Base+search)
 	if strings.Contains(before, "Wagen Nr") {
 		t.Fatalf("without embeddings the words of the query do not match a request:\n%s", before)
@@ -65,7 +65,8 @@ func TestRequestPagesFindByMeaningNeverReachAHiddenProjectAndPage(t *testing.T) 
 			if !strings.Contains(page, "Wagen Nr") {
 				t.Errorf("%s %s: no request is found by its meaning:\n%s", name, path, page)
 			}
-			if hidden := strings.Contains(page, "SECRET"); hidden != (name == "owner") {
+			// The search runs over every project the viewer sees, the list over one repository.
+			if hidden := strings.Contains(page, "SECRET"); hidden != (name == "owner" && path == search) {
 				t.Errorf("%s %s: sees the hidden project's request = %v", name, path, hidden)
 			}
 		}
@@ -74,7 +75,7 @@ func TestRequestPagesFindByMeaningNeverReachAHiddenProjectAndPage(t *testing.T) 
 	// The request page shows at most five requests found by meaning alone, and its
 	// "older" link, which carries a position, is followed.
 	_, page := fetchPage(t, e.Member, e.Base+list)
-	if got := strings.Count(page, `href="/ui/requests/`); got == 0 || got > maxSemanticRows {
+	if got := strings.Count(page, `class="title rl" href="/ui/x/shell/issues/`); got == 0 || got > maxSemanticRows {
 		t.Fatalf("%d requests on a page of a search that found them by meaning alone", got)
 	}
 
@@ -86,7 +87,7 @@ func TestRequestPagesFindByMeaningNeverReachAHiddenProjectAndPage(t *testing.T) 
 	}
 	// A cursor of a ranked search that reaches a page that cannot rank is not
 	// thrown away as an invalid id: it is a position.
-	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/requests?state=all&q=auto+defekt&cursor=~3"); code != http.StatusOK {
+	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/shell/issues?q=is%3Aall+auto+defekt&cursor=~3"); code != http.StatusOK {
 		t.Fatalf("status %d for a ranked cursor", code)
 	}
 }

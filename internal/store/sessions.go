@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 
-	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/slim"
 )
 
 type Session struct {
@@ -70,6 +72,11 @@ type Chunk struct {
 	Role string `json:"role"` // user|assistant|other
 	Text string `json:"text"` // extracted text ('' if not understood); redacted again on arrival
 	Raw  string `json:"raw"`  // full JSONL line; redacted again on arrival, images replaced
+
+	// Stored ist Raw, wie es in die Datenbank geht (rawcodec: string oder
+	// gepackter Rahmen). AppendChunks setzt es außerhalb des Schreibers; was ein
+	// Aufrufer hineinschreibt, wird überschrieben. Nie auf dem Draht.
+	Stored any `json:"-"`
 }
 
 type ChunkBatch struct {
@@ -122,38 +129,60 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrSessionCollision
 	}
-	return id, err
+	if err != nil {
+		return 0, err
+	}
+	// Stempel, die vor dem ersten Upload geschrieben wurden (REQ-620), bekommen
+	// jetzt ihre Session. Ein Fehler hier lässt sie offen, der Upload gilt.
+	_ = bindPendingActorsTx(s.db, id, account, sess.ExternalID, sess.Harness, sess.Scope.Machine)
+	return id, nil
 }
 
 // sanitizeChunks ersetzt base64-Nutzlasten in Raw durch Platzhalter
-// (blobstrip) und schwärzt Geheimnisse in Text und Raw (redact). Raw ist eine
-// JSON-Zeile und wird als solche geschwärzt, sie bleibt gültiges JSON. Das
-// geschieht hier und nicht nur im Sammler, damit auch ältere Clients nichts
-// Ungeschwärztes ablegen. Die Bilder gehen zuerst, damit die Schwärzung sie
-// nicht durchsuchen muss.
+// (blobstrip), schwärzt Geheimnisse in Text und Raw (redact) und lässt dann
+// Kopien und Ballast weg (slim). Gepackt wird danach (packChunks). Raw ist eine JSON-Zeile und wird als solche geschwärzt, sie bleibt
+// gültiges JSON. Das geschieht hier und nicht nur im Sammler, damit auch ältere
+// Clients nichts Ungeschwärztes ablegen. Die Bilder gehen zuerst, damit die
+// Schwärzung sie nicht durchsuchen muss.
+//
+// Geschlankt wird nach dem Schwärzen: das Kürzen langer Ausgaben darf weder
+// base64 anschneiden (sonst erkennt blobstrip das Bild nicht) noch ein
+// Geheimnis, das die Schwärzung nur vollständig erkennt (ein privater Schlüssel
+// zwischen BEGIN und END). Neue Clients haben die Regel schon angewandt, dann
+// ändert sich nichts; für ältere geschieht es hier. Eine weggelassene Zeile
+// behält ihre Nummer, die Folge hat dort eine Lücke.
 //
 // Es läuft im Aufrufer, vor der Warteschlange des Schreibers: der Schreiber ist
 // ein einzelner Goroutine, und das Parsen und Durchsuchen eines mehrere MB
 // großen Chunks gehört nicht auf seine Zeit. Der übergebene Schnitt bleibt
-// unverändert.
+// unverändert; zurück kommt immer ein neuer.
 func sanitizeChunks(in []Chunk) []Chunk {
-	var out []Chunk
+	out := make([]Chunk, 0, len(in))
 	for i := range in {
-		raw, _ := blobstrip.Strip(in[i].Raw)
-		raw = redact.RedactJSON(raw)
-		text := redact.Redact(in[i].Text)
-		if raw == in[i].Raw && text == in[i].Text {
+		raw, keep := sanitizeRaw(in[i].Raw)
+		if !keep {
 			continue
 		}
-		if out == nil {
-			out = append([]Chunk(nil), in...)
-		}
-		out[i].Raw, out[i].Text = raw, text
-	}
-	if out == nil {
-		return in
+		c := in[i]
+		// text wird wie lange Ausgaben in raw gekürzt: die Suche über
+		// chunk_index sieht ohnehin nur 8 KB je Feld, und der Destiller zitiert
+		// aus dem, was er bekommt (REQ-622).
+		text, _ := slim.Cap(redact.Redact(in[i].Text))
+		c.Raw, c.Text, c.Stored = raw, text, nil
+		out = append(out, c)
 	}
 	return out
+}
+
+// packChunks setzt Stored: Raw, wie es gespeichert wird. Beim Server läuft es
+// in admitChunks auf dem Aufrufer (chunkPack), sonst vor der Transaktion in
+// appendChunkBatches.
+func packChunks(chunks []Chunk, enc *rawcodec.Encoder) {
+	for i := range chunks {
+		if chunks[i].Stored == nil {
+			chunks[i].Stored = enc.Encode(chunks[i].Raw)
+		}
+	}
 }
 
 func (s *Store) AppendChunks(sessionID int64, chunks []Chunk) error {
@@ -192,6 +221,16 @@ func (s *Store) appendChunkBatches(batches []ChunkBatch) error {
 	if len(batches) == 0 {
 		return nil
 	}
+	// Vor der Transaktion: der Encoder sieht nach einem neuen Wörterbuch über
+	// s.db, und beim Schreiber ist das dieselbe einzige Verbindung.
+	var enc *rawcodec.Encoder
+	for _, b := range batches {
+		for _, c := range b.Chunks {
+			if c.Stored == nil && enc == nil {
+				enc = s.rawEncoder()
+			}
+		}
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -216,7 +255,7 @@ func (s *Store) appendChunkBatches(batches []ChunkBatch) error {
 		}
 		sessions[batch.SessionID] = struct{}{}
 	}
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO session_chunks(session_id, seq, role, text, raw) VALUES(?,?,?,?,?)`)
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO session_chunks(session_id, seq, role, text, raw, slim_version) VALUES(?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -232,7 +271,11 @@ func (s *Store) appendChunkBatches(batches []ChunkBatch) error {
 			harness[batch.SessionID] = h
 		}
 		for _, c := range batch.Chunks {
-			res, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, c.Text, c.Raw)
+			stored := c.Stored
+			if stored == nil {
+				stored = enc.Encode(c.Raw)
+			}
+			res, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, c.Text, stored, slim.Version)
 			if err != nil {
 				return err
 			}
@@ -247,6 +290,9 @@ func (s *Store) appendChunkBatches(batches []ChunkBatch) error {
 		}
 	}
 	if err := indexChunks(tx, fresh); err != nil {
+		return err
+	}
+	if err := recordChunkModelsTx(tx, fresh); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -484,8 +530,12 @@ func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {
 	out := []Chunk{}
 	for rows.Next() {
 		var c Chunk
-		if err := rows.Scan(&c.Seq, &c.Role, &c.Text, &c.Raw); err != nil {
+		var raw rawcodec.Value
+		if err := rows.Scan(&c.Seq, &c.Role, &c.Text, &raw); err != nil {
 			return nil, err
+		}
+		if c.Raw, err = s.rawLine(raw); err != nil {
+			return nil, fmt.Errorf("session %d chunk %d: %w", id, c.Seq, err)
 		}
 		out = append(out, c)
 	}
@@ -507,9 +557,13 @@ func (s *Store) SessionRaw(id int64) ([]string, error) {
 	defer rows.Close()
 	out := []string{}
 	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
+		var v rawcodec.Value
+		if err := rows.Scan(&v); err != nil {
 			return nil, err
+		}
+		raw, err := s.rawLine(v)
+		if err != nil {
+			return nil, fmt.Errorf("session %d: %w", id, err)
 		}
 		out = append(out, raw)
 	}
@@ -591,23 +645,24 @@ func (s *Store) readableSessions(filter scope.Axes, keep func(Session) bool, pre
 // ftsSessionHits sind die Chunk-Treffer des Volltexts in der lesbaren Menge, beste
 // zuerst, ohne Ausschnitt und ohne Besitzer; cids sind die Chunk-Nummern dazu.
 func (s *Store) ftsSessionHits(q, excludeSession string, r readableSessions, pre SessionPrefilter, limit int) ([]SessionHit, []int64, error) {
-	args := append([]any{ftsQuery(q), excludeSession, excludeSession}, r.args...)
+	args := append(wordArgs(ftsQuery(q)), excludeSession, excludeSession)
+	args = append(args, r.args...)
 	args = append(args, limit)
 	// bm25 (f.rank) hängt vom ganzen Index ab, auch von verborgenen Sessions:
 	// wer nur eine Teilmenge lesen darf, bekommt die Reihenfolge allein aus
 	// der lesbaren Menge.
 	order := "h.r"
 	if !pre.Unrestricted && r.restricted {
-		order = "COUNT(*) OVER (PARTITION BY se.id) DESC, se.last_seen_at DESC, se.id DESC, c.seq"
+		order = "COUNT(*) OVER (PARTITION BY se.id) DESC, se.last_seen_at DESC, se.id DESC, ci.seq"
 	}
 	// snippet() liest den Text jeder Zeile, die es liefert: in der CTE liefe es
 	// für jeden Treffer des ganzen Index. Sie führt nur Zeile und Rang; den
 	// Ausschnitt gibt es danach für die höchstens limit Ergebniszeilen.
-	rows, err := s.db.Query(`WITH h AS MATERIALIZED (SELECT rowid AS cid, rank AS r FROM chunks_fts WHERE chunks_fts MATCH ?)
-		SELECT `+prefix(sessionCols, "se.")+`, c.seq, h.cid
+	rows, err := s.db.QueryContext(s.ctx(), `WITH h AS MATERIALIZED (`+wordHits("rank")+`)
+		SELECT `+prefix(sessionCols, "se.")+`, ci.seq, h.rid
 		FROM h
-		JOIN session_chunks c ON c.id = h.cid
-		JOIN sessions se ON se.id = c.session_id
+		JOIN chunk_index ci ON ci.chunk_id = h.rid
+		JOIN sessions se ON se.id = ci.session_id
 		WHERE (? = '' OR se.external_id != ?) AND `+r.where+`
 		ORDER BY `+order+` LIMIT ?`, args...)
 	if err != nil {
@@ -637,23 +692,12 @@ func (s *Store) sessionSnippets(q string, out []SessionHit, cids []int64) error 
 	if len(cids) == 0 {
 		return nil
 	}
-	snips := map[int64]string{}
-	// Je Treffer ein Punktzugriff über rowid; ein IN über json_each nutzte
-	// den FTS5-Index nicht und führte MATCH noch einmal über alles aus.
-	for _, cid := range cids {
-		if _, done := snips[cid]; done {
-			continue
-		}
-		var snip string
-		err := s.db.QueryRow(`SELECT snippet(chunks_fts, 0, '', '', '…', 12) FROM chunks_fts
-			WHERE rowid=? AND chunks_fts MATCH ?`, cid, ftsQuery(q)).Scan(&snip)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		snips[cid] = snip
+	snips, err := s.chunkSnippets(s.ctx(), ftsQuery(q), cids, "\x02", "\x03", 12)
+	if err != nil {
+		return err
 	}
 	for i := range out {
-		out[i].Snippet = snips[cids[i]]
+		out[i].Snippet = plainSnippet(snips[cids[i]])
 	}
 	return nil
 }

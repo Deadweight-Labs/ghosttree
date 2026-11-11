@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,6 +29,10 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey string   `json:"idempotency_key"`
 		Criteria       []string `json:"criteria"`
 		Explanation    string   `json:"explanation"`
+		// Parent ist der Eltern-Issue (REQ-n), DerivedFrom sind die Quellen
+		// („Entstanden aus“: IDEA-n, PAIN-n, REQ-n, thread:n).
+		Parent      string   `json:"parent"`
+		DerivedFrom []string `json:"derived_from"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -50,6 +55,19 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Ein Token-Aufruf ist nie ein Mensch (REQ-620): "human" als Herkunft gibt es
+	// nur aus der Weboberfläche, die den Store direkt ruft.
+	if body.Origin == "human" && principalOf(r).TokenKind != store.WebSessionKind {
+		body.Origin = "agent"
+	}
+	links, err := a.access(r).ResolveRequestLinks(scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project, body.Parent, body.DerivedFrom)
+	if err != nil {
+		if denyAccess(w, err) {
+			return
+		}
+		writeRequestError(w, err)
+		return
+	}
 	detail, err := a.st.CreateRequest(requestdomain.CreateInput{
 		Request: requestdomain.Request{
 			Type: body.Type, Title: body.Title, Description: body.Description, Priority: body.Priority,
@@ -57,6 +75,7 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 			Origin: body.Origin, Person: personOf(r), SessionRef: body.SessionRef,
 		},
 		Criteria: body.Criteria, IdempotencyKey: body.IdempotencyKey, AuthorID: authorIDOf(r),
+		GitAnchor: anchorFromRequest(r), Origin: a.originFor(r, body.SessionRef), Links: links,
 	})
 	if err != nil {
 		writeRequestError(w, err)
@@ -65,6 +84,7 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 	if !detail.Replayed {
 		a.saveExplanation(explain.KindRequest, detail.Request.ID, explanation)
 	}
+	a.stampActor(r, actor.Request, detail.Request.ID, 0)
 	writeJSON(w, http.StatusCreated, a.access(r).RequestDetailView(detail))
 }
 
@@ -73,9 +93,18 @@ func (a *api) searchRequests(w http.ResponseWriter, r *http.Request) {
 	if !a.listGate(w, r, axesFromQuery(r).Project, store.ResRequest) {
 		return
 	}
+	anchor, ok := anchorFilterFromQuery(w, r)
+	if !ok {
+		return
+	}
+	origin, ok := originFilterFromQuery(w, r)
+	if !ok {
+		return
+	}
 	page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{
-		Scope: axesFromQuery(r), Query: q.Get("q"), State: q.Get("state"),
+		Scope: a.guestAxes(r), Query: q.Get("q"), State: q.Get("state"),
 		Type: q.Get("type"), Cursor: q.Get("cursor"), Limit: intParam(r, "limit", 10),
+		Commit: anchor.Commit, PR: anchor.PR, Origin: origin,
 		// Nur für Aufrufer, die den ganzen Text zeigen — der Dateispiegel. Eine
 		// Trefferliste bleibt eine Trefferliste.
 		FullDescription: q.Get("full") == "1",
@@ -126,11 +155,12 @@ func (a *api) completeRequest(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, id, store.ActEdit) {
 		return
 	}
-	err := a.st.CompleteRequest(id, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r)})
+	err := a.st.CompleteRequest(id, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r), GitAnchor: anchorFromRequest(r), Origin: a.originFor(r, "")})
 	if err != nil {
 		writeRequestError(w, err)
 		return
 	}
+	a.stampActor(r, actor.RequestDone, id, 0)
 	detail, err := a.st.RequestByID(id)
 	if err != nil {
 		writeRequestError(w, err)
@@ -167,7 +197,7 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, sql.ErrNoRows)
 		return
 	}
-	work, warnings, err := a.st.StartRequestWork(requestID, body.SessionID, body.Role, personOf(r))
+	work, warnings, err := a.st.StartRequestWork(requestID, body.SessionID, body.Role, personOf(r), anchorFromRequest(r))
 	if err != nil {
 		writeRequestError(w, a.hideRuleRequest(r, err))
 		return
@@ -175,7 +205,13 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 	if !sees && len(warnings) > 0 {
 		warnings = a.readableStartWarnings(r, requestID, work.ID)
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"work": a.workView(r, work), "warnings": warnings})
+	out := map[string]any{"work": a.workView(r, work), "warnings": warnings}
+	// Kommt der Request aus einer Idee, bekommt der Agent gleich ihre Kurzfassung,
+	// die getroffenen Entscheidungen und die offenen Fragen (REQ-611).
+	if text, err := pa.IdeaBriefingForRequest(requestID, ideaBriefingChars); err == nil && text != "" {
+		out["idea_briefing"] = text
+	}
+	writeJSON(w, http.StatusCreated, out)
 }
 
 // hideRuleRequest ersetzt in primary_exists die REQ-Nummer, wenn der Betrachter
@@ -262,7 +298,7 @@ func (a *api) addRequestCriterion(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActEdit) {
 		return
 	}
-	criterion, err := a.st.AddCriterion(requestID, body.Description, personOf(r))
+	criterion, err := a.st.AddCriterion(requestID, body.Description, personOf(r), anchorFromRequest(r))
 	if err != nil {
 		writeRequestError(w, err)
 		return
@@ -288,9 +324,12 @@ func (a *api) setRequestCriterion(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefCriterion, criterionID, store.ActWork) {
 		return
 	}
-	if err := a.st.SetCriterionState(criterionID, body.State, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r)}); err != nil {
+	if err := a.st.SetCriterionState(criterionID, body.State, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r), GitAnchor: anchorFromRequest(r), Origin: a.originFor(r, "")}); err != nil {
 		writeRequestError(w, err)
 		return
+	}
+	if body.State == "met" {
+		a.stampActor(r, actor.Criterion, criterionID, 0)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"criterion_id": criterionID, "state": body.State})
 }
@@ -311,7 +350,7 @@ func (a *api) dropRequest(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActEdit) {
 		return
 	}
-	if err := a.st.DropRequest(requestID, body.Reason, personOf(r)); err != nil {
+	if err := a.st.DropRequest(requestID, body.Reason, personOf(r), anchorFromRequest(r)); err != nil {
 		writeRequestError(w, err)
 		return
 	}
@@ -337,7 +376,7 @@ func (a *api) addRequestRelation(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActWork) {
 		return
 	}
-	saved, err := a.st.AddRequestRelation(requestID, relation, personOf(r))
+	saved, err := a.st.AddRequestRelation(requestID, relation, personOf(r), anchorFromRequest(r))
 	if err != nil {
 		writeRequestError(w, err)
 		return
@@ -362,7 +401,7 @@ func (a *api) correctRequest(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActEdit) {
 		return
 	}
-	if err := a.st.UpdateRequest(requestID, body.Patch, personOf(r), body.Reason); err != nil {
+	if err := a.st.UpdateRequest(requestID, body.Patch, personOf(r), body.Reason, anchorFromRequest(r)); err != nil {
 		writeRequestError(w, err)
 		return
 	}
@@ -406,6 +445,21 @@ func writeRequestError(w http.ResponseWriter, err error) {
 		status := http.StatusBadRequest
 		if rule.ErrorCode == "open_criteria" || rule.ErrorCode == "primary_exists" || rule.ErrorCode == "work_not_active" || rule.ErrorCode == "invalid_transition" || rule.ErrorCode == "idempotency_key_conflict" {
 			status = http.StatusConflict
+		}
+		switch rule.ErrorCode {
+		case "package_not_found", "label_not_found", "idea_not_found", "origin_not_found", "comment_not_found", "comment_target_not_found", "preset_not_found",
+			"decision_not_found", "attachment_not_found", "text_not_found", "variant_not_found", "thread_not_found",
+			"feature_not_found", "version_not_found", "reaction_target_not_found":
+			status = http.StatusNotFound
+		case "package_exists", "package_closed", "pr_taken", "label_exists", "idea_duplicate", "idea_changed",
+			"text_changed", "concept_changed", "decision_closed", "decision_changed", "decision_open", "idea_closed",
+			"preset_conflict", "feature_name_taken", "feature_changed", "feature_retired", "feature_exists", "version_changed", "idea_not_implemented":
+			status = http.StatusConflict
+		case "attachment_too_large":
+			status = http.StatusRequestEntityTooLarge
+		case "human_only", "human_decision":
+			// Ein Token ist kein Mensch: der Schritt gehört in die Weboberfläche.
+			status = http.StatusForbidden
 		}
 		if rule.ErrorCode == "secret_detected" {
 			status = http.StatusUnprocessableEntity

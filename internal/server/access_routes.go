@@ -42,6 +42,7 @@ const (
 
 var accessRoutes = map[string]routeClass{
 	"GET /api/health":                             classPublic,
+	"GET /api/version":                            classPublic,
 	"GET /metrics":                                classPublic,
 	"GET /api/whoami":                             classAccount,
 	"DELETE /api/tokens/self":                     classAccount,
@@ -61,12 +62,18 @@ var accessRoutes = map[string]routeClass{
 	"DELETE /api/orgs/{org}/invitations/{id}":     classAccount,
 	"POST /api/invitations/accept":                classAccount,
 	"PUT /api/account/default-org":                classAccount,
+	"GET /api/garden/due":                         classAccount,
+	"POST /api/garden/runs":                       classAccount,
+	"POST /api/garden/runs/{id}/finish":           classAccount,
 	"GET /api/projects":                           classProject,
 	"GET /api/projects/writable":                  classProject,
 	"GET /api/projects/{id}/members":              classProject,
 	"PUT /api/projects/{id}/members/{account}":    classAdmin,
 	"DELETE /api/projects/{id}/members/{account}": classAdmin,
 	"POST /api/projects/claim":                    classAccount,
+	"POST /api/projects/reassign":                 classAdmin,
+	"GET /api/projects/held":                      classProject,
+	"POST /api/projects/held":                     classAdmin,
 	"POST /api/projects":                          classAccount,
 	"POST /api/projects/move":                     classAccount,
 	"POST /api/context-snapshots":                 classProject,
@@ -74,8 +81,17 @@ var accessRoutes = map[string]routeClass{
 	"GET /api/context-snapshots/{name}":           classProject,
 	"GET /api/context-snapshots/{name}/entries":   classProject,
 	"POST /api/sessions":                          classProject,
+	"POST /api/tool-uses":                         classProject,
 	"GET /api/sessions":                           classProject,
 	"GET /api/machines":                           classAccount,
+	"GET /api/machines/{name}":                    classAccount,
+	"PUT /api/machines/{name}/shares/{org}":       classAdmin,
+	"DELETE /api/machines/{name}/shares/{org}":    classAdmin,
+	"PUT /api/machines/{name}/owner":              classAdmin,
+	"PUT /api/knowledge/{id}/shares/{org}":        classProject,
+	"DELETE /api/knowledge/{id}/shares/{org}":     classProject,
+	"PUT /api/runbooks/{id}/shares/{org}":         classProject,
+	"DELETE /api/runbooks/{id}/shares/{org}":      classProject,
 	"POST /api/sessions/{id}/chunks":              classProject,
 	"GET /api/sessions/{id}/raw":                  classProject,
 	"GET /api/sessions/{id}":                      classProject,
@@ -497,7 +513,7 @@ func (a *api) checkDocument(w http.ResponseWriter, r *http.Request, id int64, ac
 		writeStoreError(w, http.StatusNotFound, err)
 		return false
 	}
-	return !denyAccess(w, pa.Check(d.Project, store.ResDocument, act, store.Object{Own: pa.IsAuthor(d.Person)}))
+	return !denyAccess(w, pa.CheckDocument(d, act))
 }
 
 // listGateEntries ist listGate für Handler, die jeden Eintrag danach mit Own

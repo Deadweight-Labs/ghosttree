@@ -583,6 +583,11 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		a.startSessionAt(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, "/join/"+flow.Code)
 		return
 	}
+	if outcome == store.LoginBootstrapped {
+		// The first sign-in of a new instance goes to the setup, not an empty inbox.
+		a.finishLoginTo(w, r, account, "/ui/overview")
+		return
+	}
 	a.finishLogin(w, r, account)
 }
 

@@ -1,0 +1,38 @@
+/* New issue, idea or pain: title, text, requirements and the column of choices.
+   Mock: git-native-v2 new-issue.html. */
+
+:is(.g2.ni) {
+  & .dhead { margin-bottom: 24px; }
+  & .ptitle { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 400; letter-spacing: 0; }
+  & .ni-title { display: block; margin-bottom: 16px; }
+  & .gfield.big { width: 100%; height: 44px; font-size: 16px; padding: 0 16px; }
+  & .cx { margin-bottom: 24px; }
+  & .ni-reqs h2.t { margin: 0 0 8px; font-size: 16px; }
+  & .ni-reqs .box { margin-bottom: 24px; }
+  & .rq-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 12px; }
+  & .rq-row + .rq-row { border-top: 1px solid var(--border-muted); }
+  & .rq-row .no { color: var(--fg-muted); text-align: right; font-variant-numeric: tabular-nums; }
+  & .rq-row .no:not(:empty)::after { content: "."; }
+  & .rq-row .gfield { min-width: 0; }
+  & .rq-row.rq-add { grid-template-columns: 24px auto; }
+  & .ni-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+  & .ni-again { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+  & .rq-row.rq-add .gbtn { justify-self: start; }
+  & .lbsel { display: flex; flex-wrap: wrap; gap: 6px; }
+  & .lbsel:not(:has(.lb:not([hidden]))) { display: none; }
+  /* The menu is as wide as the column; the tick shows what is chosen, the checkbox itself stays out of sight */
+  & .side details.lbmenu { display: block; margin-top: 8px; }
+  & .lbmenu > summary { width: 100%; justify-content: space-between; font-weight: 400; }
+  & .lbmenu > .pop { width: 100%; min-width: 0; }
+  & .lbmenu .opt { cursor: pointer; }
+  & .lbmenu .opt:has(input:focus-visible) { outline: 2px solid var(--accent-emphasis); outline-offset: -2px; }
+  & .lbmenu .opt input:not(:checked) + .chk { visibility: hidden; }
+  & .side .pfield { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .side .pfield > span { color: var(--fg-muted); }
+  & .sblk .pfield + .pfield { margin-top: 12px; }
+  & .sblk .pfield + .sub { display: block; margin-top: 6px; }
+  & .pkgnew { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  & .pkgnew[hidden] { display: none; }
+  & [data-pkg] .pfield { margin-top: 8px; }
+  & .gfield.mono { font-family: var(--ui-mono); }
+}

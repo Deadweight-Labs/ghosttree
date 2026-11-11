@@ -33,7 +33,7 @@ func namesRoom(t *testing.T) (srv *httptest.Server, st *store.Store, room string
 			t.Fatal(err)
 		}
 	}
-	if _, err := st.EnsureProject("person:1", project); err != nil {
+	if _, err := claimInOrg(st, "person:1", project); err != nil {
 		t.Fatal(err)
 	}
 	for who, role := range map[string]string{"person:2": store.RoleMember, "person:3": store.RoleGuest} {
@@ -117,8 +117,9 @@ func TestAMemberReadsAgentsAsToolOwnerAndSeesWhoIsInTheProject(t *testing.T) {
 	if strings.Contains(page, `name="mentions" value="person:3"`) {
 		t.Error("a listed-only person is offered as a recipient")
 	}
-	agents := visibleText(namesGet(t, srv, st, "Mia", "/ui/agents"))
-	if !strings.Contains(agents, "Claude · Robin") || rawIDRE.MatchString(agents) {
+	agentsPage := namesGet(t, srv, st, "Mia", "/ui/agents")
+	agents := visibleText(agentsPage)
+	if !strings.Contains(agentsPage, `title="Claude · Robin`) || !strings.Contains(strings.ToLower(agents), "claude") || rawIDRE.MatchString(agents) {
 		t.Errorf("agents page: %s", agents)
 	}
 }

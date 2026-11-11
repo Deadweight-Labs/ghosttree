@@ -6,12 +6,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
 )
 
 var version = "0.1.0-dev"
 
 func run(args []string, stdout io.Writer) int {
+	client.ClientVersion = version
+	client.TerminalPerson = terminalPersonFor(args)
 	if len(args) == 0 {
+		if interactiveTerminal(stdout) {
+			return cmdTUI(nil, stdout)
+		}
 		fmt.Fprintln(stdout, usage)
 		return 2
 	}
@@ -47,6 +54,20 @@ func run(args []string, stdout io.Writer) int {
 		return cmdKnowledge(rest, stdout)
 	case "request":
 		return cmdRequest(rest, stdout)
+	case "pr":
+		return cmdPR(rest, stdout)
+	case "comment":
+		return cmdComment(rest, stdout)
+	case "react":
+		return cmdReact(rest, stdout)
+	case "package":
+		return cmdPackage(rest, stdout)
+	case "runbook":
+		return cmdRunbook(rest, stdout)
+	case "github":
+		return cmdGithub(rest, stdout)
+	case "run":
+		return cmdRun(rest, stdout)
 	case "ghost":
 		return cmdGhost(rest, stdout)
 	case "doc":
@@ -71,6 +92,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdCost(rest, stdout)
 	case "upgrade-schema":
 		return cmdUpgradeSchema(rest, stdout)
+	case "origin":
+		return cmdOrigin(rest, stdout)
 	case "canonicalize-scopes":
 		return cmdCanonicalizeScopes(rest, stdout)
 	case "unbind-branch":
@@ -99,14 +122,36 @@ func run(args []string, stdout io.Writer) int {
 		return cmdProject(rest, stdout)
 	case "setup":
 		return cmdSetup(rest, stdout)
+	case "config":
+		return cmdConfig(rest, stdout)
+	case "update":
+		return cmdUpdate(rest, stdout)
 	case "login":
 		return cmdLogin(rest, stdout)
+	case "logout":
+		return cmdLogout(rest, stdout)
+	case "tui":
+		return cmdTUI(rest, stdout)
 	case "join":
 		return cmdJoin(rest, stdout)
 	case "pain":
 		return cmdPain(rest, stdout)
+	case "idea":
+		return cmdIdea(rest, stdout)
+	case "decision":
+		return cmdDecision(rest, stdout)
+	case "feature":
+		return cmdFeature(rest, stdout)
+	case "search":
+		return cmdSearch(rest, stdout)
+	case "label":
+		return cmdLabel(rest, stdout)
+	case "topic":
+		return cmdTopic(rest, stdout)
 	case "task":
 		return cmdTask(rest, stdout)
+	case "open":
+		return cmdOpen(rest, stdout)
 	case "help", "--help", "-h":
 		fmt.Fprintln(stdout, usage)
 		return 0
@@ -121,6 +166,10 @@ func run(args []string, stdout io.Writer) int {
 
 const usage = `usage: ctx <command>
 
+  ctx without a command opens the terminal interface (in a terminal)
+
+  tui      the terminal interface: quick search, lists, settings, sign-in
+
   serve    run the ghosttree server
   watch    run the session collector daemon
   mcp      run the MCP server (stdio)
@@ -130,7 +179,10 @@ const usage = `usage: ctx <command>
   install  set up a harness (claude|codex|opencode) or ghclaude
   uninstall  remove ghclaude
   setup    write client config (server URL + token)
-  login    sign this machine in through the browser (device login)
+  config   get or set client settings (channel stable|dev)
+  update   update ctx from the stable release or the dev build (--check shows only)
+  login    sign this machine in through the browser (device login; --plain without the interface)
+  logout   sign this machine out (revokes the token, keeps server and machine name)
   join     pair this machine with a pairing code from an invitation page
   person   manage persons/tokens (server-side; deprecated alias, see account)
   account  manage accounts and their tokens (server-side)
@@ -144,8 +196,22 @@ const usage = `usage: ctx <command>
   review   approve or reject distilled knowledge
   regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger (create, move, ...)
+  comment  comments on an issue, idea or pain (add, list, edit, delete)
+  react    reactions on an issue, idea or comment (+1, heart, ...; --remove takes one back)
+  pr       pull requests of a project: list, show (checklist, package, what was said), commits
+  package  work packages: the requests that belong to a branch or pull request (create, add, remove, show, import-relations)
+  runbook  named procedures with steps, parameters and triggers (list, show, write, import, approve, allow, report)
+  github   ctx github sync-prs --db PATH: operator, fetches PR numbers for existing branches from GitHub
+  run      ctx run NAME [param=value...] prints a runbook's checklist; --target T --run executes an approved, locally allowed target
   pain     record a problem without a solution, follow it to mitigated or resolved
+  idea     record a wish without working it out, later make a request of it; or work it out (raw text, concept, images, issues)
+  decision open questions on an idea or issue with variants, votes and a way to close them
+  feature  the living description of what the product does: write how a feature is now, see which pull request touches which (list, show, update, paths, export, import)
+  search   search with qualifiers (is:open label:bug area:internal/store), saved searches (--preset)
+  label    labels for requests, pains, ideas and knowledge, per project or org
+  topic    named areas of the repository (several path prefixes under one name)
   task     ask the human for a key, file, decision or action, and check it afterwards
+  open     open an object (REQ-n, TASK-n, PAIN-n, #id, pr:n, preset:..., a path) in the browser, or print its link and card
   knowledge  add, show, supersede, retire or move a knowledge entry
   ghost    read description history or archive confirmed-deleted paths
   doc      write, publish, and read long-form documents
@@ -161,6 +227,7 @@ const usage = `usage: ctx <command>
   usage    list knowledge nobody has used within a window
   cost     report LLM spend and forecast the remaining backlog
   upgrade-schema  one-off knowledge table rebuild for trust tiers
+  origin               backfill the origin context (time, areas) of older entries
   canonicalize-scopes  one-off project name backfill and duplicate merge
   unbind-branch  lift knowledge filed against a branch to its project
   strip-images  replace stored base64 images and files with placeholders (--dry-run, runs beside the server)

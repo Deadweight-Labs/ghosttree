@@ -20,6 +20,9 @@ type orgMemberRow struct {
 	// down nor leave. NoProject: a member without a role in any project of the
 	// organization, shown to owners with a way to add one.
 	SoleOwner, NoProject bool
+	// Service: an account that is no person (a background account set up
+	// for the organization); the list says so.
+	Service bool
 }
 
 // inviteRow is an invitation with, for its creator while it is open, the link.
@@ -76,10 +79,33 @@ type orgsView struct {
 	SourceReady bool
 	Pick        *sourcePick
 	Notice      string
+	// NoticeBad: the notice reports a failure and is shown as one.
+	NoticeBad bool
+	// NewOrg: the page shows only the form for a new organization.
+	NewOrg bool
 	// Explain is the administrator's block on "Kurz erklärt"; nil for anyone else.
 	Explain *explainAdminView
 	// Garden is the same for the gardener; nil for anyone else.
 	Garden *gardenAdminView
+	// Transcripts is the same for the stored transcripts; nil for anyone else.
+	Transcripts *transcriptsAdminView
+	// GardenSet is the gardener's settings section, for the owner (REQ-624).
+	GardenSet *gardenSettingsView
+	// Moved: the viewer's namespaces that had to yield their address to its
+	// verified GitHub owner (decision E10), shown once.
+	Moved []string
+	// Assign is the instance admin's form to set a project's owner: a known
+	// project is reassigned, an unknown remote decided (contested). Only here,
+	// from an interactive session; the API refuses both.
+	Assign []store.Org
+}
+
+// People are the members that are no guests, Guests the others.
+func (v orgsView) People() []orgMemberRow {
+	return keep(v.Members, 0, func(m orgMemberRow) bool { return !m.Guest })
+}
+func (v orgsView) Guests() []orgMemberRow {
+	return keep(v.Members, 0, func(m orgMemberRow) bool { return m.Guest })
 }
 
 // orgsPage zeigt Mitglieder, Einladungen und Projekte einer Organisation.
@@ -87,7 +113,15 @@ type orgsView struct {
 func (a *app) orgsPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
-	a.renderOrgs(w, r, http.StatusOK, orgsView{Notice: orgNotice(l, r.URL.Query().Get("notice"))}, r.URL.Query().Get("org"), "")
+	key := r.URL.Query().Get("notice")
+	a.renderOrgs(w, r, http.StatusOK, orgsView{Notice: orgNotice(l, key), NoticeBad: key == "source_failed"}, r.URL.Query().Get("org"), "")
+}
+
+// orgNewPage is the form for a new organization. The "+" menu and the
+// organization menu of the header lead here; the settings of an organization
+// do not offer it.
+func (a *app) orgNewPage(w http.ResponseWriter, r *http.Request) {
+	a.renderOrgs(w, r, http.StatusOK, orgsView{NewOrg: true}, "", "")
 }
 
 func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v orgsView, ref, errMsg string) {
@@ -99,11 +133,36 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		http.Error(w, l.msg("adm.load_failed"), http.StatusInternalServerError)
 		return
 	}
-	v.Orgs = orgs
+	if notices, err := a.store.NamespaceNotices(me); err == nil && len(notices) > 0 {
+		for _, n := range notices {
+			v.Moved = append(v.Moved, l.msg("adm.notice.slug_yielded", n.OldSlug, n.NewSlug))
+		}
+		if interactive(r) {
+			_ = a.store.MarkNamespaceNoticesSeen(me)
+		}
+	}
+	// Guests manage nothing and see no organization page (14 A, #4376).
+	for _, o := range orgs {
+		if !o.Guest {
+			v.Orgs = append(v.Orgs, o)
+		}
+	}
+	orgs = v.Orgs
 	v.Explain = a.explainAdminFor(r)
 	v.Garden = a.gardenAdminFor(r)
+	v.Transcripts = a.transcriptsAdminFor(r)
+	if interactive(r) && a.isAdmin(browserPrincipal(r)) {
+		v.Assign, _ = a.store.AllOwners()
+	}
 	for _, o := range orgs {
-		if o.Slug == ref || (v.Selected.ID == 0 && o.Default && ref == "") {
+		if o.Slug == ref {
+			v.Selected = o
+		}
+	}
+	// Without a choice: the first organization, a personal namespace only when
+	// there is nothing else.
+	for _, o := range orgs {
+		if v.Selected.ID == 0 && !o.IsUser() {
 			v.Selected = o
 		}
 	}
@@ -111,6 +170,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		v.Selected = orgs[0]
 	}
 	if v.Selected.ID != 0 {
+		v.GardenSet = a.gardenSettingsFor(r, v.Selected)
 		v.Owner = v.Selected.Role == store.OrgOwner
 		v.CanRename = v.Owner || a.isAdmin(browserPrincipal(r))
 		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me, a.store.AccessEnforced())
@@ -121,10 +181,19 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				owners++
 			}
 		}
+		gardener := ""
+		if id := a.store.GardenerAccountID(); id > 0 {
+			gardener = "person:" + strconv.FormatInt(id, 10)
+		}
 		for _, m := range members {
+			// The gardener is a feature with its own tab, not a member
+			// (decision E6).
+			if gardener != "" && m.AccountID == gardener {
+				continue
+			}
 			m.Account = store.NormalizeAccountName(m.Account)
 			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me, Initial: initialOf(m.Account),
-				SoleOwner: m.Role == store.OrgOwner && owners == 1})
+				SoleOwner: m.Role == store.OrgOwner && owners == 1, Service: m.Kind == store.AccountKindService})
 		}
 		var orgAll []store.OrgMemberInfo
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
@@ -194,7 +263,11 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}
-	a.renderBrowser(w, r, "orgs", pageData{Title: l.msg("adm.org.title"), Error: errMsg, Orgs: v})
+	data := pageData{Title: l.msg("adm.org.title"), Error: errMsg, Orgs: v}
+	if v.Selected.ID != 0 && !v.NewOrg {
+		data.OrgBand, data.OrgName = a.orgBandFor(r, v.Selected, "settings"), v.Selected.Name
+	}
+	a.renderBrowser(w, r, "orgs", data)
 }
 
 // orgError übersetzt Store-Fehler in eine Meldung und einen Statuscode.
@@ -278,10 +351,10 @@ func orgNotice(l lang, key string) string {
 		return l.msg("adm.notice.role")
 	case "removed":
 		return l.msg("adm.notice.removed")
-	case "default":
-		return l.msg("adm.notice.default")
 	case "project":
 		return l.msg("adm.notice.project")
+	case "garden":
+		return l.msg("gardener.saved")
 	case "moved":
 		return l.msg("adm.notice.moved")
 	case "joined":
@@ -300,8 +373,14 @@ func orgNotice(l lang, key string) string {
 		return l.msg("adm.notice.source_removed")
 	case "source_failed":
 		return l.msg("adm.notice.source_failed")
+	case "source_proved":
+		return l.msg("adm.notice.source_proved")
 	case "imported":
 		return l.msg("adm.notice.imported")
+	case "follow":
+		return l.msg("adm.notice.follow")
+	case "assigned":
+		return l.msg("adm.notice.assigned")
 	}
 	return ""
 }
@@ -311,7 +390,19 @@ func orgRedirect(w http.ResponseWriter, r *http.Request, slug, notice string) {
 	if notice != "" {
 		q.Set("notice", notice)
 	}
-	http.Redirect(w, r, "/ui/orgs?"+q.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/orgs?"+q.Encode()+noticeAnchor(notice), http.StatusSeeOther)
+}
+
+// noticeAnchor names the section of the settings a notice belongs to, so that
+// the page opens there and not on "General".
+func noticeAnchor(notice string) string { return noticeSection[notice] }
+
+// noticeSection is the part of the settings a notice belongs to: after
+// connecting GitHub the page opens at the connected sources, not at General.
+var noticeSection = map[string]string{
+	"source_added": "#sources", "source_failed": "#sources", "source_proved": "#sources", "source_removed": "#sources", "imported": "#sources", "follow": "#sources", "assigned": "#projects",
+	"visibility": "#projects", "project": "#projects", "moved": "#projects", "project_created": "#projects",
+	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener",
 }
 
 // fillInvites lists the organization's invitations with the links their
@@ -480,18 +571,6 @@ func (a *app) orgAccept(w http.ResponseWriter, r *http.Request) {
 	orgRedirect(w, r, o.Slug, "joined")
 }
 
-func (a *app) orgDefault(w http.ResponseWriter, r *http.Request) {
-	o, err := a.formOrg(r)
-	if err == nil {
-		err = a.store.SetDefaultOrg(browserPrincipal(r).ID, o.ID)
-	}
-	if err != nil {
-		a.orgFailure(w, r, err)
-		return
-	}
-	orgRedirect(w, r, o.Slug, "default")
-}
-
 // orgProjectRole setzt oder entfernt (role=none) die Projektrolle eines
 // Organisationsmitglieds. Die Regeln prüft der Store; die Oberfläche zeigt nur,
 // was er erlaubt.
@@ -550,10 +629,35 @@ func initialOf(name string) string {
 func (a *app) orgCreate(w http.ResponseWriter, r *http.Request) {
 	o, err := a.store.CreateOrg(browserPrincipal(r).ID, r.FormValue("name"), "")
 	if err != nil {
-		a.orgFailure(w, r, err)
+		status, msg := orgError(a.langFor(r), err)
+		a.renderOrgs(w, r, status, orgsView{NewOrg: true}, "", msg)
 		return
 	}
 	http.Redirect(w, r, "/ui/orgs?org="+o.Slug+"&notice=created", http.StatusSeeOther)
+}
+
+// orgAssign sets a project's owner, for the instance admin: a known project
+// is reassigned (ReassignProject), an unknown remote decided (ClaimContested).
+// Both are logged on the owners' side.
+func (a *app) orgAssign(w http.ResponseWriter, r *http.Request) {
+	me := browserPrincipal(r)
+	if !a.isAdmin(me) {
+		http.NotFound(w, r)
+		return
+	}
+	remote, to := strings.TrimSpace(r.FormValue("remote")), r.FormValue("to")
+	var p store.Project
+	var err error
+	if _, known := a.store.ProjectByRemote(remote); known {
+		p, err = a.store.ReassignProject(me.ID, remote, to)
+	} else {
+		p, err = a.store.ClaimContested(me.ID, remote, to)
+	}
+	if err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	orgRedirect(w, r, p.Org, "assigned")
 }
 
 // orgProjectCreate legt ein Projekt ohne Git an. Das darf jedes Mitglied der

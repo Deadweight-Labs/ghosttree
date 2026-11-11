@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,19 +23,21 @@ func writePainError(w http.ResponseWriter, err error) {
 
 // callerSession keeps a session id from a body only when it is the caller's own
 // readable session, so it cannot be used to name someone else's.
+//
+// Without a usable id in the body, the session the client names in its session
+// header counts (REQ-620): the MCP tools rarely know the numeric id, so pains,
+// ideas, tasks and comments used to stay without session.
 func (a *api) callerSession(r *http.Request, id int64) int64 {
-	if id <= 0 {
-		return 0
-	}
-	pa := a.access(r)
-	if sess, err := a.st.SessionByID(id); err == nil && pa.OwnsSession(sess) {
-		return id
+	if sess, ok := a.callerSessionRow(r, id); ok {
+		return sess.ID
 	}
 	return 0
 }
 
 func (a *api) painActor(r *http.Request, sessionID int64) pain.Actor {
-	return pain.Actor{AccountID: authorIDOf(r), Person: personOf(r), SessionID: a.callerSession(r, sessionID)}
+	sid := a.callerSession(r, sessionID)
+	return pain.Actor{AccountID: authorIDOf(r), Person: personOf(r), SessionID: sid, GitAnchor: anchorFromRequest(r),
+		Origin: a.originFor(r, a.st.SessionExternalByID(sid))}
 }
 
 func (a *api) createPain(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +74,7 @@ func (a *api) createPain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.saveExplanation(explain.KindPain, detail.Pain.ID, explanation)
+	a.stampActor(r, actor.Pain, detail.Pain.ID, body.SessionID)
 	writeJSON(w, http.StatusCreated, detail)
 }
 

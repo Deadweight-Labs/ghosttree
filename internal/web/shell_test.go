@@ -80,9 +80,20 @@ func fetchPage(t *testing.T, c *http.Client, url string) (int, string) {
 			t.Fatal(err)
 		}
 	}
+	// The old address of a request leads to its page in the repository.
+	if loc := resp.Header.Get("Location"); (resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusSeeOther) && strings.HasPrefix(loc, "/ui/") && oldRequestAddress.MatchString(url) {
+		resp.Body.Close()
+		if resp, err = c.Get(url[:strings.Index(url, "/ui/")] + loc); err != nil {
+			t.Fatal(err)
+		}
+	}
 	status := resp.StatusCode
 	return status, body(t, resp)
 }
+
+// oldRequestAddress is /ui/requests/{id}, /ui/knowledge/{id} and /ui/sessions/{id},
+// which now redirect to the repository (decision #4331).
+var oldRequestAddress = regexp.MustCompile(`/ui/(?:requests|knowledge)/\d+(?:\?.*)?$|/ui/sessions/[a-z0-9]+(?:\?.*)?$`)
 
 var navKeyRE = regexp.MustCompile(`data-nav="([a-z-]+)"`)
 
@@ -108,7 +119,7 @@ func TestShellNavigationFollowsTheRole(t *testing.T) {
 		{"guest", guest, []string{"overview", "sessions", "knowledge", "requests"}, []string{"agents", "rooms"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			status, page := fetchPage(t, tc.client, base+"/ui/overview")
+			status, page := fetchPage(t, tc.client, base+"/ui/inbox")
 			if status != http.StatusOK {
 				t.Fatalf("status=%d", status)
 			}
@@ -132,7 +143,7 @@ func TestShellNavigationFollowsTheRole(t *testing.T) {
 
 func TestShellNavigationRevealsNothingToAGuest(t *testing.T) {
 	base, _, _, guest := shellWeb(t)
-	for _, path := range []string{"/ui/overview", "/ui/requests", "/ui/knowledge"} {
+	for _, path := range []string{"/ui/inbox", "/ui/knowledge"} {
 		_, page := fetchPage(t, guest, base+path)
 		for _, leak := range []string{
 			`href="/ui/coord"`, `href="/ui/account/tokens"`,
@@ -146,45 +157,30 @@ func TestShellNavigationRevealsNothingToAGuest(t *testing.T) {
 		if strings.Contains(page, "nav-count") || regexp.MustCompile(`data-nav="[a-z-]+"[^>]*>[^<]*\d`).MatchString(page) {
 			t.Errorf("GET %s navigation carries a counter", path)
 		}
-		if !strings.Contains(page, shellProject) {
-			t.Errorf("GET %s lacks the guest's own project in the selector", path)
-		}
 	}
 }
 
 func TestShellNavigationHasNoCounters(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
-	_, page := fetchPage(t, owner, base+"/ui/overview")
+	_, page := fetchPage(t, owner, base+"/ui/knowledge")
 	nav := page[strings.Index(page, `<nav`):strings.Index(page, `</nav>`)]
 	if regexp.MustCompile(`>\s*\d+\s*<`).MatchString(nav) {
 		t.Fatalf("navigation shows a number: %s", nav)
 	}
 }
 
-func TestShellProjectSelectorListsOnlyProjectsWithARole(t *testing.T) {
-	base, owner, member, _ := shellWeb(t)
-	_, page := fetchPage(t, owner, base+"/ui/overview")
-	if !strings.Contains(page, shellProject) || !strings.Contains(page, shellHiddenProject) {
-		t.Error("owner selector must list both projects")
-	}
-	_, page = fetchPage(t, member, base+"/ui/overview")
-	if !strings.Contains(page, shellProject) || strings.Contains(page, shellHiddenProject) {
-		t.Error("member selector must list only the project with a role")
-	}
-}
-
 func TestShellProjectSelectionIsKept(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
-	_, page := fetchPage(t, owner, base+"/ui/knowledge?project="+shellProject)
-	if !regexp.MustCompile(`<option value="` + regexp.QuoteMeta(shellProject) + `" title="` + regexp.QuoteMeta(shellProject) + `" selected`).MatchString(page) {
-		t.Error("selector does not show the chosen project")
+	_, page := fetchPage(t, owner, base+"/ui/overview?project="+shellProject)
+	if selectedOption(page) != shellProject {
+		t.Error("the header does not name the chosen project")
 	}
 }
 
 func TestShellHeaderHasSearchAndAccountMenu(t *testing.T) {
 	base, owner, _, guest := shellWeb(t)
 	for name, c := range map[string]*http.Client{"owner": owner, "guest": guest} {
-		_, page := fetchPage(t, c, base+"/ui/overview")
+		_, page := fetchPage(t, c, base+"/ui/knowledge")
 		for _, want := range []string{
 			`role="search"`, `action="/ui/search"`, `name="q"`,
 			`method="post" action="/ui/logout"`, `name="csrf_token"`,
@@ -195,7 +191,7 @@ func TestShellHeaderHasSearchAndAccountMenu(t *testing.T) {
 			}
 		}
 	}
-	_, page := fetchPage(t, owner, base+"/ui/overview")
+	_, page := fetchPage(t, owner, base+"/ui/knowledge")
 	if !strings.Contains(page, "alice") {
 		t.Error("account menu lacks the account name")
 	}
@@ -204,7 +200,7 @@ func TestShellHeaderHasSearchAndAccountMenu(t *testing.T) {
 func TestShellRoleLabels(t *testing.T) {
 	base, owner, member, guest := shellWeb(t)
 	for label, c := range map[string]*http.Client{"Owner": owner, "Member": member, "Guest": guest} {
-		_, page := fetchPage(t, c, base+"/ui/overview")
+		_, page := fetchPage(t, c, base+"/ui/knowledge")
 		if !strings.Contains(page, `class="account-role">`+label+`<`) {
 			t.Errorf("account menu lacks role %q", label)
 		}
@@ -214,7 +210,7 @@ func TestShellRoleLabels(t *testing.T) {
 func TestEveryBrowserPageUsesTheShell(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
 	for _, path := range []string{
-		"/ui/overview", "/ui/requests", "/ui/knowledge", "/ui/review", "/ui/sessions",
+		"/ui/inbox", "/ui/knowledge", "/ui/review", "/ui/sessions",
 		"/ui/coord", "/ui/context", "/ui/orgs", "/ui/account/tokens", "/ui/device",
 	} {
 		status, page := fetchPage(t, owner, base+path)
@@ -237,9 +233,9 @@ func TestEveryBrowserPageUsesTheShell(t *testing.T) {
 func TestShellMarksTheCurrentSection(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
 	for path, key := range map[string]string{
-		"/ui/overview": "overview", "/ui/sessions": "agents", "/ui/coord": "rooms",
+		"/ui/inbox": "overview", "/ui/sessions": "agents", "/ui/coord": "rooms",
 		"/ui/knowledge": "knowledge", "/ui/review": "knowledge", "/ui/context": "knowledge",
-		"/ui/requests": "requests",
+		"/ui/x/shell/issues": "requests",
 	} {
 		_, page := fetchPage(t, owner, base+path)
 		if !strings.Contains(page, `data-nav="`+key+`" aria-current="page"`) {
@@ -255,43 +251,27 @@ func TestKnowledgeReviewAndContextAreForReviewersLeadsAndOwnersOnly(t *testing.T
 	e := shellWebAll(t)
 	for name, c := range map[string]*http.Client{"owner": e.Owner, "lead": e.Lead, "reviewer": e.Reviewer} {
 		_, page := fetchPage(t, c, e.Base+"/ui/review")
-		if !strings.Contains(page, `data-tab="review"`) || !strings.Contains(page, `data-tab="context"`) {
+		if !strings.Contains(page, `data-seg="review"`) || !strings.Contains(page, `data-seg="context"`) {
 			t.Errorf("%s lacks the review and agent context tabs", name)
 		}
 	}
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
 		_, page := fetchPage(t, c, e.Base+"/ui/knowledge")
 		for _, k := range []string{"review", "context", "search"} {
-			if strings.Contains(page, `data-tab="`+k+`"`) {
+			if strings.Contains(page, `data-seg="`+k+`"`) {
 				t.Errorf("%s sees the %s tab", name, k)
 			}
 		}
 	}
 }
 
-func TestAllProjectsIsTheDefaultAndOfferedWithMoreThanOneProject(t *testing.T) {
+func TestAllProjectsIsTheDefaultAndNothingIsNarrowedWithoutAChoice(t *testing.T) {
 	e := shellWebAll(t)
-	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	if !strings.Contains(page, `<option value="" selected>All projects`) {
-		t.Error("owner lacks All projects")
-	}
-	// One project: nothing to choose between, nothing is preselected.
-	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest, "lead": e.Lead} {
-		_, page := fetchPage(t, c, e.Base+"/ui/overview")
-		if strings.Contains(page, "All projects") {
-			t.Errorf("%s with one project is offered All projects", name)
-		}
-		if selectedOption(page) != "" {
+	for name, c := range map[string]*http.Client{"owner": e.Owner, "member": e.Member, "guest": e.Guest, "lead": e.Lead} {
+		_, page := fetchPage(t, c, e.Base+"/ui/knowledge")
+		if strings.Contains(page, "All projects") || selectedOption(page) != "" {
 			t.Errorf("%s has %q preselected, want no filter", name, selectedOption(page))
 		}
-	}
-	// Two projects: everyone gets All projects, and it is the default.
-	if err := e.St.SetProjectRole("person:1", shellHiddenProject, "person:2", store.RoleMember, false, store.RoleViaCLI); err != nil {
-		t.Fatal(err)
-	}
-	_, page = fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if !strings.Contains(page, `<option value="" selected>All projects`) {
-		t.Error("a member of two projects is not offered All projects as the default")
 	}
 }
 
@@ -307,7 +287,7 @@ func TestEveryShellPageHasLogoutWithCSRFAndMarksDetailPages(t *testing.T) {
 	}
 	navSession, _ := e.St.SessionByID(sid)
 	for path, key := range map[string]string{
-		"/ui/overview": "overview", "/ui/requests": "requests", "/ui/requests/" + strconv.FormatInt(detail.Request.ID, 10): "requests",
+		"/ui/inbox": "overview", "/ui/x/shell/issues": "requests", "/ui/x/shell/issues/" + strconv.FormatInt(detail.Request.ID, 10): "requests",
 		"/ui/sessions": "agents", "/ui/sessions/" + navSession.PublicID: "agents",
 		"/ui/knowledge": "knowledge", "/ui/coord": "rooms",
 	} {
@@ -329,44 +309,73 @@ func TestShellFooterShowsThePublicHostNotTheRequestHost(t *testing.T) {
 	srv := httptest.NewServer(New(st, WithPublicURL("https://gt.example.test")))
 	defer srv.Close()
 	c := loginInteractive(t, srv, st, "alice")
-	_, page := fetchPage(t, c, srv.URL+"/ui/overview")
+	_, page := fetchPage(t, c, srv.URL+"/ui/knowledge")
 	if !strings.Contains(page, `<p class="shell-host">gt.example.test</p>`) {
 		t.Errorf("footer does not show the public host: %s", page)
 	}
 	srv2, _, tok := testWeb(t)
-	_, page = fetchPage(t, login(t, srv2, tok), srv2.URL+"/ui/overview")
+	_, page = fetchPage(t, login(t, srv2, tok), srv2.URL+"/ui/knowledge")
 	if !strings.Contains(page, `<p class="shell-host">`+strings.TrimPrefix(srv2.URL, "http://")+`</p>`) {
 		t.Error("without a public URL the footer shows the request host")
 	}
 }
 
-func TestShellNavigationCollapsesOnNarrowScreens(t *testing.T) {
+// The row of five entries under the header is gone (REQ-599, mock git-native-v2):
+// the entries live in the account menu, the project choice stands where the
+// breadcrumb stands, and on narrow screens the search is a button.
+func TestOldMenuRowIsGoneAndEveryEntryIsStillReachableFromTheAccountMenu(t *testing.T) {
 	e := shellWebAll(t)
-	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	if !strings.Contains(page, `data-shell-toggle`) || !strings.Contains(page, `aria-expanded="false"`) || !strings.Contains(page, `class="shell-collapsible"`) {
-		t.Error("shell lacks the navigation toggle")
+	for name, c := range map[string]*http.Client{"owner": e.Owner, "member": e.Member, "guest": e.Guest} {
+		_, page := fetchPage(t, c, e.Base+"/ui/inbox")
+		for _, gone := range []string{`class="shell-collapsible"`, `data-shell-toggle`, `class="shell-link"`} {
+			if strings.Contains(page, gone) {
+				t.Errorf("%s: the old menu row is still there (%s)", name, gone)
+			}
+		}
+		i := strings.Index(page, `class="pop r account-menu"`)
+		j := strings.Index(page, `</header>`)
+		if i < 0 || j < i {
+			t.Fatalf("%s: no account menu in the header", name)
+		}
+		menu := page[i:j]
+		if !strings.Contains(menu, `<nav class="shell-nav"`) {
+			t.Errorf("%s: the entries are not in the account menu", name)
+		}
+		want := []string{"overview", "knowledge", "requests"}
+		if name != "guest" {
+			want = append(want, "agents", "rooms")
+		} else {
+			want = append(want, "sessions")
+		}
+		for _, key := range want {
+			if !strings.Contains(menu, `data-nav="`+key+`"`) {
+				t.Errorf("%s: the account menu lacks %s", name, key)
+			}
+		}
+		if strings.Count(page, `role="search"`) != 1 || strings.Contains(page, "hsearch-btn") {
+			t.Errorf("%s: the header must have exactly one search field and no extra search button", name)
+		}
+		if strings.Count(page[:j], `<nav class="shell-nav"`) != 1 {
+			t.Errorf("%s: the entries appear outside the account menu", name)
+		}
 	}
-	resp, err := http.Get(e.Base + "/static/shell.css")
+	_, org := fetchPage(t, e.Owner, e.Base+"/ui/knowledge")
+	if !strings.Contains(org, `class="pop r account-menu"`) || !strings.Contains(org, "Switch organization") {
+		t.Error("the account menu does not lead to the organizations")
+	}
+	resp, err := http.Get(e.Base + "/static/ui-shell.css")
 	if err != nil {
 		t.Fatal(err)
 	}
 	css := body(t, resp)
-	if !strings.Contains(css, "@media (max-width: 900px)") || !strings.Contains(css, ".js .shell:not([data-open]) .shell-collapsible") {
-		t.Error("shell.css lacks the narrow-screen rules")
+	if !strings.Contains(css, "@media (max-width: 767px)") || !strings.Contains(css, ".hsearch") {
+		t.Error("ui-shell.css lacks the narrow-screen rules of the header")
 	}
 }
 
-func TestFontsAreCachedLongOtherStaticFilesAreNot(t *testing.T) {
+func TestStaticFilesAreNotCachedAsImmutable(t *testing.T) {
 	srv, _, _ := testWeb(t)
-	resp, err := http.Get(srv.URL + "/static/fonts/v5/gabarito-latin-wght-normal.woff2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if cc := resp.Header.Get("Cache-Control"); !strings.Contains(cc, "max-age=31536000") || !strings.Contains(cc, "immutable") {
-		t.Errorf("font Cache-Control=%q", cc)
-	}
-	resp, err = http.Get(srv.URL + "/static/shell.css")
+	resp, err := http.Get(srv.URL + "/static/ui-shell.css")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,35 +431,23 @@ func TestRoomsPathRedirectsToCoordination(t *testing.T) {
 	}
 }
 
-func TestShellPagesLoadSelfHostedFonts(t *testing.T) {
+func TestShellPagesCarryTheTokensAndNameNoForeignHost(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
-	_, page := fetchPage(t, owner, base+"/ui/requests")
-	if !strings.Contains(page, `href="/static/tokens.css"`) || !strings.Contains(page, `rel="icon"`) {
+	_, page := fetchPage(t, owner, base+"/ui/knowledge")
+	if !strings.Contains(page, `href="/static/ui-tokens.css"`) || !strings.Contains(page, `rel="icon"`) {
 		t.Error("shell lacks tokens stylesheet or favicon link")
+	}
+	// The footer links to the documentation; nothing else may leave the host.
+	if i, j := strings.Index(page, `<footer class="gt-foot"`), strings.Index(page, `</footer>`); i >= 0 && j > i {
+		page = page[:i] + page[j:]
 	}
 	if strings.Contains(page, "http://") || strings.Contains(page, "https://") {
 		t.Error("shell references an external host")
 	}
-	srv := httptest.NewServer(New(mustStore(t)))
-	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/static/tokens.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css := body(t, resp)
-	for _, want := range []string{"--color-accent: var(--clay-accent)", "--color-text-muted: var(--clay-ink-faint)", "--font-sans", "--font-mono", "--radius-", "--space-", "--focus-ring", "Gabarito", "Fragment Mono", "Source Serif 4", "/static/fonts/v5/gabarito-latin-wght-normal.woff2"} {
-		if !strings.Contains(css, want) {
-			t.Errorf("tokens.css lacks %q", want)
-		}
-	}
-	for _, f := range []string{"gabarito-latin-wght-normal.woff2", "fragment-mono-latin-400-normal.woff2", "source-serif-4-latin-wght-normal.woff2", "OFL-variable-gabarito.txt", "OFL-fragment-mono.txt", "OFL-variable-source-serif-4.txt"} {
-		resp, err := http.Get(srv.URL + "/static/fonts/v5/" + f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("font file %s = %d", f, resp.StatusCode)
+	// Nothing of the old surface is loaded: no Clay, no old base styles.
+	for _, gone := range []string{"/static/clay/", "/static/app.css", "/static/legacy-base.css", "/static/theme.css", "data-clay-theme"} {
+		if strings.Contains(page, gone) {
+			t.Errorf("the page still carries %q", gone)
 		}
 	}
 }

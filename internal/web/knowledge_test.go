@@ -44,6 +44,21 @@ func knPost(t *testing.T, c *http.Client, base, page, action string, form url.Va
 	return sameOriginPostForm(t, c, base+action, form)
 }
 
+// The Knowledge tab of the band, the segment "Entries" and the list count the same
+// entries, proposals waiting for review among them.
+func TestKnowledgeTabSegmentAndListCountTheSameEntries(t *testing.T) {
+	e := ovEnv(t)
+	knInsert(t, e.St, store.Knowledge{Type: "pitfall", Title: "Counted one", Confidence: "verified"})
+	knInsert(t, e.St, store.Knowledge{Type: "decision", Title: "Counted two", Confidence: "trusted"})
+	knInsert(t, e.St, store.Knowledge{Type: "note", Title: "Counted three", Confidence: "staged"})
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/knowledge")
+	tab := regexp.MustCompile(`data-tab="knowledge"[^>]*>.*?<span class="counter">(\d+)</span>`).FindStringSubmatch(page)
+	seg := regexp.MustCompile(`data-seg="entries"[^>]*>.*?<span class="counter">(\d+)</span>`).FindStringSubmatch(page)
+	if tab == nil || seg == nil || tab[1] != seg[1] || tab[1] != "3" {
+		t.Errorf("tab %v and segment %v should both count the three entries", tab, seg)
+	}
+}
+
 func TestKnowledgeListShowsKindStatusExcerptAndFilters(t *testing.T) {
 	e := ovEnv(t)
 	knInsert(t, e.St, store.Knowledge{Type: "pitfall", Title: "WAL grows unbounded", Body: "First paragraph about the WAL.\n\n```go\nrows.Close()\n```\n\nSecond paragraph.", Confidence: "verified"})
@@ -51,7 +66,7 @@ func TestKnowledgeListShowsKindStatusExcerptAndFilters(t *testing.T) {
 	knInsert(t, e.St, store.Knowledge{Type: "note", Title: "Staged idea", Confidence: "staged"})
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/knowledge")
 	for _, want := range []string{"WAL grows unbounded", "Use SQLite", "Staged idea", "Pitfall", "Decision", "Verified", "Trusted", "Staged",
-		"First paragraph about the WAL.", `class="kn-title" href="/ui/knowledge/`, `/static/knowledge.css`, `aria-current="page"`} {
+		"First paragraph about the WAL.", `<div class="tt"><a class="rl" href="/ui/x/shell/knowledge/`, `/static/ui-knowledge.css`, `aria-current="page"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("member list lacks %q", want)
 		}
@@ -226,7 +241,7 @@ func TestReviewApproveRejectUndoAndEdit(t *testing.T) {
 		t.Errorf("after edit: %+v", k)
 	}
 	_, detail := fetchPage(t, e.Owner, e.Base+resp.Header.Get("Location"))
-	for _, want := range []string{"Reject me, better", "Saved: Reject me, better", "New body", "History", "Reject me", `id="edit"`} {
+	for _, want := range []string{"Reject me, better", "Saved: Reject me, better", "New body", `id="revisions"`, "Reject me", `id="edit"`} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("detail lacks %q", want)
 		}
@@ -387,7 +402,13 @@ func TestDecisionsInTheWrongStateConflictAndNeverRewriteTheEntry(t *testing.T) {
 func TestKnowledgeActionsOnForeignOrUnreadableEntriesAnswerNotFound(t *testing.T) {
 	e := ovEnv(t)
 	hidden := knInsert(t, e.St, store.Knowledge{Title: "SECRET-HIDDEN", Confidence: "staged", Scope: scope.Axes{Project: shellHiddenProject}})
-	machine := knInsert(t, e.St, store.Knowledge{Title: "SECRET-MACHINE", Confidence: "trusted", Scope: scope.Axes{Project: shellProject, Machine: "mainex"}})
+	// Machine-axis knowledge has no project: only the owner of the machine reads it.
+	// (With a project the machine is only where it applies; see
+	// TestKnowledgeOfAProjectOnAMachineIsReadThroughTheProject.)
+	machine, err := e.St.InsertKnowledge(store.Knowledge{Type: "note", Title: "SECRET-MACHINE", Body: "body", Person: "alice", Confidence: "trusted", Scope: scope.Axes{Machine: "mainex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	staged := knInsert(t, e.St, store.Knowledge{Title: "SECRET-STAGED", Confidence: "staged"})
 	for name, c := range map[string]*http.Client{"member": e.Member, "reviewer": e.Reviewer, "lead": e.Lead} {
 		for _, id := range []int64{hidden, machine} {
@@ -466,16 +487,16 @@ func TestHistoryIsForMembersAndShowsTheAuthorOfEachVersion(t *testing.T) {
 	if !strings.Contains(guest, "Public body") {
 		t.Fatal("guest does not see the released entry")
 	}
-	for _, leak := range []string{"SECRET-DRAFT", "Draft title", "History", "kn-history"} {
+	for _, leak := range []string{"SECRET-DRAFT", "Draft title", `id="revisions"`} {
 		if strings.Contains(guest, leak) {
 			t.Errorf("guest detail leaks the earlier version: %q", leak)
 		}
 	}
 	_, member := fetchPage(t, e.Member, path)
-	if !strings.Contains(member, "SECRET-DRAFT body") || !strings.Contains(member, "History") {
+	if !strings.Contains(member, "SECRET-DRAFT body") || !strings.Contains(member, `id="revisions"`) {
 		t.Error("a member does not see the history")
 	}
-	if !strings.Contains(member, `<span class="ov-meta">alice</span>`) || strings.Contains(member, `<span class="ov-meta">lars</span>`) {
+	if !strings.Contains(member, `<span class="rby">alice</span>`) || strings.Contains(member, `<span class="rby">lars</span>`) {
 		t.Error("the history names the replacer instead of the author of the version")
 	}
 	if !strings.Contains(member, "replaced by lars") {
@@ -487,7 +508,7 @@ func TestReviewEditLinkOpensTheForm(t *testing.T) {
 	e := ovEnv(t)
 	id := knInsert(t, e.St, store.Knowledge{Title: "Fix me", Confidence: "staged"})
 	_, review := fetchPage(t, e.Owner, e.Base+"/ui/review")
-	link := "/ui/knowledge/" + strconv.FormatInt(id, 10) + "?edit=1#edit"
+	link := "/ui/x/shell/knowledge/" + strconv.FormatInt(id, 10) + "?edit=1#edit"
 	if !strings.Contains(review, `href="`+link+`"`) {
 		t.Fatalf("the review edit link is not %s", link)
 	}
@@ -563,20 +584,20 @@ func TestHistoryNamesTheAuthorOfEachVersionAndSkipsStatusOnlySteps(t *testing.T)
 	up("lena", map[string]string{"status": "deprecated"})
 	up("lena", map[string]string{"title": "V-LENA", "body": "body-lena", "status": "active"})
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/knowledge/"+strconv.FormatInt(id, 10))
-	h := page[strings.Index(page, "kn-history"):]
+	h := page[strings.Index(page, `id="revisions"`):]
 	if n := strings.Count(h, "V-LARS"); n != 1 {
 		t.Errorf("version of lars shown %d times, want once (status-only steps hidden)", n)
 	}
-	if n := strings.Count(h, `<span class="ov-meta">lars</span>`); n != 1 {
+	if n := strings.Count(h, `<span class="rby">lars</span>`); n != 1 {
 		t.Errorf("lars named %d times as author", n)
 	}
-	if n := strings.Count(h, `<span class="ov-meta">alice</span>`); n != 1 {
+	if n := strings.Count(h, `<span class="rby">alice</span>`); n != 1 {
 		t.Errorf("alice named %d times as author", n)
 	}
-	if strings.Contains(h, `<span class="ov-meta">lena</span>`) {
+	if strings.Contains(h, `<span class="rby">lena</span>`) {
 		t.Error("lena is named as author of a replaced version")
 	}
-	if i, j := strings.Index(h, "V-LARS"), strings.Index(h, `<span class="ov-meta">lars</span>`); i < 0 || j < 0 {
+	if i, j := strings.Index(h, "V-LARS"), strings.Index(h, `<span class="rby">lars</span>`); i < 0 || j < 0 {
 		t.Error("lars version or author missing")
 	}
 }
@@ -596,6 +617,35 @@ func TestKnowledgeAndReviewListsAnswerAHiddenProjectLikeAnUnknownOne(t *testing.
 		if strings.ReplaceAll(hidden, shellHiddenProject, "P") != strings.ReplaceAll(unknown, "github.com/nobody/unknown", "P") &&
 			strings.ReplaceAll(hidden, url.QueryEscape(shellHiddenProject), "P") != strings.ReplaceAll(unknown, url.QueryEscape("github.com/nobody/unknown"), "P") {
 			t.Errorf("%s: a hidden project answers differently from an unknown one", page)
+		}
+	}
+}
+
+// Decision #4349: an entry with project AND machine follows the project role. The
+// members of the project read it (list and detail), whoever owns the machine; a
+// person without a role in the project gets "not found", the owner of the
+// machine included.
+func TestKnowledgeOfAProjectOnAMachineIsReadThroughTheProject(t *testing.T) {
+	e := ovEnv(t)
+	id, err := e.St.InsertKnowledge(store.Knowledge{Type: "note", Title: "PROJECT-ON-MACHINE", Body: "body", Person: "alice", Confidence: "trusted",
+		Scope: scope.Axes{Project: shellProject, Machine: "mainex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hidden, err := e.St.InsertKnowledge(store.Knowledge{Type: "note", Title: "HIDDEN-PROJECT-ON-MACHINE", Body: "body", Person: "alice", Confidence: "trusted",
+		Scope: scope.Axes{Project: shellHiddenProject, Machine: "mainex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]*http.Client{"member": e.Member, "reviewer": e.Reviewer, "lead": e.Lead} {
+		if code, page := fetchPage(t, c, e.Base+"/ui/knowledge/"+strconv.FormatInt(id, 10)); code != http.StatusOK || !strings.Contains(page, "PROJECT-ON-MACHINE") {
+			t.Errorf("%s detail of the project entry with a machine = %d", name, code)
+		}
+		if page := fetchBody(t, c, e.Base+"/ui/knowledge"); !strings.Contains(page, "PROJECT-ON-MACHINE") || strings.Contains(page, "HIDDEN-PROJECT-ON-MACHINE") {
+			t.Errorf("%s: the list lacks the project entry with a machine, or shows one of a project without a role", name)
+		}
+		if code, page := fetchPage(t, c, e.Base+"/ui/knowledge/"+strconv.FormatInt(hidden, 10)); code != http.StatusNotFound || strings.Contains(page, "HIDDEN-PROJECT-ON-MACHINE") {
+			t.Errorf("%s detail of an entry of a project without a role = %d", name, code)
 		}
 	}
 }

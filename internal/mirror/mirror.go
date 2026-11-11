@@ -184,7 +184,7 @@ func requestBody(hit requestdomain.SearchHit, mentionedBy, motivatedBy []string)
 	// Der Spiegel zeigt die Beschreibung, nicht die Kriterien mit ihren Belegen:
 	// die hängen an Zuständen, die sich im Lauf einer Sitzung ändern, und ein
 	// veralteter Haken ist schlimmer als gar keiner.
-	fmt.Fprintf(&b, "\nCriteria, evidence and history: `request_get %d`\n", r.ID)
+	fmt.Fprintf(&b, "\nCriteria, evidence and history: `request action=get request_id=%d`\n", r.ID)
 	b.WriteString(motivatedSection(motivatedBy))
 	b.WriteString(backlinkSection(mentionedBy))
 	b.WriteString(footer())
@@ -237,7 +237,7 @@ func index(in Input, knowledgeCount int) string {
 			len(in.Threads), plural(len(in.Threads), "", "s"), open)
 	}
 	if len(in.Pains) > 0 {
-		fmt.Fprintf(&b, "- `pains/` — %d %s: problems recorded without a solution, by state (active, mitigated, resolved, obsolete), with what they motivate.\n",
+		fmt.Fprintf(&b, "- `pains/` — %d %s: problems recorded without a solution, by state (active, mitigated, accepted, resolved, obsolete), with what they motivate.\n",
 			len(in.Pains), plural(len(in.Pains), "pain", "pains"))
 	}
 	fmt.Fprintf(&b, "- `tree/` — descriptions for %d of %d paths in this repository, one file each.\n\n",
@@ -251,7 +251,7 @@ func index(in Input, knowledgeCount int) string {
 	b.WriteString("    ls .ghosttree/requests/open/                   # what is open\n")
 	b.WriteString("    cat .ghosttree/tree/<path>.md                  # what a file does\n\n")
 	b.WriteString("Each file names its scope, its type and who wrote it. Entry `#42` is `knowledge/*/42-*.md`; `REQ-7` is `requests/*/REQ-7-*.md`.\n\n")
-	b.WriteString("Where ghosttree is available as a tool, it sees more than this directory: session transcripts (`context_sessions`), unreviewed knowledge (`context_search`; superseded or retired entries stay readable by id with `knowledge_id`), and the criteria and evidence behind each request (`request_get`).\n")
+	b.WriteString("Where ghosttree is available as a tool, it sees more than this directory: session transcripts (`context_search action=sessions`), unreviewed knowledge (`context_search`; superseded or retired entries stay readable by id with `knowledge_id`), and the criteria and evidence behind each request (`request action=get`).\n")
 	b.WriteString(footer())
 	return b.String()
 }
@@ -369,6 +369,9 @@ func painBody(v PainView) string {
 	fmt.Fprintf(&b, "%s | %s\n", scopeLabel(scope.Axes{Project: p.Project}), p.State)
 	if strings.TrimSpace(p.Remaining) != "" {
 		fmt.Fprintf(&b, "\nRemaining: %s\n", strings.TrimSpace(p.Remaining))
+	}
+	if strings.TrimSpace(p.AcceptedReason) != "" {
+		fmt.Fprintf(&b, "\nAccepted because: %s\n", strings.TrimSpace(p.AcceptedReason))
 	}
 	if body := strings.TrimRight(p.Body, "\n"); body != "" {
 		b.WriteString("\n" + body + "\n")

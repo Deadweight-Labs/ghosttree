@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/embed"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -69,6 +71,23 @@ type KnowledgeSearch struct {
 	// narrower than Keep; Keep stays the exact rule.
 	Prefilter KnowledgePrefilter
 	Mode      SearchMode
+	// Anchor filtert nach dem Git-Anker der aktuellen Fassung (REQ-597). Er
+	// steht in der Abfrage beider Rankings, nicht erst in Keep: ein Filter auf
+	// einen Commit darf nicht an den ersten Treffern der Rangfolge hängen.
+	Anchor AnchorFilter
+	// Origin filtert nach Zeitpunkt und Bereich des Entstehungskontexts der
+	// aktuellen Fassung (REQ-600); ohne Kontext zählt created_at.
+	Origin originctx.Filter
+	// Settled leaves out what is not settled knowledge: staged and quarantined
+	// entries and every note of the gardener. It is the agent view of search,
+	// the same rule delivery applies (see deliverable), so a proposal nobody has
+	// decided on cannot crowd out the entry it is about. It is part of the query
+	// of every ranking, not of Keep, because the full-text ranking ignores Keep.
+	Settled bool
+	// NoGardener leaves out the gardener's notes and nothing else. The web search
+	// uses it: a person may see a staged entry, but the gardener's suggestions
+	// belong to the review queue unless the search line asks for them.
+	NoGardener bool
 }
 
 // KnowledgePrefilter is a Prefilter on the table alias k of knowledge.
@@ -111,12 +130,32 @@ func (s *Store) searchKnowledgeWith(q string, o KnowledgeSearch) ([]Knowledge, e
 		where, args = o.Axes.FilterWhere()
 	}
 	where, args = withGlobalScope(where, args, "k", []SessionViewer{o.Viewer})
+	if af, afArgs := o.Anchor.Where("k.anchor_id"); af != "" {
+		where = "(" + where + ") AND " + af
+		args = append(slices.Clone(args), afArgs...)
+	}
+	if of, ofArgs := originWhere(o.Origin, "k.origin_id", "k.created_at"); of != "" {
+		where = "(" + where + ") AND " + of
+		args = append(slices.Clone(args), ofArgs...)
+	}
+	switch {
+	case o.Settled:
+		where = "(" + where + ") AND " + settled
+	case o.NoGardener:
+		where = "(" + where + ") AND " + notGardener
+	}
 	limit := o.Limit
 	if limit <= 0 {
 		limit = 20
 		if o.Operator {
 			limit = 50
 		}
+	}
+
+	if strings.TrimSpace(q) == "" {
+		// Ohne Suchwörter (nur Qualifier der Suchsprache, REQ-600) gibt es keine
+		// Rangfolge: die jüngsten Einträge, die Filter und Sichtbarkeit lassen.
+		return s.listKnowledgeFiltered(where, args, limit, o)
 	}
 
 	sh := s.embedShared()
@@ -171,7 +210,7 @@ func ftsConditions(o KnowledgeSearch) string {
 func (s *Store) ftsKnowledge(q, where string, args []any, limit int, o KnowledgeSearch) ([]Knowledge, error) {
 	args = append([]any{ftsQuery(q)}, args...)
 	args = append(args, limit)
-	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+`
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+prefix(knowledgeCols, "k.")+`
 		FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
 		WHERE knowledge_fts MATCH ? AND `+where+ftsConditions(o)+`
 		ORDER BY f.rank LIMIT ?`, args...)
@@ -272,6 +311,12 @@ func fuseRankingsWeighted(text, vec []int64, depth, room int, vecWeight float64)
 // a minute). In the strict modes of the quality measurement, where an answer from
 // full text would be a wrong measurement, each of those is an error instead.
 func (s *Store) queryVector(q string, mode SearchMode, kind string) ([]float32, *EmbedSearchConfig, error) {
+	return s.queryVectorCtx(s.ctx(), q, mode, kind)
+}
+
+// queryVectorCtx is queryVector that stops waiting for the vector when ctx ends;
+// the search then answers from full text, as after a timeout.
+func (s *Store) queryVectorCtx(ctx context.Context, q string, mode SearchMode, kind string) ([]float32, *EmbedSearchConfig, error) {
 	sh := s.embedShared()
 	cfg := sh.cfg.Load()
 	switch {
@@ -298,9 +343,7 @@ func (s *Store) queryVector(q string, mode SearchMode, kind string) ([]float32, 
 		err = cfg.Ready()
 	}
 	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
-		v, err = cfg.Embedder.Query(ctx, q)
-		cancel()
+		v, err = sh.queries.vector(ctx, cfg, q)
 	}
 	switch {
 	case err == nil:
@@ -308,7 +351,9 @@ func (s *Store) queryVector(q string, mode SearchMode, kind string) ([]float32, 
 	case mode.strict():
 		return nil, cfg, fmt.Errorf("embedding the query: %w", err)
 	}
-	sh.logFallback(cfg, err)
+	if ctx.Err() == nil {
+		sh.logFallback(cfg, err)
+	}
 	return nil, cfg, nil
 }
 
@@ -375,7 +420,7 @@ func (s *Store) textRanking(q, where string, args []any, pool int, o KnowledgeSe
 	}
 	args = append([]any{ftsQuery(q)}, args...)
 	args = append(args, scan)
-	rows, err := s.db.Query(`SELECT k.id FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT k.id FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
 		WHERE knowledge_fts MATCH ? AND `+where+ftsConditions(o)+`
 		ORDER BY f.rank LIMIT ?`, args...)
 	if err != nil {
@@ -400,7 +445,7 @@ func (s *Store) vectorRanking(qvec []float32, cfg *EmbedSearchConfig, where stri
 	if !o.Operator {
 		query += ` AND k.confidence != 'quarantined'`
 	}
-	rows, err := s.db.Query(query+` AND `+where, append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion()}, args...)...)
+	rows, err := s.db.QueryContext(s.ctx(), query+` AND `+where, append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion()}, args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -445,7 +490,7 @@ func (s *Store) keptRows(ids []int64, want int, keep func(Knowledge) bool) ([]Kn
 		for i, id := range part {
 			args[i] = id
 		}
-		rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge WHERE id IN (`+placeholders(len(part))+`)`, args...)
+		rows, err := s.db.QueryContext(s.ctx(), `SELECT `+knowledgeCols+` FROM knowledge WHERE id IN (`+placeholders(len(part))+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -469,4 +514,20 @@ func (s *Store) keptRows(ids []int64, want int, keep func(Knowledge) bool) ([]Kn
 		}
 	}
 	return out, nil
+}
+
+// listKnowledgeFiltered ist die Antwort auf eine Suche ohne Wörter: dieselben
+// Filter und Statusregeln wie die Volltextsuche, die jüngsten zuerst.
+func (s *Store) listKnowledgeFiltered(where string, args []any, limit int, o KnowledgeSearch) ([]Knowledge, error) {
+	if o.Prefilter.SQL != "" {
+		where = "(" + where + ") AND (" + o.Prefilter.SQL + ")"
+		args = append(slices.Clone(args), o.Prefilter.Args...)
+	}
+	args = append(slices.Clone(args), limit)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT `+prefix(knowledgeCols, "k.")+` FROM knowledge k
+		WHERE `+where+ftsConditions(o)+` ORDER BY k.updated_at DESC, k.id DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	return s.scanKnowledge(rows)
 }

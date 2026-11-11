@@ -16,6 +16,53 @@ The complete list of what Ghosttree does in the current development version. The
 - Harness installation and diagnostics for Claude Code, Codex, and OpenCode.
 - A work ledger with acceptance criteria, relationships, evidence, and
   interrupted-session handoff.
+- Work packages: a branch (later a pull request) carries its requests as a
+  requirements list, each request mandatory (`pflicht`) or `optional`. A session
+  on the branch is briefed with the package at start, a branch cut from another
+  inherits that one's package, and a reviewer reads the complete list with every
+  criterion, its evidence and the Git state the evidence was written at
+  (`package_get`, `package_update`, `package_review`, `ctx package`). A criterion
+  whose evidence does not hold up is reopened with a reason
+  (`request_record_progress` with `criterion_reopen`).
+- Runbooks (`ctx runbook`, `ctx run`, `runbook_get`, `runbook_write`,
+  `run_report`): named procedures for what must be done the same way every time
+  (build, roll out, check) with typed parameters, preconditions, numbered steps
+  with exact commands and checks, a way back, linked pitfalls and triggers. They
+  live in Ghosttree, not in the repository, apply to a project, a machine, both,
+  or (for the author alone) neither, and every version is kept with its content
+  hash, writer, Git state and where it came from. A keyword in a prompt, a Bash
+  command pattern or a touched path delivers the newest approved version to the
+  session, at most two per answer and once per session. `ctx run NAME param=value`
+  prints the checklist with the parameters filled in; every run is reported with
+  its Git state and the runbook shows "last success on commit ...". A reported
+  deviation becomes a proposal that an owner or lead must approve. The seed
+  runbooks for a production rollout and SSH access are in
+  `docs/runbooks/example.json` (`ctx runbook import`).
+
+  Executable targets (like `make` targets) are a second, stricter stage, and
+  **switched off** until the operator starts `ctx serve` with
+  `GHOSTTREE_RUNBOOK_EXEC=1`. A target is a list of argument lists run without a
+  shell; parameters are typed, limited to letters, digits and `. _ / : @ + , = -`,
+  and replace a placeholder inside one argument, never a shell string. `ctx run
+  NAME --target T` is a dry run that shows each argument list; only `--run`
+  executes, in the foreground of the calling process, so the harness's normal
+  Bash approval applies. It runs only a version that an owner or lead wrote or
+  approved (a proposal or a member's version never runs) and that a person has
+  allowed for this machine and this exact content hash. A changed version needs a
+  new allowance. Every run is logged with version, machine, person and Git state.
+
+  What the boundary is: the allowance for a machine is stored on the server and
+  `ctx run --run` asks the server; a file on the machine allows nothing, and no
+  API token, device token or agent token can create one. A person creates it, today
+  as the operator with database access on the server (`ctx runbook allow --db ...`,
+  which shows the diff and asks for the start of the hash at a terminal, the same
+  boundary as role changes). What it is not: protection against a process that can
+  open the server's database or, once the web page for allowing exists, steal a
+  person's web session cookie. That page (an interactive session with CSRF and the
+  diff shown with visible escapes) is not built yet; until then, allowing runs
+  through the operator command. Texts of a runbook are single lines without control
+  or invisible formatting characters, and the diff and the dry run show every
+  non-ASCII character as an escape, so what a person approves is what runs.
 - Quarantined session distillation, review, usage measurement, recurrence
   tracking, and cost reporting.
 - Versioned documents with local drafts, optimistic concurrency, byte-preserved
@@ -32,5 +79,19 @@ The complete list of what Ghosttree does in the current development version. The
 - Coordination between agents and people: rooms, direct messages, threads,
   `@name` mentions, and delivery into Claude Code sessions through an opt-in
   channel.
+- Features (`ctx feature`, `feature_get`, `feature_update`, `FEAT-n`): the living
+  description of what the product does. A feature has a name, a summary, how it
+  behaves now, its limits, how to use it (CLI, MCP, API, web interface) and the
+  repository paths it lives in. Every change is a new version that keeps who wrote
+  it, the Git state and what triggered it (idea, issues, pull request); nothing is
+  overwritten. A pull request that changes paths inside a feature gets the item
+  "Feature X: Beschreibung angepasst?" in its checklist (`ctx feature paths --pr N`
+  reports the paths), closed by a new version that names the pull request or by a
+  note that the description still holds. An idea can say which feature it changes
+  and shows that feature's description next to the wish; its implementation
+  carries the description forward. An agent working in a feature's paths gets it
+  in short, once per session and version. `ctx feature export` writes this page
+  from the features, `ctx feature import` takes its items as features
+  (`docs/features-map.json` names them and their paths).
 
 Run `ctx` or `ctx <command>` without arguments to see the available command

@@ -18,7 +18,7 @@ func TestAgentCardIsActiveWhileItsHooksFireAndIdleOtherwise(t *testing.T) {
 	}
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/agents")
 	stateOf := func(id string) string {
-		m := regexp.MustCompile(`<li class="ag-card is-(\w+)" title="` + regexp.QuoteMeta(id) + `"`).FindStringSubmatch(page)
+		m := regexp.MustCompile(`<div class="row arow is-(\w+)[^"]*" title="` + regexp.QuoteMeta(id) + `"`).FindStringSubmatch(page)
 		if m == nil {
 			t.Fatalf("no card for %s", id)
 		}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -19,7 +20,8 @@ const requestUsage = `usage: ctx request <command>
   list [--json]                    list open requests
   search <query> [--json]          search requests for the current project
   show <id> [--json]               show one request
-  create --type T --title T [--description D] [--ac C...] [--explanation E] [--project P] [--json]
+  create --type T --title T [--description D] [--ac C...] [--explanation E] [--project P]
+                                   [--parent REQ-n] [--derived-from IDEA-n|PAIN-n|REQ-n|thread:n ...] [--json]
   move <id> --project P [--reason R] [--json]
   start <id> --session N [--role primary|related] [--json]
   pause|complete-work|abandon <work-id> --summary S [--json]
@@ -28,10 +30,13 @@ const requestUsage = `usage: ctx request <command>
   done <id> --evidence-kind K --evidence-ref R [--json]`
 
 type requestEnvelope struct {
-	OK       bool     `json:"ok"`
-	Data     any      `json:"data,omitempty"`
-	Warnings []string `json:"warnings,omitempty"`
-	Error    any      `json:"error,omitempty"`
+	OK   bool `json:"ok"`
+	Data any  `json:"data,omitempty"`
+	// Card is the compact card of the one object the answer is about, with its
+	// web link (REQ-603).
+	Card     *links.Card `json:"card,omitempty"`
+	Warnings []string    `json:"warnings,omitempty"`
+	Error    any         `json:"error,omitempty"`
 }
 
 type repeatedString []string
@@ -55,7 +60,7 @@ func cmdRequest(args []string, stdout io.Writer) int {
 	if err != nil {
 		return writeRequestCLIError(stdout, jsonMode, 1, err)
 	}
-	c := client.New(cfg)
+	c := anchoredClient(cfg)
 	switch sub {
 	case "list":
 		if len(rest) != 0 {
@@ -78,7 +83,8 @@ func cmdRequest(args []string, stdout io.Writer) int {
 			return requestCLIUsage(stdout)
 		}
 		detail, err := c.GetRequest(id)
-		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
+		card := cliBuilder(cfg, requestProjectAxes(cfg.Machine).Project).RequestCard(detail)
+		return writeRequestCLIResultCard(stdout, jsonMode, detail, &card, err)
 	case "create":
 		fs := flag.NewFlagSet("request create", flag.ContinueOnError)
 		fs.SetOutput(stdout)
@@ -91,6 +97,9 @@ func cmdRequest(args []string, stdout io.Writer) int {
 		fs.Var(&criteria, "ac", "acceptance criterion")
 		project := fs.String("project", "", "project the request belongs to (remote or unique short name); default: the current one")
 		explanation := fs.String("explanation", "", "short plain-language note for the people who read the ledger")
+		parent := fs.String("parent", "", "parent issue, REQ-n of the same project")
+		var derived repeatedString
+		fs.Var(&derived, "derived-from", "what it came out of: IDEA-n, PAIN-n, REQ-n or thread:n (repeatable)")
 		if fs.Parse(rest) != nil || *typ == "" || *title == "" {
 			return requestCLIUsage(stdout)
 		}
@@ -100,8 +109,9 @@ func cmdRequest(args []string, stdout io.Writer) int {
 		if err != nil {
 			return writeRequestCLIError(stdout, jsonMode, 1, err)
 		}
-		detail, err := c.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: *typ, Title: *title, Description: *description, Priority: *priority, Scope: scope.Axes{Project: target}, SessionRef: currentSessionRef()}, Criteria: criteria, IdempotencyKey: *key, Explanation: *explanation})
-		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
+		detail, err := c.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: *typ, Title: *title, Description: *description, Priority: *priority, Scope: scope.Axes{Project: target}, SessionRef: currentSessionRef()}, Criteria: criteria, IdempotencyKey: *key, Explanation: *explanation, Parent: *parent, DerivedFrom: derived})
+		card := cliBuilder(cfg, target).RequestCard(detail)
+		return writeRequestCLIResultCard(stdout, jsonMode, detail, &card, err)
 	case "move":
 		id, flags, ok := requestIDAndFlags(rest)
 		if !ok {
@@ -119,11 +129,13 @@ func cmdRequest(args []string, stdout io.Writer) int {
 			return writeRequestCLIError(stdout, jsonMode, 1, err)
 		}
 		detail, err := c.MoveRequest(id, target, *reason)
+		card := cliBuilder(cfg, target).RequestCard(detail)
 		if err == nil && !jsonMode {
 			fmt.Fprintf(stdout, "moved REQ-%d to %s\n", detail.Request.ID, detail.Request.Scope.Label())
+			cliCard(stdout, card)
 			return 0
 		}
-		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
+		return writeRequestCLIResultCard(stdout, jsonMode, detail, &card, err)
 	case "start":
 		id, flags, ok := requestIDAndFlags(rest)
 		if !ok {
@@ -137,7 +149,7 @@ func cmdRequest(args []string, stdout io.Writer) int {
 			return requestCLIUsage(stdout)
 		}
 		work, warnings, err := c.StartRequestWork(id, *sessionID, *role)
-		return writeRequestCLIResult(stdout, jsonMode, work, warnings, err)
+		return writeRequestCLIResultWarnCard(stdout, jsonMode, work, warnings, requestCardOf(c, cfg, work.RequestID, err), err)
 	case "pause", "complete-work", "abandon":
 		workID, flags, ok := requestIDAndFlags(rest)
 		if !ok {
@@ -151,9 +163,9 @@ func cmdRequest(args []string, stdout io.Writer) int {
 		}
 		state := map[string]string{"pause": "paused", "complete-work": "completed", "abandon": "abandoned"}[sub]
 		work, err := c.FinishRequestWork(workID, state, *summary)
-		return writeRequestCLIResult(stdout, jsonMode, work, nil, err)
+		return writeRequestCLIResultCard(stdout, jsonMode, work, requestCardOf(c, cfg, work.RequestID, err), err)
 	case "ac":
-		return cmdRequestAC(c, rest, stdout, jsonMode)
+		return cmdRequestAC(c, cfg, rest, stdout, jsonMode)
 	case "done":
 		id, flags, ok := requestIDAndFlags(rest)
 		if !ok {
@@ -171,7 +183,8 @@ func cmdRequest(args []string, stdout io.Writer) int {
 			return writeRequestCLIError(stdout, jsonMode, 1, err)
 		}
 		detail, err := c.GetRequest(id)
-		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
+		card := cliBuilder(cfg, detail.Request.Scope.Project).RequestCard(detail)
+		return writeRequestCLIResultCard(stdout, jsonMode, detail, &card, err)
 	default:
 		return requestCLIUsage(stdout)
 	}
@@ -185,7 +198,7 @@ func requestIDAndFlags(args []string) (int64, []string, bool) {
 	return id, args[1:], err == nil
 }
 
-func cmdRequestAC(c *client.Client, args []string, stdout io.Writer, jsonMode bool) int {
+func cmdRequestAC(c *client.Client, cfg config.Config, args []string, stdout io.Writer, jsonMode bool) int {
 	if len(args) < 3 {
 		return requestCLIUsage(stdout)
 	}
@@ -196,7 +209,7 @@ func cmdRequestAC(c *client.Client, args []string, stdout io.Writer, jsonMode bo
 	}
 	if action == "add" {
 		criterion, err := c.AddRequestCriterion(requestID, strings.Join(args[2:], " "))
-		return writeRequestCLIResult(stdout, jsonMode, criterion, nil, err)
+		return writeRequestCLIResultCard(stdout, jsonMode, criterion, requestCardOf(c, cfg, requestID, err), err)
 	}
 	if action != "met" && action != "waive" {
 		return requestCLIUsage(stdout)
@@ -221,7 +234,22 @@ func cmdRequestAC(c *client.Client, args []string, stdout io.Writer, jsonMode bo
 		return writeRequestCLIError(stdout, jsonMode, 1, err)
 	}
 	detail, err := c.GetRequest(requestID)
-	return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
+	card := cliBuilder(cfg, detail.Request.Scope.Project).RequestCard(detail)
+	return writeRequestCLIResultCard(stdout, jsonMode, detail, &card, err)
+}
+
+// requestCardOf reads the request an answer is about and gives its card; nil
+// when the answer failed or the request cannot be read again.
+func requestCardOf(c *client.Client, cfg config.Config, id int64, failed error) *links.Card {
+	if failed != nil || id == 0 {
+		return nil
+	}
+	detail, err := c.GetRequest(id)
+	if err != nil {
+		return nil
+	}
+	card := cliBuilder(cfg, detail.Request.Scope.Project).RequestCard(detail)
+	return &card
 }
 
 func requestProjectAxes(machine string) scope.Axes {
@@ -242,6 +270,32 @@ func removeBoolArg(args []string, name string) ([]string, bool) {
 }
 
 func requestCLIUsage(stdout io.Writer) int { fmt.Fprintln(stdout, requestUsage); return 2 }
+
+// writeRequestCLIResultCard is writeRequestCLIResult for an answer about one
+// object: JSON carries the card, text prints it under the data.
+func writeRequestCLIResultCard(stdout io.Writer, jsonMode bool, data any, card *links.Card, err error) int {
+	return writeRequestCLIResultWarnCard(stdout, jsonMode, data, nil, card, err)
+}
+
+// writeRequestCLIResultWarnCard is writeRequestCLIResultCard with warnings.
+func writeRequestCLIResultWarnCard(stdout io.Writer, jsonMode bool, data any, warnings []string, card *links.Card, err error) int {
+	if err != nil {
+		return writeRequestCLIError(stdout, jsonMode, 1, err)
+	}
+	if jsonMode {
+		env := requestEnvelope{OK: true, Data: data, Warnings: warnings}
+		if card != nil && card.URL != "" {
+			env.Card = card
+		}
+		_ = json.NewEncoder(stdout).Encode(env)
+		return 0
+	}
+	code := writeRequestCLIResult(stdout, false, data, warnings, nil)
+	if card != nil {
+		cliCard(stdout, *card)
+	}
+	return code
+}
 
 func writeRequestCLIResult(stdout io.Writer, jsonMode bool, data any, warnings []string, err error) int {
 	if err != nil {

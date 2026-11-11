@@ -2,11 +2,15 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
+	docwork "github.com/Deadweight-Labs/ghosttree/internal/doc"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -305,5 +309,114 @@ func TestGetDocumentNotFound(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("status %d, erwartet 404", res.StatusCode)
+	}
+}
+
+// Every revision has its own writer (REQ-620): creating, importing and pushing
+// stamp the revision row with the caller, an agent with its session.
+func TestDocumentRevisionsCarryTheirWriter(t *testing.T) {
+	f, _ := guestRoomFixture(t, true)
+	codexSession(t, f)
+	created := decode[store.Document](t, actorCall(t, f, "mia", "codex-mia", 200, "POST", "/api/documents",
+		map[string]any{"project": accProject, "slug": "stamped", "kind": "report", "title": "T", "body": "eins\n", "message": "m"}))
+	pushed := decode[store.Document](t, actorCall(t, f, "lena", "", 200, "PUT", idPath("/api/documents/%d/revisions", created.ID),
+		map[string]any{"base_revision": 1, "body": "zwei\n", "message": "m2"}))
+	r1, err := f.st.DocumentRevision(created.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ea := stampOf(t, f.st, actor.DocRevision, r1.ID); !ea.IsAgent() || ea.Harness != "codex" {
+		t.Errorf("revision 1: %+v", ea)
+	}
+	r2, err := f.st.DocumentRevision(created.ID, pushed.HeadRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ea := stampOf(t, f.st, actor.DocRevision, r2.ID); ea.AccountID != 2 {
+		t.Errorf("revision 2 is not lena's: %+v", ea)
+	}
+}
+
+// Reading a document's revisions and finding it follows the project roles:
+// owner, members and the guest read, whoever has no role gets 404 or nothing.
+func TestDocumentRevisionsAndSearchByRole(t *testing.T) {
+	f := accessAPI(t, true)
+	doc := f.id["d-mia"]
+	for _, who := range []string{"robin", "lena", "mia", "rex", "gus"} {
+		f.expect(t, who, 200, "GET", idPath("/api/documents/%d/revisions", doc), nil)
+		f.expect(t, who, 200, "GET", idPath("/api/documents/%d/revisions/1", doc), nil)
+		if out := f.expect(t, who, 200, "GET", "/api/documents?q=text&project="+accProject, nil); !strings.Contains(out, `"slug":"d-mia"`) {
+			t.Errorf("%s does not find the document: %s", who, out)
+		}
+	}
+	f.expect(t, "nora", 404, "GET", idPath("/api/documents/%d/revisions", doc), nil)
+	f.expect(t, "nora", 404, "GET", idPath("/api/documents/%d/revisions/1", doc), nil)
+	if out := f.expect(t, "nora", 200, "GET", "/api/documents?q=text", nil); strings.Contains(out, "d-mia") {
+		t.Errorf("stranger finds the document: %s", out)
+	}
+}
+
+// A repeated import writes nothing, so it stamps nothing: revision 1 keeps the
+// writer of the first import, whoever repeats it.
+func TestRepeatedDocumentImportKeepsTheFirstWriter(t *testing.T) {
+	f, _ := guestRoomFixture(t, true)
+	codexSession(t, f)
+	body := "imported\n"
+	run := decode[struct{ ID int64 }](t, actorCall(t, f, "mia", "codex-mia", 200, "POST", "/api/migrations",
+		map[string]any{"project": accProject, "artifacts": map[string]string{"docs/a.md": store.Digest(body)}}))
+	in := store.MigratedDocument{Document: store.Document{Project: accProject, Slug: "imported", Kind: "spec", Title: "I"},
+		Source: "docs/a.md", Digest: store.Digest(body), Body: body, Message: "import"}
+	path := idPath("/api/migrations/%d/documents/import", run.ID)
+	first := decode[store.Document](t, actorCall(t, f, "mia", "codex-mia", 200, "POST", path, in))
+	// Someone else moves the head without a stamp (the store directly, as an
+	// older server would have).
+	if _, err := f.st.PushRevision(first.ID, 1, "edited\n", "edit", "robin"); err != nil {
+		t.Fatal(err)
+	}
+	again := decode[store.Document](t, actorCall(t, f, "lena", "", 200, "POST", path, in))
+	if again.ID != first.ID {
+		t.Fatalf("repeat created another document: %d vs %d", again.ID, first.ID)
+	}
+	r1, err := f.st.DocumentRevision(first.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ea := stampOf(t, f.st, actor.DocRevision, r1.ID); ea.AccountID != 3 || ea.Harness != "codex" {
+		t.Errorf("revision 1 changed its writer on the repeat: %+v", ea)
+	}
+	r2, err := f.st.DocumentRevision(first.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ea, ok, _ := f.st.ActorOf(actor.DocRevision, r2.ID); ok {
+		t.Errorf("the repeated import stamped robin's revision 2: %+v", ea)
+	}
+}
+
+// Create and push refuse a text over the limit with 413 and the size, before
+// anything is stored.
+func TestDocumentWritesRefuseTooLargeTexts(t *testing.T) {
+	srv, token, st := newDocumentServer(t)
+	big := strings.Repeat("a", docwork.MaxBodyBytes+1)
+	res := req(t, "POST", srv.URL+"/api/documents", token, map[string]any{"project": "github.com/x/y", "slug": "big", "kind": "spec", "title": "B", "body": big})
+	out, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(string(out), "document_too_large") || !strings.Contains(string(out), "at most 5 MB") {
+		t.Fatalf("create: %d %s", res.StatusCode, out)
+	}
+	d, err := st.CreateDocument(store.Document{Project: "github.com/x/y", Slug: "small", Kind: "spec", Title: "S", Person: "test"}, "s\n", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Escapes make the request larger than the text: the reader stops it.
+	huge := strings.Repeat("<", docwork.MaxBodyBytes)
+	res = req(t, "PUT", srv.URL+"/api/documents/"+strconv.FormatInt(d.ID, 10)+"/revisions", token, map[string]any{"base_revision": 1, "body": huge, "message": "m"})
+	out, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(string(out), "document_too_large") {
+		t.Fatalf("push: %d %s", res.StatusCode, out)
+	}
+	if got, _ := st.DocumentByID(d.ID); got.HeadRevision != 1 {
+		t.Fatalf("head moved to %d", got.HeadRevision)
 	}
 }

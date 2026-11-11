@@ -26,10 +26,12 @@ const (
 // gardenRow is one note of the gardener: verdict, the entry it is about, why.
 type gardenRow struct {
 	ID, Href, Project, Verdict, Subject, Reason, Age string
-	Old                                              bool
-	Explain                                          *explainView
-	CanApprove, CanReject                            bool
-	Token, Next, Filter                              string
+	// Tone is the colour class of the verdict label.
+	Tone                  string
+	Old                   bool
+	Explain               *explainView
+	CanApprove, CanReject bool
+	Token, Next, Filter   string
 	// Lines are what the note holds beyond its reason (the test, the sketch);
 	// Refs the entries a merge keeps and replaces; Act the one action besides
 	// rejecting, for a note that has one (see review_garden_actions.go).
@@ -89,7 +91,7 @@ func (a *app) gardenBlock(r *http.Request, pa *store.ProjectAccess, project stri
 		verdict, subject := parseGardenTitle(l, view.Title)
 		created := firstNonEmpty(k.ObservedAt, k.CreatedAt)
 		row := gardenRow{
-			ID: card.ID, Href: card.Href, Project: lastSegment(k.Scope.Project), Verdict: verdict, Subject: subject,
+			ID: card.ID, Href: card.Href, Project: lastSegment(k.Scope.Project), Verdict: verdict, Subject: subject, Tone: gardenTone(view.Title),
 			Reason: ellipsize(gardenReason(view.Body), gardenReasonRunes), Age: card.Age, Old: olderThan(created, now, reviewOldAfter),
 			Explain: card.Explain, CanApprove: card.CanApprove, CanReject: card.CanReject,
 			Token: v.Token, Next: "review", Filter: project,
@@ -187,6 +189,26 @@ func parseGardenTitle(l lang, title string) (verdict, subject string) {
 		return l.msg("review.garden.proof"), subject
 	}
 	return strings.TrimSpace(label), subject
+}
+
+// gardenTone is the colour class of a verdict label in the review list.
+func gardenTone(title string) string {
+	rest := strings.TrimSpace(strings.TrimPrefix(title, "[Gärtner]"))
+	if strings.HasPrefix(rest, "Beschreibung? ") {
+		return "don"
+	}
+	label, _, _ := strings.Cut(rest, " #")
+	switch strings.TrimSpace(label) {
+	case "Veraltet?", "Korrektur?":
+		return "warn"
+	case "Duplikat?":
+		return "acc"
+	case "Widerspruch?":
+		return "dan"
+	case "Erfüllt?":
+		return "ok"
+	}
+	return "neu"
 }
 
 // gardenReason is the gardener's reason: the text after "Begründung:" up to the

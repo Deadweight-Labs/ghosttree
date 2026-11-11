@@ -45,6 +45,7 @@ func (a *api) createThread(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "project is required")
 		return
 	}
+	in.GitAnchor = anchorFromRequest(r)
 	id, err := access.CreateThread(in)
 	if err != nil {
 		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
@@ -54,6 +55,7 @@ func (a *api) createThread(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	a.noteIdeaDiscussion(r, in.Link)
 	writeJSON(w, 200, map[string]int64{"id": id})
 }
 
@@ -205,7 +207,7 @@ func (a *api) setThreadState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.State != "" {
-		if err := access.SetThreadState(id, in.State); err != nil {
+		if err := access.SetThreadState(id, in.State, anchorFromRequest(r)); err != nil {
 			if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
 				writeCoordAccessError(w, err)
 				return
@@ -239,6 +241,8 @@ func (a *api) linkThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ThreadID = id
+	// Der Git-Stand kommt nur aus dem Header, nie aus dem Rumpf.
+	in.GitAnchor = anchorFromRequest(r)
 	if err := access.LinkThread(in); err != nil {
 		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
 			writeCoordAccessError(w, err)
@@ -247,6 +251,7 @@ func (a *api) linkThread(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	a.noteIdeaDiscussion(r, &in)
 	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
@@ -312,6 +317,7 @@ func (a *api) putThreadSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ThreadID = id
+	in.GitAnchor = anchorFromRequest(r)
 	rev, err := access.PutThreadSummary(in)
 	if err != nil {
 		writeCoordAccessError(w, err)
@@ -360,6 +366,7 @@ func (a *api) putThreadOutcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ThreadID = id
+	in.GitAnchor = anchorFromRequest(r)
 	if err := access.PutThreadOutcome(in); err != nil {
 		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
 			writeCoordAccessError(w, err)
@@ -426,6 +433,7 @@ func (a *api) createThreadByRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.access(r).Filtered()
+	in.GitAnchor = anchorFromRequest(r)
 	id, err := a.st.CreateThreadByRole(principalOf(r), in)
 	if err != nil {
 		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
@@ -435,5 +443,6 @@ func (a *api) createThreadByRole(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	a.noteIdeaDiscussion(r, in.Link)
 	writeJSON(w, 200, map[string]int64{"id": id})
 }

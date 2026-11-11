@@ -3,7 +3,10 @@
 // an entry with an unset axis applies everywhere along that axis.
 package scope
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 type Axes struct {
 	Project string `json:"project,omitempty"`
@@ -63,16 +66,101 @@ func canonicalLineage(branch string, lineage []string) []string {
 
 // NormalizeRemote canonicalizes a git remote URL to host/owner/repo, lowercase.
 func NormalizeRemote(remote string) string {
-	r := strings.ToLower(strings.TrimSpace(remote))
-	r = strings.TrimSuffix(r, "/")
-	r = strings.TrimSuffix(r, ".git")
-	for _, p := range []string{"https://", "http://", "ssh://", "git://"} {
-		r = strings.TrimPrefix(r, p)
+	// Repeated until nothing changes, so normalizing twice is normalizing once:
+	// a gate and the store must see the same id. Each round strips repeated
+	// prefixes and suffixes and every colon at once, so two rounds settle any
+	// real remote; the cap keeps a hostile value linear.
+	r := remote
+	for i := 0; i < 8; i++ {
+		next := normalizeRemoteOnce(r)
+		if next == r {
+			break
+		}
+		r = next
 	}
-	r = strings.TrimPrefix(r, "git@")
-	r = strings.Replace(r, ":", "/", 1)
-	r = strings.TrimPrefix(r, "www.")
-	return strings.TrimSuffix(r, "/")
+	return r
+}
+
+func normalizeRemoteOnce(remote string) string {
+	r := trimRemoteTail(strings.ToLower(strings.TrimSpace(remote)))
+	url := false
+	for cut := true; cut; {
+		cut = false
+		for _, p := range []string{"https://", "http://", "ssh://", "git://"} {
+			if rest, ok := strings.CutPrefix(r, p); ok {
+				r, url, cut = rest, true, true
+			}
+		}
+	}
+	if url {
+		// A URL names its host as [user@]host[:port]: the user says only who
+		// connects, not which repository it is.
+		host, path, _ := strings.Cut(r, "/")
+		if i := strings.LastIndexByte(host, '@'); i >= 0 {
+			host = host[i+1:]
+		}
+		r = host
+		if path != "" {
+			r += "/" + path
+		}
+	} else {
+		// The scp form, user@host:path, has no port.
+		for strings.HasPrefix(r, "git@") {
+			r = r[len("git@"):]
+		}
+	}
+	// A port after the host: the standard ones (ssh, https, http, git) say
+	// only how to reach the repository and go; any other stays in the id,
+	// since another port can be another server. Every other colon separates
+	// like a slash (host:path, and anything a second round would rewrite).
+	first, rest, hasRest := strings.Cut(r, "/")
+	if h, port, ok := strings.Cut(first, ":"); ok && h != "" && allDigits(port) {
+		if standardPorts[port] {
+			first = h
+		} else {
+			first = h + ":" + port
+		}
+	} else {
+		first = strings.ReplaceAll(first, ":", "/")
+	}
+	r = first
+	if hasRest {
+		r += "/" + strings.ReplaceAll(rest, ":", "/")
+	}
+	for strings.HasPrefix(r, "www.") {
+		r = r[len("www."):]
+	}
+	// GitHub's ssh endpoint on port 443 is GitHub.
+	if rest, ok := strings.CutPrefix(r, "ssh.github.com"); ok && (rest == "" || rest[0] == '/') {
+		r = "github.com" + rest
+	}
+	return trimRemoteTail(r)
+}
+
+var standardPorts = map[string]bool{"22": true, "443": true, "80": true, "9418": true}
+
+// trimRemoteTail strips trailing slashes, ".git" and blanks, however often.
+func trimRemoteTail(r string) string {
+	for {
+		next := strings.TrimRightFunc(r, unicode.IsSpace)
+		next = strings.TrimSuffix(strings.TrimSuffix(next, "/"), ".git")
+		if next == r {
+			return r
+		}
+		r = next
+	}
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // IsGlobal reports that nothing narrows this placement — the entry applies
@@ -94,9 +182,21 @@ func (a Axes) Same(b Axes) bool {
 // descends from. Equality alone meant a branch cut from develop could not see
 // develop, which is the opposite of what a working tree does — it carries the
 // files it was cut from, and the ghost tree is supposed to grow the same way.
-func (a Axes) UnionWhere() (string, []any) { return a.unionWhere(true) }
+//
+// An entry with a project and a machine (knowledge about running a repository
+// on a host) belongs to the project: every session of the project reads it,
+// whatever machine that session is on. The machine is where it applies, not who
+// may read it. A session on that machine WITHOUT the project does not read it:
+// the entry would reach people who never had the project's role.
+func (a Axes) UnionWhere() (string, []any) { return a.unionWhere(true, true) }
 
-func (a Axes) unionWhere(withProjectless bool) (string, []any) {
+func (a Axes) unionWhere(withProjectless, projectMachines bool) (string, []any) {
+	// Requests carry no machine, so their clauses stay on the empty machine. For
+	// knowledge the machine of a project entry does not narrow who reads it.
+	onMachine := ` AND machine = ''`
+	if projectMachines {
+		onMachine = ``
+	}
 	var clauses []string
 	var args []any
 	if withProjectless {
@@ -110,17 +210,17 @@ func (a Axes) unionWhere(withProjectless bool) (string, []any) {
 		if a.AnyBranch {
 			// One clause instead of an enumeration: every branch of this
 			// project, plus the unbranched entries it subsumes.
-			clauses = append(clauses, `(project = ? AND machine = '')`)
+			clauses = append(clauses, `(project = ?`+onMachine+`)`)
 			args = append(args, a.Project)
 		} else {
-			clauses = append(clauses, `(project = ? AND branch = '' AND machine = '')`)
+			clauses = append(clauses, `(project = ? AND branch = ''`+onMachine+`)`)
 			args = append(args, a.Project)
 			for _, branch := range a.readableBranches() {
-				clauses = append(clauses, `(project = ? AND branch = ? AND machine = '')`)
+				clauses = append(clauses, `(project = ? AND branch = ?`+onMachine+`)`)
 				args = append(args, a.Project, branch)
 			}
 		}
-		if a.Machine != "" {
+		if a.Machine != "" && !projectMachines {
 			clauses = append(clauses, `(project = ? AND branch = '' AND machine = ?)`)
 			args = append(args, a.Project, a.Machine)
 		}
@@ -137,7 +237,7 @@ func (a Axes) RequestUnionWhere() (string, []any) {
 	if a.Project == "" {
 		return a.UnionWhere()
 	}
-	return a.unionWhere(false)
+	return a.unionWhere(false, false)
 }
 
 // readableBranches is the current branch plus its ancestors. A sibling branch

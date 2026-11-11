@@ -25,6 +25,10 @@ import (
 func seedRebuild(path string) map[string]string {
 	st, err := store.Open(path)
 	must(err)
+	if err := requireEmptyDatabase(st, path); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	out := map[string]string{}
 	t0 := time.Now().UTC()
 	ago := func(d time.Duration) string { return t0.Add(-d).Format(time.RFC3339) }

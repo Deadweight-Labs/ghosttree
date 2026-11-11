@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 )
 
 // GhostVersion ist eine abgelöste Fassung einer Beschreibung. Sie trägt den
@@ -23,6 +25,8 @@ type GhostVersion struct {
 	DescribedAt string `json:"described_at"`
 	ReplacedAt  string `json:"replaced_at"`
 	Reason      string `json:"reason"`
+	// GitAnchor ist der Anker, den diese Fassung hatte, als sie galt (REQ-597).
+	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
 }
 
 const versionCols = `id, project, path, kind, description, content_sha, git_blob,
@@ -38,9 +42,9 @@ const versionCols = `id, project, path, kind, description, content_sha, git_blob
 func archiveGhostFileTx(tx *sql.Tx, project, path, at, reason string) error {
 	_, err := tx.Exec(`INSERT INTO ghost_file_versions
 		(project,path,kind,description,content_sha,git_blob,line_count,
-		 person,harness,session_ref,described_at,replaced_at,reason)
+		 person,harness,session_ref,described_at,replaced_at,reason,anchor_id,origin_id)
 		SELECT project,path,kind,description,content_sha,git_blob,line_count,
-		       person,harness,session_ref,described_at,?,?
+		       person,harness,session_ref,described_at,?,?,anchor_id,origin_id
 		FROM ghost_files WHERE project=? AND path=?`, at, reason, project, path)
 	return err
 }
@@ -73,7 +77,23 @@ func (s *Store) GhostFileHistory(project, path string, limit int) ([]GhostVersio
 		}
 		out = append(out, v)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) > 0 {
+		ids := make([]int64, len(out))
+		for i, v := range out {
+			ids[i] = v.ID
+		}
+		anchors, err := s.anchorsFor("ghost_file_versions", ids)
+		if err != nil {
+			return nil, err
+		}
+		for i := range out {
+			out[i].GitAnchor = anchors[out[i].ID]
+		}
+	}
+	return out, nil
 }
 
 // GhostFileChain ist die Historie mit der aktuellen Fassung an der Spitze,
@@ -104,7 +124,7 @@ func (s *Store) GhostFileChain(project, path string, limit int) ([]GhostVersion,
 		Project: cur.Project, Path: cur.Path, Kind: cur.Kind,
 		Description: cur.Description, ContentSHA: cur.ContentSHA, GitBlob: cur.GitBlob,
 		LineCount: cur.LineCount, Person: cur.Person, Harness: cur.Harness,
-		SessionRef: cur.SessionRef, DescribedAt: cur.DescribedAt,
+		SessionRef: cur.SessionRef, DescribedAt: cur.DescribedAt, GitAnchor: cur.GitAnchor,
 	}
 	return append([]GhostVersion{head}, hist...), nil
 }
@@ -160,9 +180,9 @@ func (s *Store) MoveGhostFile(project, from, to string) error {
 	ts := now()
 	if _, err := tx.Exec(`INSERT INTO ghost_file_versions
 		(project,path,kind,description,content_sha,git_blob,line_count,
-		 person,harness,session_ref,described_at,replaced_at,reason)
+		 person,harness,session_ref,described_at,replaced_at,reason,anchor_id,origin_id)
 		SELECT project,?,kind,'(verschoben von '||path||')',content_sha,git_blob,line_count,
-		       person,harness,session_ref,described_at,?,'verschoben'
+		       person,harness,session_ref,described_at,?,'verschoben',anchor_id,origin_id
 		FROM ghost_files WHERE project=? AND path=?`, to, ts, project, from); err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -27,6 +28,8 @@ const (
 
 type agentsView struct {
 	Cards     []agentCard
+	Sections  agentSections
+	Cmd       cmdBlock
 	Machines  []machineRow
 	Example   string
 	Connect   string
@@ -37,7 +40,12 @@ type agentsView struct {
 
 type agentCard struct {
 	agentRow
-	RoomHref, SessionHref    string
+	RoomHref, SessionHref string
+	// MachineHref is the machine page, empty when the viewer cannot reach it.
+	MachineHref string
+	// CSRFToken and Back belong to the check "seen" of a row that waits on the
+	// viewer: the token of the form and the page it returns to.
+	CSRFToken, Back          string
 	ReqID, ReqTitle, ReqHref string
 	Post, PostAge            string
 }
@@ -78,6 +86,8 @@ func (a *app) agentsPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view.Machines, view.Example = ownMachines(l, tokens, now), l.msg("setup.example")
+		view.Sections = sectionAgents(view.Cards, csrfOf(r), r.URL.RequestURI())
+		view.Cmd = cmdBlock{ID: "agents-cmd", Mac: view.Example, Linux: view.Example}
 	}
 	a.renderBrowser(w, r, "agents", pageData{Title: l.msg("agents.title"), Agents: view})
 }
@@ -94,12 +104,13 @@ func (a *app) agentCards(r *http.Request, pa *store.ProjectAccess, rows []agentR
 	}
 	posts := a.lastPosts(r, rows, now)
 	cards := make([]agentCard, len(rows))
+	machineLink := a.machineLinker(r)
 	for i, row := range rows {
 		c := agentCard{agentRow: row, RoomHref: "/ui/coord?room=" + url.QueryEscape(row.RoomKey)}
-		if c.Branch != "" && strings.Contains(c.Name, c.Branch) {
-			// The name already ends in the branch; do not say it twice.
-			c.Branch = ""
+		if c.Machine == "" {
+			c.Machine = agentMachine(row.ExternalID)
 		}
+		c.MachineHref = machineLink(c.Machine)
 		if wk, ok := work[row.ExternalID]; ok {
 			if wk.RequestID != 0 {
 				c.ReqID = "REQ-" + strconv.FormatInt(wk.RequestID, 10)
@@ -144,4 +155,102 @@ func (a *app) lastPosts(r *http.Request, rows []agentRow, now time.Time) map[str
 		}
 	}
 	return out
+}
+
+// agentSections is the list of agents the way a person reads it: first those
+// that wait on the viewer, then those at work, and the dormant ones apart (the
+// page folds them), so thousands of resting agents do not bury the few that
+// matter.
+type agentSections struct {
+	Waiting, Active, Inactive []agentCard
+}
+
+// sectionAgents sorts cards (already ordered by listAgents) into the sections:
+// "wait_you" is waiting on the viewer, "work", "wait_other" and "stuck" are
+// active, "idle" and "off" are inactive. Rows that wait carry the form of the
+// check "seen" (token and the page to return to).
+func sectionAgents(cards []agentCard, token, back string) agentSections {
+	var s agentSections
+	for _, c := range cards {
+		switch c.Presence {
+		case "wait_you":
+			c.CSRFToken, c.Back = token, back
+			s.Waiting = append(s.Waiting, c)
+		case "idle", "off":
+			s.Inactive = append(s.Inactive, c)
+		default:
+			s.Active = append(s.Active, c)
+		}
+	}
+	return s
+}
+
+// Any says whether the page has an agent to show.
+func (s agentSections) Any() bool {
+	return len(s.Waiting)+len(s.Active)+len(s.Inactive) > 0
+}
+
+// agentSeen quits the wait of an agent on the viewer without an answer. It
+// closes the viewer's open questions, approvals and blockers from that agent as
+// dismissed, the same step as the check in the inbox (ResolveAttention); the
+// agent's wait ends with them. Nothing but the viewer's own items is touched:
+// Attention lists only those, and the store checks the recipient again.
+func (a *app) agentSeen(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	id := r.PathValue("id")
+	access := a.browserCoord(r)
+	items, err := access.Attention()
+	if err != nil {
+		coordHTTPError(l, w, err)
+		return
+	}
+	for _, item := range items {
+		if !item.IsRecipient || item.State != store.AttentionOpen || item.SenderID != id {
+			continue
+		}
+		if err := access.ResolveAttention(item.ID, store.AttentionActionDismiss); err != nil && !errors.Is(err, store.ErrAttentionClosed) {
+			coordHTTPError(l, w, err)
+			return
+		}
+	}
+	http.Redirect(w, r, a.agentSeenBack(r, r.FormValue("back")), http.StatusSeeOther)
+}
+
+// agentSeenBack is the agent list the check came from: the list of all agents
+// or the agents tab of an organisation the viewer belongs to. The address is
+// built here from known values, never taken over from the form.
+func (a *app) agentSeenBack(r *http.Request, back string) string {
+	const all = "/ui/agents"
+	slug, ok := strings.CutPrefix(back, "/ui/")
+	if !ok {
+		return all
+	}
+	slug, ok = strings.CutSuffix(strings.SplitN(slug, "?", 2)[0], "/agents")
+	if !ok || slug == "" {
+		return all
+	}
+	orgs, err := a.store.ListOrgs(browserPrincipal(r).ID)
+	if err != nil {
+		return all
+	}
+	for _, o := range orgs {
+		if o.Slug == slug {
+			return "/ui/" + url.PathEscape(o.Slug) + "/agents"
+		}
+	}
+	return all
+}
+
+// RoomName is the name of the project room the agent works in ("gemeinsam"), taken from
+// the room key "project:host/org/name"; it is empty for any other kind of room.
+func (c agentCard) RoomName() string {
+	key, ok := strings.CutPrefix(c.RoomKey, "project:")
+	if !ok {
+		return ""
+	}
+	return key[strings.LastIndex(key, "/")+1:]
 }

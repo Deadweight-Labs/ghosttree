@@ -70,7 +70,7 @@ func TestGeneralSearchLabelsRequestDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := text(t, res)
-	if !strings.Contains(got, "[request|status=open|type=feature|source=ledger]") {
+	if !strings.Contains(got, "[request|status=open|type=feature|source=ledger") {
 		t.Fatalf("request provenance missing: %s", got)
 	}
 }
@@ -158,7 +158,7 @@ func TestSearchAllProjectsFindsSessionsFromAnotherProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the vitest suite hangs on teardown", Raw: "{}"}}); err != nil {
+	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the vitest suite hangs on teardown", Raw: promptRaw("claude-code", "the vitest suite hangs on teardown")}}); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
@@ -192,7 +192,7 @@ func TestSessionsToolReachesOtherProjectsOnRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the vitest suite hangs on teardown", Raw: "{}"}}); err != nil {
+	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the vitest suite hangs on teardown", Raw: promptRaw("claude-code", "the vitest suite hangs on teardown")}}); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
@@ -468,7 +468,11 @@ func TestNonDecisionGetsNoHint(t *testing.T) {
 }
 
 func TestSessionsTool(t *testing.T) {
-	c, _ := newTestClient(t)
+	c, st := newTestClient(t)
+	// A session keeps its project only in a claimed one (REQ-623).
+	if _, err := st.ClaimProject("person:1", "github.com/x/y", ""); err != nil {
+		t.Fatal(err)
+	}
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Machine: "workstation-a"}}
 	id, err := c.UpsertSession(store.Session{Harness: "codex", ExternalID: "s1",
 		Scope:     scope.Axes{Project: "github.com/x/y", Branch: "old", Machine: "workstation-a"},
@@ -476,7 +480,7 @@ func TestSessionsTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the livekit sfu keeps dropping", Raw: "{}"}}); err != nil {
+	if err := c.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the livekit sfu keeps dropping", Raw: promptRaw("codex", "the livekit sfu keeps dropping")}}); err != nil {
 		t.Fatal(err)
 	}
 	res, _, err := s.handleSessions(context.Background(), nil, SessionsInput{Query: "livekit"})

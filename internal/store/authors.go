@@ -18,7 +18,7 @@ const authorsBackfillKey = "authors_backfilled"
 // nameIndex: Kontoname in Kleinschreibung -> Konto-Id, -1 bei Mehrdeutigkeit. Der
 // heutige Name eines Kontos gilt zuerst, frühere Namen (person_name_history)
 // füllen nur Lücken.
-func nameIndex(tx *sql.Tx) map[string]int64 {
+func nameIndex(tx queryer) map[string]int64 {
 	load := func(query string) map[string]int64 {
 		into := map[string]int64{}
 		rows, err := tx.Query(query)

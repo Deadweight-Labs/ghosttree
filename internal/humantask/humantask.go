@@ -2,7 +2,9 @@ package humantask
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
+	"unicode"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
@@ -34,6 +36,9 @@ type Task struct {
 	DoneVia     string `json:"done_via,omitempty"`
 	DoneAt      string `json:"done_at,omitempty"`
 	StateNote   string `json:"state_note,omitempty"`
+	// Steps is the walk-through for the human (REQ-603): numbered, each with an
+	// optional link. The interface shows it as a checklist.
+	Steps       []Step `json:"steps,omitempty"`
 	ConfirmedAt string `json:"confirmed_at,omitempty"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
@@ -68,6 +73,13 @@ type CreateInput struct {
 	// human whose session the agent is), because "anyone" on a project of two
 	// is two people each assuming the other one will do it.
 	Everyone bool `json:"everyone,omitempty"`
+	// Steps is the optional walk-through: at most MaxSteps one-line steps, each
+	// with an optional http(s) link. See ValidateSteps.
+	Steps []Step `json:"steps,omitempty"`
+	// Options are two to six short answers the agent proposes (kinds input and
+	// action only). The inbox offers them as quick answers; the person can always
+	// write their own. Checked and cleaned by the store.
+	Options []string `json:"options,omitempty"`
 	// Explanation is the agent's "Kurz erklärt" text for the person who has to
 	// act. The server stores it beside the task; it is not part of the task.
 	Explanation string `json:"explanation,omitempty"`
@@ -114,7 +126,7 @@ func ValidateCreate(in CreateInput) error {
 	if (in.Kind == "secret" || in.Kind == "file") && strings.TrimSpace(in.Location) == "" {
 		return ruleErr("location_required", "a secret or file task needs a location", "name where it should be placed (path, vault entry, env file), never the value")
 	}
-	return nil
+	return ValidateSteps(in.Steps)
 }
 
 func InvalidTransition(from, to string) error {
@@ -123,4 +135,82 @@ func InvalidTransition(from, to string) error {
 
 func ReasonRequired() error {
 	return ruleErr("reason_required", "this change needs a reason", "give a reason")
+}
+
+// Step is one line of a task's walk-through; URL is optional.
+type Step struct {
+	Text string `json:"text"`
+	URL  string `json:"url,omitempty"`
+}
+
+const (
+	MaxSteps    = 12
+	MaxStepText = 240
+	MaxStepURL  = 600
+)
+
+// plainLine reports whether s is a single line of visible text: no control,
+// format (unicode.Cf, which hides direction overrides and zero-width marks),
+// line or paragraph separator characters. Tabs count as control.
+func plainLine(s string) bool {
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidateSteps checks the walk-through before it is stored. Steps land in an
+// agent's context and in the browser, so they are refused, not repaired: one
+// line each, no control or format characters, links only http(s) without
+// userinfo.
+func ValidateSteps(steps []Step) error {
+	if len(steps) > MaxSteps {
+		return ruleErr("steps_invalid", fmt.Sprintf("a task has at most %d steps", MaxSteps), "keep the walk-through short: one line per step")
+	}
+	for i, st := range steps {
+		n := i + 1
+		text := strings.TrimSpace(st.Text)
+		switch {
+		case text == "":
+			return ruleErr("steps_invalid", fmt.Sprintf("step %d has no text", n), "write what the human does in this step, in one line")
+		case len([]rune(text)) > MaxStepText:
+			return ruleErr("steps_invalid", fmt.Sprintf("step %d is longer than %d characters", n, MaxStepText), "one short line per step")
+		case !plainLine(st.Text):
+			return ruleErr("steps_invalid", fmt.Sprintf("step %d has a line break, control or format character", n), "one line of plain text per step")
+		}
+		if st.URL == "" {
+			continue
+		}
+		if len(st.URL) > MaxStepURL || !plainLine(st.URL) || strings.ContainsAny(st.URL, " \t") {
+			return ruleErr("steps_invalid", fmt.Sprintf("the link of step %d is not a plain address", n), "give one http(s) address without spaces")
+		}
+		u, err := url.Parse(st.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+			return ruleErr("steps_invalid", fmt.Sprintf("the link of step %d must be an http(s) address without credentials", n), "give one http(s) address, no token or login in it")
+		}
+	}
+	return nil
+}
+
+// CleanSteps trims the text of each step; call it after ValidateSteps.
+func CleanSteps(steps []Step) []Step {
+	out := make([]Step, 0, len(steps))
+	for _, st := range steps {
+		out = append(out, Step{Text: strings.TrimSpace(st.Text), URL: st.URL})
+	}
+	return out
+}
+
+// StepFields lists name and text of every step and link, for CheckFields.
+func (in CreateInput) StepFields() []string {
+	var f []string
+	for i, st := range in.Steps {
+		f = append(f, fmt.Sprintf("step %d", i+1), st.Text)
+		if st.URL != "" {
+			f = append(f, fmt.Sprintf("step %d link", i+1), st.URL)
+		}
+	}
+	return f
 }

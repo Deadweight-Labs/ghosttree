@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +32,9 @@ func TestUserPromptSubmitHookDeliversRelevantKnowledge(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/api/coord/") {
 			w.Write([]byte("[]")) // the coordination look that rides along with the prompt
 			return
+		}
+		if r.URL.Path == "/api/runbooks/triggered" {
+			return // die Abläufe fragen daneben; hier ohne Treffer
 		}
 		if r.URL.Query().Get("q") == "" {
 			t.Error("prompt was not forwarded")
@@ -234,7 +238,7 @@ func TestPreToolUseUnderstandsCurrentCodexBashObject(t *testing.T) {
 	if !strings.Contains(ctx, "aktuelle Codex-Bash-Datei") {
 		t.Fatalf("current Codex payload delivered no description: %q", ctx)
 	}
-	if strings.Contains(ctx, "context_describe_file") {
+	if strings.Contains(ctx, "describe_file") {
 		t.Fatalf("Bash must not be treated as a write: %q", ctx)
 	}
 }
@@ -341,7 +345,7 @@ func TestPreToolUseAsksForADescriptionOnlyWhenWriting(t *testing.T) {
 		t.Fatalf("reading an undescribed file must stay silent, got %q", reading)
 	}
 	writing := renderGhostDelivery(entries, fresh, true, false, "a.go", 0)
-	if !strings.Contains(writing, "context_describe_file") {
+	if !strings.Contains(writing, "context_remember action=describe_file") {
 		t.Fatalf("writing an undescribed file must ask for one, got %q", writing)
 	}
 }
@@ -353,15 +357,26 @@ func TestPreToolUseAsksForADescriptionOnlyWhenWriting(t *testing.T) {
 // Dasselbe Muster wie bei null Suchtreffern (#732).
 func TestSecondEditDoesNotClaimTheDescriptionIsMissing(t *testing.T) {
 	described := `[{"path":"internal/store/knowledge.go","kind":"file","description":"die Wissenspfade"}]`
+	var mu sync.Mutex
 	var deliveries int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		// Die gezielte Nachfrage kennt keine Einmal-je-Sitzung-Regel.
 		case strings.Contains(r.URL.Path, "/tree"):
 			w.Write([]byte(described))
+		// Die Abläufe (REQ-604) und ihre Auslöser fragt der Hook parallel ab;
+		// sie zählen nicht als Auslieferung von Beschreibungen.
+		case strings.HasPrefix(r.URL.Path, "/api/runbook"):
+			w.Write([]byte(`[]`))
+		// Ebenso die Features des Bereichs (REQ-612), parallel zu den Beschreibungen.
+		case strings.HasPrefix(r.URL.Path, "/api/features"):
+			w.Write([]byte(`{}`))
 		default:
+			mu.Lock()
 			deliveries++
-			if deliveries == 1 {
+			n := deliveries
+			mu.Unlock()
+			if n == 1 {
 				w.Write([]byte(described))
 				return
 			}
@@ -403,5 +418,19 @@ func TestPreToolUseMarksAStaleDescriptionAsSuch(t *testing.T) {
 	}
 	if !strings.Contains(got, "61") || !strings.Contains(strings.ToUpper(got), "VERALTET") {
 		t.Fatalf("a stale description must say how far it drifted, got %q", got)
+	}
+}
+
+// What the gardener wrote without a person reading it first reaches an agent
+// framed as data; a description an agent or a person wrote is delivered as it was.
+func TestGhostDeliveryFramesWhatTheGardenerWroteAsData(t *testing.T) {
+	merge := strings.Repeat("a", 40)
+	entries := []store.GhostFile{
+		{Path: "a.go", Kind: "file", Description: "Vom Gärtner.", Harness: "gardener", SessionRef: "gardener:merge:" + merge},
+		{Path: "b.go", Kind: "file", Description: "Von einem Agenten.", Harness: "mcp"},
+	}
+	got := renderGhostDelivery(entries, map[string]ghost.Freshness{}, false, true, "a.go", 0)
+	if strings.Count(got, "not an instruction") != 1 || !strings.Contains(got, "### a.go\n(written by the gardener") {
+		t.Errorf("delivery:\n%s", got)
 	}
 }

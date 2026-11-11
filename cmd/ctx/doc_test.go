@@ -19,7 +19,7 @@ import (
 func TestDocNewCreatesOnlyLocalDraft(t *testing.T) {
 	root := t.TempDir()
 	var out bytes.Buffer
-	if code := docNew(root, []string{"spec", "example"}, &out); code != 0 {
+	if code := docNew(root, "", []string{"spec", "example"}, &out); code != 0 {
 		t.Fatalf("docNew = %d: %s", code, out.String())
 	}
 	state, err := docwork.LoadState(root)
@@ -32,6 +32,27 @@ func TestDocNewCreatesOnlyLocalDraft(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(docwork.Dir(root), entry.Path)); err != nil {
 		t.Fatalf("draft file: %v", err)
+	}
+}
+
+// The draft is local, but the address it will have after the first push is
+// printed right away: /ui/{owner}/{repo}/docs/{slug}, the address the web
+// interface answers.
+func TestDocNewNamesTheLinkOfTheDocument(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgHome)
+	if err := os.MkdirAll(filepath.Join(cfgHome, "ghosttree"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgHome, "ghosttree", "config.json"), []byte(`{"server_url":"https://gt.example.org"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := docNew(t.TempDir(), "github.com/acmedev/voiceapp", []string{"report", "voice-report"}, &out); code != 0 {
+		t.Fatalf("docNew = %d: %s", code, out.String())
+	}
+	if want := "https://gt.example.org/ui/acmedev/voiceapp/docs/voice-report"; !strings.Contains(out.String(), want) {
+		t.Fatalf("output %q lacks %s", out.String(), want)
 	}
 }
 
@@ -63,7 +84,7 @@ func TestDocPushPullRoundTripPreservesBytes(t *testing.T) {
 	c := client.New(config.Config{ServerURL: srv.URL, Token: token})
 	root := t.TempDir()
 	body := "# Design\r\n\ttab\tä ö ü 🌳\r\n"
-	if code := docNew(root, []string{"spec", "design"}, &bytes.Buffer{}); code != 0 {
+	if code := docNew(root, "", []string{"spec", "design"}, &bytes.Buffer{}); code != 0 {
 		t.Fatal("new failed")
 	}
 	state, _ := docwork.LoadState(root)
@@ -203,7 +224,7 @@ func TestDocNewDatePrefix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			var out bytes.Buffer
-			if code := docNew(root, []string{"spec", tc.slug}, &out); code != 0 {
+			if code := docNew(root, "", []string{"spec", tc.slug}, &out); code != 0 {
 				t.Fatalf("docNew = %d: %s", code, out.String())
 			}
 			state, _ := docwork.LoadState(root)
@@ -218,7 +239,7 @@ func TestDocNewDatePrefix(t *testing.T) {
 func TestDocNewDatedTitleDoesNotAffectPath(t *testing.T) {
 	root := t.TempDir()
 	var out bytes.Buffer
-	if code := docNew(root, []string{"spec", "req360-gap-analysis"}, &out); code != 0 {
+	if code := docNew(root, "", []string{"spec", "req360-gap-analysis"}, &out); code != 0 {
 		t.Fatal(out.String())
 	}
 	state, _ := docwork.LoadState(root)
@@ -241,7 +262,7 @@ func TestDocNewPathCollisions(t *testing.T) {
 	docOf := func(t *testing.T, root string, slug string) string {
 		t.Helper()
 		var out bytes.Buffer
-		if code := docNew(root, []string{"spec", slug}, &out); code != 0 {
+		if code := docNew(root, "", []string{"spec", slug}, &out); code != 0 {
 			t.Fatalf("docNew %s = %d: %s", slug, code, out.String())
 		}
 		state, _ := docwork.LoadState(root)
@@ -306,4 +327,30 @@ func TestDocNewPathCollisions(t *testing.T) {
 			t.Fatalf("got %q", got)
 		}
 	})
+}
+
+// A text over the limit is refused before anything is sent, with the size in
+// the message; the server would refuse it the same way.
+func TestDocPushRefusesATooLargeDocument(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("alice")
+	srv := httptest.NewServer(server.New(st))
+	t.Cleanup(srv.Close)
+	c := client.New(config.Config{ServerURL: srv.URL, Token: token})
+	root := t.TempDir()
+	if code := docNew(root, "", []string{"spec", "big"}, &bytes.Buffer{}); code != 0 {
+		t.Fatal("new failed")
+	}
+	state, _ := docwork.LoadState(root)
+	if err := docwork.WriteFile(root, state["big"].Path, strings.Repeat("a", docwork.MaxBodyBytes+1)); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := docPush(root, "github.com/x/y", c, "big", "m", false, &out); code != 1 || !strings.Contains(out.String(), "at most 5 MB") || !strings.Contains(out.String(), "nothing was sent") {
+		t.Fatalf("push = %d: %s", code, out.String())
+	}
+	if ds, _ := st.Documents("github.com/x/y", "", true); len(ds) != 0 {
+		t.Fatalf("a document was stored: %+v", ds)
+	}
 }

@@ -1,32 +1,49 @@
-{{define "loginbrand"}}<a class="login-brand" href="/ui/">{{template "logomark" "mark-hero"}}<span>{{t "shell.brand_lead"}}<b>{{t "shell.brand_tail"}}</b></span></a>{{end}}
+{{define "loginbrand"}}<a class="auth-logo" href="/ui/" aria-label="{{t "shell.brand"}}">{{template "ghostmark"}}</a>{{end}}
+{{define "authfoot"}}<footer class="gt-foot"><a href="https://github.com/Deadweight-Labs/ghosttree/blob/dev/docs/operations.md#privacy-and-security" target="_blank" rel="noopener noreferrer">{{t "ui.footer.privacy"}}</a><a href="https://github.com/Deadweight-Labs/ghosttree#readme" target="_blank" rel="noopener noreferrer">{{t "ui.footer.help"}}</a>{{if srvVersion}}<span>{{t "ui.footer.version" srvVersion}}</span>{{end}}</footer>{{end}}
+{{define "autherr"}}<p class="auth-error" role="alert">{{mi "tri"}}<span>{{.}}</span></p>{{end}}
+{{define "authprov"}}{{if eq . "GitHub"}}{{mi "gh"}}{{end}}{{end}}
 
-{{define "login"}}{{template "head" .}}<main class="login">{{template "loginbrand"}}
-<section class="login-card clay"><h1>{{t "login.title"}}</h1>
-<form class="login-form" method="post" action="/ui/login/code">
+{{define "login"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="/static/ui-auth.css"><div class="authbox">{{template "loginbrand"}}
+<h1>{{if .Bootstrap}}{{t "login.title_setup"}}{{else}}{{t "login.title"}}{{end}}</h1>
+{{if and .Error (not .TokenOpen)}}{{template "autherr" .Error}}{{end}}
+<section class="auth-card"><form class="login-form" method="post" action="/ui/login/code">
 <button class="visually-hidden" tabindex="-1" aria-hidden="true">{{t "login.submit"}}</button>
-{{if .OIDC}}<button class="clay btn btn-primary" formaction="/ui/login/oidc" formnovalidate>{{if .ProviderName}}{{t "login.provider" .ProviderName}}{{else}}{{t "login.provider_generic"}}{{end}}</button><div class="login-divider" role="separator"><span>{{t "login.or"}}</span></div>{{end}}
-{{if .Error}}<p class="login-error" role="alert">{{.Error}}</p>{{end}}
-<label class="field"><span>{{if .Bootstrap}}{{t "login.bootstrap_label"}}{{else}}{{t "login.code_label"}}{{end}}</span><input class="clay" name="code" type="password" autocomplete="off" spellcheck="false" placeholder="{{t "login.code_placeholder"}}"{{if not .OIDC}} required{{end}}></label>
-{{if .Bootstrap}}<label class="field"><span>{{t "login.name_label"}}</span><input class="clay" name="name" autocomplete="off" required placeholder="{{t "login.name_placeholder"}}"></label>{{end}}
-<button class="clay btn{{if not .OIDC}} btn-primary{{end}}">{{t "login.submit"}}</button>
+{{if .OIDC}}<button class="gbtn pri blk" formaction="/ui/login/oidc" formnovalidate>{{template "authprov" .ProviderName}}{{if .ProviderName}}{{t "login.provider" .ProviderName}}{{else}}{{t "login.provider_generic"}}{{end}}</button><div class="auth-or" role="separator"><span>{{t "login.or"}}</span></div>{{end}}
+<label class="pfield"><span>{{if .Bootstrap}}{{t "login.bootstrap_label"}}{{else}}{{t "login.code_label"}}{{end}}</span><span class="gfield"><input name="code" type="password" autocomplete="off" spellcheck="false" placeholder="{{t "login.code_placeholder"}}" required{{if not .TokenOpen}} autofocus{{end}}></span>{{if .Bootstrap}}<small class="muted">{{t "login.bootstrap_hint"}}</small>{{end}}</label>
+{{if .Bootstrap}}<label class="pfield"><span>{{t "login.name_label"}}</span><span class="gfield"><input name="name" autocomplete="off" required placeholder="{{t "login.name_placeholder"}}"></span></label>{{end}}
+<button class="gbtn blk{{if not .OIDC}} pri{{end}}">{{t "login.submit"}}</button>
 </form>
-{{if .OIDC}}<p class="login-hint">{{t "login.no_account"}}</p>{{end}}
-{{if and .Paste (not .Bootstrap)}}<details class="login-token"{{if .TokenOpen}} open{{end}}><summary>{{t "login.token_toggle"}}</summary><form method="post" action="/ui/login"><label class="field"><span>{{t "login.token_label"}}</span><input class="clay" name="token" type="password" autocomplete="off" required></label><button class="clay btn">{{t "login.submit"}}</button></form></details>{{end}}
-</section>{{template "foot" .}}{{end}}
+{{if and .Paste (not .Bootstrap)}}<details class="auth-token"{{if .TokenOpen}} open{{end}}><summary>{{t "login.token_toggle"}}{{mi "chev"}}</summary><form method="post" action="/ui/login">{{if and .Error .TokenOpen}}{{template "autherr" .Error}}{{end}}<label class="pfield"><span>{{t "login.token_label"}}</span><span class="gfield"><input name="token" type="password" autocomplete="off" required{{if .TokenOpen}} autofocus{{end}}></span></label><button class="gbtn blk">{{t "login.submit"}}</button></form></details>{{end}}
+{{if not .Bootstrap}}<div class="auth-or is-new" role="separator"><span>{{t "login.new_here"}}</span></div><a class="gbtn blk" href="/ui/register">{{t "login.create_account"}}</a>{{end}}
+</section>{{template "authfoot"}}</div>{{template "foot" .}}{{end}}
 
-{{define "logincode"}}{{template "head" .}}<main class="login">{{template "loginbrand"}}
-{{if .InviteV}}<section class="login-card join-card clay"><h1>{{t "join.invited" .InviteV.Inviter .InviteV.Target}}</h1>
-<p class="join-tag">{{t "join.tagline"}}</p>
-<ul class="join-facts">{{if .InviteV.Org}}<li>{{.InviteV.Org}}</li>{{end}}<li>{{t "join.expires"}} {{ago .InviteV.ExpiresAt}}</li></ul>
-{{if .Error}}<p class="login-error" role="alert">{{.Error}}</p>{{end}}
-{{if .OIDC}}<form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}">{{if .InviteV.Signup}}<input type="hidden" name="signup" value="1"><button class="clay btn btn-primary">{{t "join.create_account"}}</button></form><form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><button class="clay btn">{{t "join.sign_in_join"}}</button></form>{{else}}<button class="clay btn btn-primary">{{t "join.sign_in_join"}}</button></form>{{end}}
-{{else}}<form class="login-form" method="post" action="/ui/login/code"><input type="hidden" name="code" value="{{.Code}}"><label class="field"><span>{{t "join.name_label"}}</span><input class="clay" name="name" maxlength="64" required autocomplete="nickname" autocapitalize="none" spellcheck="false" placeholder="{{t "login.name_placeholder"}}"></label><button class="clay btn btn-primary">{{t "join.create_join"}}</button></form>{{end}}
-<p class="join-alt"><a href="/ui/login">{{t "join.have_account"}}</a></p></section>
-{{else}}<section class="login-card clay"><h1>{{if .Invite}}{{t "login.invite_title"}}{{else}}{{t "login.code_title"}}{{end}}</h1>
-{{if .Error}}<p class="login-error" role="alert">{{.Error}}</p>{{end}}
-{{if and .Invite .OIDC}}<p>{{t "login.invite_text"}}</p><form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><button class="clay btn btn-primary">{{t "login.provider_generic"}}</button></form>
-{{else}}<form class="login-form" method="post" action="/ui/login/code"><label class="field"><span>{{t "login.code_label"}}</span><input class="clay" name="code" type="password" value="{{.Code}}" autocomplete="off" required></label>{{if .NeedsName}}<label class="field"><span>{{t "login.account_name"}}</span><input class="clay" name="name" required></label>{{end}}<button class="clay btn btn-primary">{{t "login.continue"}}</button></form>{{end}}
-{{if .OIDC}}<p class="login-hint">{{t "login.no_account"}}</p>{{end}}<a class="login-back" href="/ui/login">{{t "login.back"}}</a></section>{{end}}{{template "foot" .}}{{end}}
+{{define "invhead"}}<div class="invh">{{avatarX "xl" "human" .Inviter "" false}}<span class="plus" aria-hidden="true">{{mi "plus"}}</span><span class="gav xl hc-5 org" aria-hidden="true">{{.OrgMark}}</span></div><h1{{if ne .Target .Short}} title="{{.Target}}"{{end}}>{{t "join.invited" .Inviter .Short}}</h1>{{end}}
+{{define "invfacts"}}<ul class="facts">{{if .Org}}<li><span class="gav hc-5 org" aria-hidden="true">{{.OrgMark}}</span><b>{{.Org}}</b></li>{{end}}{{if .RoleText}}<li><span class="lb out">{{.RoleText}}</span></li>{{end}}{{if .ExpiresIn}}<li>{{mi "clock"}}<time datetime="{{.ExpiresAt}}">{{.ExpiresIn}}</time></li>{{end}}</ul>{{end}}
+{{define "invname"}}<label class="pfield"><span>{{t "join.name_label"}}</span><span class="gfield{{if .NameError}} is-bad{{end}}"><input name="name" value="{{.NameValue}}" maxlength="64" required pattern=".*\S.*" autocomplete="nickname" autocapitalize="none" spellcheck="false" placeholder="{{t "login.name_placeholder"}}" autofocus{{if .NameError}} aria-invalid="true"{{end}}></span>{{if .NameError}}<small class="bad" role="alert">{{.NameError}}</small>{{end}}</label>{{end}}
 
-{{define "loginmsg"}}{{template "head" .}}<main class="login">{{template "loginbrand"}}
-<section class="login-card clay"><h1>{{.Title}}</h1><p class="login-error" role="alert">{{.Error}}</p><a class="login-back" href="/ui/login">{{t "login.back_to_sign_in"}}</a></section>{{template "foot" .}}{{end}}
+{{define "logincode"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="/static/ui-auth.css"><div class="authbox{{if .InviteV}} wide{{end}}">{{template "loginbrand"}}
+{{if .InviteV}}{{template "invhead" .InviteV}}{{if .Error}}{{template "autherr" .Error}}{{end}}
+<section class="auth-card">{{template "invfacts" .InviteV}}
+{{if .OIDC}}<form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}">{{if .InviteV.Signup}}<input type="hidden" name="signup" value="1"><button class="gbtn pri blk">{{t "join.create_account"}}</button></form><div class="auth-or" role="separator"><span>{{t "login.or"}}</span></div><form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><button class="gbtn blk">{{template "authprov" .ProviderName}}{{if .ProviderName}}{{t "join.with" .ProviderName}}{{else}}{{t "join.sign_in_join"}}{{end}}</button></form>{{else}}<button class="gbtn pri blk">{{template "authprov" .ProviderName}}{{if .ProviderName}}{{t "join.with_join" .ProviderName}}{{else}}{{t "join.sign_in_join"}}{{end}}</button></form>{{end}}
+{{else}}<form class="login-form" method="post" action="/ui/login/code"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="codepage" value="1"><input type="hidden" name="linked" value="1">{{template "invname" .InviteV}}<button class="gbtn pri blk">{{t "join.create_join"}}</button></form>{{end}}
+</section>
+<p class="auth-alt boxed">{{t "register.have_account"}} <a href="/ui/login">{{t "register.sign_in"}}</a></p>
+{{else}}<h1>{{if .Invite}}{{t "login.invite_title"}}{{else}}{{t "login.code_title"}}{{end}}</h1>
+{{if .Error}}{{template "autherr" .Error}}{{end}}
+<section class="auth-card">
+{{if and .Invite .OIDC}}<p class="lead">{{t "login.invite_text"}}</p><form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><button class="gbtn pri blk">{{template "authprov" .ProviderName}}{{if .ProviderName}}{{t "login.provider" .ProviderName}}{{else}}{{t "login.provider_generic"}}{{end}}</button></form>
+{{else}}<form class="login-form" method="post" action="/ui/login/code"><input type="hidden" name="codepage" value="1">{{if .Auth.Linked}}<input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="linked" value="1">{{else}}<label class="pfield"><span>{{t "login.code_label"}}</span><span class="gfield"><input name="code" type="password" value="{{.Code}}" autocomplete="off" spellcheck="false" required{{if not .NeedsName}} autofocus{{end}}></span></label>{{end}}{{if .NeedsName}}<label class="pfield"><span>{{t "login.account_name"}}</span><span class="gfield"><input name="name" required autofocus placeholder="{{t "login.name_placeholder"}}"></span></label>{{end}}<button class="gbtn pri blk">{{t "login.continue"}}</button></form>{{end}}
+</section>
+<p class="auth-alt">{{t "login.new_to"}} <a href="/ui/register">{{t "login.create_account"}}</a></p>
+<p class="auth-back"><a href="/ui/login">{{t "login.back"}}</a></p>{{end}}
+{{template "authfoot"}}</div>{{template "foot" .}}{{end}}
+
+{{define "loginmsg"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="/static/ui-auth.css"><div class="authbox">{{template "loginbrand"}}
+<div class="ico att">{{mi "tri"}}</div><h1>{{.Title}}</h1>
+<section class="auth-card center"><p class="lead" role="alert">{{.Error}}</p><a class="gbtn blk" href="/ui/login">{{t "login.back_to_sign_in"}}</a></section>{{template "authfoot"}}</div>{{template "foot" .}}{{end}}
+
+{{define "register"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="/static/ui-auth.css"><div class="authbox">{{template "loginbrand"}}
+<h1>{{t "register.title"}}</h1>
+{{if .Error}}{{template "autherr" .Error}}{{end}}
+<section class="auth-card"><form class="login-form" method="post" action="/ui/register"><label class="pfield"><span>{{t "register.link_label"}}</span><span class="gfield"><input name="link" type="text" inputmode="url" value="{{.Code}}" autocomplete="off" spellcheck="false" required autofocus placeholder="{{t "register.link_placeholder"}}"></span></label><button class="gbtn pri blk">{{t "register.next"}}</button></form></section>
+<p class="auth-alt">{{t "register.have_account"}} <a href="/ui/login">{{t "register.sign_in"}}</a></p>{{template "authfoot"}}</div>{{template "foot" .}}{{end}}

@@ -13,43 +13,6 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-// cssBodies liefert die Deklarationen aller Blattregeln, deren Selektorliste
-// (kommagetrennt) genau sel enthält.
-func cssBodies(t *testing.T, sel string) []string {
-	t.Helper()
-	var out []string
-	for _, r := range parseCSSRules(string(mustReadEmbedded(t, "static/app.css"))) {
-		if strings.Join(strings.Fields(r.selector), " ") == sel {
-			out = append(out, r.body)
-			continue
-		}
-		if strings.Contains(r.selector, ":where(") {
-			continue
-		}
-		for _, part := range strings.Split(r.selector, ",") {
-			if strings.Join(strings.Fields(part), " ") == sel {
-				out = append(out, r.body)
-				break
-			}
-		}
-	}
-	return out
-}
-
-func requireCSS(t *testing.T, sel string, wants ...string) {
-	t.Helper()
-	bodies := cssBodies(t, sel)
-	if len(bodies) == 0 {
-		t.Fatalf("CSS rule %q missing", sel)
-	}
-	all := strings.Join(bodies, "\n")
-	for _, want := range wants {
-		if !strings.Contains(all, want) {
-			t.Errorf("%s: missing %q in %s", sel, want, all)
-		}
-	}
-}
-
 func coordTemplate(t *testing.T) string { return string(mustReadEmbedded(t, "templates/coord.html")) }
 
 func TestCoordExpiryAcceptsDatetimeLocalAndRFC3339(t *testing.T) {
@@ -122,11 +85,10 @@ func TestCoordExpiryFieldIsSharedAndHonestAboutTheZone(t *testing.T) {
 	if strings.Contains(tpl, "(RFC3339)") {
 		t.Error("no free-text RFC3339 field may remain")
 	}
-	requireCSS(t, ".coord-enhanced .coord-zone-server", "display: none;")
 }
 
 func TestCoordExpiryOffsetStampingRunsInNode(t *testing.T) {
-	source := string(mustReadEmbedded(t, "static/app.js"))
+	source := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	start := strings.Index(source, "  const progressiveFormPaths =")
 	end := strings.Index(source, "  const liveStatus =")
 	if start < 0 || end <= start || !strings.Contains(source[start:end], "coordExpiryOffset") {

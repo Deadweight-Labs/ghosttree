@@ -32,7 +32,7 @@ func TestCoordEventStructureRetainsProgressiveSurfaceHooks(t *testing.T) {
 	template := string(mustReadEmbedded(t, "templates/coord.html"))
 	for _, hook := range []string{
 		`id="coord-rooms"`,
-		`class="coord-conversation"`,
+		`id="coord-conversation"`,
 		`id="coord-context"`,
 		`class="coord-messages"`,
 		`data-coord-sidebar-dynamic`,
@@ -40,7 +40,7 @@ func TestCoordEventStructureRetainsProgressiveSurfaceHooks(t *testing.T) {
 		`data-coord-standing-list`,
 		`data-coord-thread-list`,
 		`coord-thread-paging`,
-		`class="coord-thread-messages"`,
+		`coord-thread-messages`,
 		`data-coord-draft-key=`,
 		`data-coord-focus-key=`,
 		`data-coord-live-status`,
@@ -52,7 +52,7 @@ func TestCoordEventStructureRetainsProgressiveSurfaceHooks(t *testing.T) {
 }
 
 func TestCoordProgressiveClientRefetchesCanonicalVisibleSurfaces(t *testing.T) {
-	source := string(mustReadEmbedded(t, "static/app.js"))
+	source := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	for _, want := range []string{
 		"new EventSource", "coord.changed", "resync", "DOMParser", "location.href",
 		"URLSearchParams", "around", "thread_around", "data-coord-live-status",
@@ -76,7 +76,7 @@ func TestCoordProgressiveClientRefetchesCanonicalVisibleSurfaces(t *testing.T) {
 }
 
 func TestCoordProgressiveClientOnlyInterceptsSafeCoordinationNavigationAndForms(t *testing.T) {
-	source := string(mustReadEmbedded(t, "static/app.js"))
+	source := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	for _, want := range []string{
 		"history.pushState", "popstate", "event.submitter", "new FormData(form)",
 		"new URLSearchParams()", "coordFormBody",
@@ -104,7 +104,7 @@ func TestCoordProgressiveClientOnlyInterceptsSafeCoordinationNavigationAndForms(
 }
 
 func TestCoordProgressiveTargetClassificationRunsInNode(t *testing.T) {
-	source := string(mustReadEmbedded(t, "static/app.js"))
+	source := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	start := strings.Index(source, "  const progressiveFormPaths =")
 	end := strings.Index(source, "  const liveStatus =")
 	if start < 0 || end <= start {
@@ -187,7 +187,7 @@ func TestCoordMessagePromotionHasStableDraftIdentity(t *testing.T) {
 }
 
 func TestCoordFocusIdentityPrefersStableOperationKey(t *testing.T) {
-	source := string(mustReadEmbedded(t, "static/app.js"))
+	source := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	start := strings.Index(source, "const focusIdentity =")
 	end := strings.Index(source, "  const captureFocus =")
 	if start < 0 || end <= start {
@@ -211,7 +211,7 @@ if (!sameFocusIdentity(focusIdentity(oldUnkeyed), replacementUnkeyed)) throw new
 }
 
 func TestCoordDraftIdentityExcludesServerContextAndSurvivesReplyShapeChanges(t *testing.T) {
-	source := string(mustReadEmbedded(t, "static/app.js"))
+	source := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	start := strings.Index(source, "  const draftControlSelector =")
 	end := strings.Index(source, "  const applyCoordinator =")
 	if start < 0 || end <= start {
@@ -305,7 +305,7 @@ if (replyControls[3].value !== "123" || replyControls[4].value !== "user draft")
 }
 
 func TestCoordApplyCoordinatorRejectsStaleNavigationPostAndRefreshResults(t *testing.T) {
-	source := string(mustReadEmbedded(t, "static/app.js"))
+	source := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	start := strings.Index(source, "  const createCoordApplyCoordinator =")
 	end := strings.Index(source, "  const progressiveFormPaths =")
 	if start < 0 || end <= start {
@@ -368,7 +368,7 @@ const run = async (kind, pending) => {
 }
 
 func TestCoordThreadInvalidationAlsoRefreshesVisibleRoomMessages(t *testing.T) {
-	source := string(mustReadEmbedded(t, "static/app.js"))
+	source := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	start := strings.Index(source, "  const roomSurfaces =")
 	end := strings.Index(source, "  const scheduleRefreshDrain =")
 	if start < 0 || end <= start {
@@ -391,7 +391,7 @@ if (selectors.includes("#coord-rooms") || selectors.includes("#coord-context")) 
 }
 
 func TestCoordAttentionInvalidationRefreshesDedicatedDetailSurface(t *testing.T) {
-	source := string(mustReadEmbedded(t, "static/app.js"))
+	source := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	start := strings.Index(source, "  const roomSurfaces =")
 	end := strings.Index(source, "  const scheduleRefreshDrain =")
 	if start < 0 || end <= start {
@@ -412,7 +412,7 @@ if (!selectors.includes("[data-coord-sidebar-dynamic]")) throw new Error("attent
 }
 
 func TestCoordProgressiveNavigationHandlesThreadDrawerPopstateAndRefreshRetry(t *testing.T) {
-	source := string(mustReadEmbedded(t, "static/app.js"))
+	source := string(mustReadEmbedded(t, "static/ui-coord.js"))
 	applyStart := strings.Index(source, "  const applyCoordPage =")
 	applyEnd := strings.Index(source, "  const fetchCoordPage =")
 	if applyStart < 0 || applyEnd <= applyStart {

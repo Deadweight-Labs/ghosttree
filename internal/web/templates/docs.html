@@ -1,0 +1,26 @@
+{{define "docs"}}{{template "head" .}}{{template "nav" .}}<main class="g2 dc"><div class="wrap">
+{{with .DocsV}}{{if .Rows}}
+<div class="sbar"><label class="gfield mono-in">{{mi "search"}}<input type="search" data-list-filter=".dcrow" placeholder="{{t "docs.search"}}" aria-label="{{t "docs.search"}}" autocomplete="off" spellcheck="false"></label></div>
+<div class="box"><div class="box-h lh"><span class="t" data-list-n data-one="{{t "docs.n_one"}}" data-many="{{t "docs.n" 0}}">{{if eq (len .Rows) 1}}{{t "docs.n_one"}}{{else}}{{t "docs.n" (len .Rows)}}{{end}}</span><span class="sp"></span><span class="muted fw4">{{t "docs.last_rev"}}</span></div>
+{{range .Rows}}<div class="row dcrow"><span class="st" aria-hidden="true">{{mi "file"}}</span><div class="dcmain"><a class="dcname rl" href="{{.Href}}">{{.Title}}</a><span class="lb out">{{.Kind}}</span><div class="dcslug mono">{{.Slug}}</div></div><div class="dcmeta">{{actor .Actor .Person}}<span class="muted dcage">{{ago .At}}</span><a class="chip sha" href="{{.Href}}">{{t "docs.rev" .Rev}}</a></div></div>
+{{end}}{{template "listnone"}}</div>
+{{else}}<div class="box"><div class="box-empty">{{t "docs.empty"}}</div></div>{{end}}{{end}}
+</div><script src="/static/ui-list.js" defer></script>
+{{template "foot" .}}{{end}}
+
+{{define "doc"}}{{template "head" .}}{{template "nav" .}}<main class="g2 dc"><div class="wrap">
+{{with .DocV}}
+<div class="dhead"><div class="dtitle"><h1>{{.Title}}</h1><div class="gacts"><a class="gbtn sm" href="{{.RawHref}}">{{mi "code"}}{{t "docs.raw"}}</a><button type="button" class="gbtn sm" data-ui-copy="#doc-link" data-copied="{{t "cards.copied"}}">{{mi "link"}}<span class="cl">{{t "docs.copy_link"}}</span></button></div></div>
+<div class="dmeta"><span class="lb out">{{.Kind}}</span>{{if .Archived}}<span class="lb warn">{{t "docs.archived"}}</span>{{end}}<span>{{actor .Actor .Person}} {{ago .At}}</span><span class="chip sha" title="{{t "docs.rev_of" .Rev .Head}}">{{t "docs.rev" .Rev}}</span>{{if .Old}}<a href="{{.Href}}">{{t "docs.to_head"}}</a>{{end}}<code class="mono muted dcslug" id="doc-link">{{.Link}}</code></div></div>
+<div class="dmain">
+{{with .Diff}}<div class="box dcdiff"><div class="box-h"><span class="t">{{t "docs.diff_h" .From .To}}</span><span class="add">{{t "docs.plus" .Added}}</span><span class="del">{{t "docs.minus" .Removed}}</span><span class="sp"></span><a class="gbtn sm" href="{{$.DocV.Href}}">{{mi "file"}}{{t "docs.show_text"}}</a></div>
+{{if .Lines}}<div class="dlines">{{range .Lines}}{{if eq .Op "skip"}}<div class="dl skip" aria-hidden="true"></div>{{else}}<div class="dl {{.Op}}"><span class="ln">{{if .Old}}{{.Old}}{{end}}</span><span class="ln">{{if .New}}{{.New}}{{end}}</span><span class="tx">{{if eq .Op "add"}}<span class="visually-hidden">{{t "code.diff_add"}} </span>{{else if eq .Op "del"}}<span class="visually-hidden">{{t "code.diff_del"}} </span>{{end}}{{.Text}}</span></div>{{end}}{{end}}</div>
+{{else}}<div class="box-empty">{{t "docs.diff_same"}}</div>{{end}}</div>
+{{else}}<div class="dcread"><article class="box dcdoc">{{.Body}}</article><nav class="dctoc" data-toc hidden aria-label="{{t "docs.toc"}}"><div class="dctoc-h">{{t "docs.toc"}}</div><ol></ol></nav></div>{{end}}
+<div class="sec" id="revisions"><h2>{{t "docs.revisions"}}</h2><span class="counter">{{len .Revs}}</span></div>
+<div class="box">{{if gt (len .Revs) 1}}<form class="box-h dccmp" method="get" action="{{.Href}}"><select class="gfield" name="from" aria-label="{{t "docs.compare_from"}}">{{$from := .CmpFrom}}{{range .Revs}}<option value="{{.N}}"{{if eq .N $from}} selected{{end}}>{{t "docs.rev" .N}}</option>{{end}}</select><span class="muted">{{mi "chevr"}}</span><select class="gfield" name="to" aria-label="{{t "docs.compare_to"}}">{{$to := .CmpTo}}{{range .Revs}}<option value="{{.N}}"{{if eq .N $to}} selected{{end}}>{{t "docs.rev" .N}}</option>{{end}}</select><button class="gbtn sm">{{t "docs.compare"}}</button></form>{{end}}
+{{range .Revs}}<div class="row dcrev{{if .Current}} on{{end}}"><a class="chip sha" href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{t "docs.rev" .N}}</a><div class="dcmsg">{{.Message}}</div><div class="dcmeta">{{actor .Actor .Person}}<span class="muted dcage">{{ago .At}}</span>{{if .DiffHref}}<a class="gbtn sm" href="{{.DiffHref}}">{{t "docs.diff"}}</a>{{else}}<span class="dcnodiff"></span>{{end}}</div></div>
+{{end}}</div>
+</div>
+{{end}}</div>
+{{template "foot" .}}{{end}}

@@ -12,22 +12,17 @@
       own.focus();
     }, true);
   }
+  // A link to a block of the log (#c12) from another page: the page opens as the
+  // ghosttree view, which has no blocks, so it goes on to the raw log.
+  if (document.querySelector(".sess-detail") && !document.querySelector(".flow") && /^#c\d+$/.test(location.hash)) {
+    const url = new URL(location.href);
+    url.searchParams.set("view", "raw");
+    location.replace(url);
+  }
   for (const el of document.querySelectorAll("time[data-clock]")) {
     const stamp = new Date(el.getAttribute("datetime"));
     if (!isNaN(stamp) && /^\d\d:\d\d$/.test(el.textContent.trim())) {
       el.textContent = stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
     }
-  }
-  const copy = document.querySelector("[data-copy-link]");
-  if (copy) {
-    copy.addEventListener("click", async () => {
-      const url = location.origin + location.pathname;
-      try {
-        await navigator.clipboard.writeText(url);
-        const label = copy.textContent;
-        copy.textContent = "✓";
-        setTimeout(() => { copy.textContent = label; }, 1200);
-      } catch (_) { /* clipboard not available: the address bar has the link */ }
-    });
   }
 })();

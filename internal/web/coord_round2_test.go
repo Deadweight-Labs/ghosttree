@@ -99,7 +99,7 @@ func TestCoordShortRoomName(t *testing.T) {
 // contains needle.
 func attentionCard(t *testing.T, page, needle string) string {
 	t.Helper()
-	at := strings.Index(page, `<p class="ask-t">`+needle+`</p>`)
+	at := strings.Index(page, `<div class="ask-t"><div class="kn-body prose" data-md="`+needle+`"><p>`+needle+`</p></div></div>`)
 	if at < 0 {
 		t.Fatalf("no attention card for %q", needle)
 	}
@@ -145,7 +145,7 @@ func TestCoordAttentionPreviewTruncatesByRunes(t *testing.T) {
 func TestCoordApprovalVerdictsAreVisibleAndOnlyDismissIsFolded(t *testing.T) {
 	page, _ := coordCompactAttentionFixture(t)
 	card := attentionCard(t, page, "Eingehende Anfrage 1")
-	details := strings.Index(card, `<details class="coord-attention-actions"`)
+	details := strings.Index(card, `<details class="dd top-menu coord-attention-actions"`)
 	if details < 0 {
 		t.Fatalf("approval card lost its actions disclosure: %s", card)
 	}
@@ -160,7 +160,7 @@ func TestCoordApprovalVerdictsAreVisibleAndOnlyDismissIsFolded(t *testing.T) {
 		t.Errorf("The disclosure must hold only Dismiss: %s", folded)
 	}
 	note, button := strings.Index(card, "Coordination only"), strings.Index(card, "Note approval")
-	if note < 0 || note > button || note > strings.Index(card, `class="acts rm-foot"`) {
+	if note < 0 || note > button || note > strings.Index(card, `acts rm-foot rq4-f`) {
 		t.Errorf("honest note must sit on the card directly above the verdict row: note=%d button=%d", note, button)
 	}
 }

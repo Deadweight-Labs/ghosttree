@@ -88,7 +88,6 @@ func TestOrgFormsNeedCSRFAndSameOrigin(t *testing.T) {
 		"/ui/orgs/project/move":  {"org": {"alpha"}, "remote": {"github.com/x/one"}, "to": {"alpha"}},
 		"/ui/orgs/invite/revoke": {"org": {"alpha"}, "id": {"1"}},
 		"/ui/orgs/accept":        {"code": {"x"}},
-		"/ui/orgs/default":       {"org": {"alpha"}},
 		"/ui/orgs/create":        {"name": {"Sneaky"}},
 		"/ui/orgs/rename":        {"org": {"alpha"}, "name": {"Sneaky"}},
 	}
@@ -130,7 +129,7 @@ func TestOrgFormsNeedCSRFAndSameOrigin(t *testing.T) {
 		t.Fatalf("a rejected form created an invitation: %+v", invs)
 	}
 	// Ein Körper über der Grenze kommt nicht durch.
-	big := url.Values{"csrf_token": {csrf}, "org": {"alpha"}, "email": {strings.Repeat("a", maxDeviceForm)}}
+	big := url.Values{"csrf_token": {csrf}, "org": {"alpha"}, "email": {strings.Repeat("a", maxFormBody)}}
 	if resp := sameOriginPostForm(t, alice, base+"/ui/orgs/invite", big); resp.StatusCode == http.StatusOK {
 		t.Fatal("oversized form accepted")
 	}
@@ -195,7 +194,7 @@ func TestOrgInviteAcceptRoleMoveAndRemoveInTheBrowser(t *testing.T) {
 		t.Fatalf("last owner: %d", resp.StatusCode)
 	}
 	// Eine fremde Organisation ist nicht vorhanden.
-	if resp := postOrg(t, anna, base, "/ui/orgs/default", url.Values{"org": {"alpha"}}); resp.StatusCode != http.StatusNotFound {
+	if resp := postOrg(t, anna, base, "/ui/orgs/rename", url.Values{"org": {"alpha"}, "name": {"Mine"}}); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("foreign org: %d", resp.StatusCode)
 	}
 }
@@ -222,7 +221,7 @@ func TestLocalInvitationLinkCreatesAccountAndSession(t *testing.T) {
 	b := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, _ := b.Get(srv.URL + "/ui/login/code?code=" + code)
 	page := body(t, resp)
-	if !strings.Contains(page, "alice invited you to Alpha") || !strings.Contains(page, "Your coding agents share") || strings.Contains(page, `type="password"`) || !strings.Contains(page, `name="name"`) {
+	if !strings.Contains(page, "alice invited you to Alpha") || strings.Contains(page, `type="password"`) || !strings.Contains(page, `name="name"`) {
 		t.Fatalf("landing page: %s", page)
 	}
 	// Ein GET verbraucht nichts.
@@ -246,7 +245,7 @@ func TestLocalInvitationLinkCreatesAccountAndSession(t *testing.T) {
 		t.Fatal("no session after redeeming")
 	}
 	resp = sameOriginPostForm(t, b, srv.URL+"/ui/login/code", url.Values{"code": {code}, "name": {"again"}})
-	if resp.StatusCode != http.StatusForbidden {
+	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("reuse: %d", resp.StatusCode)
 	}
 }
@@ -256,7 +255,7 @@ func TestOIDCInvitationLandingPointsToTheIdentityProvider(t *testing.T) {
 	code := env.invite(t, org, "")
 	resp, _ := http.Get(env.web.URL + "/ui/login/code?code=" + code)
 	page := body(t, resp)
-	if !strings.Contains(page, "Continue and join") || !strings.Contains(page, `action="/ui/login/oidc"`) || strings.Contains(page, `name="name"`) {
+	if !strings.Contains(page, "Join with your identity provider") || !strings.Contains(page, `action="/ui/login/oidc"`) || strings.Contains(page, `name="name"`) {
 		t.Fatalf("landing page: %s", page)
 	}
 	b := newBrowser(t)

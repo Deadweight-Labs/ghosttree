@@ -9,8 +9,9 @@ project and where the entry comes from (request, pull request, session, code
 area) above it.
 
 Agents write the note when they create the object (`explanation` on
-`context_remember`, `request_create`, `pain_record`, `human_task_create` and
-`coord_send` with a question; `--explanation` on the `ctx` commands). Missing or
+`context_remember`, `request` `action=create`, `pain` `action=record`,
+`human_task` `action=create` and `coord` `action=send` with a question;
+`--explanation` on the `ctx` commands). Missing or
 outdated notes are generated from the object's own text and the project data
 around it (titles of the requests it names, code paths), never from session
 transcripts. A note is outdated when the text it explains changed, or, if it was

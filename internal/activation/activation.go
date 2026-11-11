@@ -43,11 +43,16 @@ func NormalizeContext(c Context) (Context, error) {
 	if c.RepoPath, err = normalizeRel(c.RepoPath); err != nil {
 		return Context{}, err
 	}
+	// A fresh slice: the caller's paths may be read concurrently elsewhere.
+	paths := make([]string, len(c.Paths))
 	for i, p := range c.Paths {
-		c.Paths[i], err = normalizeRel(p)
+		paths[i], err = normalizeRel(p)
 		if err != nil {
 			return Context{}, err
 		}
+	}
+	if c.Paths != nil {
+		c.Paths = paths
 	}
 	return c, nil
 }

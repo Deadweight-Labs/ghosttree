@@ -103,11 +103,15 @@ func TestSearchAPIHybridShowsAGuestOnlyWhatAGuestMaySeeInTheSameOrder(t *testing
 		}
 	}
 
-	// A member reads the staged entries; the owner reads the other project; the
+	// A member reads the staged entries when the search asks for them (agent
+	// search leaves them out otherwise); the owner reads the other project; the
 	// author of the global entry reads that; a stranger reads nothing.
 	const wide = "/api/search?kind=knowledge&q=q1+q2+q3+q4&limit=100"
-	if members, _ := hybridHits(t, withHidden, "mia", wide); !slices.Contains(members, "H0") || slices.Contains(members, "X0") {
+	if members, _ := hybridHits(t, withHidden, "mia", wide); slices.Contains(members, "H0") || slices.Contains(members, "X0") {
 		t.Fatalf("member: %v", members)
+	}
+	if staged, _ := hybridHits(t, withHidden, "mia", "/api/search?kind=knowledge&q=q1+q2+q3+q4+is:staged&limit=100"); !slices.Contains(staged, "H0") {
+		t.Fatalf("member asking for staged entries: %v", staged)
 	}
 	if owner, _ := hybridHits(t, withHidden, "robin", wide); !slices.Contains(owner, "X0") || !slices.Contains(owner, "G0") {
 		t.Fatalf("owner: %v", owner)

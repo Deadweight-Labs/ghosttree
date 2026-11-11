@@ -1,0 +1,36 @@
+/* Machine page and the machine tab of an organisation: rows of knowledge, agents and
+   sessions come from the base; this adds the sharing forms and the share rows. */
+
+:is(.g2.mh) {
+  & .dtitle h1 .mono { font-size: inherit; }
+  & .chip { display: inline-flex; align-items: center; gap: 4px; }
+  & .chip .i { width: 14px; height: 14px; }
+  & .merow .rt { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; max-width: 360px; }
+  & .merow .rp { display: inline-flex; align-items: center; gap: 4px; }
+  & .eshare { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+  & .eshare .gfield { height: 28px; min-width: 0; max-width: 150px; padding: 0 8px; font-size: 13px; }
+  & .eshare .gbtn .i { width: 14px; height: 14px; }
+  & .mshare { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; }
+  & .mshare + .mshare { border-top: 1px solid var(--border-muted); }
+  & .mshare-n, & .mshare-r { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+  & .mshare-r form { margin: 0; }
+  & .mform { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); align-items: end; gap: 12px; border-top: 1px solid var(--border-default); background: var(--canvas-subtle); }
+  & .mform .cx-fl { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .mform .cx-fl .gfield { font-weight: 400; font-size: 14px; }
+  & .mform > .gbtn { justify-self: start; }
+  & .mowner { border-top: 1px solid var(--border-muted); }
+  & .mowner > summary { list-style: none; display: inline-flex; cursor: pointer; }
+  & .mowner > summary::-webkit-details-marker { display: none; }
+  & .mowner form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  & .agroup .arow { padding-left: 16px; }
+  & .lb.p-done { color: #fff; background: var(--done-emphasis); }
+}
+
+@media (max-width: 767px) {
+  :is(.g2.mh) .merow { grid-template-columns: 16px minmax(0, 1fr); }
+  :is(.g2.mh) .merow .rt { grid-column: 2; justify-content: flex-start; max-width: none; margin-top: 4px; }
+}
+
+/* The two parts of an organization's machines tab (REQ-623). */
+:is(.g2.mh) .mh-sec { font-size: 16px; font-weight: 600; margin: 24px 0 8px; }
+:is(.g2.mh) .mh-sec:first-child { margin-top: 0; }

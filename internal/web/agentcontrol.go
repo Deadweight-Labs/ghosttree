@@ -133,10 +133,11 @@ func (a *app) coordAgentControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent or control not found", http.StatusNotFound)
 		return
 	case errors.Is(err, store.ErrControlUnsupported):
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		// The store words it in English for the API; the page says it in its language.
+		a.failControl(w, r, agent, http.StatusUnprocessableEntity, err, "err.control.unsupported")
 		return
 	case errors.Is(err, store.ErrControlActive):
-		http.Error(w, err.Error(), http.StatusConflict)
+		a.failControl(w, r, agent, http.StatusConflict, err, "err.control.active")
 		return
 	case errors.Is(err, store.ErrInvalidInput):
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -145,5 +146,30 @@ func (a *app) coordAgentControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(r.FormValue("room")), http.StatusSeeOther)
+	a.redirectAfterControl(w, r, agent)
+}
+
+// redirectAfterControl führt nach dem Steuern zurück: in den Raum, aus dem das
+// Formular kam, sonst auf die Seite des Agenten. Das Ziel wird gebaut, nie aus
+// dem Formular übernommen.
+func (a *app) redirectAfterControl(w http.ResponseWriter, r *http.Request, agent string) {
+	if room := strings.TrimSpace(r.FormValue("room")); room != "" || agent == "" {
+		http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, agentURL(agent), http.StatusSeeOther)
+}
+
+// failControl goes back to the page the control form was on, with the reason in the
+// language of the page; a client that is no browser gets the store's text as before.
+func (a *app) failControl(w http.ResponseWriter, r *http.Request, agent string, status int, err error, key string) {
+	if !formNavigation(r) {
+		http.Error(w, err.Error(), status)
+		return
+	}
+	back := agentURL(agent)
+	if room := strings.TrimSpace(r.FormValue("room")); room != "" {
+		back = "/ui/coord?room=" + url.QueryEscape(room)
+	}
+	a.failFormTo(w, r, back, status, a.langFor(r).msg(key), "")
 }
