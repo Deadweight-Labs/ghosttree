@@ -467,6 +467,26 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   with the right to read its transcript, person and date with the right to read its
   metadata, and otherwise a number; anonymous readers and other projects see
   nothing. A collector talking to an older server skips the new route without errors.
+  The collector also reads the hash itself (IDEA-31 P2, source `observed`): after a
+  successful commit call it reads the reflog of `HEAD` in the working directory the
+  tool ran in, within the time window of the call, and reports the full hash, the
+  kind (`commit`, `amend`, `rebase`, `cherry-pick`, `merge`, `am`, `revert`) and the
+  patch ID of each commit it made, also for `git commit -q`. It starts at most three
+  `git` processes per call (none without a successful commit call), reads only the
+  directory of the tool, below it, or a worktree of the same repository (never a
+  `git -C` into another repository), uses no network, and at most 300 lookups per
+  transcript and ten minutes, only for calls of the last 30 days. The server checks
+  an observed hash like a reported one: time window and author (strong or weak),
+  and only for sessions of the reporting account. An older server ignores the new
+  field.
+  `ctx db backfill-session-git --db <path>` does the same for the transcripts
+  already stored (IDEA-31 P5): it recognises the calls in the stored lines, writes
+  what the route writes, runs the match against the pull request commits, and
+  prints the coverage (commit calls, pull requests and commits with sessions, split
+  into reported, observed and matched). It runs beside the server in short
+  transactions, is repeatable and resumable (`--resume`, `--after-id`), and
+  `--dry-run` runs the same steps against temporary copies of the three tables
+  without writing to the file. See `deploy/README.md`.
 - Reactions on comments, ideas and issues from a fixed list (+1, -1, laugh,
   hooray, confused, heart, rocket, eyes), `PUT|DELETE|GET /api/reactions`,
   `ctx react`, `reaction_set`, `reaction_list`: members react, guests read.

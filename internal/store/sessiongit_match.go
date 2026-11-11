@@ -170,7 +170,7 @@ func (m *matcher) settleReported(project string, commits []pullCommitAt) error {
 	var todo []reported
 	for _, c := range commits {
 		rows, err := m.q.Query(`SELECT session_id, sha, chunk_seq FROM session_commits
-			WHERE project=? AND source='reported' AND sha IN (SELECT value FROM json_each(?))`, project, jsonStrings(shaPrefixes(c.SHA)))
+			WHERE project=? AND source IN ('reported','observed') AND sha IN (SELECT value FROM json_each(?))`, project, jsonStrings(shaPrefixes(c.SHA)))
 		if err != nil {
 			return err
 		}
@@ -213,7 +213,7 @@ func (m *matcher) settleReported(project string, commits []pullCommitAt) error {
 			// nicht kennt; die Zeile bleibt, die Leser blenden sie aus
 			// (reportedContradicted), bis ein passender Commit sie bestätigt.
 			if len(r.sha) >= minDeleteSHA {
-				_, err = m.q.Exec(`DELETE FROM session_commits WHERE session_id=? AND sha=? AND source='reported'`, r.session, r.sha)
+				_, err = m.q.Exec(`DELETE FROM session_commits WHERE session_id=? AND sha=? AND source IN ('reported','observed')`, r.session, r.sha)
 			}
 		case len(fitting) == 1 && r.sha != fitting[0].SHA:
 			var have int
@@ -231,6 +231,43 @@ func (m *matcher) settleReported(project string, commits []pullCommitAt) error {
 		}
 	}
 	return nil
+}
+
+// settleClaims prüft die SHAs, die ein Stapel gemeldet oder beobachtet hat, gegen die
+// Commits der PRs, die der Server schon kennt.
+func (m *matcher) settleClaims(b *gitBatch) error {
+	for project, list := range b.claimed {
+		var known []pullCommitAt
+		for _, sha := range uniqueStrings(list) {
+			found, err := pullCommitsWithPrefix(m.q, project, sha)
+			if err != nil {
+				return err
+			}
+			known = append(known, found...)
+		}
+		if err := m.settleReported(project, known); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// matchWindows legt die Zeitfenster der Vorgänge ohne SHA über die Commits der PRs
+// und gibt zurück, wie viele Commits dabei einer Session zugeordnet wurden.
+func (m *matcher) matchWindows(b *gitBatch) (int, error) {
+	total := 0
+	for project, ws := range b.windows {
+		commits, err := m.commitsInWindows(project, ws)
+		if err != nil {
+			return total, err
+		}
+		n, err := m.resolveAll(project, commits)
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
 }
 
 // minDeleteSHA: erst ab dieser Länge ist ein Präfix eindeutig genug, dass ein

@@ -54,7 +54,10 @@ type pendingGitCall struct {
 	seq     int
 	started string
 	branch  string
-	calls   []gitcmd.Call
+	// cwd ist das Arbeitsverzeichnis des Werkzeugs beim Aufruf (Claude Code schreibt
+	// es je Zeile, sonst das der Session).
+	cwd   string
+	calls []gitcmd.Call
 }
 
 // gitScan liest die Git-Vorgänge eines Transkripts und hält fest, was noch auf
@@ -69,6 +72,14 @@ type gitScan struct {
 	// die Vorgänge aus einem Grund abgelehnt hat, der sich nicht von selbst ändert.
 	holdUntil time.Time
 	holdFor   time.Duration
+	// observer liest nach einem erfolgreichen Commit-Aufruf das Reflog (P2). nil:
+	// es wird nichts beobachtet (Tests, Bestandslauf ohne Repo).
+	observer *observer
+	// sessionCwd ist das Arbeitsverzeichnis der Session, wo die Zeile keines nennt.
+	sessionCwd string
+	// historic: die Zeilen sind alt (Bestandslauf). Ein wartender Aufruf verfällt
+	// dann nicht nach pendingGitCallTTL, denn die Uhr der Zeilen ist nicht die von heute.
+	historic bool
 }
 
 func newGitScan(harness, externalID string) *gitScan {
@@ -114,7 +125,7 @@ func (g *gitScan) line(seq int, line string) {
 			if branch == "" {
 				branch = claudeBranch(g.harness, line)
 			}
-			p := &pendingGitCall{seq: seq, started: b.Time, branch: branch, calls: calls}
+			p := &pendingGitCall{seq: seq, started: b.Time, branch: branch, cwd: g.callCwd(b, line), calls: calls}
 			if b.HasOutput {
 				// Aufruf und Ergebnis in einer Zeile (Codex item_completed).
 				g.finish(p, b.Output, b.Failed, b.Time)
@@ -128,6 +139,46 @@ func (g *gitScan) line(seq int, line string) {
 			}
 		}
 	}
+}
+
+// callCwd ist das Arbeitsverzeichnis, in dem der Aufruf lief: das der Zeile (Claude
+// Code), das, was Codex dem Aufruf als workdir mitgibt, sonst das der Session.
+func (g *gitScan) callCwd(b transcript.Block, line string) string {
+	var cwd string
+	if g.harness == "codex" {
+		cwd = codexWorkdir(b.Input)
+	} else {
+		cwd = claudeCwd(line)
+	}
+	if cwd == "" {
+		cwd = g.sessionCwd
+	}
+	return cwd
+}
+
+// claudeCwd liest das Arbeitsverzeichnis, das Claude Code in jede Zeile schreibt.
+func claudeCwd(line string) string {
+	var l struct {
+		CWD string `json:"cwd"`
+	}
+	if json.Unmarshal([]byte(line), &l) != nil {
+		return ""
+	}
+	return l.CWD
+}
+
+// codexWorkdir liest workdir aus den Argumenten eines Codex-Aufrufs.
+func codexWorkdir(arguments string) string {
+	if !strings.HasPrefix(arguments, "{") {
+		return ""
+	}
+	var a struct {
+		Workdir string `json:"workdir"`
+	}
+	if json.Unmarshal([]byte(arguments), &a) != nil {
+		return ""
+	}
+	return a.Workdir
 }
 
 // command gibt den Shell-Text eines Werkzeugaufrufs zurück, leer für ein
@@ -246,7 +297,7 @@ func (g *gitScan) hold(id string, p *pendingGitCall) {
 	for len(g.order) > 0 {
 		old, ok := g.pending[g.order[0]]
 		if ok && len(g.pending) < maxPendingGitCalls {
-			if t, err := time.Parse(time.RFC3339Nano, old.started); err != nil || t.After(cutoff) {
+			if t, err := time.Parse(time.RFC3339Nano, old.started); g.historic || err != nil || t.After(cutoff) {
 				break
 			}
 		}
@@ -297,6 +348,11 @@ func (g *gitScan) finish(p *pendingGitCall, output string, failed bool, ended st
 					break
 				}
 			}
+			// Das Reflog nennt die volle SHA auch dann, wenn die Ausgabe keine hat
+			// (git commit -q). Nur nach einem erfolgreichen Aufruf.
+			if !failed && g.observer != nil {
+				ev.Observed = g.observer.observeCall(p.cwd, c.Dir, p.started, ended)
+			}
 		case gitcmd.KindPush:
 			// Auf der Gegenseite, nicht der Branch der Session: so läuft er gegen den
 			// head_ref eines PRs.
@@ -323,6 +379,24 @@ func (g *gitScan) add(ev store.SessionGitEvent) {
 		g.queue = g.queue[len(g.queue)-maxQueuedGitEvents:]
 	}
 }
+
+// HistoryScan liest die gespeicherten Zeilen einer abgeschlossenen Session mit derselben
+// Erkennung wie der Collector (ctx db backfill-session-git). Es liest nur: kein Reflog,
+// keine Route. Die Zeilen sind die geschlankten der Datenbank; slim lässt Aufrufe,
+// Zeit, cwd, Branch und die kurzen Ergebnisse, auf die die Erkennung baut, stehen.
+type HistoryScan struct{ g *gitScan }
+
+func NewHistoryScan(harness, externalID string) *HistoryScan {
+	g := newGitScan(harness, externalID)
+	g.historic = true
+	return &HistoryScan{g: g}
+}
+
+// Line nimmt eine Zeile in der Reihenfolge ihrer Nummern.
+func (h *HistoryScan) Line(seq int, raw string) { h.g.line(seq, raw) }
+
+// Events nennt die erkannten Vorgänge; ein Aufruf ohne Ergebnis in den Zeilen fehlt.
+func (h *HistoryScan) Events() []store.SessionGitEvent { return h.g.queue }
 
 // gitEventsUnsupported: der Server kennt die Route nicht (älterer Server). Bis
 // zum nächsten Start wird nichts mehr gesendet; ein Neustart nach dem Update des

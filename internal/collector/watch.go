@@ -117,7 +117,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 	ident := st.identity(path, func() touchIdentity { return sessionIdentity(path, harness, machine) })
 	var gits *gitScan
 	if _, ok := up.(GitEventRecorder); ok && !gitEventsUnsupported.Load() {
-		gits = st.gitScanner(path, harness, ident.externalID)
+		gits = st.gitScanner(path, harness, ident.externalID, ident.checkout)
 	}
 	seq := fs.Seq
 	flush := func() error {
