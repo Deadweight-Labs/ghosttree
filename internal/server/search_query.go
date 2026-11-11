@@ -291,9 +291,19 @@ func (a *api) qualifiedKnowledge(st *store.Store, r *http.Request, res *searchRe
 	if err != nil {
 		return err
 	}
-	kept := filterTo(ks, limit, func(k store.Knowledge) bool {
+	// Im Projekt gilt die Quote für breite Treffer wie bei der Suche ohne
+	// Qualifier (capBroadHits): erst nach den Qualifiern begrenzen, dann kürzen.
+	inProject := ax.Project != "" && r.URL.Query().Get("scope") == "union"
+	pageSize := limit
+	if inProject {
+		pageSize = 0
+	}
+	kept := filterTo(ks, pageSize, func(k store.Knowledge) bool {
 		return q.Match(factsOf(pa, query.KindKnowledge, k.ID, k.Status, k.Type, k.Scope.Project, k.Person, "", k.CreatedAt, k.UpdatedAt, facts[k.ID]).WithKnowledge(k.Confidence, k.Harness))
 	})
+	if inProject {
+		kept = capBroadHits(kept, limit)
+	}
 	a.st.RecordKnowledgeSearchHits(kept)
 	res.Knowledge = pa.KnowledgeViews(kept)
 	return nil

@@ -645,6 +645,45 @@ func (c *Client) RegressionGaps(ax scope.Axes) ([]store.Knowledge, int, error) {
 	return out.Gaps, out.Unreviewed, err
 }
 
+// SetKnowledgeEverywhere sets or takes back the flag "applies everywhere" of a
+// machine or global entry: the briefing of every project then carries it.
+func (c *Client) SetKnowledgeEverywhere(id int64, on bool) error {
+	return c.do("PUT", "/api/knowledge/"+strconv.FormatInt(id, 10)+"/everywhere", nil, map[string]bool{"everywhere": on}, nil)
+}
+
+// TriageEntry is one proposal of the review of broad knowledge.
+type TriageEntry struct {
+	Knowledge  store.Knowledge  `json:"knowledge"`
+	Kind       store.TriageKind `json:"kind"`
+	Project    string           `json:"project,omitempty"`
+	Deliveries int              `json:"deliveries,omitempty"`
+}
+
+// TriageReport is the answer of the review. UnusedSkipped is set when the list
+// of entries nobody picked up is missing because the delivery log reaches back
+// only LogDays days (an older server leaves both fields out).
+type TriageReport struct {
+	Items         []TriageEntry `json:"items"`
+	UnusedSkipped bool          `json:"unused_skipped,omitempty"`
+	LogDays       int           `json:"log_days,omitempty"`
+}
+
+// KnowledgeTriage lists machine and global entries for review: those that arose
+// in exactly one project, and those nobody has picked up for 90 days. It changes
+// nothing.
+func (c *Client) KnowledgeTriage(project string, limit int) (TriageReport, error) {
+	q := url.Values{}
+	if project != "" {
+		q.Set("project", project)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out TriageReport
+	err := c.do("GET", "/api/knowledge-triage", q, nil, &out)
+	return out, err
+}
+
 // KnowledgeByID fetches one entry with its body intact, for the case where
 // somebody asked for exactly this entry rather than for an overview.
 func (c *Client) KnowledgeByID(id int64) (store.Knowledge, error) {

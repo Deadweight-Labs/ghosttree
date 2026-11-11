@@ -20,6 +20,8 @@ const knowledgeUsage = `usage: ctx knowledge move <id> --project P | --machine M
        ctx knowledge supersede <id> --old ID[,ID...] --reason R
        ctx knowledge retire <id> --reason R
        ctx knowledge show <id>
+       ctx knowledge triage [--project P] [--limit N]
+       ctx knowledge everywhere <id> [--off]
 
 move    Moves a knowledge entry that was filed in the wrong place. You need write
         access to where it is and to where it goes; the move is recorded.
@@ -54,6 +56,16 @@ retire  Retires an entry whose subject no longer exists, with a required reason.
         It needs the same right as editing the entry in the web.
 
 show    Prints one entry in full, with the reason if it was superseded or retired.
+
+triage  Lists machine and global entries for review and changes nothing: those
+        that arose in exactly one project (they are probably project knowledge
+        about a host and belong to 'ctx knowledge move --project'), and those
+        nobody has picked up for 90 days (keep, retire, or flag).
+
+everywhere  Flags a machine or global entry as holding in every project, so the
+        briefing of every project carries it. Without the flag the briefing
+        carries a machine or global entry only in projects it arose or was
+        evidenced in; a word in a prompt and the search still reach it anywhere.
 
 Run 'ctx knowledge <command> --help' for the options of one command.`
 
@@ -107,6 +119,10 @@ func cmdKnowledge(args []string, stdout io.Writer) int {
 		return cmdKnowledgeSupersede(args[1:], stdout)
 	case "show":
 		return cmdKnowledgeShow(args[1:], stdout)
+	case "triage":
+		return cmdKnowledgeTriage(args[1:], stdout)
+	case "everywhere":
+		return cmdKnowledgeEverywhere(args[1:], stdout)
 	}
 	fmt.Fprintln(stdout, knowledgeUsage)
 	return 2

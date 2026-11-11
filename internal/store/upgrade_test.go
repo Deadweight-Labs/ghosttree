@@ -559,3 +559,68 @@ func TestAddedColumnsNamesWhatItAddedAndIsIdempotent(t *testing.T) {
 		t.Fatalf("second run reported %v, want nothing added", again)
 	}
 }
+
+// REQ-641 review, minor 5: the three rebuilds of the knowledge table carried only
+// the columns the legacy table had, so a database that already holds the flag
+// "applies everywhere" lost it in silence. Each step is checked on its own: the
+// flag is put back on entry 1 before it, and has to be there after it.
+func TestUpgradeStepsKeepTheEverywhereFlag(t *testing.T) {
+	path := makeOldDB(t)
+	flag := func(t *testing.T) (int, error) {
+		t.Helper()
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var v int
+		err = db.QueryRow(`SELECT everywhere FROM knowledge WHERE id=1`).Scan(&v)
+		return v, err
+	}
+	arm := func(t *testing.T) {
+		t.Helper()
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		has, err := hasColumn(db, "knowledge", "everywhere")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !has {
+			if _, err := db.Exec(`ALTER TABLE knowledge ADD COLUMN everywhere INTEGER NOT NULL DEFAULT 0 CHECK(everywhere IN (0,1))`); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := db.Exec(`UPDATE knowledge SET everywhere=1 WHERE id=1`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	steps := []struct {
+		name string
+		run  func() (string, error)
+	}{
+		{"UpgradeSchema", func() (string, error) { return UpgradeSchema(path) }},
+		{"UpgradeTypes", func() (string, error) { return UpgradeTypes(path) }},
+		{"UpgradeRequestDomain", func() (string, error) { return UpgradeRequestDomain(path) }},
+	}
+	for _, step := range steps {
+		arm(t)
+		if _, err := step.run(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		v, err := flag(t)
+		if err != nil {
+			t.Fatalf("%s: the column is gone: %v", step.name, err)
+		}
+		if v != 1 {
+			t.Errorf("%s reset the flag to %d", step.name, v)
+		}
+	}
+	// And a database without the column still upgrades.
+	plain := makeOldDB(t)
+	if _, err := UpgradeSchema(plain); err != nil {
+		t.Fatalf("legacy database without the column: %v", err)
+	}
+}

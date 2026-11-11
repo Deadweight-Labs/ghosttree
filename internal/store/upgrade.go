@@ -9,6 +9,24 @@ import (
 	"time"
 )
 
+// everywhereCarry names the pieces that carry knowledge.everywhere through a
+// rebuild of the table (REQ-641). The flag is set by a person and cannot be
+// computed again; a rebuild that left it out would reset every "applies
+// everywhere" to 0 without a word. def and col are empty on a database that has
+// no such column yet.
+type everywhereCarry struct{ def, col string }
+
+func carryEverywhere(db *sql.DB) (everywhereCarry, error) {
+	has, err := hasColumn(db, "knowledge", "everywhere")
+	if err != nil || !has {
+		return everywhereCarry{}, err
+	}
+	return everywhereCarry{
+		def: `, everywhere INTEGER NOT NULL DEFAULT 0 CHECK(everywhere IN (0,1))`,
+		col: `, everywhere`,
+	}, nil
+}
+
 // SchemaCurrent reports whether the trust-tier schema is already in place.
 // The origin column is the marker: it only exists after the upgrade.
 func SchemaCurrent(db *sql.DB) (bool, error) {
@@ -71,6 +89,10 @@ func UpgradeSchema(path string) (string, error) {
 		return backup, err
 	}
 
+	ev, err := carryEverywhere(db)
+	if err != nil {
+		return backup, err
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return backup, err
@@ -80,6 +102,11 @@ func UpgradeSchema(path string) (string, error) {
 	steps := []string{
 		`DROP TRIGGER IF EXISTS knowledge_ai`,
 		`DROP TRIGGER IF EXISTS knowledge_au`,
+		// The triggers of the project affinity on other tables read knowledge; a
+		// table that is dropped and renamed cannot stay under them (REQ-641).
+		`DROP TRIGGER IF EXISTS knowledge_affinity_evidence`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_insert`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_update`,
 		`CREATE TABLE knowledge_new(
 		  id INTEGER PRIMARY KEY,
 		  type TEXT NOT NULL CHECK(type IN ('pitfall','decision','note','plan')),
@@ -90,13 +117,13 @@ func UpgradeSchema(path string) (string, error) {
 		  origin TEXT NOT NULL DEFAULT 'agent' CHECK(origin IN ('agent','distilled','human')),
 		  superseded_by INTEGER NOT NULL DEFAULT 0,
 		  person TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
-		  created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+		  created_at TEXT NOT NULL, updated_at TEXT NOT NULL` + ev.def + `)`,
 		// id is carried over explicitly: the FTS index addresses rows by rowid.
 		`INSERT INTO knowledge_new(id, type, title, body, project, branch, machine,
-		   confidence, status, origin, superseded_by, person, harness, session_ref, created_at, updated_at)
+		   confidence, status, origin, superseded_by, person, harness, session_ref, created_at, updated_at` + ev.col + `)
 		 SELECT id, type, title, body, project, branch, machine,
 		   CASE confidence WHEN 'observation' THEN 'trusted' ELSE confidence END,
-		   status, 'agent', 0, person, harness, session_ref, created_at, updated_at
+		   status, 'agent', 0, person, harness, session_ref, created_at, updated_at` + ev.col + `
 		 FROM knowledge`,
 		`DROP TABLE knowledge`,
 		`ALTER TABLE knowledge_new RENAME TO knowledge`,
@@ -219,6 +246,10 @@ func UpgradeTypes(path string) (string, error) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge`).Scan(&before); err != nil {
 		return backup, err
 	}
+	ev, err := carryEverywhere(db)
+	if err != nil {
+		return backup, err
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return backup, err
@@ -227,6 +258,11 @@ func UpgradeTypes(path string) (string, error) {
 	steps := []string{
 		`DROP TRIGGER IF EXISTS knowledge_ai`,
 		`DROP TRIGGER IF EXISTS knowledge_au`,
+		// The triggers of the project affinity on other tables read knowledge; a
+		// table that is dropped and renamed cannot stay under them (REQ-641).
+		`DROP TRIGGER IF EXISTS knowledge_affinity_evidence`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_insert`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_update`,
 		`CREATE TABLE knowledge_new(
 		  id INTEGER PRIMARY KEY,
 		  type TEXT NOT NULL CHECK(type IN ('pitfall','decision','note','plan','instruction','request')),
@@ -237,11 +273,11 @@ func UpgradeTypes(path string) (string, error) {
 		  origin TEXT NOT NULL DEFAULT 'agent' CHECK(origin IN ('agent','distilled','human')),
 		  superseded_by INTEGER NOT NULL DEFAULT 0,
 		  person TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
-		  created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+		  created_at TEXT NOT NULL, updated_at TEXT NOT NULL` + ev.def + `)`,
 		`INSERT INTO knowledge_new(id, type, title, body, project, branch, machine,
-		   confidence, status, origin, superseded_by, person, harness, session_ref, created_at, updated_at)
+		   confidence, status, origin, superseded_by, person, harness, session_ref, created_at, updated_at` + ev.col + `)
 		 SELECT id, type, title, body, project, branch, machine,
-		   confidence, status, origin, superseded_by, person, harness, session_ref, created_at, updated_at
+		   confidence, status, origin, superseded_by, person, harness, session_ref, created_at, updated_at` + ev.col + `
 		 FROM knowledge`,
 		`DROP TABLE knowledge`,
 		`ALTER TABLE knowledge_new RENAME TO knowledge`,
@@ -313,6 +349,10 @@ func UpgradeRequestDomain(path string) (string, error) {
 		return backup, err
 	}
 	defer db.Exec(`PRAGMA foreign_keys=ON`)
+	ev, err := carryEverywhere(db)
+	if err != nil {
+		return backup, err
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return backup, err
@@ -358,6 +398,11 @@ func UpgradeRequestDomain(path string) (string, error) {
 		`DELETE FROM instruction_activation_path WHERE knowledge_id IN (SELECT id FROM knowledge WHERE type='request')`,
 		`DROP TRIGGER IF EXISTS knowledge_ai`,
 		`DROP TRIGGER IF EXISTS knowledge_au`,
+		// The triggers of the project affinity on other tables read knowledge; a
+		// table that is dropped and renamed cannot stay under them (REQ-641).
+		`DROP TRIGGER IF EXISTS knowledge_affinity_evidence`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_insert`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_update`,
 		`CREATE TABLE knowledge_new(
 		 id INTEGER PRIMARY KEY,
 		 type TEXT NOT NULL CHECK(type IN ('pitfall','decision','note','plan','instruction')),
@@ -368,9 +413,9 @@ func UpgradeRequestDomain(path string) (string, error) {
 		 origin TEXT NOT NULL DEFAULT 'agent' CHECK(origin IN ('agent','distilled','human')),
 		 superseded_by INTEGER NOT NULL DEFAULT 0,
 		 person TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
-		 created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-		`INSERT INTO knowledge_new(id,type,title,body,project,branch,machine,confidence,status,origin,superseded_by,person,harness,session_ref,created_at,updated_at)
-		 SELECT id,type,title,body,project,branch,machine,confidence,status,origin,superseded_by,person,harness,session_ref,created_at,updated_at
+		 created_at TEXT NOT NULL, updated_at TEXT NOT NULL` + ev.def + `)`,
+		`INSERT INTO knowledge_new(id,type,title,body,project,branch,machine,confidence,status,origin,superseded_by,person,harness,session_ref,created_at,updated_at` + ev.col + `)
+		 SELECT id,type,title,body,project,branch,machine,confidence,status,origin,superseded_by,person,harness,session_ref,created_at,updated_at` + ev.col + `
 		 FROM knowledge WHERE type!='request'`,
 		`DROP TABLE knowledge`,
 		`ALTER TABLE knowledge_new RENAME TO knowledge`,

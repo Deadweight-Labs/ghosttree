@@ -513,6 +513,14 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   descriptions of confirmed-deleted files.
 - Knowledge that arrives with a prompt is picked from rare words, arrives once
   per session and names the word that triggered it.
+- `ctx knowledge triage` lists machine and global entries for review without
+  changing them: those that arose in exactly one project (probably project
+  knowledge about a host, to be filed with `ctx knowledge move`), and those
+  nobody picked up on a prompt word or a search for 90 days. The second list
+  rests on the delivery log and is left out, with a note, until the log reaches
+  back 90 days; binding instructions are never on it. `ctx knowledge
+  everywhere <id>` flags an entry as holding in every project
+  (`PUT /api/knowledge/{id}/everywhere`, `GET /api/knowledge-triage`).
 
 #### Search
 
@@ -894,9 +902,29 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   says, at most three seconds; a write and the prompt hook never repeat.
 - A search of one area (`kind=sessions`) ends with its request: when the caller
   hangs up, the query stops and frees its place and its connection.
+- The start-up briefing no longer hands out machine and global knowledge that
+  has no tie to the project of the session (PAIN-74). A tie is computed, not
+  maintained: the entry was written in a session of the project, a session of
+  the project is evidence for it, or a person flagged it as holding everywhere
+  (`knowledge_project_affinity`, `knowledge.everywhere`, filled by triggers and
+  built from the stock on the first start). Project knowledge now stands first,
+  the quarter of the budget reserved for broad knowledge holds only entries with
+  a tie, and the closing line counts what was left out. A word in a prompt still
+  delivers it and the search finds it. A search in a project returns at most a
+  quarter of its hits (5 of 20) from machine and global knowledge while there
+  are enough project hits, also with qualifiers; across projects
+  (`all_projects`) the search is unchanged. Binding instructions are not
+  affected. After the rollout run `ctx knowledge triage` and flag machine and
+  safety rules with `ctx knowledge everywhere <id>` (see the deploy guide).
 
 ### Fixed
 
+- Uploading a session a second time failed with a UNIQUE violation as soon as a
+  machine or global entry was tied to its project (the triggers of the project
+  tie used `INSERT OR IGNORE`, which the `ON CONFLICT DO UPDATE` of the session
+  upsert overrules). The triggers now use `ON CONFLICT DO NOTHING`, fire on a
+  session only when its project changes, and cost about 45 µs instead of 2.6 ms
+  per session write on an archive of 20,000 sessions.
 - `ctx coord peers`, `inbox` and `rooms` only read: in a repository whose
   remote the server does not know as a project they no longer join its room
   (which bound the `cli:<machine>` identity to that room and made every other

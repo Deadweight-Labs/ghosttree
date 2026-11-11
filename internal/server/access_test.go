@@ -412,6 +412,14 @@ func TestDocumentsGhostsAndMembersMatrixEnforced(t *testing.T) {
 
 func TestBootstrapContextIsFiltered(t *testing.T) {
 	f := accessAPI(t, true)
+	// The test is about who may see an entry. The briefing hands out machine and
+	// global entries only where they are tied to the project or flagged as
+	// applying everywhere (REQ-641), so both are flagged.
+	for _, key := range []string{"k-global", "k-machine"} {
+		if err := f.st.SetKnowledgeEverywhere(f.id[key], true); err != nil {
+			t.Fatal(err)
+		}
+	}
 	bootstrap := func(who, project, machine string) string {
 		return f.expect(t, who, 200, "GET", "/api/context/bootstrap?project="+project+"&machine="+machine, nil)
 	}

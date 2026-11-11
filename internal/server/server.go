@@ -196,6 +196,10 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "POST /api/knowledge/{id}/supersede", a.supersedeKnowledge)
 	a.routeFunc(mux, "PUT /api/knowledge/{id}/regression", a.setRegressionCover)
 	a.routeFunc(mux, "GET /api/knowledge/regression-gaps", a.regressionGaps)
+	a.routeFunc(mux, "PUT /api/knowledge/{id}/everywhere", a.setKnowledgeEverywhere)
+	// Not under /api/knowledge/: an older server reads the word there as an id
+	// and answers 400 instead of 404.
+	a.routeFunc(mux, "GET /api/knowledge-triage", a.knowledgeTriage)
 	a.routeFunc(mux, "POST /api/migrated-knowledge", a.insertMigratedKnowledge)
 	a.routeFunc(mux, "GET /api/migrations", a.completedMigrationArtifacts)
 	a.routeFunc(mux, "GET /api/migrations/documents", a.completedDocumentArtifacts)
