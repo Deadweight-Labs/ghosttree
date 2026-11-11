@@ -670,6 +670,9 @@ type GitSessionLink struct {
 	// Autor des Commits ließ sich nicht gegen das Konto der Session prüfen. Sie ist
 	// ein Kandidat, kein Beleg.
 	Weak bool
+	// Origins sagt nur bei der Abfrage zu einem Request, auf welchem Weg die Session
+	// zu ihm kommt: RequestOriginPR oder RequestOriginEvidence.
+	Origins []string
 }
 
 // linkRank ordnet die Stärke einer Verbindung: direkt vor Patch vor PR.
@@ -695,6 +698,7 @@ func (l linkSet) add(n GitSessionLink) {
 	}
 	cur.Weak = cur.Weak && n.Weak
 	cur.Sources = uniqueStrings(append(cur.Sources, n.Sources...))
+	cur.Origins = uniqueStrings(append(cur.Origins, n.Origins...))
 	cur.Commits += n.Commits
 	if cur.At == "" || (n.At != "" && n.At < cur.At) {
 		cur.At = n.At
@@ -711,6 +715,7 @@ func (l linkSet) list() []GitSessionLink {
 	out := make([]GitSessionLink, 0, len(l))
 	for _, v := range l {
 		sort.Strings(v.Sources)
+		sort.Strings(v.Origins)
 		out = append(out, *v)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -1117,6 +1122,9 @@ type GitSessionLinkView struct {
 	// Weak: die Verbindung beruht nur auf einem Zeitfenster, und der Autor des
 	// Commits ließ sich nicht gegen die Person prüfen. Ein Kandidat, kein Beleg.
 	Weak bool `json:"weak,omitempty"`
+	// Origins nennt bei einem Request, auf welchem Weg die Session zu ihm kommt:
+	// pr (ein PR im Paket) oder evidence (ein Commit-Nachweis).
+	Origins []string `json:"origins,omitempty"`
 }
 
 // GitSessionLinks ist, was ein Betrachter zu einem Commit oder PR von den Sessions
@@ -1194,7 +1202,7 @@ func shapeGitLinks(st *Store, project string, links []GitSessionLink, canTranscr
 		if !ok || sess.Scope.Project != project {
 			continue
 		}
-		v := GitSessionLinkView{Sources: l.Sources, Via: l.Via, PR: l.PR, Commits: l.Commits, Weak: l.Weak}
+		v := GitSessionLinkView{Sources: l.Sources, Via: l.Via, PR: l.PR, Commits: l.Commits, Weak: l.Weak, Origins: l.Origins}
 		switch {
 		case canTranscript(sess):
 			v.Level, v.SessionRef, v.Title, v.Harness = GitSessionLinkFull, sess.PublicID, sess.Title, sess.Harness

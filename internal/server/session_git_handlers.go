@@ -14,6 +14,7 @@ import (
 //	POST /api/session-git-events        der Collector meldet Git-Vorgänge seiner Sessions
 //	GET  /api/commits/{sha}/sessions    Sessions zu einem Commit, soweit der Betrachter sie sehen darf
 //	GET  /api/pulls/{n}/sessions        Sessions zu einem PR, ebenso
+//	GET  /api/requests/{id}/sessions    Sessions eines Requests über PRs im Paket und Commit-Nachweise, ebenso
 //
 // Die Route zum Melden steht NEBEN dem Präfix /api/sessions und nicht darunter:
 // ein älterer Server beantwortet ein unbekanntes Wort unter einem Präfix mit 400
@@ -22,12 +23,14 @@ func init() {
 	accessRoutes["POST /api/session-git-events"] = classProject
 	accessRoutes["GET /api/commits/{sha}/sessions"] = classProject
 	accessRoutes["GET /api/pulls/{n}/sessions"] = classProject
+	accessRoutes["GET /api/requests/{id}/sessions"] = classProject
 }
 
 func (a *api) registerSessionGitRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "POST /api/session-git-events", a.recordSessionGitEvents)
 	a.routeFunc(mux, "GET /api/commits/{sha}/sessions", a.commitSessions)
 	a.routeFunc(mux, "GET /api/pulls/{n}/sessions", a.pullSessions)
+	a.routeFunc(mux, "GET /api/requests/{id}/sessions", a.requestSessions)
 }
 
 // maxSessionGitBody begrenzt den Körper: 500 Vorgänge mit je 20 SHAs sind weit
@@ -117,6 +120,26 @@ func (a *api) pullSessions(w http.ResponseWriter, r *http.Request) {
 	out, err := a.access(r).PullSessions(project, n)
 	if err != nil {
 		writePullError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// requestSessions nennt die Sessions eines Requests über die PRs seines Pakets und
+// seine Commit-Nachweise. Ein Request, den es nicht gibt oder den der Aufrufer
+// nicht lesen darf, antwortet wie jede Request-Route (404).
+func (a *api) requestSessions(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad request id")
+		return
+	}
+	if !a.checkRequest(w, r, store.RefRequest, id, store.ActRead) {
+		return
+	}
+	out, err := a.access(r).RequestSessions(id)
+	if err != nil {
+		writeRequestError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
