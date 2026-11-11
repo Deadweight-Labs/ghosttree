@@ -45,3 +45,37 @@ type SignalUsage struct {
 	Since string       `json:"since"`
 	Lines []SignalLine `json:"lines"`
 }
+
+// UseLine is what was delivered of one kind by one route (or in sessions of one
+// profile) and what became of it: how many parts the agent picked up or
+// followed afterwards, as far as the transcript shows. Sums only.
+type UseLine struct {
+	Via     string `json:"via,omitempty"`
+	Kind    string `json:"kind"`
+	Profile string `json:"profile,omitempty"`
+	Parts   int    `json:"parts"`
+	// Judged are the parts whose use was read from the transcript. Pending are
+	// judgeable parts still waiting for that. What is neither was not judged:
+	// the kind has no judgement (path descriptions), the session has no
+	// transcript, or the entry was gone.
+	Judged   int `json:"judged"`
+	PickedUp int `json:"picked_up"`
+	Followed int `json:"followed"`
+	Pending  int `json:"pending"`
+	Chars    int `json:"chars"`
+	// JudgedChars and UsedChars give the weight: of the characters that were
+	// judged, how many belonged to parts that were picked up or followed.
+	JudgedChars int `json:"judged_chars"`
+	UsedChars   int `json:"used_chars"`
+}
+
+// ContextUse is the report on use of the delivered context since a day.
+type ContextUse struct {
+	Since    string    `json:"since"`
+	Lines    []UseLine `json:"lines"`
+	Profiles []UseLine `json:"profiles"`
+}
+
+// Judgeable says whether the use of a kind of part is read from the transcript.
+// It is the list the judging job works through.
+func Judgeable(kind string) bool { return kind == KindKnowledge || kind == KindRunbook }

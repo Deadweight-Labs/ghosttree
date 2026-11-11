@@ -157,3 +157,62 @@ func TestContextLogStoresOnlyShortTokensAsSignalValues(t *testing.T) {
 		t.Errorf("a value that is not a token reached the report:\n%s", body)
 	}
 }
+
+// REQ-645: the use of the delivered context is a report of sums with the rights
+// of the delivery report. It shows the share per route and kind and per profile
+// and names no path, entry number or session.
+func TestUsageContextReportsSumsWithTheRightsOfTheDeliveryReport(t *testing.T) {
+	f := accessAPI(t, true)
+	batch := map[string]any{"project": accProject, "session_ref": "s-use-secret", "harness": "claude",
+		"events": []map[string]any{{"call": "use1", "profile": "lean", "parts": []map[string]any{
+			{"via": "bootstrap", "kind": "knowledge", "id": 41, "chars": 100},
+			{"via": "bootstrap", "kind": "knowledge", "id": 42, "chars": 300},
+			{"via": "path", "kind": "ghost", "path": "secret/place.go", "chars": 500}}}}}
+	f.expect(t, "mia", 200, "POST", "/api/context-log", batch)
+	// What the job would have written: 41 picked up, 42 not used.
+	if _, err := f.st.DB().Exec(`UPDATE context_delivery_log SET used=1, judged_at='2026-11-11T10:00:00Z' WHERE object_id=41`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.DB().Exec(`UPDATE context_delivery_log SET used=0, judged_at='2026-11-11T10:00:00Z' WHERE object_id=42`); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/usage/context?since=2020-01-01&project=" + accProject
+	body := f.expect(t, "mia", 200, "GET", path, nil)
+	var rep deliverylog.ContextUse
+	if err := json.Unmarshal([]byte(body), &rep); err != nil {
+		t.Fatal(err)
+	}
+	var know, ghost *deliverylog.UseLine
+	for i := range rep.Lines {
+		switch rep.Lines[i].Kind {
+		case "knowledge":
+			know = &rep.Lines[i]
+		case "ghost":
+			ghost = &rep.Lines[i]
+		}
+	}
+	if know == nil || know.Parts != 2 || know.Judged != 2 || know.PickedUp != 1 || know.Followed != 0 || know.Pending != 0 ||
+		know.Chars != 400 || know.JudgedChars != 400 || know.UsedChars != 100 {
+		t.Errorf("knowledge line %+v", know)
+	}
+	if ghost == nil || ghost.Parts != 1 || ghost.Judged != 0 || ghost.Pending != 0 {
+		t.Errorf("a path description is counted and never judged: %+v", ghost)
+	}
+	if len(rep.Profiles) != 1 || rep.Profiles[0].Profile != "lean" || rep.Profiles[0].Kind != "knowledge" || rep.Profiles[0].PickedUp != 1 {
+		t.Errorf("profiles %+v", rep.Profiles)
+	}
+	for _, leak := range []string{"secret/place.go", "s-use-secret", `"id"`} {
+		if strings.Contains(body, leak) {
+			t.Errorf("the report contains %q:\n%s", leak, body)
+		}
+	}
+	f.expect(t, "gus", 200, "GET", path, nil)
+	f.expect(t, "nora", 404, "GET", path, nil)
+	var other deliverylog.ContextUse
+	if err := json.Unmarshal([]byte(f.expect(t, "nora", 200, "GET", "/api/usage/context?since=2020-01-01", nil)), &other); err != nil || len(other.Lines) != 0 {
+		t.Errorf("a stranger sees %+v", other)
+	}
+	for _, bad := range []string{"", "?since=yesterday", "?since=2026-11-10;drop"} {
+		f.expect(t, "mia", 400, "GET", "/api/usage/context"+bad, nil)
+	}
+}
