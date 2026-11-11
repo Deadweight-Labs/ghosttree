@@ -457,14 +457,15 @@ class Chain:
         return [m for m in out if m.is_symlink() or m.exists()]
 
     def post_session(self, tag):
-        # Der Agent ist beendet, sein Container weg. Was er im HOME hinterlassen hat, ist trotzdem nicht vertrauenswürdig:
-        # die Bereinigung unten läuft auf dem Host und folgt keinem Symlink.
-        require_real_dirs(self.home, "src", f"src/{P['dir']}", ".claude", ".claude/projects")
         info = {}
         if self.arm == "ghosttree":
             r = self.tool([f"{CTX_BIN_DIR}/ctx", "watch", "--once"], check=False, timeout=600, tag="gt-watch")[0]
             info["gt_watch_rc"] = r.rc
             (self.out / f"{tag}.gt-watch.log").write_text(r.stdout + r.stderr)
+        # Der Agent ist beendet, sein Container weg. Was er im HOME hinterlassen hat, ist nicht vertrauenswürdig, und
+        # jeder Schritt in der Sandbox, der das HOME beschreibbar einhängt (ctx watch), kann es wieder ändern.
+        # Darum steht die Prüfung hier, unmittelbar vor der Bereinigung auf dem Host, die keinem Symlink folgt.
+        require_real_dirs(self.home, "src", f"src/{P['dir']}", ".claude", ".claude/projects")
         removed = []
         if self.arm != "native":
             for p, is_link in safe_walk(self.work):

@@ -473,6 +473,24 @@ class HostCleanupSymlinkTest(unittest.TestCase):
         self.assertEqual((self.outside / "AGENTS.md").read_text(), "fremd")
         self.assertFalse((self.c.out / "F1.a0.removed-AGENTS.md").exists())  # den Inhalt hinter dem Link liest der Harness nicht
 
+    def test_symlink_planted_during_a_sandbox_step_is_still_caught(self):
+        """Die Prüfung steht nach ctx watch: ein Symlink, der erst in diesem Schritt entsteht, wird gefunden."""
+        gt = bench.Chain("ghosttree", 1, cid="s-gt-" + os.urandom(3).hex())
+        (gt.home / ".claude").mkdir(parents=True)
+        gt.work.mkdir(parents=True)
+        gt.out.mkdir(parents=True, exist_ok=True)
+
+        class R:
+            stdout, stderr, rc = "", "", 0
+
+        def plant(*cmds, **kw):
+            (gt.home / ".claude" / "projects").symlink_to(self.outside)
+            return [R()]
+
+        with mock.patch.object(bench.Chain, "tool", side_effect=plant), self.assertRaises(sbx.IsolationError):
+            gt.post_session("F1.a0")
+        self.assert_untouched()
+
     def test_snapshot_filter_refuses_a_hardlink_to_somewhere_else(self):
         import io
         import tarfile
