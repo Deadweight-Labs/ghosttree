@@ -63,4 +63,14 @@ func TestJSFixturesAreWhatTheTemplatesRender(t *testing.T) {
 		t.Fatalf("the header field is not on the page:\n%.600s", page)
 	}
 	goldenFixture(t, "suggest-field.html", []byte(field+"\n"))
+
+	// The filter fields of the issue list and the pull list, as the pages write them.
+	for list, path := range map[string]string{"issues": "/ui/x/shell/issues", "pulls": "/ui/x/shell/pulls"} {
+		_, page := fetchPage(t, x.Owner, x.Base+path)
+		bar := regexp.MustCompile(`(?s)<form class="sbar".*?</form>`).FindString(page)
+		if bar == "" || !strings.Contains(bar, `data-suggest-list="`+list+`"`) || !strings.Contains(bar, `data-suggest-project="`+shellProject+`"`) {
+			t.Fatalf("the filter field of the %s list is not on the page:\n%.600s", list, page)
+		}
+		goldenFixture(t, "suggest-list-"+list+".html", []byte(bar+"\n"))
+	}
 }

@@ -91,3 +91,35 @@ func TestWebhookPullRequestNeedsTheSignatureAndIgnoresOtherActions(t *testing.T)
 		t.Fatalf("failing: %d %v %q", rec.Code, logged, rec.Body.String())
 	}
 }
+
+// REQ-601 AC-13: the text of the pull request comes with the event; a null is a
+// pull request without a text, a missing field is an event that does not say it.
+func TestWebhookCarriesThePullRequestText(t *testing.T) {
+	f := newFakeApp(t)
+	var got []PullEvent
+	h := f.app().WebhookHandlerWithPulls(func(int64, []string, []string) error { return nil },
+		func(e PullEvent) error { got = append(got, e); return nil }, nil)
+	for _, c := range []struct {
+		field string
+		want  *string
+	}{
+		{`"body":"## Was\nein Text",`, ptr("## Was\nein Text")},
+		{`"body":null,`, ptr("")},
+		{``, nil},
+	} {
+		got = nil
+		body := `{"action":"edited","number":7,"installation":{"id":5},"repository":{"full_name":"A/app"},
+		 "pull_request":{"number":7,"title":"Fix",` + c.field + `"state":"open","head":{"ref":"feat/a","repo":{"full_name":"A/app"}},"base":{"ref":"main"}}}`
+		if rec := deliver(t, h, "pull_request", "whsec", body); rec.Code != http.StatusNoContent || len(got) != 1 {
+			t.Fatalf("%s: %d %v", c.field, rec.Code, got)
+		}
+		switch {
+		case c.want == nil && got[0].Body != nil:
+			t.Errorf("%q: the event says %q, want nothing", c.field, *got[0].Body)
+		case c.want != nil && (got[0].Body == nil || *got[0].Body != *c.want):
+			t.Errorf("%q: the event says %v, want %q", c.field, got[0].Body, *c.want)
+		}
+	}
+}
+
+func ptr(s string) *string { return &s }

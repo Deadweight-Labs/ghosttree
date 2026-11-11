@@ -20,6 +20,9 @@ type PullRequestInfo struct {
 	OpenedAt  string `json:"opened_at"`
 	UpdatedAt string `json:"updated_at"`
 	MergedAt  string `json:"merged_at,omitempty"`
+	// Body ist der Text des PRs, wie GitHub ihn gemeldet hat (bereinigt, begrenzt);
+	// leer, solange noch kein Ereignis ihn gebracht hat.
+	Body string `json:"body,omitempty"`
 }
 
 // PullRequestOf liest einen PR. Ein PR, den GitHub nie gemeldet hat, ist
@@ -30,8 +33,8 @@ func (s *Store) PullRequestOf(project string, n int64) (PullRequestInfo, error) 
 	}
 	project = scopeNormalize(project)
 	p := PullRequestInfo{Project: project, Number: n}
-	err := s.db.QueryRow(`SELECT title,state,head_ref,base_ref,author,opened_at,updated_at,merged_at FROM git_pull_requests WHERE project=? AND number=?`,
-		project, n).Scan(&p.Title, &p.State, &p.Head, &p.Base, &p.Author, &p.OpenedAt, &p.UpdatedAt, &p.MergedAt)
+	err := s.db.QueryRow(`SELECT title,state,head_ref,base_ref,author,opened_at,updated_at,merged_at,body FROM git_pull_requests WHERE project=? AND number=?`,
+		project, n).Scan(&p.Title, &p.State, &p.Head, &p.Base, &p.Author, &p.OpenedAt, &p.UpdatedAt, &p.MergedAt, &p.Body)
 	return p, err
 }
 

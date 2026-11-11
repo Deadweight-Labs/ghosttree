@@ -112,9 +112,18 @@ func seedPulls(st *store.Store, project string) func(path string) {
 		{183, "Release 0.14.0", "release/0.14.0", "main", "codex", "open", 5 * time.Hour},
 		{184, "feat(web): Pull Requests und Commits als Reiter (REQ-599)", "feat/599-pulls", "feat/git-native-599", "Robin", "open", 3 * time.Hour},
 	}
+	// The text of two of them, the way GitHub sends it (Markdown, and markup that must stay text).
+	texts := map[int64]string{
+		184: "## Was ändert sich\n\nPull Requests und Commits stehen als Reiter am Repo, mit **allem**, was dazu gesagt wurde.\n\n- Liste mit Filterfeld und Vorschlägen\n- Seite mit Unterhaltung, Checkliste, Wissen und Commits\n\nGetestet mit `go test -p 1 ./internal/web/`.\n\n<script>alert(1)</script>",
+		181: "Gärtner-Hinweise erscheinen im Posteingang als eine gebündelte Zeile.",
+	}
 	for _, pr := range pulls {
+		var body *string
+		if t, ok := texts[pr.n]; ok {
+			body = &t
+		}
 		_, err := st.RecordPullRequest(store.PullRequestChange{InstallationID: 77, Remote: project, HeadRemote: project, Number: pr.n, Action: "opened", Title: pr.title,
-			Head: pr.head, Base: pr.base, State: "open", Author: pr.author})
+			Head: pr.head, Base: pr.base, State: "open", Author: pr.author, Body: body})
 		must(err)
 		if pr.state != "open" {
 			_, err = st.RecordPullRequest(store.PullRequestChange{InstallationID: 77, Remote: project, HeadRemote: project, Number: pr.n, Action: "closed", Title: pr.title,
