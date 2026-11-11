@@ -349,8 +349,8 @@ func TestPublishCheckRunNeedsTheWriteRightAndSaysWhenItIsMissing(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":1}`))
 	})
 	run := CheckRun{Name: "ghosttree Lastenheft", Title: "2 of 3 criteria met", Summary: "- REQ-1", Conclusion: CheckFailure, DetailsURL: "https://example.test/p/1"}
-	if err := f.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run); err != nil {
-		t.Fatalf("with the right: %v", err)
+	if id, err := f.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run, 0); err != nil || id != 1 {
+		t.Fatalf("with the right: %v %d", err, id)
 	}
 	if len(posted) != 1 || posted[0]["head_sha"] != detailSHA || posted[0]["conclusion"] != "failure" || posted[0]["status"] != "completed" {
 		t.Fatalf("posted: %+v", posted)
@@ -369,7 +369,7 @@ func TestPublishCheckRunNeedsTheWriteRightAndSaysWhenItIsMissing(t *testing.T) {
 	f2.srv.Config.Handler.(*http.ServeMux).HandleFunc("POST /repos/{o}/{r}/check-runs", func(w http.ResponseWriter, r *http.Request) {
 		t.Error("a check run was sent without the right")
 	})
-	if err := f2.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run); !errors.Is(err, ErrPermissionMissing) {
+	if _, err := f2.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run, 0); !errors.Is(err, ErrPermissionMissing) {
 		t.Fatalf("without the right: %v", err)
 	}
 	// Ein Token, das GitHub gibt, dessen Check-Run-Aufruf aber 403 bekommt, heißt dasselbe.
@@ -377,16 +377,78 @@ func TestPublishCheckRunNeedsTheWriteRightAndSaysWhenItIsMissing(t *testing.T) {
 	f3.srv.Config.Handler.(*http.ServeMux).HandleFunc("POST /repos/{o}/{r}/check-runs", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Resource not accessible by integration", http.StatusForbidden)
 	})
-	if err := f3.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run); !errors.Is(err, ErrPermissionMissing) {
+	if _, err := f3.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run, 0); !errors.Is(err, ErrPermissionMissing) {
 		t.Fatalf("forbidden: %v", err)
 	}
 	// Ungültige Eingaben gehen gar nicht erst hinaus.
 	for _, bad := range []CheckRun{{Name: "x", Conclusion: "maybe"}} {
-		if err := f.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, bad); err == nil {
+		if _, err := f.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, bad, 0); err == nil {
 			t.Errorf("%+v was accepted", bad)
 		}
 	}
-	if err := f.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", "nothex", run); err == nil {
+	if _, err := f.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", "nothex", run, 0); err == nil {
 		t.Error("a sha that is not hexadecimal was accepted")
+	}
+}
+
+// Ein vorhandener Check-Run wird aktualisiert (PATCH, ohne head_sha), nicht neu
+// angelegt; kennt GitHub ihn nicht mehr (404), wird ein neuer angelegt, und jeder
+// andere Fehler bleibt einer. Kennt GitHub den Commit nicht, heißt das
+// ErrCommitUnavailable; ein Ratenlimit kommt als RateLimitError an.
+func TestPublishCheckRunUpdatesTheExistingRun(t *testing.T) {
+	f := newFakeDetails(t)
+	var methods []string
+	var patched map[string]any
+	patchStatus := http.StatusOK
+	mux := f.srv.Config.Handler.(*http.ServeMux)
+	mux.HandleFunc("PATCH /repos/{o}/{r}/check-runs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		methods = append(methods, "PATCH "+r.PathValue("id"))
+		f.mu.Unlock()
+		if patchStatus != http.StatusOK {
+			http.Error(w, "nope", patchStatus)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&patched)
+		_, _ = w.Write([]byte(`{"id":41}`))
+	})
+	mux.HandleFunc("POST /repos/{o}/{r}/check-runs", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		methods = append(methods, "POST")
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":99}`))
+	})
+	run := CheckRun{Name: "ghosttree Lastenheft", Title: "t", Summary: "s", Conclusion: CheckSuccess}
+	app := f.app()
+	if id, err := app.PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run, 41); err != nil || id != 41 {
+		t.Fatalf("update: %d %v", id, err)
+	}
+	if _, has := patched["head_sha"]; has || patched["conclusion"] != "success" {
+		t.Errorf("a PATCH carries no head_sha: %+v", patched)
+	}
+	patchStatus = http.StatusNotFound
+	if id, err := app.PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run, 41); err != nil || id != 99 {
+		t.Fatalf("an unknown run is created again: %d %v", id, err)
+	}
+	patchStatus = http.StatusBadGateway
+	if _, err := app.PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run, 41); err == nil || errors.Is(err, ErrCommitUnavailable) {
+		t.Fatalf("another failure stays a failure: %v", err)
+	}
+	patchStatus = http.StatusTooManyRequests
+	var rl *RateLimitError
+	if _, err := app.PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run, 41); !errors.As(err, &rl) {
+		t.Fatalf("rate limit: %v", err)
+	}
+	if got := strings.Join(methods, ","); got != "PATCH 41,PATCH 41,POST,PATCH 41,PATCH 41" {
+		t.Errorf("requests: %s", got)
+	}
+
+	f2 := newFakeDetails(t)
+	f2.srv.Config.Handler.(*http.ServeMux).HandleFunc("POST /repos/{o}/{r}/check-runs", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "No commit found for SHA", http.StatusUnprocessableEntity)
+	})
+	if _, err := f2.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run, 0); !errors.Is(err, ErrCommitUnavailable) {
+		t.Fatalf("unknown commit: %v", err)
 	}
 }

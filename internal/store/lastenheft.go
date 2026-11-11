@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS github_check_runs(
   digest TEXT NOT NULL,
   published_at TEXT NOT NULL,
   PRIMARY KEY(project, pr)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS github_repo_visibility(
+  remote TEXT PRIMARY KEY,
+  private INTEGER NOT NULL CHECK(private IN (0,1)),
+  updated_at TEXT NOT NULL) WITHOUT ROWID;
 `
 
 // LastenheftMember ist ein Request im Paket mit den Zahlen seiner Kriterien.
@@ -127,17 +131,21 @@ type LastenheftTarget struct {
 // maxLastenheftTargets begrenzt einen Durchlauf.
 const maxLastenheftTargets = 200
 
-// LastenheftTargets liefert die offenen PRs mit Paket, jüngste Änderung zuerst.
+const lastenheftTargetSelect = `SELECT g.project, g.number, g.head_sha, gs.installation_id
+		FROM git_pull_requests g
+		JOIN work_packages w ON w.project=g.project AND w.pr=g.number AND w.state='open'
+		JOIN projects p ON p.remote=g.project
+		JOIN github_repo_visibility v ON v.remote=g.project AND v.private=1
+		JOIN git_sources gs ON gs.org_id=p.org_id AND gs.installation_id>0 AND g.project LIKE 'github.com/' || gs.login || '/%'
+		WHERE g.state='open' AND g.head_sha!=''`
+
+// LastenheftTargets liefert die offenen PRs mit Paket in privaten Repos, jüngste
+// Änderung zuerst.
 func (s *Store) LastenheftTargets() ([]LastenheftTarget, error) {
 	if s.reader != nil {
 		return s.reader.LastenheftTargets()
 	}
-	rows, err := s.db.Query(`SELECT g.project, g.number, g.head_sha, gs.installation_id
-		FROM git_pull_requests g
-		JOIN work_packages w ON w.project=g.project AND w.pr=g.number AND w.state='open'
-		JOIN projects p ON p.remote=g.project
-		JOIN git_sources gs ON gs.org_id=p.org_id AND gs.installation_id>0 AND g.project LIKE 'github.com/' || gs.login || '/%'
-		WHERE g.state='open' AND g.head_sha!='' ORDER BY g.updated_at DESC LIMIT ?`, maxLastenheftTargets)
+	rows, err := s.db.Query(lastenheftTargetSelect+` ORDER BY g.updated_at DESC LIMIT ?`, maxLastenheftTargets)
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +161,34 @@ func (s *Store) LastenheftTargets() ([]LastenheftTarget, error) {
 	return out, rows.Err()
 }
 
+// LastenheftTargetFor ist LastenheftTargets für einen PR: der aktuelle Stand aus der
+// Datenbank. ok ist false, wenn der PR kein Ziel ist (nicht offen, kein offenes Paket,
+// kein privates Repo, kein Head-Commit).
+func (s *Store) LastenheftTargetFor(project string, pr int64) (t LastenheftTarget, ok bool, err error) {
+	if s.reader != nil {
+		return s.reader.LastenheftTargetFor(project, pr)
+	}
+	err = s.db.QueryRow(lastenheftTargetSelect+` AND g.project=? AND g.number=?`, scopeNormalize(project), pr).Scan(&t.Project, &t.PR, &t.HeadSHA, &t.InstallationID)
+	if err == sql.ErrNoRows {
+		return LastenheftTarget{}, false, nil
+	}
+	return t, err == nil, err
+}
+
+// LastenheftCheckRunID ist die Nummer des Check-Runs, den der letzte Schreibvorgang
+// am vermerkten Commit angelegt hat (0, wenn keiner bekannt ist).
+func (s *Store) LastenheftCheckRunID(project string, pr int64) (int64, error) {
+	if s.reader != nil {
+		return s.reader.LastenheftCheckRunID(project, pr)
+	}
+	var id int64
+	err := s.db.QueryRow(`SELECT check_run_id FROM github_check_runs WHERE project=? AND pr=?`, scopeNormalize(project), pr).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return id, err
+}
+
 // LastenheftPublished sagt, an welchen Commit und mit welchem Stand der Check-Run
 // zuletzt geschrieben wurde; leer, wenn noch nie.
 func (s *Store) LastenheftPublished(project string, pr int64) (headSHA, digest string, err error) {
@@ -166,15 +202,70 @@ func (s *Store) LastenheftPublished(project string, pr int64) (headSHA, digest s
 	return headSHA, digest, err
 }
 
-// MarkLastenheftPublished merkt sich, was geschrieben wurde.
-func (s *Store) MarkLastenheftPublished(project string, pr int64, headSHA, digest string) error {
+// MarkLastenheftPublished merkt sich, was geschrieben wurde und unter welcher Nummer
+// GitHub den Check-Run führt: eine spätere Änderung am selben Commit aktualisiert
+// ihn, statt einen neuen anzulegen.
+func (s *Store) MarkLastenheftPublished(project string, pr int64, headSHA, digest string, checkRunID int64) error {
 	if s.writer != nil {
-		return queueWrite(s, []any{project, pr, headSHA, digest}, func(d *Store, p []any) error {
-			return d.MarkLastenheftPublished(p[0].(string), p[1].(int64), p[2].(string), p[3].(string))
+		return queueWrite(s, []any{project, pr, headSHA, digest, checkRunID}, func(d *Store, p []any) error {
+			return d.MarkLastenheftPublished(p[0].(string), p[1].(int64), p[2].(string), p[3].(string), p[4].(int64))
 		})
 	}
-	_, err := s.db.Exec(`INSERT INTO github_check_runs(project,pr,head_sha,digest,published_at) VALUES(?,?,?,?,?)
-		ON CONFLICT(project,pr) DO UPDATE SET head_sha=excluded.head_sha, digest=excluded.digest, published_at=excluded.published_at`,
-		scopeNormalize(project), pr, headSHA, digest, now())
+	_, err := s.db.Exec(`INSERT INTO github_check_runs(project,pr,head_sha,digest,published_at,check_run_id) VALUES(?,?,?,?,?,?)
+		ON CONFLICT(project,pr) DO UPDATE SET head_sha=excluded.head_sha, digest=excluded.digest, published_at=excluded.published_at, check_run_id=excluded.check_run_id`,
+		scopeNormalize(project), pr, headSHA, digest, now(), checkRunID)
 	return err
+}
+
+func setRepoPrivateTx(q execQueryer, remote string, private bool, ts string) error {
+	_, err := q.Exec(`INSERT INTO github_repo_visibility(remote,private,updated_at) VALUES(?,?,?)
+		ON CONFLICT(remote) DO UPDATE SET private=excluded.private, updated_at=excluded.updated_at`, remote, boolInt(private), ts)
+	return err
+}
+
+// SetRepoVisibility merkt sich, welche Repos GitHub als privat und welche als
+// öffentlich meldet. Es kommt nur aus Quellen, die GitHub selbst sind: dem Abgleich der
+// Installation und dem signierten Webhook. Remotes, die keine GitHub-Remote sind,
+// werden übergangen. (Zwei Listen statt einer Karte: die Schreibwarteschlange nimmt
+// nur Karten von Text auf Text.)
+func (s *Store) SetRepoVisibility(private, public []string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{private, public}, func(d *Store, p []any) error {
+			return d.SetRepoVisibility(p[0].([]string), p[1].([]string))
+		})
+	}
+	if len(private)+len(public) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	ts := now()
+	for flag, list := range [][]string{public, private} {
+		for _, raw := range list {
+			remote, err := normalizeRemote(raw)
+			if err != nil || !strings.HasPrefix(remote, "github.com/") {
+				continue
+			}
+			if err := setRepoPrivateTx(tx, remote, flag == 1, ts); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// RepoPrivate sagt, ob das Repo bekanntermaßen privat ist. Unbekannt heißt false.
+func (s *Store) RepoPrivate(project string) (bool, error) {
+	if s.reader != nil {
+		return s.reader.RepoPrivate(project)
+	}
+	var private int
+	err := s.db.QueryRow(`SELECT private FROM github_repo_visibility WHERE remote=?`, scopeNormalize(project)).Scan(&private)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return private == 1, err
 }

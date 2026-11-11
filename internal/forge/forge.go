@@ -32,6 +32,9 @@ type Prover interface {
 type Account struct {
 	Login string
 	Repos []string
+	// Visibility sagt je Repo aus Repos, ob GitHub es als privat meldet (true). Leer,
+	// wenn der Nachweis es nicht liefert (OAuth-App).
+	Visibility map[string]bool
 	// InstallationID ist die Installation der GitHub-App, die den Nachweis trägt;
 	// 0 beim Nachweis über die OAuth-App.
 	InstallationID int64
@@ -54,6 +57,11 @@ type Installer interface {
 // des Nutzers (GitHub-App).
 type RepoLister interface {
 	InstallationRepos(ctx context.Context, installationID int64) ([]string, error)
+}
+
+// RepoVisibilityLister ist RepoLister mit der Sichtbarkeit je Repo.
+type RepoVisibilityLister interface {
+	InstallationRepoInfos(ctx context.Context, installationID int64) ([]RepoInfo, error)
 }
 
 // Identity ist das GitHub-Konto, das ein Mensch beim Login nachgewiesen hat:

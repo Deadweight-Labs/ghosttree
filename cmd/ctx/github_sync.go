@@ -29,7 +29,7 @@ func pullChange(ev forge.PullEvent) store.PullRequestChange {
 	return store.PullRequestChange{
 		InstallationID: ev.InstallationID, Remote: ev.Remote, HeadRemote: ev.HeadRemote, Number: int64(ev.Number),
 		Action: ev.Action, Title: ev.Title, Head: ev.Head, Base: ev.Base, DefaultBranch: ev.DefaultBranch,
-		MergeSHA: ev.MergeSHA, HeadSHA: ev.HeadSHA, Author: ev.Author, State: ev.State,
+		MergeSHA: ev.MergeSHA, HeadSHA: ev.HeadSHA, HeadAt: ev.UpdatedAt, RepoPrivate: ev.RepoPrivate, Author: ev.Author, State: ev.State,
 	}
 }
 

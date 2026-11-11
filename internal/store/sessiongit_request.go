@@ -33,7 +33,8 @@ const (
 // evidenceShaWord findet in einem Nachweistext Wörter, die eine Commit-SHA sein
 // können. Der Text ist frei geschrieben ("PRs #173 (b0cd1b9), #174 (e33198b)"),
 // darum zählt nur ein Wort aus sieben bis vierzig Hexzeichen mit mindestens einer
-// Ziffer: "defaced" ist ein Wort, keine SHA.
+// Ziffer und mindestens einem Buchstaben a bis f: "defaced" ist ein Wort, keine SHA,
+// und "2026111" oder eine lange Zahl ist ein Datum oder eine Nummer, keine SHA.
 var evidenceShaWord = regexp.MustCompile(`(?i)\b[0-9a-f]{7,40}\b`)
 
 // shasInEvidence liest die SHAs aus dem Text eines Commit-Nachweises.
@@ -41,7 +42,7 @@ func shasInEvidence(ref string) []string {
 	var out []string
 	for _, w := range evidenceShaWord.FindAllString(ref, -1) {
 		w = gitanchor.Normalize(w)
-		if strings.ContainsAny(w, "0123456789") && gitanchor.ValidPrefix(w) {
+		if strings.ContainsAny(w, "0123456789") && strings.ContainsAny(w, "abcdef") && gitanchor.ValidPrefix(w) {
 			out = append(out, w)
 		}
 	}

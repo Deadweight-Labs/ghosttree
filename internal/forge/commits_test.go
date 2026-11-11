@@ -202,3 +202,22 @@ func TestPullEventCarriesTheHeadCommit(t *testing.T) {
 		t.Fatalf("event: %+v ok=%v", ev, ok)
 	}
 }
+
+// Das Ereignis trägt die Zeit, auf die sich der Head-Commit bezieht, und die Sichtbarkeit
+// des Repos; fehlt das Feld private, ist sie unbekannt (nil), nicht öffentlich.
+func TestPullEventCarriesTheEventTimeAndTheVisibility(t *testing.T) {
+	mk := func(repoFields string) []byte {
+		return []byte(`{"action":"synchronize","number":7,"installation":{"id":5},"repository":{"full_name":"Deadweight-Labs/GT","default_branch":"main"` + repoFields + `},
+		"pull_request":{"number":7,"title":"x","state":"open","updated_at":"2026-11-11T10:00:00Z","user":{"login":"mia-gh"},"head":{"ref":"feat/x","sha":"` + detailSHA + `","repo":{"full_name":"Deadweight-Labs/GT"}},"base":{"ref":"main"}}}`)
+	}
+	ev, ok := ParsePullEvent("pull_request", mk(`,"private":true`))
+	if !ok || ev.UpdatedAt != "2026-11-11T10:00:00Z" || ev.RepoPrivate == nil || !*ev.RepoPrivate {
+		t.Fatalf("private: %+v ok=%v", ev, ok)
+	}
+	if ev, _ := ParsePullEvent("pull_request", mk(`,"private":false`)); ev.RepoPrivate == nil || *ev.RepoPrivate {
+		t.Fatalf("public: %+v", ev.RepoPrivate)
+	}
+	if ev, _ := ParsePullEvent("pull_request", mk(``)); ev.RepoPrivate != nil {
+		t.Fatalf("unknown must stay nil: %v", *ev.RepoPrivate)
+	}
+}

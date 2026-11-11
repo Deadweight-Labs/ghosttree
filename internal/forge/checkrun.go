@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -33,53 +34,77 @@ type CheckRun struct {
 
 const maxCheckSummary = 60000
 
-// PublishCheckRun legt am Commit headSHA des Repos einen abgeschlossenen Check-Run an.
-// GitHub zeigt je Name den jüngsten; ein neuer Aufruf ersetzt darum, was zuvor
-// dastand. Fehlt der App das Recht „Checks: write“, kommt ErrPermissionMissing.
-func (g *GitHubApp) PublishCheckRun(ctx context.Context, installationID int64, repo, headSHA string, run CheckRun) error {
+// PublishCheckRun schreibt den Check-Run am Commit headSHA des Repos und gibt dessen
+// Nummer zurück. Ist existingID gesetzt (der Run, den ein früherer Aufruf an
+// demselben Commit angelegt hat), wird er aktualisiert (PATCH), statt einen weiteren
+// anzulegen: sonst wüchse die Liste der Prüfungen am Commit mit jeder Änderung. Kennt
+// GitHub ihn nicht mehr, wird ein neuer angelegt. Fehlt der App das Recht „Checks:
+// write“, kommt ErrPermissionMissing; kennt GitHub den Commit nicht, ErrCommitUnavailable.
+func (g *GitHubApp) PublishCheckRun(ctx context.Context, installationID int64, repo, headSHA string, run CheckRun, existingID int64) (int64, error) {
 	parts, ok := repoParts(repo)
 	if !ok || !hexSHA(headSHA) {
-		return fmt.Errorf("check run: repo must look like github.com/owner/repo and the sha must be hexadecimal")
+		return 0, fmt.Errorf("check run: repo must look like github.com/owner/repo and the sha must be hexadecimal")
 	}
 	switch run.Conclusion {
 	case CheckSuccess, CheckFailure, CheckNeutral:
 	default:
-		return fmt.Errorf("check run: conclusion must be success, failure or neutral")
+		return 0, fmt.Errorf("check run: conclusion must be success, failure or neutral")
 	}
 	tok, err := g.installationToken(ctx, installationID, map[string]string{"checks": "write"})
 	if err != nil {
-		return tokenRefusal(err)
+		return 0, tokenRefusal(err)
 	}
 	summary := run.Summary
 	if r := []rune(summary); len(r) > maxCheckSummary {
 		summary = string(r[:maxCheckSummary]) + "…"
 	}
 	payload := map[string]any{
-		"name": run.Name, "head_sha": headSHA, "status": "completed", "conclusion": run.Conclusion,
+		"name": run.Name, "status": "completed", "conclusion": run.Conclusion,
 		"output": map[string]string{"title": run.Title, "summary": summary},
 	}
 	if run.DetailsURL != "" {
 		payload["details_url"] = run.DetailsURL
 	}
-	body, err := json.Marshal(payload)
+	base := g.cfg.APIBase + "/repos/" + url.PathEscape(parts[1]) + "/" + url.PathEscape(parts[2]) + "/check-runs"
+	send := func(method, target string, body map[string]any) (int64, error) {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return 0, err
+		}
+		req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(raw))
+		if err != nil {
+			return 0, err
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("Content-Type", "application/json")
+		var out struct {
+			ID int64 `json:"id"`
+		}
+		err = g.do(req, &out)
+		return out.ID, err
+	}
+	if existingID > 0 {
+		id, err := send(http.MethodPatch, base+"/"+fmt.Sprint(existingID), payload)
+		if err == nil {
+			if id == 0 {
+				id = existingID
+			}
+			return id, nil
+		}
+		// Nur ein Run, den GitHub nicht mehr kennt (404), wird neu angelegt; jeder
+		// andere Fehler bleibt einer.
+		var se *statusError
+		if !errors.As(err, &se) || se.code != http.StatusNotFound {
+			return 0, commitRefusal(err)
+		}
+	}
+	payload["head_sha"] = headSHA
+	id, err := send(http.MethodPost, base, payload)
 	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		g.cfg.APIBase+"/repos/"+url.PathEscape(parts[1])+"/"+url.PathEscape(parts[2])+"/check-runs", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Content-Type", "application/json")
-	var created struct {
-		ID int64 `json:"id"`
-	}
-	if err := g.do(req, &created); err != nil {
 		// Ein Token ohne das Recht wird vom Check-Run-Aufruf mit 403 abgewiesen, wenn
 		// die Installation es nicht freigegeben hat.
-		return commitRefusal(err)
+		return 0, commitRefusal(err)
 	}
-	return nil
+	return id, nil
 }

@@ -235,6 +235,11 @@ type PullEvent struct {
 	MergeSHA           string
 	// HeadSHA ist der neueste Commit des Head-Branches; an ihn hängt der Check-Run.
 	HeadSHA string
+	// UpdatedAt ist updated_at des PRs im Ereignis (RFC 3339): die Zeit, auf die sich
+	// HeadSHA bezieht. Webhooks kommen nicht in Reihenfolge an.
+	UpdatedAt string
+	// RepoPrivate ist das Feld private des Repos im Ereignis (nil, wenn es fehlt).
+	RepoPrivate *bool
 	// Author ist der Login des PR-Autors.
 	Author string
 	// State ist open, closed oder merged.
@@ -257,8 +262,10 @@ func ParsePullEvent(event string, body []byte) (PullEvent, bool) {
 		Repository struct {
 			FullName      string `json:"full_name"`
 			DefaultBranch string `json:"default_branch"`
+			Private       *bool  `json:"private"`
 		} `json:"repository"`
 		PullRequest struct {
+			UpdatedAt      string `json:"updated_at"`
 			Number         int64  `json:"number"`
 			Title          string `json:"title"`
 			State          string `json:"state"`
@@ -294,7 +301,7 @@ func ParsePullEvent(event string, body []byte) (PullEvent, bool) {
 	ev := PullEvent{
 		InstallationID: p.Installation.ID, Remote: remoteOf(p.Repository.FullName), Number: n, Action: p.Action,
 		Title: p.PullRequest.Title, Head: p.PullRequest.Head.Ref, Base: p.PullRequest.Base.Ref,
-		DefaultBranch: p.Repository.DefaultBranch, MergeSHA: p.PullRequest.MergeCommitSHA, HeadSHA: p.PullRequest.Head.SHA, Author: p.PullRequest.User.Login, State: "open",
+		DefaultBranch: p.Repository.DefaultBranch, MergeSHA: p.PullRequest.MergeCommitSHA, HeadSHA: p.PullRequest.Head.SHA, UpdatedAt: p.PullRequest.UpdatedAt, RepoPrivate: p.Repository.Private, Author: p.PullRequest.User.Login, State: "open",
 	}
 	if p.PullRequest.Head.Repo != nil {
 		ev.HeadRemote = remoteOf(p.PullRequest.Head.Repo.FullName)

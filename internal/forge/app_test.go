@@ -109,9 +109,10 @@ func newFakeApp(t *testing.T) *fakeApp {
 		if page == 0 {
 			page = 1
 		}
-		var repos []map[string]string
+		var repos []map[string]any
 		for i := (page - 1) * 100; i < total && i < page*100; i++ {
-			repos = append(repos, map[string]string{"full_name": fmt.Sprintf("Deadweight-Labs/repo-%03d", i)})
+			// Jedes zweite Repo ist privat.
+			repos = append(repos, map[string]any{"full_name": fmt.Sprintf("Deadweight-Labs/repo-%03d", i), "private": i%2 == 1})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"total_count": total, "repositories": repos})
 	})
@@ -266,6 +267,10 @@ func TestProveListsAllReposOfAnAdminOrgThroughTheInstallation(t *testing.T) {
 	}
 	if len(accts[0].Repos) != 231 || accts[0].Repos[0] != "github.com/deadweight-labs/repo-000" || accts[0].Repos[230] != "github.com/deadweight-labs/repo-230" {
 		t.Fatalf("repos (paginated): %d", len(accts[0].Repos))
+	}
+	// Die Sichtbarkeit kommt mit: wovon der Check-Run am PR abhängt.
+	if v := accts[0].Visibility; len(v) != 231 || v["github.com/deadweight-labs/repo-000"] || !v["github.com/deadweight-labs/repo-001"] || v["github.com/deadweight-labs/repo-230"] {
+		t.Fatalf("visibility: %d entries", len(v))
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
