@@ -256,6 +256,35 @@ func TestBriefingStaysWithinTheLimit(t *testing.T) {
 	}
 }
 
+// REQ-643 review: the shortened form of a runbook asks for the report like the
+// full one, at every limit that leaves room for any step, and says where the
+// full checklist is.
+func TestShortBriefingKeepsTheReportLine(t *testing.T) {
+	s, _ := Normalize(baseSpec())
+	v := View{Name: "rollout-prod", Version: 3, Spec: s}
+	for i := 0; i < 40; i++ {
+		v.Spec.Steps = append(v.Spec.Steps, Step{Title: strings.Repeat("schritt ", 10), Command: strings.Repeat("x", 300)})
+	}
+	for _, limit := range []int{500, 700, 1000, 1500, 1800} {
+		out := Briefing(v, "keyword deploy", limit)
+		if len(out) > limit {
+			t.Errorf("limit %d: %d bytes", limit, len(out))
+		}
+		if !strings.Contains(out, "\nWhen done, report the outcome: ctx runbook report rollout-prod ok|failed") {
+			t.Errorf("limit %d: the shortened runbook does not ask for the report:\n%s", limit, out)
+		}
+		if !strings.HasSuffix(out, ".\n") || !strings.Contains(out, "ctx run rollout-prod") || !strings.Contains(out, "...\n") {
+			t.Errorf("limit %d: the short form has lost its ending:\n%s", limit, out)
+		}
+	}
+	// A runbook that fits is the checklist, which ends with the same line.
+	short := View{Name: "tiny", Version: 1, Spec: s}
+	short.Spec.Steps = short.Spec.Steps[:1]
+	if out := Briefing(short, "keyword x", 4000); !strings.Contains(out, "ctx runbook report tiny ok|failed") {
+		t.Errorf("the full form lost the report line:\n%s", out)
+	}
+}
+
 func TestDiffShowsOnlyWhatChanged(t *testing.T) {
 	a, _ := Normalize(baseSpec())
 	b := a

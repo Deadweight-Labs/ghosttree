@@ -887,7 +887,8 @@ func TestJoinLoopbackSendsS256ExplicitlyAndProvesTheVerifier(t *testing.T) {
 	if len(f.opened) != 1 || !strings.HasSuffix(f.opened[0], "/join/pair") {
 		t.Fatalf("browser %v", f.opened)
 	}
-	if n := strings.Count(strings.TrimSpace(out.String()), "\n"); n > 8 {
+	// The status is part of this output, and one of its lines names the profile.
+	if n := strings.Count(strings.TrimSpace(out.String()), "\n"); n > 9 {
 		t.Fatalf("output is not short (%d lines): %s", n+1, out.String())
 	}
 }

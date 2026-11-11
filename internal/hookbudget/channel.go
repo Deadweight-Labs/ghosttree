@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/profile"
 )
 
 // Kanäle des automatischen Kontexts. Sie haben getrennte Budgets, und das ist
@@ -41,6 +43,16 @@ func ChannelLimit(channel string) int {
 		return CoordLimit
 	}
 	return Limit
+}
+
+// LimitFor nennt das Budget eines Kanals für eine Sitzung dieses Profils. Nur
+// der Gedächtniskanal folgt dem Profil: eine lean-Sitzung bekommt weniger
+// Wissen ungefragt, aber die Nachrichten anderer Agenten kommen an wie sonst.
+func LimitFor(channel string, p profile.Profile) int {
+	if channel == ChannelCoord {
+		return CoordLimit
+	}
+	return p.HookBudget()
 }
 
 // ChannelWindow nennt das Fenster, nach dem sich ein Kanal erholt. Der

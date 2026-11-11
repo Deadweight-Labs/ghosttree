@@ -3,11 +3,13 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/runbook"
@@ -473,4 +475,59 @@ func TestRunbookAllowanceCannotBeGivenWithAToken(t *testing.T) {
 	}
 	f.expect(t, "nora", 404, "GET", idPath("/api/runbooks/%d/allowed?machine=x", a.ID), nil)
 	f.expect(t, "gus", 404, "GET", idPath("/api/runbooks/%d/allowed?machine=x", a.ID), nil)
+}
+
+// REQ-643 review: a runbook is remembered as delivered the moment the server
+// claims it, so it is claimed only if the budget the hook reports can carry it
+// whole. One that does not fit stays open and comes when there is room; a
+// client that sends no budget is answered as before.
+func TestRunbookTriggersClaimOnlyWhatTheBudgetCanCarry(t *testing.T) {
+	f := accessAPI(t, true)
+	longSteps := func(s map[string]any) {
+		var steps []map[string]any
+		for i := range 40 {
+			steps = append(steps, map[string]any{"title": fmt.Sprintf("Schritt %d: %s", i, strings.Repeat("lang ", 12))})
+		}
+		s["steps"] = steps
+	}
+	writeRunbookAPI(t, f, "robin", 201, rbBody("rollout", "ausrollen bitte", true, longSteps))
+	trig := func(session string, budget *int) string {
+		body := map[string]any{"project": accProject, "prompt": "wir wollen ausrollen", "session": session}
+		if budget != nil {
+			body["budget"] = *budget
+		}
+		return f.expect(t, "mia", 200, "POST", "/api/runbooks/triggered", body)
+	}
+	n := func(v int) *int { return &v }
+
+	// Nothing fits: nothing is sent and nothing is claimed, so the same session
+	// gets the runbook as soon as the budget allows it.
+	for _, tight := range []int{0, 40, minRunbookBriefing - 1, 300} {
+		if out := trig("s-budget", n(tight)); strings.TrimSpace(out) != "" {
+			t.Fatalf("budget %d: delivered\n%s", tight, out)
+		}
+	}
+	// Room for a short form but not the whole checklist: the short form is sent,
+	// ends with the report line and is within the budget.
+	room := 900
+	out := trig("s-budget", n(room))
+	if !strings.Contains(out, "[runbook rollout, triggered by keyword ausrollen]") || !strings.Contains(out, "ctx runbook report rollout ok|failed") {
+		t.Fatalf("a short form was expected:\n%s", out)
+	}
+	if got := utf8.RuneCountInString(out); got > room {
+		t.Fatalf("%d characters sent for a budget of %d", got, room)
+	}
+	// Now it is delivered: once per session as always.
+	if again := trig("s-budget", n(5000)); strings.TrimSpace(again) != "" {
+		t.Fatalf("delivered twice:\n%s", again)
+	}
+	// A wide budget does not lift the cap of a single runbook.
+	wide := trig("s-wide", n(5000))
+	if got := utf8.RuneCountInString(wide); got <= room || got > maxRunbookBriefing+utf8.RuneCountInString(runbooksHeading) || !strings.Contains(wide, "ctx runbook report rollout ok|failed") {
+		t.Fatalf("%d characters for a wide budget, want more than %d and at most %d:\n%s", got, room, maxRunbookBriefing, wide)
+	}
+	// No budget in the request: as before.
+	if old := trig("s-old", nil); !strings.Contains(old, "ctx runbook report rollout ok|failed") {
+		t.Fatalf("a client without a budget gets the runbook:\n%s", old)
+	}
 }

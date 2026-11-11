@@ -496,10 +496,17 @@ const (
 	// maxRunbookBriefing begrenzt, was ein einzelner Ablauf in die Session
 	// bringt; mehr steht hinter `ctx run` und runbook_get.
 	maxRunbookBriefing = 1800
+	// minRunbookBriefing is the least a shortened runbook is worth sending:
+	// header, purpose, a few steps and the two closing lines. With less room the
+	// runbook waits.
+	minRunbookBriefing = 500
 	maxTriggerPrompt   = 16 << 10
 	maxTriggerCommand  = 8 << 10
 	maxTriggerPaths    = 64
 )
+
+// runbooksHeading opens the answer of triggeredRunbooks.
+const runbooksHeading = "## Runbooks for what you are doing (ghosttree)\n\n"
 
 // triggeredRunbooks beantwortet, welche Abläufe zu dem passen, was gerade
 // geschieht: ein Stichwort im Prompt, ein Befehl, ein berührter Pfad. Geliefert
@@ -514,6 +521,10 @@ func (a *api) triggeredRunbooks(w http.ResponseWriter, r *http.Request) {
 		Session  string   `json:"session"`
 		Project  string   `json:"project"`
 		Machine  string   `json:"machine"`
+		// Budget is how many characters the hook of the session can still carry
+		// whole (hookbudget.Remaining). Absent for a client that does not send
+		// it: the answer is then as long as it always was.
+		Budget *int `json:"budget"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		a.access(r).Filtered()
@@ -572,9 +583,29 @@ func (a *api) triggeredRunbooks(w http.ResponseWriter, r *http.Request) {
 	session := store.CleanSessionKey(body.Session)
 	var out []string
 	var parts []deliverylog.Part
+	// A runbook is remembered as delivered the moment it is claimed, and the
+	// budget of the session cannot cut it in half and still let it come again.
+	// So one that does not fit in what the hook can carry is neither sent nor
+	// claimed: it stays open for a later call, a shorter form of it is sent
+	// if that fits.
+	limited, left := body.Budget != nil, 0
+	if limited {
+		left = *body.Budget - deliverylog.Runes(runbooksHeading)
+	}
 	for _, h := range hits {
 		if len(out) == maxRunbookTriggers {
 			break
+		}
+		limit := maxRunbookBriefing
+		if limited {
+			limit = min(limit, left)
+			if limit < minRunbookBriefing {
+				break
+			}
+		}
+		briefing := runbook.Briefing(a.runbookViewFor(r, h.d.View), h.reason, limit)
+		if limited && deliverylog.Runes(briefing)+1 > left {
+			continue
 		}
 		if session != "" {
 			fresh, err := a.st.ClaimContextDeliveries(principalOf(r).ID, session, store.DeliveredByRunbook,
@@ -587,17 +618,16 @@ func (a *api) triggeredRunbooks(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		v := a.runbookViewFor(r, h.d.View)
-		briefing := runbook.Briefing(v, h.reason, maxRunbookBriefing)
 		out = append(out, briefing)
 		parts = append(parts, deliverylog.Part{Via: deliverylog.ViaRunbook, Kind: deliverylog.KindRunbook, ID: h.d.Ref.ID, Chars: deliverylog.Runes(briefing)})
+		left -= deliverylog.Runes(briefing) + 1
 	}
 	setDelivered(w, parts)
 	w.WriteHeader(http.StatusOK)
 	if len(out) == 0 {
 		return
 	}
-	fmt.Fprint(w, "## Runbooks for what you are doing (ghosttree)\n\n")
+	fmt.Fprint(w, runbooksHeading)
 	fmt.Fprint(w, strings.Join(out, "\n"))
 }
 

@@ -153,6 +153,10 @@ type RunbookTrigger struct {
 	Session  string   `json:"session,omitempty"`
 	Project  string   `json:"project,omitempty"`
 	Machine  string   `json:"machine,omitempty"`
+	// Budget is what the hook budget of the session has left (hookbudget.Remaining).
+	// The server delivers and remembers only runbooks that fit; nil asks as
+	// before.
+	Budget *int `json:"budget,omitempty"`
 }
 
 // TriggeredRunbooks fragt, welche Abläufe zu Prompt, Befehl oder Pfaden passen.

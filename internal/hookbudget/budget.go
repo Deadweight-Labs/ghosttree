@@ -15,11 +15,20 @@ import (
 	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
+	"github.com/Deadweight-Labs/ghosttree/internal/profile"
 )
 
-const Limit = 24000
+// Limit is the budget of a full session; a lean one has profile.LeanHookBudget
+// (LimitFor).
+const Limit = profile.FullHookBudget
 
-const notice = "\n\n[ghosttree: Session hook context budget reached (24000 characters). This response was shortened; further automatic context is suppressed. Fetch full context with `context_get` or start at `.ghosttree/INDEX.md`.]\n"
+// noticeFor is the text that closes a response the budget cut short.
+func noticeFor(limit int) string {
+	return fmt.Sprintf("\n\n[ghosttree: Session hook context budget reached (%d characters). This response was shortened; further automatic context is suppressed. Fetch full context with `context_get` or start at `.ghosttree/INDEX.md`.]\n", limit)
+}
+
+// notice is the one a full session gets.
+var notice = noticeFor(Limit)
 
 // lockWait bounds how long a hook waits for the budget lock. The lock is held
 // across two synced receipt writes (fsync of file and directory), so on a slow
@@ -114,11 +123,8 @@ func DeliverChannel(sessionID, channel, text string, emit func(string) error) er
 	if r.Exhausted {
 		return emit("")
 	}
-	limit := ChannelLimit(channel)
-	cut := notice
-	if channel == ChannelCoord {
-		cut = coordNotice
-	}
+	limit := LimitFor(channel, profile.FromEnv())
+	cut := cutNotice(channel, limit)
 	text = strings.ToValidUTF8(text, "�")
 	n := utf8.RuneCountInString(text)
 	wasExhausted := r.Exhausted
@@ -127,7 +133,7 @@ func DeliverChannel(sessionID, channel, text string, emit func(string) error) er
 		if available < 0 {
 			available = 0
 		}
-		text = string([]rune(text)[:available]) + cut
+		text = cutAtLine(text, available) + cut
 		n = utf8.RuneCountInString(text)
 		r.Exhausted = true
 	}
