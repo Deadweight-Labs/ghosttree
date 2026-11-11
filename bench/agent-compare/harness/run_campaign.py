@@ -15,7 +15,8 @@ from pathlib import Path
 
 HARNESS = Path(__file__).resolve().parent
 LOGS = HARNESS.parent / "logs"
-ARMS = ["vanilla", "native", "claudemem", "ghosttree"]
+# claudemem läuft nicht in der Sandbox (Installation und Worker brauchen Netz), siehe bench.py SANDBOX_ARMS
+ARMS = ["vanilla", "native", "ghosttree"]
 
 
 def main():
@@ -27,7 +28,7 @@ def main():
     a = ap.parse_args()
     jobs = []
     for rep in range(a.start_rep, max(a.ledgerly_reps, a.nurlearn_reps) + 1):
-        order = ARMS[(rep - 1) % 4:] + ARMS[:(rep - 1) % 4]
+        order = ARMS[(rep - 1) % len(ARMS):] + ARMS[:(rep - 1) % len(ARMS)]
         if rep <= a.ledgerly_reps:
             jobs += [("ledgerly", arm, rep) for arm in order]
         if rep <= a.nurlearn_reps:

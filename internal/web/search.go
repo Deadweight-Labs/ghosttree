@@ -140,6 +140,11 @@ type searchView struct {
 	// Exact are the objects the line names by their number (#217, pr:217, REQ-12;
 	// search_exact.go). They stand above the groups and are not part of them.
 	Exact []searchHit
+	// SessionsHref is the link "Search in sessions too" of the page of all kinds:
+	// the same line narrowed to the sessions. The page of all kinds does not search
+	// sessions (decision #4447), so the link asks nothing and shows no number. Empty
+	// when the page searches them anyway or the viewer has no sessions group.
+	SessionsHref string
 }
 
 // searchKindMark is the icon of each kind of hit.
@@ -217,6 +222,32 @@ type searchPlan struct {
 }
 
 func (p *searchPlan) runnable() bool { return len(p.lines) > 0 }
+
+// searchesSessions says whether the plan searches sessions: only on request, when
+// the page is narrowed to them (kind=sessions, the tab "Sessions") or a line names
+// them (kind:session, is:session). The page of all kinds leaves them out (decision
+// #4447): they are millions of rows of raw history, and their search is the most
+// expensive one.
+func (p *searchPlan) searchesSessions() bool {
+	if p.kind == "sessions" {
+		return true
+	}
+	for _, sl := range p.lines {
+		if slices.Contains(sl.q.Kinds(), query.KindSession) {
+			return true
+		}
+	}
+	return false
+}
+
+// runKinds are the groups the plan searches: p.kinds without the sessions, unless
+// the plan asks for them (searchesSessions).
+func (p *searchPlan) runKinds() []string {
+	if p.searchesSessions() {
+		return p.kinds
+	}
+	return slices.DeleteFunc(slices.Clone(p.kinds), func(k string) bool { return k == "sessions" })
+}
 
 // planSearch reads the line (or the quick filter) of r for its viewer.
 func (a *app) planSearch(r *http.Request) *searchPlan {
@@ -300,15 +331,19 @@ func (a *app) planSearch(r *http.Request) *searchPlan {
 			}
 		}
 	}
+	if p.runnable() && slices.Contains(p.kinds, "sessions") && !p.searchesSessions() {
+		v.SessionsHref = p.href("sessions")
+	}
 	return p
 }
 
 // runSearch searches every kind of the plan at the same time and returns the
 // groups with hits in the order of the page.
 func (a *app) runSearch(ctx context.Context, r *http.Request, p *searchPlan) []searchGroup {
-	out := make([]searchGroup, len(p.kinds))
+	kinds := p.runKinds()
+	out := make([]searchGroup, len(kinds))
 	var wg sync.WaitGroup
-	for i, key := range p.kinds {
+	for i, key := range kinds {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

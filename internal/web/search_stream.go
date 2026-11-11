@@ -36,32 +36,21 @@ var (
 	searchKeepalive      = 15 * time.Second
 )
 
-// searchLimiter is the number of kinds searched at once on the server: one less
-// than the read connections of the store, at least one.
-type searchLimiter struct {
-	once  sync.Once
-	slots chan struct{}
-}
-
-// searchSlotsUnlimited is the number of kinds at once when the store sets no
-// limit on its connections.
-const searchSlotsUnlimited = 4
+// searchLimiter gives a kind a place among the searches of the server. The places
+// are the store's (Store.AcquireSearchSlot), shared with the API: one less than
+// the read connections, at least one. A kind waits as long as its own budget
+// lasts (ctx): the page tells a kind that ran out of time as slow and offers to
+// load it again, so a place that comes too late costs nothing that is not said.
+// The wait of a page that has no budget of its own is wait.
+type searchLimiter struct{}
 
 func (l *searchLimiter) acquire(ctx context.Context, st *store.Store) (release func(), ok bool) {
-	l.once.Do(func() {
-		n := st.ReadPoolSize() - 1
-		if st.ReadPoolSize() <= 0 {
-			n = searchSlotsUnlimited
-		}
-		l.slots = make(chan struct{}, max(n, 1))
-	})
-	select {
-	case l.slots <- struct{}{}:
-		return func() { <-l.slots }, true
-	case <-ctx.Done():
-		return nil, false
-	}
+	return st.AcquireSearchSlot(ctx, 0)
 }
+
+// sessionsSearchWait is how long the search of the sessions page waits for a place
+// among the searches before it answers that the server is busy.
+var sessionsSearchWait = 5 * time.Second
 
 // searchStreams are the running search streams by account: the search itself
 // under the key of the account, a kind loaded again under the account and the
@@ -134,9 +123,10 @@ func (p *searchPlan) liveView(r *http.Request) *searchLive {
 		kind = ""
 		qs.Del("kind")
 	}
-	lv := &searchLive{Stream: "/ui/search/stream?" + qs.Encode(), Sync: "/ui/search?" + qs.Encode(), Total: len(p.kinds), Kind: kind,
+	kinds := p.runKinds()
+	lv := &searchLive{Stream: "/ui/search/stream?" + qs.Encode(), Sync: "/ui/search?" + qs.Encode(), Total: len(kinds), Kind: kind,
 		PerGroup: searchPerGroup, KindPage: searchKindPage, Step: kindStep, Cap: searchCountCap}
-	for _, k := range p.kinds {
+	for _, k := range kinds {
 		lv.Slots = append(lv.Slots, searchSlot{Key: k, Label: p.l.msg(searchKindLabel[k]), Mark: searchKindMark[k]})
 	}
 	return lv
@@ -163,7 +153,7 @@ func (a *app) searchStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := a.planSearch(r)
-	kinds, budget := p.kinds, searchKindBudget
+	kinds, budget := p.runKinds(), searchKindBudget
 	only := r.URL.Query().Get("only")
 	if only != "" {
 		kinds, budget = nil, searchKindFullBudget

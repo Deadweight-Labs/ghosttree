@@ -189,7 +189,7 @@ def main():
             if variant != "baseline":
                 fn(d, variant == "reference")
                 commit(d)
-            g = bench.grade_task(task, d, sha, ENV)
+            g = bench.grade_task(task, d, sha, bench.HostGradeRun(d, ENV))
             expect = {"baseline": (False, None), "reference": (True, True), "naive": (True, False)}[variant]
             got = (g["func"], g["know"])
             good = got[0] == expect[0] and (expect[1] is None or got[1] == expect[1] or (task == "F0" and got[1] is None))

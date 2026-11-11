@@ -280,11 +280,14 @@ func (s *Store) fuseRequests(ctx context.Context, filter requestdomain.SearchFil
 		}
 		// The id decides a tie, so that the same query always reads the same rows.
 		query += ` ORDER BY f.rank, r.id LIMIT ?`
-		rows, err := s.db.QueryContext(ctx, query, append(append([]any{ftsQuery(filter.Query)}, args...), pool+1)...)
+		textIDs, err = andThenOr(filter.Query, pool+1, pool+1, idKey, func(expr string) ([]int64, error) {
+			rows, err := s.db.QueryContext(ctx, query, append(append([]any{expr}, args...), pool+1)...)
+			if err != nil {
+				return nil, err
+			}
+			return scanIDs(rows)
+		})
 		if err != nil {
-			return nil, false, err
-		}
-		if textIDs, err = scanIDs(rows); err != nil {
 			return nil, false, err
 		}
 	}

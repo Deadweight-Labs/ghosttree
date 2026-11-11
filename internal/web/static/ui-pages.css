@@ -58,7 +58,7 @@
   /* ---- Detail pages: title, meta line, main column and sidebar ---- */
   & .dhead { padding-bottom: 16px; margin-bottom: 24px; border-bottom: 1px solid var(--border-default); }
   & .dtitle { display: flex; align-items: flex-start; gap: 16px; }
-  & .dtitle h1 { min-width: 0; font-size: 32px; line-height: 1.25; font-weight: 400; letter-spacing: 0; overflow-wrap: anywhere; }
+  & .dtitle h1 { min-width: 0; font-size: 32px; line-height: 1.25; font-weight: 400; letter-spacing: 0; overflow-wrap: break-word; }
   & .dtitle h1 .n { font-weight: 300; color: var(--fg-muted); margin-left: 8px; }
   & .gacts { margin-left: auto; display: flex; gap: 8px; flex: none; padding-top: 2px; }
   & .callout .gacts { margin: 8px 0 0; padding: 0; }
@@ -66,6 +66,10 @@
   & .dmeta b, & .dmeta .person { color: var(--fg-default); font-weight: 600; }
   & .dgrid { display: grid; grid-template-columns: minmax(0, 1fr) 256px; gap: 24px; align-items: start; }
   & .dmain, & .side { min-width: 0; }
+  /* What stands below the timeline of a page (pictures, workshop, a closing note) is set in like the
+     boxes of the timeline: avatar column (40 px) plus its gap (16 px), the same space between all of them.
+     The composer is already in this column. On the phone the timeline has no avatar column. */
+  & .dmain > .tlx ~ :is(.box, .callout) { margin: 0 0 16px 56px; }
   /* A page without facts does not keep the column: no aside, or one with nothing in it */
   & .dgrid:not(:has(> .side *)) { grid-template-columns: minmax(0, 1fr); }
   & .side:not(:has(*)) { display: none; }
@@ -151,7 +155,8 @@
     & .side { order: 2; }
     & .dtitle h1 { font-size: 24px; }
     & .dtitle { flex-wrap: wrap; }
-    & .dtitle h1 { flex: 1 1 0; }
+    & .dtitle h1 { flex: 1 1 100%; }
+    & .dtitle .gacts { margin-left: 0; }
     & .dtitle .gacts { flex-wrap: wrap; max-width: 100%; }
     & .dtitle .gacts:has(.share) { flex-basis: 100%; margin-left: 0; }
     & .dtitle .share { flex-wrap: wrap; max-width: 100%; }
@@ -162,4 +167,8 @@
     & .lh .tab { min-height: 44px; }
     & .ntools .seg { width: 100%; }
   }
+}
+
+@media (max-width: 767px) {
+  :is(.g2) .dmain > .tlx ~ :is(.box, .callout) { margin-left: 0; }
 }

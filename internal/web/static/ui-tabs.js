@@ -7,6 +7,7 @@
 // behind the separator (li.aux) and the rest of that group as icons (li.icx).
 (() => {
   const PAD = 12; // room at both ends for the folder card of the open tab (ui-shell.css)
+  const SNAP = 24; // where a tab stands after the row scrolled to it (scroll-padding-inline in ui-shell.css)
 
   // The label of a tab or segment is set bold when it is open. Bold is wider and
   // would push the neighbours, so a hidden copy in bold reserves the room.
@@ -107,9 +108,9 @@
       if (!sel) return;
       const room = nav.getBoundingClientRect();
       const r = sel.getBoundingClientRect();
-      // clear of the fades: 40 px at the left, 72 px (fade and mark) at the right
-      if (r.left < room.left + PAD + 28) nav.scrollLeft += r.left - room.left - PAD - 28;
-      else if (r.right > room.right - PAD - 60) nav.scrollLeft += r.right - room.right + PAD + 60;
+      // The row stops at whole tabs (scroll-snap, ui-shell.css): the open tab goes to the snap
+      // point, 24 px from the left edge, clear of the fade; the tabs before it are out of sight.
+      if (r.left < room.left + SNAP + 4 || r.right > room.right - PAD - 60) nav.scrollLeft += r.left - room.left - SNAP;
     };
 
     const fit = () => {
