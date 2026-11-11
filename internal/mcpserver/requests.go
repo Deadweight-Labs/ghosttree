@@ -279,7 +279,7 @@ func renderRequestDetail(detail requestdomain.Detail, concise bool) string {
 	}
 	b.WriteString("\nCriteria\n")
 	for _, criterion := range detail.Criteria {
-		fmt.Fprintf(&b, "- %s [%s] %s\n", criterion.HumanID(), criterion.State, criterion.Description)
+		fmt.Fprintf(&b, "- %s (criterion_id %d) [%s] %s\n", criterion.HumanID(), criterion.ID, criterion.State, criterion.Description)
 		if concise {
 			continue
 		}

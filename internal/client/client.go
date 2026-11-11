@@ -47,6 +47,9 @@ type Client struct {
 	originSession string
 	// readOnly refuses every request that is not a read (SetReadOnly).
 	readOnly bool
+	// readRetries is how often a read is repeated when the server is not there
+	// (SetReadRetries).
+	readRetries int
 }
 
 // ErrReadOnly answers a write of a client that only reads: GHOSTTREE_HOOKS=off
@@ -115,7 +118,58 @@ type StatusError struct {
 func (e *StatusError) HTTPStatus() int { return e.Status }
 
 func (e *StatusError) Error() string {
-	return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, e.Body)
+	if !isHTML(e.Body) {
+		return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, e.Body)
+	}
+	// An error page comes from a proxy in front of the server, not from the
+	// server: the reader is an agent, and the markup tells it nothing.
+	msg := fmt.Sprintf("%s %s: %d %s", e.Method, e.Path, e.Status, http.StatusText(e.Status))
+	if !unavailable(e.Status) {
+		return msg + " (an HTML error page from a proxy, not an answer of the server)"
+	}
+	msg += ": the server is not answering behind its proxy, usually because it restarts. Try again in a few seconds."
+	if e.Method != http.MethodGet && e.Method != http.MethodHead {
+		msg += " Whether this write arrived is not known; read the state before you repeat it."
+	}
+	return msg
+}
+
+func isHTML(body string) bool {
+	head := strings.ToLower(strings.TrimSpace(body))
+	if len(head) > 200 {
+		head = head[:200]
+	}
+	return strings.HasPrefix(head, "<!doctype html") || strings.HasPrefix(head, "<html") || strings.Contains(head, "<head>")
+}
+
+// unavailable are the answers of a proxy whose server is not there.
+func unavailable(status int) bool {
+	return status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+}
+
+// SetReadRetries makes the client repeat a read up to n times when the server
+// is not there: the connection fails, or a proxy answers 502, 503 or 504. A
+// restart of the server takes a few seconds, and an agent that reads during
+// them otherwise gets an error it can only answer by calling again. Writes are
+// never repeated: whether one arrived is not known. A hook leaves this off,
+// because it must not make a person wait.
+func (c *Client) SetReadRetries(n int) { c.readRetries = n }
+
+// readRetryWait is the pause before the n-th repetition (from 0).
+var readRetryWait = func(n int) time.Duration { return time.Duration(n+1) * 700 * time.Millisecond }
+
+// worthRepeating says whether a failed read may succeed a moment later.
+func worthRepeating(err error) bool {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return unavailable(se.Status)
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		// A timeout already cost the whole budget of the call.
+		return !ue.Timeout() && !errors.Is(err, context.Canceled)
+	}
+	return false
 }
 
 // IsRouteMissing sagt, ob der Server die Route gar nicht kennt. Das tut ein
@@ -185,6 +239,22 @@ func (c *Client) do(method, path string, query url.Values, in, out any) error {
 }
 
 func (c *Client) doContext(ctx context.Context, method, path string, query url.Values, in, out any) error {
+	err := c.doOnce(ctx, method, path, query, in, out)
+	if method != http.MethodGet && method != http.MethodHead {
+		return err
+	}
+	for n := 0; n < c.readRetries && err != nil && worthRepeating(err); n++ {
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(readRetryWait(n)):
+		}
+		err = c.doOnce(ctx, method, path, query, in, out)
+	}
+	return err
+}
+
+func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values, in, out any) error {
 	if c.readOnly && method != http.MethodGet && method != http.MethodHead {
 		return ErrReadOnly
 	}
