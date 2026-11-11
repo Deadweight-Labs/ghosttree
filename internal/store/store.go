@@ -1033,6 +1033,12 @@ func OpenReadOnly(path string, maxOpenConns int) (*Store, error) {
 }
 
 func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
+	return openWithOptions(path, options, true)
+}
+
+// openWithOptions is OpenWithOptions; seed says whether a test binary may start
+// a new database file from the migrated template (see testtemplate.go).
+func openWithOptions(path string, options OpenOptions, seed bool) (*Store, error) {
 	if options.MaxOpenConns <= 0 {
 		return nil, fmt.Errorf("max open connections must be positive")
 	}
@@ -1041,6 +1047,9 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		options.MaxOpenConns = 1
 	}
 	if dbPath != "" {
+		if seed {
+			seedFromTestTemplate(dbPath)
+		}
 		if err := prepareDatabaseFiles(dbPath); err != nil {
 			return nil, err
 		}
@@ -1051,6 +1060,9 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	if seed && path == ":memory:" {
+		seedMemoryFromTestTemplate(db)
+	}
 	if dbPath != "" {
 		var journal string
 		if err := db.QueryRow(`PRAGMA journal_mode=WAL`).Scan(&journal); err != nil {

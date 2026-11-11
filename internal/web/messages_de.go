@@ -736,6 +736,7 @@ var messagesDE = map[string]string{
 	"search.none_for":                 "Keine Treffer für „%s“.",
 	"search.progress":                 "{done} von {total} Bereichen",
 	"search.stop":                     "Abbrechen",
+	"search.exact":                    "Exakt",
 	"search.more":                     "Mehr laden",
 	"nav.team_devices":                "Team & Maschinen",
 	"nav.tab_team":                    "Team",

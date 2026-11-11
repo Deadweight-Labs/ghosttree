@@ -92,7 +92,7 @@ func readSearchStream(t *testing.T, c *http.Client, u string) []streamEvent {
 
 var (
 	hitHrefRE  = regexp.MustCompile(`<a class="ht rl" href="([^"]*)"`)
-	kindRowRE  = regexp.MustCompile(`<a class="frow[^"]*" href="[^"]*">.*?<span class="nm">([^<]*)</span><span class="counter">([^<]*)</span></a>`)
+	kindRowRE  = regexp.MustCompile(`<a class="frow[^"]*" href="[^"]*"[^>]*>.*?<span class="nm">([^<]*)</span><span class="counter">([^<]*)</span></a>`)
 	groupHeadR = regexp.MustCompile(`<div class="box-h"><h2 class="t">([^<]*)</h2>(?:<span class="sp"></span><a href="([^"]*)">)?`)
 )
 
@@ -285,8 +285,10 @@ func TestSearchLivePageIsTheFrame(t *testing.T) {
 		t.Errorf("the guest's frame has a place for sessions or the wrong count")
 	}
 	_, narrowed := e.get(t, e.Owner, "/ui/search?q=zebrafish&live=1&kind=pains")
-	if strings.Contains(narrowed, `data-kind-body="sessions"`) || !strings.Contains(narrowed, `data-kind-body="pains"`) {
-		t.Errorf("the frame narrowed to pains keeps the place of another kind")
+	// The page script switches kinds without a new page, so the frame keeps the
+	// place of every kind and says which one is chosen.
+	if !strings.Contains(narrowed, `data-kind-body="sessions"`) || !strings.Contains(narrowed, `data-kind-body="pains"`) || !strings.Contains(narrowed, `data-kind="pains"`) {
+		t.Errorf("the frame narrowed to pains lost the place of a kind or does not name the chosen one")
 	}
 	if _, bad := e.get(t, e.Owner, "/ui/search?q=zebrafish+bogus:1&live=1"); strings.Contains(bad, "data-search-live") {
 		t.Error("a line that does not run opens a stream")
