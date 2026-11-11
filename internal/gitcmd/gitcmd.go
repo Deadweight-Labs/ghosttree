@@ -73,6 +73,7 @@ func parseDepth(command string, depth int, dir string) []Call {
 			w := words[0]
 			switch {
 			case isAssignment(w), w == "!", w == "{", w == "then", w == "do", w == "else", w == "elif",
+				w == "if", w == "while", w == "until",
 				w == "sudo", w == "command", w == "builtin", w == "exec", w == "time", w == "nohup", w == "nice":
 				words = words[1:]
 				continue
@@ -393,6 +394,15 @@ func splitCommands(s string) [][]string {
 			inWord = true
 			j := i + 1
 			for j < len(rs) && rs[j] != '"' {
+				if rs[j] == '$' && j+1 < len(rs) && rs[j+1] == '(' {
+					// "$(cat <<'EOF' … EOF)": die Ersetzung ist Text des Wortes, soweit
+					// sie reicht. Ihr Ende liegt hinter Anführungszeichen und
+					// Heredoc-Rümpfen, nicht beim nächsten ".
+					end := skipSubstitution(rs, j+2)
+					word.WriteString(string(rs[j:end]))
+					j = end
+					continue
+				}
 				if rs[j] == '\\' && j+1 < len(rs) && strings.ContainsRune("\"\\$`\n", rs[j+1]) {
 					if rs[j+1] != '\n' {
 						word.WriteRune(rs[j+1])
@@ -469,6 +479,90 @@ func splitCommands(s string) [][]string {
 type heredoc struct {
 	delim string
 	strip bool
+}
+
+// skipSubstitution liest eine Befehlsersetzung "$( … )" (from steht hinter dem "$(")
+// und liefert die Position hinter der schließenden Klammer; nicht geschlossen frisst
+// sie den Rest. Anführungszeichen, Escapes, geschachtelte Klammern und Heredocs
+// werden gelesen, so dass ein ungerades ' oder " in einer Commit-Nachricht das Ende
+// nicht verschiebt.
+func skipSubstitution(rs []rune, from int) int {
+	depth := 1
+	var docs []heredoc
+	for i := from; i < len(rs); i++ {
+		switch c := rs[i]; {
+		case c == '\\':
+			i++
+		case c == '\'':
+			i++
+			for i < len(rs) && rs[i] != '\'' {
+				i++
+			}
+		case c == '"':
+			i = skipDoubleQuoted(rs, i+1) - 1
+		case c == '`':
+			i++
+			for i < len(rs) && rs[i] != '`' {
+				if rs[i] == '\\' {
+					i++
+				}
+				i++
+			}
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		case c == '\n':
+			if len(docs) > 0 {
+				i = skipHeredocs(rs, i+1, docs) - 1
+				docs = nil
+			}
+		case c == '<' && i+1 < len(rs) && rs[i+1] == '<' && !(i+2 < len(rs) && rs[i+2] == '<'):
+			j := i + 2
+			strip := false
+			if j < len(rs) && rs[j] == '-' {
+				strip = true
+				j++
+			}
+			for j < len(rs) && (rs[j] == ' ' || rs[j] == '\t') {
+				j++
+			}
+			var delim strings.Builder
+			for j < len(rs) && !strings.ContainsRune(" \t\n;&|()<>", rs[j]) {
+				if !strings.ContainsRune("'\"\\", rs[j]) {
+					delim.WriteRune(rs[j])
+				}
+				j++
+			}
+			if delim.Len() > 0 {
+				docs = append(docs, heredoc{delim: delim.String(), strip: strip})
+			}
+			i = j - 1
+		case c == '<' && i+1 < len(rs) && rs[i+1] == '<':
+			i += 2
+		}
+	}
+	return len(rs)
+}
+
+// skipDoubleQuoted liefert die Position hinter dem schließenden " einer Zeichenkette
+// (from steht hinter dem öffnenden); eine Ersetzung "$( … )" darin wird für sich
+// gelesen.
+func skipDoubleQuoted(rs []rune, from int) int {
+	for i := from; i < len(rs); i++ {
+		switch {
+		case rs[i] == '\\':
+			i++
+		case rs[i] == '$' && i+1 < len(rs) && rs[i+1] == '(':
+			i = skipSubstitution(rs, i+2) - 1
+		case rs[i] == '"':
+			return i + 1
+		}
+	}
+	return len(rs)
 }
 
 // skipHeredocs überspringt die Rümpfe nach dem Zeilenende und liefert die

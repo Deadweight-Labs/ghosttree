@@ -72,7 +72,7 @@ func sha40(prefix string) string {
 
 func (f *gitFix) record(t *testing.T, account int64, events ...SessionGitEvent) SessionGitResult {
 	t.Helper()
-	res, err := f.st.RecordSessionGitEvents(account, events)
+	res, err := f.st.RecordSessionGitEvents(account, "", events)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,12 +177,12 @@ func TestRecordSessionGitEventsIsIdempotentAndWritesNothingForAForeignSession(t 
 	// kommt durch, auch nicht das zu ihrer eigenen.
 	own := commitEvent(f.anna, 1, "2026-11-08T16:06:33Z", "2026-11-08T16:06:34Z", "feat/b")
 	foreign := commitEvent(f.robin, 9, "2026-11-08T16:07:00Z", "2026-11-08T16:07:01Z", "feat/a", "abcdef0")
-	if _, err := f.st.RecordSessionGitEvents(2, []SessionGitEvent{own, foreign}); !errors.Is(err, ErrGitEventSession) {
+	if _, err := f.st.RecordSessionGitEvents(2, "", []SessionGitEvent{own, foreign}); !errors.Is(err, ErrGitEventSession) {
 		t.Fatalf("a foreign session: %v", err)
 	}
 	// Eine unbekannte Session sieht gleich aus.
 	unknown := commitEvent(Session{Harness: "claude-code", ExternalID: "nobody"}, 1, "2026-11-08T16:06:33Z", "2026-11-08T16:06:34Z", "")
-	if _, err := f.st.RecordSessionGitEvents(1, []SessionGitEvent{unknown}); !errors.Is(err, ErrGitEventSession) {
+	if _, err := f.st.RecordSessionGitEvents(1, "", []SessionGitEvent{unknown}); !errors.Is(err, ErrGitEventSession) {
 		t.Fatalf("an unknown session: %v", err)
 	}
 	f.st.db.QueryRow(`SELECT COUNT(*) FROM session_git_events`).Scan(&n)
@@ -194,7 +194,7 @@ func TestRecordSessionGitEventsIsIdempotentAndWritesNothingForAForeignSession(t 
 	// Dieselbe Kennung bei einem anderen Harness ist eine andere Session.
 	other := ev
 	other.Harness = "codex"
-	if _, err := f.st.RecordSessionGitEvents(1, []SessionGitEvent{other}); !errors.Is(err, ErrGitEventSession) {
+	if _, err := f.st.RecordSessionGitEvents(1, "", []SessionGitEvent{other}); !errors.Is(err, ErrGitEventSession) {
 		t.Fatalf("the session of another harness: %v", err)
 	}
 }
@@ -214,15 +214,17 @@ func TestRecordSessionGitEventsRejectsInvalidInput(t *testing.T) {
 	} {
 		e := good
 		mutate(&e)
-		if _, err := f.st.RecordSessionGitEvents(1, []SessionGitEvent{e}); !errors.Is(err, ErrInvalidInput) {
-			t.Errorf("%s: %v", name, err)
+		// Ein ungültiger Vorgang wird einzeln verworfen: kein Fehler des Stapels.
+		res, err := f.st.RecordSessionGitEvents(1, "", []SessionGitEvent{e})
+		if err != nil || res.Rejected != 1 || res.Recorded != 0 || res.Reason == "" {
+			t.Errorf("%s: %+v %v", name, res, err)
 		}
 	}
 	tooMany := make([]SessionGitEvent, MaxSessionGitEvents+1)
 	for i := range tooMany {
 		tooMany[i] = good
 	}
-	if _, err := f.st.RecordSessionGitEvents(1, tooMany); !errors.Is(err, ErrInvalidInput) {
+	if _, err := f.st.RecordSessionGitEvents(1, "", tooMany); !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("too many: %v", err)
 	}
 }

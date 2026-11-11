@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"time"
@@ -42,9 +41,8 @@ CREATE TABLE IF NOT EXISTS session_git_events(
   ok INTEGER NOT NULL DEFAULT 1 CHECK(ok IN (0,1)),
   branch TEXT NOT NULL DEFAULT '',
   resolved INTEGER NOT NULL DEFAULT 0 CHECK(resolved IN (0,1)),
+  account_id INTEGER NOT NULL DEFAULT 0,
   UNIQUE(session_id, seq, kind));
-CREATE INDEX IF NOT EXISTS session_git_events_window
-  ON session_git_events(project, kind, started_at) WHERE ok = 1;
 CREATE INDEX IF NOT EXISTS session_git_events_open
   ON session_git_events(project, started_at) WHERE kind = 'commit' AND ok = 1 AND resolved = 0;
 
@@ -59,6 +57,7 @@ CREATE TABLE IF NOT EXISTS session_commits(
   patch_id TEXT NOT NULL DEFAULT '',
   committed_at TEXT NOT NULL DEFAULT '',
   recorded_at TEXT NOT NULL,
+  weak INTEGER NOT NULL DEFAULT 0 CHECK(weak IN (0,1)),
   PRIMARY KEY(session_id, sha)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS session_commits_sha ON session_commits(project, sha);
 CREATE INDEX IF NOT EXISTS session_commits_short ON session_commits(project, sha) WHERE length(sha) < 40;
@@ -73,13 +72,46 @@ CREATE TABLE IF NOT EXISTS session_prs(
   recorded_at TEXT NOT NULL,
   PRIMARY KEY(session_id, project, pr, source)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS session_prs_pr ON session_prs(project, pr);
+
+-- Wie viele Vorgänge ein Konto an einem Tag melden durfte (Last, nicht Recht).
+CREATE TABLE IF NOT EXISTS session_git_quota(
+  account_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  events INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(account_id, day)) WITHOUT ROWID;
+`
+
+// sessionGitIndexes steht getrennt vom Schema: sie stützen sich auf Spalten, die
+// ein früherer Stand der Tabellen noch nicht hatte (ensureColumn legt sie vorher an).
+//
+// Die Fenster-Indizes tragen ended_at, damit die Prüfung "Fenster enthält die
+// Commit-Zeit" im Index geschieht und keine Zeile der Tabelle lädt; der zweite
+// führt das Konto vor der Zeit, so liest die Suche nach den Vorgängen des
+// Autors nur dessen Zeilen.
+const sessionGitIndexes = `
+DROP INDEX IF EXISTS session_git_events_window;
+CREATE INDEX IF NOT EXISTS session_git_events_span
+  ON session_git_events(project, kind, started_at, ended_at) WHERE ok = 1;
+CREATE INDEX IF NOT EXISTS session_git_events_account_span
+  ON session_git_events(project, kind, account_id, started_at, ended_at) WHERE ok = 1;
+CREATE INDEX IF NOT EXISTS git_pull_requests_merge ON git_pull_requests(project, merge_sha);
 `
 
 // ensureSessionGit legt die Tabellen additiv an; auf jeder Datenbank beliebig
 // oft ausführbar. Läuft nach ensurePullRequests, auf dessen Tabellen sich der
-// Abgleich stützt (nur zur Laufzeit, nicht im Schema).
+// Abgleich stützt (nur zur Laufzeit, nicht im Schema), und der Index auf
+// git_pull_requests.merge_sha.
 func ensureSessionGit(db *sql.DB) error {
-	_, err := db.Exec(sessionGitSchema)
+	if _, err := db.Exec(sessionGitSchema); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "session_git_events", "account_id", `INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("session_git_events.account_id: %w", err)
+	}
+	if err := ensureColumn(db, "session_commits", "weak", `INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("session_commits.weak: %w", err)
+	}
+	_, err := db.Exec(sessionGitIndexes)
 	return err
 }
 
@@ -118,6 +150,7 @@ var gitEventOps = map[string]bool{
 // Ein langes Fenster träfe viele Commits und träte gegen jeden Vorgang anderer
 // Sessions an; wer ein Fenster aufbläst, würde so fremde Zuordnungen blockieren.
 const (
+	// MaxSessionGitEvents ist die Grenze je Request.
 	MaxSessionGitEvents = 500
 	maxGitEventSHAs     = 20
 	maxGitCallWindow    = 30 * time.Minute
@@ -129,9 +162,44 @@ const (
 	maxLinkedSessions = 100
 )
 
+// Grenzen der Last. Der Writer ist ein einziger; was ein Konto meldet, darf ihn
+// nicht beschäftigen, auch wenn jede Angabe für sich gültig ist. Als Variablen,
+// damit ein Test sie senken kann.
+var (
+	// maxSessionGitEventsPerSession: so viele Vorgänge hält der Server je Session.
+	// Eine Session, die mehr meldet, ist erfunden oder außer Kontrolle; der Rest
+	// wird verworfen (Capped), denn Wiederholen ändert daran nichts.
+	maxSessionGitEventsPerSession = 2000
+	// maxSessionGitSHAsPerSession: so viele gemeldete oder zugeordnete SHAs je Session.
+	maxSessionGitSHAsPerSession = 2000
+	// maxSessionGitEventsPerDay: so viele neue Vorgänge nimmt der Server je Konto
+	// und UTC-Tag an. Darüber antwortet er mit ErrGitEventQuota; der Collector hält
+	// die Vorgänge zurück und versucht es später (am nächsten Tag) wieder.
+	maxSessionGitEventsPerDay = 20000
+	// maxWindowCandidates: gleichzeitig offene Vorgänge, die ein Commit höchstens
+	// gegeneinander abwägt. Treffen mehr zu, ist die Zeit nicht aussagekräftig; der
+	// Commit bleibt dann offen, statt dass der Server Hunderte Zeilen je Commit lädt.
+	maxWindowCandidates = 64
+	// maxWindowCommits: Commits, die ein Fenster je Anfrage liefert.
+	maxWindowCommits = 300
+	// maxResolvePerRun und maxMatchTime deckeln die Arbeit des Abgleichs je Stapel
+	// bzw. je PR-Sync. Was darüber hinausgeht, bleibt offen und wird mit dem
+	// nächsten Sync des PRs oder dem nächsten Vorgang nachgeholt.
+	maxResolvePerRun = 1500
+	maxMatchTime     = 3 * time.Second
+)
+
 // ErrGitEventSession: die Session ist unbekannt oder gehört einem anderen Konto.
 // Beides sieht gleich aus, damit niemand durch Raten Sessions findet.
 var ErrGitEventSession = errors.New("the session is unknown or belongs to someone else")
+
+// ErrGitEventMachine: der Token ist an eine Maschine gebunden, die Session lief auf
+// einer anderen.
+var ErrGitEventMachine = errors.New("the token is bound to another machine than the session")
+
+// ErrGitEventQuota: das Konto hat die Tagesgrenze für Vorgänge erreicht. Kein
+// Fehler des Stapels; der Collector wiederholt ihn später.
+var ErrGitEventQuota = errors.New("the account reached its daily limit of git events")
 
 // ErrSessionGitEventsUnsupported meldet der Client, wenn der Server die Route
 // zum Melden von Git-Vorgängen nicht kennt (ein älterer Server). Der Collector
@@ -170,34 +238,56 @@ type SessionGitResult struct {
 	// Matched ist die Zahl der Commits, die der Abgleich dabei einer Session
 	// zugeordnet hat.
 	Matched int `json:"matched"`
+	// Rejected zählt die Vorgänge, die für sich ungültig waren (Uhr geht vor,
+	// unbekannte Art, kaputter Branch). Sie werden einzeln verworfen; die übrigen
+	// des Stapels gelten. Reason nennt den ersten Grund.
+	Rejected int    `json:"rejected,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	// Capped zählt, was an der Grenze je Session oder je Tag liegen blieb.
+	Capped int `json:"capped,omitempty"`
 }
 
 // RecordSessionGitEvents schreibt die Vorgänge fort. Idempotent: der Collector
 // liest Transkripte mehrfach, und ein wiederholter Stapel ändert nichts.
 //
-// Der Stapel wird ganz oder gar nicht angenommen. Gehört auch nur eine Session
-// nicht dem Konto, geschieht nichts (ErrGitEventSession): so kann ein Token keine
-// fremde Arbeit erfinden, und ein erfundener Commit an einer fremden Session
-// wäre schlimmer als ein fehlender.
-func (s *Store) RecordSessionGitEvents(account int64, events []SessionGitEvent) (SessionGitResult, error) {
+// Gehört auch nur eine Session nicht dem Konto, geschieht nichts (ErrGitEventSession):
+// so kann ein Token keine fremde Arbeit erfinden, und ein erfundener Commit an
+// einer fremden Session wäre schlimmer als ein fehlender. Dasselbe gilt für einen
+// Token, der an eine andere Maschine gebunden ist als die Session (ErrGitEventMachine).
+//
+// Ein Vorgang, der für sich ungültig ist (die Uhr des Rechners geht vor, eine
+// unbekannte Art), kippt den Stapel nicht: er wird einzeln verworfen und in
+// Rejected gezählt. Die Last ist begrenzt je Request (MaxSessionGitEvents), je
+// Session und je Konto und Tag; was an der Grenze je Session liegen bleibt, zählt
+// Capped, und ein Konto, das seine Tagesgrenze erreicht hat, bekommt
+// ErrGitEventQuota.
+func (s *Store) RecordSessionGitEvents(account int64, machine string, events []SessionGitEvent) (SessionGitResult, error) {
 	if s.writer != nil {
-		return queueValue(s, []any{account, events}, func(d *Store, p []any) (SessionGitResult, error) {
-			return d.RecordSessionGitEvents(p[0].(int64), p[1].([]SessionGitEvent))
+		return queueValue(s, []any{account, machine, events}, func(d *Store, p []any) (SessionGitResult, error) {
+			return d.RecordSessionGitEvents(p[0].(int64), p[1].(string), p[2].([]SessionGitEvent))
 		})
 	}
+	var res SessionGitResult
 	if len(events) == 0 {
-		return SessionGitResult{}, nil
+		return res, nil
 	}
 	if len(events) > MaxSessionGitEvents {
-		return SessionGitResult{}, fmt.Errorf("%w: at most %d events per request", ErrInvalidInput, MaxSessionGitEvents)
+		return res, fmt.Errorf("%w: at most %d events per request", ErrInvalidInput, MaxSessionGitEvents)
 	}
-	clean := make([]SessionGitEvent, len(events))
-	for i, e := range events {
+	clean := make([]SessionGitEvent, 0, len(events))
+	for _, e := range events {
 		c, err := cleanSessionGitEvent(e)
 		if err != nil {
-			return SessionGitResult{}, err
+			res.Rejected++
+			if res.Reason == "" {
+				res.Reason = strings.TrimPrefix(err.Error(), ErrInvalidInput.Error()+": ")
+			}
+			continue
 		}
-		clean[i] = c
+		clean = append(clean, c)
+	}
+	if len(clean) == 0 {
+		return res, nil
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -205,28 +295,52 @@ func (s *Store) RecordSessionGitEvents(account int64, events []SessionGitEvent) 
 	}
 	defer tx.Rollback()
 	owner := instanceOwnerID(tx)
+	day := time.Now().UTC().Format("2006-01-02")
+	var usedToday int
+	if err := tx.QueryRow(`SELECT events FROM session_git_quota WHERE account_id=? AND day=?`, account, day).Scan(&usedToday); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return SessionGitResult{}, err
+	}
+	if usedToday >= maxSessionGitEventsPerDay {
+		return SessionGitResult{}, ErrGitEventQuota
+	}
 	type gitSession struct {
 		id              int64
 		project, branch string
+		events, shas    int
 	}
-	sessions := map[string]gitSession{}
-	var res SessionGitResult
+	sessions := map[string]*gitSession{}
 	ts := now()
 	reportedShas := map[string][]string{}
+	windows := map[string][]gitWindow{}
 	for _, e := range clean {
 		key := e.Harness + "\x00" + e.SessionExternalID
 		sess, ok := sessions[key]
 		if !ok {
-			err := tx.QueryRow(`SELECT id, project, branch FROM sessions WHERE harness=? AND external_id=?
+			sess = &gitSession{}
+			var sessMachine string
+			err := tx.QueryRow(`SELECT id, project, branch, machine FROM sessions WHERE harness=? AND external_id=?
 				AND (CASE WHEN account_id=0 THEN ? ELSE account_id END)=?`,
-				e.Harness, e.SessionExternalID, owner, account).Scan(&sess.id, &sess.project, &sess.branch)
+				e.Harness, e.SessionExternalID, owner, account).Scan(&sess.id, &sess.project, &sess.branch, &sessMachine)
 			if errors.Is(err, sql.ErrNoRows) {
 				return SessionGitResult{}, ErrGitEventSession
 			}
 			if err != nil {
 				return SessionGitResult{}, err
 			}
+			if machine != "" && sessMachine != "" && !strings.EqualFold(machine, sessMachine) {
+				return SessionGitResult{}, ErrGitEventMachine
+			}
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM session_git_events WHERE session_id=?`, sess.id).Scan(&sess.events); err != nil {
+				return SessionGitResult{}, err
+			}
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM session_commits WHERE session_id=?`, sess.id).Scan(&sess.shas); err != nil {
+				return SessionGitResult{}, err
+			}
 			sessions[key] = sess
+		}
+		if sess.events >= maxSessionGitEventsPerSession || usedToday+res.Recorded >= maxSessionGitEventsPerDay {
+			res.Capped++
+			continue
 		}
 		branch := e.Branch
 		if branch == "" && e.Kind == GitEventCommit {
@@ -236,14 +350,15 @@ func (s *Store) RecordSessionGitEvents(account int64, events []SessionGitEvent) 
 		if e.OK {
 			ok1 = 1
 		}
-		r, err := tx.Exec(`INSERT INTO session_git_events(session_id,project,seq,kind,op,started_at,ended_at,ok,branch)
-			VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,seq,kind) DO NOTHING`,
-			sess.id, sess.project, e.Seq, e.Kind, e.Op, e.StartedAt, e.EndedAt, ok1, branch)
+		r, err := tx.Exec(`INSERT INTO session_git_events(session_id,project,seq,kind,op,started_at,ended_at,ok,branch,account_id)
+			VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,seq,kind) DO NOTHING`,
+			sess.id, sess.project, e.Seq, e.Kind, e.Op, e.StartedAt, e.EndedAt, ok1, branch, account)
 		if err != nil {
 			return SessionGitResult{}, err
 		}
 		if n, _ := r.RowsAffected(); n > 0 {
 			res.Recorded++
+			sess.events++
 		}
 		if sess.project == "" {
 			// Ohne Projekt gibt es nichts, woran sich eine SHA oder ein PR binden
@@ -255,11 +370,19 @@ func (s *Store) RecordSessionGitEvents(account int64, events []SessionGitEvent) 
 			op = "commit"
 		}
 		for _, sha := range e.SHAs {
-			if _, err := putSessionCommit(tx, sessionCommit{
+			if sess.shas >= maxSessionGitSHAsPerSession {
+				res.Capped++
+				break
+			}
+			added, err := putSessionCommit(tx, sessionCommit{
 				SessionID: sess.id, Project: sess.project, SHA: sha, Source: CommitSourceReported,
 				Op: op, ChunkSeq: e.Seq, CommittedAt: e.EndedAt,
-			}, ts); err != nil {
+			}, ts)
+			if err != nil {
 				return SessionGitResult{}, err
+			}
+			if added {
+				sess.shas++
 			}
 			reportedShas[sess.project] = append(reportedShas[sess.project], sha)
 		}
@@ -268,7 +391,10 @@ func (s *Store) RecordSessionGitEvents(account int64, events []SessionGitEvent) 
 				return SessionGitResult{}, err
 			}
 		}
-		if e.PR > 0 && e.PRRemote == sess.project {
+		// Ein PR, den ein fehlgeschlagener Aufruf nennt (gh pr create schlägt fehl und
+		// gibt die Adresse des schon bestehenden PRs aus), ist keiner, den die
+		// Session angelegt hat.
+		if e.PR > 0 && e.PRRemote == sess.project && e.OK {
 			var src string
 			switch e.Kind {
 			case GitEventPRCreate:
@@ -283,10 +409,15 @@ func (s *Store) RecordSessionGitEvents(account int64, events []SessionGitEvent) 
 				}
 			}
 		}
+		if e.Kind == GitEventCommit && e.OK && len(e.SHAs) == 0 {
+			windows[sess.project] = append(windows[sess.project], gitWindow{from: e.StartedAt, to: e.EndedAt})
+		}
 	}
 	// Abgleich: erst die gemeldeten SHAs dieses Stapels gegen die Commits der
 	// PRs (bestätigen, verlängern oder verwerfen), dann die Zeitfenster der
-	// Vorgänge ohne SHA.
+	// Vorgänge ohne SHA. Die Arbeit ist je Stapel gedeckelt (maxResolvePerRun,
+	// maxMatchTime).
+	m := newMatcher(tx, owner)
 	for project, list := range reportedShas {
 		var known []pullCommitAt
 		for _, sha := range uniqueStrings(list) {
@@ -296,20 +427,29 @@ func (s *Store) RecordSessionGitEvents(account int64, events []SessionGitEvent) 
 			}
 			known = append(known, found...)
 		}
-		if err := settleReported(tx, project, known); err != nil {
+		if err := m.settleReported(project, known); err != nil {
 			return SessionGitResult{}, err
 		}
 	}
-	for _, e := range clean {
-		sess := sessions[e.Harness+"\x00"+e.SessionExternalID]
-		if sess.project == "" || e.Kind != GitEventCommit || !e.OK || len(e.SHAs) > 0 {
-			continue
+	for project, ws := range windows {
+		commits, err := m.commitsInWindows(project, ws)
+		if err != nil {
+			return SessionGitResult{}, err
 		}
-		n, err := matchEventWindow(tx, sess.project, e.StartedAt, e.EndedAt)
+		n, err := m.resolveAll(project, commits)
 		if err != nil {
 			return SessionGitResult{}, err
 		}
 		res.Matched += n
+	}
+	if res.Recorded > 0 {
+		if _, err := tx.Exec(`INSERT INTO session_git_quota(account_id,day,events) VALUES(?,?,?)
+			ON CONFLICT(account_id,day) DO UPDATE SET events=events+excluded.events`, account, day, res.Recorded); err != nil {
+			return SessionGitResult{}, err
+		}
+		if _, err := tx.Exec(`DELETE FROM session_git_quota WHERE day < ?`, time.Now().UTC().AddDate(0, 0, -7).Format("2006-01-02")); err != nil {
+			return SessionGitResult{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return SessionGitResult{}, err
@@ -424,55 +564,65 @@ type sessionCommit struct {
 	ChunkSeq    int
 	PatchID     string
 	CommittedAt string
+	// Weak: die Zuordnung (matched) beruht auf einem Zeitfenster, und der Autor des
+	// Commits ließ sich nicht gegen das Konto der Session prüfen.
+	Weak bool
 }
 
 // putSessionCommit legt einen Commit der Session an. Eine kurze SHA derselben
 // Session, die ein Präfix der neuen ist, wird durch die volle ersetzt (sie bleibt
 // mit ihrer Quelle stehen: gemeldet und bestätigt); eine kürzere neue SHA zu
 // einer bekannten vollen legt nichts an. added sagt, ob die Zeile neu ist.
-func putSessionCommit(tx *sql.Tx, c sessionCommit, recordedAt string) (added bool, err error) {
-	rows, err := tx.Query(`SELECT sha FROM session_commits WHERE session_id=?`, c.SessionID)
-	if err != nil {
-		return false, err
-	}
-	var existing []string
-	for rows.Next() {
-		var sha string
-		if err := rows.Scan(&sha); err != nil {
-			rows.Close()
+//
+// Je Aufruf drei gezielte Abfragen auf den Primärschlüssel (session_id, sha):
+// dieselbe oder eine kürzere SHA, eine längere, dann das Einfügen. Die Session
+// wird nicht geladen; sonst wuchs die Arbeit mit der Zahl ihrer Commits im Quadrat.
+func putSessionCommit(tx dbTx, c sessionCommit, recordedAt string) (added bool, err error) {
+	var old string
+	err = tx.QueryRow(sqlOwnShorterSHA, c.SessionID, jsonStrings(shaPrefixes(c.SHA))).Scan(&old)
+	switch {
+	case err == nil && old == c.SHA:
+		return false, nil
+	case err == nil:
+		// old ist die kurze Fassung von c.SHA.
+		if _, err := tx.Exec(`UPDATE session_commits SET sha=?, committed_at=CASE WHEN committed_at='' THEN ? ELSE committed_at END
+			WHERE session_id=? AND sha=?`, c.SHA, c.CommittedAt, c.SessionID, old); err != nil {
 			return false, err
 		}
-		existing = append(existing, sha)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+		return false, nil
+	case !errors.Is(err, sql.ErrNoRows):
 		return false, err
 	}
-	rows.Close()
-	for _, old := range existing {
-		switch {
-		case old == c.SHA:
-			return false, nil
-		case strings.HasPrefix(c.SHA, old):
-			// old ist die kurze Fassung von c.SHA.
-			if _, err := tx.Exec(`UPDATE session_commits SET sha=?, committed_at=CASE WHEN committed_at='' THEN ? ELSE committed_at END
-				WHERE session_id=? AND sha=?`, c.SHA, c.CommittedAt, c.SessionID, old); err != nil {
-				return false, err
-			}
-			return false, nil
-		case strings.HasPrefix(old, c.SHA):
-			return false, nil
-		}
+	var one int
+	err = tx.QueryRow(sqlOwnLongerSHA, c.SessionID, c.SHA, c.SHA+"g").Scan(&one)
+	switch {
+	case err == nil:
+		return false, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return false, err
 	}
 	if c.Op == "" {
 		c.Op = "commit"
 	}
-	if _, err := tx.Exec(`INSERT INTO session_commits(session_id,project,sha,source,op,chunk_seq,patch_id,committed_at,recorded_at)
-		VALUES(?,?,?,?,?,?,?,?,?)`, c.SessionID, c.Project, c.SHA, c.Source, c.Op, c.ChunkSeq, c.PatchID, c.CommittedAt, recordedAt); err != nil {
+	weak := 0
+	if c.Weak {
+		weak = 1
+	}
+	if _, err := tx.Exec(`INSERT INTO session_commits(session_id,project,sha,source,op,chunk_seq,patch_id,committed_at,recorded_at,weak)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`, c.SessionID, c.Project, c.SHA, c.Source, c.Op, c.ChunkSeq, c.PatchID, c.CommittedAt, recordedAt, weak); err != nil {
 		return false, err
 	}
 	return true, nil
 }
+
+// Die Abfragen von putSessionCommit; ein Test prüft ihre Pläne.
+const (
+	// dieselbe SHA oder eine kürzere Fassung (die längste zuerst).
+	sqlOwnShorterSHA = `SELECT sha FROM session_commits WHERE session_id=? AND sha IN (SELECT value FROM json_each(?))
+		ORDER BY length(sha) DESC LIMIT 1`
+	// eine längere SHA, die mit der neuen beginnt.
+	sqlOwnLongerSHA = `SELECT 1 FROM session_commits WHERE session_id=? AND sha > ? AND sha < ? LIMIT 1`
+)
 
 // shaPrefixes nennt alle Präfixe einer SHA ab sieben Zeichen, sie selbst
 // eingeschlossen: so findet ein Index die kurze Fassung einer vollen SHA.
@@ -482,166 +632,6 @@ func shaPrefixes(sha string) []string {
 		out = append(out, sha[:n])
 	}
 	return out
-}
-
-// settleReported prüft die gemeldeten SHAs gegen Commits, die der Server aus den
-// PRs kennt, und verlängert kurze zu vollen.
-//
-// Eine gemeldete SHA ist eine Behauptung des Collectors. Kennt der Server die
-// Commits, die zu ihr passen, muss mindestens einer zum Zeitfenster des Vorgangs
-// passen, der sie gemeldet hat: ein Commit, der Stunden vor oder nach dem Aufruf
-// entstand, kann nicht aus diesem Aufruf stammen. Widersprechen ALLE, wird die
-// Zeile verworfen (ab zwölf Zeichen; eine kürzere bleibt, ist aber für die Leser
-// unsichtbar, solange sie widerspricht), und eine erfundene SHA nimmt keinem
-// anderen einen Commit. Passt genau einer, wird eine kurze SHA durch die volle ersetzt (Quelle bleibt
-// reported); passen mehrere (ein Präfix von sieben Zeichen ist nicht eindeutig),
-// bleibt sie, wie sie ist. Ein Commit, der nur denselben Präfix trägt, verwirft
-// nie die Zeile einer Session, deren Commit ein anderer ist.
-//
-// commits sind die Commits, die gerade bekannt geworden sind; geprüft werden die
-// Zeilen, die zu einem von ihnen passen, gegen ALLE Commits mit ihrem Präfix.
-func settleReported(tx *sql.Tx, project string, commits []pullCommitAt) error {
-	type reported struct {
-		session int64
-		sha     string
-		seq     int
-	}
-	seen := map[reported]bool{}
-	var todo []reported
-	for _, c := range commits {
-		rows, err := tx.Query(`SELECT session_id, sha, chunk_seq FROM session_commits
-			WHERE project=? AND source='reported' AND sha IN (SELECT value FROM json_each(?))`, project, jsonStrings(shaPrefixes(c.SHA)))
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var r reported
-			if err := rows.Scan(&r.session, &r.sha, &r.seq); err != nil {
-				rows.Close()
-				return err
-			}
-			if !seen[r] {
-				seen[r] = true
-				todo = append(todo, r)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		rows.Close()
-	}
-	for _, r := range todo {
-		candidates, err := pullCommitsWithPrefix(tx, project, r.sha)
-		if err != nil {
-			return err
-		}
-		var fitting []pullCommitAt
-		for _, c := range candidates {
-			ok, err := reportedWindowFits(tx, r.session, r.seq, c.CommittedAt)
-			if err != nil {
-				return err
-			}
-			if ok {
-				fitting = append(fitting, c)
-			}
-		}
-		switch {
-		case len(candidates) == 0:
-		case len(fitting) == 0:
-			// Ein kurzer Präfix kann zu einem Commit gehören, den der Server noch
-			// nicht kennt; die Zeile bleibt, die Leser blenden sie aus
-			// (reportedContradicted), bis ein passender Commit sie bestätigt.
-			if len(r.sha) >= minDeleteSHA {
-				_, err = tx.Exec(`DELETE FROM session_commits WHERE session_id=? AND sha=? AND source='reported'`, r.session, r.sha)
-			}
-		case len(fitting) == 1 && r.sha != fitting[0].SHA:
-			var have int
-			if err = tx.QueryRow(`SELECT COUNT(*) FROM session_commits WHERE session_id=? AND sha=?`, r.session, fitting[0].SHA).Scan(&have); err != nil {
-				return err
-			}
-			if have > 0 {
-				_, err = tx.Exec(`DELETE FROM session_commits WHERE session_id=? AND sha=?`, r.session, r.sha)
-			} else {
-				_, err = tx.Exec(`UPDATE session_commits SET sha=? WHERE session_id=? AND sha=?`, fitting[0].SHA, r.session, r.sha)
-			}
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// dbQuerier ist, was *sql.DB und *sql.Tx gemeinsam können.
-type dbQuerier interface {
-	Query(query string, args ...any) (*sql.Rows, error)
-	QueryRow(query string, args ...any) *sql.Row
-}
-
-// minDeleteSHA: erst ab dieser Länge ist ein Präfix eindeutig genug, dass ein
-// widersprechender Commit die gemeldete Zeile beweisbar entkräftet. Eine kürzere
-// kann zu einem Commit gehören, den der Server noch nicht kennt.
-const minDeleteSHA = 12
-
-// reportedContradicted sagt, ob eine gemeldete Zeile dem widerspricht, was der
-// Server über die Commits mit ihrem Präfix weiß: es gibt welche, und keiner passt
-// ins Fenster des Vorgangs. Eine Zeile ohne bekannten Commit widerspricht nicht.
-func reportedContradicted(q dbQuerier, project string, session int64, seq int, sha string) (bool, error) {
-	candidates, err := pullCommitsWithPrefix(q, project, sha)
-	if err != nil || len(candidates) == 0 {
-		return false, err
-	}
-	for _, c := range candidates {
-		ok, err := reportedWindowFits(q, session, seq, c.CommittedAt)
-		if err != nil || ok {
-			return false, err
-		}
-	}
-	return true, nil
-}
-
-// pullCommitsWithPrefix nennt die Commits der PRs des Projekts, deren SHA mit
-// dem Präfix beginnt, mit ihrer Zeit (ohne Zeit nicht: sie lassen sich nicht
-// prüfen).
-func pullCommitsWithPrefix(q dbQuerier, project, prefix string) ([]pullCommitAt, error) {
-	rows, err := q.Query(`SELECT DISTINCT sha, committed_at FROM git_pr_commits
-		WHERE project=? AND sha >= ? AND sha < ? AND committed_at != ''`, project, prefix, prefix+"g")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []pullCommitAt
-	for rows.Next() {
-		var sha, at string
-		if err := rows.Scan(&sha, &at); err != nil {
-			return nil, err
-		}
-		if t, ok := parseGitTime(at); ok {
-			out = append(out, pullCommitAt{SHA: sha, CommittedAt: t})
-		}
-	}
-	return out, rows.Err()
-}
-
-// reportedWindowFits sagt, ob die Zeit eines Commits im Fenster des Vorgangs
-// liegt, der seine SHA gemeldet hat. Ein Vorgang, den es nicht gibt, widerspricht
-// nicht.
-func reportedWindowFits(q dbQuerier, session int64, seq int, at time.Time) (bool, error) {
-	var started, ended string
-	err := q.QueryRow(`SELECT started_at, ended_at FROM session_git_events WHERE session_id=? AND seq=? AND kind='commit'`, session, seq).Scan(&started, &ended)
-	if errors.Is(err, sql.ErrNoRows) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	from, ok1 := parseGitTime(started)
-	to, ok2 := parseGitTime(ended)
-	if !ok1 || !ok2 {
-		return true, nil
-	}
-	return !at.Before(from.Add(-gitMatchSlack)) && !at.After(to.Add(gitMatchSlack)), nil
 }
 
 func uniqueStrings(in []string) []string {
@@ -654,310 +644,6 @@ func uniqueStrings(in []string) []string {
 		}
 	}
 	return out
-}
-
-// pullCommitAt ist ein Commit eines PRs mit seiner Zeit.
-type pullCommitAt struct {
-	SHA         string
-	CommittedAt time.Time
-}
-
-// matchEventWindow legt das Fenster eines Commit-Vorgangs über die Commits der
-// PRs des Projekts und entscheidet für jeden, ob er zu einer Session gehört.
-func matchEventWindow(tx *sql.Tx, project, startedAt, endedAt string) (int, error) {
-	from, ok1 := parseGitTime(startedAt)
-	to, ok2 := parseGitTime(endedAt)
-	if !ok1 || !ok2 {
-		return 0, nil
-	}
-	rows, err := tx.Query(`SELECT DISTINCT sha, committed_at FROM git_pr_commits
-		WHERE project=? AND committed_at >= ? AND committed_at <= ? AND committed_at != ''`,
-		project, from.Add(-gitMatchSlack).Format(time.RFC3339), to.Add(gitMatchSlack).Format(time.RFC3339))
-	if err != nil {
-		return 0, err
-	}
-	var commits []pullCommitAt
-	for rows.Next() {
-		var sha, at string
-		if err := rows.Scan(&sha, &at); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		if t, ok := parseGitTime(at); ok {
-			commits = append(commits, pullCommitAt{SHA: sha, CommittedAt: t})
-		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, err
-	}
-	rows.Close()
-	return resolveCommits(tx, project, commits)
-}
-
-// resolveCommits entscheidet je Commit, welche Session ihn erzeugt hat.
-func resolveCommits(tx *sql.Tx, project string, commits []pullCommitAt) (int, error) {
-	assigned := 0
-	for _, c := range commits {
-		n, err := resolveCommit(tx, project, c)
-		if err != nil {
-			return assigned, err
-		}
-		assigned += n
-	}
-	return assigned, nil
-}
-
-type windowEvent struct {
-	id       int64
-	session  int64
-	account  int64
-	seq      int
-	op       string
-	branch   string
-	reported bool
-}
-
-// resolveCommit ordnet einen Commit eines PRs der Session zu, deren Vorgang ihn
-// erzeugt haben kann, oder keiner. Der Zeitpunkt des Commits stammt von GitHub,
-// die Fenster aus den Transkripten der Sessions.
-//
-// Regeln:
-//  1. Eine SHA, die eine Session selbst gemeldet oder beobachtet hat (reported,
-//     observed) und deren Fenster die Commit-Zeit enthält, ist belegt; das
-//     Zeitfenster der anderen entscheidet dann nichts mehr.
-//  2. Vorgänge anderer Sessions, deren Fenster die Commit-Zeit enthält, treten in
-//     Wettbewerb. Ein Vorgang, dessen Branch dem Branch eines PRs widerspricht,
-//     der den Commit trägt, scheidet aus.
-//  3. Bleibt genau eine Session, bekommt sie den Commit. Bleiben mehrere, bekommt
-//     ihn die einzige, deren Branch zum PR passt; sonst niemand.
-//  4. Was einmal einem Konto zugeordnet ist, nimmt kein anderes Konto zurück:
-//     ein Vorgang eines fremden Kontos im selben Fenster ändert die Zuordnung
-//     nicht, und ein fremder Anspruch ersetzt sie nicht. Zwischen Sessions
-//     desselben Kontos (ein Orchestrator und sein Worker auf einem Branch) bleibt
-//     das Ergebnis unabhängig von der Reihenfolge, in der die Vorgänge eintrafen,
-//     und eine Zuordnung, die ein späterer zweiter Vorgang mehrdeutig macht, wird
-//     wieder zurückgenommen. Wer ein Fenster oder einen Branch erfindet, kann so
-//     fremde Arbeit nicht löschen; er kann nur seine eigene Zeile anlegen.
-//     Eine gemeldete SHA eines anderen Kontos legt ihre Zeile NEBEN die
-//     Zuordnung des Zeitfensters, sie ersetzt sie nicht: beide Quellen stehen mit
-//     ihrem Namen da (reported ist stärker als matched, das zeigt die Anzeige),
-//     und niemand kann mit einer Behauptung fremde Arbeit entfernen.
-func resolveCommit(tx *sql.Tx, project string, c pullCommitAt) (int, error) {
-	owner := instanceOwnerID(tx)
-	at := c.CommittedAt
-	loStr := at.Add(-gitMatchSlack).Format(time.RFC3339)
-	hiStr := at.Add(gitMatchSlack).Format(time.RFC3339)
-	// Regel 1: belegte Ansprüche.
-	var claimants []windowEvent
-	rows, err := tx.Query(`SELECT r.session_id, CASE WHEN s.account_id=0 THEN ? ELSE s.account_id END
-		FROM session_commits r JOIN sessions s ON s.id=r.session_id
-		JOIN session_git_events e ON e.session_id=r.session_id AND e.seq=r.chunk_seq AND e.kind='commit'
-		WHERE r.project=? AND r.source IN ('reported','observed') AND r.sha IN (SELECT value FROM json_each(?))
-		  AND e.started_at <= ? AND e.ended_at >= ?`, owner, project, jsonStrings(shaPrefixes(c.SHA)), hiStr, loStr)
-	if err != nil {
-		return 0, err
-	}
-	for rows.Next() {
-		var e windowEvent
-		if err := rows.Scan(&e.session, &e.account); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		claimants = append(claimants, e)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, err
-	}
-	rows.Close()
-	// Regel 2: Wettbewerb.
-	var events []windowEvent
-	if len(claimants) == 0 {
-		lo := at.Add(-gitMatchSlack).Add(-maxGitCallWindow).Format(time.RFC3339)
-		rows, err := tx.Query(`SELECT e.id, e.session_id, CASE WHEN s.account_id=0 THEN ? ELSE s.account_id END, e.seq, e.op,
-				COALESCE(NULLIF(e.branch,''), s.branch),
-				EXISTS(SELECT 1 FROM session_commits r WHERE r.session_id=e.session_id AND r.chunk_seq=e.seq AND r.source IN ('reported','observed'))
-			FROM session_git_events e JOIN sessions s ON s.id=e.session_id
-			WHERE e.project=? AND e.kind='commit' AND e.ok=1 AND e.started_at >= ? AND e.started_at <= ?
-			  AND e.ended_at >= ? ORDER BY e.started_at, e.id`, owner, project, lo, hiStr, loStr)
-		if err != nil {
-			return 0, err
-		}
-		for rows.Next() {
-			var e windowEvent
-			if err := rows.Scan(&e.id, &e.session, &e.account, &e.seq, &e.op, &e.branch, &e.reported); err != nil {
-				rows.Close()
-				return 0, err
-			}
-			// Ein Vorgang mit gemeldeter SHA hat seine Antwort; er nimmt weder
-			// teil noch blockiert er.
-			if !e.reported {
-				events = append(events, e)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		rows.Close()
-	}
-	winner, err := windowOwner(tx, project, c.SHA, events)
-	if err != nil {
-		return 0, err
-	}
-	// Regel 4: was schon zugeordnet ist.
-	rows, err = tx.Query(`SELECT r.session_id, CASE WHEN s.account_id=0 THEN ? ELSE s.account_id END, r.chunk_seq
-		FROM session_commits r JOIN sessions s ON s.id=r.session_id
-		WHERE r.project=? AND r.sha=? AND r.source='matched'`, owner, project, c.SHA)
-	if err != nil {
-		return 0, err
-	}
-	var held []windowEvent
-	for rows.Next() {
-		var h windowEvent
-		if err := rows.Scan(&h.session, &h.account, &h.seq); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		held = append(held, h)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, err
-	}
-	rows.Close()
-	involved := map[int64]bool{}
-	for _, e := range events {
-		involved[e.account] = true
-	}
-	for _, e := range claimants {
-		involved[e.account] = true
-	}
-	kept := false
-	for _, h := range held {
-		if winner != nil && h.session == winner.session {
-			continue
-		}
-		// Nimmt ein anderes Konto an der Entscheidung teil, bleibt die Zuordnung
-		// stehen (Regel 4).
-		foreign := winner != nil && winner.account != h.account
-		for acct := range involved {
-			foreign = foreign || acct != h.account
-		}
-		if foreign {
-			kept = true
-			continue
-		}
-		if _, err := tx.Exec(`DELETE FROM session_commits WHERE session_id=? AND sha=? AND source='matched'`, h.session, c.SHA); err != nil {
-			return 0, err
-		}
-		if _, err := tx.Exec(`UPDATE session_git_events SET resolved = EXISTS(
-				SELECT 1 FROM session_commits sc WHERE sc.session_id=session_git_events.session_id AND sc.chunk_seq=session_git_events.seq)
-			WHERE session_id=? AND seq=? AND kind='commit'`, h.session, h.seq); err != nil {
-			return 0, err
-		}
-	}
-	if winner == nil || kept {
-		return 0, nil
-	}
-	op := winner.op
-	if op == "" {
-		op = "commit"
-	}
-	added, err := putSessionCommit(tx, sessionCommit{
-		SessionID: winner.session, Project: project, SHA: c.SHA, Source: CommitSourceMatched,
-		Op: op, ChunkSeq: winner.seq, CommittedAt: c.CommittedAt.Format(time.RFC3339),
-	}, now())
-	if err != nil {
-		return 0, err
-	}
-	if _, err := tx.Exec(`UPDATE session_git_events SET resolved=1 WHERE id=?`, winner.id); err != nil {
-		return 0, err
-	}
-	if added {
-		return 1, nil
-	}
-	return 0, nil
-}
-
-// windowOwner wendet die Regeln 2 und 3 an.
-func windowOwner(tx *sql.Tx, project, sha string, events []windowEvent) (*windowEvent, error) {
-	if len(events) == 0 {
-		return nil, nil
-	}
-	// Die Branches der PRs, die den Commit tragen.
-	rows, err := tx.Query(`SELECT DISTINCT p.head_ref FROM git_pr_commits k JOIN git_pull_requests p ON p.project=k.project AND p.number=k.pr
-		WHERE k.project=? AND k.sha=?`, project, sha)
-	if err != nil {
-		return nil, err
-	}
-	heads := map[string]bool{}
-	for rows.Next() {
-		var h string
-		if err := rows.Scan(&h); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		heads[h] = true
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
-	var fitting, unknown []windowEvent
-	for _, e := range events {
-		switch {
-		case e.branch == "" || len(heads) == 0:
-			unknown = append(unknown, e)
-		case heads[e.branch]:
-			fitting = append(fitting, e)
-		}
-	}
-	// Mehrere Vorgänge derselben Session im selben Fenster sind kein Wettbewerb.
-	switch {
-	case len(sessionsOf(fitting)) == 1:
-		return &fitting[0], nil
-	case len(fitting) == 0 && len(sessionsOf(unknown)) == 1:
-		return &unknown[0], nil
-	}
-	return nil, nil
-}
-
-func sessionsOf(events []windowEvent) map[int64]bool {
-	out := map[int64]bool{}
-	for _, e := range events {
-		out[e.session] = true
-	}
-	return out
-}
-
-// matchPullCommits gleicht nach einem PR-Sync ab: kurze SHAs werden voll, und die
-// Commits des PRs werden gegen offene und frühere Vorgänge gelegt. Ein Fehler
-// hier darf den Sync nicht scheitern lassen (er läuft nach dessen Commit); er wird
-// protokolliert und beim nächsten Sync nachgeholt.
-func (s *Store) matchPullCommits(project string, commits []pullCommitAt) {
-	if len(commits) == 0 {
-		return
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		log.Printf("session git match for %s: %v", project, err)
-		return
-	}
-	defer tx.Rollback()
-	if err := settleReported(tx, project, commits); err != nil {
-		log.Printf("session git match for %s: %v", project, err)
-		return
-	}
-	if _, err := resolveCommits(tx, project, commits); err != nil {
-		log.Printf("session git match for %s: %v", project, err)
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		log.Printf("session git match for %s: %v", project, err)
-	}
 }
 
 // ------------------------------------------------------------------ Lesen
@@ -980,6 +666,10 @@ type GitSessionLink struct {
 	Commits int
 	// At ist der früheste Zeitpunkt, den die Zuordnung kennt.
 	At string
+	// Weak: die Verbindung beruht nur auf einem Zeitfenster (matched), und der
+	// Autor des Commits ließ sich nicht gegen das Konto der Session prüfen. Sie ist
+	// ein Kandidat, kein Beleg.
+	Weak bool
 }
 
 // linkRank ordnet die Stärke einer Verbindung: direkt vor Patch vor PR.
@@ -1003,6 +693,7 @@ func (l linkSet) add(n GitSessionLink) {
 		l[n.SessionID] = &c
 		return
 	}
+	cur.Weak = cur.Weak && n.Weak
 	cur.Sources = uniqueStrings(append(cur.Sources, n.Sources...))
 	cur.Commits += n.Commits
 	if cur.At == "" || (n.At != "" && n.At < cur.At) {
@@ -1050,6 +741,15 @@ func (s *Store) SessionsForPull(project string, number int64) ([]GitSessionLink,
 	return set.list(), nil
 }
 
+// sqlPullSessionCommits: die Commits eines PRs gegen die der Sessions; weak ist 1,
+// wenn alle Zeilen einer Quelle schwach sind.
+//
+// CROSS JOIN legt die Reihenfolge fest: von den Commits des PRs (Primärschlüssel) aus
+// je SHA in den Index von session_commits, nicht über alle Zeilen des Projekts.
+const sqlPullSessionCommits = `SELECT sc.session_id, sc.source, COUNT(DISTINCT sc.sha), MIN(COALESCE(NULLIF(sc.committed_at,''), sc.recorded_at)), MIN(sc.weak)
+	FROM git_pr_commits k CROSS JOIN session_commits sc ON sc.project=k.project AND sc.sha=k.sha
+	WHERE k.project=? AND k.pr=? GROUP BY sc.session_id, sc.source`
+
 func (s *Store) sessionsForPull(project string, number int64, via string, set linkSet) error {
 	// Ein "merged" gilt nur, solange der PR, wenn der Server ihn kennt, wirklich
 	// gemergt ist: die Meldung stammt vom Collector und ist eine Behauptung.
@@ -1072,9 +772,7 @@ func (s *Store) sessionsForPull(project string, number int64, via string, set li
 		return err
 	}
 	rows.Close()
-	rows, err = s.db.Query(`SELECT sc.session_id, sc.source, COUNT(DISTINCT sc.sha), MIN(COALESCE(NULLIF(sc.committed_at,''), sc.recorded_at))
-		FROM git_pr_commits k JOIN session_commits sc ON sc.project=k.project AND sc.sha=k.sha
-		WHERE k.project=? AND k.pr=? GROUP BY sc.session_id, sc.source`, project, number)
+	rows, err = s.db.Query(sqlPullSessionCommits, project, number)
 	if err != nil {
 		return err
 	}
@@ -1082,11 +780,11 @@ func (s *Store) sessionsForPull(project string, number int64, via string, set li
 	for rows.Next() {
 		var id int64
 		var src, at string
-		var n int
-		if err := rows.Scan(&id, &src, &n, &at); err != nil {
+		var n, weak int
+		if err := rows.Scan(&id, &src, &n, &at, &weak); err != nil {
 			return err
 		}
-		set.add(GitSessionLink{SessionID: id, Sources: []string{src}, Via: via, PR: number, Commits: n, At: at})
+		set.add(GitSessionLink{SessionID: id, Sources: []string{src}, Via: via, PR: number, Commits: n, At: at, Weak: weak == 1})
 	}
 	return rows.Err()
 }
@@ -1125,32 +823,40 @@ func (s *Store) SessionsForCommit(project, sha string) ([]GitSessionLink, error)
 	}
 	set := linkSet{}
 	// Stufe 1: die SHA selbst, auch in ihrer kurzen Fassung und, wenn sie kurz
-	// angefragt wird, in jeder vollen, die mit ihr beginnt.
-	rows, err := s.db.Query(`SELECT session_id, source, patch_id, COALESCE(NULLIF(committed_at,''), recorded_at), sha, chunk_seq
-		FROM session_commits WHERE project=? AND (sha IN (SELECT value FROM json_each(?)) OR (sha >= ? AND sha < ?))`,
-		project, jsonStrings(shaPrefixes(sha)), sha, sha+"g")
-	if err != nil {
-		return nil, err
-	}
+	// angefragt wird, in jeder vollen, die mit ihr beginnt. Zwei Abfragen statt
+	// eines OR: jede liest den Index (project, sha), das OR las alle Zeilen.
 	type directRow struct {
 		id                  int64
 		src, patch, at, sha string
 		seq                 int
+		weak                bool
 	}
 	var found []directRow
-	for rows.Next() {
-		var r directRow
-		if err := rows.Scan(&r.id, &r.src, &r.patch, &r.at, &r.sha, &r.seq); err != nil {
+	for _, q := range []struct {
+		query string
+		args  []any
+	}{
+		{sqlSessionCommitsExact, []any{project, jsonStrings(shaPrefixes(sha))}},
+		{sqlSessionCommitsLonger, []any{project, sha, sha + "g"}},
+	} {
+		rows, err := s.db.Query(q.query, q.args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var r directRow
+			if err := rows.Scan(&r.id, &r.src, &r.patch, &r.at, &r.sha, &r.seq, &r.weak); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			found = append(found, r)
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		found = append(found, r)
-	}
-	if err := rows.Err(); err != nil {
 		rows.Close()
-		return nil, err
 	}
-	rows.Close()
 	var patches []string
 	for _, r := range found {
 		// Eine gemeldete kurze SHA, der die bekannten Commits mit diesem Präfix
@@ -1164,7 +870,7 @@ func (s *Store) SessionsForCommit(project, sha string) ([]GitSessionLink, error)
 				continue
 			}
 		}
-		set.add(GitSessionLink{SessionID: r.id, Sources: []string{r.src}, Commits: 1, At: r.at})
+		set.add(GitSessionLink{SessionID: r.id, Sources: []string{r.src}, Commits: 1, At: r.at, Weak: r.weak})
 		if r.patch != "" {
 			patches = append(patches, r.patch)
 		}
@@ -1227,17 +933,52 @@ func uniqueInts(in []int64) []int64 {
 	return out
 }
 
+// Die Abfragen, die eine SHA gegen einen Index legen. Je Tabelle zwei: die SHA
+// und ihre kürzeren Fassungen (IN über die Präfixe), und die längeren, die mit ihr
+// beginnen (Bereich). Ein OR aus beiden las alle Zeilen des Projekts; ein Test
+// prüft die Pläne.
+const (
+	sqlSessionCommitsCols   = `SELECT session_id, source, patch_id, COALESCE(NULLIF(committed_at,''), recorded_at), sha, chunk_seq, weak FROM session_commits`
+	sqlSessionCommitsExact  = sqlSessionCommitsCols + ` WHERE project=? AND sha IN (SELECT value FROM json_each(?))`
+	sqlSessionCommitsLonger = sqlSessionCommitsCols + ` WHERE project=? AND sha > ? AND sha < ?`
+
+	sqlPullsMergeExact  = `SELECT number FROM git_pull_requests WHERE project=? AND merge_sha IN (SELECT value FROM json_each(?))`
+	sqlPullsMergeLonger = `SELECT number FROM git_pull_requests WHERE project=? AND merge_sha > ? AND merge_sha < ?`
+
+	// Von der Liste der Präfixe aus: ein Nachschlagen im Index (project, sha) je Präfix.
+	sqlPullsCarryExact  = `SELECT DISTINCT k.pr FROM json_each(?) j CROSS JOIN git_pr_commits k ON k.project=? AND k.sha=j.value`
+	sqlPullsCarryLonger = `SELECT DISTINCT pr FROM git_pr_commits WHERE project=? AND sha > ? AND sha < ?`
+)
+
 // pullsWithMerge nennt die PRs, deren Merge-Commit die SHA ist (voll oder als
 // Präfix in beiden Richtungen, denn merge_sha ist nicht immer voll).
 func (s *Store) pullsWithMerge(project, sha string) ([]int64, error) {
-	return s.pullNumbers(`SELECT number FROM git_pull_requests WHERE project=? AND merge_sha != ''
-		AND (merge_sha IN (SELECT value FROM json_each(?)) OR (merge_sha >= ? AND merge_sha < ?))`,
-		project, jsonStrings(shaPrefixes(sha)), sha, sha+"g")
+	return s.pullsByPrefix(sqlPullsMergeExact, sqlPullsMergeLonger, project, sha)
 }
 
 func (s *Store) pullsCarrying(project, sha string) ([]int64, error) {
-	return s.pullNumbers(`SELECT DISTINCT pr FROM git_pr_commits WHERE project=? AND (sha IN (SELECT value FROM json_each(?)) OR (sha >= ? AND sha < ?))`,
-		project, jsonStrings(shaPrefixes(sha)), sha, sha+"g")
+	return s.pullsByPrefix(sqlPullsCarryExact, sqlPullsCarryLonger, project, sha)
+}
+
+func (s *Store) pullsByPrefix(exact, longer, project, sha string) ([]int64, error) {
+	a, err := s.pullNumbers(exact, exactArgs(exact, project, sha)...)
+	if err != nil {
+		return nil, err
+	}
+	b, err := s.pullNumbers(longer, project, sha, sha+"g")
+	if err != nil {
+		return nil, err
+	}
+	return append(a, b...), nil
+}
+
+// exactArgs: die Argumente der Abfrage nach der SHA und ihren kürzeren Fassungen;
+// bei sqlPullsCarryExact steht die Liste vor dem Projekt.
+func exactArgs(query, project, sha string) []any {
+	if query == sqlPullsCarryExact {
+		return []any{jsonStrings(shaPrefixes(sha)), project}
+	}
+	return []any{project, jsonStrings(shaPrefixes(sha))}
 }
 
 func (s *Store) pullNumbers(query string, args ...any) ([]int64, error) {
@@ -1343,6 +1084,9 @@ type GitSessionLinkView struct {
 	Via     string   `json:"via,omitempty"`
 	PR      int64    `json:"pr,omitempty"`
 	Commits int      `json:"commits,omitempty"`
+	// Weak: die Verbindung beruht nur auf einem Zeitfenster, und der Autor des
+	// Commits ließ sich nicht gegen die Person prüfen. Ein Kandidat, kein Beleg.
+	Weak bool `json:"weak,omitempty"`
 }
 
 // GitSessionLinks ist, was ein Betrachter zu einem Commit oder PR von den Sessions
@@ -1420,7 +1164,7 @@ func shapeGitLinks(st *Store, project string, links []GitSessionLink, canTranscr
 		if !ok || sess.Scope.Project != project {
 			continue
 		}
-		v := GitSessionLinkView{Sources: l.Sources, Via: l.Via, PR: l.PR, Commits: l.Commits}
+		v := GitSessionLinkView{Sources: l.Sources, Via: l.Via, PR: l.PR, Commits: l.Commits, Weak: l.Weak}
 		switch {
 		case canTranscript(sess):
 			v.Level, v.SessionRef, v.Title, v.Harness = GitSessionLinkFull, sess.PublicID, sess.Title, sess.Harness

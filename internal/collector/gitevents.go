@@ -65,6 +65,10 @@ type gitScan struct {
 	pending             map[string]*pendingGitCall
 	order               []string
 	queue               []store.SessionGitEvent
+	// holdUntil und holdFor: bis wann nicht erneut gefragt wird, nachdem der Server
+	// die Vorgänge aus einem Grund abgelehnt hat, der sich nicht von selbst ändert.
+	holdUntil time.Time
+	holdFor   time.Duration
 }
 
 func newGitScan(harness, externalID string) *gitScan {
@@ -327,8 +331,28 @@ var gitEventsUnsupported atomic.Bool
 
 var gitEventsWarn = &limitedLog{interval: time.Minute, now: time.Now, out: func(s string) { log.Print(s) }}
 
+// Wie send mit einer Antwort des Servers umgeht.
+const (
+	// maxGitSendAttempts: so viele Anfragen höchstens je send, auch wenn ein Stapel
+	// halbiert werden muss, um den unbrauchbaren Vorgang zu finden. Was darüber
+	// hinausgeht, bleibt in der Warteschlange und geht mit dem nächsten Lauf.
+	maxGitSendAttempts = 40
+	// gitHoldMin und gitHoldMax: nach einer Antwort, die sich nicht von selbst ändert
+	// (Recht, Maschinenbindung, Tagesgrenze), fragt der Collector erst nach einer Pause
+	// wieder, die sich bis zur Obergrenze verdoppelt.
+	gitHoldMin = time.Minute
+	gitHoldMax = time.Hour
+)
+
 // send meldet die wartenden Vorgänge. Ein Fehler hält das Archivieren nicht auf:
 // die Vorgänge bleiben in der Warteschlange und gehen mit dem nächsten Lauf.
+//
+// Verworfen wird nie mehr als ein Vorgang, der selbst unbrauchbar ist: antwortet
+// der Server mit 400, 413 oder 422, wird der Stapel halbiert, bis der Vorgang
+// einzeln feststeht; nur der wird mit seinem Grund protokolliert und verworfen. Jede
+// andere Ablehnung (401, 403, 409, 429 …) ändert sich nicht durch das Ändern des
+// Stapels und trifft die Session als Ganzes: die Vorgänge bleiben zurückgestellt, die
+// Meldung wird mit wachsender Pause wiederholt, und der Grund steht im Protokoll.
 func (g *gitScan) send(up Uploader) {
 	if len(g.queue) == 0 {
 		return
@@ -338,38 +362,72 @@ func (g *gitScan) send(up Uploader) {
 		g.queue = g.queue[:0]
 		return
 	}
-	for len(g.queue) > 0 {
-		n := min(len(g.queue), store.MaxSessionGitEvents)
-		_, err := rec.RecordSessionGitEvents(g.queue[:n])
-		if err != nil {
-			if errors.Is(err, store.ErrSessionGitEventsUnsupported) {
-				gitEventsUnsupported.Store(true)
-				g.queue = g.queue[:0]
-				gitEventsWarn.printf("this server does not take git events of sessions yet; they are not sent until ctx watch restarts")
-				return
+	if time.Now().Before(g.holdUntil) {
+		return
+	}
+	size := min(len(g.queue), store.MaxSessionGitEvents)
+	for attempts := 0; len(g.queue) > 0; attempts++ {
+		if attempts >= maxGitSendAttempts {
+			gitEventsWarn.printf("git events of session %s: still looking for the event the server refuses; %d wait for the next run", g.externalID, len(g.queue))
+			return
+		}
+		n := min(size, len(g.queue))
+		res, err := rec.RecordSessionGitEvents(g.queue[:n])
+		if err == nil {
+			g.queue = g.queue[n:]
+			g.holdFor = 0
+			if res.Rejected > 0 || res.Capped > 0 {
+				gitEventsWarn.printf("git events of session %s: the server dropped %d invalid (%s) and %d over its limits", g.externalID, res.Rejected, res.Reason, res.Capped)
 			}
-			if isRefused(err) {
-				// Eine Ablehnung (fremde oder unbekannte Session, ungültiger Wert)
-				// ändert sich nicht durch Wiederholen.
-				g.queue = g.queue[n:]
-				gitEventsWarn.printf("git events of session %s were refused: %v", g.externalID, err)
+			size = min(len(g.queue), store.MaxSessionGitEvents)
+			continue
+		}
+		if errors.Is(err, store.ErrSessionGitEventsUnsupported) {
+			gitEventsUnsupported.Store(true)
+			g.queue = g.queue[:0]
+			gitEventsWarn.printf("this server does not take git events of sessions yet; they are not sent until ctx watch restarts")
+			return
+		}
+		switch status := httpStatusOf(err); {
+		case status == 400 || status == 413 || status == 422:
+			if n > 1 {
+				size = (n + 1) / 2
 				continue
 			}
+			// Der Vorgang allein ist unbrauchbar.
+			ev := g.queue[0]
+			g.queue = g.queue[1:]
+			gitEventsWarn.printf("git event %s at line %d of session %s was refused and dropped: %v", ev.Kind, ev.Seq, g.externalID, err)
+			size = min(len(g.queue), store.MaxSessionGitEvents)
+		case status >= 400 && status < 500:
+			g.pause()
+			gitEventsWarn.printf("git events of session %s were refused (%d) and wait: %v", g.externalID, status, err)
+			return
+		default:
 			gitEventsWarn.printf("git events of session %s not recorded: %v", g.externalID, err)
 			return
 		}
-		g.queue = g.queue[n:]
 	}
 }
 
-// isRefused sagt, ob der Server den Stapel ablehnt (4xx außer 408 und 429).
-func isRefused(err error) bool {
-	var h interface{ HTTPStatus() int }
-	if !errors.As(err, &h) {
-		return false
+// pause legt die Pause fest, nach der send wieder fragt.
+func (g *gitScan) pause() {
+	switch {
+	case g.holdFor <= 0:
+		g.holdFor = gitHoldMin
+	case g.holdFor < gitHoldMax:
+		g.holdFor = min(2*g.holdFor, gitHoldMax)
 	}
-	s := h.HTTPStatus()
-	return s >= 400 && s < 500 && s != 408 && s != 429
+	g.holdUntil = time.Now().Add(g.holdFor)
+}
+
+// httpStatusOf liest den Statuscode eines Fehlers der Route, 0 ohne einen.
+func httpStatusOf(err error) int {
+	var h interface{ HTTPStatus() int }
+	if errors.As(err, &h) {
+		return h.HTTPStatus()
+	}
+	return 0
 }
 
 // repoRemote macht aus dem Wert von gh -R ("owner/name" oder "host/owner/name")

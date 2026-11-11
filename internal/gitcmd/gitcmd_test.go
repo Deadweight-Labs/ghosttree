@@ -178,3 +178,70 @@ func TestPushedBranchAndPullURLs(t *testing.T) {
 		}
 	}
 }
+
+// Eine Commit-Nachricht in "$(cat <<'EOF' … EOF)" ist Text, auch mit ungeradem
+// Anführungszeichen; früher endete das Wort beim ersten ", und Zeilen der Nachricht
+// wie "git push" galten als Befehl.
+func TestParseReadsACommandSubstitutionInsideDoubleQuotesAsText(t *testing.T) {
+	cases := []struct {
+		name, cmd string
+		want      []string
+	}{
+		{"heredoc message with an odd double quote",
+			"git commit -q -m \"$(cat <<'EOF'\nfix: say \"hi\n\ngit push origin main\nEOF\n)\"",
+			[]string{"commit"}},
+		{"heredoc message with an odd single quote",
+			"git commit -q -m \"$(cat <<'EOF'\nfix: it's broken, don't panic\n\ngit push origin main\ngh pr create --title x\nEOF\n)\"",
+			[]string{"commit"}},
+		{"the command after the message is still read",
+			"git add -A && git commit -q -m \"$(cat <<'EOF'\nfix: it's\n\ngit push\nEOF\n)\" && git push -u origin HEAD",
+			[]string{"commit", "push"}},
+		{"unquoted delimiter and tab-stripped body",
+			"git commit -q -m \"$(cat <<-EOF\n\tit's \"half\n\tgit push\n\tEOF\n)\"\ngit push",
+			[]string{"commit", "push"}},
+		{"nested substitution and quotes",
+			`git commit -q -m "a $(echo "b $(date +%s) c") d" && git push`,
+			[]string{"commit", "push"}},
+		{"parenthesis and quote inside single quotes",
+			`git commit -q -m "$(printf '%s' ') " git push')"`,
+			[]string{"commit"}},
+		{"escaped quote after the substitution",
+			`git commit -q -m "$(date) \"quoted\"" && git push`,
+			[]string{"commit", "push"}},
+		{"a substitution that never closes swallows the rest",
+			"git commit -q -m \"$(cat <<'EOF'\nit's\ngit push\n",
+			[]string{"commit"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := kinds(Parse(tc.cmd)); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("%q: got %v, want %v", tc.cmd, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseSeesACallBehindIfWhileAndUntil(t *testing.T) {
+	cases := []struct {
+		name, cmd string
+		want      []string
+	}{
+		{"if", `if git commit -q -m x; then echo done; fi`, []string{"commit"}},
+		{"if and then", `if git diff --quiet; then echo clean; else git commit -qam x; fi`, []string{"commit"}},
+		{"then on its own line", "if true; then\n  git commit -q -m x\n  git push\nfi", []string{"commit", "push"}},
+		{"negated if", `if ! git push; then echo failed; fi`, []string{"push"}},
+		{"while with a retry", `while ! git push origin HEAD; do sleep 2; done`, []string{"push"}},
+		{"until", `until git push; do sleep 2; done`, []string{"push"}},
+		{"do", `for i in 1 2; do git commit -q --allow-empty -m x; done`, []string{"commit"}},
+		{"elif", `if false; then :; elif git commit -q -m x; then :; fi`, []string{"commit"}},
+		{"a condition that is no git call", `if git diff --quiet; then echo clean; fi`, nil},
+		{"the word as an argument", `echo if git commit`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := kinds(Parse(tc.cmd)); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("%q: got %v, want %v", tc.cmd, got, tc.want)
+			}
+		})
+	}
+}

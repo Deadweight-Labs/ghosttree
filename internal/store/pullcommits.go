@@ -160,7 +160,7 @@ func (s *Store) RecordPullCommits(c PullCommitsChange) (PullCommitsResult, error
 		}
 		res.Recorded++
 		if t, ok := parseGitTime(committed); ok {
-			timed = append(timed, pullCommitAt{SHA: sha, CommittedAt: t})
+			timed = append(timed, pullCommitAt{SHA: sha, CommittedAt: t, Author: cleanLogin(k.Author)})
 		}
 	}
 	// Was wieder im PR ist, zählt nicht als abgefallen.

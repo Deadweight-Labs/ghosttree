@@ -83,10 +83,14 @@ func TestSessionGitEventsAreAcceptedOnlyForTheOwnersSessions(t *testing.T) {
 	if code, _ := f.callNoToken(t, "POST", "/api/session-git-events", gitEvents(miaCommit())); code != 401 {
 		t.Fatalf("anonymous: %d", code)
 	}
-	// Ungültiges ist ein 400, kein 500.
+	// Ein ungültiger Vorgang wird einzeln verworfen (200, Rejected), ein Körper, der
+	// kein JSON-Objekt ist, ist ein 400, kein 500.
 	bad := miaCommit()
 	bad.Kind = "reset"
-	f.expect(t, "mia", 400, "POST", "/api/session-git-events", gitEvents(bad))
+	out = f.expect(t, "mia", 200, "POST", "/api/session-git-events", gitEvents(bad))
+	if got := decode[store.SessionGitResult](t, out); got.Rejected != 1 || got.Recorded != 0 {
+		t.Fatalf("invalid: %+v", got)
+	}
 	f.expect(t, "mia", 400, "POST", "/api/session-git-events", "not an object")
 }
 
