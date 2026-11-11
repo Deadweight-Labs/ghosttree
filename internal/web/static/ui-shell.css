@@ -28,6 +28,19 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .gh-header .hsearch:focus-within { width: 400px; }
 .gh-header .hsearch .i { color: var(--fg-muted); }
 .gh-header .hsearch input::-webkit-search-cancel-button { display: none; }
+/* The list under a search field (ui-suggest.js): the object a number names, the qualifier being typed, the search for all of it. */
+.sg-host { position: relative; }
+.sg-list { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; box-sizing: border-box; width: 100%; min-width: 320px; max-width: calc(100vw - 32px); margin: 0; padding: 4px; list-style: none; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-pop); }
+.sg-list[hidden] { display: none; }
+.sg-list .sg { display: flex; align-items: center; gap: 8px; min-width: 0; border-radius: 6px; cursor: pointer; }
+.sg-list .sg[aria-selected="true"], .sg-list .sg:hover { background: var(--accent-subtle); }
+.sg-list .sg-a { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; color: var(--fg-default); text-decoration: none; }
+.sg-list .sg-q { justify-content: space-between; padding: 6px 8px; }
+.sg-list .sg-k { font: 13px/20px var(--ui-mono); color: var(--fg-default); }
+.sg-list .sg-l { margin-left: auto; padding-left: 12px; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+.sg-list .sg-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-list .hm { display: inline-flex; color: var(--fg-muted); }
+.sg-list .sg + .sg-all { margin-top: 4px; border-top: 1px solid var(--border-muted); border-radius: 0 0 6px 6px; }
 .gh-header .hright { display: flex; align-items: center; gap: 8px; }
 .gh-header .iconbtn { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; color: var(--fg-muted); background: var(--btn-bg); border: 1px solid var(--btn-border); border-radius: 6px; cursor: pointer; }
 .gh-header .iconbtn:hover { background: var(--btn-hover); text-decoration: none; }
@@ -144,6 +157,8 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
   .gh-header .hsearch:focus-within { position: absolute; z-index: 5; top: 12px; left: 16px; right: 16px; justify-content: flex-start; gap: 8px; width: auto; padding: 0 12px; background: var(--canvas-default); border-color: var(--accent-emphasis); cursor: text; }
   .gh-header .hsearch:focus-within input { flex: 1; width: auto; }
   .gh-header .hsearch kbd { display: none; }
+  .gh-header .hsf.sg-host { position: static; }
+  .gh-header .sg-list { position: fixed; top: 64px; left: 16px; right: 16px; width: auto; min-width: 0; max-width: none; }
   .gh-header .hcrumb { flex: 1 1 0; }
   .gh-header .hplus { display: none; }
   .gh-header .hcrumb .org, .gh-header .hcrumb .org + .sl { display: none; }

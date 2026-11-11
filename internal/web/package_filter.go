@@ -79,7 +79,7 @@ func packageMenu(l lang, q string, current int64, list []requestdomain.PackageSu
 	if len(items) == 0 {
 		return issueMenu{}, false
 	}
-	m := issueMenu{Label: l.msg("filter.package"), Active: current != 0}
-	m.Items = append([]issueMenuItem{{Label: l.msg("filter.any_package"), Href: href(withQualifier(q, dropKey("package"), "")), Current: current == 0}}, items...)
+	m := issueMenu{Label: l.msg("issues.filter.package"), Active: current != 0}
+	m.Items = append([]issueMenuItem{{Label: l.msg("issues.filter.any_package"), Href: href(withQualifier(q, dropKey("package"), "")), Current: current == 0}}, items...)
 	return m, true
 }

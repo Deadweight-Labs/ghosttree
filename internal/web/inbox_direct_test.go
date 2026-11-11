@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -38,7 +39,7 @@ func TestInboxDirectSectionShowsTheMessageAndNoDirectLabel(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/inbox")
-	for _, want := range []string{"Direct to you", "Do you have a minute for the roles question?", `action="/ui/inbox/reply"`, `name="room" value="` + room + `"`, `data-cat="direkt `, "Reply to alice"} {
+	for _, want := range []string{"Do you have a minute for the roles question?", `action="/ui/inbox/reply"`, `name="room" value="` + room + `"`, `data-cat="direkt `, "Reply to alice"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("inbox lacks %q", want)
 		}
@@ -90,8 +91,11 @@ func TestInboxFilterNarrowsAndCountsStayWhole(t *testing.T) {
 	if !strings.Contains(direct, "Only a direct note") || !strings.Contains(direct, `data-f="direkt" class="on"`) {
 		t.Error("the direct filter hides the direct message")
 	}
-	if strings.Contains(direct, `id="waiting"`) || strings.Contains(direct, `id="mentioned"`) {
-		t.Error("the direct filter keeps the other sections")
+	if strings.Contains(direct, `id="waiting"`) {
+		t.Error("the direct filter keeps the section of what waits")
+	}
+	if strings.Contains(direct, `id="direct"`) {
+		t.Error("a direct message has a section of its own again")
 	}
 	_, tasks := fetchPage(t, e.Member, e.Base+"/ui/inbox?f=aufgaben")
 	if strings.Contains(tasks, "Only a direct note") || !strings.Contains(tasks, "Nothing matches this filter.") {
@@ -189,5 +193,36 @@ func TestInboxGuestAndPastedTokenGetNoReplyForms(t *testing.T) {
 	_, guest := fetchPage(t, e.Guest, e.Base+"/ui/inbox")
 	if strings.Contains(guest, "Private note") {
 		t.Error("a guest sees a direct message of two others")
+	}
+}
+
+// REQ-599 AC-7: the inbox has two sections, what waits for the person and what
+// was said to them; a direct message is said to them and stands in the second,
+// beside the mentions in rooms. What nobody read for two weeks falls out of it.
+func TestInboxHasOnlyWhatWaitsAndWhatWasSaidAndOldSayingsFallOut(t *testing.T) {
+	e := ovEnv(t)
+	room, alice := inboxDM(t, e)
+	if _, err := alice.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "dm-old", Body: "A note from the past"}); err != nil {
+		t.Fatal(err)
+	}
+	_, page := fetchPage(t, e.Member, e.Base+"/ui/inbox")
+	if !strings.Contains(page, `id="mentioned"`) || !strings.Contains(page, "A note from the past") {
+		t.Errorf("the direct message is not in the section of what was said:\n%s", page)
+	}
+	if strings.Contains(page, `id="direct"`) || strings.Contains(page, "Direct to you") {
+		t.Error("a direct message has a section of its own")
+	}
+	if n := strings.Count(page, `<section class="box" id="`); n > 2 {
+		t.Errorf("the inbox has %d sections, want at most two", n)
+	}
+
+	atNow(t, time.Now().Add((inboxMentionDays-2)*24*time.Hour))
+	if _, page := fetchPage(t, e.Member, e.Base+"/ui/inbox"); !strings.Contains(page, "A note from the past") {
+		t.Error("a message that is not yet two weeks old fell out")
+	}
+	atNow(t, time.Now().Add((inboxMentionDays+2)*24*time.Hour))
+	_, late := fetchPage(t, e.Member, e.Base+"/ui/inbox")
+	if strings.Contains(late, "A note from the past") {
+		t.Error("a message nobody read for more than two weeks is still in the inbox")
 	}
 }

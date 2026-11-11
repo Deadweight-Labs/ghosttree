@@ -133,7 +133,6 @@ type inboxSection struct {
 type inboxView struct {
 	Waiting, Mentioned []inboxRow
 	WaitingBox         inboxSection
-	DirectBox          inboxSection
 	MentionedBox       inboxSection
 	Direct             []inboxRow
 	// Filters is the chip row, Filter the key of the one that is on.
@@ -424,6 +423,18 @@ func (a *app) inboxDirect(r *http.Request) ([]inboxRow, error) {
 	return rows, nil
 }
 
+// inboxMentionDays is how long what was said stays in the inbox when nobody
+// reads it: the room keeps it, the inbox is for what is current.
+const inboxMentionDays = 14
+
+// inboxRecent keeps the rows of what was said that are not older than
+// inboxMentionDays; a row without a time stays.
+func inboxRecent(rows []inboxRow, now time.Time) []inboxRow {
+	return slices.DeleteFunc(rows, func(row inboxRow) bool {
+		return !row.at.IsZero() && now.Sub(row.at) > inboxMentionDays*24*time.Hour
+	})
+}
+
 // sortInboxRows puts the newest row first.
 func sortInboxRows(rows []inboxRow) {
 	slices.SortStableFunc(rows, func(x, y inboxRow) int { return y.at.Compare(x.at) })
@@ -592,11 +603,14 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 		}
 		v.Filters = append(v.Filters, inboxFilterChip{Key: key, Label: inboxFilterKeys[key], Href: href, Count: counts[key], Current: key == v.Filter})
 	}
-	waitingRows, directRows, mentionedRows := inboxKeep(v.Waiting, v.Filter), inboxKeep(v.Direct, v.Filter), inboxKeep(v.Mentioned, v.Filter)
+	// Two sections only (REQ-599 AC-7): what waits for the person, and what was
+	// said to them, in a room or directly, newest first. What was said long ago
+	// and never read falls out by itself; it stays in its room.
+	waitingRows, mentionedRows := inboxKeep(v.Waiting, v.Filter), inboxKeep(inboxRecent(append(slices.Clone(v.Mentioned), v.Direct...), now), v.Filter)
+	sortInboxRows(mentionedRows)
 	v.WaitingBox = inboxSection{ID: "waiting", Title: "inbox.waiting", None: "inbox.none", Rows: waitingRows, Warn: true}
-	v.DirectBox = inboxSection{ID: "direct", Title: "inbox.direct", None: "inbox.none", Rows: directRows}
 	v.MentionedBox = inboxSection{ID: "mentioned", Title: "inbox.mentioned", None: "inbox.none", Rows: mentionedRows}
-	v.FilteredEmpty = !v.Empty && len(waitingRows)+len(directRows)+len(mentionedRows) == 0
+	v.FilteredEmpty = !v.Empty && len(waitingRows)+len(mentionedRows) == 0
 	if code := r.URL.Query().Get("fail"); code != "" {
 		v.Result = &requestResult{Text: l.msg(inboxFailKey(code)), Kind: "failed", Fail: true}
 	}

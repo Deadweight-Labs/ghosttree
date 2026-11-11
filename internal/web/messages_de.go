@@ -1319,7 +1319,6 @@ var messagesDE = map[string]string{
 	"ui.cmd.mac":                    "macOS",
 	"ui.cmd.linux":                  "Linux",
 	// Posteingang: Filter, Direkt an dich, Antworten (REQ-599, Teil A)
-	"inbox.direct":            "Direkt an dich",
 	"inbox.filters":           "Filter",
 	"inbox.filter.alle":       "Alle",
 	"inbox.filter.direkt":     "Direkt",
