@@ -31,6 +31,9 @@ type State struct {
 	// idents hält die Herkunft je Transkript im Speicher, damit eine aktive
 	// Session nicht bei jeder neuen Zeile Kopfzeilen liest und git startet.
 	idents map[string]identEntry
+	// gitScans hält je Transkript die Git-Aufrufe, die auf ihr Ergebnis warten
+	// (nur im Speicher, siehe gitScan).
+	gitScans map[string]*gitScan
 	// saved ist der zuletzt geschriebene Inhalt; unverändert wird nicht geschrieben.
 	saved []byte
 	// lastWrite und dirty bündeln das Speichern während einer aktiven Session
@@ -64,6 +67,24 @@ func (st *State) identity(path string, compute func() touchIdentity) touchIdenti
 	st.idents[path] = identEntry{ident: id, at: backoffNow()}
 	st.mu.Unlock()
 	return id
+}
+
+// gitScanner gibt den Leser der Git-Vorgänge dieses Transkripts zurück. Die
+// Zuordnung zu einer Session kann sich ändern (späte Metadaten); der Leser
+// behält dann seine wartenden Aufrufe und übernimmt die neue Kennung.
+func (st *State) gitScanner(path, harness, externalID string) *gitScan {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.gitScans == nil {
+		st.gitScans = map[string]*gitScan{}
+	}
+	g, ok := st.gitScans[path]
+	if !ok {
+		g = newGitScan(harness, externalID)
+		st.gitScans[path] = g
+	}
+	g.harness, g.externalID = harness, externalID
+	return g
 }
 
 func DefaultStatePath() string {

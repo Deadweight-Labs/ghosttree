@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS git_pr_commits(
   recorded_at TEXT NOT NULL,
   PRIMARY KEY(project, pr, sha)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS git_pr_commits_sha ON git_pr_commits(project, sha);
+CREATE INDEX IF NOT EXISTS git_pr_commits_time ON git_pr_commits(project, committed_at);
 `
 
 // MaxPullCommits ist, wie viele Commits je PR gespeichert werden. GitHub liefert
@@ -125,6 +126,7 @@ func (s *Store) RecordPullCommits(c PullCommitsChange) (PullCommitsResult, error
 		return PullCommitsResult{}, err
 	}
 	res := PullCommitsResult{Applied: true}
+	var timed []pullCommitAt
 	ts := now()
 	if _, err := tx.Exec(`UPDATE git_pr_commits SET in_pr=0 WHERE project=? AND pr=? AND in_pr=1`, remote, c.Number); err != nil {
 		return res, err
@@ -151,6 +153,9 @@ func (s *Store) RecordPullCommits(c PullCommitsChange) (PullCommitsResult, error
 			return res, err
 		}
 		res.Recorded++
+		if t, ok := parseGitTime(committed); ok {
+			timed = append(timed, pullCommitAt{SHA: sha, CommittedAt: t})
+		}
 	}
 	// Was wieder im PR ist, zählt nicht als abgefallen.
 	var stillOut int64
@@ -158,7 +163,14 @@ func (s *Store) RecordPullCommits(c PullCommitsChange) (PullCommitsResult, error
 		return res, err
 	}
 	res.Dropped = int(stillOut)
-	return res, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return res, err
+	}
+	// Neue Commits können ein offenes Zeitfenster einer Session lösen (IDEA-31).
+	// Das läuft nach dem Commit des Syncs: ein Fehler dort lässt ihn nicht
+	// scheitern.
+	s.matchPullCommits(remote, timed)
+	return res, nil
 }
 
 func firstLine(s string) string {

@@ -121,9 +121,13 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 	var touches []store.PathActivity
 	var proofs []ControlProof
 	ident := st.identity(path, func() touchIdentity { return sessionIdentity(path, harness, machine) })
+	var gits *gitScan
+	if _, ok := up.(GitEventRecorder); ok && !gitEventsUnsupported.Load() {
+		gits = st.gitScanner(path, harness, ident.externalID)
+	}
 	seq := fs.Seq
 	flush := func() error {
-		if len(batch) == 0 && offset == fs.Offset && len(touches) == 0 && len(proofs) == 0 {
+		if len(batch) == 0 && offset == fs.Offset && len(touches) == 0 && len(proofs) == 0 && (gits == nil || len(gits.queue) == 0) {
 			return nil
 		}
 		// Ohne Stapel (nur weggelassene oder leere Zeilen) wandert der
@@ -156,6 +160,12 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 			}
 		}
 		touches = touches[:0]
+		// Git-Vorgänge gehen nach dem bestätigten Upload der Zeilen hinaus: der
+		// Server kennt die Session dann. Wie die Aktivität halten sie das
+		// Archivieren nicht auf.
+		if gits != nil {
+			gits.send(up)
+		}
 		fs.Offset = offset
 		fs.Seq = seq
 		batch = batch[:0]
@@ -177,6 +187,9 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 		// Aktivität und Kontrollbeweis lesen die Originalzeile, vor dem
 		// Schlanken.
 		touches = append(touches, activityFrom(ident, trimmed)...)
+		if gits != nil {
+			gits.line(seq, trimmed)
+		}
 		if harness != "codex" {
 			if p, ok := ControlProofFrom([]byte(trimmed)); ok {
 				proofs = append(proofs, p)

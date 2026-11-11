@@ -374,6 +374,28 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   `GET /api/commits/{sha}` (what was said at that commit), `GET /api/pulls/{n}/commits`,
   `GET /api/paths/commits` (commits whose entries were written while working on a
   path), `commit_get`. Entries count and show only as far as the viewer may read them.
+- Sessions are tied to the commits and pull requests they produced, without the
+  agent doing anything (IDEA-31, first part; display and `request get` follow).
+  The collector (`ctx watch`) reads the shell calls of Claude Code and Codex
+  transcripts for `git commit` (also `merge`, `rebase`, `cherry-pick`, `am`,
+  `revert`), `git push`, `gh pr create` and `gh pr merge`, pairs each with its
+  result and reports the time window to `POST /api/session-git-events`. Only a
+  call at the start of a simple command counts: a task text, a file or an `echo`
+  that mentions `git commit` is not a commit. Most commits carry no hash in the
+  transcript (Claude Code commits with `-q` in 88 % of the calls), so the server
+  matches the window against the commits of the pull requests it knows from GitHub, also
+  later and without a repository: the commit goes to the session whose window and
+  branch fit, and stays open when two sessions on one branch share a window. A
+  hash a session reported itself wins, and a short one becomes the full hash
+  once a pull request carries the commit. `GET /api/commits/{sha}/sessions` and
+  `GET /api/pulls/{n}/sessions` name the sessions in three stages (the session that
+  made the commit, the pull request whose merge commit it is, the pull request
+  that carries it), so a squash merge still leads to the sessions of its branch
+  commits, marked "via pull request". Derived links are computed when read and not
+  written to `request_work`. A viewer sees title and address of a session only
+  with the right to read its transcript, person and date with the right to read its
+  metadata, and otherwise a number; anonymous readers and other projects see
+  nothing. A collector talking to an older server skips the new route without errors.
 - Reactions on comments, ideas and issues from a fixed list (+1, -1, laugh,
   hooray, confused, heart, rocket, eyes), `PUT|DELETE|GET /api/reactions`,
   `ctx react`, `reaction_set`, `reaction_list`: members react, guests read.

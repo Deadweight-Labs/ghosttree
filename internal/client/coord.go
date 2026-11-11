@@ -183,6 +183,38 @@ func (c *Client) RecordPathActivity(events []store.PathActivity) error {
 	return c.do("POST", "/api/activity", nil, events, nil)
 }
 
+// RecordSessionGitEvents meldet Git-Vorgänge von Sessions (IDEA-31). Der
+// Collector benutzt das; ein Fehler hier darf das Archivieren eines Transkripts
+// nicht scheitern lassen. Ein älterer Server kennt die Route nicht: IsRouteMissing
+// erkennt das an der Antwort.
+func (c *Client) RecordSessionGitEvents(events []store.SessionGitEvent) (store.SessionGitResult, error) {
+	var out store.SessionGitResult
+	err := c.do("POST", "/api/session-git-events", nil, map[string]any{"events": events}, &out)
+	if err != nil && IsRouteMissing(err) {
+		return out, fmt.Errorf("%w: %v", store.ErrSessionGitEventsUnsupported, err)
+	}
+	return out, err
+}
+
+// SessionsForCommit nennt die Sessions zu einem Commit, soweit der Aufrufer sie
+// sehen darf.
+func (c *Client) SessionsForCommit(project, sha string) (store.GitSessionLinks, error) {
+	q := url.Values{}
+	q.Set("project", project)
+	var out store.GitSessionLinks
+	err := c.do("GET", "/api/commits/"+url.PathEscape(sha)+"/sessions", q, nil, &out)
+	return out, err
+}
+
+// SessionsForPull nennt die Sessions zu einem PR, soweit der Aufrufer sie sehen darf.
+func (c *Client) SessionsForPull(project string, number int64) (store.GitSessionLinks, error) {
+	q := url.Values{}
+	q.Set("project", project)
+	var out store.GitSessionLinks
+	err := c.do("GET", "/api/pulls/"+strconv.FormatInt(number, 10)+"/sessions", q, nil, &out)
+	return out, err
+}
+
 // MarkCoordDelivery schreibt den Zustellzustand fort. Ein Adapter meldet
 // damit, was er WIRKLICH beobachtet hat — injected, wenn der Harness die
 // Eingabe genommen hat, acked erst bei einer gesehenen Antwort.
