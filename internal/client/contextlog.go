@@ -62,3 +62,11 @@ func (c *Client) UsageSignals(project, since string) (deliverylog.SignalUsage, e
 	err := c.do("GET", "/api/usage/signals", usageQuery(project, since), nil, &out)
 	return out, err
 }
+
+// UsageContext is the use of the delivered context since a day: what the agent
+// picked up or followed, per route and kind and per profile.
+func (c *Client) UsageContext(project, since string) (deliverylog.ContextUse, error) {
+	var out deliverylog.ContextUse
+	err := c.do("GET", "/api/usage/context", usageQuery(project, since), nil, &out)
+	return out, err
+}

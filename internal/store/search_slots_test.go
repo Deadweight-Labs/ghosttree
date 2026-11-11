@@ -91,3 +91,73 @@ func TestSearchSlotWaitHasALimit(t *testing.T) {
 		t.Fatal("a search without a limit got a place that is taken")
 	}
 }
+
+// Background work (the usage job) takes a place only while one is free and no
+// search waits for one; it never queues in front of a search.
+func TestBackgroundSlotGivesWayToSearches(t *testing.T) {
+	st, err := OpenWithOptions(t.TempDir()+"/bg.db", OpenOptions{MaxOpenConns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	// A free place is taken, and given back.
+	release, ok := st.AcquireBackgroundSlot(context.Background(), time.Second)
+	if !ok {
+		t.Fatal("no place on an idle store")
+	}
+	// With the only place taken, the background gives up after its wait, and a
+	// gone caller gets nothing.
+	began := time.Now()
+	if _, ok := st.AcquireBackgroundSlot(context.Background(), 30*time.Millisecond); ok {
+		t.Fatal("the background got a place that was taken")
+	}
+	if d := time.Since(began); d < 25*time.Millisecond || d > time.Second {
+		t.Errorf("the background waited %v, want about 30ms", d)
+	}
+	release()
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := st.AcquireBackgroundSlot(gone, time.Second); ok {
+		t.Fatal("a caller that has gone got a place")
+	}
+
+	// A search waits for the held place; the place that is freed goes to it, not
+	// to the background caller that is looking at the same moment.
+	held, ok := st.AcquireSearchSlot(context.Background(), 0)
+	if !ok {
+		t.Fatal("no place for the first search")
+	}
+	g := &st.embedShared().gate
+	search := make(chan bool, 1)
+	go func() {
+		rel, ok := st.AcquireSearchSlot(context.Background(), 5*time.Second)
+		if ok {
+			defer rel()
+			time.Sleep(100 * time.Millisecond) // holds it while the background looks
+		}
+		search <- ok
+	}()
+	for deadline := time.Now().Add(5 * time.Second); g.waiting.Load() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the search never started to wait")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	bg := make(chan bool, 1)
+	go func() {
+		rel, ok := st.AcquireBackgroundSlot(context.Background(), 60*time.Millisecond)
+		if ok {
+			rel()
+		}
+		bg <- ok
+	}()
+	time.Sleep(10 * time.Millisecond)
+	held()
+	if !<-search {
+		t.Error("the waiting search did not get the freed place")
+	}
+	if <-bg {
+		t.Error("the background took a place in front of a waiting search")
+	}
+}

@@ -134,3 +134,56 @@ func TestUsageSignalsAndDeliveriesPrintTheirSums(t *testing.T) {
 		t.Errorf("deliveries:\n%s", out.String())
 	}
 }
+
+// REQ-645: ctx usage context prints, per route and kind and per profile, how
+// much of what was delivered the agent used, and says plainly that path
+// descriptions are counted and not judged.
+func TestUsageContextPrintsTheShareThatWasUsed(t *testing.T) {
+	f := newLogFixture(t)
+	const project = "github.com/test/repo"
+	if err := f.st.RecordContextLog(store.ContextLogBatch{Project: project, SessionRef: "w1", Harness: "claude", Events: []store.DeliveryEvent{{
+		Call: "cw1", Profile: "lean", Parts: []deliverylog.Part{
+			{Via: deliverylog.ViaBootstrap, Kind: deliverylog.KindKnowledge, ID: 1, Chars: 100},
+			{Via: deliverylog.ViaBootstrap, Kind: deliverylog.KindKnowledge, ID: 2, Chars: 300},
+			{Via: deliverylog.ViaBootstrap, Kind: deliverylog.KindKnowledge, ID: 3, Chars: 50},
+			{Via: deliverylog.ViaPath, Kind: deliverylog.KindGhost, Path: "a/b.go", Chars: 80}}}}}, 1); err != nil {
+		t.Fatal(err)
+	}
+	f.st.DB().Exec(`UPDATE context_delivery_log SET used=2, judged_at='2026-11-11T10:00:00Z' WHERE object_id=1`)
+	f.st.DB().Exec(`UPDATE context_delivery_log SET used=0, judged_at='2026-11-11T10:00:00Z' WHERE object_id=2`)
+	var out bytes.Buffer
+	if code := cmdUsage([]string{"context", "--since", "2020-01-01", "--project", project}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	var know, ghost, lean string
+	for _, l := range strings.Split(out.String(), "\n") {
+		fs := strings.Fields(l)
+		switch {
+		case len(fs) > 1 && fs[0] == "bootstrap" && fs[1] == "knowledge":
+			know = l
+		case len(fs) > 1 && fs[0] == "path" && fs[1] == "ghost":
+			ghost = l
+		case len(fs) > 1 && fs[0] == "lean" && fs[1] == "knowledge":
+			lean = l
+		}
+	}
+	// route kind parts judged picked-up followed waiting used weight
+	fields := func(l string) []string { return strings.Fields(strings.ReplaceAll(l, " %", "")) }
+	if fs := fields(know); len(fs) != 9 || fs[2] != "3" || fs[3] != "2" || fs[4] != "0" || fs[5] != "1" || fs[6] != "1" || fs[7] != "50.0" || fs[8] != "25.0" {
+		t.Errorf("knowledge line %q\n%s", know, out.String())
+	}
+	if fs := fields(ghost); len(fs) != 9 || fs[2] != "1" || fs[3] != "0" || fs[7] != "-" || fs[8] != "-" {
+		t.Errorf("ghost line %q", ghost)
+	}
+	if lean == "" {
+		t.Errorf("no line for the profile:\n%s", out.String())
+	}
+	out.Reset()
+	if code := cmdUsage([]string{"context", "--since", "2020-01-01", "--project", project, "--json"}, &out); code != 0 {
+		t.Fatal(code)
+	}
+	var rep deliverylog.ContextUse
+	if err := json.Unmarshal(out.Bytes(), &rep); err != nil || len(rep.Lines) != 2 {
+		t.Errorf("json %s %v", out.String(), err)
+	}
+}

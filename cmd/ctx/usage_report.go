@@ -19,6 +19,7 @@ import (
 const usageReportUsage = `usage: ctx usage tools      [--since YYYY-MM-DD] [--project P] [--actions] [--json]
        ctx usage deliveries [--since YYYY-MM-DD] [--project P] [--json]
        ctx usage signals    [--since YYYY-MM-DD] [--project P] [--json]
+       ctx usage context    [--since YYYY-MM-DD] [--project P] [--json]
 
 Reports from the server, over the projects you may see in full (or --project).
 They hold sums only.
@@ -35,7 +36,15 @@ deliveries  what the hooks put in front of agents, per route and kind: parts,
             is left out).
 signals     the environment variables of the process a session ran in, per value:
             how many sessions, and what share of the finished ones had at most
-            three prompts.`
+            three prompts.
+context     how much of the delivered context the agent used: per route and
+            kind and per profile, the parts that were judged from the session
+            transcript, how many the agent picked up (named by number or by
+            two words of the title, or looked up) or followed (opened the path
+            the entry names, ran its command, reported the runbook), and the
+            share of the characters. Only entries and runbooks are judged;
+            path descriptions are counted but not judged. A hint, not a proof:
+            nothing is lowered or held back on it.`
 
 var sinceFlag = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
@@ -46,7 +55,7 @@ func cmdUsageReport(args []string, stdout io.Writer) (code int, handled bool) {
 		return 0, false
 	}
 	switch args[0] {
-	case "tools", "deliveries", "signals":
+	case "tools", "deliveries", "signals", "context":
 	default:
 		return 0, false
 	}
@@ -87,6 +96,15 @@ func cmdUsageReport(args []string, stdout io.Writer) (code int, handled bool) {
 		out = rep
 		if !*asJSON {
 			printDeliveryReport(stdout, rep)
+		}
+	case "context":
+		rep, err := c.UsageContext(*project, *since)
+		if err != nil {
+			return usageReportError(stdout, err), true
+		}
+		out = rep
+		if !*asJSON {
+			printContextUse(stdout, rep)
 		}
 	case "signals":
 		rep, err := c.UsageSignals(*project, *since)
@@ -206,4 +224,32 @@ func printSignalReport(w io.Writer, rep deliverylog.SignalUsage) {
 		fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\t%s\t\n", strings.TrimPrefix(l.Name, "CLAUDE_CODE_"), value, l.Sessions, l.Measured, l.Short, percent(l.Short, l.Measured))
 	}
 	_ = tw.Flush()
+}
+
+// printContextUse prints the use of the delivered context. The share is of the
+// judged parts: a part that waits for its judgement or has none is not in it.
+func printContextUse(w io.Writer, rep deliverylog.ContextUse) {
+	fmt.Fprintf(w, "use of the delivered context since %s\n", rep.Since)
+	fmt.Fprintln(w, "used = picked up or followed, of the judged parts; weight = their share of the judged characters")
+	print := func(title, first string, lines []deliverylog.UseLine, key func(deliverylog.UseLine) string) {
+		if len(lines) == 0 {
+			return
+		}
+		fmt.Fprintf(w, "\n%s\n", title)
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
+		fmt.Fprintf(tw, "%s\tkind\tparts\tjudged\tpicked up\tfollowed\twaiting\tused\tweight\t\n", first)
+		for _, l := range lines {
+			used, weight := "-", "-"
+			if deliverylog.Judgeable(l.Kind) {
+				used, weight = percent(l.PickedUp+l.Followed, l.Judged), percent(l.UsedChars, l.JudgedChars)
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t\n", key(l), l.Kind, l.Parts, l.Judged, l.PickedUp, l.Followed, l.Pending, used, weight)
+		}
+		_ = tw.Flush()
+	}
+	print("by route and kind", "route", rep.Lines, func(l deliverylog.UseLine) string { return l.Via })
+	print("by profile of the session (entries and runbooks)", "profile", rep.Profiles, func(l deliverylog.UseLine) string { return l.Profile })
+	if len(rep.Lines) == 0 {
+		fmt.Fprintln(w, "nothing logged")
+	}
 }
