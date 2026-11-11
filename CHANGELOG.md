@@ -6,16 +6,6 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
-### Fixed
-
-- `ctx watch` no longer syncs the journals that Claude Code's Workflow tool
-  writes under `subagents/workflows/<run>/journal.jsonl`. They are not
-  transcripts and carry no session id, so every journal registered as session
-  `journal`, the server refused it with `409 session_id_collision`, and the
-  collector retried each one on every sweep. A registration refused with 409
-  now also waits for the registration backoff instead of being retried every
-  30 seconds.
-
 Changes since `0.1.0-rc.3`. The very detailed notes that used to stand here,
 entry by entry with their review rounds, are in the Git history of this file;
 the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
@@ -759,6 +749,14 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - Organization names may not contain control characters.
 
 ### Fixed
+
+- `ctx watch` no longer syncs the journals that Claude Code's Workflow tool
+  writes under `subagents/workflows/<run>/journal.jsonl`. They are not
+  transcripts and carry no session id, so every journal registered as session
+  `journal`, the server refused it with `409 session_id_collision`, and the
+  collector retried each one on every sweep. A registration refused with 409
+  now also waits for the registration backoff instead of being retried every
+  30 seconds.
 
 - A tool call during a restart of the server no longer returns the HTML error
   page of the proxy in front of it. The message is one line, a read is tried
