@@ -865,6 +865,14 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   (which bound the `cli:<machine>` identity to that room and made every other
   repository ask for `--agent-name`) and say that there is nothing to read yet.
   A project still starts only with real work in it or with `ctx project claim`.
+- A document that names the command `pw` in Markdown code (as in "run
+  `pw export`, then `pw deploy`") is no longer refused as a labeled secret: a
+  value behind a bare label (`pw` or `Passwort ist` followed by a blank) ends at
+  the closing backtick when the label stands in an open code span. Outside of
+  code nothing is cut, and `pw: ...`, `password=...`, `Passwort Hx7!kQ2pz` and a
+  password with a backtick or `&&` in it stay findings. The refusal now names
+  line, column and the label as written (`line 4, column 3, after the label
+  "pw"`), never the value.
 
 - `ctx watch` no longer syncs the journals that Claude Code's Workflow tool
   writes under `subagents/workflows/<run>/journal.jsonl`. They are not

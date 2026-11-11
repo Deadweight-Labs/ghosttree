@@ -185,9 +185,21 @@ func validateDocumentBody(body string) error {
 		return fmt.Errorf("body is not valid UTF-8")
 	}
 	if matches := redact.FindSecrets(body); len(matches) > 0 {
-		return fmt.Errorf("body contains a possible %s secret on line %d; nothing was stored", matches[0].Label, matches[0].Line)
+		return secretRefusal(matches[0])
 	}
 	return nil
+}
+
+// secretRefusal names where the filter hit and on what, never the value: the
+// line, the column, and for a labeled secret the label as written, so that an
+// author sees at once whether a command name (pw) or a real password was
+// meant.
+func secretRefusal(m redact.SecretMatch) error {
+	where := fmt.Sprintf("line %d, column %d", m.Line, m.Column)
+	if m.Keyword != "" {
+		where += fmt.Sprintf(", after the label %q", m.Keyword)
+	}
+	return fmt.Errorf("body contains a possible %s secret on %s; nothing was stored", m.Label, where)
 }
 
 // writeDocumentConflict sagt nicht nur, DASS der Kopf weitergezogen ist,

@@ -4,13 +4,19 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func referenceFindSecrets(s string) []SecretMatch {
 	var matches []SecretMatch
 	for _, pattern := range patterns {
 		for _, location := range pattern.re.FindAllStringIndex(s, -1) {
-			matches = append(matches, SecretMatch{Label: pattern.label, Line: strings.Count(s[:location[0]], "\n") + 1})
+			lineStart := strings.LastIndexByte(s[:location[0]], '\n') + 1
+			matches = append(matches, SecretMatch{
+				Label:  pattern.label,
+				Line:   strings.Count(s[:location[0]], "\n") + 1,
+				Column: utf8.RuneCountInString(s[lineStart:location[0]]) + 1,
+			})
 		}
 	}
 	return matches

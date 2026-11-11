@@ -11,11 +11,19 @@ package redact
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
+// SecretMatch says where a secret was found, never what it is. Line and Column
+// count from 1; the column counts characters (not bytes) from the start of the
+// line and points at the label of a labeled secret, at the start of the value
+// otherwise. Keyword is the label as it stands in the text ("pw", "Passwort")
+// and is empty for everything that is found by its form.
 type SecretMatch struct {
-	Label string
-	Line  int
+	Label   string
+	Line    int
+	Column  int
+	Keyword string
 }
 
 // Mode says what kind of string is being redacted.
@@ -164,16 +172,23 @@ func FindSecrets(s string) []SecretMatch { return FindSecretsIn(s, Text) }
 func FindSecretsIn(s string, mode Mode) []SecretMatch {
 	var matches []SecretMatch
 	var covered [][]int
-	line := func(at int) int { return strings.Count(s[:at], "\n") + 1 }
+	at := func(label string, pos int) SecretMatch {
+		lineStart := strings.LastIndexByte(s[:pos], '\n') + 1
+		return SecretMatch{
+			Label:  label,
+			Line:   strings.Count(s[:pos], "\n") + 1,
+			Column: utf8.RuneCountInString(s[lineStart:pos]) + 1,
+		}
+	}
 	for i := range patterns {
 		p := &patterns[i]
 		for _, location := range p.spans(s, mode) {
-			matches = append(matches, SecretMatch{Label: p.label, Line: line(location[0])})
+			matches = append(matches, at(p.label, location[0]))
 			covered = append(covered, location)
 		}
 	}
 	for _, location := range urlCredentialSpans(s, mode) {
-		matches = append(matches, SecretMatch{Label: "url", Line: line(location[0])})
+		matches = append(matches, at("url", location[0]))
 		covered = append(covered, location)
 	}
 	for _, h := range scanLabeled(s, mode) {
@@ -182,7 +197,9 @@ func FindSecretsIn(s string, mode Mode) []SecretMatch {
 		if overlaps(covered, h.start, h.end) {
 			continue
 		}
-		matches = append(matches, SecretMatch{Label: "labeled", Line: line(h.start)})
+		m := at("labeled", h.labelStart)
+		m.Keyword = s[h.labelStart:h.labelEnd]
+		matches = append(matches, m)
 	}
 	return matches
 }

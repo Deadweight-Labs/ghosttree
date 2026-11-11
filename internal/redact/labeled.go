@@ -49,6 +49,8 @@ const (
 type hit struct {
 	start, end int // the value
 	kind       labelKind
+
+	labelStart, labelEnd int // the label in front of it
 }
 
 // labelStart marks the first letters of all labels, in both cases.
@@ -611,6 +613,16 @@ func scanLabeledWith(s string, mode Mode, first *[256]bool) []hit {
 		if !ok {
 			continue
 		}
+		// A label that stands inside a Markdown code span is a command name when
+		// nothing ties the value to it: the span ends at its closing backtick, and
+		// what lies behind that is the next command, not a password.
+		if level <= levelWord {
+			if k := strings.IndexByte(s[vs:ve], '`'); k >= 0 && sc.insideCodeSpan(i) {
+				if ve = vs + k; ve == vs {
+					continue
+				}
+			}
+		}
 		// "pass" is a verb as well ("pass machine=x"): it counts as a label
 		// only with a symbol behind it.
 		if kind == kindPassword && !long && e-i == 4 && level < levelSymbol {
@@ -619,10 +631,28 @@ func scanLabeledWith(s string, mode Mode, first *[256]bool) []hit {
 		if !looksSecret(sc.decode(vs, ve), level, kind) {
 			continue
 		}
-		hits = append(hits, hit{vs, ve, kind})
+		hits = append(hits, hit{start: vs, end: ve, kind: kind, labelStart: i, labelEnd: e})
 		i = ve - 1
 	}
 	return hits
+}
+
+// insideCodeSpan is true when the label at s[i] stands after an odd number of
+// backticks on its line: in an inline code span that is still open. Outside of
+// one a backtick is a character like any other, and a password that has one
+// ("Passwort Hx`7!kQ2pz") is not cut.
+func (sc *labelScanner) insideCodeSpan(i int) bool {
+	open := false
+	for k := i - 1; k >= 0; k-- {
+		c := sc.s[k]
+		if c == '\n' || sc.json && c == 'n' && k > 0 && sc.s[k-1] == '\\' && escapeStartsAt(sc.s, k-1) {
+			break
+		}
+		if c == '`' {
+			open = !open
+		}
+	}
+	return open
 }
 
 func redactLabeled(s string, mode Mode, stats Stats) string {
