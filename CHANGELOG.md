@@ -636,6 +636,27 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   at least as long as each transaction held the write lock. At the end it
   merges both full-text indexes with `optimize` (`--skip-optimize` leaves that
   to `ctx db vacuum --fts-optimize`).
+- A delivery log and reports on what ghosttree puts in front of agents
+  (REQ-636; measurement only, nothing an agent is given changes). Each hook
+  call that delivers context is written down with its parts (a knowledge entry,
+  a path description, a runbook, a section of the briefing) and their size in
+  characters, which add up to what the session budget counted; the tool counts
+  and the log reach the server together at the end of a turn, so the hooks wait
+  for nothing. The log holds numbers, repository paths, sizes and times, never
+  text of a prompt. Rows are kept 180 days and then folded into monthly sums
+  (no path, no session). Each session also records the names and values of
+  `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ATTENDED` and
+  `CLAUDE_CODE_CHILD_SESSION`. `ctx usage tools --since DAY` lists, per tool,
+  in how many sessions it was called and how often (the count the decision
+  about preloading tools asks for), `ctx usage deliveries` the characters
+  delivered per route and kind, and `ctx usage signals` per signal value the
+  share of finished sessions with at most three prompts. The reports show sums
+  only, to whoever may see the project's statistics. Signal values other than a
+  short token are recorded as `(invalid)`; the log is bounded per account,
+  project and day, and a hook that cannot reach the server waits one deadline
+  for all its reports together. The server answers the
+  context routes with a new header `X-Ghosttree-Delivered`; an older server
+  without it is logged as one part per delivery.
 
 ### Changed
 

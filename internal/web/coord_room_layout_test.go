@@ -186,11 +186,15 @@ func TestCoordRoomShowsWhoIsHereWithNoteAndBranchWithoutRightColumn(t *testing.T
 			t.Errorf("the right column is gone, found %s", gone)
 		}
 	}
-	// The sender line names the addressee in plain words.
+	// The quiet second line names an addressee in plain words; a message to everyone says nothing.
 	appendAgent(t, st, room, "m1", "an alle", "")
+	appendAgent(t, st, room, "m2", "gezielt", "", "person:1")
 	page = get("/ui/coord?room=" + url.QueryEscape(room))
-	if !strings.Contains(messageItem(t, page, "1"), `<span class="rm-to">to everyone</span>`) {
-		t.Error("the message head names the addressee")
+	if strings.Contains(messageItem(t, page, "1"), "to everyone") {
+		t.Error("a message to everyone carries no addressee")
+	}
+	if !strings.Contains(messageItem(t, page, "2"), `<span class="rm-to">to robin</span>`) {
+		t.Errorf("the second line names the addressee: %s", messageItem(t, page, "2"))
 	}
 }
 
@@ -215,7 +219,7 @@ func TestCoordEmptyRoomOffersTheActionNotAPickerOrDeadEnd(t *testing.T) {
 	_, _, room, get := chatFixture(t)
 	page := get("/ui/coord?room=" + url.QueryEscape(room))
 	empty := segment(t, page, `<li class="coord-empty">`, "</li>")
-	if !strings.Contains(empty, "Nothing here yet.") || !strings.Contains(empty, `href="#coord-message-body"`) || !strings.Contains(empty, "Tell an agent something") {
+	if !strings.Contains(empty, "Nothing here yet.") || strings.Contains(empty, "<a ") {
 		t.Errorf("empty room: %s", empty)
 	}
 	if !strings.Contains(page, `class="coord-participants rm-here"`) {

@@ -184,6 +184,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.registerIdeaWorkshopRoutes(mux)
 	a.registerFeatureRoutes(mux)
 	a.registerRunbookRoutes(mux)
+	a.registerDeliveryLogRoutes(mux)
 	a.routeFunc(mux, "POST /api/knowledge", a.createKnowledge)
 	a.routeFunc(mux, "GET /api/knowledge", a.listKnowledge)
 	a.routeFunc(mux, "GET /api/knowledge/pending", a.pendingKnowledge)

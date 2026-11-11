@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/deliverylog"
 	"github.com/Deadweight-Labs/ghosttree/internal/runbook"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -570,6 +571,7 @@ func (a *api) triggeredRunbooks(w http.ResponseWriter, r *http.Request) {
 	sort.SliceStable(hits, func(i, j int) bool { return spec(hits[i]) > spec(hits[j]) })
 	session := store.CleanSessionKey(body.Session)
 	var out []string
+	var parts []deliverylog.Part
 	for _, h := range hits {
 		if len(out) == maxRunbookTriggers {
 			break
@@ -586,8 +588,11 @@ func (a *api) triggeredRunbooks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		v := a.runbookViewFor(r, h.d.View)
-		out = append(out, runbook.Briefing(v, h.reason, maxRunbookBriefing))
+		briefing := runbook.Briefing(v, h.reason, maxRunbookBriefing)
+		out = append(out, briefing)
+		parts = append(parts, deliverylog.Part{Via: deliverylog.ViaRunbook, Kind: deliverylog.KindRunbook, ID: h.d.Ref.ID, Chars: deliverylog.Runes(briefing)})
 	}
+	setDelivered(w, parts)
 	w.WriteHeader(http.StatusOK)
 	if len(out) == 0 {
 		return

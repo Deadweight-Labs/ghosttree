@@ -3,7 +3,9 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/deliverylog"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -98,22 +100,34 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	w.WriteHeader(200)
 	if len(hits) == 0 && hint == "" {
+		w.WriteHeader(200)
 		return
 	}
 	// A different heading from the bootstrap on purpose. This arrived because of
 	// what was just said, and a reader who cannot tell the two apart cannot judge
 	// why it is in front of them. Each line names the word that brought it, for
 	// the same reason: a reader who sees it can tell a good reason from a bad one.
-	fmt.Fprint(w, "## Possibly relevant to what you just said (ghosttree)\n\n")
+	//
+	// The answer is built first so that the hook can be told how it divides into
+	// entries (REQ-636). The hint is one part of some size: it is made from a word
+	// of the prompt, and the log keeps no words of a prompt.
+	var body strings.Builder
+	parts := make([]deliverylog.Part, 0, len(hits)+1)
+	body.WriteString("## Possibly relevant to what you just said (ghosttree)\n\n")
 	for _, h := range hits {
 		k := h.Knowledge
-		fmt.Fprintf(w, "- [%s|%s] %s — %s (triggered by %q)\n", k.Type, scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), 400), h.Term)
+		line := fmt.Sprintf("- [%s|%s] %s — %s (triggered by %q)\n", k.Type, scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), 400), h.Term)
+		body.WriteString(line)
+		parts = append(parts, deliverylog.Part{Via: deliverylog.ViaRelevance, Kind: deliverylog.KindKnowledge, ID: h.ID, Chars: deliverylog.Runes(line)})
 	}
 	if hint != "" {
-		fmt.Fprint(w, hint)
+		body.WriteString(hint)
+		parts = append(parts, deliverylog.Part{Via: deliverylog.ViaHint, Kind: deliverylog.KindHint, Chars: deliverylog.Runes(hint)})
 	}
+	setDelivered(w, parts)
+	w.WriteHeader(200)
+	fmt.Fprint(w, body.String())
 }
 
 // rememberDelivered records entries as delivered to the session named in the
