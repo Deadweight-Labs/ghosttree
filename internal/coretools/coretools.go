@@ -198,7 +198,7 @@ var table = []Core{
 	{
 		Name: "package",
 		Tier: TierWork,
-		Lead: "Work packages: the requests a branch or pull request carries as its requirements. Without package_id the current branch's package is meant. An opened pull request gets a package automatically; create then answers package_exists, and you add the requests with add.",
+		Lead: "Work packages: the requests a branch or pull request carries as its requirements. Without package_id the current branch's package is meant. A PR gets its package itself: create then says package_exists, use add.",
 		Actions: []Action{
 			{Name: "get", Tool: "package_get", Line: "the package with open criteria and waiting human tasks (branch, pr, package_id)"},
 			{Name: "review", Tool: "package_review", Line: "every criterion with its evidence and a verdict, for a reviewer"},
