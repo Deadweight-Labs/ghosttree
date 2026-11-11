@@ -299,8 +299,9 @@ func TestSearchLivePageIsTheFrame(t *testing.T) {
 	}
 	_, narrowed := e.get(t, e.Owner, "/ui/search?q=zebrafish&live=1&kind=pains")
 	// The page script switches kinds without a new page, so the frame keeps the
-	// place of every kind and says which one is chosen.
-	if !strings.Contains(narrowed, `data-kind-body="sessions"`) || !strings.Contains(narrowed, `data-kind-body="pains"`) || !strings.Contains(narrowed, `data-kind="pains"`) {
+	// place of every kind it searches and says which one is chosen; the sessions
+	// are not searched unless the page is narrowed to them.
+	if strings.Contains(narrowed, `data-kind-body="sessions"`) || !strings.Contains(narrowed, `data-kind-body="requests"`) || !strings.Contains(narrowed, `data-kind-body="pains"`) || !strings.Contains(narrowed, `data-kind="pains"`) {
 		t.Errorf("the frame narrowed to pains lost the place of a kind or does not name the chosen one")
 	}
 	if _, bad := e.get(t, e.Owner, "/ui/search?q=zebrafish+bogus:1&live=1"); strings.Contains(bad, "data-search-live") {
