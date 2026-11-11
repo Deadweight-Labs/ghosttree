@@ -383,11 +383,13 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   call at the start of a simple command counts: a task text, a file or an `echo`
   that mentions `git commit` is not a commit. Most commits carry no hash in the
   transcript (Claude Code commits with `-q` in 88 % of the calls), so the server
-  matches the window against the commits of the pull requests it knows from GitHub, also
-  later and without a repository: the commit goes to the session whose window and
-  branch fit, and stays open when two sessions on one branch share a window. A
-  hash a session reported itself wins, and a short one becomes the full hash
-  once a pull request carries the commit. `GET /api/commits/{sha}/sessions` and
+  matches the window (at most 30 minutes) against the commits of the pull requests it
+  knows from GitHub, also later and without a repository: the commit goes to the
+  session whose window and branch fit, and stays open when two sessions of one
+  account on one branch share a window. An assignment is never taken back or
+  taken over by another account. A hash a session reported itself wins when the
+  commit time fits its window (otherwise the report is dropped), and a short one
+  becomes the full hash once a pull request carries the commit. `GET /api/commits/{sha}/sessions` and
   `GET /api/pulls/{n}/sessions` name the sessions in three stages (the session that
   made the commit, the pull request whose merge commit it is, the pull request
   that carries it), so a squash merge still leads to the sessions of its branch

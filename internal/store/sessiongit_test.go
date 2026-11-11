@@ -19,7 +19,7 @@ import (
 // und ein zweites Projekt mit der Session "s-other" von robin.
 type gitFix struct {
 	st                          *Store
-	robin, anna, other          Session
+	robin, robin2, anna, other  Session
 	otherProject                string
 	robinAcc, annaAcc, otherAcc int64
 }
@@ -52,12 +52,13 @@ func gitFixture(t *testing.T) *gitFix {
 	}
 	f := &gitFix{st: st, otherProject: gitOtherProject}
 	f.robin = addSession(t, st, "s-robin", 1, prProject, "", VisPrivate, prompt("private prompt of robin"))
+	f.robin2 = addSession(t, st, "s-robin-2", 1, prProject, "", VisPrivate, prompt("second private prompt of robin"))
 	f.anna = addSession(t, st, "s-anna", 2, prProject, "", VisProject, prompt("shared prompt of anna"))
 	f.other = addSession(t, st, "s-other", 1, gitOtherProject, "", VisPrivate, prompt("prompt in the other project"))
 	for _, s := range []struct {
 		id     int64
 		branch string
-	}{{f.robin.ID, "feat/a"}, {f.anna.ID, "feat/b"}} {
+	}{{f.robin.ID, "feat/a"}, {f.robin2.ID, "feat/a"}, {f.anna.ID, "feat/b"}} {
 		if _, err := st.db.Exec(`UPDATE sessions SET branch=? WHERE id=?`, s.branch, s.id); err != nil {
 			t.Fatal(err)
 		}
@@ -285,22 +286,76 @@ func TestTwoSessionsInTheSameWindowAreSeparatedByTheirBranch(t *testing.T) {
 	}
 }
 
-func TestTwoSessionsOnTheSameBranchLeaveTheEventOpen(t *testing.T) {
+func TestTwoSessionsOfOneAccountOnTheSameBranchLeaveTheEventOpen(t *testing.T) {
 	f := gitFixture(t)
 	c := sha40("cc")
 	f.pull(t, 7, "feat/a", PullCommit{SHA: c, CommittedAt: "2026-11-08T16:06:34Z"})
 	f.record(t, 1, commitEvent(f.robin, 4, "2026-11-08T16:06:33.800Z", "2026-11-08T16:06:34.100Z", "feat/a"))
 	if got := f.owners(t, c); got["s-robin"] == "" {
-		t.Fatalf("alone in the window, robin gets the commit: %v", got)
+		t.Fatalf("alone in the window, the session gets the commit: %v", got)
 	}
-	// Annas Vorgang trifft dasselbe Fenster auf demselben Branch: jetzt ist es
-	// mehrdeutig, und die frühere Zuordnung wird zurückgenommen.
-	f.record(t, 2, commitEvent(f.anna, 2, "2026-11-08T16:06:33.900Z", "2026-11-08T16:06:34.200Z", "feat/a"))
+	// Ein Worker desselben Kontos trifft dasselbe Fenster auf demselben Branch:
+	// jetzt ist es mehrdeutig, und die frühere Zuordnung wird zurückgenommen,
+	// unabhängig davon, wer zuerst kam.
+	f.record(t, 1, commitEvent(f.robin2, 2, "2026-11-08T16:06:33.900Z", "2026-11-08T16:06:34.200Z", "feat/a"))
 	if got := f.owners(t, c); len(got) != 0 {
 		t.Fatalf("ambiguous: nobody gets the commit, got %v", got)
 	}
-	if f.resolved(t, f.robin, 4) || f.resolved(t, f.anna, 2) {
+	if f.resolved(t, f.robin, 4) || f.resolved(t, f.robin2, 2) {
 		t.Error("both events stay open")
+	}
+}
+
+func TestAnotherAccountCannotTakeAnAssignmentBackOrStealIt(t *testing.T) {
+	f := gitFixture(t)
+	c := sha40("cc")
+	f.pull(t, 7, "feat/a", PullCommit{SHA: c, CommittedAt: "2026-11-08T16:06:34Z"})
+	f.record(t, 1, commitEvent(f.robin, 4, "2026-11-08T16:06:33.800Z", "2026-11-08T16:06:34.100Z", "feat/a"))
+	// Annas Vorgang trifft dasselbe Fenster auf demselben Branch: ein fremdes
+	// Konto ändert die Zuordnung nicht.
+	f.record(t, 2, commitEvent(f.anna, 2, "2026-11-08T16:06:33.900Z", "2026-11-08T16:06:34.200Z", "feat/a"))
+	if got := f.owners(t, c); len(got) != 1 || got["s-robin"] != CommitSourceMatched {
+		t.Fatalf("robin keeps the commit: %v", got)
+	}
+	// Auch ein Vorgang, dessen Branch besser zu passen scheint, nimmt sie nicht.
+	f.st.db.Exec(`UPDATE sessions SET branch='' WHERE id=?`, f.robin.ID)
+	f.record(t, 2, commitEvent(f.anna, 3, "2026-11-08T16:06:33.950Z", "2026-11-08T16:06:34.250Z", "feat/a"))
+	if got := f.owners(t, c); len(got) != 1 || got["s-robin"] != CommitSourceMatched {
+		t.Fatalf("robin still keeps the commit: %v", got)
+	}
+}
+
+func TestAForgedReportedShaNeitherStealsNorDeletesAnotherAccountsCommit(t *testing.T) {
+	f := gitFixture(t)
+	c := "7a8b9c0d1e2f30415263748596a7b8c9d0e1f203"
+	f.pull(t, 7, "feat/a", PullCommit{SHA: c, CommittedAt: "2026-11-08T16:06:34Z"})
+	f.record(t, 1, commitEvent(f.robin, 4, "2026-11-08T16:06:33.800Z", "2026-11-08T16:06:34.100Z", "feat/a"))
+	// Anna meldet die SHA aus einem Aufruf, der Stunden davor lief: das Fenster
+	// widerspricht der Zeit des Commits, die Zeile wird verworfen.
+	f.record(t, 2, commitEvent(f.anna, 2, "2026-11-08T12:00:00Z", "2026-11-08T12:00:01Z", "feat/a", "7a8b9c0"))
+	if got := f.owners(t, c); len(got) != 1 || got["s-robin"] != CommitSourceMatched {
+		t.Fatalf("a contradicted report is dropped: %v", got)
+	}
+	if got := f.owners(t, "7a8b9c0"); len(got) != 0 {
+		t.Fatalf("no short row remains: %v", got)
+	}
+	// Anna meldet mit einem Fenster, das die Zeit enthält (so lang, wie ein
+	// Fenster sein darf): die Meldung ist plausibel und bleibt, aber Robins
+	// Zuordnung wird dadurch nicht gelöscht.
+	f.record(t, 2, commitEvent(f.anna, 3, "2026-11-08T16:00:00Z", "2026-11-08T17:00:00Z", "feat/a", "7a8b9c0"))
+	got := f.owners(t, c)
+	if got["s-robin"] != CommitSourceMatched {
+		t.Fatalf("a plausible foreign report does not remove robin's assignment: %v", got)
+	}
+}
+
+func TestAWindowIsCutAtThirtyMinutes(t *testing.T) {
+	f := gitFixture(t)
+	f.record(t, 1, commitEvent(f.robin, 4, "2026-11-08T10:00:00Z", "2026-11-08T14:00:00Z", "feat/a"))
+	var ended string
+	f.st.db.QueryRow(`SELECT ended_at FROM session_git_events WHERE session_id=? AND seq=4`, f.robin.ID).Scan(&ended)
+	if ended != "2026-11-08T10:30:00Z" {
+		t.Fatalf("a window longer than %v is cut: %s", maxGitCallWindow, ended)
 	}
 }
 
@@ -406,6 +461,22 @@ func TestPullRequestsOfASessionComeFromTheCreateAndMergeCalls(t *testing.T) {
 		if links, _ := f.st.SessionsForPull(prProject, n); len(links) != 0 {
 			t.Fatalf("PR %d must not be attributed: %+v", n, links)
 		}
+	}
+	// Der Collector behauptet einen Merge; kennt der Server den PR und er ist
+	// offen, gilt die Behauptung nicht. Erst ein gemergter PR bestätigt sie.
+	if _, err := f.st.RecordPullRequest(prEvent(7, "opened", "open", "feat/a")); err != nil {
+		t.Fatal(err)
+	}
+	links, _ = f.st.SessionsForPull(prProject, 7)
+	if len(links) != 1 || strings.Join(links[0].Sources, ",") != "created" {
+		t.Fatalf("an open PR was not merged: %+v", links)
+	}
+	if _, err := f.st.RecordPullRequest(prEvent(7, "closed", "merged", "feat/a")); err != nil {
+		t.Fatal(err)
+	}
+	links, _ = f.st.SessionsForPull(prProject, 7)
+	if len(links) != 1 || strings.Join(links[0].Sources, ",") != "created,merged" {
+		t.Fatalf("a merged PR confirms the claim: %+v", links)
 	}
 }
 
