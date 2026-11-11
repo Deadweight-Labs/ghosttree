@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -147,5 +149,23 @@ func TestSessionSearchWithSeveralWordsDoesNotRunOrWhenAndFillsThePage(t *testing
 	}
 	if len(hits) != 4 {
 		t.Errorf("got %d hits, want 4", len(hits))
+	}
+}
+
+// A search on a view whose context has ended ends with that error: the time
+// budget of a search area (WithContext) relies on it, in the readable set and in
+// the vector ranking alike, so that a slow area is named as missing at its budget
+// and not after the work is done.
+func TestSessionSearchByMeaningEndsWithTheContextOfTheView(t *testing.T) {
+	st, _ := searchWorld(t, 0)
+	gus := viewer(st, "person:5", "gus")
+	pre := gus.TranscriptPrefilter()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, mode := range []SearchMode{SearchAuto, SearchVectorOnly} {
+		_, err := st.WithContext(ctx).SearchSessionsWith(sessionQuery, SessionSearch{Limit: 10, Prefilter: pre, Mode: mode})
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("mode %v: err = %v, want the search to end with the context of its view", mode, err)
+		}
 	}
 }

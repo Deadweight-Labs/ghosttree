@@ -749,6 +749,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	pa.Filtered()
 	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}, Requests: []requestdomain.SearchHit{}}
 	gaps := a.newSearchGaps(r, kind == "all")
+	defer gaps.close()
 	if kind == "knowledge" || kind == "all" {
 		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
 		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
@@ -758,7 +759,8 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		// Rangfusion an, damit eine verborgene Zeile keine sichtbare verschiebt.
 		// Gezählt wird, was ausgeliefert wird, und nur das: der Überhang, den die
 		// Abfrage für die Filter holt, und was die Regel verwirft, ist nicht benutzt.
-		ks, err := a.st.SearchKnowledgeWith(q, store.KnowledgeSearch{
+		st, done := gaps.budget("knowledge")
+		ks, err := st.SearchKnowledgeWith(q, store.KnowledgeSearch{
 			Axes: filter, Union: r.URL.Query().Get("scope") == "union",
 			Limit: fetch, Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
 			NoRecord: true, Anchor: anchor, Origin: origin,
@@ -767,6 +769,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 			// author:gardener, das ist der qualifizierte Weg.
 			Settled: true,
 		})
+		err = done(err)
 		if err != nil {
 			if !gaps.add("knowledge", err) {
 				writeStoreError(w, http.StatusInternalServerError, err)
@@ -784,7 +787,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	// Die Standardsuche (all) enthält keine Sessions (Entscheidung #4447): sie
 	// laufen nur mit kind=sessions.
 	if kind == "sessions" && !anchor.Active() && !origin.Active() {
-		st, done := gaps.budget()
+		st, done := gaps.budget("sessions")
 		hits, err := a.searchSessions(st, pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch, store.SearchAuto)
 		err = done(err)
 		if err != nil {
@@ -800,7 +803,9 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	if kind == "requests" || kind == "all" {
 		// With embeddings the requests are ranked by words and by meaning; the
 		// filter, with the visibility of the reader, is the same SQL for both.
-		page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit, Commit: anchor.Commit, PR: anchor.PR, Origin: origin}), store.SearchAuto)
+		st, done := gaps.budget("requests")
+		page, err := st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit, Commit: anchor.Commit, PR: anchor.PR, Origin: origin}), store.SearchAuto)
+		err = done(err)
 		if err != nil {
 			if !gaps.add("requests", err) {
 				writeStoreError(w, http.StatusInternalServerError, err)

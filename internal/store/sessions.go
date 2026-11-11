@@ -399,7 +399,7 @@ func idsJSONOf(ids []int64) string {
 // während fn läuft.
 func (s *Store) eachSession(where string, args []any, fn func(Session) (bool, error)) error {
 	const page = 500
-	rows, err := s.db.Query(`SELECT id FROM sessions WHERE `+where+` ORDER BY last_seen_at DESC, id DESC`, args...)
+	rows, err := s.db.QueryContext(s.ctx(), `SELECT id FROM sessions WHERE `+where+` ORDER BY last_seen_at DESC, id DESC`, args...)
 	if err != nil {
 		return err
 	}
@@ -420,7 +420,7 @@ func (s *Store) eachSession(where string, args []any, fn func(Session) (bool, er
 	for start := 0; start < len(order); start += page {
 		end := min(start+page, len(order))
 		ids := order[start:end]
-		rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions WHERE id IN (SELECT value FROM json_each(?))`, idsJSONOf(ids))
+		rows, err := s.db.QueryContext(s.ctx(), `SELECT `+sessionCols+` FROM sessions WHERE id IN (SELECT value FROM json_each(?))`, idsJSONOf(ids))
 		if err != nil {
 			return err
 		}

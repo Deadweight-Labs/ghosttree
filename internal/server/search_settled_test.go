@@ -3,6 +3,7 @@ package server
 import (
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -96,4 +97,57 @@ func TestSearchAllAnswersWhenOneAreaFails(t *testing.T) {
 	v.Set("q", "zentrifol")
 	v.Set("kind", "sessions")
 	f.expect(t, "robin", 500, "GET", "/api/search?"+v.Encode(), nil)
+}
+
+// An area that runs out of its time budget is named as missing and the others
+// are answered, whichever it is: the budget is not the sessions' alone. The areas
+// run one after the other, so the search as a whole ends at its own limit too.
+func TestSearchAreaOutOfTimeIsAGapAndTheOthersAnswer(t *testing.T) {
+	f := accessAPI(t, true)
+	k := store.Knowledge{Type: "pitfall", Title: "zentrifol hängt", Body: "b", Confidence: "trusted"}
+	k.Scope, k.Person = scope.Axes{Project: accProject}, "mia"
+	if _, err := f.st.InsertKnowledge(k); err != nil {
+		t.Fatal(err)
+	}
+	old := areaBudgetFor
+	t.Cleanup(func() { areaBudgetFor = old })
+
+	for _, slow := range []string{"sessions", "requests"} {
+		areaBudgetFor = func(area string) time.Duration {
+			if area == slow {
+				return -time.Second
+			}
+			return areaBudget
+		}
+		// Several kinds named in the line: the qualified path.
+		v := url.Values{"q": {"zentrifol kind:knowledge,requests,session"}, "project": {accProject}}
+		res := decode[searchResult](t, f.expect(t, "robin", 200, "GET", "/api/search?"+v.Encode(), nil))
+		if len(res.Knowledge) != 1 || len(res.Unavailable) != 1 || res.Unavailable[0] != (store.SearchGap{Area: slow, Reason: store.GapTimeout}) {
+			t.Errorf("qualified, %s out of time: %+v / %+v", slow, res.Knowledge, res.Unavailable)
+		}
+	}
+
+	// The default search of all kinds: knowledge answers when the requests run out of time.
+	areaBudgetFor = func(area string) time.Duration {
+		if area == "requests" {
+			return -time.Second
+		}
+		return areaBudget
+	}
+	v := url.Values{"q": {"zentrifol"}, "project": {accProject}}
+	res := decode[searchResult](t, f.expect(t, "robin", 200, "GET", "/api/search?"+v.Encode(), nil))
+	if len(res.Knowledge) != 1 || len(res.Unavailable) != 1 || res.Unavailable[0] != (store.SearchGap{Area: "requests", Reason: store.GapTimeout}) {
+		t.Errorf("all, requests out of time: %+v / %+v", res.Knowledge, res.Unavailable)
+	}
+	// Knowledge out of time: the requests are still answered.
+	areaBudgetFor = func(area string) time.Duration {
+		if area == "knowledge" {
+			return -time.Second
+		}
+		return areaBudget
+	}
+	res = decode[searchResult](t, f.expect(t, "robin", 200, "GET", "/api/search?"+v.Encode(), nil))
+	if len(res.Knowledge) != 0 || len(res.Unavailable) != 1 || res.Unavailable[0] != (store.SearchGap{Area: "knowledge", Reason: store.GapTimeout}) {
+		t.Errorf("all, knowledge out of time: %+v / %+v", res.Knowledge, res.Unavailable)
+	}
 }
