@@ -187,6 +187,9 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 }
 
 func (a *app) painFail(w http.ResponseWriter, r *http.Request, err error) {
+	if a.secretRefused(w, r, err, "") {
+		return
+	}
 	switch {
 	case errors.Is(err, store.ErrAccessForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -240,6 +243,9 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 		ev = pain.Evidence{}
 	}
 	if _, err := a.access(r).SetPainState(id, to, r.FormValue("remaining"), ev, painStateNote(to, r.FormValue("why"), r.FormValue("note")), by); err != nil {
+		if a.secretRefused(w, r, err, a.painHref(r, id)) {
+			return
+		}
 		if code := requestdomain.Code(err); code != "" {
 			a.failFormTo(w, r, a.painHref(r, id), http.StatusUnprocessableEntity, a.langFor(r).msg(painFailKey(code)), painFailField(code))
 			return

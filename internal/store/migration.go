@@ -353,6 +353,10 @@ func (s *Store) MigrationEvidenceForKnowledge(id int64) (MigrationEvidence, erro
 // InsertMigrated atomically stores an entry, its source proof and its ledger
 // state. The stable item key makes retries after a partial run idempotent.
 func (s *Store) InsertMigrated(in MigratedEntry) (MigratedResult, error) {
+	// The text of a file that moves into ghosttree is a write like any other.
+	if err := refuseSecrets("title", in.Knowledge.Title, "body", in.Knowledge.Body, "quote", in.Quote); err != nil {
+		return MigratedResult{}, err
+	}
 	if s.writer != nil {
 		return queueValue(s, []any{in}, func(d *Store, p []any) (MigratedResult, error) { return d.InsertMigrated(p[0].(MigratedEntry)) })
 	}

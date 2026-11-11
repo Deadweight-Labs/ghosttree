@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -72,6 +73,8 @@ func coordCandidateLabel(l lang, candidate string) string {
 
 func coordHTTPError(l lang, w http.ResponseWriter, err error) {
 	switch {
+	case requestdomain.Code(err) == "secret_detected":
+		http.Error(w, l.msg("err.write_secret"), http.StatusUnprocessableEntity)
 	case errors.Is(err, store.ErrCoordNotFound):
 		http.Error(w, "coordination target not found", http.StatusNotFound)
 	case errors.Is(err, store.ErrCoordForbidden):

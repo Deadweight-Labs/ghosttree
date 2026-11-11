@@ -240,6 +240,9 @@ func (a *ProjectAccess) packageFeatureChecks(project string, pr int64) []request
 // diesen PR angesehen und richtig befunden wurde, ohne neue Fassung: ein Umbau,
 // der kein Verhalten ändert. Die Notiz sagt, warum sie noch stimmt.
 func (a *ProjectAccess) ConfirmFeatureUnchanged(id, pr int64, note, person string) error {
+	if err := refuseSecrets("note", note); err != nil {
+		return err
+	}
 	f, err := a.featureFor(id, ActWork)
 	if err != nil {
 		return err

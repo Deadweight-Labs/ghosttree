@@ -1199,6 +1199,15 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   on a Unix socket that holds the API key; the agent gets a run token. The
   harness writes an isolation report before and after each session and refuses
   to start an agent when it does not pass.
+- Free text is checked for secrets when it is written, with the check that
+  documents already had (PAIN-17): knowledge, requests with their criteria,
+  evidence and reasons, pains, ideas with texts, concepts and decisions,
+  comments, messages, threads, features, work packages and human tasks.
+  A text with a password, key or token behind a label is refused with 422
+  `secret_detected`, naming the field, line, column and label, never the value,
+  and saying what to do; nothing is stored. Editing an old entry does not
+  re-check a part it leaves as it was. A part of a value in angle brackets
+  (`ap2-<id>`) counts as a placeholder.
 - Dependency updates: MCP Go SDK 1.8.0, `modernc.org/sqlite` 1.60, `golang.org/x/sys`,
   GoReleaser action and CodeQL action.
 

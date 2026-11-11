@@ -111,6 +111,13 @@ func CleanAnswerOptions(in []string) ([]string, error) {
 		seen[strings.ToLower(text)] = true
 		out = append(out, text)
 	}
+	var fields []string
+	for i, o := range out {
+		fields = append(fields, indexed("options", i), o)
+	}
+	if err := refuseSecrets(fields...); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

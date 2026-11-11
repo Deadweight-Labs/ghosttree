@@ -347,6 +347,9 @@ func workshopBack(project string, id int64, key, value string) string {
 // workshopFail antwortet auf einen Fehler eines Schrittes: ohne Recht 403, unbekannt oder fremd
 // 404, eine Regel des Stores als Hinweis auf der Idee.
 func (a *app) workshopFail(w http.ResponseWriter, r *http.Request, err error, project string, ideaID int64) {
+	if a.secretRefused(w, r, err, workshopBack(project, ideaID, "", "")) {
+		return
+	}
 	switch {
 	case errors.Is(err, store.ErrAccessForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)

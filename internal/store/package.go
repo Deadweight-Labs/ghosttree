@@ -337,6 +337,9 @@ func (s *Store) AddPackageRequests(id int64, members []requestdomain.PackageMemb
 	if len(members) == 0 {
 		return requestdomain.PackageDetail{}, requestdomain.NewRuleError("requests_required", "name at least one request", "pass request ids with a role", nil)
 	}
+	if err := refuseSecrets("reason", reason); err != nil {
+		return requestdomain.PackageDetail{}, err
+	}
 	if s.writer != nil {
 		return queueValue(s, []any{id, members, reason, person}, func(d *Store, p []any) (requestdomain.PackageDetail, error) {
 			return d.AddPackageRequests(p[0].(int64), p[1].([]requestdomain.PackageMember), p[2].(string), p[3].(string))
@@ -379,6 +382,9 @@ func packageClosed(id int64) error {
 func (s *Store) RemovePackageRequest(id, requestID int64, reason, person string) (requestdomain.PackageDetail, error) {
 	if strings.TrimSpace(reason) == "" {
 		return requestdomain.PackageDetail{}, requestdomain.NewRuleError("removal_reason_required", "removing a request from a package has to say why", "pass the reason it no longer belongs", nil)
+	}
+	if err := refuseSecrets("reason", reason); err != nil {
+		return requestdomain.PackageDetail{}, err
 	}
 	if s.writer != nil {
 		return queueValue(s, []any{id, requestID, reason, person}, func(d *Store, p []any) (requestdomain.PackageDetail, error) {
@@ -507,7 +513,7 @@ func checkPackageLabel(s string) error {
 			return requestdomain.NewRuleError("label_invalid", "package name and branch must be a single line without control characters", "remove line breaks and control characters", nil)
 		}
 	}
-	return nil
+	return refuseSecrets("name", s)
 }
 
 const maxPackageLabel = 200
