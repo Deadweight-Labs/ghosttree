@@ -18,6 +18,8 @@ type requestRecord struct {
 	route        string
 	errorClass   string
 	errorMessage string
+	// phases are the partial times a measured route fills in (phases.go).
+	phases *phaseSet
 }
 
 type requestRecordKey struct{}
@@ -141,6 +143,9 @@ func (a *api) telemetry(next http.Handler) http.Handler {
 				}
 				if record.actor != "" {
 					attributes = append(attributes, "actor", record.actor)
+				}
+				if phases := record.phases.attr(); phases != nil {
+					attributes = append(attributes, *phases)
 				}
 				if record.errorClass != "" {
 					attributes = append(attributes, "error_class", record.errorClass)

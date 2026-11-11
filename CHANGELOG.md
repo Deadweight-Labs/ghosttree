@@ -161,6 +161,13 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- The `http_request` log line of `/api/context/relevant` and
+  `/api/context/bootstrap` carries the group `phases`: the milliseconds spent
+  in each step (`pool_wait`, `access`, `knowledge`, `rights`, `claim`,
+  `project_tie`, `render`, and for the prompt the steps of the relevance search
+  and of the hint). Evaluate it with `journalctl` and `jq` (see
+  `docs/operations.md`). `cmd/hookbench` builds a test database of production
+  size and measures both routes with the same steps, also under load.
 - The search field answers while you type: Ctrl+K (Cmd+K) or `/` jumps into
   it, a number (`#217`, `REQ-12`, `pr:5`) lists the object it names first, and
   the qualifier being typed is completed (`is:`, `kind:`, `branch:`, `package:`,
@@ -482,6 +489,26 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   with the right to read its transcript, person and date with the right to read its
   metadata, and otherwise a number; anonymous readers and other projects see
   nothing. A collector talking to an older server skips the new route without errors.
+  The collector also reads the hash itself (IDEA-31 P2, source `observed`): after a
+  successful commit call it reads the reflog of `HEAD` in the working directory the
+  tool ran in, within the time window of the call, and reports the full hash, the
+  kind (`commit`, `amend`, `rebase`, `cherry-pick`, `merge`, `am`, `revert`) and the
+  patch ID of each commit it made, also for `git commit -q`. It starts at most three
+  `git` processes per call (none without a successful commit call), reads only the
+  directory of the tool, below it, or a worktree of the same repository (never a
+  `git -C` into another repository), uses no network, and at most 300 lookups per
+  transcript and ten minutes, only for calls of the last 30 days. The server checks
+  an observed hash like a reported one: time window and author (strong or weak),
+  and only for sessions of the reporting account. An older server ignores the new
+  field.
+  `ctx db backfill-session-git --db <path>` does the same for the transcripts
+  already stored (IDEA-31 P5): it recognises the calls in the stored lines, writes
+  what the route writes, runs the match against the pull request commits, and
+  prints the coverage (commit calls, pull requests and commits with sessions, split
+  into reported, observed and matched). It runs beside the server in short
+  transactions, is repeatable and resumable (`--resume`, `--after-id`), and
+  `--dry-run` runs the same steps against temporary copies of the three tables
+  without writing to the file. See `deploy/README.md`.
 - Reactions on comments, ideas and issues from a fixed list (+1, -1, laugh,
   hooray, confused, heart, rocket, eyes), `PUT|DELETE|GET /api/reactions`,
   `ctx react`, `reaction_set`, `reaction_list`: members react, guests read.
@@ -1062,6 +1089,21 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- The two hook routes are faster (PAIN-76). On a test database of the size of a
+  production one (4,500 entries, 3 million chunks, `cmd/hookbench`) the
+  briefing at session start takes 25 ms instead of 150 ms (p50), 28 ms instead
+  of 180 to 400 ms (p95), and a prompt uses a quarter less processor time.
+  Counting the use of an entry rewrote its full-text row (the trigger ran on
+  every update of the table), so every briefing held the writer for tens of
+  milliseconds and the next write waited behind it; the trigger now runs only
+  when the title or the body change and replaces itself once on start. The
+  briefing no longer waits for the writer to record what it delivered (the
+  queue stays first in, first out, so a following prompt still finds the
+  entries taken). The language gate keeps its sample and its verdicts per
+  account for a short while, the rights check reads the authors of all entries
+  in one query instead of one per entry, the fixed queries of the gate are
+  prepared once, and the hint that looks for a word in the sessions gives up
+  after 100 ms and leaves the hint out.
 - `request action=start_work` finds the own session in a project crowded with
   newer sessions of other agents (an orchestrator with workers in worktrees):
   it looks through 200 sessions instead of 20.

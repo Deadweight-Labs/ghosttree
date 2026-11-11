@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -200,6 +201,15 @@ func (s *Store) knowledgeAuthorID(id int64) int64 {
 	return acct
 }
 
+// authorRows reads the authors of the entries named in a JSON array of ids.
+func (s *Store) authorRows(idsJSON string) (*sql.Rows, error) {
+	if s.reader != nil {
+		return s.reader.authorRows(idsJSON)
+	}
+	return s.db.QueryContext(s.ctx(), `SELECT knowledge_id, account_id FROM knowledge_authors
+		WHERE knowledge_id IN (SELECT value FROM json_each(?))`, idsJSON)
+}
+
 // machineDeliveryIndex: Maschinenname -> Konto-Id des Besitzers und die Konto-Id
 // des Instanz-Owners (für Namen ohne Zeile und Altbestand). Namen von Personen
 // werden hier nicht mehr aufgelöst: die Autorschaft steht als Konto-Id in
@@ -234,7 +244,7 @@ func (s *Store) machineDeliveryIndex() (map[string]int64, int64) {
 // bleibt für seinen Autor sichtbar, wird nur nicht zugestellt.
 func (a *ProjectAccess) machineAuthorDelivers(k Knowledge) bool {
 	a.loadOwners()
-	author := a.st.knowledgeAuthorID(k.ID)
+	author := a.entryAuthor(k.ID)
 	if author == 0 {
 		// Ohne Besitzer: gehört dem Instanz-Owner.
 		author = a.ownerDefault

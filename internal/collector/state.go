@@ -72,7 +72,7 @@ func (st *State) identity(path string, compute func() touchIdentity) touchIdenti
 // gitScanner gibt den Leser der Git-Vorgänge dieses Transkripts zurück. Die
 // Zuordnung zu einer Session kann sich ändern (späte Metadaten); der Leser
 // behält dann seine wartenden Aufrufe und übernimmt die neue Kennung.
-func (st *State) gitScanner(path, harness, externalID string) *gitScan {
+func (st *State) gitScanner(path, harness, externalID, checkout string) *gitScan {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.gitScans == nil {
@@ -81,9 +81,10 @@ func (st *State) gitScanner(path, harness, externalID string) *gitScan {
 	g, ok := st.gitScans[path]
 	if !ok {
 		g = newGitScan(harness, externalID)
+		g.observer = newObserver()
 		st.gitScans[path] = g
 	}
-	g.harness, g.externalID = harness, externalID
+	g.harness, g.externalID, g.sessionCwd = harness, externalID, checkout
 	return g
 }
 

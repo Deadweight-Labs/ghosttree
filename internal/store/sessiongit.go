@@ -226,10 +226,29 @@ type SessionGitEvent struct {
 	Branch string `json:"branch,omitempty"`
 	// SHAs sind die Hashes aus der Ausgabe von git commit (kurz oder voll).
 	SHAs []string `json:"shas,omitempty"`
+	// Observed sind die Commits, die der Collector nach dem erfolgreichen Aufruf im
+	// Reflog des Repos gefunden hat (P2): volle SHA, Art und Patch-ID. Auch bei
+	// git commit -q, das keine SHA ausgibt.
+	Observed []ObservedCommit `json:"observed,omitempty"`
 	// PR und PRRemote stammen aus der Adresse, die gh pr create ausgibt, bzw. aus
 	// der Meldung von gh pr merge.
 	PR       int64  `json:"pr,omitempty"`
 	PRRemote string `json:"pr_remote,omitempty"`
+}
+
+// ObservedCommit ist ein Commit, den der Collector im Reflog des Arbeitsverzeichnisses
+// im Zeitfenster eines Aufrufs gelesen hat.
+type ObservedCommit struct {
+	// SHA ist voll (40 oder 64 Hexzeichen).
+	SHA string `json:"sha"`
+	// Op nennt, welcher Befehl den Commit erzeugt hat (commit, amend, rebase,
+	// cherry-pick, merge, am, revert), wie das Reflog es sagt.
+	Op string `json:"op,omitempty"`
+	// PatchID ist die Ausgabe von git patch-id --stable für den Commit; leer, wenn
+	// sie sich nicht bilden ließ (Merge, leerer Commit, zu groß).
+	PatchID string `json:"patch_id,omitempty"`
+	// CommittedAt ist die Committer-Zeit (RFC 3339).
+	CommittedAt string `json:"committed_at,omitempty"`
 }
 
 // SessionGitResult sagt, was ein Stapel bewirkt hat.
@@ -303,15 +322,9 @@ func (s *Store) RecordSessionGitEvents(account int64, machine string, events []S
 	if usedToday >= maxSessionGitEventsPerDay {
 		return SessionGitResult{}, ErrGitEventQuota
 	}
-	type gitSession struct {
-		id              int64
-		project, branch string
-		events, shas    int
-	}
 	sessions := map[string]*gitSession{}
 	ts := now()
-	reportedShas := map[string][]string{}
-	windows := map[string][]gitWindow{}
+	batch := newGitBatch()
 	for _, e := range clean {
 		key := e.Harness + "\x00" + e.SessionExternalID
 		sess, ok := sessions[key]
@@ -342,106 +355,23 @@ func (s *Store) RecordSessionGitEvents(account int64, machine string, events []S
 			res.Capped++
 			continue
 		}
-		branch := e.Branch
-		if branch == "" && e.Kind == GitEventCommit {
-			branch = sess.branch
-		}
-		ok1 := 0
-		if e.OK {
-			ok1 = 1
-		}
-		r, err := tx.Exec(`INSERT INTO session_git_events(session_id,project,seq,kind,op,started_at,ended_at,ok,branch,account_id)
-			VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,seq,kind) DO NOTHING`,
-			sess.id, sess.project, e.Seq, e.Kind, e.Op, e.StartedAt, e.EndedAt, ok1, branch, account)
-		if err != nil {
+		if err := writeGitEvent(tx, sess, account, e, ts, batch, &res); err != nil {
 			return SessionGitResult{}, err
 		}
-		if n, _ := r.RowsAffected(); n > 0 {
-			res.Recorded++
-			sess.events++
-		}
-		if sess.project == "" {
-			// Ohne Projekt gibt es nichts, woran sich eine SHA oder ein PR binden
-			// ließe: das Ereignis bleibt (Abdeckung), mehr nicht.
-			continue
-		}
-		op := e.Op
-		if op == "" {
-			op = "commit"
-		}
-		for _, sha := range e.SHAs {
-			if sess.shas >= maxSessionGitSHAsPerSession {
-				res.Capped++
-				break
-			}
-			added, err := putSessionCommit(tx, sessionCommit{
-				SessionID: sess.id, Project: sess.project, SHA: sha, Source: CommitSourceReported,
-				Op: op, ChunkSeq: e.Seq, CommittedAt: e.EndedAt,
-			}, ts)
-			if err != nil {
-				return SessionGitResult{}, err
-			}
-			if added {
-				sess.shas++
-			}
-			reportedShas[sess.project] = append(reportedShas[sess.project], sha)
-		}
-		if len(e.SHAs) > 0 {
-			if _, err := tx.Exec(`UPDATE session_git_events SET resolved=1 WHERE session_id=? AND seq=? AND kind=?`, sess.id, e.Seq, e.Kind); err != nil {
-				return SessionGitResult{}, err
-			}
-		}
-		// Ein PR, den ein fehlgeschlagener Aufruf nennt (gh pr create schlägt fehl und
-		// gibt die Adresse des schon bestehenden PRs aus), ist keiner, den die
-		// Session angelegt hat.
-		if e.PR > 0 && e.PRRemote == sess.project && e.OK {
-			var src string
-			switch e.Kind {
-			case GitEventPRCreate:
-				src = PRSourceCreated
-			case GitEventPRMerge:
-				src = PRSourceMerged
-			}
-			if src != "" {
-				if _, err := tx.Exec(`INSERT OR IGNORE INTO session_prs(session_id,project,pr,source,chunk_seq,recorded_at) VALUES(?,?,?,?,?,?)`,
-					sess.id, sess.project, e.PR, src, e.Seq, ts); err != nil {
-					return SessionGitResult{}, err
-				}
-			}
-		}
-		if e.Kind == GitEventCommit && e.OK && len(e.SHAs) == 0 {
-			windows[sess.project] = append(windows[sess.project], gitWindow{from: e.StartedAt, to: e.EndedAt})
-		}
 	}
-	// Abgleich: erst die gemeldeten SHAs dieses Stapels gegen die Commits der
-	// PRs (bestätigen, verlängern oder verwerfen), dann die Zeitfenster der
-	// Vorgänge ohne SHA. Die Arbeit ist je Stapel gedeckelt (maxResolvePerRun,
+	// Abgleich: erst die gemeldeten und beobachteten SHAs dieses Stapels gegen die
+	// Commits der PRs (bestätigen, verlängern oder verwerfen), dann die Zeitfenster
+	// der Vorgänge ohne SHA. Die Arbeit ist je Stapel gedeckelt (maxResolvePerRun,
 	// maxMatchTime).
 	m := newMatcher(tx, owner)
-	for project, list := range reportedShas {
-		var known []pullCommitAt
-		for _, sha := range uniqueStrings(list) {
-			found, err := pullCommitsWithPrefix(tx, project, sha)
-			if err != nil {
-				return SessionGitResult{}, err
-			}
-			known = append(known, found...)
-		}
-		if err := m.settleReported(project, known); err != nil {
-			return SessionGitResult{}, err
-		}
+	if err := m.settleClaims(batch); err != nil {
+		return SessionGitResult{}, err
 	}
-	for project, ws := range windows {
-		commits, err := m.commitsInWindows(project, ws)
-		if err != nil {
-			return SessionGitResult{}, err
-		}
-		n, err := m.resolveAll(project, commits)
-		if err != nil {
-			return SessionGitResult{}, err
-		}
-		res.Matched += n
+	n, err := m.matchWindows(batch)
+	if err != nil {
+		return SessionGitResult{}, err
 	}
+	res.Matched += n
 	if res.Recorded > 0 {
 		if _, err := tx.Exec(`INSERT INTO session_git_quota(account_id,day,events) VALUES(?,?,?)
 			ON CONFLICT(account_id,day) DO UPDATE SET events=events+excluded.events`, account, day, res.Recorded); err != nil {
@@ -455,6 +385,136 @@ func (s *Store) RecordSessionGitEvents(account int64, machine string, events []S
 		return SessionGitResult{}, err
 	}
 	return res, nil
+}
+
+// gitSession ist die Session eines Vorgangs mit den Zählern ihrer Grenzen.
+type gitSession struct {
+	id              int64
+	project, branch string
+	events, shas    int
+}
+
+// gitBatch sammelt, was ein Stapel von Vorgängen dem Abgleich hinterlässt: die
+// SHAs, die Sessions gemeldet oder beobachtet haben und gegen die Commits der PRs
+// zu prüfen sind, und die Zeitfenster der Commit-Vorgänge ohne jede SHA.
+type gitBatch struct {
+	claimed map[string][]string
+	windows map[string][]gitWindow
+}
+
+func newGitBatch() *gitBatch {
+	return &gitBatch{claimed: map[string][]string{}, windows: map[string][]gitWindow{}}
+}
+
+// writeGitEvent schreibt einen Vorgang einer Session fort und alles, was sich ohne
+// den Abgleich daraus ergibt: den Vorgang selbst, die gemeldeten und beobachteten
+// SHAs, den PR. Der Abgleich gegen die PRs (settleClaims, matchWindows) folgt aus
+// dem Sammelwert batch, damit der Aufrufer entscheidet, wann und in welcher
+// Transaktion er läuft: der Server gleich im selben Stapel, der Bestandslauf
+// (BackfillSessionGit) in eigenen, kurzen Transaktionen.
+//
+// Die Grenzen je Session prüft der Aufrufer (sess.events), die SHAs hier.
+func writeGitEvent(tx dbTx, sess *gitSession, account int64, e SessionGitEvent, ts string, batch *gitBatch, res *SessionGitResult) error {
+	branch := e.Branch
+	if branch == "" && e.Kind == GitEventCommit {
+		branch = sess.branch
+	}
+	ok1 := 0
+	if e.OK {
+		ok1 = 1
+	}
+	r, err := tx.Exec(`INSERT INTO session_git_events(session_id,project,seq,kind,op,started_at,ended_at,ok,branch,account_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,seq,kind) DO NOTHING`,
+		sess.id, sess.project, e.Seq, e.Kind, e.Op, e.StartedAt, e.EndedAt, ok1, branch, account)
+	if err != nil {
+		return err
+	}
+	if n, _ := r.RowsAffected(); n > 0 {
+		res.Recorded++
+		sess.events++
+	}
+	if sess.project == "" {
+		// Ohne Projekt gibt es nichts, woran sich eine SHA oder ein PR binden
+		// ließe: das Ereignis bleibt (Abdeckung), mehr nicht.
+		return nil
+	}
+	op := e.Op
+	if op == "" {
+		op = "commit"
+	}
+	for _, sha := range e.SHAs {
+		if sess.shas >= maxSessionGitSHAsPerSession {
+			res.Capped++
+			break
+		}
+		added, err := putSessionCommit(tx, sessionCommit{
+			SessionID: sess.id, Project: sess.project, SHA: sha, Source: CommitSourceReported,
+			Op: op, ChunkSeq: e.Seq, CommittedAt: e.EndedAt,
+		}, ts)
+		if err != nil {
+			return err
+		}
+		if added {
+			sess.shas++
+		}
+		batch.claimed[sess.project] = append(batch.claimed[sess.project], sha)
+	}
+	// Beobachtet: der Collector hat die SHA im Reflog des Repos gelesen. Für die
+	// Rechte ist das dieselbe Behauptung wie eine gemeldete SHA (der Server kann das
+	// Repo nicht sehen); settleClaims prüft beide gleich, sobald er die Commits des
+	// PRs kennt.
+	for _, o := range e.Observed {
+		if sess.shas >= maxSessionGitSHAsPerSession {
+			res.Capped++
+			break
+		}
+		oop := o.Op
+		if oop == "" {
+			oop = "commit"
+		}
+		at := o.CommittedAt
+		if at == "" {
+			at = e.EndedAt
+		}
+		added, err := putSessionCommit(tx, sessionCommit{
+			SessionID: sess.id, Project: sess.project, SHA: o.SHA, Source: CommitSourceObserved,
+			Op: oop, ChunkSeq: e.Seq, PatchID: o.PatchID, CommittedAt: at,
+		}, ts)
+		if err != nil {
+			return err
+		}
+		if added {
+			sess.shas++
+		}
+		batch.claimed[sess.project] = append(batch.claimed[sess.project], o.SHA)
+	}
+	if len(e.SHAs) > 0 || len(e.Observed) > 0 {
+		if _, err := tx.Exec(`UPDATE session_git_events SET resolved=1 WHERE session_id=? AND seq=? AND kind=?`, sess.id, e.Seq, e.Kind); err != nil {
+			return err
+		}
+	}
+	// Ein PR, den ein fehlgeschlagener Aufruf nennt (gh pr create schlägt fehl und
+	// gibt die Adresse des schon bestehenden PRs aus), ist keiner, den die
+	// Session angelegt hat.
+	if e.PR > 0 && e.PRRemote == sess.project && e.OK {
+		var src string
+		switch e.Kind {
+		case GitEventPRCreate:
+			src = PRSourceCreated
+		case GitEventPRMerge:
+			src = PRSourceMerged
+		}
+		if src != "" {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO session_prs(session_id,project,pr,source,chunk_seq,recorded_at) VALUES(?,?,?,?,?,?)`,
+				sess.id, sess.project, e.PR, src, e.Seq, ts); err != nil {
+				return err
+			}
+		}
+	}
+	if e.Kind == GitEventCommit && e.OK && len(e.SHAs) == 0 && len(e.Observed) == 0 {
+		batch.windows[sess.project] = append(batch.windows[sess.project], gitWindow{from: e.StartedAt, to: e.EndedAt})
+	}
+	return nil
 }
 
 // cleanSessionGitEvent prüft einen Vorgang und bringt ihn in die gespeicherte
@@ -529,6 +589,10 @@ func cleanSessionGitEvent(e SessionGitEvent) (SessionGitEvent, error) {
 	if e.Kind != GitEventCommit {
 		e.SHAs = nil
 	}
+	e.Observed = cleanObserved(e.Observed)
+	if e.Kind != GitEventCommit || !e.OK {
+		e.Observed = nil
+	}
 	if e.PR < 0 || e.PR > 1<<31 {
 		return bad("pr must be a pull request number")
 	}
@@ -544,6 +608,40 @@ func cleanSessionGitEvent(e SessionGitEvent) (SessionGitEvent, error) {
 		e.PR, e.PRRemote = 0, ""
 	}
 	return e, nil
+}
+
+// cleanObserved lässt nur Commits mit voller SHA stehen (eine kürzere kann der
+// Reflog nicht liefern; sie wäre eine Behauptung ohne Gewicht), je Vorgang höchstens
+// maxGitEventSHAs, ohne Dubletten. Eine Patch-ID, die keine ist, entfällt; der
+// Commit bleibt.
+func cleanObserved(in []ObservedCommit) []ObservedCommit {
+	var out []ObservedCommit
+	seen := map[string]bool{}
+	for _, o := range in {
+		o.SHA = gitanchor.Normalize(o.SHA)
+		if (len(o.SHA) != 40 && len(o.SHA) != 64) || !gitanchor.ValidPrefix(o.SHA) || seen[o.SHA] {
+			continue
+		}
+		seen[o.SHA] = true
+		if !gitEventOps[o.Op] {
+			o.Op = "commit"
+		}
+		if p := gitanchor.Normalize(o.PatchID); len(p) >= 40 && len(p) <= 64 && gitanchor.ValidPrefix(p) {
+			o.PatchID = p
+		} else {
+			o.PatchID = ""
+		}
+		if t, ok := parseGitTime(o.CommittedAt); ok {
+			o.CommittedAt = t.Format(time.RFC3339)
+		} else {
+			o.CommittedAt = ""
+		}
+		out = append(out, o)
+		if len(out) >= maxGitEventSHAs {
+			break
+		}
+	}
+	return out
 }
 
 func parseGitTime(s string) (time.Time, bool) {
@@ -585,8 +683,9 @@ func putSessionCommit(tx dbTx, c sessionCommit, recordedAt string) (added bool, 
 		return false, nil
 	case err == nil:
 		// old ist die kurze Fassung von c.SHA.
-		if _, err := tx.Exec(`UPDATE session_commits SET sha=?, committed_at=CASE WHEN committed_at='' THEN ? ELSE committed_at END
-			WHERE session_id=? AND sha=?`, c.SHA, c.CommittedAt, c.SessionID, old); err != nil {
+		if _, err := tx.Exec(`UPDATE session_commits SET sha=?, committed_at=CASE WHEN committed_at='' THEN ? ELSE committed_at END,
+			patch_id=CASE WHEN patch_id='' THEN ? ELSE patch_id END
+			WHERE session_id=? AND sha=?`, c.SHA, c.CommittedAt, c.PatchID, c.SessionID, old); err != nil {
 			return false, err
 		}
 		return false, nil
