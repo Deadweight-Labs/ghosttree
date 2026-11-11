@@ -161,6 +161,12 @@ func (a *api) knowledgeTriage(w http.ResponseWriter, r *http.Request) {
 	}
 	out := triageResult{Items: make([]triageEntry, 0, len(items))}
 	for _, it := range items {
+		// The proposal names the project the entry arose in. A reader who may not
+		// open that project must not learn its name from the review: the proposal
+		// is left out (a move to a project one cannot see is not theirs to make).
+		if it.Project != "" && !pa.CanSeeProject(it.Project, store.ResKnowledge) {
+			continue
+		}
 		view := pa.KnowledgeViews([]store.Knowledge{it.Knowledge})
 		if len(view) == 0 {
 			continue

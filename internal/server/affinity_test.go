@@ -234,6 +234,12 @@ func TestEverywhereAndTriageEndpoints(t *testing.T) {
 	if len(moves) != 1 || moves[0] != f.here {
 		t.Errorf("review of %s proposes moving %v, want only %d (arose in exactly this project)", accProject, moves, f.here)
 	}
+	// mia has no role in accOther: the entry that arose there is not proposed to
+	// her, so the review does not reveal that project's name.
+	out = f.expect(t, "mia", 200, "GET", "/api/knowledge-triage", nil)
+	if strings.Contains(out, accOther) || strings.Contains(out, "zorblaxen arose elsewhere") && strings.Contains(out, `"kind":"move"`) {
+		t.Errorf("the review names a project mia cannot read: %s", out)
+	}
 	// Another account sees nothing of mia's machine.
 	out = f.expect(t, "robin", 200, "GET", "/api/knowledge-triage?project="+accProject, nil)
 	if strings.Contains(out, "arose in this project") {
