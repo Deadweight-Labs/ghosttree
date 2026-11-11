@@ -7,7 +7,7 @@ in einer frischen Session richtig anwendet. Er vergleicht vier Arme:
 |---|---|
 | `vanilla` | keins (Auto-Memory aus, selbst angelegte Gedächtnisdateien werden nach jeder Session entfernt) |
 | `native` | Claude Codes eingebaute Auto-Memory, `CLAUDE.md` erlaubt |
-| `claudemem` | claude-mem, offizieller Installweg `npx claude-mem install --provider claude` |
+| `claudemem` | claude-mem, offizieller Installweg `npx claude-mem install --provider claude` (nur noch in den Ergebnissen der ersten Messung; läuft nicht in der Sandbox) |
 | `ghosttree` | `ctx setup` + `ctx install claude` gegen einen frischen lokalen `ctx serve` je Kette |
 
 Präregistrierung und Ergebnis stehen im ghosttree-Dokument
@@ -75,64 +75,102 @@ Mit `BENCH_NURLEARN_TEMPLATE` lässt sich eine eigene Kopie angeben.
 
 ## Voraussetzungen
 
-- Linux, Go, Node/npx, `uv`, Python 3.11+, git
-- Claude Code (`claude`) und ein Zugang, den `BENCH_AGENT` setzt: entweder
-  `claude` selbst oder ein Wrapper, der `ANTHROPIC_BASE_URL` und
-  `ANTHROPIC_AUTH_TOKEN` exportiert und `claude` aufruft
-- `ctx` aus diesem Repo (`make build`)
+- Linux, Go, Python 3.11+, git, `socat`
+- Docker mit dem Sandbox-Image (Standard) oder bubblewrap (`bwrap`, nur für lokale Probeläufe)
+- Claude Code (`claude`): im Image bzw. bei bwrap der `claude` des Hosts
+- ein Modellzugang: die Umgebungsvariable `ANTHROPIC_API_KEY` (oder die in
+  `BENCH_UPSTREAM_KEY_ENV` genannte) gehört dem Modell-Proxy des Harness und nur ihm
+- `ctx` aus diesem Repo (`make build`) für den ghosttree-Arm
 
-## Sicherheit: Agenten laufen ohne Rückfragen
+## Sicherheit: Agenten laufen in einer Sandbox
 
-`bench.py` startet jede Session mit `--dangerously-skip-permissions`. Nur
-so laufen Sessions unbeaufsichtigt, und alle Arme arbeiten mit demselben
-Werkzeugumfang. Eigenes HOME, `env -i` und eigenes `TMPDIR` je Kette
-trennen **nur die Konfiguration**. Eine Sicherheitsgrenze sind sie nicht:
-Der Agent läuft unter der Benutzerkennung, die den Harness startet, und
-kann per Bash alles lesen und ändern, was dieser Benutzer darf
-(echtes HOME, SSH-Schlüssel, andere Repositories), dazu das Netz.
+`bench.py` startet jede Session mit `--dangerously-skip-permissions`. Nur so laufen Sessions
+unbeaufsichtigt, und alle Arme arbeiten mit demselben Werkzeugumfang. Die Grenze zieht deshalb
+die Sandbox (`harness/sandbox.py`), nicht der Agent. **Ohne nachgewiesene Isolation startet kein Agent.**
 
-Deshalb nur auf einer Maschine oder unter einem Konto fahren, das dafür
-vorgesehen ist:
+Jede Session, jeder `git`-, `ctx`- und `go test`-Aufruf auf Dateien aus dem Agenten-HOME läuft in einer
+Sandbox mit:
 
-- eigener, unprivilegierter Benutzer ohne Zugriff auf persönliche Daten
-  und Schlüssel, `BENCH_BASE` und `BENCH_RUNS` gehören diesem Benutzer, oder
-- jede Kette in einem Wegwerf-Container bzw. einer VM mit eingeschränktem
-  Netz (nur der Modell-Endpunkt und die Paketquellen, die die Arme zum
-  Installieren brauchen).
+- **keinem Netz** (Container: `--network none`; bwrap: `--unshare-all`). Der Agent erreicht weder das
+  Internet noch den Host.
+- **nur lesbarer Wurzel**, ohne Capabilities, mit `no-new-privileges`, als Benutzer ohne root, mit Grenzen
+  für CPU, Speicher und Prozesse (nur Container).
+- **Wegwerf-HOME** je Kette unter `$BENCH_RUNS`, eingehängt als `/home/agent`. Das HOME des Hosts
+  und alles darunter ist nicht sichtbar. Gedächtnis eines Arms liegt nur in diesem HOME.
+- **einer leeren Umgebung**: nur Namen aus `sandbox.ALLOWED_ENV_NAMES`, nichts wird geerbt. Auch bwrap
+  selbst startet mit leerer Umgebung, weil sein Init-Prozess in der Sandbox bliebe und `/proc/1/environ`
+  sonst die Umgebung des Harness verriete (die Probe hat das gefunden).
+- **Modellzugang nur über einen Proxy** (`harness/modelproxy.py`): ein Unix-Socket je Kette, in die Sandbox
+  eingehängt; `socat` macht daraus `127.0.0.1:18317`. Der Agent trägt als `ANTHROPIC_AUTH_TOKEN` ein
+  Laufkennzeichen ein, keinen Schlüssel. Der Proxy lässt nur `POST /v1/messages` und
+  `/v1/messages/count_tokens` mit gültigem Kennzeichen und einem Modell aus der Erlaubnisliste durch
+  (`BENCH_PROXY_MODELS`), begrenzt Anfragen, Tokens und Gleichzeitigkeit und schreibt den Verbrauch je
+  Anfrage nach `proxy-usage.jsonl`. Den echten Schlüssel liest er erst bei einer Anfrage aus seiner
+  eigenen Umgebung; er steht nie in der Umgebung der Sandbox, in einer Datei oder im Protokoll.
+- **Bewertung ohne Modell**: Verdeckte Tests und Agentencode treffen sich nur in einer Bewertungs-Sandbox
+  ohne Proxy, mit leerem HOME und dem Stand nur lesbar eingehängt. Der Harness folgt auf dem Host keinem
+  Symlink aus der Sandbox und liest nur reguläre Dateien.
 
-Eine Werkzeug-Allowlist (`--allowedTools`) statt
-`--dangerously-skip-permissions` ist möglich. Sie ändert aber, was die
-Agenten tun können, und ist dann ein anderes Messprotokoll als in der
-Messung vom 2026-11-05/06.
+**Isolationsprotokoll.** Vor und nach jeder Session führt der Harness die Probe `harness/probe.py` in
+derselben Sandbox aus, als derselbe Benutzer mit derselben Umgebung, und schreibt
+`results/<kette>/<tag>.isolation.json` (Hash in den Metadaten der Session). Die Probe prüft: keine
+Verbindung zu öffentlichen Adressen (und zu den Zielen aus `BENCH_PROBE_EXTRA_TARGETS`, einer Liste
+`host:port,host:port` aus der Umgebung, damit keine internen Adressen im Repo stehen), keine
+Namensauflösung, nur die Schnittstelle `lo`, das HOME des Hosts und der Docker-Socket fehlen, die
+Umgebung trägt genau die erlaubten Namen und kein Prozess einen Schlüsselnamen, die Einhängungen sind genau
+die erwarteten, die Wurzel ist nicht beschreibbar, keine Capabilities, der Proxy antwortet und weist
+ein falsches Kennzeichen, ein fremdes Modell und einen fremden Pfad ab. Dazu prüft der Harness vor der Probe die
+Beschreibung der Sandbox (`verify_spec`) und bei Docker den gestarteten Container (`docker inspect`).
+**Geschlossen bei Fehler:** Besteht eine dieser Stufen nicht, oder fehlt eine Prüfung in der Ausgabe der
+Probe, wirft der Harness `IsolationError`, bevor der Agent läuft, und die Kette bricht ab. Es gibt keinen Weg
+„ohne Sandbox“ (`BENCH_SANDBOX=none` ist ein Fehler).
+
+**Zwei Wege hinter einer Schnittstelle** (`BENCH_SANDBOX`):
+
+| Weg | Wert | Stärken | Grenzen |
+|---|---|---|---|
+| Container (Standard) | `container` | festes Image mit Toolchain, Grenzen für Speicher, Prozesse und CPU, läuft auf anderen Hosts | braucht den Docker-Daemon, Image bauen und pflegen |
+| bubblewrap | `bwrap` | kein Daemon, kein root, Start in Millisekunden | Werkzeuge vom Host (`/usr`), keine Speicher- und Prozessgrenzen, der Weg steht im Protokoll |
+
+Welcher Weg für gewertete Läufe gilt, ist eine offene Entscheidung (DEC-18, Empfehlung: Container).
+
+**Grenzen dieser Sandbox.** Was ein Agent kosten kann, begrenzen die Modell-Erlaubnisliste sowie
+`max_requests` und `max_tokens` des Proxys je Kette. Der Arm `claudemem` läuft nicht
+in der Sandbox (Installation und Worker brauchen Netz) und wird abgelehnt. Go-Module ohne Vendor-Verzeichnis
+brauchen einen gefüllten Modul-Cache unter `$BENCH_BASE/shared/gomod` (nur lesbar eingehängt, `GOPROXY=off`);
+ledgerly nutzt nur die Standardbibliothek.
 
 ## Einrichten
 
 ```bash
 export BENCH_BASE=~/agentbench-data/agent-compare   # Ergebnisse, gemeinsame Binaries
-export BENCH_RUNS=/var/tmp/agentcmp/runs            # Arbeitsbäume, NICHT unter $HOME
-export BENCH_AGENT=claude                           # oder Pfad zu einem Wrapper
-# nur für claude-mem hinter einem Proxy (der Observer ignoriert geerbte ANTHROPIC_*):
-export BENCH_CMEM_GATEWAY_URL=http://proxy:port BENCH_CMEM_GATEWAY_TOKEN=...
+export BENCH_RUNS=/var/tmp/agentcmp/runs            # Arbeitsbäume
+export BENCH_SANDBOX=container                      # oder bwrap
+export BENCH_IMAGE=agent-compare:local              # Image des Containers
+# Schlüssel des Modells: nur für den Proxy des Harness, nie für Agenten
+export ANTHROPIC_API_KEY=...                        # oder BENCH_UPSTREAM_KEY_ENV=<Name der Variablen>
+# optional: BENCH_UPSTREAM_URL (Standard https://api.anthropic.com), BENCH_UPSTREAM_AUTH=bearer
 
-S=$BENCH_BASE/shared; mkdir -p $S/bin $S/ctx-bin $S/gocache $S/gomod $S/npm-cache $S/uv-cache
-ln -sf "$(readlink -f "$(command -v claude)")" $S/bin/claude    # Version pinnen
-ln -sf "$(command -v uv)" $S/bin/uv
-printf '#!/bin/sh\nexec uv tool run "$@"\n' > $S/bin/uvx && chmod +x $S/bin/uvx
-printf '#!/bin/sh\necho "$(date -Is) systemctl $*" >> "$HOME/.bench-systemctl.log"\necho "Failed to connect to bus: No medium found" >&2\nexit 1\n' > $S/bin/systemctl && chmod +x $S/bin/systemctl
-cp dist/ctx $S/ctx-bin/ctx
-curl -fsSL https://bun.sh/install | BUN_INSTALL=$S/bun bash && ln -sf $S/bun/bin/bun $S/bin/bun
+image/build.sh [<claude-binary>]                    # baut agent-compare:local mit gepinntem claude
+mkdir -p $BENCH_BASE/shared/ctx-bin && cp dist/ctx $BENCH_BASE/shared/ctx-bin/ctx   # nur ghosttree-Arm
 ```
 
-Die `systemctl`-Attrappe ist Absicht. `ctx install claude` würde sonst per
-`systemctl --user` die Collector-Unit des echten Benutzers anfassen. Der
-Collector läuft im Harness stattdessen als `ctx watch --once` nach jeder
-Session.
+Die Version von `claude` steht im Image. Wer sie festlegen will, gibt die Binärdatei an `image/build.sh`;
+das Image steht mit seiner ID im Isolationsprotokoll.
 
 Vor einer Messung die verdeckten Checks prüfen: Die Referenzlösung muss
 bestehen, die naive Lösung muss `know` verfehlen.
 
 ```bash
 python3 hidden/validate_ledgerly.py
+```
+
+Und die Isolation prüfen, ohne das Modell aufzurufen:
+
+```bash
+cd harness
+python3 bench.py probe        # baut eine Wegwerf-Kette, probt vor und nach `claude --version`, schreibt isolation.json
+make bench-test               # Tests; die mit Docker oder bwrap sind sonst übersprungen
 ```
 
 ## Messen
@@ -144,7 +182,7 @@ python3 run_campaign.py --ledgerly-reps 8 --nurlearn-reps 0 --max-par 12
 python3 analyze.py                                 # Tabelle, Kontraste, Mechanismus
 python3 analyze.py --project nurlearn
 python3 bench.py regrade <kette>                   # nur bei Harness-/Umgebungsfehlern
-python3 killall.py                                 # alles stoppen
+python3 bench.py cleanup                           # Sandbox-Container nach Label entfernen
 ```
 
 Je Kette liegen unter `$BENCH_BASE/results/<kette>/`: `records.jsonl`
@@ -164,11 +202,11 @@ und je Folgesession der Patch gegen den Schnappschuss.
   ohne Auto-Memory selbst `CLAUDE.md` oder Dateien im Auto-Memory-Pfad an.
   In allen Armen außer `native` entfernt der Harness das nach jeder Session
   und protokolliert es.
-- **claude-mem-Observer:** Er braucht hinter einem Proxy die
-  Gateway-Anmeldung in `~/.claude-mem/.env`, einen eigenen Worker-Port je
-  Instanz und `uvx` für Chroma.
-- **Unix-Sockets:** Das `TMPDIR` je Kette ist kurz (`/tmp/ac-<kette>`),
-  weil Tests Sockets darunter binden (`sun_path` ≤ 108 Byte).
+- **Unix-Sockets:** In der Sandbox ist `/tmp` ein kurzer tmpfs (`exec`, damit Go-Testbinaries laufen),
+  weil Tests Sockets darunter binden (`sun_path` ≤ 108 Byte). Der Socket des Proxys liegt unter
+  `$BENCH_RUNS/<kette>/sock/`.
+- **Aufräumen nach Kennung:** Container tragen das Label `bench.run=<kette>` und werden danach entfernt,
+  nie über ein Muster in Prozessen oder Umgebungen.
 - **Modellidentität:** Ein Aufruf zählt nur, wenn das Hauptmodell in
   `modelUsage` ein `canonicalModel` mit Präfix `claude-opus-5-5` hat.
   Helfer sind nur Haiku 4.5/5.5 und Sonnet 5.5.

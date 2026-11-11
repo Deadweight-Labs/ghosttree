@@ -856,6 +856,13 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   coordination event stream no longer exposes the global event sequence.
 - Join sessions are hardened after review: invitation pages answer every invalid
   code with the same 404 and are rate limited per client address.
+- The benchmark harness `bench/agent-compare` no longer starts agents with
+  `--dangerously-skip-permissions` on the host. Every agent session runs in a
+  sandbox without a network (container by default, bubblewrap as an alternative)
+  with a throwaway home directory. The model is reachable only through a proxy
+  on a Unix socket that holds the API key; the agent gets a run token. The
+  harness writes an isolation report before and after each session and refuses
+  to start an agent when it does not pass.
 - Dependency updates: MCP Go SDK 1.8.0, `modernc.org/sqlite` 1.60, `golang.org/x/sys`,
   GoReleaser action and CodeQL action.
 
