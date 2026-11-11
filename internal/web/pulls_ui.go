@@ -592,6 +592,8 @@ type pullView struct {
 	KnowledgeHref string
 	// LiveIDs are the issues of the checklist, for the live stream.
 	LiveIDs string
+	// Sess is the block "Built in" of the side column (nil when there is none).
+	Sess *sessBlock
 }
 
 // pullDetail ist /ui/{org}/{repo}/pulls/{n}.
@@ -656,6 +658,7 @@ func (a *app) pullDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 	}
 	v.DoneHref = pathWith("/ui/search", "project", remote, "preset", "pr-ergebnis", "pr", strconv.FormatInt(n, 10))
 
+	v.Sess = pullSessionBlock(l, pa, remote, n)
 	v.HasPackage = d.Checklist.HasPackage
 	a.pullChecklist(l, pa, view, d, v)
 	v.Checks = pullChecks(l, d, v)

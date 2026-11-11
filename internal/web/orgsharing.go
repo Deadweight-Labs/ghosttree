@@ -300,6 +300,7 @@ func (a *app) orgSourceAdd(w http.ResponseWriter, r *http.Request) {
 				a.orgFailure(w, r, err)
 				return
 			}
+			a.recordRepoVisibility(proven.Login, proven.Visibility)
 			orgRedirect(w, r, a.mirrorGitHubOrg(r.Context(), o, proven.Login, proven.InstallationID).Slug, "source_added")
 			return
 		}
@@ -312,6 +313,7 @@ func (a *app) orgSourceAdd(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
+	a.recordRepoVisibility(proven.Login, proven.Visibility)
 	if _, err := a.store.ClaimPrefix(me, o.ID, "github.com/"+proven.Login+"/*", visibility); err != nil {
 		a.orgFailure(w, r, err)
 		return
@@ -383,11 +385,26 @@ func (a *app) refreshSourceRepos(ctx context.Context, me string, orgID int64, sr
 	}
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
-	repos, err := lister.InstallationRepos(ctx, src.InstallationID)
-	if err != nil {
-		return
+	var repos []string
+	var visibility map[string]bool
+	if vl, ok := a.prover.(forge.RepoVisibilityLister); ok {
+		infos, err := vl.InstallationRepoInfos(ctx, src.InstallationID)
+		if err != nil {
+			return
+		}
+		visibility = map[string]bool{}
+		for _, r := range infos {
+			repos = append(repos, r.Remote)
+			visibility[r.Remote] = r.Private
+		}
+	} else {
+		var err error
+		if repos, err = lister.InstallationRepos(ctx, src.InstallationID); err != nil {
+			return
+		}
 	}
 	_, _ = a.store.ConnectSourceWithInstallation(me, orgID, src.Kind, src.Login, 0, repos)
+	a.recordRepoVisibility(src.Login, visibility)
 }
 
 // orgPrefixVisibility ändert, was ein Präfix neuen Projekten als Sichtbarkeit mitgibt.
@@ -475,3 +492,21 @@ func (a *app) fillSources(r *http.Request, v *orgsView, me string) {
 }
 
 func sourceError(err error) bool { return errors.Is(err, forge.ErrNotConfigured) }
+
+// recordRepoVisibility merkt sich, welche Repos des Kontos GitHub als privat meldet.
+// Nur Repos unter dem Login der Quelle zählen; ein Fehler ist keiner: ohne Wissen
+// gilt ein Repo als öffentlich, und der Check-Run am PR bleibt aus.
+func (a *app) recordRepoVisibility(login string, visibility map[string]bool) {
+	prefix := "github.com/" + strings.ToLower(login) + "/"
+	var private, public []string
+	for remote, isPrivate := range visibility {
+		switch {
+		case !strings.HasPrefix(remote, prefix):
+		case isPrivate:
+			private = append(private, remote)
+		default:
+			public = append(public, remote)
+		}
+	}
+	_ = a.store.SetRepoVisibility(private, public)
+}

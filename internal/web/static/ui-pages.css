@@ -81,6 +81,11 @@
   & .sblk .v > * { display: flex; align-items: center; gap: 8px; }
   & .sblk .v .sub, & .sblk .sub { font-size: 12px; color: var(--fg-muted); display: block; }
   & .sblk .origin { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; }
+  /* "Built in": one session per row, the title above, who and when below it. */
+  & .side .sblk .v > .sess { display: grid; flex-basis: 100%; gap: 2px; min-width: 0; align-items: start; }
+  & .sess .st { min-width: 0; font-size: 14px; }
+  & .sess .sm { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; font-size: 12px; }
+  & .sess .sm .gav { width: 16px; height: 16px; font-size: 8px; }
   & .sblk .v .waits { margin-right: 0; }
   & .sblk .v .dot.push { margin-left: auto; }
   & .live-box { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 12px; background: var(--success-subtle); border: 1px solid var(--success-muted); border-radius: 6px; }

@@ -215,6 +215,14 @@ func (c *Client) SessionsForPull(project string, number int64) (store.GitSession
 	return out, err
 }
 
+// SessionsForRequest nennt die Sessions eines Requests über die PRs seines Pakets
+// und seine Commit-Nachweise, soweit der Aufrufer sie sehen darf.
+func (c *Client) SessionsForRequest(requestID int64) (store.GitSessionLinks, error) {
+	var out store.GitSessionLinks
+	err := c.do("GET", "/api/requests/"+strconv.FormatInt(requestID, 10)+"/sessions", nil, nil, &out)
+	return out, err
+}
+
 // MarkCoordDelivery schreibt den Zustellzustand fort. Ein Adapter meldet
 // damit, was er WIRKLICH beobachtet hat — injected, wenn der Harness die
 // Eingabe genommen hat, acked erst bei einer gesehenen Antwort.

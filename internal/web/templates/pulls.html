@@ -44,6 +44,7 @@
 {{if .Side.Package}}<div class="sblk"><h3>{{t "pulls.side.package"}}</h3><div class="v"><span>{{.Side.Package}}</span><span class="sub">{{.Side.PackageNote}}</span></div></div>{{end}}
 {{if .Side.Requests}}<div class="sblk"><h3>{{t "pulls.side.requests"}}</h3><div class="v">{{range .Side.Requests}}<span>{{refPill "request" .N .Href}}</span>{{end}}{{if .Side.RequestsMore}}<a href="{{.ChecklistHref}}">{{t "pulls.side.more" .Side.RequestsMore}}</a>{{end}}</div></div>{{end}}
 {{if .Side.Features}}<div class="sblk"><h3>{{t "pulls.side.features"}}</h3><div class="v">{{range .Side.Features}}<a href="{{.Href}}">{{.Title}}</a>{{end}}</div></div>{{end}}
+{{template "sessblock" .Sess}}
 </aside></div>
 {{end}}</div>{{template "foot" .}}{{end}}
 
@@ -75,5 +76,6 @@
 </div>
 <aside class="side" aria-label="{{t "commit.side"}}">
 {{if .Side.Requests}}<div class="sblk"><h3>{{t "commit.side.requests"}}</h3><div class="v">{{range .Side.Requests}}<span>{{refPill "request" .N .Href}}</span>{{end}}</div></div>{{end}}
+{{template "sessblock" .Sess}}
 </aside></div>
 {{end}}</div>{{template "foot" .}}{{end}}

@@ -134,6 +134,7 @@ type commitView struct {
 	Files       []commitFile
 	FilesTotal  int
 	Side        commitSide
+	Sess        *sessBlock
 	Empty       bool
 	CommitsHref string
 	Entries     int
@@ -240,6 +241,7 @@ func (a *app) commitDetail(w http.ResponseWriter, r *http.Request, remote, sha s
 		}
 		v.Parents = append(v.Parents, cp)
 	}
+	v.Sess = commitSessionBlock(l, pa, remote, d.SHA)
 	v.Title = firstNonEmpty(d.Title, l.msg("commit.untitled", row.Short))
 	if t := parseTime(d.At); !t.IsZero() {
 		v.At, v.AtTitle = shortAgo(l, now, t), l.dateTime(t.Local())

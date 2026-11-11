@@ -243,7 +243,7 @@ func (m Model) equivalent(row settingRow) string {
 	case "machine":
 		return "ctx login --machine <name>"
 	case "github":
-		return m.local.ProfileURL
+		return "ctx account github link"
 	}
 	return ""
 }
@@ -269,6 +269,10 @@ func (m Model) serverStatus(s Server) string {
 	return strings.Join(parts, sep)
 }
 
+// dateLayout is how the settings write a day: the same in both languages, so a
+// date reads the same in a screenshot and in a bug report.
+const dateLayout = "2006-01-02"
+
 func (m Model) tokenStatus(s Server) string {
 	sep := m.th.Subtle.Render(" · ")
 	var who []string
@@ -285,6 +289,14 @@ func (m Model) tokenStatus(s Server) string {
 		who = append(who, m.th.Dim.Render(m.lang.t("token.stored")))
 	case TokenValid:
 		who = append(who, m.th.Good.Render(m.lang.t("token.valid")))
+		if !s.Since.IsZero() {
+			who = append(who, m.th.Dim.Render(m.lang.t("since")+" "+s.Since.Local().Format(dateLayout)))
+			if s.Expires.IsZero() {
+				who = append(who, m.th.Dim.Render(m.lang.t("no.expiry")))
+			} else {
+				who = append(who, m.th.Dim.Render(m.lang.t("valid.until")+" "+s.Expires.Local().Format(dateLayout)))
+			}
+		}
 	case TokenRejected:
 		who = append(who, m.th.Bad.Render(m.lang.t("token.rejected")))
 	}

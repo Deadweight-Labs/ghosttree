@@ -48,7 +48,7 @@ func main() {
 		_, err = st.AcceptInvitation(who, code)
 		must(err)
 	}
-	_, err = st.EnsureProject("person:1", project)
+	_, err = st.ClaimProject("person:1", project, "werkstatt")
 	must(err)
 	must(st.SetProjectRole("person:1", project, "person:2", store.RoleMember, false, store.RoleViaAPI))
 	must(st.SetProjectRole("person:1", project, "person:4", store.RoleGuest, false, store.RoleViaAPI))
@@ -87,6 +87,7 @@ func main() {
 		seedDecisions(st, project)
 		seedMaengel(st, project, room, org.ID, out)
 		after = seedPulls(st, project)
+		seedSessionLinks(st, project)
 	}
 	json.NewEncoder(os.Stdout).Encode(out)
 	if after != nil {

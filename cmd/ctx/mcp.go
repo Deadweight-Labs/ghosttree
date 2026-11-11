@@ -260,6 +260,10 @@ func cmdMCP(args []string, stdout io.Writer) int {
 		// Fehlschlag aussehen lassen.
 		_ = WriteTree(c, hctx.axes.Project, hctx.root, home)
 	}))
+	// A stored, replaced or retired entry reaches the mirror within a few
+	// seconds, so that the next grep in .ghosttree/knowledge finds it
+	// (REQ-436 AC-2). One rewrite per burst of writes.
+	srv.SetAfterKnowledge(debounce(treeSettle, func() { refreshMirrorAfterWrite(c, cfg.Machine) }))
 	if err := mcpserver.Run(context.Background(), srv, version); err != nil {
 		fmt.Fprintf(os.Stderr, "mcp: %v\n", err)
 		return 1
