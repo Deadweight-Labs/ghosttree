@@ -575,6 +575,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Changed
 
+- A bare `#231` in a text of a repository (comments, issues, documents, project
+  knowledge) now means that repository's pull request 231, as on GitHub: the web
+  interface shows it as the pull request's pill when ghosttree knows it, and only
+  falls back to the knowledge entry of that number (the old spelling) when there
+  is no such pull request. A knowledge entry is named `KN-231` everywhere: tools,
+  cards, the `ctx` output, the mirror in `.ghosttree/`, the gardener's notes and
+  threads, and the rule section `ctx install` writes (run it again to get the new
+  wording). `KN-n` is read wherever `#n` was read for knowledge
+  (`context_get action=link`, `ctx knowledge ...`, `--supersedes`, runbook
+  pitfalls, pain evidence); the old `#n` still works as input. Stored texts are
+  not rewritten. The gardener now writes requests as `REQ-n` instead of `#n`;
+  its notes and threads in the old form are still read.
 - `ctx` starts in 4.5 ms instead of 14.5 ms. It is one binary, and every start
   parsed the page templates of the web interface in both languages, although
   only `ctx serve` shows a page. They are now parsed when the server starts, so

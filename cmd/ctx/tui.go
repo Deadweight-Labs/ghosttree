@@ -17,6 +17,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/installer"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/query"
 	"github.com/Deadweight-Labs/ghosttree/internal/tui"
@@ -41,7 +42,7 @@ var runTUI = func(opt tui.Options) (tui.Model, error) {
 const tuiUsage = `usage: ctx tui [--look mark|tree|lines] [--switch rail|bar]
 
 The terminal interface: quick search (REQ-n, PAIN-n, TASK-n, IDEA-n, FEAT-n,
-#id, pr:n or a search line), your tasks, open requests and messages, and the
+KN-n, pr:n or a search line), your tasks, open requests and messages, and the
 local settings. ctx without arguments opens it in a terminal.
 Two modes, switched with shift+tab: Project (the folder's project: requests,
 pains, tasks, room) and Inbox (what waits for you across projects: tasks,
@@ -380,7 +381,7 @@ func searchItems(b links.Builder, r client.SearchResult) []tui.Item {
 		out = append(out, tui.Item{Ref: fmt.Sprintf("AC-%d.%d", c.RequestID, c.Number), Kind: "criterion", Title: c.Description, Meta: c.State})
 	}
 	for _, k := range r.Knowledge {
-		out = append(out, tui.Item{Ref: fmt.Sprintf("#%d", k.ID), Kind: k.Type, Title: k.Title, Meta: k.Type})
+		out = append(out, tui.Item{Ref: knref.Format(k.ID), Kind: k.Type, Title: k.Title, Meta: k.Type})
 	}
 	for _, f := range r.Files {
 		out = append(out, tui.Item{Ref: f.Path, Kind: "file", Title: firstLine(f.Description), Meta: f.Kind})

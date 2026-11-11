@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	docwork "github.com/Deadweight-Labs/ghosttree/internal/doc"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -84,7 +85,7 @@ func Build(in Input) []Doc {
 	docs := make([]Doc, 0, len(knowledge)+len(in.Documents)+len(in.Requests)+1)
 	for _, k := range knowledge {
 		path := fmt.Sprintf("knowledge/%s/%d-%s.md", k.Type, k.ID, slug(k.Title))
-		docs = append(docs, Doc{Path: path, Body: knowledgeBody(k, mentions[mentionKey("#", k.ID)], motivated[mentionKey("#", k.ID)])})
+		docs = append(docs, Doc{Path: path, Body: knowledgeBody(k, mentions[mentionKey(knref.Prefix, k.ID)], motivated[mentionKey(knref.Prefix, k.ID)])})
 	}
 	for _, document := range in.Documents {
 		docs = append(docs, Doc{Path: documentPath(document), Body: documentBody(document)})
@@ -116,7 +117,7 @@ func deliverable(entries []store.Knowledge) []store.Knowledge {
 
 func knowledgeBody(k store.Knowledge, mentionedBy, motivatedBy []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# #%d %s\n\n", k.ID, k.Title)
+	fmt.Fprintf(&b, "# %s %s\n\n", knref.Format(k.ID), k.Title)
 	fmt.Fprintf(&b, "%s | %s | %s", scopeLabel(k.Scope), k.Type, k.Confidence)
 	if provenance := store.KnowledgeProvenance(k); provenance != "" {
 		fmt.Fprintf(&b, " | %s", provenance)
@@ -250,7 +251,7 @@ func index(in Input, knowledgeCount int) string {
 	b.WriteString("    grep -l \"## Last handoff\" .ghosttree/requests/open/*.md   # what was started\n")
 	b.WriteString("    ls .ghosttree/requests/open/                   # what is open\n")
 	b.WriteString("    cat .ghosttree/tree/<path>.md                  # what a file does\n\n")
-	b.WriteString("Each file names its scope, its type and who wrote it. Entry `#42` is `knowledge/*/42-*.md`; `REQ-7` is `requests/*/REQ-7-*.md`.\n\n")
+	b.WriteString("Each file names its scope, its type and who wrote it. Entry `KN-42` is `knowledge/*/42-*.md`; `REQ-7` is `requests/*/REQ-7-*.md`.\n\n")
 	b.WriteString("Where ghosttree is available as a tool, it sees more than this directory: session transcripts (`context_search action=sessions`), unreviewed knowledge (`context_search`; superseded or retired entries stay readable by id with `knowledge_id`), and the criteria and evidence behind each request (`request action=get`).\n")
 	b.WriteString(footer())
 	return b.String()
@@ -275,7 +276,7 @@ func backlinks(knowledge []store.Knowledge, requests []requestdomain.SearchHit) 
 	type source struct{ label, text string }
 	var sources []source
 	for _, k := range knowledge {
-		sources = append(sources, source{fmt.Sprintf("- #%d %s", k.ID, k.Title), k.Title + "\n" + k.Body})
+		sources = append(sources, source{fmt.Sprintf("- %s %s", knref.Format(k.ID), k.Title), k.Title + "\n" + k.Body})
 	}
 	for _, hit := range requests {
 		r := hit.Request
@@ -283,7 +284,7 @@ func backlinks(knowledge []store.Knowledge, requests []requestdomain.SearchHit) 
 	}
 	var targets []string
 	for _, k := range knowledge {
-		targets = append(targets, mentionKey("#", k.ID))
+		targets = append(targets, mentionKey(knref.Prefix, k.ID))
 	}
 	for _, hit := range requests {
 		targets = append(targets, mentionKey("REQ-", hit.Request.ID))
@@ -294,7 +295,7 @@ func backlinks(knowledge []store.Knowledge, requests []requestdomain.SearchHit) 
 			if strings.HasPrefix(s.label, "- "+t+" ") {
 				continue // sich selbst zu nennen ist kein Rückverweis
 			}
-			if mentions(s.text, t) {
+			if mentions(s.text, t) || (strings.HasPrefix(t, knref.Prefix) && mentions(s.text, "#"+strings.TrimPrefix(t, knref.Prefix))) {
 				out[t] = append(out[t], s.label)
 			}
 		}
@@ -303,7 +304,8 @@ func backlinks(knowledge []store.Knowledge, requests []requestdomain.SearchHit) 
 	return out
 }
 
-// mentions prüft auf eine Nennung mit Wortgrenze: #4 darf nicht in #42 treffen.
+// mentions prüft auf eine Nennung mit Wortgrenze: KN-4 darf nicht in KN-42 treffen.
+// Wissen steht in älteren Texten als #4; backlinks zählt auch diese Nennung.
 func mentions(text, token string) bool {
 	for i := 0; ; {
 		j := strings.Index(text[i:], token)
@@ -383,7 +385,7 @@ func painBody(v PainView) string {
 			case "request":
 				fmt.Fprintf(&b, "- REQ-%d %s\n", l.RequestID, l.Title)
 			case "knowledge":
-				fmt.Fprintf(&b, "- #%d %s\n", l.KnowledgeID, l.Title)
+				fmt.Fprintf(&b, "- %s %s\n", knref.Format(l.KnowledgeID), l.Title)
 			default:
 				fmt.Fprintf(&b, "- %s\n", l.ExternalRef)
 			}
@@ -402,7 +404,7 @@ func painBody(v PainView) string {
 	return b.String()
 }
 
-// motivators maps a request ("REQ-n") or knowledge entry ("#n") to the pains
+// motivators maps a request ("REQ-n") or knowledge entry ("KN-n") to the pains
 // that motivate it.
 func motivators(pains []PainView) map[string][]string {
 	out := map[string][]string{}
@@ -414,7 +416,7 @@ func motivators(pains []PainView) map[string][]string {
 				key := mentionKey("REQ-", l.RequestID)
 				out[key] = append(out[key], line)
 			case "knowledge":
-				key := mentionKey("#", l.KnowledgeID)
+				key := mentionKey(knref.Prefix, l.KnowledgeID)
 				out[key] = append(out[key], line)
 			}
 		}

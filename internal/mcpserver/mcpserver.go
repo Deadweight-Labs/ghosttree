@@ -13,6 +13,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/query"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -646,7 +647,7 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if err != nil {
 		return nil, nil, err
 	}
-	msg := fmt.Sprintf("stored #%d [%s|%s]", saved.ID, saved.Type, scopeLabel(saved.Scope))
+	msg := fmt.Sprintf("stored %s [%s|%s]", knref.Format(saved.ID), saved.Type, scopeLabel(saved.Scope))
 	if len(in.Supersedes) > 0 {
 		msg += fmt.Sprintf("; superseded %s", idList(in.Supersedes))
 	}
@@ -785,7 +786,7 @@ func renderKnowledge(k store.Knowledge) string {
 		// should weigh it differently from an exact word hit.
 		label += "|match:" + k.Match
 	}
-	return fmt.Sprintf("- #%d [%s%s%s] %s — %s\n", k.ID, label, anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt), k.Title, body)
+	return fmt.Sprintf("- %s [%s%s%s] %s — %s\n", knref.Format(k.ID), label, anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt), k.Title, body)
 }
 
 // anchorLabel nennt den Git-Stand eines Treffers kurz: "|at:<commit>" mit
@@ -813,7 +814,7 @@ func anchorLabel(a *gitanchor.Anchor) string {
 // bullets and fenced blocks it was written with are the entry, not decoration
 // around it.
 func renderKnowledgeFull(k store.Knowledge) string {
-	header := fmt.Sprintf("# #%d %s\n[%s%s%s]", k.ID, k.Title, knowledgeLabel(k), anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt))
+	header := fmt.Sprintf("# %s %s\n[%s%s%s]", knref.Format(k.ID), k.Title, knowledgeLabel(k), anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt))
 	if k.ObservedAt != "" {
 		header += " observed:" + k.ObservedAt
 	}

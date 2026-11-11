@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -171,7 +172,7 @@ func (s *Server) renderPullKnowledge(project string, pr int64) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n\nKnowledge written on PR #%d (%d entries, %d described paths):\n", pr, len(brief.Knowledge), len(brief.Ghosts))
 	for _, k := range brief.Knowledge {
-		fmt.Fprintf(&b, "- #%d [%s] %s\n", k.ID, k.Type, oneLine(k.Title))
+		fmt.Fprintf(&b, "- %s [%s] %s\n", knref.Format(k.ID), k.Type, oneLine(k.Title))
 	}
 	for _, p := range brief.Ghosts {
 		fmt.Fprintf(&b, "- path %s\n", oneLine(p))

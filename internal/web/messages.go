@@ -620,7 +620,7 @@ var messages = map[string]string{
 	"sessions.private":             "Private",
 	"sessions.untitled":            "Untitled session",
 	"sessions.n_knowledge":         "%d knowledge",
-	"sessions.knowledge_ref":       "Knowledge #%d",
+	"sessions.knowledge_ref":       "Knowledge KN-%d",
 	"sessions.who.you":             "You",
 	"sessions.who.thinking":        "Thinking",
 	"sessions.who.command":         "Command",

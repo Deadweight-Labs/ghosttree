@@ -300,7 +300,7 @@ func linkDataText(data string) string {
 	case "request":
 		return "REQ-" + rest
 	case "knowledge":
-		return "#" + rest
+		return "KN-" + rest
 	case "external":
 		return rest
 	}

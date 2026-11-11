@@ -285,7 +285,7 @@ func TestIdeaWorkshopToolsOverTheWire(t *testing.T) {
 		t.Fatalf("close as a web session: %v", err)
 	}
 	got, failed = callTool(t, session, "decision_list", map[string]any{"id": 1})
-	if failed || !strings.Contains(got, `"state":"decided"`) || !strings.Contains(got, `"knowledge":"#`) {
+	if failed || !strings.Contains(got, `"state":"decided"`) || !strings.Contains(got, `"knowledge":"KN-`) {
 		t.Fatalf("decision after closing: %v %s", failed, got)
 	}
 	concept, _ := callTool(t, session, "idea_concept", map[string]any{"id": 1})

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -147,8 +148,8 @@ func cmdMachineShare(args []string, stdout io.Writer) int {
 		if len(pos) != 3 || (pos[0] != store.EntryKnowledge && pos[0] != store.EntryRunbook) {
 			return usage()
 		}
-		id, err := strconv.ParseInt(strings.TrimPrefix(pos[1], "#"), 10, 64)
-		if err != nil || id <= 0 {
+		id, ok := knref.Parse(pos[1])
+		if !ok {
 			return usage()
 		}
 		shared, err := c.ShareEntry(pos[0], id, pos[2], !*unshare)
@@ -158,7 +159,15 @@ func cmdMachineShare(args []string, stdout io.Writer) int {
 		if len(shared) == 0 {
 			shared = []string{"nobody (private)"}
 		}
-		fmt.Fprintf(stdout, "%s #%d is now shared with: %s\n", pos[0], id, strings.Join(shared, ", "))
+		fmt.Fprintf(stdout, "%s %s is now shared with: %s\n", pos[0], entryRef(pos[0], id), strings.Join(shared, ", "))
 	}
 	return 0
+}
+
+// entryRef names a shared entry: knowledge as KN-n, a runbook by its number.
+func entryRef(kind string, id int64) string {
+	if kind == store.EntryKnowledge {
+		return knref.Format(id)
+	}
+	return "#" + strconv.FormatInt(id, 10)
 }

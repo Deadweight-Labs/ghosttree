@@ -31,7 +31,7 @@ func init() {
 	add("runbooks.form.err.enum_values", "A choice needs 1 to 20 values, separated by commas.", "Eine Auswahl braucht 1 bis 20 Werte, durch Komma getrennt.")
 	add("runbooks.form.err.default", "The default does not fit the type of its parameter. Letters, digits and . _ / : @ + , = - are allowed, up to 200 characters, and no \"-\" at the start.", "Der Standardwert passt nicht zum Typ seines Parameters. Erlaubt sind Buchstaben, Ziffern und . _ / : @ + , = -, bis 200 Zeichen, und kein „-“ am Anfang.")
 	add("runbooks.form.err.undeclared", "A step uses {{%s}}, which is not a parameter of this runbook.", "Ein Schritt nutzt {{%s}}, das ist kein Parameter dieses Ablaufs.")
-	add("runbooks.form.err.pitfalls", "Pitfalls are numbers of knowledge entries, for example 4294, 4293.", "Fallen sind Nummern von Wissenseinträgen, zum Beispiel 4294, 4293.")
+	add("runbooks.form.err.pitfalls", "Pitfalls are numbers of knowledge entries, for example KN-4294, KN-4293.", "Fallen sind Nummern von Wissenseinträgen, zum Beispiel KN-4294, KN-4293.")
 	add("runbooks.form.err.keyword", "A keyword needs at least 3 characters.", "Ein Stichwort braucht mindestens 3 Zeichen.")
 	add("err.control.unsupported", "This kind of agent cannot be paused or interrupted from here.", "Diese Art von Agent lässt sich von hier aus nicht pausieren oder unterbrechen.")
 	add("err.control.active", "A pause is already running for this agent.", "Für diesen Agenten läuft schon eine Pause.")

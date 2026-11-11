@@ -56,7 +56,7 @@ var table = []Core{
 		Default: "context",
 		Actions: []Action{
 			{Name: "context", Tool: "context_get", Line: "with paths: the descriptions of those paths and their directories; without: the briefing of this project, branch and machine"},
-			{Name: "link", Tool: "open_link", Line: "web link and short card for REQ-n, TASK-n, PAIN-n, IDEA-n, #id, pr:n or preset:name (ref), to hand to the human"},
+			{Name: "link", Tool: "open_link", Line: "web link and short card for REQ-n, TASK-n, PAIN-n, IDEA-n, KN-n, pr:n or preset:name (ref), to hand to the human"},
 			{Name: "commit", Tool: "commit_get", Line: "what was said about a commit (commit: hash or 7+ characters)"},
 			{Name: "pull", Tool: "pull_get", Line: "one pull request with its package, feature checklist and anchored knowledge (pr)"},
 			{Name: "pulls", Rare: true, Tool: "pull_list", Line: "pull requests GitHub reported (state, branch, author)"},

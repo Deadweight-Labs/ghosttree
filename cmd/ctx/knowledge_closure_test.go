@@ -61,8 +61,8 @@ func TestKnowledgeSupersedeAndShowCLI(t *testing.T) {
 		t.Fatalf("a refused call changed #%d: %+v", oldA, k)
 	}
 
-	code, out := ctx("supersede", idn, "--old", ida+",#"+idb, "--reason", "the share was removed")
-	if code != 0 || !strings.Contains(out, "#"+idn+" now supersedes #"+ida+", #"+idb) {
+	code, out := ctx("supersede", idn, "--old", "KN-"+ida+",#"+idb, "--reason", "the share was removed")
+	if code != 0 || !strings.Contains(out, "KN-"+idn+" now supersedes KN-"+ida+", KN-"+idb) {
 		t.Fatalf("supersede: %d %s", code, out)
 	}
 	for _, id := range []int64{oldA, oldB} {
@@ -75,7 +75,7 @@ func TestKnowledgeSupersedeAndShowCLI(t *testing.T) {
 	}
 
 	code, out = ctx("show", ida)
-	if code != 0 || !strings.Contains(out, "superseded by #"+idn) || !strings.Contains(out, "the share was removed") || !strings.Contains(out, "body of share created") {
+	if code != 0 || !strings.Contains(out, "superseded by KN-"+idn) || !strings.Contains(out, "the share was removed") || !strings.Contains(out, "body of share created") {
 		t.Errorf("show of a superseded entry: %d\n%s", code, out)
 	}
 	if code, out := ctx("show", idn); code != 0 || strings.Contains(out, "superseded by") {

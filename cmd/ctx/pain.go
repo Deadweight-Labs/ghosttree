@@ -9,6 +9,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 )
 
@@ -34,7 +35,7 @@ func splitLeading(args []string) (positional, flags []string) {
 	return args[:i], args[i:]
 }
 
-// parseMotivates reads REQ-98, #42 or free text / a URL.
+// parseMotivates reads REQ-98, KN-42 (or the old #42) or free text / a URL.
 func parseMotivates(v string) pain.Target {
 	v = strings.TrimSpace(v)
 	if n, ok := pain.ParseNumberRef(v, "REQ-"); ok && (strings.HasPrefix(strings.ToUpper(v), "REQ-")) {
@@ -43,8 +44,8 @@ func parseMotivates(v string) pain.Target {
 	if n, ok := idea.ParseRef(v); ok && strings.HasPrefix(strings.ToUpper(v), "IDEA-") {
 		return pain.Target{IdeaID: n}
 	}
-	if strings.HasPrefix(v, "#") {
-		if n, ok := pain.ParseNumberRef(v, ""); ok {
+	if strings.HasPrefix(v, "#") || knref.Has(v) {
+		if n, ok := knref.Parse(v); ok {
 			return pain.Target{KnowledgeID: n}
 		}
 	}
@@ -75,7 +76,7 @@ func painDetailLines(stdout io.Writer, d pain.Detail) {
 			case "request":
 				fmt.Fprintf(stdout, "  #%d REQ-%d %s\n", l.ID, l.RequestID, l.Title)
 			case "knowledge":
-				fmt.Fprintf(stdout, "  #%d knowledge #%d %s\n", l.ID, l.KnowledgeID, l.Title)
+				fmt.Fprintf(stdout, "  #%d knowledge %s %s\n", l.ID, knref.Format(l.KnowledgeID), l.Title)
 			case "idea":
 				fmt.Fprintf(stdout, "  #%d IDEA-%d %s\n", l.ID, l.IdeaID, l.Title)
 			default:

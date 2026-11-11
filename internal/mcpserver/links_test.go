@@ -137,14 +137,14 @@ func TestPainIdeaAndKnowledgeAnswersCarryLinkAndCard(t *testing.T) {
 	mustHave(t, "idea_search", got, `"url":"`+base+`/ideas/1"`)
 
 	got = wireText(t, s, "context_remember", map[string]any{"type": "note", "title": "Merke", "body": "etwas Langes", "scope_hint": "project"})
-	mustHave(t, "context_remember", got, "stored #1", "Knowledge #1: Merke", "link: "+base+"/knowledge/1")
+	mustHave(t, "context_remember", got, "stored KN-1", "Knowledge KN-1: Merke", "link: "+base+"/knowledge/1")
 	got = wireText(t, s, "context_search", map[string]any{"query": "Merke", "kind": "knowledge"})
-	mustHave(t, "context_search hit", got, "#1 [", base+"/knowledge/1")
+	mustHave(t, "context_search hit", got, "KN-1 [", base+"/knowledge/1")
 	if strings.Contains(got, "state: ") {
 		t.Errorf("a search hit carries the link only:\n%s", got)
 	}
 	got = wireText(t, s, "context_search", map[string]any{"knowledge_id": 1})
-	mustHave(t, "context_search knowledge_id", got, "Knowledge #1", "link: "+base+"/knowledge/1")
+	mustHave(t, "context_search knowledge_id", got, "Knowledge KN-1", "link: "+base+"/knowledge/1")
 	got = wireText(t, s, "context_search", map[string]any{"query": "is:open is:issue"})
 	mustHave(t, "qualified search", got, base+"/issues/1")
 }
@@ -201,7 +201,8 @@ func TestOpenLinkToolAnswersForEveryShortForm(t *testing.T) {
 		"TASK-1":                 {"Task TASK-1: Handgriff", base + "/tasks/1"},
 		"PAIN-1":                 {"Pain PAIN-1: Qual", base + "/pains/1"},
 		"IDEA-1":                 {"Idea IDEA-1: Idee", base + "/ideas/1"},
-		"#1":                     {"Knowledge #1: Merke", base + "/knowledge/1"},
+		"#1":                     {"Knowledge KN-1: Merke", base + "/knowledge/1"},
+		"KN-1":                   {"Knowledge KN-1: Merke", base + "/knowledge/1"},
 		"pr:155":                 {"Pull request #155", base + "/pulls/155"},
 		"commit:2d950bf":         {"Commit 2d950bf", base + "/commit/2d950bf"},
 		"preset:pr-ergebnis 155": {"Search preset:pr-ergebnis", root + "/presets/repo/pr-ergebnis?pr=155&project=x%2Fy"},

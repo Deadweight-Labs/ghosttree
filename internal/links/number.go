@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 )
 
 // NumberTerm is a term that names objects by their number and says nothing else:
@@ -25,9 +27,9 @@ type NumberTerm struct {
 var HashKinds = []string{KindRequest, KindPull, KindKnowledge}
 
 // The number is at most 15 digits, which keeps it well inside int64.
-var numberRE = regexp.MustCompile(`(?i)^(?:#(\d{1,15})|(req|task|pain|idea)-(\d{1,15})|(pr|pull):\s*#?(\d{1,15}))$`)
+var numberRE = regexp.MustCompile(`(?i)^(?:#(\d{1,15})|(req|task|pain|idea|kn)-(\d{1,15})|(pr|pull):\s*#?(\d{1,15}))$`)
 
-var numberPrefixKind = map[string]string{"req": KindRequest, "task": KindTask, "pain": KindPain, "idea": KindIdea, "pr": KindPull, "pull": KindPull}
+var numberPrefixKind = map[string]string{"req": KindRequest, "task": KindTask, "pain": KindPain, "idea": KindIdea, "kn": KindKnowledge, "pr": KindPull, "pull": KindPull}
 
 // ParseNumber reads term as a NumberTerm. A number of zero is no number, and a
 // term with more than the number does not name one object ("REQ-5 login" is a
@@ -95,7 +97,7 @@ func Short(r Ref) string {
 	case KindPull:
 		return "pr:" + n
 	case KindKnowledge:
-		return "#" + n
+		return knref.Format(r.ID)
 	}
 	return n
 }

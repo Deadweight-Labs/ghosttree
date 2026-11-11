@@ -11,6 +11,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -447,7 +448,7 @@ func (e *entryResolver) load(r anchoredRow) *CommitEntry {
 		if err != nil || k.Scope.Project != project || !a.CanSeeKnowledge(k) {
 			return nil
 		}
-		return &CommitEntry{Kind: r.Kind, ID: r.ID, Ref: "#" + strconv.FormatInt(r.ID, 10), Title: oneLine(k.Title, 200), Person: k.Person}
+		return &CommitEntry{Kind: r.Kind, ID: r.ID, Ref: knref.Format(r.ID), Title: oneLine(k.Title, 200), Person: k.Person}
 	case CommitKindGhost:
 		if g, err := a.st.GhostFileByPath(project, r.Path); err == nil {
 			if !a.CanSeeGhost(g) {
