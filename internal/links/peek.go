@@ -7,6 +7,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -124,7 +125,7 @@ func Peek(b Builder, r Reader, ref Ref, project string) (Info, error) {
 	case KindKnowledge:
 		k, err := r.KnowledgeByID(ref.ID)
 		if err != nil {
-			return Info{}, Unknown(fmt.Sprintf("#%d", ref.ID))
+			return Info{}, Unknown(knref.Format(ref.ID))
 		}
 		return infoOf(b.KnowledgeCard(k), ref.ID, k.Body, k.Person, k.CreatedAt), nil
 	case KindPull:

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -45,7 +46,7 @@ func (s *Server) handleRegressionCover(_ context.Context, _ *mcp.CallToolRequest
 		}
 		var b strings.Builder
 		for _, gap := range out.Gaps {
-			fmt.Fprintf(&b, "- #%d %s\n", gap.ID, gap.Title)
+			fmt.Fprintf(&b, "- %s %s\n", knref.Format(gap.ID), gap.Title)
 		}
 		if len(out.Gaps) == 0 {
 			b.WriteString("No fix is recorded as unguarded.\n")
@@ -61,7 +62,7 @@ func (s *Server) handleRegressionCover(_ context.Context, _ *mcp.CallToolRequest
 		return nil, RegressionCoverOutput{}, err
 	}
 	out := RegressionCoverOutput{KnowledgeID: in.KnowledgeID, State: in.State, Test: in.Test}
-	text := fmt.Sprintf("#%d: %s", in.KnowledgeID, in.State)
+	text := fmt.Sprintf("%s: %s", knref.Format(in.KnowledgeID), in.State)
 	if in.Test != "" {
 		text += " by " + in.Test
 	}

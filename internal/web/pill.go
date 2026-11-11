@@ -153,7 +153,7 @@ func numberedPillOf(l lang, kind string, n int64, href, title string, long bool)
 	if !ok {
 		k = refKinds["request"]
 	}
-	return pillHTML(pillSpec{Class: k.Class, Icon: template.HTML(k.Icon), Text: "#" + strconv.FormatInt(n, 10),
+	return pillHTML(pillSpec{Class: k.Class, Icon: template.HTML(k.Icon), Text: pillNum(k.Prefix, n),
 		Title: title, Href: href, Ref: k.Prefix + "-" + strconv.FormatInt(n, 10), Long: long,
 		Name: strings.TrimSpace(l.msg(k.Key) + " " + strconv.FormatInt(n, 10) + " " + title)})
 }

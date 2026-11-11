@@ -30,6 +30,8 @@ function load(path) {
     contains: () => false,
     getElementById: () => null,
     querySelector: () => null,
+    // The body of a page of a repository carries data-repo; tests set globalThis.__repo.
+    body: { getAttribute: (k) => (k === "data-repo" ? g.__repo || null : null) },
   };
   g.location = { hash: "" };
   g.GTPill = {

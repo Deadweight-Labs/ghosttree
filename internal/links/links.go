@@ -191,7 +191,7 @@ func (b Builder) Feature(n int64) string { return b.repo("/features/" + num(n)) 
 // serve (the page of its idea or issue, anchored at the decision).
 func (b Builder) Decision(n int64) string { return b.repo("/decisions/" + num(n)) }
 
-// Knowledge is the entry #id.
+// Knowledge is the entry KN-id.
 func (b Builder) Knowledge(id int64) string { return b.repo("/knowledge/" + num(id)) }
 
 // Document is a document of the worktree, by slug. The schema has no document

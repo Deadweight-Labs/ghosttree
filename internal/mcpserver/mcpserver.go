@@ -13,6 +13,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/query"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -107,7 +108,7 @@ type SearchInput struct {
 	// a second call rather than a guess. Same shape as session_id on
 	// context_sessions: list or search, or name one and read it whole.
 	KnowledgeID int64  `json:"knowledge_id,omitempty" jsonschema:"read this knowledge entry in full instead of searching. The id is on every hit; use it when a snippet is not enough, for instance for a stored plan or spec"`
-	Kind        string `json:"kind,omitempty" jsonschema:"knowledge, requests, sessions, files or all (default all); with qualifiers also pains, ideas, criteria, tasks and messages (room messages you may read). \"files\" searches the per-file and per-directory descriptions of this repository — use it to find a file by what it does rather than by what it is called"`
+	Kind        string `json:"kind,omitempty" jsonschema:"knowledge, requests, sessions, files or all (default all, which leaves out sessions: ask for them with sessions); with qualifiers also pains, ideas, criteria, tasks and messages (room messages you may read). \"files\" searches the per-file and per-directory descriptions of this repository — use it to find a file by what it does rather than by what it is called"`
 	AllBranches bool   `json:"all_branches,omitempty" jsonschema:"search across all branches of the project"`
 	Project     string `json:"project,omitempty" jsonschema:"search another project instead of the current one, given as a normalized remote like github.com/owner/repo"`
 	AllProjects bool   `json:"all_projects,omitempty" jsonschema:"search every project. Use when a problem here may already have been solved elsewhere; the default stays the current project"`
@@ -208,7 +209,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "context_snapshot_get", Description: "Read one snapshot safely: no filter returns only head and counts, domain returns at most 100 summaries, and domain plus key returns exactly one payload.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleSnapshotGet)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_search",
-		Description: "Search ghosttree knowledge and past session transcripts, or read one knowledge entry in full. Hits are snippets and carry an id; pass knowledge_id to get that entry's whole body back verbatim, which is how stored plans, specs and other long documents are read. Defaults to the current project, branch and machine context. Set project to search another repository, or all_projects to search every one of them — worth doing when a problem here may already have been solved elsewhere. " + searchLanguageHelp,
+		Description: "Search ghosttree knowledge, requests and file descriptions, or read one knowledge entry in full. The default search does not include session transcripts; ask for them with kind=sessions (or is:session in the query). Hits are snippets and carry an id; pass knowledge_id to get that entry's whole body back verbatim, which is how stored plans, specs and other long documents are read. Defaults to the current project, branch and machine context. Set project to search another repository, or all_projects to search every one of them — worth doing when a problem here may already have been solved elsewhere. " + searchLanguageHelp,
 	}, s.handleSearch)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_get",
@@ -425,7 +426,8 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 			return out.String(), nil
 		}})
 	}
-	if (kind == "sessions" || kind == "all") && !anchored {
+	// The default search (all) leaves sessions out (decision #4447); kind=sessions asks for them.
+	if kind == "sessions" && !anchored {
 		areas = append(areas, searchArea{name: "sessions", run: func(ctx context.Context) (string, error) {
 			// Sessions carry all three axes, so an exact filter on the full context
 			// would only ever match this very session; project is the useful scope.
@@ -646,7 +648,7 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if err != nil {
 		return nil, nil, err
 	}
-	msg := fmt.Sprintf("stored #%d [%s|%s]", saved.ID, saved.Type, scopeLabel(saved.Scope))
+	msg := fmt.Sprintf("stored %s [%s|%s]", knref.Format(saved.ID), saved.Type, scopeLabel(saved.Scope))
 	if len(in.Supersedes) > 0 {
 		msg += fmt.Sprintf("; superseded %s", idList(in.Supersedes))
 	}
@@ -785,7 +787,7 @@ func renderKnowledge(k store.Knowledge) string {
 		// should weigh it differently from an exact word hit.
 		label += "|match:" + k.Match
 	}
-	return fmt.Sprintf("- #%d [%s%s%s] %s — %s\n", k.ID, label, anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt), k.Title, body)
+	return fmt.Sprintf("- %s [%s%s%s] %s — %s\n", knref.Format(k.ID), label, anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt), k.Title, body)
 }
 
 // anchorLabel nennt den Git-Stand eines Treffers kurz: "|at:<commit>" mit
@@ -813,7 +815,7 @@ func anchorLabel(a *gitanchor.Anchor) string {
 // bullets and fenced blocks it was written with are the entry, not decoration
 // around it.
 func renderKnowledgeFull(k store.Knowledge) string {
-	header := fmt.Sprintf("# #%d %s\n[%s%s%s]", k.ID, k.Title, knowledgeLabel(k), anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt))
+	header := fmt.Sprintf("# %s %s\n[%s%s%s]", knref.Format(k.ID), k.Title, knowledgeLabel(k), anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt))
 	if k.ObservedAt != "" {
 		header += " observed:" + k.ObservedAt
 	}

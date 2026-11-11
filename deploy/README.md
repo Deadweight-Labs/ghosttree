@@ -648,7 +648,7 @@ calls to the server besides reading, and the account of its client config
   exists, a sketch of a missing test, or "not testable"). The answers are checked
   against the checkout first: a named test has to be defined in the file the
   session read.
-- **Staged notes for the ledger** (job 4): "criterion `K` of request `#N` is met",
+- **Staged notes for the ledger** (job 4): "criterion `K` of request `REQ-N` is met",
   with a proof: a commit (it exists, is in the history of `HEAD` and a git tool
   printed it to the session; squash commits carry the pull request number
   `(#149)`), a test (`path/to/x_test.go:TestName`, defined in a file the session

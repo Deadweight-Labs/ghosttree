@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -310,7 +311,7 @@ func mergeNote(pr int64, title, base string, knowledge []int64, ghosts int) stri
 			ids = append(ids, fmt.Sprintf("+%d more", len(knowledge)-maxListed))
 			break
 		}
-		ids = append(ids, fmt.Sprintf("#%d", id))
+		ids = append(ids, knref.Format(id))
 	}
 	know := "no branch knowledge"
 	if len(ids) > 0 {

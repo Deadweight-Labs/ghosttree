@@ -203,7 +203,7 @@ func jaccard(a, b map[string]bool) float64 {
 var (
 	loopCodeBlock = regexp.MustCompile("(?s)```.*?```")
 	loopURL       = regexp.MustCompile(`(?i)\bhttps?://[^\s)>\]]+`)
-	loopRef       = regexp.MustCompile(`(?i)\b(?:req|ac|thr|pr)[-# ]?\d+\b|#\d+\b`)
+	loopRef       = regexp.MustCompile(`(?i)\b(?:req|ac|thr|pr|kn)[-# ]?\d+\b|#\d+\b`)
 	loopHash      = regexp.MustCompile(`\b[0-9a-f]{7,40}\b`)
 	loopPath      = regexp.MustCompile(`(?:[\w.~-]+/){2,}[\w.-]+|(?:\.{0,2}|~)/[\w.-]+(?:/[\w.-]+)*|\b[\w-]+\.(?:go|md|ts|tsx|js|py|sh|json|ya?ml|toml|html|css|sql|txt|mod|sum)\b`)
 	loopDigits    = regexp.MustCompile(`\d+(?:[.,]\d+)?`)

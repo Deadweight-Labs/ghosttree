@@ -11,6 +11,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -256,7 +257,7 @@ func suggestions(c *client.Client) ([]tui.Item, error) {
 	out := make([]tui.Item, 0, len(list))
 	for _, p := range list {
 		k := p.Knowledge
-		out = append(out, tui.Item{Ref: fmt.Sprintf("#%d", k.ID), Kind: k.Type, Title: k.Title, Meta: shortProject(k.Scope.Project)})
+		out = append(out, tui.Item{Ref: knref.Format(k.ID), Kind: k.Type, Title: k.Title, Meta: shortProject(k.Scope.Project)})
 	}
 	return out, nil
 }

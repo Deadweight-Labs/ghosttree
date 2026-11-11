@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -53,7 +54,7 @@ type PainUpdateInput struct {
 	State        string            `json:"state,omitempty" jsonschema:"move to mitigated, accepted (one lives with it on purpose), resolved, obsolete or back to active"`
 	Remaining    string            `json:"remaining,omitempty" jsonschema:"required for mitigated: what is still unsolved"`
 	EvidenceKind string            `json:"evidence_kind,omitempty" jsonschema:"commit, test, file, decision, session, url or request; required for mitigated and resolved"`
-	EvidenceRef  string            `json:"evidence_ref,omitempty" jsonschema:"concrete evidence reference; for request REQ-n, for decision #n"`
+	EvidenceRef  string            `json:"evidence_ref,omitempty" jsonschema:"concrete evidence reference; for request REQ-n, for decision KN-n"`
 	Note         string            `json:"note,omitempty" jsonschema:"required for accepted (why one lives with the problem), for obsolete and for moving back to active: why"`
 	Title        string            `json:"title,omitempty" jsonschema:"replacement title; needs reason"`
 	Body         string            `json:"body,omitempty" jsonschema:"replacement text; needs reason"`
@@ -95,7 +96,7 @@ func painOutput(d pain.Detail, withHistory bool) PainOutput {
 		case "request":
 			target = fmt.Sprintf("REQ-%d %s", l.RequestID, l.Title)
 		case "knowledge":
-			target = fmt.Sprintf("#%d %s", l.KnowledgeID, l.Title)
+			target = fmt.Sprintf("%s %s", knref.Format(l.KnowledgeID), l.Title)
 		case "idea":
 			target = fmt.Sprintf("IDEA-%d %s", l.IdeaID, l.Title)
 		}

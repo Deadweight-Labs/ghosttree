@@ -31,6 +31,7 @@ func TestCoreCallsFollowAGuessedFieldName(t *testing.T) {
 		{"action": "get", "id": ref},
 		{"action": "get", "request": strings.TrimPrefix(ref, "REQ-")},
 		{"action": "get", "request_id": "#" + strings.TrimPrefix(ref, "REQ-"), "detailed": true},
+		{"action": "get", "request_id": ref},
 	} {
 		text, failed = callTool(t, session, "request", args)
 		if failed || !strings.Contains(text, "Exports carry the time zone") {
@@ -108,5 +109,28 @@ func TestContextSearchTakesALimit(t *testing.T) {
 	two, failed := callTool(t, session, "context_search", map[string]any{"query": "kranich", "limit": 2})
 	if failed || strings.Count(two, "Kranich note") != 2 {
 		t.Fatalf("search with limit 2: %v %s", failed, two)
+	}
+}
+
+// A knowledge entry is named KN-n; a field that takes the number takes that spelling
+// (and the old #n) as well.
+func TestCoreCallsTakeKNForAKnowledgeNumber(t *testing.T) {
+	session := coreSession(t)
+	text, failed := callTool(t, session, "context_remember", map[string]any{"type": "note", "title": "Der Cache liegt unter var", "body": "etwas zu merken", "scope_hint": "project"})
+	if failed {
+		t.Fatalf("remember: %s", text)
+	}
+	if !strings.Contains(text, "stored KN-1 ") || strings.Contains(text, "#1") {
+		t.Errorf("remember names the entry other than KN-1: %s", text)
+	}
+	for _, id := range []any{"KN-1", "kn-1", "#1", "1", float64(1)} {
+		text, failed = callTool(t, session, "context_search", map[string]any{"knowledge_id": id})
+		if failed || !strings.Contains(text, "# KN-1 Der Cache liegt unter var") {
+			t.Errorf("knowledge_id %v: %v %s", id, failed, text)
+		}
+	}
+	text, failed = callTool(t, session, "context_get", map[string]any{"action": "link", "ref": "KN-1"})
+	if failed || !strings.Contains(text, "Knowledge KN-1: Der Cache liegt unter var") || !strings.Contains(text, "/knowledge/1") {
+		t.Errorf("link KN-1: %v %s", failed, text)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -65,7 +66,7 @@ func cmdUnbindBranch(args []string, stdout io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "%d active entries are filed against a branch:\n", len(bound))
 		for _, k := range bound {
-			fmt.Fprintf(stdout, "  #%-4d %-8s %s@%s  %s\n", k.ID, k.Type, k.Scope.Project, k.Scope.Branch, k.Title)
+			fmt.Fprintf(stdout, "  %-8s %-8s %s@%s  %s\n", knref.Format(k.ID), k.Type, k.Scope.Project, k.Scope.Branch, k.Title)
 		}
 		fmt.Fprintf(stdout, "\nlift them with: ctx unbind-branch --db %s %s\n", *dbPath, idList(bound))
 		return 0
@@ -81,7 +82,7 @@ func cmdUnbindBranch(args []string, stdout io.Writer) int {
 		verb = "would lift"
 	}
 	for _, k := range affected {
-		fmt.Fprintf(stdout, "%s #%d from %s@%s to %s\n", verb, k.ID, k.Scope.Project, k.Scope.Branch, k.Scope.Project)
+		fmt.Fprintf(stdout, "%s %s from %s@%s to %s\n", verb, knref.Format(k.ID), k.Scope.Project, k.Scope.Branch, k.Scope.Project)
 	}
 	// Naming an id that carries no branch is not an error, but silence about it
 	// would read as success on an entry that was never touched.

@@ -109,13 +109,15 @@ func (s *Store) ftsDocuments(q string, o DocumentSearch, limit int) ([]Document,
 
 func (s *Store) textDocumentIDs(q string, o DocumentSearch, scan int) ([]int64, error) {
 	where, args := documentWhere(o)
-	rows, err := s.db.Query(`SELECT d.id FROM documents_fts f JOIN documents d ON d.id = f.rowid
+	return andThenOr(q, scan, scan, idKey, func(expr string) ([]int64, error) {
+		rows, err := s.db.Query(`SELECT d.id FROM documents_fts f JOIN documents d ON d.id = f.rowid
 		WHERE documents_fts MATCH ? AND `+where+` ORDER BY f.rank LIMIT ?`,
-		append(append([]any{ftsQuery(q)}, args...), scan)...)
-	if err != nil {
-		return nil, err
-	}
-	return scanIDs(rows)
+			append(append([]any{expr}, args...), scan)...)
+		if err != nil {
+			return nil, err
+		}
+		return scanIDs(rows)
+	})
 }
 
 func (s *Store) hybridDocuments(q string, o DocumentSearch, limit int, qvec []float32, cfg *EmbedSearchConfig) ([]Document, error) {

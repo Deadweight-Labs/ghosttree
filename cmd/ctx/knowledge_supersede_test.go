@@ -30,8 +30,8 @@ func TestKnowledgeAddSupersedesAndRetireCLI(t *testing.T) {
 	}
 
 	code, out := ctx("add", "--type", "note", "--title", "share removed", "--body", "gone", "--scope", "project", "--project", cliHere,
-		"--supersedes", ida+",#"+idb, "--reason", "the share was removed")
-	if code != 0 || !strings.Contains(out, "superseded #"+ida+", #"+idb) {
+		"--supersedes", "KN-"+ida+",#"+idb, "--reason", "the share was removed")
+	if code != 0 || !strings.Contains(out, "superseded KN-"+ida+", KN-"+idb) {
 		t.Fatalf("add: %d %s", code, out)
 	}
 	for _, id := range []int64{oldA, oldB} {
@@ -50,7 +50,7 @@ func TestKnowledgeAddSupersedesAndRetireCLI(t *testing.T) {
 	if code, out := ctx("retire", id); code != 2 || !strings.Contains(out, "--reason") {
 		t.Errorf("retire without reason: %d %s", code, out)
 	}
-	if code, out := ctx("retire", id, "--reason", "tunnel closed"); code != 0 || !strings.Contains(out, "retired #"+id) {
+	if code, out := ctx("retire", id, "--reason", "tunnel closed"); code != 0 || !strings.Contains(out, "retired KN-"+id) {
 		t.Errorf("retire: %d %s", code, out)
 	}
 	if k, _ := st.KnowledgeByID(gone); k.Status != "deprecated" {

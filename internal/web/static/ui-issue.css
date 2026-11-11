@@ -47,7 +47,7 @@
   & .side > .gbtn.blk { margin-bottom: 16px; }
   /* Name in the muted tone, the value carries the weight; the name stands at the first line of a value of many lines */
   & .side .sblk h3 { display: flex; align-items: center; min-height: 24px; margin: 0; color: var(--fg-muted); }
-  & .side .sblk .v { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+  & .side .sblk .v { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
   & .side .sblk .v > * { display: inline-flex; }
   & .side .sblk .v > .sub { flex-basis: 100%; }
   /* The label picker shrinks with the column instead of pushing its button out of it */

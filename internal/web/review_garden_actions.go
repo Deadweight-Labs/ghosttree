@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -80,10 +81,10 @@ func validTestID(t string) bool {
 }
 
 // titleIDs reads the entry numbers a note's title names: "[Gärtner] Duplikat?
-// #12 und #15: Titel" gives 12 and 15.
+// KN-12 und KN-15: Titel" gives 12 and 15 (the old "#12 und #15" too).
 func titleIDs(title string) ([]int64, bool) {
 	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(title), "[Gärtner]"))
-	_, after, ok := strings.Cut(rest, " #")
+	_, after, ok := cutGardenMark(rest)
 	if !ok {
 		return nil, false
 	}
@@ -92,7 +93,17 @@ func titleIDs(title string) ([]int64, bool) {
 		return nil, false
 	}
 	var ids []int64
-	for _, part := range strings.Split(list, " und #") {
+	for i, part := range strings.Split(list, " und ") {
+		// The first number lost its mark in the cut; every later one carries its own.
+		if i > 0 {
+			if p, ok := strings.CutPrefix(part, knref.Prefix); ok {
+				part = p
+			} else if p, ok := strings.CutPrefix(part, "#"); ok {
+				part = p
+			} else {
+				return nil, false
+			}
+		}
 		id, err := strconv.ParseInt(part, 10, 64)
 		if err != nil || id < 1 {
 			return nil, false
@@ -353,7 +364,7 @@ type gardenRef struct {
 }
 
 func entryRef(pa *store.ProjectAccess, role string, k store.Knowledge) gardenRef {
-	return gardenRef{Role: role, Text: fmt.Sprintf("#%d %s", k.ID, pa.KnowledgeView(k).Title), Href: "/ui/knowledge/" + strconv.FormatInt(k.ID, 10)}
+	return gardenRef{Role: role, Text: fmt.Sprintf("%s %s", knref.Format(k.ID), pa.KnowledgeView(k).Title), Href: "/ui/knowledge/" + strconv.FormatInt(k.ID, 10)}
 }
 
 // decorateGardenRow adds what a duplicate or regression note needs on its card:
@@ -460,7 +471,7 @@ func (a *app) confirmGardenNote(note store.Knowledge, person string) error {
 }
 
 // reviewMerge merges the duplicates a note of the gardener names: the newest entry
-// supersedes the older ones, with the reason "Gärtner-Vorschlag #<note>, bestätigt
+// supersedes the older ones, with the reason "Gärtner-Vorschlag KN-<note>, bestätigt
 // von <person>". The right is that of superseding; the store call is that of
 // context_supersede.
 func (a *app) reviewMerge(w http.ResponseWriter, r *http.Request) {
@@ -478,7 +489,7 @@ func (a *app) reviewMerge(w http.ResponseWriter, r *http.Request) {
 	for _, k := range plan.replace {
 		old = append(old, k.ID)
 	}
-	reason := fmt.Sprintf("Gärtner-Vorschlag #%d, bestätigt von %s", note.ID, person)
+	reason := fmt.Sprintf("Gärtner-Vorschlag %s, bestätigt von %s", knref.Format(note.ID), person)
 	account, _ := store.AccountNumericID(browserPrincipal(r).ID)
 	err = a.store.SupersedeKnowledge(plan.keep.ID, old, reason, store.RelationActor{Name: person, AccountID: account, Via: "web"})
 	switch {

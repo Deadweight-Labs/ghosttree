@@ -20,6 +20,7 @@
   & .ist.is-done { color: var(--success-fg); }
   & .setlayout > div > .sh2:not(:first-child):not(.is-first) { margin-top: 32px; }
   & .setlayout > div > .box + .box { margin-top: 16px; }
+  & .wrap > .box + .sh2 { margin-top: 32px; }
   & .sethead { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
   & .sethead b { display: block; font-size: 20px; font-weight: 600; line-height: 1.25; }
   & .sethead .muted { font-size: 14px; }

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -228,7 +229,7 @@ func CoverProposed(existing []store.Knowledge, e Entry) bool {
 // a person confirms the note on the review page.
 func CoverProposal(project string, c Cover) store.Knowledge {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Vorschlag des Gärtners (Herkunft gardener, nicht bestätigt) zu Eintrag #%d: %s\n\n", c.Entry.ID, c.Entry.Title)
+	fmt.Fprintf(&b, "Vorschlag des Gärtners (Herkunft gardener, nicht bestätigt) zu Eintrag %s: %s\n\n", knref.Format(c.Entry.ID), c.Entry.Title)
 	fmt.Fprintf(&b, "Urteil: %s\n", CoverLabel(c.Kind))
 	switch c.Kind {
 	case CoverExisting:
@@ -244,7 +245,7 @@ func CoverProposal(project string, c Cover) store.Knowledge {
 	}
 	return store.Knowledge{
 		Type:       "note",
-		Title:      fmt.Sprintf("%s%s #%d: %s", titlePrefix, CoverLabel(c.Kind), c.Entry.ID, c.Entry.Title),
+		Title:      fmt.Sprintf("%s%s %s: %s", titlePrefix, CoverLabel(c.Kind), knref.Format(c.Entry.ID), c.Entry.Title),
 		Body:       b.String(),
 		Scope:      scope.Axes{Project: project},
 		Confidence: proposalState,
@@ -264,7 +265,7 @@ func ProposeCovers(sink Sink, project string, existing []store.Knowledge, covers
 			continue
 		}
 		if _, err := sink.Remember(CoverProposal(project, c), scope.Axes{Project: project}); err != nil {
-			return written, fmt.Errorf("propose regression cover for #%d: %w", c.Entry.ID, err)
+			return written, fmt.Errorf("propose regression cover for %s: %w", knref.Format(c.Entry.ID), err)
 		}
 		written++
 	}

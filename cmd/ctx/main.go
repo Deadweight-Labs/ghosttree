@@ -211,7 +211,7 @@ const usage = `usage: ctx <command>
   label    labels for requests, pains, ideas and knowledge, per project or org
   topic    named areas of the repository (several path prefixes under one name)
   task     ask the human for a key, file, decision or action, and check it afterwards
-  open     open an object (REQ-n, TASK-n, PAIN-n, #id, pr:n, preset:..., a path) in the browser, or print its link and card
+  open     open an object (REQ-n, TASK-n, PAIN-n, KN-n, pr:n, preset:..., a path) in the browser, or print its link and card
   knowledge  add, show, supersede, retire or move a knowledge entry
   ghost    read description history or archive confirmed-deleted paths
   doc      write, publish, and read long-form documents

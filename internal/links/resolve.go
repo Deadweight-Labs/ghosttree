@@ -12,6 +12,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/runbook"
@@ -43,7 +44,7 @@ const (
 	KindInbox     = "inbox"
 )
 
-// Ref is a parsed short form: REQ-596, TASK-124, PAIN-57, IDEA-3, FEAT-4, #4295,
+// Ref is a parsed short form: REQ-596, TASK-124, PAIN-57, IDEA-3, FEAT-4, KN-4295,
 // pr:155, commit:2d950bf, preset:pr-ergebnis 155, a path, a search line.
 type Ref struct {
 	Kind string
@@ -57,7 +58,7 @@ type Ref struct {
 }
 
 var (
-	idRE        = regexp.MustCompile(`(?i)^(req|task|pain|idea|feat|pkg|dec)-(\d+)$`)
+	idRE        = regexp.MustCompile(`(?i)^(req|task|pain|idea|feat|pkg|dec|kn)-(\d+)$`)
 	criterionRE = regexp.MustCompile(`(?i)^(?:req-(\d+)#(\d+)|ac-(\d+)\.(\d+))$`)
 	hashRE      = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 	prefixRE    = regexp.MustCompile(`^([a-z]+):(.*)$`)
@@ -69,7 +70,7 @@ var (
 func ParseRef(input string) (Ref, error) {
 	in := strings.TrimSpace(input)
 	if in == "" {
-		return Ref{}, errors.New("name what to open: REQ-n, TASK-n, PAIN-n, IDEA-n, FEAT-n, DEC-n, #id, pr:n, commit:sha, preset:name, a path or a search line")
+		return Ref{}, errors.New("name what to open: REQ-n, TASK-n, PAIN-n, IDEA-n, FEAT-n, DEC-n, KN-n, pr:n, commit:sha, preset:name, a path or a search line")
 	}
 	atoi := func(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
 	num := func(s string) int { n, _ := strconv.ParseInt(s, 10, 32); return int(n) }
@@ -79,14 +80,24 @@ func ParseRef(input string) (Ref, error) {
 		}
 		return Ref{Kind: KindCriterion, ID: atoi(m[3]), Num: num(m[4])}, nil
 	}
+	if t, ok := ParseNumber(in); ok {
+		// A bare #N given as a reference (ctx open #4295) is the old way of writing a
+		// knowledge entry, now KN-N; in running text of a repository #N is the pull
+		// request. A search asks NumberTerm.Kinds for every kind #N can mean.
+		if t.Kind == "" {
+			return Ref{Kind: KindKnowledge, ID: t.N}, nil
+		}
+		return Ref{Kind: t.Kind, ID: t.N}, nil
+	}
 	if m := idRE.FindStringSubmatch(in); m != nil {
-		kind := map[string]string{"req": KindRequest, "task": KindTask, "pain": KindPain, "idea": KindIdea, "feat": KindFeature, "pkg": KindPackage, "dec": KindDecision}[strings.ToLower(m[1])]
+		kind := map[string]string{"req": KindRequest, "task": KindTask, "pain": KindPain, "idea": KindIdea, "feat": KindFeature, "pkg": KindPackage, "dec": KindDecision, "kn": KindKnowledge}[strings.ToLower(m[1])]
 		return Ref{Kind: kind, ID: atoi(m[2])}, nil
 	}
+	// #4295 is the old spelling of KN-4295 and is still read.
 	if strings.HasPrefix(in, "#") {
-		n, err := strconv.ParseInt(in[1:], 10, 64)
-		if err != nil || n <= 0 {
-			return Ref{}, fmt.Errorf("%q is not a knowledge number like #4295", in)
+		n, ok := knref.Parse(in)
+		if !ok {
+			return Ref{}, fmt.Errorf("%q is not a knowledge number like KN-4295", in)
 		}
 		return Ref{Kind: KindKnowledge, ID: n}, nil
 	}
@@ -167,7 +178,7 @@ func ParseRef(input string) (Ref, error) {
 	if strings.Contains(in, "/") || strings.Contains(in, ".") {
 		return Ref{Kind: KindPath, Text: in}, nil
 	}
-	return Ref{}, fmt.Errorf("cannot tell what %q is: use REQ-n, TASK-n, PAIN-n, IDEA-n, FEAT-n, DEC-n, #id, pr:n, commit:sha, preset:name, a path or a search line like is:open", in)
+	return Ref{}, fmt.Errorf("cannot tell what %q is: use REQ-n, TASK-n, PAIN-n, IDEA-n, FEAT-n, DEC-n, KN-n, pr:n, commit:sha, preset:name, a path or a search line like is:open", in)
 }
 
 // docRepo reads the repository part of doc:owner/repo/slug: owner/repo on
@@ -289,7 +300,7 @@ func (e Env) Resolve(ref Ref) (Card, error) {
 	case KindKnowledge:
 		k, err := e.API.KnowledgeByID(ref.ID)
 		if err != nil {
-			return Card{}, Unknown(fmt.Sprintf("#%d", ref.ID))
+			return Card{}, Unknown(knref.Format(ref.ID))
 		}
 		return b.fallbackProject(e.Project).KnowledgeCard(k), nil
 	case KindPackage:

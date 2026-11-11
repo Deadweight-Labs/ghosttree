@@ -147,7 +147,7 @@ func TestMergeNotesWhichBranchKnowledgeWentInAndOnlyOnce(t *testing.T) {
 			notes = append(notes, k)
 		}
 	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "PR #7") || !strings.Contains(notes[0], "#"+prItoa(k1)) || !strings.Contains(notes[0], "#"+prItoa(k2)) || strings.Contains(notes[0], "\n") {
+	if len(notes) != 1 || !strings.Contains(notes[0], "PR #7") || !strings.Contains(notes[0], "KN-"+prItoa(k1)) || !strings.Contains(notes[0], "KN-"+prItoa(k2)) || strings.Contains(notes[0], "\n") {
 		t.Fatalf("merge note: %q", notes)
 	}
 	// Dieselbe Meldung noch einmal, und ein verspätetes "synchronize": keine zweite Notiz, kein Rückfall.

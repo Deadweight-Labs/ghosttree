@@ -178,6 +178,7 @@ var writerMethodClasses = map[string]string{
 	"BrowseSessions":                "read",
 	"SearchTranscripts":             "read",
 	"ReadPoolSize":                  "read",
+	"AcquireSearchSlot":             "administrative",
 	"WithContext":                   "administrative",
 	"SessionWindow":                 "read",
 	"SessionHits":                   "read",

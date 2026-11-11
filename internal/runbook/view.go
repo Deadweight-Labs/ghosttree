@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 )
 
@@ -224,7 +225,7 @@ func Checklist(v View, values map[string]string) string {
 	if len(v.Pitfalls) > 0 {
 		b.WriteString("\nPitfalls:\n")
 		for _, p := range v.Pitfalls {
-			fmt.Fprintf(&b, "- #%d %s\n", p.ID, p.Title)
+			fmt.Fprintf(&b, "- %s %s\n", knref.Format(p.ID), p.Title)
 		}
 	}
 	if len(s.Targets) > 0 {
@@ -306,7 +307,7 @@ func Lines(s Spec) []string {
 		}
 	}
 	for _, id := range s.Pitfalls {
-		add("pitfall: #%d", id)
+		add("pitfall: %s", knref.Format(id))
 	}
 	for _, k := range s.Triggers.Keywords {
 		add("trigger keyword: %s", k)
