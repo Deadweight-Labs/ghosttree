@@ -595,6 +595,10 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 	return res, out, err
 }
 
+// ownSessionScan is how many of the newest sessions of the project ownSession
+// looks through.
+const ownSessionScan = 200
+
 // ownSession findet die Session dieses MCP-Prozesses, wenn der Agent ihre Nummer
 // nicht nennt (PAIN-57).
 //
@@ -607,8 +611,14 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 // Reihenfolge: die Harness-Session-ID dieses Prozesses (sicher, wo gesetzt),
 // dann das Arbeitsverzeichnis (ein Branchwechsel ändert es nicht), zuletzt der
 // Branch von früher, wie es vorher allein galt.
+//
+// Nach dem Alter geordnet liegen die Sessions eines Projekts, in dem viele
+// Agenten zugleich arbeiten (ein Orchestrator mit Workern in Worktrees),
+// schnell weiter hinten als die ersten zwanzig: die eigene wurde dann nicht
+// mehr gefunden, obwohl sie passte (REQ-436 AC-5). Deshalb wird bis
+// ownSessionScan Zeilen weit gesucht.
 func (s *Server) ownSession() (int64, error) {
-	sessions, err := s.client.Sessions(scope.Axes{Project: s.ctxAxes.Project}, 20)
+	sessions, err := s.client.Sessions(scope.Axes{Project: s.ctxAxes.Project}, ownSessionScan)
 	if err != nil {
 		return 0, err
 	}

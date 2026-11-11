@@ -22,6 +22,10 @@ const accountUsage = `usage: ctx account add <name> [--email E] [--admin] --db <
        ctx account set-gardener --clear --db <path>
        ctx account link-github <name|person:N|N> --login <github login> [--id N] --db <path>
        ctx account set-kind <name|person:N|N> --kind person|service [--org <slug>] --db <path>
+       ctx account github link [--print]
+
+github link needs no database: it opens your web profile, where you link your own
+GitHub account (the same step as the GitHub row in ctx tui settings).
 
 set-kind makes an account a service (the gardener, an operations runner, CI)
 or a person again. A service signs in nowhere, owns nothing, is listed under
@@ -67,6 +71,8 @@ func cmdAccount(args []string, stdout io.Writer) int {
 		return cmdAccountLinkGitHub(args[1:], stdout)
 	case "set-kind":
 		return cmdAccountSetKind(args[1:], stdout)
+	case "github":
+		return cmdAccountGitHub(args[1:], stdout)
 	case "token":
 		if len(args) > 1 && args[1] == "create" {
 			return cmdAccountTokenCreate(args[2:], stdout)

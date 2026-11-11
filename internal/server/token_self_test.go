@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -88,5 +90,36 @@ func TestRevokeOwnTokenRefusesAWebSession(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("%+v: %d", p, w.Code)
 		}
+	}
+}
+
+func whoAmIBody(t *testing.T, srv *httptest.Server, token string) map[string]any {
+	t.Helper()
+	req, _ := http.NewRequest("GET", srv.URL+"/api/whoami", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var who map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&who); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("whoami: %d %v", resp.StatusCode, err)
+	}
+	return who
+}
+
+func TestWhoAmITellsSinceWhenAndUntilWhenTheLoginHolds(t *testing.T) {
+	srv, st := deviceFixture(t)
+	token, info, err := st.CreateToken("alice", store.TokenSpec{Label: "ci", Machine: "runner", ExpiresIn: 48 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	who := whoAmIBody(t, srv, token)
+	if who["token_created_at"] != info.CreatedAt || who["token_expires_at"] != info.ExpiresAt || info.ExpiresAt == "" {
+		t.Fatalf("whoami %v, token %+v", who, info)
+	}
+	if _, err := time.Parse(time.RFC3339, info.ExpiresAt); err != nil {
+		t.Fatalf("expiry is not RFC 3339: %v", err)
 	}
 }

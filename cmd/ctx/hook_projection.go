@@ -134,3 +134,27 @@ func refreshFiles(args []string) int {
 	writeProjection(cfg, gitCtx, false)
 	return 0
 }
+
+// refreshMirrorAfterWrite rewrites the mirror of the checkout the session works
+// in after the session stored, replaced or retired a knowledge entry
+// (REQ-436 AC-2). It runs in the background of ctx mcp, never makes a tool
+// call wait, and does nothing in a checkout that has no mirror yet: the session
+// start is what creates it. The ghost tree is left alone, describe_file has its
+// own refresh. Errors are swallowed: the files are a projection.
+func refreshMirrorAfterWrite(c *client.Client, machine string) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	g := collector.ResolveGitContext(cwd)
+	if g.Project == "" || g.Root == "" || !projectionExists(g.Root) {
+		return
+	}
+	// Wait for a writer that is running: it may have read the entries before
+	// this one was stored.
+	release, err := lockProjection(g.Root, true)
+	if err == nil {
+		defer release()
+	}
+	_ = WriteMirror(c, scope.Axes{Project: g.Project, Branch: g.Branch, Lineage: g.Lineage, Machine: machine}, g.Root)
+}
