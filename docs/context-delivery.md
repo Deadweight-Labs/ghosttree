@@ -121,7 +121,11 @@ delivered. It works in the background: a few sessions per step, with a pause
 between steps, reading through the read pool and writing in one short transaction
 at the end of a step. A session counts as finished after an hour without
 activity. The job reads only sessions that belong to the account whose rows it
-judges, and writes numbers, never text. `GHOSTTREE_USAGE_JUDGE=off` switches it off.
+judges, and writes numbers, never text. It judges a part only if the server's own
+delivery memory (`context_deliveries`, kept seven days) shows that it handed the
+entry to that session: the log is written by the hook, and a reported number the
+server did not deliver is left alone, so the result cannot be used to find out
+what an entry the reporter may not read says. `GHOSTTREE_USAGE_JUDGE=off` switches it off.
 
 Judged are knowledge entries and runbooks. Only what the agent said and did after
 the delivery counts, not what the person wrote and not what tools returned (a

@@ -89,6 +89,7 @@ func newUsageFixture(t *testing.T, s *Store, withText bool) *usageFixture {
 	}
 	useAppend(t, s, f.sid, withText, lines, []string{"user", "assistant", "tool", "assistant"})
 	for i, id := range []int64{f.picked, f.none, f.followed} {
+		serve(t, s, f.account, f.session, id)
 		if err := s.RecordContextLog(ContextLogBatch{Project: logProject, SessionRef: f.session, Harness: "claude", Events: []DeliveryEvent{{
 			Call: fmt.Sprintf("call%d", i), At: f.base.Format(time.RFC3339),
 			Parts: []deliverylog.Part{{Via: deliverylog.ViaBootstrap, Kind: deliverylog.KindKnowledge, ID: id, Chars: 100 + 10*i}}}}}, f.account); err != nil {
@@ -104,6 +105,15 @@ func newUsageFixture(t *testing.T, s *Store, withText bool) *usageFixture {
 		f.rows[id] = row
 	}
 	return f
+}
+
+// serve is what the server does when it hands an entry to a session: it
+// remembers it in the delivery memory, which the job relies on.
+func serve(t testing.TB, s *Store, account int64, session string, id int64) {
+	t.Helper()
+	if _, err := s.ClaimContextDeliveries(fmt.Sprintf("person:%d", account), session, DeliveredByBootstrap, []ContextDelivery{{KnowledgeID: id}}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (f *usageFixture) used(t *testing.T, id int64) (int, string) {
@@ -179,6 +189,7 @@ func TestJudgeDeliveriesTiesPickedUpBroadEntriesToTheProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	serve(t, s, f.account, f.session, own)
 	if err := s.RecordContextLog(ContextLogBatch{Project: logProject, SessionRef: f.session, Harness: "claude", Events: []DeliveryEvent{{
 		Call: "own", At: f.base.Format(time.RFC3339), Parts: []deliverylog.Part{{Via: deliverylog.ViaRelevance, Kind: deliverylog.KindKnowledge, ID: own, Chars: 50}}}}}, f.account); err != nil {
 		t.Fatal(err)
@@ -281,6 +292,7 @@ func TestJudgeDeliveriesIsCappedPerStep(t *testing.T) {
 			t.Fatal(err)
 		}
 		useAppend(t, s, sid, false, []string{useLine(base.Add(5*time.Second), "assistant", useText("nichts"))}, []string{"assistant"})
+		serve(t, s, 7, key, 1)
 		if err := s.RecordContextLog(ContextLogBatch{Project: logProject, SessionRef: key, Harness: "claude", Events: []DeliveryEvent{{
 			Call: "c" + key[len(key)-1:], At: base.Format(time.RFC3339), Parts: []deliverylog.Part{{Via: deliverylog.ViaBootstrap, Kind: deliverylog.KindKnowledge, ID: 1, Chars: 5}}}}}, 7); err != nil {
 			t.Fatal(err)
@@ -307,6 +319,7 @@ func TestJudgeDeliveriesUsesItsPartialIndex(t *testing.T) {
 	rows, err := s.db.Query(`EXPLAIN QUERY PLAN SELECT d.account_id, d.session_key, se.id, se.harness
 		FROM context_delivery_log d JOIN sessions se ON `+sessionOfLog+`
 		WHERE `+openJudgeable+` AND d.subagent = 0 AND d.held_out = 0 AND d.delivered_at < ? AND se.last_seen_at < ?
+		  AND `+servedByServer+`
 		ORDER BY d.delivered_at LIMIT ?`, 1, "x", "x", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -407,5 +420,46 @@ func TestContextUseReportCountsByRouteKindAndProfile(t *testing.T) {
 	}
 	if later, _ := s.ContextUseReport([]string{logProject}, "2099-01-01"); len(later.Lines) != 0 {
 		t.Errorf("a later window: %+v", later)
+	}
+}
+
+// The job must not be an oracle: a row that names an entry the server never
+// delivered to the session (one the reporting account cannot read, a number picked
+// freely) is never judged, however much of its title the transcript says, and it
+// is closed without a verdict, so nothing about the entry can be read from it.
+func TestJudgeDeliveriesDoesNotJudgeWhatTheServerDidNotDeliver(t *testing.T) {
+	s := openTest(t)
+	f := newUsageFixture(t, s, false)
+	secret, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "Wörterbuch lernt sich ein, erst nach neunzig Sekunden", Body: "geheim",
+		Scope: scope.Axes{Project: "github.com/other/private"}, Person: "someone"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The transcript says the secret's title words and its number; the log claims
+	// it was delivered, the server's memory has nothing.
+	if err := s.RecordContextLog(ContextLogBatch{Project: logProject, SessionRef: f.session, Harness: "claude", Events: []DeliveryEvent{{
+		Call: "guess", At: f.base.Format(time.RFC3339), Parts: []deliverylog.Part{{Via: deliverylog.ViaBootstrap, Kind: deliverylog.KindKnowledge, ID: secret, Chars: 9},
+			{Via: deliverylog.ViaRunbook, Kind: deliverylog.KindRunbook, ID: 99, Chars: 9}}}}}, f.account); err != nil {
+		t.Fatal(err)
+	}
+	f.judge(t)
+	var used int
+	var at string
+	if err := s.db.QueryRow(`SELECT COALESCE(MIN(used),-1), COALESCE(MAX(judged_at),'') FROM context_delivery_log WHERE call='guess'`).Scan(&used, &at); err != nil || used != UsedPending || at != "" {
+		t.Fatalf("an unserved part was judged: used=%d judged_at=%q %v", used, at, err)
+	}
+	if n := logCount(t, s, `SELECT COUNT(*) FROM knowledge_usage WHERE knowledge_id=?`, secret); n != 0 {
+		t.Error("an unserved entry has usage counts")
+	}
+	if n := logCount(t, s, `SELECT COUNT(*) FROM knowledge_project_affinity WHERE knowledge_id=?`, secret); n != 0 {
+		t.Error("an unserved entry got a project tie")
+	}
+	// Later the row is closed without a verdict, the same as any that cannot be judged.
+	res, err := s.JudgeDeliveries(context.Background(), JudgeOptions{Now: time.Now().Add(15 * 24 * time.Hour)})
+	if err != nil || res.GaveUp != 2 {
+		t.Fatalf("result = %+v %v", res, err)
+	}
+	if err := s.db.QueryRow(`SELECT MIN(used), MIN(judged_at) FROM context_delivery_log WHERE call='guess'`).Scan(&used, &at); err != nil || used != UsedPending || at == "" {
+		t.Errorf("closed rows: used=%d judged_at=%q %v", used, at, err)
 	}
 }

@@ -83,8 +83,10 @@ func BenchmarkJudgeDeliveries(b *testing.B) {
 		}
 		var events []DeliveryEvent
 		for d := range perSession {
+			id := ids[rnd.Intn(len(ids))]
+			serve(b, s, 7, key, id)
 			events = append(events, DeliveryEvent{Call: fmt.Sprintf("c%d", d), At: base.Add(time.Duration(d*60) * time.Second).Format(time.RFC3339),
-				Parts: []deliverylog.Part{{Via: deliverylog.ViaRelevance, Kind: deliverylog.KindKnowledge, ID: ids[rnd.Intn(len(ids))], Chars: 300}}})
+				Parts: []deliverylog.Part{{Via: deliverylog.ViaRelevance, Kind: deliverylog.KindKnowledge, ID: id, Chars: 300}}})
 		}
 		if err := s.RecordContextLog(ContextLogBatch{Project: logProject, SessionRef: key, Harness: "claude", Events: events}, 7); err != nil {
 			b.Fatal(err)
@@ -166,6 +168,7 @@ func BenchmarkPlanJudgementBacklog(b *testing.B) {
 		b.Fatal(err)
 	}
 	_ = sid
+	serve(b, s, 7, "present", 1)
 	if _, err := s.db.Exec(`INSERT INTO context_delivery_log(account_id, session_key, call, ord, project, harness, via, kind, object_id, chars, delivered_at)
 		VALUES(7, 'present', '', 0, ?, 'claude', 'bootstrap', 'knowledge', 1, 100, ?)`, logProject, time.Now().UTC().Add(-4*time.Hour).Format(time.RFC3339)); err != nil {
 		b.Fatal(err)

@@ -128,6 +128,22 @@ const sessionOfLog = `se.harness = CASE d.harness WHEN 'claude' THEN 'claude-cod
 // wörtlich im Teilindex context_delivery_log_open.
 const openJudgeable = `d.used = -1 AND d.judged_at = '' AND d.kind IN ('knowledge','runbook')`
 
+// servedByServer ist die Bedingung, dass der Server die Sache dieser Sitzung
+// selbst zugestellt hat (context_deliveries, vom Server beim Ausliefern
+// geschrieben, nach dem Zugriffsrecht des Kontos). Das Protokoll schreibt der
+// Hook, und wer in einem Projekt schreiben darf, kann darin jede Nummer melden.
+// Ohne diese Bedingung wäre das Urteil ein Orakel: Wer eine fremde, für ihn
+// unlesbare Eintragsnummer meldet und im eigenen Transkript Wörter ausprobiert,
+// läse am Wert von used ab, ob sie im Titel oder Text des Eintrags stehen. Eine
+// Zeile, die der Server nicht bestätigt, wird nie ausgewertet und nach GiveUp
+// ohne Urteil geschlossen; ihr Ausgang verrät nichts. Der Server vergisst
+// Zustellungen nach contextDeliveryRetention (7 Tagen); eine Zeile, die der
+// Job bis dahin nicht erreicht hat, wird deshalb nicht mehr beurteilt.
+const servedByServer = `EXISTS (SELECT 1 FROM context_deliveries cd
+	WHERE cd.account_id = 'person:' || d.account_id AND cd.session_key = d.session_key
+	  AND ((d.kind = 'knowledge' AND cd.knowledge_id = d.object_id)
+	    OR (d.kind = 'runbook' AND cd.knowledge_id = 0 AND cd.term = 'runbook:' || d.object_id)))`
+
 type judgeSessionPlan struct {
 	account int64
 	key     string
@@ -215,6 +231,7 @@ func (s *Store) planJudgement(ctx context.Context, now time.Time, opt JudgeOptio
 	rows, err := s.db.QueryContext(ctx, `SELECT d.account_id, d.session_key, se.id, se.harness
 		FROM context_delivery_log d JOIN sessions se ON `+sessionOfLog+`
 		WHERE `+openJudgeable+` AND d.subagent = 0 AND d.held_out = 0 AND d.delivered_at < ? AND se.last_seen_at < ?
+		  AND `+servedByServer+`
 		ORDER BY d.delivered_at LIMIT ?`, owner, settled, settled, judgeRowCap)
 	if err != nil {
 		return nil, false, err
@@ -249,6 +266,7 @@ func (s *Store) planJudgement(ctx context.Context, now time.Time, opt JudgeOptio
 		p := &plans[i]
 		r, err := s.db.QueryContext(ctx, `SELECT d.id, d.kind, d.object_id, d.project, d.delivered_at FROM context_delivery_log d
 			WHERE d.account_id = ? AND d.session_key = ? AND `+openJudgeable+` AND d.subagent = 0 AND d.held_out = 0 AND d.delivered_at < ?
+			AND `+servedByServer+`
 			ORDER BY d.delivered_at, d.id`, p.account, p.key, settled)
 		if err != nil {
 			return nil, false, err
@@ -270,13 +288,14 @@ func (s *Store) planJudgement(ctx context.Context, now time.Time, opt JudgeOptio
 }
 
 // expiredRows sind offene Zeilen, die älter als GiveUp sind und zu keiner
-// Sitzung mit Transkript gehören, die dem Konto gehört. Sie werden
+// Sitzung mit Transkript gehören, die dem Konto gehört, oder die der Server
+// nicht als zugestellt kennt (servedByServer). Sie werden
 // abgeschlossen, damit die Suche nach Auswertbarem nicht an ihnen hängt.
 func (s *Store) expiredRows(ctx context.Context, now time.Time, opt JudgeOptions) ([]int64, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT d.id FROM context_delivery_log d
 		WHERE `+openJudgeable+` AND d.delivered_at < ?
-		  AND NOT EXISTS (SELECT 1 FROM sessions se WHERE `+sessionOfLog+`
-		       AND EXISTS (SELECT 1 FROM session_chunks c WHERE c.session_id = se.id))
+		  AND (NOT `+servedByServer+` OR NOT EXISTS (SELECT 1 FROM sessions se WHERE `+sessionOfLog+`
+		       AND EXISTS (SELECT 1 FROM session_chunks c WHERE c.session_id = se.id)))
 		ORDER BY d.delivered_at LIMIT ?`, now.Add(-opt.GiveUp).Format(time.RFC3339), instanceOwnerID(s.db), judgeGiveUpRows)
 	if err != nil {
 		return nil, err

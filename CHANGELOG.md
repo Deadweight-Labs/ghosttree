@@ -707,7 +707,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   `used` of the project tie), and `knowledge_usage` counts per entry in how many
   sessions it was delivered, picked up and followed. The job reads only
   sessions the account of the delivery rows owns and that have been idle for an
-  hour, reads through the read pool and holds the write lock only for the short
+  hour, and only parts the server itself remembers as delivered to that session
+  (a part a hook reported for an entry the server never handed over is not
+  judged, so the result cannot be used to probe an entry the reporter may not
+  read; it is closed without a verdict after 14 days), reads through the read pool and holds the write lock only for the short
   write at the end of a step; it leaves path descriptions, hints and subagent
   briefings unjudged. A row whose session never arrived is closed after 14 days
   without a verdict. `GHOSTTREE_USAGE_JUDGE=off` switches the job off. `ctx usage
