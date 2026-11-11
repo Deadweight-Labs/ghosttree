@@ -81,9 +81,8 @@ func (s *Store) ApplyRequestDistillation(sessionID int64, digest, promptVersion 
 	created := 0
 	sessionAnchor := sessionAnchorTx(tx, sessionID)
 	for _, item := range items {
-		var chunkText string
-		if err := tx.QueryRow(`SELECT text FROM session_chunks WHERE session_id=? AND seq=?`,
-			sessionID, item.ChunkSeq).Scan(&chunkText); err != nil {
+		chunkText, err := s.chunkTextTx(tx, sessionID, item.ChunkSeq)
+		if err != nil {
 			return 0, err
 		}
 		// The same grounding rule as for knowledge, and it matters more here: a

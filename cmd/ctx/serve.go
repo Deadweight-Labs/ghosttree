@@ -34,6 +34,8 @@ type serveConfig struct {
 	SnapshotLimits snapshot.Limits
 	SnapshotRoots  map[string]string
 	Writer         store.WriterConfig
+	// SessionText is stored or derived (store.ParseSessionText).
+	SessionText    string
 	OIDC           web.OIDCConfig
 	PublicURL      string
 	Language       string
@@ -65,6 +67,11 @@ const (
 	envDistDir = "GHOSTTREE_DIST_DIR"
 	// envLanguage picks the language of the web interface: en (default) or de.
 	envLanguage = "GHOSTTREE_LANGUAGE"
+
+	// envSessionText picks whether the server stores the text of transcript
+	// chunks (stored, the default) or leaves it to be derived from the stored
+	// line (derived).
+	envSessionText = "GHOSTTREE_SESSION_TEXT"
 )
 
 // indexGapDelay is how long after the index backfill the search for chunks
@@ -92,7 +99,7 @@ func cmdServe(args []string, stdout io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	st, err := store.OpenRuntime(cfg.DB, cfg.Writer)
+	st, err := store.OpenRuntimeWithText(cfg.DB, cfg.Writer, cfg.SessionText)
 	if err != nil {
 		fmt.Fprintf(stdout, "open db: %v\n", err)
 		return 1
@@ -139,6 +146,7 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.OIDC.Signup, "oidc-signup", os.Getenv(envOIDCSignup), "offer \"Create an account\" on invitation links (OIDC prompt=create): 1 always, 0 never, empty only when the provider lists it (env "+envOIDCSignup+")")
 	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
 	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
+	sessionText := fs.String("session-text", os.Getenv(envSessionText), "text of transcript chunks: stored (default) writes it next to the line, derived leaves it out and reads derive it from the line; see ctx db slim-text (env "+envSessionText+")")
 	fs.StringVar(&cfg.Language, "language", os.Getenv(envLanguage), "language of the web interface: en (default) or de (env "+envLanguage+")")
 	explainMode := os.Getenv(envExplain)
 	if explainMode == "" {
@@ -166,6 +174,12 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 		return serveConfig{}, fmt.Errorf("--language: %w", err)
 	}
 	cfg.Language = lang
+	if *sessionText == "" {
+		*sessionText = store.SessionTextStored
+	}
+	if cfg.SessionText, err = store.ParseSessionText(*sessionText); err != nil {
+		return serveConfig{}, fmt.Errorf("--session-text: %w", err)
+	}
 	if cfg.Embed, err = embedFlagSet.resolve(); err != nil {
 		return serveConfig{}, err
 	}

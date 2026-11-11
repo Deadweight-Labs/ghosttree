@@ -799,6 +799,7 @@ func (s *Store) SessionWindow(id int64, from, around, limit int) (Window, error)
 			from = int(first.Int64)
 		}
 	}
+	harness := s.sessionHarness(id)
 	rows, err := s.db.QueryContext(s.ctx(), `SELECT seq, role, text, raw FROM session_chunks WHERE session_id=? AND seq >= ? ORDER BY seq LIMIT ?`, id, max(from, 0), limit)
 	if err != nil {
 		return Window{}, err
@@ -815,6 +816,7 @@ func (s *Store) SessionWindow(id int64, from, around, limit int) (Window, error)
 			rows.Close()
 			return Window{}, fmt.Errorf("session %d chunk %d: %w", id, c.Seq, err)
 		}
+		c.Text = chunkTextOf(harness, c.Text, c.Raw)
 		w.Chunks = append(w.Chunks, c)
 	}
 	rows.Close()
