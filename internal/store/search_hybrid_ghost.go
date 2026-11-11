@@ -104,13 +104,17 @@ func (s *Store) hybridGhostFiles(q string, o GhostSearch, limit int, qvec []floa
 		if o.Keep != nil {
 			scan = keepScanCap
 		}
-		rows, err := s.db.Query(`SELECT g.id FROM ghost_files_fts f JOIN ghost_files g ON g.id = f.rowid
+		var err error
+		textIDs, err = andThenOr(q, scan, scan, idKey, func(expr string) ([]int64, error) {
+			rows, err := s.db.Query(`SELECT g.id FROM ghost_files_fts f JOIN ghost_files g ON g.id = f.rowid
 			WHERE ghost_files_fts MATCH ? AND `+where+` ORDER BY f.rank LIMIT ?`,
-			append(append([]any{ftsQuery(q)}, args...), scan)...)
+				append(append([]any{expr}, args...), scan)...)
+			if err != nil {
+				return nil, err
+			}
+			return scanIDs(rows)
+		})
 		if err != nil {
-			return nil, err
-		}
-		if textIDs, err = scanIDs(rows); err != nil {
 			return nil, err
 		}
 	}

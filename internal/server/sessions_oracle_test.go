@@ -109,7 +109,7 @@ func TestGuestsNeverSeeTheInternalSessionNumber(t *testing.T) {
 	for _, path := range []string{
 		"/api/sessions?project=" + accProject,
 		"/api/search?q=zaunkoenig&kind=sessions",
-		"/api/search?q=zaunkoenig&kind=all",
+		"/api/search?q=zaunkoenig+is:session",
 	} {
 		var out struct {
 			Sessions []store.SessionHit `json:"sessions"`

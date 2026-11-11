@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,11 +41,19 @@ func repoRemote(v string) string {
 
 // searchKinds sagt, welche Arten die Anfrage will: der Parameter kind und die
 // Qualifier zusammen.
+//
+// Die Standardsuche (kind leer oder all) enthält keine Sessions (Entscheidung
+// #4447): Sessions sind Millionen Zeilen Rohverlauf und ihre Teilsuche der
+// teuerste Teil. Sie kommen nur auf ausdrücklichen Wunsch dazu: kind=sessions
+// oder ein Qualifier, der sie nennt (kind:session, is:session).
 func searchKinds(kindParam string, q query.Query) []string {
 	var want []string
 	switch strings.ToLower(kindParam) {
 	case "", "all":
-		want = []string{query.KindKnowledge, query.KindRequest, query.KindPain, query.KindIdea, query.KindFeature, query.KindCriterion, query.KindTask, query.KindFile, query.KindMessage, query.KindSession}
+		want = []string{query.KindKnowledge, query.KindRequest, query.KindPain, query.KindIdea, query.KindFeature, query.KindCriterion, query.KindTask, query.KindFile, query.KindMessage}
+		if slices.Contains(q.Kinds(), query.KindSession) {
+			want = append(want, query.KindSession)
+		}
 	case "messages", "message":
 		want = []string{query.KindMessage}
 	case "sessions", "session":
@@ -181,6 +190,7 @@ func (a *api) qualifiedResult(w http.ResponseWriter, r *http.Request, q query.Qu
 
 	kinds := searchKinds(kindParam, q)
 	gaps := a.newSearchGaps(r, len(kinds) > 1)
+	defer gaps.close()
 	// fail answers a failed area: as a gap when there are others, otherwise as
 	// the error of the request. false means the answer is already written.
 	fail := func(kind string, err error) bool {
@@ -197,11 +207,13 @@ func (a *api) qualifiedResult(w http.ResponseWriter, r *http.Request, q query.Qu
 		var err error
 		switch kind {
 		case query.KindKnowledge:
-			err = a.qualifiedKnowledge(r, &res, q, text, ax, limit, fetchBase, anchor, origin)
+			st, done := gaps.budget(areaName(kind))
+			err = done(a.qualifiedKnowledge(st, r, &res, q, text, ax, limit, fetchBase, anchor, origin))
 		case query.KindRequest:
-			err = a.qualifiedRequests(r, &res, q, text, ax, limit, fetchBase, anchor, origin)
+			st, done := gaps.budget(areaName(kind))
+			err = done(a.qualifiedRequests(st, r, &res, q, text, ax, limit, fetchBase, anchor, origin))
 		case query.KindSession:
-			st, done := gaps.budget()
+			st, done := gaps.budget(areaName(kind))
 			err = done(a.qualifiedSessions(st, r, &res, q, text, ax, limit, fetchBase))
 		case query.KindMessage:
 			err = a.qualifiedMessages(r, &res, q, text, project, limit, fetchBase)
@@ -261,10 +273,10 @@ func idsOf[T any](list []T, id func(T) int64) []int64 {
 	return out
 }
 
-func (a *api) qualifiedKnowledge(r *http.Request, res *searchResult, q query.Query, text string, ax scope.Axes, limit, fetchBase int, anchor store.AnchorFilter, origin originctx.Filter) error {
+func (a *api) qualifiedKnowledge(st *store.Store, r *http.Request, res *searchResult, q query.Query, text string, ax scope.Axes, limit, fetchBase int, anchor store.AnchorFilter, origin originctx.Filter) error {
 	pa := a.access(r)
 	readable := func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }
-	ks, err := a.st.SearchKnowledgeWith(text, store.KnowledgeSearch{
+	ks, err := st.SearchKnowledgeWith(text, store.KnowledgeSearch{
 		Axes: ax, Union: r.URL.Query().Get("scope") == "union",
 		Limit: a.overfetch(fetchBase), Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
 		NoRecord: true, Anchor: anchor, Origin: origin,
@@ -287,9 +299,9 @@ func (a *api) qualifiedKnowledge(r *http.Request, res *searchResult, q query.Que
 	return nil
 }
 
-func (a *api) qualifiedRequests(r *http.Request, res *searchResult, q query.Query, text string, ax scope.Axes, limit, fetchBase int, anchor store.AnchorFilter, origin originctx.Filter) error {
+func (a *api) qualifiedRequests(st *store.Store, r *http.Request, res *searchResult, q query.Query, text string, ax scope.Axes, limit, fetchBase int, anchor store.AnchorFilter, origin originctx.Filter) error {
 	pa := a.access(r)
-	page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{
+	page, err := st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{
 		Query: text, Scope: scope.Axes{Project: ax.Project}, Limit: fetchBase, Commit: anchor.Commit, PR: anchor.PR, Origin: origin,
 	}), store.SearchAuto)
 	if err != nil {
