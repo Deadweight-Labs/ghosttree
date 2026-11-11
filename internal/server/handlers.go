@@ -910,12 +910,22 @@ func (a *api) searchSessions(st *store.Store, pa *store.ProjectAccess, q string,
 const defaultBudget = 4000
 
 func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
+	ph := phases(r)
+	end := ph.start("pool_wait")
+	a.st.AwaitReadConn(r.Context())
+	end()
 	actx, err := activationFromQuery(r)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	entries, err := a.st.KnowledgeForActivatedContext(axesFromQuery(r), actx, a.access(r).Viewer())
+	end = ph.start("access")
+	pa := a.access(r)
+	viewer := pa.Viewer()
+	end()
+	end = ph.start("knowledge")
+	entries, err := a.st.KnowledgeForActivatedContext(axesFromQuery(r), actx, viewer)
+	end()
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -923,8 +933,10 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	// Was beim Sessionstart ausgeliefert wird, folgt derselben Sichtbarkeit wie
 	// jede andere Lesung: globales Wissen für alle, Projektwissen nach Rolle,
 	// Maschinenwissen nur für den Besitzer der Maschine.
-	pa := a.access(r)
+	end = ph.start("rights")
+	pa.WarmKnowledgeAuthors(entries)
 	entries = filterTo(entries, 0, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
+	end()
 	// A session that asked for the lean profile (REQ-643) gets the short briefing
 	// and none of the ledger sections below.
 	if p, _ := profile.Parse(r.URL.Query().Get("profile")); p == profile.Lean {
@@ -933,19 +945,28 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	openRequests := 0
 	if pa.CanSeeProject(axesFromQuery(r).Project, store.ResRequest) {
-		if openRequests, err = a.st.CountOpenRequestsFor(pa.Viewer(), axesFromQuery(r)); err != nil {
+		end = ph.start("requests")
+		openRequests, err = a.st.CountOpenRequestsFor(pa.Viewer(), axesFromQuery(r))
+		end()
+		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
 	}
 	// Breites Wissen ohne Bezug zum Projekt der Sitzung kommt nicht mit (DEC-15);
 	// ein Wort im Prompt stellt es weiterhin zu, die Suche findet es.
+	end = ph.start("project_tie")
 	entries, withheldBroad := a.withoutUntiedBroad(entries, axesFromQuery(r).Project)
+	end()
+	end = ph.start("render")
 	body, shown, sizes := renderBootstrapWith(entries, intParam(r, "budget", defaultBudget), false, withheldBroad)
+	end()
 	// Recorded before the answer goes out, so the first prompt of the session
 	// cannot be handled ahead of it. A failed write costs only a possible repeat
 	// later, and the briefing is not worth failing for that.
+	end = ph.start("claim")
 	a.rememberDelivered(r, store.DeliveredByBootstrap, shown)
+	end()
 	// The answer is assembled first and sent in one piece: the hook is told in a
 	// header how the briefing divides into entries and sections (REQ-636), and a
 	// header has to be written before the first byte of the body.
@@ -962,7 +983,8 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	// is open, the package of the branch, what waits for a person, what was left
 	// unfinished. Each is one part, so the log shows what that side of the
 	// briefing costs.
-	section := func(write func()) {
+	section := func(name string, write func()) {
+		defer ph.start(name)()
 		before := out.runes()
 		write()
 		if n := out.runes() - before; n > 0 {
@@ -974,26 +996,32 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 		if openRequests != 1 {
 			plural = "requests"
 		}
-		section(func() {
+		section("ledger", func() {
 			fmt.Fprintf(out, "\n## Work ledger (ghosttree)\n\n%d open %s in this scope. For substantial feature, architecture, migration, or multi-session work, search the request ledger first; continue a match or create one with explicit acceptance criteria. Trivial local fixes and routine maintenance do not require a request.\n", openRequests, plural)
 		})
 	}
 	// Das Arbeitspaket des Branches (REQ-601), geerbt vom Ursprung, wenn der
 	// Branch keines hat.
-	section(func() { a.writePackageBriefing(out, r, pa) })
+	section("package", func() { a.writePackageBriefing(out, r, pa) })
 	// Vor der Prüfung auf Session-Metadaten: ein Gast mit einer zugewiesenen
 	// Aufgabe liest keine Sessions und bekommt den Abschnitt trotzdem.
-	if waiting, err := a.st.WaitingTasksFor(pa, axesFromQuery(r).Project, waitingMaxEach); err == nil {
-		section(func() { fmt.Fprint(out, renderWaiting(waiting)) })
+	end = ph.start("waiting")
+	waiting, err := a.st.WaitingTasksFor(pa, axesFromQuery(r).Project, waitingMaxEach)
+	end()
+	if err == nil {
+		section("waiting_render", func() { fmt.Fprint(out, renderWaiting(waiting)) })
 	}
 	// Der Zähler sagt, dass es etwas gibt; erst diese Zeile sagt, dass etwas
 	// angefangen und liegengeblieben ist. Ein Fehler kostet nur die Auskunft:
 	// der Bootstrap ist bis hierhin schon geschrieben.
 	if pa.Allow(axesFromQuery(r).Project, store.ResSessionMeta, store.ActRead, store.Object{}) {
-		if threads, err := a.st.InterruptedWorkFor(pa.Viewer(), axesFromQuery(r),
+		end = ph.start("interrupted")
+		threads, err := a.st.InterruptedWorkFor(pa.Viewer(), axesFromQuery(r),
 			time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
-			r.URL.Query().Get("session"), maxInterruptedThreads); err == nil {
-			section(func() { fmt.Fprint(out, renderInterrupted(threads, time.Now().UTC())) })
+			r.URL.Query().Get("session"), maxInterruptedThreads)
+		end()
+		if err == nil {
+			section("interrupted_render", func() { fmt.Fprint(out, renderInterrupted(threads, time.Now().UTC())) })
 		}
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")

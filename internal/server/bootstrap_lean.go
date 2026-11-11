@@ -29,8 +29,13 @@ const leanPitfallChars = 160
 // whether or not anyone reads them, so a project whose instructions alone are
 // longer gets those and no pitfalls.
 func (a *api) leanBootstrap(w http.ResponseWriter, r *http.Request, entries []store.Knowledge) {
+	ph := phases(r)
+	end := ph.start("render")
 	body, shown, sizes := renderLeanBootstrap(entries, a.clientVersionNote(r))
+	end()
+	end = ph.start("claim")
 	a.rememberDelivered(r, store.DeliveredByBootstrap, shown)
+	end()
 	parts := make([]deliverylog.Part, 0, len(shown))
 	for i, id := range shown {
 		parts = append(parts, deliverylog.Part{Via: deliverylog.ViaBootstrap, Kind: deliverylog.KindKnowledge, ID: id, Chars: sizes[i]})

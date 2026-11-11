@@ -153,6 +153,69 @@ project: the collector treats such a folder as one without a remote, and the
 server answers `invalid_remote` for writes and stores a session from it without
 its project.
 
+## Where the time of a hook call goes
+
+The hooks wait for two routes of the server: `GET /api/context/relevant` (every
+prompt) and `GET /api/context/bootstrap` (every session start). Their
+`http_request` log line carries the group `phases`, the milliseconds of each
+step, next to the total `duration_ms`:
+
+| Phase | What it is |
+|---|---|
+| `pool_wait` | waiting for a read connection (a connection is taken and given back at once) |
+| `access` | building the rights of the caller |
+| `knowledge` (bootstrap) | reading the entries of the scope |
+| `rights` | the visibility and delivery rules over those entries |
+| `project_tie`, `requests`, `package`, `waiting`, `interrupted`, `ledger` (bootstrap) | the sections of the briefing |
+| `claim` | writing what was delivered; for a prompt the wait for the writer |
+| `render` | building the answer |
+| `rel_total`, `rel_doc_freq`, `rel_gate_sample`, `rel_gate_count`, `rel_knowledge_fts`, `rel_hint_terms`, `rel_record_use` (prompt) | the steps of the relevance search: counting entries, the frequency of each word, the language gate, the full-text search |
+| `hint`, `hint_requests`, `hint_sessions`, `hint_claim` (prompt) | the pointer to an earlier request or session |
+
+Steps that did not run are absent from the line. `hint` contains
+`hint_requests`, `hint_sessions` and `hint_claim`, and `rel_*` are inside the
+search; add only the outer steps to compare with the total.
+
+Percentiles of one route over the last hour, with `jq` (needs `jq` 1.6 or
+newer; the unit name is the one of your installation):
+
+```sh
+journalctl -u ghosttree --since '1 hour ago' -o cat |
+  jq -s --arg route /api/context/relevant '
+    map(select(.event == "http_request" and .route == $route and .phases))
+    | . as $calls
+    | ([$calls[] | .phases | keys[]] | unique) + ["total"] | map(. as $k
+      | ($calls | map(if $k == "total" then .duration_ms else (.phases[$k] // 0) end) | sort) as $v
+      | {phase: $k, n: ($v | length),
+         p50: $v[($v | length) * 0.50 | floor], p95: $v[($v | length) * 0.95 | floor], max: $v[-1]})
+    | sort_by(-.p95)[]' | jq -c .
+```
+
+The same with Python, if `jq` is not at hand:
+
+```sh
+journalctl -u ghosttree --since '1 hour ago' -o cat | python3 -c '
+import json, sys, statistics as st
+route = sys.argv[1]; cols = {}
+for line in sys.stdin:
+    try: e = json.loads(line)
+    except ValueError: continue
+    if e.get("event") != "http_request" or e.get("route") != route or "phases" not in e: continue
+    cols.setdefault("total", []).append(e["duration_ms"])
+    for k, v in e["phases"].items(): cols.setdefault(k, []).append(v)
+n = len(cols.get("total", []))
+for k, v in sorted(cols.items(), key=lambda kv: -sorted(kv[1])[int(len(kv[1]) * .95) - 1 if len(kv[1]) > 1 else 0]):
+    v = sorted(v + [0] * (n - len(v)))
+    print(f"{k:20} p50 {v[len(v)//2]:8.2f}  p95 {v[min(len(v)-1, int(len(v)*.95))]:8.2f}  max {v[-1]:8.2f}  (n={n})")
+' /api/context/bootstrap
+```
+
+`cmd/hookbench` reproduces the figures on a database of production size:
+`hookbench gen -db /tmp/hb.db` (about four minutes), then
+`hookbench run -db /tmp/hb.db -n 300 [-searches 6 -collectors 2 -judge]`. It
+works on the file it is given and writes to it like a hook does, so run it on a
+copy.
+
 ## Short helper runs: the lean profile
 
 Every session carries about 55 KB of fixed context from ghosttree: the tool

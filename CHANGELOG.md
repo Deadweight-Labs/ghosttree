@@ -161,6 +161,13 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- The `http_request` log line of `/api/context/relevant` and
+  `/api/context/bootstrap` carries the group `phases`: the milliseconds spent
+  in each step (`pool_wait`, `access`, `knowledge`, `rights`, `claim`,
+  `project_tie`, `render`, and for the prompt the steps of the relevance search
+  and of the hint). Evaluate it with `journalctl` and `jq` (see
+  `docs/operations.md`). `cmd/hookbench` builds a test database of production
+  size and measures both routes with the same steps, also under load.
 - The search field answers while you type: Ctrl+K (Cmd+K) or `/` jumps into
   it, a number (`#217`, `REQ-12`, `pr:5`) lists the object it names first, and
   the qualifier being typed is completed (`is:`, `kind:`, `branch:`, `package:`,
@@ -1047,6 +1054,21 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- The two hook routes are faster (PAIN-76). On a test database of the size of a
+  production one (4,500 entries, 3 million chunks, `cmd/hookbench`) the
+  briefing at session start takes 25 ms instead of 150 ms (p50), 28 ms instead
+  of 180 to 400 ms (p95), and a prompt uses a quarter less processor time.
+  Counting the use of an entry rewrote its full-text row (the trigger ran on
+  every update of the table), so every briefing held the writer for tens of
+  milliseconds and the next write waited behind it; the trigger now runs only
+  when the title or the body change and replaces itself once on start. The
+  briefing no longer waits for the writer to record what it delivered (the
+  queue stays first in, first out, so a following prompt still finds the
+  entries taken). The language gate keeps its sample and its verdicts per
+  account for a short while, the rights check reads the authors of all entries
+  in one query instead of one per entry, the fixed queries of the gate are
+  prepared once, and the hint that looks for a word in the sessions gives up
+  after 100 ms and leaves the hint out.
 - `request action=start_work` finds the own session in a project crowded with
   newer sessions of other agents (an orchestrator with workers in worktrees):
   it looks through 200 sessions instead of 20.

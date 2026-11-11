@@ -39,6 +39,22 @@ func (s *Store) ReadPoolSize() int {
 	return s.db.Stats().MaxOpenConnections
 }
 
+// AwaitReadConn takes a read connection and gives it back at once. What it
+// costs is the wait a read of this moment would have: the time a hook spends in
+// the queue of the pool, or opening a connection after the pool ran dry. It is
+// for the measurement of a route (PAIN-76), which cannot see inside database/sql
+// where a query waited; the pool hands the connection it just released to the
+// next query, so the probe does not cost a second connection.
+func (s *Store) AwaitReadConn(ctx context.Context) {
+	if s.reader != nil {
+		s.reader.AwaitReadConn(ctx)
+		return
+	}
+	if conn, err := s.db.Conn(ctx); err == nil {
+		_ = conn.Close()
+	}
+}
+
 // chunkMapState remembers whether the database has chunk_index_chunk. A store
 // opened read-only on a database no server has migrated yet lacks it; once seen
 // it stays.

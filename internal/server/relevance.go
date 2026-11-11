@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/deliverylog"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -33,6 +35,9 @@ const maxHintSources = 3
 // a word said often in one session still count as one session.
 const hintSessionScan = 40
 
+// hintSessionBudget is how long the hint may spend in the sessions.
+const hintSessionBudget = 100 * time.Millisecond
+
 // relevant answers with knowledge the text gives a reason to deliver, or with
 // nothing at all — which is the usual case, and is an empty body rather than an
 // error.
@@ -46,8 +51,14 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 	if limit > maxRelevantEntries {
 		limit = maxRelevantEntries
 	}
+	ph := phases(r)
+	end := ph.start("pool_wait")
+	a.st.AwaitReadConn(r.Context())
+	end()
+	end = ph.start("access")
 	pa := a.access(r)
 	pa.Filtered()
+	end()
 	axes := axesFromQuery(r)
 	account := principalOf(r).ID
 	session := store.CleanSessionKey(r.URL.Query().Get("session"))
@@ -64,14 +75,17 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 		Account: account,
 		Session: session,
 		Record:  true,
+		Phase:   ph.start,
 	})
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
+	end = ph.start("rights")
 	hits := filterTo(res.Hits, limit, func(h store.RelevantHit) bool {
 		return pa.CanSeeKnowledge(h.Knowledge) && pa.CanDeliverKnowledge(h.Knowledge)
 	})
+	end()
 	// Claiming comes before answering, so two prompts of the same session
 	// handled at once cannot both deliver an entry. When the claim cannot be
 	// made the answer is silence: better to miss an entry than to repeat it. The
@@ -83,7 +97,9 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 		for i, h := range hits {
 			items[i] = store.ContextDelivery{KnowledgeID: h.ID}
 		}
+		end = ph.start("claim")
 		fresh, err := a.st.ClaimContextDeliveries(account, session, store.DeliveredByRelevance, items)
+		end()
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
@@ -94,7 +110,9 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 		}
 		hits = filterTo(hits, 0, func(h store.RelevantHit) bool { return won[h.ID] })
 	}
+	end = ph.start("hint")
 	hint, err := a.relevanceHint(r, pa, res.Hints, axes, account, session, inSessions)
+	end()
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -112,6 +130,7 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 	// The answer is built first so that the hook can be told how it divides into
 	// entries (REQ-636). The hint is one part of some size: it is made from a word
 	// of the prompt, and the log keeps no words of a prompt.
+	defer ph.start("render")()
 	var body strings.Builder
 	parts := make([]deliverylog.Part, 0, len(hits)+1)
 	body.WriteString("## Possibly relevant to what you just said (ghosttree)\n\n")
@@ -133,7 +152,8 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 // rememberDelivered records entries as delivered to the session named in the
 // request. Without a session id there is nothing to remember. A failed write is
 // dropped on purpose: the cost is that an entry may arrive once more later,
-// which is what delivery did before it had a memory.
+// which is what delivery did before it had a memory. The write is queued and not
+// waited for (Store.QueueContextDeliveries): nothing in the answer depends on it.
 func (a *api) rememberDelivered(r *http.Request, via string, ids []int64) {
 	session := store.CleanSessionKey(r.URL.Query().Get("session"))
 	if session == "" || len(ids) == 0 {
@@ -143,7 +163,7 @@ func (a *api) rememberDelivered(r *http.Request, via string, ids []int64) {
 	for i, id := range ids {
 		items[i] = store.ContextDelivery{KnowledgeID: id}
 	}
-	_, _ = a.st.ClaimContextDeliveries(principalOf(r).ID, session, via, items)
+	a.st.QueueContextDeliveries(principalOf(r).ID, session, via, items)
 }
 
 // relevanceHint is the one line that says where a very rare word came up before,
@@ -175,7 +195,9 @@ func (a *api) relevanceHint(r *http.Request, pa *store.ProjectAccess, terms []st
 			continue
 		}
 		if session != "" {
+			endClaim := phases(r).start("hint_claim")
 			fresh, err := a.st.ClaimContextDeliveries(account, session, store.DeliveredByHint, []store.ContextDelivery{{Term: t.Term}})
+			endClaim()
 			if err != nil {
 				return "", err
 			}
@@ -200,7 +222,10 @@ func answered(pa *store.ProjectAccess, known []store.Knowledge) bool {
 }
 
 func (a *api) hintLine(r *http.Request, pa *store.ProjectAccess, term string, where scope.Axes, session string, inSessions bool) (string, error) {
+	ph := phases(r)
+	endRequests := ph.start("hint_requests")
 	page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{Query: term, Scope: where, Limit: maxHintSources + 1}))
+	endRequests()
 	if err != nil {
 		return "", err
 	}
@@ -216,7 +241,22 @@ func (a *api) hintLine(r *http.Request, pa *store.ProjectAccess, term string, wh
 	// was just typed, which says nothing. Sessions are counted even when a
 	// request names the word, so that a word of everyday language that one
 	// request happens to contain is still recognised as one.
-	hits, err := a.searchSessions(a.st, pa, term, where, session, hintSessionScan, a.overfetch(hintSessionScan), store.SearchFullTextOnly)
+	// The hint is an extra, and the session search is the one part of a prompt whose
+	// time grows with the archive: on three million chunks it took up to 300 ms
+	// for a word that many sessions use. It gets hintSessionBudget; a search that
+	// is not done by then is given up and the prompt goes without the hint, which
+	// is what a prompt did before the hint existed (PAIN-76).
+	ctx, cancel := context.WithTimeout(r.Context(), hintSessionBudget)
+	defer cancel()
+	endSessions := ph.start("hint_sessions")
+	hits, err := a.searchSessions(a.st.WithContext(ctx), pa, term, where, session, hintSessionScan, a.overfetch(hintSessionScan), store.SearchFullTextOnly)
+	endSessions()
+	// Also without an error: a search that ran out of time may hand back the part
+	// it had, and a word that looks rare because the count is incomplete is the
+	// one thing this hint must not claim.
+	if ctx.Err() != nil && r.Context().Err() == nil {
+		return "", nil
+	}
 	if err != nil {
 		return "", err
 	}

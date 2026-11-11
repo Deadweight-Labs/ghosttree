@@ -1,5 +1,7 @@
 package store
 
+import "encoding/json"
+
 // Objekte ohne Projekt und ohne Maschine ("global") gehören ihrem Autorenkonto.
 // Der Autor ist die Konto-Id aus knowledge_authors und request_authors, gesetzt
 // beim Schreiben oder einmalig bei der Rückfüllung (authors.go). Zur Laufzeit
@@ -24,6 +26,46 @@ func (a *ProjectAccess) entryAuthor(id int64) int64 {
 	}
 	a.entryAuthors[id] = v
 	return v
+}
+
+// WarmKnowledgeAuthors liest die Autoren der Einträge in einer Abfrage vor. Die
+// Rechteprüfung fragt sie sonst je Eintrag, und ein Bootstrap prüft einige
+// tausend (PAIN-76). Was die Abfrage nicht findet, gilt als ohne Besitzer, wie
+// bei der Einzelabfrage.
+func (a *ProjectAccess) WarmKnowledgeAuthors(ks []Knowledge) {
+	if len(ks) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(ks))
+	for _, k := range ks {
+		if _, known := a.entryAuthors[k.ID]; !known && k.ID != 0 {
+			ids = append(ids, k.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	list, err := json.Marshal(ids)
+	if err != nil {
+		return
+	}
+	rows, err := a.st.authorRows(string(list))
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	if a.entryAuthors == nil {
+		a.entryAuthors = make(map[int64]int64, len(ids))
+	}
+	for _, id := range ids {
+		a.entryAuthors[id] = 0
+	}
+	for rows.Next() {
+		var id, account int64
+		if rows.Scan(&id, &account) == nil {
+			a.entryAuthors[id] = account
+		}
+	}
 }
 
 // requestAuthor: das Konto, dem ein Auftrag gehört (0 ohne Besitzer).

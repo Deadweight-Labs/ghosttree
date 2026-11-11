@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -111,6 +112,39 @@ func (s *Store) ClaimContextDeliveries(account, session, via string, items []Con
 		return nil, err
 	}
 	return fresh, nil
+}
+
+// QueueContextDeliveries is ClaimContextDeliveries for a caller that does not
+// need to know which items were new: the start-up briefing, which only records
+// what it handed over. The claim is put in the queue of the writer and the
+// caller goes on, instead of waiting for the writer to get to it, which on a
+// server that is also taking in transcripts took longer than the briefing
+// itself (PAIN-76).
+//
+// Nothing is lost by not waiting. The queue is first in, first out, so a prompt
+// of the same session that claims an entry afterwards is behind this claim and
+// finds the entry already taken; the guarantee that of two concurrent callers
+// exactly one gets an item stands. What remains is what was already accepted for
+// the briefing: a write that fails is dropped, and the cost is that an entry may
+// arrive once more later.
+func (s *Store) QueueContextDeliveries(account, session, via string, items []ContextDelivery) {
+	session = CleanSessionKey(session)
+	if session == "" || len(items) == 0 {
+		return
+	}
+	if len(items) > maxContextDeliveryItems {
+		items = items[:maxContextDeliveryItems]
+	}
+	if s.writer == nil {
+		_, _ = s.ClaimContextDeliveries(account, session, via, items)
+		return
+	}
+	// The answer channel of the request has room for one value, so a request
+	// nobody waits for is not left hanging.
+	_, _ = s.writer.admitOwnedReserved(context.Background(), []any{account, session, via, items}, 0, func(p []any) error {
+		_, err := s.direct().ClaimContextDeliveries(p[0].(string), p[1].(string), p[2].(string), p[3].([]ContextDelivery))
+		return err
+	})
 }
 
 // deliveredToSessionSQL is the condition, on a knowledge row aliased k, that the
