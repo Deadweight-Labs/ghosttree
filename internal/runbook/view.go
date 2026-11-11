@@ -234,7 +234,7 @@ func Checklist(v View, values map[string]string) string {
 			fmt.Fprintf(&b, "- %s: %s\n", t.Name, t.Comment)
 		}
 	}
-	fmt.Fprintf(&b, "\nWhen done, report the outcome: ctx runbook report %s ok|failed [--note TEXT] [--deviation 'add:N:title:command'].\n", v.Name)
+	b.WriteString("\n" + reportLine(v.Name))
 	return b.String()
 }
 
@@ -263,19 +263,33 @@ func Briefing(v View, reason string, limit int) string {
 	if len(head)+len(full) <= limit {
 		return head + full
 	}
+	// The two closing lines are reserved before any step is written: the
+	// pointer to the full checklist and the line that asks for the report. A
+	// shortened runbook that lost the second would never be reported.
 	var b strings.Builder
 	b.WriteString(head)
 	fmt.Fprintf(&b, "# Runbook %s (version %d)\nPurpose: %s\n%s\n", v.Name, v.Version, v.Spec.Purpose, v.LastSuccess.LastSuccessLine())
+	pointer := fmt.Sprintf("Full checklist with parameters: ctx run %s, or the MCP tool runbook action=get name=%s.\n", v.Name, v.Name)
+	report := reportLine(v.Name)
+	reserved := len(pointer) + len(report) + len("...\n")
 	for i, st := range v.Spec.Steps {
 		line := fmt.Sprintf("%d. %s\n", i+1, st.Title)
-		if b.Len()+len(line) > limit-120 {
+		if b.Len()+len(line)+reserved > limit {
 			b.WriteString("...\n")
 			break
 		}
 		b.WriteString(line)
 	}
-	fmt.Fprintf(&b, "Full checklist with parameters: ctx run %s, or the MCP tool runbook action=get name=%s.\n", v.Name, v.Name)
+	b.WriteString(pointer)
+	b.WriteString(report)
 	return b.String()
+}
+
+// reportLine is the line that closes a runbook the server delivers, in full or
+// shortened. The hook budget tells a runbook that is whole by it
+// (internal/hookbudget): do not reword its first words.
+func reportLine(name string) string {
+	return fmt.Sprintf("When done, report the outcome: ctx runbook report %s ok|failed [--note TEXT] [--deviation 'add:N:title:command'].\n", name)
 }
 
 // Lines schreibt eine Fassung als Zeilen für den Vergleich zweier Fassungen.

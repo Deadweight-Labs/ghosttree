@@ -504,3 +504,14 @@ func TestProbeAcceptsTheStopHooksEmptyObject(t *testing.T) {
 		t.Fatal("a Stop hook answering non-JSON must fail the probe")
 	}
 }
+
+// The rule section names the profile briefly: which variable sets it, what lean
+// carries up front, and which tools load on demand in every session. It stays
+// short because every session carries it.
+func TestInstalledRulesNameTheProfile(t *testing.T) {
+	for _, want := range []string{"GHOSTTREE_PROFILE=lean", "`feature`, `runbook` and `comment` load on demand", "`full`", "`ctx status`"} {
+		if !strings.Contains(ruleText, want) {
+			t.Errorf("ruleText missing %q", want)
+		}
+	}
+}

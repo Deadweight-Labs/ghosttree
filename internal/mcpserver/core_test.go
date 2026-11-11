@@ -72,8 +72,11 @@ func TestToolListShowsOnlyTheCoreToolsLoadedUpFront(t *testing.T) {
 		if n := len([]rune(tool.Description)); n > maxUpfrontDescription {
 			t.Errorf("%s: description has %d characters, Claude Code cuts at %d", tool.Name, n, maxUpfrontDescription)
 		}
-		if v, _ := tool.Meta[alwaysLoadMeta].(bool); !v {
-			t.Errorf("%s: no %s, Claude Code would defer it behind tool search", tool.Name, alwaysLoadMeta)
+		// The full profile loads the core and work tiers up front and leaves the
+		// rare tier to tool search (profile_test.go checks the other profile).
+		want := coretools.TierOf(tool.Name) != coretools.TierRare
+		if v, _ := tool.Meta[alwaysLoadMeta].(bool); v != want {
+			t.Errorf("%s: %s is %v, want %v for its tier", tool.Name, alwaysLoadMeta, v, want)
 		}
 		if tool.OutputSchema != nil {
 			t.Errorf("%s: a core tool has no single output schema", tool.Name)

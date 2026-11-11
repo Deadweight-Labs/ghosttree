@@ -22,6 +22,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
+	"github.com/Deadweight-Labs/ghosttree/internal/profile"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -833,7 +834,18 @@ func (c *Client) Bootstrap(ax scope.Axes, actx activation.Context, budget int, s
 // BootstrapDelivered is Bootstrap that also returns how the server says the
 // briefing divides into entries and sections.
 func (c *Client) BootstrapDelivered(ax scope.Axes, actx activation.Context, budget int, session string) (Delivered, error) {
+	return c.BootstrapDeliveredFor(ax, actx, budget, session, profile.Full)
+}
+
+// BootstrapDeliveredFor is BootstrapDelivered for a session of the given
+// profile (REQ-643): the lean profile asks for the short briefing. A server
+// that does not know the parameter answers with the whole briefing, which the
+// hook budget of the profile still bounds.
+func (c *Client) BootstrapDeliveredFor(ax scope.Axes, actx activation.Context, budget int, session string, p profile.Profile) (Delivered, error) {
 	q := axesQuery(ax)
+	if p == profile.Lean {
+		q.Set("profile", string(p))
+	}
 	if session != "" {
 		q.Set("session", session)
 	}

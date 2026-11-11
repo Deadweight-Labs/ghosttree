@@ -16,6 +16,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/mcpserver"
+	"github.com/Deadweight-Labs/ghosttree/internal/profile"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshotmirror"
@@ -241,6 +242,7 @@ func cmdMCP(args []string, stdout io.Writer) int {
 	})
 	srv.SetSessionRef(currentSessionRef())
 	srv.SetUsageHarness(mcpUsageHarness())
+	srv.SetProfile(profile.FromEnv())
 	srv.SetCoordRef(coordAgentOverride())
 	srv.SetAgentRole(agentRoleFromEnv())
 	srv.SetSessionID(agentSessionFromEnv())
