@@ -11,6 +11,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -104,9 +105,9 @@ func parseIssueQuery(q string) issueQuery {
 			valid = hexCommit.MatchString(val)
 			iq.Commit = val
 		case "pr":
-			n, err := strconv.ParseInt(strings.TrimPrefix(val, "#"), 10, 64)
-			valid = err == nil && n > 0
-			iq.PR = n
+			t, ok := links.ParseNumber("pr:" + val)
+			valid = ok
+			iq.PR = t.N
 		default:
 			valid = false
 		}

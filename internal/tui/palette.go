@@ -194,9 +194,19 @@ func (m Model) palAll(query string) []palItem {
 	var items []palItem
 	q := strings.TrimSpace(query)
 	if q != "" && palIsRef(q) {
-		ref := clean(q, 80)
-		items = append(items, palItem{id: "jump:ref:" + ref, group: palJump, title: fmt.Sprintf(m.lang.t("pal.open"), ref), hint: "ctx open " + ref, score: 1000,
-			run: func(m Model) (Model, tea.Cmd) { m.toHome(); cmd := m.openRef(ref); return m, cmd }})
+		refs := []string{clean(q, 80)}
+		if t, ok := links.ParseNumber(q); ok && t.Kind == "" {
+			// #217 names no kind: one entry for each kind it can mean, in the order
+			// the web search shows them (links.HashKinds).
+			refs = refs[:0]
+			for _, r := range t.Refs() {
+				refs = append(refs, links.Short(r))
+			}
+		}
+		for i, ref := range refs {
+			items = append(items, palItem{id: "jump:ref:" + ref, group: palJump, title: fmt.Sprintf(m.lang.t("pal.open"), ref), hint: "ctx open " + ref, score: 1000 - i,
+				run: func(m Model) (Model, tea.Cmd) { m.toHome(); cmd := m.openRef(ref); return m, cmd }})
+		}
 	}
 	for _, p := range m.pal.projects {
 		id := p.ID

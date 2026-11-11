@@ -17,6 +17,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	"github.com/Deadweight-Labs/ghosttree/internal/query"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -64,6 +65,12 @@ type searchHit struct {
 	RefKind, Project, Lead string
 	RefN                   int64
 	Marked, SnipHTML       template.HTML
+	// Mark is the icon of the kind of the hit. Exact: the hit is the object the
+	// search term names by its number (search_exact.go); Facet is the kind of the
+	// page it belongs to ("" for a pull request, which is no kind of the page) and
+	// PRState the state of a pull request, for its pill.
+	Mark, Facet, PRState string
+	Exact                bool
 }
 
 // searchGroup is the hits of one kind. All is the link to the full list, empty
@@ -97,6 +104,9 @@ type searchGroup struct {
 	On bool
 }
 
+// kindStep is how many hits "More hits" adds on the page narrowed to a kind.
+const kindStep = searchKindPage
+
 type searchView struct {
 	Q      string
 	Groups []searchGroup
@@ -127,6 +137,9 @@ type searchView struct {
 	Lines      []string
 	// Scopes are the places a search can be kept at: for me, the project, the org.
 	Scopes []saveScope
+	// Exact are the objects the line names by their number (#217, pr:217, REQ-12;
+	// search_exact.go). They stand above the groups and are not part of them.
+	Exact []searchHit
 }
 
 // searchKindMark is the icon of each kind of hit.
@@ -169,6 +182,10 @@ func (a *app) searchPage(w http.ResponseWriter, r *http.Request) {
 	for i := range p.v.Groups {
 		p.v.Groups[i].On = p.v.Groups[i].Key == p.v.Kind
 	}
+	if p.v.Kind != "" && p.v.Live == nil {
+		// Narrowed to one kind, the hits of the number that belong to it stay.
+		p.v.Exact = slices.DeleteFunc(slices.Clone(p.v.Exact), func(h searchHit) bool { return h.Facet != p.v.Kind })
+	}
 	a.searchSidebar(p.l, r, p.pa, p.v, p.project, p.guest)
 	a.renderBrowser(w, r, "search", pageData{Title: p.l.msg("search.title"), Project: p.project, SearchV: p.v})
 }
@@ -193,6 +210,10 @@ type searchPlan struct {
 	shown int
 	// kind is the kind the page is narrowed to, "" for the page of all kinds.
 	kind string
+	// exact are the hits of a number the line names; exactHref their addresses,
+	// which the groups leave out so that nothing shows twice.
+	exact     []searchHit
+	exactHref map[string]bool
 }
 
 func (p *searchPlan) runnable() bool { return len(p.lines) > 0 }
@@ -267,6 +288,17 @@ func (a *app) planSearch(r *http.Request) *searchPlan {
 	}
 	for i := range p.lines {
 		p.lines[i].union = len(p.lines) > 1
+	}
+	// A line that is one number (not a quick filter) first finds the object itself.
+	if v.Searched && r.URL.Query().Get("preset") == "" {
+		if term, ok := links.ParseNumber(q); ok {
+			p.exact = a.exactHits(l, pa, term, project, p.kinds, p.now)
+			v.Exact = p.exact
+			p.exactHref = map[string]bool{}
+			for _, h := range p.exact {
+				p.exactHref[h.Href] = true
+			}
+		}
 	}
 	return p
 }
@@ -345,6 +377,17 @@ func (a *app) searchKind(ctx context.Context, r *http.Request, p *searchPlan, ke
 		// the list of one line does not hold them all.
 		merged.Total, merged.Exact, merged.Full = 0, false, ""
 	}
+	if len(p.exactHref) > 0 {
+		// What the number named is shown above the groups: not a second time here.
+		n := len(merged.Hits)
+		merged.Hits = slices.DeleteFunc(merged.Hits, func(h searchHit) bool { return p.exactHref[h.Href] })
+		if merged.Exact {
+			merged.Total -= n - len(merged.Hits)
+		}
+		if len(merged.Hits) == 0 {
+			return searchGroup{Key: key}
+		}
+	}
 	merged.Capped = capped
 	p.sizeGroup(merged)
 	return *merged
@@ -388,7 +431,7 @@ func (p *searchPlan) sizeGroup(g *searchGroup) {
 	case p.kind != g.Key:
 		g.More = p.href(g.Key)
 	case p.shown < searchCountCap:
-		g.More = p.href(g.Key) + "&n=" + strconv.Itoa(min(p.shown+searchKindPage, searchCountCap))
+		g.More = p.href(g.Key) + "&n=" + strconv.Itoa(min(p.shown+kindStep, searchCountCap))
 	default:
 		// The last step is shown: only the list of the repository goes further.
 		g.More = g.Full
@@ -775,6 +818,7 @@ func markHits(g *searchGroup, text string) {
 	}
 	for i := range g.Hits {
 		h := &g.Hits[i]
+		h.Mark = searchKindMark[g.Key]
 		h.Marked = markWords(h.Title, words)
 		if h.Snip != "" {
 			h.SnipHTML = markWords(h.Snip, words)

@@ -20,10 +20,12 @@
   & .frow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   & .frow:hover { background: var(--neutral-muted); text-decoration: none; }
   & .frow.on { background: var(--neutral-muted); font-weight: 600; }
-  & .hits .box-h { border-top: 1px solid var(--border-default); }
-  & .hits .box-h:first-child { border-top: 0; }
+  /* A group is one .hg; a rule line stands between two that are shown (a group
+     can be hidden by the kind chosen, so the first child is not always the first). */
+  & .hits .hg > .box-h { border-top: 0; }
+  & .hits .hg:not([hidden]) ~ .hg:not([hidden]) > .box-h { border-top: 1px solid var(--border-default); }
   & .hit { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
-  & .hit + .hit { border-top: 1px solid var(--border-muted); }
+  & .hit:not([hidden]) ~ .hit:not([hidden]) { border-top: 1px solid var(--border-muted); }
   & .hit .hm { display: inline-flex; align-items: center; height: 24px; color: var(--fg-muted); }
   & .hit .hl { line-height: 24px; }
   & .hit .hl .pill { margin-right: 8px; vertical-align: middle; }
@@ -66,9 +68,15 @@
   & .sprog .bar { flex: 1; height: 4px; border-radius: 999px; background: var(--neutral-muted); overflow: hidden; }
   & .sprog .bar > span { display: block; width: 0; height: 100%; background: var(--accent-emphasis); transition: width .2s ease; }
   & .sprog .tx { white-space: nowrap; font-variant-numeric: tabular-nums; }
-  & .hits .box-h:first-of-type { border-top: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   :is(.g2.sr) .sprog .bar > span { transition: none; }
 }
 :is(.g2) .hit .hx { margin-top: 4px; font-size: 12px; line-height: 18px; color: var(--fg-muted); overflow-wrap: anywhere; }
+
+/* The object a number names (#217, REQ-12): a hit like the others, a thin accent
+   at the edge and a small "exact" mark. */
+:is(.g2.sr) {
+  & .hit.hit-exact { box-shadow: inset 2px 0 0 var(--accent-emphasis); }
+  & .hit .hs .chip-exact { display: inline-flex; align-items: center; margin-left: 4px; padding: 0 6px; border: 1px solid var(--border-default); border-radius: 999px; font-size: 12px; color: var(--fg-muted); }
+}

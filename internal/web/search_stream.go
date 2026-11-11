@@ -111,13 +111,18 @@ type searchLive struct {
 	Stream, Sync string
 	Slots        []searchSlot
 	Total        int
+	// Kind is the kind the address narrows the page to ("" for all); the page
+	// script switches kinds without a new page and keeps the address in step.
+	// PerGroup, KindPage, Step and Cap are the sizes of a group on the page of
+	// all kinds, on the page of one kind, of a step of "More hits" and its end
+	// (searchPerGroup, searchKindPage, kindStep, searchCountCap).
+	Kind                          string
+	PerGroup, KindPage, Step, Cap int
 }
 
 // searchSlot is the place of one kind on the live page.
 type searchSlot struct {
 	Key, Label, Mark string
-	// Show: the hits of this kind are shown (the page is not narrowed to another).
-	Show bool
 }
 
 // liveView builds the frame for the plan.
@@ -129,9 +134,10 @@ func (p *searchPlan) liveView(r *http.Request) *searchLive {
 		kind = ""
 		qs.Del("kind")
 	}
-	lv := &searchLive{Stream: "/ui/search/stream?" + qs.Encode(), Sync: "/ui/search?" + qs.Encode(), Total: len(p.kinds)}
+	lv := &searchLive{Stream: "/ui/search/stream?" + qs.Encode(), Sync: "/ui/search?" + qs.Encode(), Total: len(p.kinds), Kind: kind,
+		PerGroup: searchPerGroup, KindPage: searchKindPage, Step: kindStep, Cap: searchCountCap}
 	for _, k := range p.kinds {
-		lv.Slots = append(lv.Slots, searchSlot{Key: k, Label: p.l.msg(searchKindLabel[k]), Mark: searchKindMark[k], Show: kind == "" || kind == k})
+		lv.Slots = append(lv.Slots, searchSlot{Key: k, Label: p.l.msg(searchKindLabel[k]), Mark: searchKindMark[k]})
 	}
 	return lv
 }

@@ -79,6 +79,14 @@ func ParseRef(input string) (Ref, error) {
 		}
 		return Ref{Kind: KindCriterion, ID: atoi(m[3]), Num: num(m[4])}, nil
 	}
+	if t, ok := ParseNumber(in); ok {
+		// In running text and in the terminal #N is a knowledge entry (the pill of a
+		// text, ctx open #4295); a search asks NumberTerm.Kinds for the other kinds.
+		if t.Kind == "" {
+			return Ref{Kind: KindKnowledge, ID: t.N}, nil
+		}
+		return Ref{Kind: t.Kind, ID: t.N}, nil
+	}
 	if m := idRE.FindStringSubmatch(in); m != nil {
 		kind := map[string]string{"req": KindRequest, "task": KindTask, "pain": KindPain, "idea": KindIdea, "feat": KindFeature, "pkg": KindPackage, "dec": KindDecision}[strings.ToLower(m[1])]
 		return Ref{Kind: kind, ID: atoi(m[2])}, nil
