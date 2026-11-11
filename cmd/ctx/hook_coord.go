@@ -302,7 +302,7 @@ func postToolUse(stdin io.Reader, harness string, stdout io.Writer) int {
 				defer close(usesDone)
 				if harness == "claude" {
 					noteSessionCall(raw)
-					flushSessionUses(raw, harness, false)
+					flushSessionReports(raw, harness, false)
 				}
 			}()
 			text, polled := coordInboxContext(raw, false)
@@ -333,8 +333,11 @@ func turnEnd(stdin io.Reader, harness string, stdout io.Writer) int {
 			usesDone := make(chan struct{})
 			go func() {
 				defer close(usesDone)
+				if harness == "codex" {
+					flushContextLog(raw, harness, true)
+				}
 				if harness == "claude" {
-					flushSessionUses(raw, harness, true)
+					flushSessionReports(raw, harness, true)
 					reminder = turnReminder(raw)
 					if dir, err := sessionLogDir(hookSessionID(raw)); err == nil {
 						pruneSessionLogs(dir)
