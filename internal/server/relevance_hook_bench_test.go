@@ -15,15 +15,11 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-// BenchmarkPromptHookRelevant is what the server spends on one prompt of the
-// prompt hook (GET /api/context/relevant) in an archive of sessions. The archive
-// is synthetic and deterministic: a Zipf vocabulary filled into chunks of the
-// account that asks, so the language gate has a sample to count in and the words
-// of the prompt are neither in the knowledge nor in many sessions.
-//
-//	GHOSTTREE_HOOK_BENCH_CHUNKS=310000 go test ./internal/server -run '^$' \
-//	  -bench BenchmarkPromptHookRelevant -benchtime 50x
-func BenchmarkPromptHookRelevant(b *testing.B) {
+// newHookArchive serves an archive of sessions (GHOSTTREE_HOOK_BENCH_CHUNKS chunks,
+// 200,000 without it) of the account of the returned token, from the store the
+// server runs on in production: one writer, a pool of read connections.
+func newHookArchive(b *testing.B) (srv *httptest.Server, token string, words []string) {
+	b.Helper()
 	chunks := 200000
 	if v := os.Getenv("GHOSTTREE_HOOK_BENCH_CHUNKS"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -37,8 +33,7 @@ func BenchmarkPromptHookRelevant(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() { st.Close() })
-	token, err := st.AddPerson("bench")
+	token, err = st.AddPerson("bench")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -48,9 +43,8 @@ func BenchmarkPromptHookRelevant(b *testing.B) {
 			account = id
 		}
 	}
-
 	const vocabulary = 120000
-	words := make([]string, vocabulary)
+	words = make([]string, vocabulary)
 	for i := range words {
 		words[i] = fmt.Sprintf("v%06d", i)
 	}
@@ -85,9 +79,30 @@ func BenchmarkPromptHookRelevant(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	srv := httptest.NewServer(New(st))
+	if err := st.Close(); err != nil {
+		b.Fatal(err)
+	}
+	// Reopened as the server opens it: the writer and a pool of read connections.
+	rt, err := store.OpenRuntime(path, store.DefaultWriterConfig())
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { rt.Close() })
+	srv = httptest.NewServer(New(rt))
 	b.Cleanup(srv.Close)
+	return srv, token, words
+}
 
+// BenchmarkPromptHookRelevant is what the server spends on one prompt of the
+// prompt hook (GET /api/context/relevant) in an archive of sessions. The archive
+// is synthetic and deterministic: a Zipf vocabulary filled into chunks of the
+// account that asks, so the language gate has a sample to count in and the words
+// of the prompt are neither in the knowledge nor in many sessions.
+//
+//	GHOSTTREE_HOOK_BENCH_CHUNKS=310000 go test ./internal/server -run '^$' \
+//	  -bench BenchmarkPromptHookRelevant -benchtime 50x
+func BenchmarkPromptHookRelevant(b *testing.B) {
+	srv, token, words := newHookArchive(b)
 	// Words from the middle of the ranking: in no entry, in some sessions.
 	mid := func(from, n int) string { return strings.Join(words[from:from+n], " ") }
 	prompts := []struct{ name, text string }{

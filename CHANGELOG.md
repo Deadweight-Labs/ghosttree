@@ -759,6 +759,38 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - `ctx doc new` and `ctx doc pull` no longer repeat a date that the slug already
   starts with.
 - Organization names may not contain control characters.
+- The default search leaves out sessions. `context_search`, `ctx search`,
+  `/api/search` and the search page of the web interface answer without kind
+  (or with `kind=all`) from knowledge, requests, pains, ideas, features,
+  criteria, tasks, file descriptions, documents and messages. Sessions are
+  searched on request: `kind=sessions`, `kind:session` or `is:session` in the
+  line, `context_search action=sessions`, or the Sessions tab. The page of all
+  kinds ends in a plain link "Search in sessions too" that asks nothing and
+  shows no number. The session search was the slowest part of every search and
+  filled the answer with raw history; run `ctx install` again so the rules in
+  `CLAUDE.md` and `AGENTS.md` say so.
+- Several words are joined with AND first. The word searches over sessions,
+  knowledge, requests, file descriptions and documents asked the index for any
+  of the words, so every further word widened the set of hits and made the
+  search slower. They now ask for all words and add the hits of the OR search,
+  without duplicates, only when AND returned fewer than a page. On 310,000
+  chunks the session word search for two common words took 272 ms and now takes
+  142 ms, for a common and a middling word 179 ms and now 8.5 ms; one word, or
+  words that are rare together, cost the same.
+- The prompt hook searches the sessions for its hint ("X also came up in session
+  #n") only when the prompt asks about earlier work: a time behind us ("damals",
+  "last week"), "did we", "wie hatten wir", or a question about a thing ("was
+  ist mit X"). Any other prompt skips the hint and the lookup of its
+  candidates. A prompt with one rare word and no such question takes 4.3 ms of
+  server time instead of 7.2 ms, with 88 KB instead of 2.1 MB allocated, on an
+  archive of 310,000 chunks; a question costs what it did.
+- Searches wait for a place of their own, one less than there are read
+  connections, so a hook always finds a connection free. With three connections
+  and 12 searchers the read of a hook took 26 ms, or 3.4 s when the searches
+  went through sessions, and now takes 0.6 ms in both cases (0.46 ms idle,
+  310,000 chunks). The API (`/api/search`) and the web interface share the
+  places; a search that cannot get one in time answers `search_busy` (503),
+  which the client retries.
 
 ### Fixed
 
@@ -770,6 +802,12 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   now also waits for the registration backoff instead of being retried every
   30 seconds.
 
+- A search over several areas whose sessions, knowledge or requests run out of
+  time (8 s each, 24 s in all) names that area as missing and answers with the
+  others. Until now only the sessions had a budget, and the vector ranking of
+  sessions and the read of the sessions a reader may open ran past it. The
+  default search no longer asks the sessions at all, so this shows only for a
+  line that names several kinds.
 - A tool call during a restart of the server no longer returns the HTML error
   page of the proxy in front of it. The message is one line, a read is tried
   twice more first (`ctx mcp` only; a write is never repeated), and a failed

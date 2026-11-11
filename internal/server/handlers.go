@@ -720,6 +720,14 @@ type searchResult struct {
 }
 
 func (a *api) search(w http.ResponseWriter, r *http.Request) {
+	// A search waits for a place of its own, so that the hooks keep a read
+	// connection (Store.AcquireSearchSlot).
+	release, ok := a.st.AcquireSearchSlot(r.Context())
+	if !ok {
+		writeCoded(w, http.StatusServiceUnavailable, "search_busy", "too many searches at once; retry")
+		return
+	}
+	defer release()
 	q := r.URL.Query().Get("q")
 	kind := r.URL.Query().Get("kind")
 	if kind == "" {

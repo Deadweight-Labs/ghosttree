@@ -36,31 +36,13 @@ var (
 	searchKeepalive      = 15 * time.Second
 )
 
-// searchLimiter is the number of kinds searched at once on the server: one less
-// than the read connections of the store, at least one.
-type searchLimiter struct {
-	once  sync.Once
-	slots chan struct{}
-}
-
-// searchSlotsUnlimited is the number of kinds at once when the store sets no
-// limit on its connections.
-const searchSlotsUnlimited = 4
+// searchLimiter gives a kind a place among the searches of the server. The places
+// are the store's (Store.AcquireSearchSlot), shared with the API: one less than
+// the read connections, at least one.
+type searchLimiter struct{}
 
 func (l *searchLimiter) acquire(ctx context.Context, st *store.Store) (release func(), ok bool) {
-	l.once.Do(func() {
-		n := st.ReadPoolSize() - 1
-		if st.ReadPoolSize() <= 0 {
-			n = searchSlotsUnlimited
-		}
-		l.slots = make(chan struct{}, max(n, 1))
-	})
-	select {
-	case l.slots <- struct{}{}:
-		return func() { <-l.slots }, true
-	case <-ctx.Done():
-		return nil, false
-	}
+	return st.AcquireSearchSlot(ctx)
 }
 
 // searchStreams are the running search streams by account: the search itself
