@@ -72,6 +72,12 @@ organization and the user its admin, otherwise the connection is refused.
 branch and PR anchors (`GitHubApp.PullRequests`) needs it and reports a missing
 permission as an error until it is added.
 
+The commit page shows the changed files and the state of the checks of a commit.
+Those two come from `Contents: read` and `Checks: read` (optionally `Commit
+statuses: read`); without them the commit page simply leaves the blocks out, and
+`ctx github sync-prs --commits` says which permission is missing. Parents,
+message and co-authors need only `Pull requests: read`.
+
 Give the server the App's credentials. The private key (PEM, as downloaded from
 GitHub) and the webhook secret are read from files only and never logged or sent
 to the browser:
@@ -334,6 +340,55 @@ sessions neither in its web search nor in its agents' search. A rollback after
 `slim-search` therefore needs the backup; a rollback before it does not. If an
 older binary wrote lines after the run, the next run of `slim-search` moves
 them.
+
+### The text of transcript lines: derived, not stored
+
+`session_chunks.text` holds the text of a line as the collector read it, next to
+the packed line in `raw` from which it can be derived. Readers take the stored
+text when the column has some and derive it from `raw` when it is empty
+(`internal/chunktext`), so a server of this version behaves like the old one
+until the column is emptied. The first start adds `text_chars` (the length in
+characters of the text that was or would have been stored; `ctx cost` sums it).
+
+```bash
+sudo systemctl stop ghosttree
+sudo sh -c 'cd /var/lib/ghosttree && zstd -T0 -o /var/backups/ghosttree-before-slim-text.db.zst ghosttree.db'
+sudo systemctl start ghosttree        # the new version adds text_chars
+$RUN db slim-search --db $DB          # needed once, if it has not run: chunks_fts stands on text
+$RUN db slim-text --db $DB --dry-run  # classes of rows, writes nothing; look at a copy first
+# start the server with --session-text=derived (or GHOSTTREE_SESSION_TEXT=derived)
+$RUN db slim-text --db $DB            # beside the running server
+sudo systemctl stop ghosttree
+$RUN db vacuum --db $DB --yes         # gives the space back
+$RUN db check --db $DB --full
+sudo systemctl start ghosttree
+```
+
+The dry run derives the text of every row that has some and counts: `same`
+(derived equals stored), `cut` (differs, and a truncation mark is involved: the
+stored line shortens a long tool output at another place than the collector
+did), `other` and `underivable` (the parsers get nothing out of the stored line,
+so the stored text is the only copy: the real run leaves those rows with their
+text and counts them again on every run). After the run the `cut` and `other`
+rows read the derived view, which is shorter or otherwise different. The run
+keeps no copy of their old text: only the database backup above brings it back
+byte for byte, `--restore` gives the derived version. Quotes already stored live verbatim in the evidence and do not
+depend on the column. A quote of a distillation batch that was submitted before
+the run and collected after it is checked against the derived text, which is why
+the command refuses while a batch is open.
+
+With `--session-text=derived` the server writes a chunk without text only when
+its line yields some; otherwise it keeps the text it received, and `text_chars`
+is the length of the derived text, which is what `ctx cost` should count.
+
+The command takes the write lock for one `UPDATE` per batch of 500 rows and
+pauses at least as long as the lock was held. A second run finds nothing; an
+interrupted one is simply started again (or continued with `--after-id`).
+
+Going back: set `--session-text=stored`, run `ctx db slim-text --restore`
+(writes the derived text into every emptied row; byte for byte the old text
+where the derivation was equal, the derived version for `cut` and `other`), then start the older binary. Without
+`--restore` an older binary sees empty transcripts.
 
 ### Shrinking and checking the database
 

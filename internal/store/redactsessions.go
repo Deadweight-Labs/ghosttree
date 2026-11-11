@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/chunktext"
 	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
@@ -217,13 +218,15 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 		var read int
 		var held int
 		last := rep.LastID
-		rows, err := db.QueryContext(ctx, `SELECT id, session_id, seq, text, raw FROM session_chunks WHERE id > ? ORDER BY id LIMIT ?`, rep.LastID, opts.Batch)
+		rows, err := db.QueryContext(ctx, `SELECT c.id, c.session_id, c.seq, c.text, c.raw, COALESCE(se.harness, '')
+			FROM session_chunks c LEFT JOIN sessions se ON se.id = c.session_id
+			WHERE c.id > ? ORDER BY c.id LIMIT ?`, rep.LastID, opts.Batch)
 		if err != nil {
 			return fail(err)
 		}
 		for rows.Next() {
 			var e redactEdit
-			if err := rows.Scan(&e.id, &e.session, &e.seq, &e.oldText, &e.stored); err != nil {
+			if err := rows.Scan(&e.id, &e.session, &e.seq, &e.oldText, &e.stored, &e.harness); err != nil {
 				rows.Close()
 				return fail(err)
 			}
@@ -240,6 +243,7 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 			e.newRaw = w.redactField(e.oldRaw, redact.JSON, stats)
 			e.rawKinds = take(stats)
 			if e.newText != e.oldText || e.newRaw != e.oldRaw {
+				e.setViews()
 				edits = append(edits, e)
 			}
 			if held >= opts.BatchBytes {
@@ -371,6 +375,12 @@ type redactEdit struct {
 	seq         int
 	oldText     string
 	oldRaw      string
+	harness     string
+	// oldView und newView sind der Text, den ein Leser vorher und nachher sieht
+	// (Leseregel: gespeicherter Text, sonst aus der Zeile abgeleitet). Nach
+	// ctx db slim-text ist oldText leer; die Zitate der Belege stammen aber aus dem
+	// abgeleiteten Text, und nach ihm richtet requote sich.
+	oldView, newView string
 	// stored ist raw, wie es gelesen wurde (gepackt oder nicht); das UPDATE
 	// vergleicht damit.
 	stored    rawcodec.Value
@@ -378,6 +388,23 @@ type redactEdit struct {
 	newRaw    string
 	textKinds map[string]int64
 	rawKinds  map[string]int64
+}
+
+// setViews bestimmt oldView und newView. Steht Text in der Zeile, gilt er; ist
+// er leer, wird er aus der Zeile vor und nach dem Schwärzen abgeleitet.
+func (e *redactEdit) setViews() {
+	if e.oldText != "" {
+		e.oldView, e.newView = e.oldText, e.newText
+		return
+	}
+	if e.newRaw == e.oldRaw {
+		return
+	}
+	// Die alte Sicht ist die Zeile vor dem Schwärzen, ohne Schwärzen und Kürzen:
+	// Derive schwärzt schon mit den heutigen Mustern, und ein Zitat, das einen
+	// Wert aus seiner Beschriftung schneidet, stünde sonst nicht mehr darin.
+	e.oldView = chunktext.Parse(e.harness)([]byte(e.oldRaw)).Text
+	e.newView = chunkTextOf(e.harness, "", e.newRaw)
 }
 
 type redactBatch struct {
@@ -526,7 +553,7 @@ func (w *redactWork) apply(edits []redactEdit) (redactBatch, error) {
 				return res, err
 			}
 		}
-		if textChanged {
+		if textChanged || rawChanged {
 			if err := w.requote(q, e, &res); err != nil {
 				return res, err
 			}
@@ -674,7 +701,7 @@ func (w *redactWork) requote(q maintQueryer, e redactEdit, res *redactBatch) err
 			} else {
 				res.citedRq = append(res.citedRq, r.owner)
 			}
-			nq := redactQuote(e.oldText, e.newText, r.quote, w.redactPlain)
+			nq := redactQuote(e.oldView, e.newView, r.quote, w.redactPlain)
 			if nq == r.quote {
 				continue
 			}

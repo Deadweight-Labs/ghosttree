@@ -311,6 +311,22 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 #### Git-native ledger
 
+- The commit page shows what GitHub says about a commit: parents as pills,
+  the whole message, co-authors, the changed files with their added and removed
+  lines, and the state of the checks; the list shows the checks and the
+  co-authors too, and both have a `<>` button to the code at that commit.
+  `ctx github sync-prs --commits` (and the webhook, for the newest commits,
+  after it has answered GitHub) fetches and stores it, so a page never asks
+  GitHub. The changed files need the App permission `Contents: read`, the checks
+  `Checks: read`; a missing permission leaves the block out, is noted per
+  installation, and does not keep those commits at the head of the queue. A
+  commit GitHub no longer knows (after a force push) is skipped on its own. A guest who may not read every branch gets
+  none of it.
+- The profile has a block "Notifications" with one switch per kind (mentions,
+  questions to me, decisions, tasks, gardener) for the inbox and the bell; a kind
+  switched off is missing there and from the count, and stays readable where it
+  comes from. Mentions only ever appear in the inbox, the bell does not count
+  them, so their switch names only the inbox. The profile grid follows the mock (portrait 296 px).
 - A GitHub App connects an organization: its repositories join the
   organization in ghosttree, and pull requests are bound by webhook
   (`ctx github sync-prs` catches up).
@@ -552,6 +568,29 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   563 MiB; the web search answers byte for byte as before. An older ghosttree
   started after `slim-search` does not find the moved sessions, so going back
   needs the backup.
+- The text of a transcript line is no longer stored twice. `session_chunks.text`
+  (the text the collector read from the original line) can be derived from the
+  stored line, and readers now do so whenever the column is empty: the session
+  page, the session API (`ReadSession`), the two quote checks of the
+  distiller and its input. The parsers moved from the collector to the leaf
+  package `internal/chunktext`; the collector uploads what it uploaded before.
+  The first start adds the column `session_chunks.text_chars` (metadata only).
+  `ctx serve --session-text=derived` (or `GHOSTTREE_SESSION_TEXT=derived`)
+  writes new chunks without text; the default `stored` changes nothing.
+  `ctx db slim-text --db <path>` empties the column of existing rows beside the
+  running server, in batches of 500 rows with short write locks (first
+  `--dry-run`, which counts rows whose derived text equals, differs by a
+  truncation mark, or differs otherwise, or cannot be derived at all, and prints
+  no text; then `ctx db vacuum` with the server stopped). A row with nothing to
+  derive keeps its text; for the rows that read the derived view afterwards only
+  the database backup brings the old text back. It refuses while `ctx db slim-search` has
+  not run and while a distillation batch is open (`--force` overrides the
+  latter). `--restore` writes the derived text back, which a rollback to an
+  older binary needs first. `ctx cost` and `ctx usage` read `text_chars`,
+  `chunk_index` and the stored line instead of the column and give the same
+  numbers. Where the stored line cuts a long tool output somewhere else than
+  the collector did (0.73 % of the rows on local transcripts, almost all
+  Codex), the derived, shorter view of the same output is what is read.
 - The agents' session search (`context_search` with sessions,
   `ctx search`) and the sessions of a request search the same fields as the
   web search: messages, thinking, commands and tool output. Instructions a

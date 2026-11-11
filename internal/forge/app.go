@@ -18,8 +18,10 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,6 +47,10 @@ var (
 	// ErrPermissionMissing: die App hat für diese Abfrage keine Berechtigung
 	// (z. B. Pull requests: read fehlt).
 	ErrPermissionMissing = errors.New("the GitHub App lacks the permission for that request")
+	// ErrCommitUnavailable: GitHub kennt diesen einen Commit nicht (mehr), etwa weil
+	// ein Force-Push ihn verworfen hat. Anders als ErrPermissionMissing sagt das
+	// nichts über die übrigen Commits der Installation.
+	ErrCommitUnavailable = errors.New("github does not know that commit")
 	// ErrRateLimited: GitHub hat das Ratenlimit der Installation erreicht. Der
 	// konkrete Fehler (RateLimitError) nennt, wann es wieder geht.
 	ErrRateLimited = errors.New("github rate limit reached")
@@ -158,7 +164,22 @@ func ParsePrivateKey(pemBytes []byte) (*rsa.PrivateKey, error) {
 type GitHubApp struct {
 	cfg    AppConfig
 	client *http.Client
+
+	// tokens hält die Installations-Token bis kurz vor ihrem Ablauf, damit ein Lauf
+	// über viele Commits nicht für jeden Abruf ein neues bei GitHub holt.
+	tokMu  sync.Mutex
+	tokens map[string]cachedToken
 }
+
+// cachedToken ist ein Installations-Token mit seinem Ablauf. Es steht nur im
+// Speicher und kommt in keinen Fehler und kein Protokoll.
+type cachedToken struct {
+	token   string
+	expires time.Time
+}
+
+// tokenSlack ist die Zeit vor dem Ablauf, ab der ein Token nicht mehr benutzt wird.
+const tokenSlack = 5 * time.Minute
 
 func NewGitHubApp(cfg AppConfig) *GitHubApp {
 	if cfg.WebBase == "" {
@@ -452,9 +473,12 @@ type PullCommit struct {
 	// zuordnet), AuthorName der Name aus dem Commit.
 	Author     string `json:"author,omitempty"`
 	AuthorName string `json:"author_name,omitempty"`
-	// Title ist die erste Zeile der Commit-Nachricht.
+	// Title ist die erste Zeile der Commit-Nachricht, Message die ganze.
 	Title       string `json:"title"`
+	Message     string `json:"message,omitempty"`
 	CommittedAt string `json:"committed_at,omitempty"`
+	// Parents sind die SHAs der Eltern-Commits; sie kommen mit derselben Antwort.
+	Parents []string `json:"parents,omitempty"`
 }
 
 const (
@@ -483,7 +507,10 @@ func (g *GitHubApp) PullRequestCommits(ctx context.Context, installationID int64
 	var out []PullCommit
 	for page := 1; page <= maxCommitPages; page++ {
 		var raw []struct {
-			SHA    string `json:"sha"`
+			SHA     string `json:"sha"`
+			Parents []struct {
+				SHA string `json:"sha"`
+			} `json:"parents"`
 			Commit struct {
 				Message string `json:"message"`
 				Author  struct {
@@ -506,7 +533,10 @@ func (g *GitHubApp) PullRequestCommits(ctx context.Context, installationID int64
 			return nil, err
 		}
 		for _, r := range raw {
-			c := PullCommit{SHA: r.SHA, AuthorName: r.Commit.Author.Name, Title: firstLine(r.Commit.Message)}
+			c := PullCommit{SHA: r.SHA, AuthorName: r.Commit.Author.Name, Title: firstLine(r.Commit.Message), Message: r.Commit.Message}
+			for _, p := range r.Parents {
+				c.Parents = append(c.Parents, p.SHA)
+			}
 			if r.Author != nil {
 				c.Author = r.Author.Login
 			}
@@ -528,6 +558,213 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// CommitFile ist eine Datei, die ein Commit ändert, mit den Zeilen, die er
+// hinzufügt und entfernt.
+type CommitFile struct {
+	Path      string `json:"path"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+}
+
+// CommitFiles ist die Dateiliste eines Commits. Total ist die Zahl der Dateien
+// laut GitHub (die Liste hat höchstens maxCommitFiles), Additions und Deletions
+// die Summen über den ganzen Commit.
+type CommitFiles struct {
+	Files     []CommitFile `json:"files"`
+	Total     int          `json:"total"`
+	Additions int          `json:"additions"`
+	Deletions int          `json:"deletions"`
+}
+
+const maxCommitFiles = 300
+
+// CommitFiles liefert die geänderten Dateien eines Commits mit ihren Zeilenzahlen
+// (GET /repos/{owner}/{repo}/commits/{sha}). GitHub verlangt dafür das Recht
+// "Contents: read"; das Token wird darauf begrenzt. Fehlt es, kommt
+// ErrPermissionMissing: die Commit-Seite zeigt dann nur, was sie sonst weiß. Kennt
+// GitHub den Commit nicht (404, 422), kommt ErrCommitUnavailable.
+func (g *GitHubApp) CommitFiles(ctx context.Context, installationID int64, repo, sha string) (CommitFiles, error) {
+	parts, ok := repoParts(repo)
+	if !ok || !hexSHA(sha) {
+		return CommitFiles{}, fmt.Errorf("commit files: repo must look like github.com/owner/repo and the sha must be hexadecimal")
+	}
+	tok, err := g.installationToken(ctx, installationID, map[string]string{"contents": "read"})
+	if err != nil {
+		return CommitFiles{}, tokenRefusal(err)
+	}
+	type commitBody struct {
+		Stats struct {
+			Additions int `json:"additions"`
+			Deletions int `json:"deletions"`
+		} `json:"stats"`
+		Files []struct {
+			Filename  string `json:"filename"`
+			Additions int    `json:"additions"`
+			Deletions int    `json:"deletions"`
+		} `json:"files"`
+	}
+	var raw commitBody
+	path := "/repos/" + url.PathEscape(parts[1]) + "/" + url.PathEscape(parts[2]) + "/commits/" + sha
+	hdr, err := g.getHeader(ctx, tok, path, &raw)
+	if err != nil {
+		return CommitFiles{}, commitRefusal(err)
+	}
+	out := CommitFiles{Total: len(raw.Files), Additions: raw.Stats.Additions, Deletions: raw.Stats.Deletions}
+	// Hat der Commit mehr Dateien, als eine Seite fasst, nennt GitHub die letzte Seite
+	// im Link-Kopf. Alle Seiten bis auf die letzte sind voll; mit der letzten (ein
+	// Abruf mehr, nur für solche Commits) ist die Zahl genau. Gelingt er nicht, bleibt
+	// es bei der Zahl der ersten Seite: sie dient nur der Anzeige.
+	if last := lastPage(hdr.Get("Link")); last > 1 && len(raw.Files) > 0 {
+		var tail commitBody
+		if _, err := g.getHeader(ctx, tok, path+"?page="+strconv.Itoa(last), &tail); err == nil {
+			out.Total = (last-1)*len(raw.Files) + len(tail.Files)
+		}
+	}
+	for i, f := range raw.Files {
+		if i >= maxCommitFiles {
+			break
+		}
+		out.Files = append(out.Files, CommitFile{Path: f.Filename, Additions: f.Additions, Deletions: f.Deletions})
+	}
+	return out, nil
+}
+
+// Stände der Prüfungen eines Commits.
+const (
+	CIPending = "pending"
+	CISuccess = "success"
+	CIFailure = "failure"
+)
+
+// CommitCI fasst die Prüfungen eines Commits zu einem Stand zusammen: ein Check-Run
+// oder Status, der scheitert, ergibt "failure"; läuft noch einer, "pending"; sind
+// alle durch, "success". Hat der Commit keine Prüfung, ist der Stand leer. Das
+// braucht "Checks: read" (und, wenn die App es hat, "Commit statuses: read"); fehlt
+// "Checks", kommt ErrPermissionMissing; kennt GitHub den Commit nicht,
+// ErrCommitUnavailable.
+func (g *GitHubApp) CommitCI(ctx context.Context, installationID int64, repo, sha string) (string, error) {
+	parts, ok := repoParts(repo)
+	if !ok || !hexSHA(sha) {
+		return "", fmt.Errorf("commit checks: repo must look like github.com/owner/repo and the sha must be hexadecimal")
+	}
+	withStatuses := true
+	tok, err := g.installationToken(ctx, installationID, map[string]string{"checks": "read", "statuses": "read"})
+	if err != nil {
+		// Eine App ohne "Commit statuses" bekommt das Token nur für die Checks.
+		withStatuses = false
+		if tok, err = g.installationToken(ctx, installationID, map[string]string{"checks": "read"}); err != nil {
+			return "", tokenRefusal(err)
+		}
+	}
+	base := "/repos/" + url.PathEscape(parts[1]) + "/" + url.PathEscape(parts[2]) + "/commits/" + sha
+	var runs struct {
+		CheckRuns []struct {
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+		} `json:"check_runs"`
+	}
+	if err := g.getAs(ctx, tok, base+"/check-runs?per_page=100", &runs); err != nil {
+		return "", commitRefusal(err)
+	}
+	state := ""
+	rank := map[string]int{"": 0, CISuccess: 1, CIPending: 2, CIFailure: 3}
+	worse := func(s string) {
+		if rank[s] > rank[state] {
+			state = s
+		}
+	}
+	for _, r := range runs.CheckRuns {
+		switch {
+		case r.Status != "completed":
+			worse(CIPending)
+		case r.Conclusion == "success" || r.Conclusion == "neutral" || r.Conclusion == "skipped":
+			worse(CISuccess)
+		default:
+			worse(CIFailure)
+		}
+	}
+	if withStatuses {
+		var st struct {
+			State      string `json:"state"`
+			TotalCount int    `json:"total_count"`
+		}
+		if err := g.getAs(ctx, tok, base+"/status", &st); err == nil && st.TotalCount > 0 {
+			switch st.State {
+			case "success":
+				worse(CISuccess)
+			case "pending":
+				worse(CIPending)
+			default:
+				worse(CIFailure)
+			}
+		}
+	}
+	return state, nil
+}
+
+var linkLastRE = regexp.MustCompile(`<[^>]*[?&]page=(\d+)[^>]*>\s*;\s*rel="last"`)
+
+// lastPage liest aus dem Link-Kopf von GitHub die Nummer der letzten Seite; 0, wenn
+// es keine gibt.
+func lastPage(link string) int {
+	m := linkLastRE.FindStringSubmatch(link)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n > 1000 {
+		return 0
+	}
+	return n
+}
+
+func repoParts(repo string) ([]string, bool) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(repo)), "/")
+	return parts, len(parts) == 3 && parts[0] == "github.com" && parts[1] != "" && parts[2] != ""
+}
+
+func hexSHA(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// tokenRefusal macht aus der Ablehnung eines Installations-Tokens "Recht fehlt":
+// verlangt die App ein Recht, das die Installation nicht hat, antwortet GitHub mit
+// 422 (oder 403); ein 404 heißt, dass es die Installation nicht mehr gibt. Das gilt
+// für alle Commits der Installation. Ein Ratenlimit und alles andere bleiben, wie
+// sie sind.
+func tokenRefusal(err error) error {
+	var se *statusError
+	if errors.As(err, &se) && (se.code == http.StatusForbidden || se.code == http.StatusNotFound || se.code == http.StatusUnprocessableEntity) {
+		return ErrPermissionMissing
+	}
+	return err
+}
+
+// commitRefusal deutet die Antwort auf die Abfrage eines Commits: ein 403 heißt,
+// dass dem Token das Recht fehlt (gilt für die ganze Installation); ein 404 oder 422
+// betrifft nur diesen Commit (etwa nach einem Force-Push verschwunden). Ein
+// Ratenlimit und alles andere bleiben, wie sie sind.
+func commitRefusal(err error) error {
+	var se *statusError
+	if errors.As(err, &se) {
+		switch se.code {
+		case http.StatusForbidden:
+			return ErrPermissionMissing
+		case http.StatusNotFound, http.StatusUnprocessableEntity:
+			return ErrCommitUnavailable
+		}
+	}
+	return err
 }
 
 // ---------------------------------------------------------------- JWT und Token
@@ -559,6 +796,10 @@ func (g *GitHubApp) installationToken(ctx context.Context, installationID int64,
 	if installationID <= 0 {
 		return "", errors.New("github: no installation")
 	}
+	key := tokenKey(installationID, permissions)
+	if tok, ok := g.cachedToken(key); ok {
+		return tok, nil
+	}
 	jwt, err := g.appJWT()
 	if err != nil {
 		return "", err
@@ -578,7 +819,8 @@ func (g *GitHubApp) installationToken(ctx context.Context, installationID int64,
 		req.Header.Set("Content-Type", "application/json")
 	}
 	var out struct {
-		Token string `json:"token"`
+		Token     string    `json:"token"`
+		ExpiresAt time.Time `json:"expires_at"`
 	}
 	if err := g.do(req, &out); err != nil {
 		return "", err
@@ -586,7 +828,47 @@ func (g *GitHubApp) installationToken(ctx context.Context, installationID int64,
 	if out.Token == "" {
 		return "", errors.New("github gave no installation token")
 	}
+	g.storeToken(key, out.Token, out.ExpiresAt)
 	return out.Token, nil
+}
+
+// tokenKey ist der Schlüssel eines Tokens im Speicher: Installation und die
+// (sortierten) Rechte, auf die es begrenzt ist.
+func tokenKey(installationID int64, permissions map[string]string) string {
+	if permissions == nil {
+		return strconv.FormatInt(installationID, 10) + "|*"
+	}
+	parts := make([]string, 0, len(permissions))
+	for k, v := range permissions {
+		parts = append(parts, k+"="+v)
+	}
+	sort.Strings(parts)
+	return strconv.FormatInt(installationID, 10) + "|" + strings.Join(parts, ",")
+}
+
+func (g *GitHubApp) cachedToken(key string) (string, bool) {
+	g.tokMu.Lock()
+	defer g.tokMu.Unlock()
+	t, ok := g.tokens[key]
+	if !ok || !g.cfg.Now().Before(t.expires.Add(-tokenSlack)) {
+		delete(g.tokens, key)
+		return "", false
+	}
+	return t.token, true
+}
+
+// storeToken merkt sich ein Token bis zum Ablauf, den GitHub nennt. Ohne Ablauf
+// (oder schon fast abgelaufen) bleibt es ungespeichert.
+func (g *GitHubApp) storeToken(key, token string, expires time.Time) {
+	if expires.IsZero() || !g.cfg.Now().Before(expires.Add(-tokenSlack)) {
+		return
+	}
+	g.tokMu.Lock()
+	defer g.tokMu.Unlock()
+	if g.tokens == nil {
+		g.tokens = map[string]cachedToken{}
+	}
+	g.tokens[key] = cachedToken{token: token, expires: expires}
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -620,30 +902,41 @@ func (g *GitHubApp) exchange(ctx context.Context, code, redirectURI string) (str
 }
 
 func (g *GitHubApp) getAs(ctx context.Context, token, path string, v any) error {
+	_, err := g.getHeader(ctx, token, path, v)
+	return err
+}
+
+// getHeader ist getAs, das auch die Kopfzeilen der Antwort zurückgibt (für Link).
+func (g *GitHubApp) getHeader(ctx context.Context, token, path string, v any) (http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.cfg.APIBase+path, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	return g.do(req, v)
+	return g.doHeader(req, v)
 }
 
 func (g *GitHubApp) do(req *http.Request, v any) error {
+	_, err := g.doHeader(req, v)
+	return err
+}
+
+func (g *GitHubApp) doHeader(req *http.Request, v any) (http.Header, error) {
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("github: %w", redactErr(err))
+		return nil, fmt.Errorf("github: %w", redactErr(err))
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseLen))
 	if err != nil {
-		return fmt.Errorf("github: %w", err)
+		return nil, fmt.Errorf("github: %w", err)
 	}
 	if resp.StatusCode/100 != 2 {
 		if rl, ok := rateLimited(resp, g.cfg.Now()); ok {
-			return rl
+			return nil, rl
 		}
-		return &statusError{code: resp.StatusCode}
+		return nil, &statusError{code: resp.StatusCode}
 	}
-	return json.Unmarshal(body, v)
+	return resp.Header, json.Unmarshal(body, v)
 }

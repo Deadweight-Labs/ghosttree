@@ -3,6 +3,8 @@ package collector
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/chunktext"
 )
 
 // Der Pfad muss aus dem Werkzeugaufruf herauskommen. Im Archivtext steht er
@@ -101,8 +103,8 @@ func TestAPathSurvivesEvenWhenTheArchivedTextWouldTruncateIt(t *testing.T) {
 	}
 
 	// Der archivierte Text verliert den Pfad — das ist der Ausgangszustand.
-	archived := claudeToolCallText(block)
-	if len(archived) > maxToolCallArgs+64 {
+	archived := chunktext.ClaudeToolCallText(block)
+	if len(archived) > chunktext.MaxToolCallArgs+64 {
 		t.Fatalf("the archived text should be truncated, got %d chars", len(archived))
 	}
 	// Belegen, dass er wirklich weg ist: sonst prüft der Test nichts.
