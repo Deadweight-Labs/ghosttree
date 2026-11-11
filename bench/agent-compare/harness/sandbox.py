@@ -495,25 +495,56 @@ _SECCOMP_NEW_API = {"io_uring_setup": 425, "io_uring_enter": 426, "io_uring_regi
 _AUDIT_ARCH = {"x86_64": 0xC000003E, "aarch64": 0xC00000B7}
 
 
+_CLONE = {"x86_64": 56, "aarch64": 220}
+_CLONE3 = 435  # auf beiden Architekturen gleich
+_CLONE_NEW_MASK = 0x02000000 | 0x04000000 | 0x08000000 | 0x10000000 | 0x20000000 | 0x40000000 | 0x00020000  # CLONE_NEW*
+
+
+def _assemble(items):
+    """items: ("label", name) oder (code, ziel_treffer, ziel_sonst, k). Ziel None heißt: die nächste Anweisung."""
+    pos, labels = 0, {}
+    for it in items:
+        if it[0] == "label":
+            labels[it[1]] = pos
+        else:
+            pos += 1
+    out, pos = [], 0
+    for it in items:
+        if it[0] == "label":
+            continue
+        code, jt, jf, k = it
+        rel = lambda target: 0 if target is None else labels[target] - (pos + 1)  # noqa: E731
+        if rel(jt) < 0 or rel(jf) < 0 or rel(jt) > 255 or rel(jf) > 255:
+            raise ValueError("Sprung außerhalb des Bereichs")
+        out.append(_bpf(code, rel(jt), rel(jf), k))
+        pos += 1
+    return b"".join(out)
+
+
 def seccomp_filter():
-    """Klassisches BPF-Programm für `bwrap --seccomp`: alles erlaubt außer der Liste oben (dann EPERM). Eine fremde
-    Architektur oder die x32-Schnittstelle töten den Prozess. Für andere Architekturen gibt es keinen Filter, und
-    ohne Filter startet bwrap nicht (IsolationError)."""
+    """Klassisches BPF-Programm für `bwrap --seccomp`: alles erlaubt außer der Liste oben (dann EPERM). `clone` mit
+    einem CLONE_NEW*-Bit gibt EPERM, `clone3` (Argumente liegen im Speicher, nicht prüfbar) ENOSYS wie im Docker-Profil:
+    die Bibliotheken fallen auf `clone` zurück. Eine fremde Architektur oder die x32-Schnittstelle töten den Prozess.
+    Für andere Architekturen gibt es keinen Filter, und ohne Filter startet bwrap nicht (IsolationError)."""
     arch = platform.machine()
     if arch not in _AUDIT_ARCH:
         raise IsolationError(f"kein Seccomp-Filter für die Architektur {arch!r}: bwrap ist hier nicht zugelassen, nimm den Container")
     nrs = sorted({*_SECCOMP_COMMON[arch].values(), *_SECCOMP_NEW_API.values()})
-    kill, allow, eperm = 0x80000000, 0x7FFF0000, 0x00050000 | 1
-    prog = [_bpf(0x20, 0, 0, 4),                        # A = arch
-            _bpf(0x15, 1, 0, _AUDIT_ARCH[arch]),         # arch == erwartet: weiter
-            _bpf(0x06, 0, 0, kill),
-            _bpf(0x20, 0, 0, 0)]                        # A = Nummer des Systemaufrufs
-    if arch == "x86_64":
-        prog += [_bpf(0x35, 0, 1, 0x40000000), _bpf(0x06, 0, 0, kill)]  # x32-Aufrufe
-    for i, nr in enumerate(nrs):
-        prog.append(_bpf(0x15, len(nrs) - i, 0, nr))    # Treffer: zum EPERM-Ende springen
-    prog += [_bpf(0x06, 0, 0, allow), _bpf(0x06, 0, 0, eperm)]
-    return b"".join(prog)
+    kill, allow, eperm, enosys = 0x80000000, 0x7FFF0000, 0x00050000 | 1, 0x00050000 | 38
+    A_ABS, JEQ, JGE, JSET, RET = 0x20, 0x15, 0x35, 0x45, 0x06
+    ins = [(A_ABS, None, None, 4), (JEQ, "arch_ok", None, _AUDIT_ARCH[arch]), (RET, None, None, kill), ("label", "arch_ok"),
+           (A_ABS, None, None, 0)]
+    if arch == "x86_64":  # x32-Aufrufe tragen Bit 30 in der Nummer
+        ins += [(JGE, "kill", None, 0x40000000)]
+    ins += [(JEQ, "enosys", None, _CLONE3), (JEQ, "clone", None, _CLONE[arch])]
+    ins += [(JEQ, "eperm", None, nr) for nr in nrs]
+    ins += [(RET, None, None, allow),
+            ("label", "clone"), (A_ABS, None, None, 16), (JSET, "eperm", None, _CLONE_NEW_MASK),  # args[0]: Flags
+            (RET, None, None, allow),
+            ("label", "kill"), (RET, None, None, kill),
+            ("label", "enosys"), (RET, None, None, enosys),
+            ("label", "eperm"), (RET, None, None, eperm)]
+    return _assemble(ins)
 
 
 @functools.lru_cache(maxsize=None)
@@ -529,7 +560,7 @@ def bwrap_supports(flag, bwrap="bwrap"):
 class BwrapSandbox(Sandbox):
     """bubblewrap: kein Daemon, kein root. Die Werkzeuge kommen vom Host (/usr), Grenzen für Speicher und
     Prozesse gibt es hier nicht. Gedacht für lokale Probeläufe; das Protokoll nennt den Weg. Gehärtet mit
-    `--disable-userns` (wenn bwrap es kennt; das Protokoll hält fest, ob) und einem Seccomp-Filter (seccomp_filter)."""
+    `--disable-userns` (ohne diese Option startet bwrap nicht) und einem Seccomp-Filter (seccomp_filter)."""
 
     kind = "bwrap"
     implicit_mounts = ("/proc", "/dev", "/tmp", "/usr", "/bin", "/sbin", "/lib", "/lib64")
@@ -539,14 +570,14 @@ class BwrapSandbox(Sandbox):
         self.bwrap = bwrap or os.environ.get("BENCH_BWRAP", "bwrap")
 
     def facts_summary(self):
-        return {"limits_enforced": False, "userns_disabled": bwrap_supports("--disable-userns", self.bwrap), "seccomp": True}
+        return {"limits_enforced": False, "userns_disabled": True, "seccomp": True}
 
     def bwrap_args(self, cwd, seccomp_fd=3):
         a = [self.bwrap, "--unshare-all", "--die-with-parent", "--new-session", "--clearenv", "--hostname", "bench",
              "--setenv", "PATH", "/usr/bin:/bin", "--ro-bind", "/usr", "/usr"]
-        if bwrap_supports("--disable-userns", self.bwrap):
-            a += ["--unshare-user", "--disable-userns"]  # --unshare-all macht den User-Namensraum nur „try“; disable braucht ihn fest
-        a += ["--seccomp", str(seccomp_fd)]
+        # --unshare-all macht den User-Namensraum nur „try“; --disable-userns braucht ihn fest. Ob bwrap die Option
+        # kennt, prüft _start (sonst IsolationError); hier steht sie immer, damit verify_runtime sie fordern kann.
+        a += ["--unshare-user", "--disable-userns", "--seccomp", str(seccomp_fd)]
         for d in ("bin", "sbin", "lib", "lib64"):
             p = f"/{d}"
             if os.path.islink(p):
@@ -567,6 +598,9 @@ class BwrapSandbox(Sandbox):
         if not shutil.which(self.bwrap):
             raise IsolationError("bubblewrap (bwrap) ist nicht installiert")
         seccomp_filter()  # wirft IsolationError für eine Architektur ohne Filter, bevor etwas startet
+        if not bwrap_supports("--disable-userns", self.bwrap):
+            raise IsolationError("bwrap kennt --disable-userns nicht (zu alt): ohne das bliebe der User-Namensraum offen. "
+                                 "bwrap aktualisieren oder den Container nehmen.")
 
     def _wrap(self, inner, cwd):
         return self.bwrap_args(cwd) + ["--", *inner]
@@ -579,9 +613,7 @@ class BwrapSandbox(Sandbox):
 
     def verify_runtime(self, facts):
         args = self.bwrap_args(self.spec.workdir)
-        required = ["--unshare-all", "--clearenv", "--die-with-parent", "--seccomp"]
-        if bwrap_supports("--disable-userns", self.bwrap):
-            required.append("--disable-userns")
+        required = ["--unshare-all", "--clearenv", "--die-with-parent", "--seccomp", "--disable-userns"]
         bad = [f"bwrap ohne {flag}" for flag in required if flag not in args]
         bad += [f"bwrap mit {flag}" for flag in ("--share-net", "--cap-add", "--unshare-all-try") if flag in args]
         return bad

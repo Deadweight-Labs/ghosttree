@@ -210,25 +210,32 @@ class ChainLiveMixin:
         return c
 
     def plant_fsmonitor(self, c):
-        """Der Agent trägt in die Konfiguration seines Repos einen Befehl ein, den git bei `add` ausführen würde."""
+        """Der Agent trägt in die Konfiguration seines Repos Befehle ein, die git bei add und commit ausführen würde:
+        core.fsmonitor, einen clean-Filter (per .gitattributes) und ein gpg.program."""
         subprocess.run(["git", "init", "-q", str(c.work)], check=True, capture_output=True)
-        hook = c.home / "fsmon.sh"
-        hook.write_text(f"#!/bin/sh\necho ran >> {sbx.SANDBOX_HOME}/fsmon-ran\nexit 0\n")
-        hook.chmod(0o755)
-        subprocess.run(["git", "-C", str(c.work), "config", "core.fsmonitor", f"{sbx.SANDBOX_HOME}/fsmon.sh"],
-                       check=True, capture_output=True)
+        home = sbx.SANDBOX_HOME
+        for name, marker in (("fsmon.sh", "fsmon-ran"), ("filter.sh", "filter-ran"), ("gpg.sh", "gpg-ran")):
+            hook = c.home / name
+            hook.write_text(f"#!/bin/sh\necho ran >> {home}/{marker}\ncat\nexit 0\n")
+            hook.chmod(0o755)
+        for key, value in (("core.fsmonitor", f"{home}/fsmon.sh"), ("filter.leak.clean", f"{home}/filter.sh"),
+                           ("filter.leak.smudge", "cat"), ("commit.gpgsign", "true"), ("gpg.program", f"{home}/gpg.sh")):
+            subprocess.run(["git", "-C", str(c.work), "config", key, value], check=True, capture_output=True)
+        (c.work / ".gitattributes").write_text("* filter=leak\n")
         (c.work / "datei.txt").write_text("x")
-        return c.home / "fsmon-ran"
+        return [c.home / m for m in ("fsmon-ran", "filter-ran")]
 
-    def test_post_session_does_not_run_the_fsmonitor_of_the_agents_repo(self):
-        """M3: `git add -A` und `git rev-parse` in post_session liefen ohne -c core.fsmonitor=false."""
+    def test_post_session_does_not_run_the_fsmonitor_or_filters_of_the_agents_repo(self):
+        """M3: `git add -A` und `git rev-parse` in post_session liefen ohne Schutz vor der Konfiguration des Agenten."""
         c = self.make_chain()
-        marker = self.plant_fsmonitor(c)
+        markers = self.plant_fsmonitor(c)
         c.tool(["git", "add", "-A"], tag="control")  # Beleg: ohne Schutz läuft der Befehl des Agenten
-        self.assertTrue(marker.exists(), "der Angriff wirkt nicht: die Gegenprobe ist sinnlos")
-        marker.unlink()
+        for m in markers:
+            self.assertTrue(m.exists(), f"der Angriff wirkt nicht ({m.name}): die Gegenprobe ist sinnlos")
+            m.unlink()
         info = c.post_session("F1.a0")
-        self.assertFalse(marker.exists(), "git hat core.fsmonitor des Agenten ausgeführt")
+        for m in markers + [c.home / "gpg-ran"]:
+            self.assertFalse(m.exists(), f"git hat {m.name} des Agenten ausgeführt")
         self.assertRegex(info["head"], r"^[0-9a-f]{40}$")
 
     def test_grading_refuses_a_workdir_that_became_a_symlink(self):
@@ -305,7 +312,9 @@ class ContainerLiveTest(ChainLiveMixin, LiveMixin, unittest.TestCase):
     def test_container_is_removed_by_label_not_by_pattern(self):
         self.assertTrue(self.box.name)
         removed = sbx.remove_containers("live")
-        self.assertEqual(len(removed), 1)
+        self.assertGreaterEqual(len(removed), 1)  # die Kennung „live“ teilen sich auch parallele Läufe dieser Tests
+        left = subprocess.run(["docker", "ps", "-aq", "--filter", f"name={self.box.name}"], capture_output=True, text=True)
+        self.assertEqual(left.stdout.strip(), "")
 
 
 if __name__ == "__main__":

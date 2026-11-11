@@ -336,17 +336,57 @@ class BackendDescriptionTest(unittest.TestCase):
                 with mock.patch.object(sbx.BwrapSandbox, "bwrap_args", return_value=tampered):
                     self.assertTrue(any(missing in b for b in box.verify_runtime({})), missing)
 
-    def test_bwrap_without_disable_userns_is_recorded_not_hidden(self):
+    def test_bwrap_without_disable_userns_refuses_to_start(self):
+        """Ohne --disable-userns bliebe der User-Namensraum offen: bwrap startet dann nicht (geschlossen bei Fehler)."""
         box = sbx.make_sandbox("bwrap", make_spec(), self.dir / "b")
-        with mock.patch.object(sbx, "bwrap_supports", return_value=False):
-            self.assertNotIn("--disable-userns", box.bwrap_args("/", seccomp_fd=7))
-            self.assertEqual(box.facts_summary()["userns_disabled"], False)
+        with mock.patch.object(sbx, "bwrap_supports", return_value=False), mock.patch.object(sbx.shutil, "which", return_value="/usr/bin/bwrap"):
+            with self.assertRaisesRegex(sbx.IsolationError, "disable-userns"):
+                box._start()
+        with mock.patch.object(sbx, "bwrap_supports", return_value=True), mock.patch.object(sbx.shutil, "which", return_value="/usr/bin/bwrap"):
+            box._start()
 
-    def test_seccomp_filter_is_a_valid_bpf_program_that_refuses_unknown_architectures(self):
-        prog = sbx.seccomp_filter()
-        self.assertTrue(prog and len(prog) % 8 == 0)
-        with mock.patch("platform.machine", return_value="riscv64"), self.assertRaises(sbx.IsolationError):
-            sbx.seccomp_filter()
+    @staticmethod
+    def run_bpf(prog, arch_id, nr, arg0=0):
+        """Kleiner Interpreter für klassisches BPF (nur die Befehle des Filters) über einer seccomp_data-Struktur."""
+        import struct
+        data = struct.pack("=IIQ6Q", nr, arch_id, 0, arg0, 0, 0, 0, 0, 0)
+        insns = [struct.unpack("=HBBI", prog[k:k + 8]) for k in range(0, len(prog), 8)]
+        a, pc = 0, 0
+        while True:
+            code, jt, jf, k = insns[pc]
+            pc += 1
+            if code == 0x20:
+                a = struct.unpack_from("=I", data, k)[0]
+            elif code == 0x06:
+                return k
+            elif code == 0x15:
+                pc += jt if a == k else jf
+            elif code == 0x35:
+                pc += jt if a >= k else jf
+            elif code == 0x45:
+                pc += jt if a & k else jf
+            else:
+                raise AssertionError(f"unbekannter Befehl {code:#x}")
+
+    def test_seccomp_filter_decisions(self):
+        """Der Filter lässt Gewöhnliches durch, sperrt Namensräume und Co. und prüft clone auf CLONE_NEW*-Bits."""
+        ALLOW, KILL, EPERM, ENOSYS = 0x7FFF0000, 0x80000000, 0x00050001, 0x00050026
+        for arch, audit, plain in (("x86_64", 0xC000003E, {"read": 0, "execve": 59}), ("aarch64", 0xC00000B7, {"read": 63, "execve": 221})):
+            with mock.patch("platform.machine", return_value=arch):
+                prog = sbx.seccomp_filter()
+            run = lambda nr, arg0=0: self.run_bpf(prog, audit, nr, arg0)  # noqa: E731
+            for name, nr in plain.items():
+                self.assertEqual(run(nr), ALLOW, (arch, name))
+            for name, nr in {**sbx._SECCOMP_COMMON[arch], **sbx._SECCOMP_NEW_API}.items():
+                self.assertEqual(run(nr), EPERM, (arch, name))
+            clone = sbx._CLONE[arch]
+            self.assertEqual(run(clone, 0x00010000 | 0x100), ALLOW, "clone für Threads")
+            for flag in (0x10000000, 0x40000000, 0x20000000, 0x00020000, 0x08000000, 0x04000000, 0x02000000):
+                self.assertEqual(run(clone, 0x100 | flag), EPERM, (arch, hex(flag)))
+            self.assertEqual(run(sbx._CLONE3), ENOSYS)
+            self.assertEqual(self.run_bpf(prog, 0x40000003, 0), KILL, "fremde Architektur")
+            if arch == "x86_64":
+                self.assertEqual(run(0x40000000 | 0), KILL, "x32-Schnittstelle")
 
     def test_container_runtime_check_refuses_an_unconfined_seccomp_profile(self):
         box = sbx.make_sandbox("container", make_spec(), self.dir / "c", image="img:test")
@@ -555,6 +595,70 @@ class ChainReviewFixesTest(unittest.TestCase):
                 self.assertIn(needed, argv, argv)
         subs = {next(a for a in argv[1:] if not a.startswith("-") and "=" not in a and a != "/dev/null") for argv in gits}
         self.assertTrue({"add", "rev-parse"} <= subs, subs)
+
+    def test_the_agents_git_config_is_replaced_before_git_runs(self):
+        """filter.*.clean, gpg.program, core.pager … aus .git/config des Agenten führen Befehle aus; -c deckt nicht alle ab."""
+        c = bench.Chain("vanilla", 1, cid="gc-" + os.urandom(3).hex())
+        (c.work / ".git").mkdir(parents=True)
+        outside = Path(tempfile.mkdtemp(prefix="outside-", dir=_TMP))
+        (outside / "config").write_text("unberührt")
+        (c.work / ".git" / "config").write_text('[filter "x"]\n\tclean = touch /home/agent/leak\n[core]\n\tpager = evil\n')
+        (c.work / ".git" / "commondir").write_text(str(outside))
+        bench.reset_git_config(c.work)
+        text = (c.work / ".git" / "config").read_text()
+        self.assertEqual(text, bench.GIT_CONFIG)
+        self.assertNotIn("filter", text)
+        self.assertFalse((c.work / ".git" / "commondir").exists())
+        # config ist ein Symlink: er wird entfernt, nicht beschrieben
+        (c.work / ".git" / "config").unlink()
+        (c.work / ".git" / "config").symlink_to(outside / "config")
+        bench.reset_git_config(c.work)
+        self.assertFalse((c.work / ".git" / "config").is_symlink())
+        self.assertEqual((outside / "config").read_text(), "unberührt")
+        # .git ist ein Symlink oder eine gitfile
+        import shutil
+        shutil.rmtree(c.work / ".git")
+        (c.work / ".git").symlink_to(outside)
+        with self.assertRaises(sbx.IsolationError):
+            bench.reset_git_config(c.work)
+        (c.work / ".git").unlink()
+        (c.work / ".git").write_text(f"gitdir: {outside}\n")
+        with self.assertRaises(sbx.IsolationError):
+            bench.reset_git_config(c.work)
+        self.assertEqual((outside / "config").read_text(), "unberührt")
+
+    def test_post_session_replaces_the_config_before_the_first_git_step(self):
+        c = bench.Chain("vanilla", 1, cid="gd-" + os.urandom(3).hex())
+        (c.home / ".claude").mkdir(parents=True)
+        (c.work / ".git").mkdir(parents=True)
+        c.out.mkdir(parents=True, exist_ok=True)
+        (c.work / ".git" / "config").write_text('[filter "x"]\n\tclean = evil\n')
+        seen = []
+
+        class R:
+            stdout, stderr, rc = "abc\n", "", 0
+
+        def record(self, *cmds, **kw):
+            seen.append((c.work / ".git" / "config").read_text())
+            return [R() for _ in cmds]
+
+        with mock.patch.object(bench.Chain, "tool", record):
+            c.post_session("F1.a0")
+        self.assertEqual(seen, [bench.GIT_CONFIG])
+
+    def test_git_steps_ignore_the_global_config_and_attributes_of_the_agent_home(self):
+        self.assertIn("core.attributesFile=/dev/null", " ".join(bench.GIT))
+        self.assertIn("commit.gpgsign=false", " ".join(bench.GIT))
+        c = bench.Chain("vanilla", 1, cid="ge-" + os.urandom(3).hex())
+        boxes = []
+
+        def new_sandbox(tag, **kw):
+            boxes.append(FakeSandbox(make_spec(), c.root / "in" / tag, []))
+            return boxes[-1]
+
+        c.new_sandbox = new_sandbox
+        c.tool(["git", "status"], tag="t")
+        self.assertEqual(boxes[0].agent_envs[0]["GIT_CONFIG_GLOBAL"], "/dev/null")
 
     def test_ids_are_validated(self):
         """n4: Die Kennung landet in Pfaden, Namen und Labels."""

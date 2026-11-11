@@ -63,7 +63,11 @@ ALLOWED_HELPER = re.compile(r"^claude-(haiku-4-5|haiku-5-5|sonnet-5-5)")
 INFRA_PAT = re.compile(r"API Error|overloaded|ECONNREFUSED|ECONNRESET|Connection error|socket hang up|"
                        r"fetch failed|502|503|504|529|Request timed out|rate limit", re.I)
 # git auf Repos, die der Agent beschrieben hat, läuft nur in der Sandbox und ohne Hooks des Repos.
-GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "safe.directory=*"]
+GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null",
+       "-c", "commit.gpgsign=false", "-c", "safe.directory=*"]
+# Konfiguration eines Repos, das die Bedienung selbst angelegt hat (git init, remote add): mehr nicht.
+GIT_CONFIG = ("[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n"
+              f'[remote "origin"]\n\turl = {REMOTE}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n')
 GIT_ID = ["-c", "user.name=Dev", "-c", "user.email=dev@acme-billing.example"]
 CTX_BIN_DIR = "/opt/bench/ctx-bin"
 GOMOD_DIR = "/opt/bench/gomod"
@@ -176,6 +180,28 @@ def require_real_dirs(root, *rels):
                 raise sbx.IsolationError(f"Der Agent hat {cur} durch einen Symlink oder eine Datei ersetzt")
 
 
+def reset_git_config(work):
+    """Ersetzt .git/config des Agenten-Repos durch die Konfiguration des Harness, bevor git darauf läuft.
+    Die Konfiguration stammt vom Agenten: filter.*.clean, core.pager, core.sshCommand, gpg.program, diff.*.textconv
+    und andere Schlüssel führen Befehle aus, und -c-Schalter allein decken nicht alle ab. `.git` muss ein echtes
+    Verzeichnis sein (kein Symlink, keine gitfile); config und commondir werden entfernt, ohne einem Symlink zu folgen."""
+    git = Path(work) / ".git"
+    try:
+        mode = os.lstat(git).st_mode
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(mode):
+        raise sbx.IsolationError(f"Der Agent hat {git} durch einen Symlink oder eine Datei ersetzt")
+    for name in ("config", "config.worktree", "commondir"):
+        try:
+            os.unlink(git / name)
+        except FileNotFoundError:
+            pass
+    fd = os.open(git / "config", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(GIT_CONFIG)
+
+
 def snapshot_filter(member, dest):
     """Entpackt unsere eigenen Schnappschüsse: Pfade nur unterhalb des Ziels (auch durch bereits entpackte Symlinks
     hindurch), Hardlinks nur auf Ziele darin. Symlinks bleiben Symlinks, sie sind Text und werden nie gefolgt."""
@@ -285,7 +311,8 @@ class Chain:
         """Führt Befehle nacheinander in einer frischen Sandbox aus (git, ctx, Aufräumen)."""
         out = []
         with self.new_sandbox(tag, extra_mounts=mounts) as box:
-            env = {**box.spec.env, "PATH": self.trusted_path()}  # kein python3, git oder go aus ~/.local/bin des Agenten
+            # kein python3, git oder go aus ~/.local/bin des Agenten, und keine globale git-Konfiguration aus dessen HOME
+            env = {**box.spec.env, "PATH": self.trusted_path(), "GIT_CONFIG_GLOBAL": "/dev/null"}
             for argv in cmds:
                 r = box.exec(argv, env=env, cwd=cwd or self.iwork, timeout=timeout)
                 if check and r.rc != 0:
@@ -515,7 +542,9 @@ class Chain:
                 if base is not None:
                     user_md.write_text(base)
         info["removed_memfiles"] = removed
-        # Die Konfiguration des Repos stammt vom Agenten: ohne GIT führte git core.fsmonitor und Hooks daraus aus.
+        # Die Konfiguration des Repos stammt vom Agenten: ohne GIT führte git core.fsmonitor und Hooks daraus aus, und
+        # filter.*, gpg.program usw. gehen nur über die Ersetzung der Datei.
+        reset_git_config(self.work)
         _, _, head = self.tool([*GIT, "add", "-A"],
                                [*GIT, *GIT_ID, "commit", "-q", "--allow-empty", "-m", f"Arbeitsstand nach {tag.split('.')[0]}"],
                                [*GIT, "rev-parse", "HEAD"], tag="commit")
@@ -969,6 +998,7 @@ def regrade(cid):
             with tarfile.open(tarp) as t:
                 t.extractall(ch.root, filter=snapshot_filter)
             require_real_dirs(ch.home, "src", f"src/{P['dir']}")
+            reset_git_config(ch.work)
             patch = out / f"{r['task']}.a{r['attempt']}.patch"
             if patch.exists() and patch.read_text().strip():
                 # Der Patch kommt aus einem Verzeichnis des Harness, nur lesbar: ins HOME des Agenten wird nichts geschrieben,

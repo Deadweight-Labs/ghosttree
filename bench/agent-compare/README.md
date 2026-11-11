@@ -132,8 +132,9 @@ Sitzung beendet sind: ein mit `setsid` gestarteter Hintergrundprozess kann sie n
 Beschreibung der Sandbox (`verify_spec`) und bei Docker den gestarteten Container (`docker inspect`).
 `verify_spec` verlangt für jede Einhängung `realpath == abspath` (ein Symlink aus der Sandbox ist nie eine
 Quelle), und der Harness prüft die Verzeichnisse im HOME des Agenten unmittelbar vor jedem Einhängen
-(`require_real_dirs`). Jeder `git`-Aufruf auf einem Repo des Agenten läuft mit `core.fsmonitor=false` und
-`core.hooksPath=/dev/null`. `BENCH_BASE`, `BENCH_RUNS` und `BENCH_HIDDEN` werden beim Start aufgelöst und
+(`require_real_dirs`). Jeder `git`-Aufruf auf einem Repo des Agenten läuft mit `core.fsmonitor=false`, `core.hooksPath=/dev/null`,
+ohne Attributdatei und ohne globale Konfiguration, und `.git/config` wird vorher durch die Konfiguration des
+Harness ersetzt (`filter.*`, `gpg.program`, `core.pager` u. a. führen sonst Befehle des Agenten aus). `BENCH_BASE`, `BENCH_RUNS` und `BENCH_HIDDEN` werden beim Start aufgelöst und
 müssen selbst ohne Symlink dastehen.
 **Geschlossen bei Fehler:** Besteht eine dieser Stufen nicht, oder fehlt eine Prüfung in der Ausgabe der
 Probe, wirft der Harness `IsolationError`, bevor der Agent läuft, und die Kette bricht ab. Es gibt keinen Weg
@@ -146,10 +147,10 @@ Probe, wirft der Harness `IsolationError`, bevor der Agent läuft, und die Kette
 | Container (Standard) | `container` | festes Image mit Toolchain, Grenzen für Speicher, Prozesse und CPU, läuft auf anderen Hosts | braucht den Docker-Daemon, Image bauen und pflegen |
 | bubblewrap | `bwrap` | kein Daemon, kein root, Start in Millisekunden | Werkzeuge vom Host (`/usr`), keine Speicher- und Prozessgrenzen, der Weg steht im Protokoll |
 
-bwrap startet mit `--unshare-all`, `--disable-userns` (wenn die installierte Version es kennt; das Protokoll
-hält fest, ob) und einem Seccomp-Filter (`sandbox.seccomp_filter`: neue Namensräume, Einhängen, Module, `bpf`,
-`io_uring`, `perf`, Schlüsselbund, Uhr und Neustart sind gesperrt; nur x86_64 und aarch64, sonst startet bwrap
-nicht). Das ist weniger als ein Container: der Kernel des Hosts und seine Werkzeuge bleiben in Reichweite,
+bwrap startet mit `--unshare-all`, `--disable-userns` (kennt die installierte Version die Option nicht, startet
+bwrap nicht) und einem Seccomp-Filter (`sandbox.seccomp_filter`: neue Namensräume, Einhängen, Module, `bpf`,
+`io_uring`, `perf`, Schlüsselbund, Uhr und Neustart sind gesperrt, `clone` mit `CLONE_NEW*`-Bits gibt EPERM,
+`clone3` ENOSYS; nur x86_64 und aarch64, sonst startet bwrap nicht). Das ist weniger als ein Container: der Kernel des Hosts und seine Werkzeuge bleiben in Reichweite,
 und es gibt keine Grenzen für Speicher und Prozesse. **Bubblewrap ist für Probeläufe gedacht; gewertete Läufe
 laufen im Container.** Welcher Weg für gewertete Läufe gilt, ist eine offene Entscheidung (DEC-18, Empfehlung: Container).
 
