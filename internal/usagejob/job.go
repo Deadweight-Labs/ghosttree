@@ -4,10 +4,14 @@
 //
 // The job never holds anything up. It starts late, takes a few sessions per
 // step, pauses between steps and waits longer when nothing is due or the store
-// reports an error. Each step reads through the store's read pool and holds the
-// write lock only for the short write at its end (store.JudgeDeliveries). All
-// its state is in the database: a row is judged once, so a restart, or two
-// servers by mistake, never count a delivery twice.
+// reports an error. Each step reads through the store's read pool, one session at
+// a time under a search place that it only takes while no search waits for one
+// (Store.AcquireBackgroundSlot), and holds the write lock only for the short
+// write after each session (store.JudgeDeliveries). A session that cannot be read
+// is closed without a verdict, so it does not stop the backlog, and a step that
+// runs out of time keeps what it has written. All its state is in the database: a
+// row is judged once, so a restart, or two servers by mistake, never count a
+// delivery twice.
 package usagejob
 
 import (
@@ -107,15 +111,26 @@ func (j *Job) Run(ctx context.Context) {
 }
 
 func (j *Job) step(ctx context.Context) (store.JudgeResult, error) {
-	sctx, cancel := context.WithTimeout(ctx, orDefault(j.cfg.StepTimeout, DefaultStepTimeout))
+	timeout := orDefault(j.cfg.StepTimeout, DefaultStepTimeout)
+	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	started := time.Now()
-	res, err := j.st.JudgeDeliveries(sctx, store.JudgeOptions{MaxSessions: j.cfg.Sessions})
-	if err == nil && (res.Rows > 0 || res.GaveUp > 0) {
+	// The step stops starting sessions at half the timeout, so a slow session
+	// ends it cleanly with its progress already written, never by the timeout.
+	res, err := j.st.JudgeDeliveries(sctx, store.JudgeOptions{MaxSessions: j.cfg.Sessions, Budget: timeout / 2})
+	if res.Rows > 0 || res.GaveUp > 0 || res.Failed > 0 || res.Yielded {
 		j.log.Info("usage_judge", "sessions", res.Sessions, "rows", res.Rows, "picked_up", res.PickedUp,
-			"followed", res.Followed, "gave_up", res.GaveUp, "more", res.More, "ms", time.Since(started).Milliseconds())
+			"followed", res.Followed, "gave_up", res.GaveUp, "failed_sessions", res.Failed, "unjudged", res.Unjudged,
+			"yielded", res.Yielded, "more", res.More, "ms", time.Since(started).Milliseconds(), "error", errText(err))
 	}
 	return res, err
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func startDelay(d time.Duration) time.Duration {

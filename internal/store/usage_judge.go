@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/deliverylog"
 )
 
 // Das Urteil über eine Zustellung (REQ-645, P3 des Konzepts "Schlankes Profil und
@@ -56,6 +58,7 @@ type judgeItem struct {
 	Kind  string
 	ID    int64
 	Since string // Zustellzeit, auf die Sekunde: nur spätere Zeilen zählen
+	Via   string // Weg der Zustellung (deliverylog.Via*)
 	Title string // bei einem Ablauf der Name
 	Body  string
 }
@@ -77,10 +80,12 @@ const minTitleWords = 2
 const minRunbookName = 8
 
 var (
-	// Eine Nummer: KN-4251, #4251, knowledge/4251 (Adresse einer Wissensseite)
-	// oder ein Abruf mit knowledge_id (JSON oder Befehlszeile). Davor und danach
-	// keine Ziffer.
-	idPattern = regexp.MustCompile(`(?i)(?:\bkn-|#|/knowledge/|knowledge_id["']?\s*[:=]\s*["']?)(\d{1,9})\b`)
+	// Eine Nummer: KN-4251, knowledge/4251 (Adresse einer Wissensseite) oder ein
+	// Abruf mit knowledge_id (JSON oder Befehlszeile). Ein nacktes #4251 zählt
+	// nicht: Seit #234 heißt Wissen KN-n, und #n ist im Text eines Repos ein
+	// Pull Request oder Issue ("PR #249"); als Nummer gewertet gäbe es Treffer
+	// für Einträge, an die niemand gedacht hat.
+	idPattern = regexp.MustCompile(`(?i)(?:\bkn-|/knowledge/|knowledge_id["']?\s*[:=]\s*["']?)(\d{1,9})\b`)
 	// Ein Pfad mit Verzeichnis und einer Endung, die ein Buchstabe einleitet.
 	pathPattern = regexp.MustCompile("[A-Za-z0-9_.@~-]+(?:/[A-Za-z0-9_.@-]+)+\\.[A-Za-z][A-Za-z0-9]{0,7}\\b")
 	urlPattern  = regexp.MustCompile(`[a-z][a-z0-9+.-]*://\S+`)
@@ -106,6 +111,10 @@ type judgeTarget struct {
 type judger struct {
 	targets []*judgeTarget
 	byID    map[int64][]*judgeTarget // Wissenseinträge nach Nummer
+	// timed und untimed zählen die Handlungen des Agenten mit und ohne Zeit.
+	// Eine Zeile ohne Zeit zählt nie (after); eine Sitzung, die nur solche Zeilen
+	// hat, ist nicht beurteilbar.
+	timed, untimed int
 }
 
 func newJudger(items []judgeItem) *judger {
@@ -196,22 +205,31 @@ func agentAct(role, text string) (act, call bool) {
 // feed prüft eine Zeile. Zeilen, die nicht von der Zustellung an gelten, werden
 // je Ding übersprungen: at und Since sind Zeiten auf die Sekunde, es zählt, was
 // strikt danach steht (der Aufruf, der die Zustellung auslöste, steht in
-// derselben Sekunde davor). Ohne Zeit zählt die Zeile.
+// derselben Sekunde davor). Ohne Zeit zählt die Zeile nicht: ob sie vor oder
+// nach der Zustellung stand, ist unbekannt.
 func (j *judger) feed(l judgeLine) {
 	act, call := agentAct(l.Role, l.Text)
 	if !act {
 		return
 	}
+	if len(l.At) < 19 {
+		j.untimed++
+		return
+	}
+	j.timed++
 	ids := idsIn(l.Text)
 	var words map[string]bool
-	var lower string
+	var lower, flat string
 	for _, t := range j.targets {
 		if t.result == UsedFollowed || !after(l.At, t.item.Since) {
 			continue
 		}
 		switch t.item.Kind {
 		case "knowledge":
-			if call && t.followed(l.Text) {
+			if call && flat == "" && len(t.cmds) > 0 {
+				flat = strings.Join(strings.Fields(l.Text), " ")
+			}
+			if call && t.followed(l.Text, flat) {
 				t.result = UsedFollowed
 				continue
 			}
@@ -257,15 +275,24 @@ func (j *judger) feed(l judgeLine) {
 }
 
 // followed: ein Werkzeugaufruf nennt einen Pfad oder führt einen Befehl aus, den
-// der Eintrag nennt.
-func (t *judgeTarget) followed(callText string) bool {
-	for _, p := range t.paths {
-		if strings.Contains(callText, p) {
-			return true
+// der Eintrag nennt. flat ist der Aufruf mit zusammengefasstem Leerraum, einmal
+// je Zeile gebildet (leer, wenn kein Ding einen Befehl hat).
+//
+// Ein Pfad ist ein schwächerer Hinweis als ein Befehl: ein Agent, der die Datei
+// ohnehin bearbeitet, nennt sie auch, ohne dass der Eintrag etwas damit zu tun
+// hätte. Wurde der Eintrag zugestellt, weil ein Werkzeugaufruf einen Pfad
+// berührte (ViaPath), war der Agent schon an dieser Stelle; dort zählt ein Pfad
+// nicht als Folgen, nur Befehl, Nummer oder Titelwörter. Für die übrigen Wege
+// bleibt der Pfad ein Hinweis, kein Beweis (Kopf dieser Datei).
+func (t *judgeTarget) followed(callText, flat string) bool {
+	if t.item.Via != deliverylog.ViaPath {
+		for _, p := range t.paths {
+			if strings.Contains(callText, p) {
+				return true
+			}
 		}
 	}
-	if len(t.cmds) > 0 {
-		flat := strings.Join(strings.Fields(callText), " ")
+	if flat != "" {
 		for _, c := range t.cmds {
 			if strings.Contains(flat, c) {
 				return true
@@ -286,10 +313,11 @@ func (j *judger) verdicts() map[int64]int {
 
 // after sagt, ob eine Zeile von der Zustellung an zählt. Beide Zeiten sind ISO
 // 8601 in UTC; verglichen wird auf die Sekunde, weil die Zustellzeit keine
-// Bruchteile hat und der Zeitstempel der Zeile welche.
+// Bruchteile hat und der Zeitstempel der Zeile welche. Ohne eine der beiden Zeiten
+// ist die Reihenfolge unbekannt, und die Zeile zählt nicht.
 func after(at, since string) bool {
 	if len(at) < 19 || len(since) < 19 {
-		return true
+		return false
 	}
 	return at[:19] > since[:19]
 }

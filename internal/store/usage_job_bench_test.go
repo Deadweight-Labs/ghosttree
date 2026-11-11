@@ -104,7 +104,8 @@ func BenchmarkJudgeDeliveries(b *testing.B) {
 		}
 		b.StartTimer()
 		for {
-			opt := JudgeOptions{Now: now, MaxSessions: DefaultJudgeSessions}
+			opt := JudgeOptions{Now: now, MaxSessions: DefaultJudgeSessions, SlotWait: DefaultJudgeSlotWait, LineCap: judgeLineCap}
+			var jr JudgeResult
 			t0 := time.Now()
 			plans, more, err := s.reader.planJudgement(context.Background(), now.UTC(), opt)
 			if err != nil {
@@ -112,7 +113,7 @@ func BenchmarkJudgeDeliveries(b *testing.B) {
 			}
 			var vs []judgeVerdict
 			for _, p := range plans {
-				v, err := s.reader.judgeSession(context.Background(), p)
+				v, err := s.reader.judgeSession(context.Background(), p, opt, &jr)
 				if err != nil {
 					b.Fatal(err)
 				}

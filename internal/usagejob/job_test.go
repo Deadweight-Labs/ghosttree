@@ -140,3 +140,26 @@ func (b *blockingStore) JudgeDeliveries(ctx context.Context, _ store.JudgeOption
 	<-ctx.Done()
 	return store.JudgeResult{}, ctx.Err()
 }
+
+// The step gets a time budget of half its timeout, so a slow session ends the
+// step cleanly (progress written) before the timeout cuts it; a step that
+// yielded because the searches were busy is not a failure and takes the short
+// pause, not the back-off.
+func TestJobGivesTheStepABudgetAndDoesNotBackOffWhenYielding(t *testing.T) {
+	f := &fakeStore{reply: func(n int) (store.JudgeResult, error) {
+		if n < 3 {
+			return store.JudgeResult{Yielded: true, More: true}, nil
+		}
+		return store.JudgeResult{}, nil
+	}}
+	stop := run(t, f, Config{StartDelay: -1, Pause: 5 * time.Millisecond, Idle: time.Hour,
+		InitialBackoff: time.Hour, StepTimeout: 40 * time.Second})
+	defer stop()
+	waitFor(t, "three steps", func() bool { c, _ := f.snapshot(); return len(c) >= 3 })
+	calls, _ := f.snapshot()
+	for _, c := range calls {
+		if c.Budget != 20*time.Second {
+			t.Errorf("budget = %v, want half of the 40s timeout", c.Budget)
+		}
+	}
+}

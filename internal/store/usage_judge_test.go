@@ -57,15 +57,19 @@ func TestJudgeOnlyCountsWhatTheAgentDidAfterTheDelivery(t *testing.T) {
 		"a number inside another":  asst("2026-11-10T10:05:00Z", "KN-42510 und #14251 und KN-4251x"),
 		"a pull request same-ish":  asst("2026-11-10T10:05:00Z", "PR 4251 ist gemergt"),
 		"another tool's text only": {Role: "tool", Text: "no call marker KN-4251", At: "2026-11-10T10:05:00Z"},
+		// Whether a line without a time came before or after the delivery is
+		// unknown, so it never counts.
+		"a line without a time": asst("", "Wie in KN-4251 beschrieben"),
 	}
 	for name, l := range cases {
 		if got := verdictOf(t, []judgeItem{it}, l)[1]; got != UsedNone {
 			t.Errorf("%s: used = %d, want 0", name, got)
 		}
 	}
-	// A line without a time counts: the index may not know it.
-	if got := verdictOf(t, []judgeItem{it}, asst("", "Wie in #4251 beschrieben"))[1]; got != UsedPickedUp {
-		t.Errorf("line without time: used = %d, want 1", got)
+	j := newJudger([]judgeItem{it})
+	j.feed(asst("", "KN-4251"))
+	if j.untimed != 1 || j.timed != 0 {
+		t.Errorf("timed/untimed = %d/%d, want 0/1", j.timed, j.untimed)
 	}
 	// Codex writes calls as their own tool lines.
 	if got := verdictOf(t, []judgeItem{it}, judgeLine{Role: "tool", At: "2026-11-10T10:05:00Z", Text: `[tool call: context_search] {"knowledge_id": "4251"}`})[1]; got != UsedPickedUp {
@@ -134,5 +138,58 @@ func TestJudgeResultCarriesOnlyNumbers(t *testing.T) {
 	}
 	if s := fmt.Sprint(v); len(s) > 20 {
 		t.Errorf("verdicts look like more than numbers: %q", s)
+	}
+}
+
+// A bare #n is a pull request or an issue in the text of a repository ("PR #249"),
+// not an entry: only KN-n, an address of the knowledge page and knowledge_id count.
+func TestJudgeBareHashNumberIsNoEntry(t *testing.T) {
+	item := func(key, id int64) judgeItem {
+		return judgeItem{Key: key, Kind: "knowledge", ID: id, Since: t0, Title: "Eintrag ohne passende Wörter " + fmt.Sprint(id)}
+	}
+	items := []judgeItem{item(1, 249), item(2, 12), item(3, 5)}
+	for name, tc := range map[string]struct {
+		text string
+		want [3]int
+	}{
+		"a pull request":       {"Das steht in PR #249 und ist gemergt.", [3]int{0, 0, 0}},
+		"a bare number":        {"Siehe #12 und #5.", [3]int{0, 0, 0}},
+		"an entry":             {"Siehe KN-12.", [3]int{0, 1, 0}},
+		"an entry lower case":  {"siehe kn-5 dazu", [3]int{0, 0, 1}},
+		"entry beside the PR":  {"PR #249 setzt KN-12 um", [3]int{0, 1, 0}},
+		"the page address":     {"https://ghosttree.example/ui/o/r/knowledge/249", [3]int{1, 0, 0}},
+		"the lookup in a call": {`[tool call: x] {"knowledge_id": 12}`, [3]int{0, 1, 0}},
+		"a number in the PR":   {"fix #12 (#5)", [3]int{0, 0, 0}},
+	} {
+		v := verdictOf(t, items, asst("2026-11-10T10:05:00Z", tc.text))
+		if got := [3]int{v[1], v[2], v[3]}; got != tc.want {
+			t.Errorf("%s: used = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// A path that an entry names counts as followed only where the agent was not at
+// that path already: an entry delivered because a tool call touched a path (via
+// path) is not followed by the next call on the same path. A command still counts.
+func TestJudgeFollowedByPathNeedsMoreThanBeingThereAnyway(t *testing.T) {
+	body := "Siehe `internal/deliverylog/deliverylog.go`, dazu `ctx usage deliveries`."
+	mk := func(via string) []judgeItem {
+		return []judgeItem{{Key: 1, Kind: "knowledge", ID: 10, Since: t0, Via: via, Title: "Zustellung Hook", Body: body}}
+	}
+	edit := call("2026-11-10T10:01:00Z", "Edit", `{"file_path":"internal/deliverylog/deliverylog.go"}`)
+	run := call("2026-11-10T10:02:00Z", "Bash", `{"command":"ctx usage deliveries"}`)
+	for name, tc := range map[string]struct {
+		via   string
+		lines []judgeLine
+		want  int
+	}{
+		"edits the path, delivered by path":     {"path", []judgeLine{edit}, UsedNone},
+		"edits the path, delivered by briefing": {"bootstrap", []judgeLine{edit}, UsedFollowed},
+		"edits the path, delivered by prompt":   {"relevance", []judgeLine{edit}, UsedFollowed},
+		"runs the command, delivered by path":   {"path", []judgeLine{edit, run}, UsedFollowed},
+	} {
+		if got := verdictOf(t, mk(tc.via), tc.lines...)[1]; got != tc.want {
+			t.Errorf("%s: used = %d, want %d", name, got, tc.want)
+		}
 	}
 }

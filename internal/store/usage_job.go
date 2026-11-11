@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -69,8 +69,16 @@ const (
 	// Schritt je schafft, und klein genug, dass die Suche nicht von der Menge des
 	// Rückstands abhängt.
 	judgeRowCap = 800
-	// judgeLineCap begrenzt die Zeilen, die eine Sitzung dem Matcher gibt.
+	// judgeLineCap begrenzt die Zeilen, die eine Sitzung dem Matcher gibt. Was
+	// darüber liegt, bleibt ungelesen, und die Zeilen ohne Fund gelten dann als
+	// nicht beurteilt (JudgeResult.Unjudged), nicht als 0.
 	judgeLineCap = 20000
+	// DefaultJudgeBudget ist die Zeit, die ein Schritt höchstens für Sitzungen
+	// braucht. Danach hört er auf, was schon beurteilt ist, steht in der Datenbank.
+	DefaultJudgeBudget = 30 * time.Second
+	// DefaultJudgeSlotWait ist die Zeit, die der Schritt auf einen freien
+	// Suchplatz wartet, bevor er für diesmal abgibt.
+	DefaultJudgeSlotWait = time.Second
 	// judgeGiveUpRows begrenzt, wie viele Zeilen ein Schritt als nicht
 	// auswertbar abschließt.
 	judgeGiveUpRows = 500
@@ -90,7 +98,18 @@ type JudgeOptions struct {
 	GiveUp time.Duration
 	// Now ersetzt die Uhr (Tests).
 	Now time.Time
+	// Budget ist die Zeit, nach der der Schritt keine weitere Sitzung mehr
+	// beginnt; Standard DefaultJudgeBudget.
+	Budget time.Duration
+	// SlotWait ist die Wartezeit auf einen Suchplatz; Standard DefaultJudgeSlotWait.
+	SlotWait time.Duration
+	// LineCap ist die Zahl Zeilen, die eine Sitzung dem Matcher höchstens gibt;
+	// Standard judgeLineCap (Tests setzen es kleiner).
+	LineCap int
 }
+
+// errJudgeBusy sagt, dass kein Suchplatz frei wurde.
+var errJudgeBusy = errors.New("no search slot free")
 
 // JudgeResult sagt, was ein Schritt getan hat: Zahlen, kein Inhalt.
 type JudgeResult struct {
@@ -98,7 +117,16 @@ type JudgeResult struct {
 	Rows     int // beurteilte Zeilen
 	PickedUp int // davon aufgegriffen (used = 1)
 	Followed int // davon gefolgt (used = 2)
-	GaveUp   int // ohne Urteil abgeschlossen (kein Transkript, Eintrag fehlt)
+	GaveUp   int // ohne Urteil abgeschlossen (kein Transkript, Eintrag fehlt, Fehler, nicht ganz gelesen)
+	// Failed ist die Zahl Sitzungen, die sich nicht lesen ließen; ihre Zeilen sind
+	// ohne Urteil abgeschlossen (in GaveUp enthalten).
+	Failed int
+	// Unjudged ist die Zahl Zeilen ohne Fund in einer Sitzung, die nicht ganz
+	// gelesen wurde (zu lang, oder ohne Zeiten); sie sind ohne Urteil abgeschlossen,
+	// nicht mit 0 (in GaveUp enthalten, wenn die Zeile sich geändert hat).
+	Unjudged int
+	// Yielded sagt, dass der Schritt abgegeben hat, weil kein Suchplatz frei war.
+	Yielded bool
 	// More sagt, dass nach diesem Schritt noch offene Zeilen auswertbar sind.
 	More bool
 }
@@ -108,6 +136,7 @@ type JudgeResult struct {
 type judgeVerdict struct {
 	RowID       int64
 	Used        int
+	Via         string
 	Kind        string
 	ObjectID    int64
 	Project     string
@@ -172,37 +201,93 @@ func (s *Store) JudgeDeliveries(ctx context.Context, opt JudgeOptions) (JudgeRes
 	if s.reader != nil {
 		rd = s.reader
 	}
+	if opt.Budget <= 0 {
+		opt.Budget = DefaultJudgeBudget
+	}
+	if opt.SlotWait <= 0 {
+		opt.SlotWait = DefaultJudgeSlotWait
+	}
+	if opt.LineCap <= 0 {
+		opt.LineCap = judgeLineCap
+	}
 	var res JudgeResult
 	plans, more, err := rd.planJudgement(ctx, now, opt)
 	if err != nil {
 		return res, err
 	}
 	res.More = more
-	var verdicts []judgeVerdict
+	at := now.Format(time.RFC3339)
+	// Die Sitzungen laufen unter dem Zeitbudget des Schritts. Läuft es ab, hört der
+	// Schritt auf und meldet, dass noch mehr offen ist; was bis dahin beurteilt
+	// ist, steht schon in der Datenbank.
+	bctx, cancel := context.WithTimeout(ctx, opt.Budget)
+	defer cancel()
+sessions:
 	for _, p := range plans {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		vs, err := rd.judgeSession(ctx, p)
-		if err != nil {
-			return res, fmt.Errorf("judge session %d: %w", p.id, err)
+		if bctx.Err() != nil {
+			res.More = true
+			break
+		}
+		vs, err := rd.judgeSession(bctx, p, opt, &res)
+		switch {
+		case err == nil:
+		case errors.Is(err, errJudgeBusy):
+			// Hooks und Suche gehen vor: der Schritt gibt ab und kommt später wieder.
+			res.Yielded, res.More = true, true
+			break sessions
+		case ctx.Err() != nil:
+			return res, ctx.Err()
+		case bctx.Err() != nil:
+			res.More = true
+			break sessions
+		default:
+			// Eine Sitzung, die sich nicht lesen lässt, hielte sonst jeden Schritt
+			// auf: die ältesten Zustellungen kommen zuerst und es wären immer wieder
+			// dieselben. Ihre Zeilen werden ohne Urteil geschlossen.
+			res.Failed++
+			vs = vs[:0]
+			for _, v := range p.rows {
+				v.Used = UsedPending
+				vs = append(vs, v)
+			}
 		}
 		res.Sessions++
-		verdicts = append(verdicts, vs...)
+		if err := s.record(&res, vs, at); err != nil {
+			return res, err
+		}
+	}
+	if res.Yielded {
+		return res, nil
 	}
 	stale, err := rd.expiredRows(ctx, now, opt)
 	if err != nil {
 		return res, err
 	}
-	for _, id := range stale {
-		verdicts = append(verdicts, judgeVerdict{RowID: id, Used: UsedPending})
+	if len(stale) > 0 {
+		vs := make([]judgeVerdict, 0, len(stale))
+		for _, id := range stale {
+			vs = append(vs, judgeVerdict{RowID: id, Used: UsedPending})
+		}
+		if err := s.record(&res, vs, at); err != nil {
+			return res, err
+		}
 	}
-	if len(verdicts) == 0 {
-		return res, nil
+	return res, nil
+}
+
+// record trägt die Urteile einer Sitzung ein und zählt, was sich geändert hat.
+// Jede Sitzung wird für sich geschrieben, damit ein späterer Fehler oder das Ende
+// des Zeitbudgets nichts verwirft.
+func (s *Store) record(res *JudgeResult, vs []judgeVerdict, at string) error {
+	if len(vs) == 0 {
+		return nil
 	}
-	applied, err := s.applyJudgement(verdicts, now.Format(time.RFC3339))
+	applied, err := s.applyJudgement(vs, at)
 	if err != nil {
-		return res, err
+		return err
 	}
 	for _, v := range applied {
 		switch v.Used {
@@ -218,7 +303,7 @@ func (s *Store) JudgeDeliveries(ctx context.Context, opt JudgeOptions) (JudgeRes
 			res.Rows++
 		}
 	}
-	return res, nil
+	return nil
 }
 
 // planJudgement sucht die Sitzungen, die ausgewertet werden können: offene Zeilen
@@ -264,7 +349,7 @@ func (s *Store) planJudgement(ctx context.Context, now time.Time, opt JudgeOptio
 	more := n == judgeRowCap || len(seen) == opt.MaxSessions && n > 0
 	for i := range plans {
 		p := &plans[i]
-		r, err := s.db.QueryContext(ctx, `SELECT d.id, d.kind, d.object_id, d.project, d.delivered_at FROM context_delivery_log d
+		r, err := s.db.QueryContext(ctx, `SELECT d.id, d.via, d.kind, d.object_id, d.project, d.delivered_at FROM context_delivery_log d
 			WHERE d.account_id = ? AND d.session_key = ? AND `+openJudgeable+` AND d.subagent = 0 AND d.held_out = 0 AND d.delivered_at < ?
 			AND `+servedByServer+`
 			ORDER BY d.delivered_at, d.id`, p.account, p.key, settled)
@@ -273,7 +358,7 @@ func (s *Store) planJudgement(ctx context.Context, now time.Time, opt JudgeOptio
 		}
 		for r.Next() {
 			v := judgeVerdict{Account: p.account, Session: p.key}
-			if err := r.Scan(&v.RowID, &v.Kind, &v.ObjectID, &v.Project, &v.DeliveredAt); err != nil {
+			if err := r.Scan(&v.RowID, &v.Via, &v.Kind, &v.ObjectID, &v.Project, &v.DeliveredAt); err != nil {
 				r.Close()
 				return nil, false, err
 			}
@@ -316,7 +401,21 @@ func (s *Store) expiredRows(ctx context.Context, now time.Time, opt JudgeOptions
 // offenen Zeilen. Aus dem Transkript wird nur gelesen, was der Agent getan hat
 // (Rolle assistant, bei Codex auch die Werkzeugaufrufe), und nur von der ersten
 // Zustellung an; was der Matcher sieht, verlässt diese Funktion nicht.
-func (s *Store) judgeSession(ctx context.Context, p judgeSessionPlan) ([]judgeVerdict, error) {
+//
+// Die Sitzung liest über eine Lese-Verbindung, und die teilen sich Hooks und
+// Suche. Der Job nimmt deshalb für die Dauer des Lesens einen Suchplatz
+// (AcquireBackgroundSlot, nur solange keine Suche auf einen wartet) und gibt ihn
+// danach zurück; bekommt er keinen, kommt errJudgeBusy zurück und nichts wurde
+// gelesen.
+func (s *Store) judgeSession(ctx context.Context, p judgeSessionPlan, opt JudgeOptions, res *JudgeResult) ([]judgeVerdict, error) {
+	release, ok := s.AcquireBackgroundSlot(ctx, opt.SlotWait)
+	if !ok {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, errJudgeBusy
+	}
+	defer release()
 	items, missing, err := s.judgeItems(ctx, p.rows)
 	if err != nil {
 		return nil, err
@@ -348,12 +447,18 @@ func (s *Store) judgeSession(ctx context.Context, p judgeSessionPlan) ([]judgeVe
 	rows, err := s.db.QueryContext(ctx, `SELECT c.role, c.text, CASE WHEN c.text = '' THEN c.raw END, COALESCE(i.ts, '')
 		FROM session_chunks c LEFT JOIN chunk_index i ON i.session_id = c.session_id AND i.seq = c.seq
 		WHERE c.session_id = ? AND `+roles+` AND (i.ts IS NULL OR i.ts = '' OR substr(i.ts, 1, 19) >= ?)
-		ORDER BY c.seq LIMIT ?`, p.id, first[:min(19, len(first))], judgeLineCap)
+		ORDER BY c.seq LIMIT ?`, p.id, first[:min(19, len(first))], opt.LineCap+1)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	lines, cut := 0, false
 	for rows.Next() {
+		if lines == opt.LineCap {
+			cut = true
+			break
+		}
+		lines++
 		var role, text, at string
 		var raw rawcodec.Value
 		if err := rows.Scan(&role, &text, &raw, &at); err != nil {
@@ -372,11 +477,21 @@ func (s *Store) judgeSession(ctx context.Context, p judgeSessionPlan) ([]judgeVe
 		return nil, err
 	}
 	verdicts := j.verdicts()
+	// Nicht beurteilbar ist, was nicht ganz gelesen wurde: eine Sitzung länger als
+	// die Obergrenze (der Rest fehlt) und eine, deren Zeilen keine Zeit haben (ob
+	// sie nach der Zustellung stehen, ist unbekannt). Was bis dahin gefunden wurde,
+	// gilt; ein "nichts gefunden" nicht, es wird als nicht beurteilt geschlossen
+	// und nicht als 0 gezählt.
+	unjudged := cut || j.timed == 0 && j.untimed > 0
 	for _, v := range p.rows {
 		if missing[v.RowID] {
 			continue
 		}
 		v.Used = verdicts[v.RowID]
+		if unjudged && v.Used == UsedNone {
+			v.Used = UsedPending
+			res.Unjudged++
+		}
 		out = append(out, v)
 	}
 	return out, nil
@@ -440,7 +555,7 @@ func (s *Store) judgeItems(ctx context.Context, rows []judgeVerdict) ([]judgeIte
 			missing[v.RowID] = true
 			continue
 		}
-		t.Key, t.Kind, t.ID, t.Since = v.RowID, v.Kind, v.ObjectID, v.DeliveredAt
+		t.Key, t.Kind, t.ID, t.Since, t.Via = v.RowID, v.Kind, v.ObjectID, v.DeliveredAt, v.Via
 		items = append(items, t)
 	}
 	return items, missing, nil
