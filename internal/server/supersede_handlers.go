@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -40,11 +41,11 @@ func (a *api) checkSupersedable(w http.ResponseWriter, r *http.Request, k store.
 			return false
 		}
 		if old.Status != "active" && old.Status != "stale" {
-			writeCoded(w, http.StatusConflict, "not_current", fmt.Sprintf("#%d is %s: nothing to supersede", id, old.Status))
+			writeCoded(w, http.StatusConflict, "not_current", fmt.Sprintf("%s is %s: nothing to supersede", knref.Format(id), old.Status))
 			return false
 		}
 		if !old.Scope.Same(k.Scope) {
-			writeCoded(w, http.StatusBadRequest, "scope_mismatch", fmt.Sprintf("#%d is %s, the new entry is %s: the replacement needs exactly the scope of the old entry (move one of them first)", id, old.Scope.Label(), k.Scope.Label()))
+			writeCoded(w, http.StatusBadRequest, "scope_mismatch", fmt.Sprintf("%s is %s, the new entry is %s: the replacement needs exactly the scope of the old entry (move one of them first)", knref.Format(id), old.Scope.Label(), k.Scope.Label()))
 			return false
 		}
 	}

@@ -22,7 +22,7 @@ import (
 // (Pitfall #846). Was wirklich Pflicht ist, prüft der Handler.
 
 type CoordSendInput struct {
-	Body string `json:"body" jsonschema:"what you want to say. Write @name to address a person or agent of the room (a display name, a short name such as claude-anna, or an unambiguous start of one): the server resolves it, and a name that fits several is refused with the candidates, so nothing reaches the wrong one. Name the ghosttree objects you mean — a message that says REQ-350 or knowledge #2071 is still worth something in six months; 'the auth thing is done' is not"`
+	Body string `json:"body" jsonschema:"what you want to say. Write @name to address a person or agent of the room (a display name, a short name such as claude-anna, or an unambiguous start of one): the server resolves it, and a name that fits several is refused with the candidates, so nothing reaches the wrong one. Name the ghosttree objects you mean — a message that says REQ-350 or knowledge KN-2071 is still worth something in six months; 'the auth thing is done' is not"`
 	Room string `json:"room,omitempty" jsonschema:"project (default — everyone working in this repository) or machine (everyone on this computer, including agents with no repository)"`
 	// ReplyTo hält einen Gesprächsfaden zusammen, ohne dass daraus ein
 	// dauerhafter Thread wird. Spec §A2: ein spontaner Austausch braucht

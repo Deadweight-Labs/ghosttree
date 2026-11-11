@@ -135,6 +135,31 @@ for (const [name, text] of Object.entries(slow)) {
   }
 }
 
+// "#231" is a number the server decides on (ui-md.js only marks it); on the page of a
+// repository the mark also says it may be that repository's pull request. KN-n is
+// a knowledge entry and needs no decision.
+{
+  const r = (t) => html(md.render(t, {}));
+  const eq = (t, want) => { const got = r(t); if (got !== want) fail(`${JSON.stringify(t)}: ${got} != ${want}`); };
+  globalThis.__repo = "";
+  eq("see #231.", '<p>see <span data-maybe="KN-231">#231</span>.</p>');
+  globalThis.__repo = "github.com/x/y";
+  eq("see #231.", '<p>see <span data-maybe="KN-231" data-pr="231">#231</span>.</p>');
+  eq("(#7) and #8", '<p>(<span data-maybe="KN-7" data-pr="7">#7</span>) and <span data-maybe="KN-8" data-pr="8">#8</span></p>');
+  // not a reference: part of a word, an address, an entity, a heading mark, code
+  eq("a#5 b&#5 c/#5 d-#5", "<p>a#5 b&amp;#5 c/#5 d-#5</p>");
+  eq("`#5`", "<p><code>#5</code></p>");
+  eq("[#5](/p)", '<p><a href="/p">#5</a></p>');
+  for (const repo of ["", "github.com/x/y"]) {
+    globalThis.__repo = repo;
+    eq("see KN-1970.", '<p>see <span class="ref" data-ref="KN-1970"></span>.</p>');
+    eq("KN-12, KN-15", '<p><span class="ref" data-ref="KN-12"></span>, <span class="ref" data-ref="KN-15"></span></p>');
+    eq("REQ-5 and KN-5", '<p><a class="ref" data-ref="REQ-5" href="/ui/requests/5"></a> and <span class="ref" data-ref="KN-5"></span></p>');
+    eq("XKN-5 KN-5x KN- KN-5-a kn-5", "<p>XKN-5 KN-5x KN- KN-5-a kn-5</p>");
+  }
+  globalThis.__repo = "";
+}
+
 if (failures.length) {
   console.error(failures.join("\n"));
   process.exit(1);

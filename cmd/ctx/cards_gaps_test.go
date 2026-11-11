@@ -73,9 +73,9 @@ func TestPackageKnowledgeRunbookPresetAndSessionCommandsPrintTheCard(t *testing.
 		t.Fatal(err)
 	}
 	code, out = painTaskRun(t, "knowledge", "show", itoa(kid))
-	have("knowledge show", code, out, "Knowledge #1: Merke", "link: "+base+"/knowledge/1")
+	have("knowledge show", code, out, "Knowledge KN-1: Merke", "link: "+base+"/knowledge/1")
 	code, out = painTaskRun(t, "knowledge", "retire", itoa(kid), "--reason", "stimmt nicht mehr")
-	have("knowledge retire", code, out, "retired #1", "Knowledge #1", "link: "+base+"/knowledge/1")
+	have("knowledge retire", code, out, "retired KN-1", "Knowledge KN-1", "link: "+base+"/knowledge/1")
 
 	code, out = painTaskRun(t, "search", "--project", cliHere, "--save", "pr-bugs", "--line", "type:bug pr:{pr}")
 	have("search --save", code, out, "saved pr-bugs", "Search preset:pr-bugs", "link: "+root+"/presets/me/pr-bugs")

@@ -167,12 +167,12 @@ func TestGardenActionsFollowTheAccountNumberAndNotTheName(t *testing.T) {
 // three kinds that have an action.
 func TestGardenActionsRefuseATitleThatNamesOtherEntriesThanTheReference(t *testing.T) {
 	e, gardener := gardenActEnv(t)
-	number := regexp.MustCompile(`#(\d+)`)
+	number := regexp.MustCompile(`KN-(\d+)`)
 	f := fileForged(t, e, gardener, func(n *store.Knowledge) {
 		// The reference names the real entries, the title names entries that are none of them.
 		n.Title = number.ReplaceAllStringFunc(n.Title, func(m string) string {
-			id, _ := strconv.ParseInt(m[1:], 10, 64)
-			return "#" + idStr(id+1000)
+			id, _ := strconv.ParseInt(m[3:], 10, 64)
+			return "KN-" + idStr(id+1000)
 		})
 	})
 	f.refused(t, e, "a title that names other entries")
@@ -185,7 +185,7 @@ func TestGardenActionsCheckTheTitleAgainstTheReferenceOnItsOwn(t *testing.T) {
 	real := gardenEntry(t, e.St, shellProject, "pitfall", "Der echte Pitfall", "trusted")
 	other := gardenEntry(t, e.St, shellProject, "pitfall", "Ein ganz anderer Pitfall", "trusted")
 	note := garden.CoverProposal(shellProject, garden.Cover{Entry: garden.Entry{ID: real, Title: "Der echte Pitfall"}, Kind: garden.CoverUntestable, Reason: "Eine Eigenschaft des Werkzeugs."})
-	note.Title = "[Gärtner] Nicht testbar? #" + idStr(other) + ": Ein ganz anderer Pitfall"
+	note.Title = "[Gärtner] Nicht testbar? KN-" + idStr(other) + ": Ein ganz anderer Pitfall"
 	id := gardenerWrote(t, e.St, note, gardener)
 
 	offered, page := offers(t, e, id, "cover")
@@ -196,7 +196,7 @@ func TestGardenActionsCheckTheTitleAgainstTheReferenceOnItsOwn(t *testing.T) {
 		t.Error("the page does not say that the note is not vouched for")
 	}
 	// The card shows the entry the reference names, with title and link, not the title's claim.
-	if !strings.Contains(page, `href="/ui/knowledge/`+idStr(real)+`"`) || !strings.Contains(page, "#"+idStr(real)+" Der echte Pitfall") {
+	if !strings.Contains(page, `href="/ui/knowledge/`+idStr(real)+`"`) || !strings.Contains(page, "KN-"+idStr(real)+" Der echte Pitfall") {
 		t.Errorf("the card does not show the entry of the reference:\n%s", page)
 	}
 	if code := postGardenAction(t, e, e.Lead, "/ui/review/"+idStr(id)+"/cover"); code != http.StatusForbidden {
@@ -211,7 +211,7 @@ func TestGardenActionsCheckTheTitleAgainstTheReferenceOnItsOwn(t *testing.T) {
 	b := gardenEntry(t, e.St, shellProject, "pitfall", "Dienst neu", "trusted")
 	dup := garden.RelationProposal(shellProject, garden.Relation{Kind: garden.Duplicate, IDs: []int64{a, b}, Reason: "r",
 		Quotes: map[int64]string{a: "Der Dienst läuft auf dem Server", b: "Der Dienst läuft auf dem Server"}}, map[int64]string{a: "Dienst alt", b: "Dienst neu"})
-	dup.Title = "[Gärtner] Duplikat? #" + idStr(a) + " und #" + idStr(other) + ": Dienst alt"
+	dup.Title = "[Gärtner] Duplikat? KN-" + idStr(a) + " und KN-" + idStr(other) + ": Dienst alt"
 	did := gardenerWrote(t, e.St, dup, gardener)
 	if offered, _ := offers(t, e, did, "merge"); offered {
 		t.Error("a duplicate note with a foreign title offers to merge")
@@ -355,7 +355,7 @@ func TestCardShowsTheEntryTheReferenceNamesWithTitleAndLink(t *testing.T) {
 	gardenerWrote(t, e.St, garden.CoverProposal(shellProject, garden.Cover{Entry: garden.Entry{ID: p, Title: "Der Pitfall, um den es geht"}, Kind: garden.CoverSketch,
 		File: "internal/x/x_test.go", Test: "TestNewX", Steps: "eins\nzwei\ndrei"}), gardener)
 	_, page := fetchPage(t, e.Lead, e.Base+"/ui/review")
-	for _, want := range []string{"Concerns:", `href="/ui/knowledge/` + idStr(p) + `"`, "#" + idStr(p) + " Der Pitfall, um den es geht", "internal/x/x_test.go:TestNewX"} {
+	for _, want := range []string{"Concerns:", `href="/ui/knowledge/` + idStr(p) + `"`, "KN-" + idStr(p) + " Der Pitfall, um den es geht", "internal/x/x_test.go:TestNewX"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the card lacks %q", want)
 		}
@@ -379,13 +379,18 @@ func TestGardenNoteShapesAreReadStrictly(t *testing.T) {
 		"[Gärtner] Widerspruch? #3 und #4 und #5: x":   {3, 4, 5},
 		"[Gärtner] Test fehlt? #7: Pitfall: Teil":      {7},
 		"[Gärtner] Test vorhanden? #7: ein #8 im Text": {7},
+		// KN-n is the form since #N became a pull request; #n was written before.
+		"[Gärtner] Duplikat? KN-12 und KN-15: Titel":       {12, 15},
+		"[Gärtner] Widerspruch? KN-3 und #4 und KN-5: x":   {3, 4, 5},
+		"[Gärtner] Test fehlt? KN-7: Pitfall: Teil":        {7},
+		"[Gärtner] Test vorhanden? KN-7: ein KN-8 im Text": {7},
 	} {
 		got, ok := titleIDs(title)
 		if !ok || !sameIDs(got, want) {
 			t.Errorf("%q read as %v %v, want %v", title, got, ok, want)
 		}
 	}
-	for _, title := range []string{"", "[Gärtner] ohne Nummer: x", "[Gärtner] Test? #x: y", "[Gärtner] Test? #0: y", "[Gärtner] Test? #7", "[Gärtner] Test? #7 und #: y", "[Gärtner] Test? #-1: y"} {
+	for _, title := range []string{"", "[Gärtner] ohne Nummer: x", "[Gärtner] Test? #x: y", "[Gärtner] Test? #0: y", "[Gärtner] Test? #7", "[Gärtner] Test? #7 und #: y", "[Gärtner] Test? #-1: y", "[Gärtner] Test? KN-x: y", "[Gärtner] Test? KN-0: y", "[Gärtner] Test? KN-7", "[Gärtner] Test? KN-7 und 8: y", "[Gärtner] Test? KN-7 und KN-: y"} {
 		if got, ok := titleIDs(title); ok {
 			t.Errorf("%q read as %v", title, got)
 		}

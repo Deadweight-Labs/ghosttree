@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 )
 
 var kindLabel = map[string]string{
@@ -140,11 +142,11 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 			}
 			var ids []string
 			for _, id := range r.IDs {
-				ids = append(ids, fmt.Sprintf("#%d", id))
+				ids = append(ids, knref.Format(id))
 			}
 			fmt.Fprintf(w, "- %s %s: %s\n", label, strings.Join(ids, ", "), r.Reason)
 			for _, id := range r.IDs {
-				fmt.Fprintf(w, "  - #%d: \"%s\"\n", id, r.Quotes[id])
+				fmt.Fprintf(w, "  - %s: \"%s\"\n", knref.Format(id), r.Quotes[id])
 			}
 			if len(r.Evidence) > 0 {
 				fmt.Fprintf(w, "  - Belege: %s\n", strings.Join(r.Evidence, ", "))
@@ -166,7 +168,7 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 		if res.DryRun && v.Kind == NotRun {
 			kind = "Trockenlauf"
 		}
-		fmt.Fprintf(w, "## #%d %s: %s\n", v.Entry.ID, kind, v.Entry.Title)
+		fmt.Fprintf(w, "## %s %s: %s\n", knref.Format(v.Entry.ID), kind, v.Entry.Title)
 		fmt.Fprintf(w, "- Typ %s, beobachtet %s\n", v.Entry.Type, v.Entry.Since())
 		if len(v.Files) > 0 {
 			fmt.Fprintf(w, "- Dateien: %s\n", strings.Join(v.Files, ", "))
@@ -208,7 +210,7 @@ func writeCovers(w io.Writer, covers []Cover) {
 	if len(sketches) > 0 {
 		fmt.Fprintf(w, "## Testskizzen (Regressionsschutz)\nZu diesen Pitfalls gibt es keinen Test, der ihre Wiederkehr bemerken würde. Der Gärtner skizziert einen; geschrieben wird er von einem Menschen.\n")
 		for _, c := range sketches {
-			fmt.Fprintf(w, "- #%d %s\n  - Test: %s\n", c.Entry.ID, c.Entry.Title, c.TestID())
+			fmt.Fprintf(w, "- %s %s\n  - Test: %s\n", knref.Format(c.Entry.ID), c.Entry.Title, c.TestID())
 			for _, l := range strings.Split(c.Steps, "\n") {
 				fmt.Fprintf(w, "    %s\n", l)
 			}
@@ -222,9 +224,9 @@ func writeCovers(w io.Writer, covers []Cover) {
 		fmt.Fprintf(w, "## Regressionsschutz: vorhandene Tests und nicht Testbares\n")
 		for _, c := range others {
 			if c.Kind == CoverExisting {
-				fmt.Fprintf(w, "- #%d %s: %s deckt ihn ab", c.Entry.ID, c.Entry.Title, c.TestID())
+				fmt.Fprintf(w, "- %s %s: %s deckt ihn ab", knref.Format(c.Entry.ID), c.Entry.Title, c.TestID())
 			} else {
-				fmt.Fprintf(w, "- #%d %s: nicht testbar", c.Entry.ID, c.Entry.Title)
+				fmt.Fprintf(w, "- %s %s: nicht testbar", knref.Format(c.Entry.ID), c.Entry.Title)
 			}
 			if c.Reason != "" {
 				fmt.Fprintf(w, " (%s)", c.Reason)
@@ -247,7 +249,7 @@ func writeProofs(w io.Writer, res Result) {
 	}
 	fmt.Fprintf(w, "## Ledger: erfüllte Kriterien (Vorschläge)\nDer Gärtner schlägt vor, diese Kriterien als erfüllt zu vermerken. Geschlossen wird nichts; ein Mensch bestätigt jeden Vorschlag auf der Prüfseite.\n")
 	for _, p := range res.Proofs {
-		fmt.Fprintf(w, "- #%d %s, Kriterium %d: %s\n", p.Request.ID, p.Request.Title, p.Criterion.Number, shorten(p.Criterion.Description, 160))
+		fmt.Fprintf(w, "- REQ-%d %s, Kriterium %d: %s\n", p.Request.ID, p.Request.Title, p.Criterion.Number, shorten(p.Criterion.Description, 160))
 		for _, it := range p.Items {
 			fmt.Fprintf(w, "  - Beleg %s: %s", it.Kind, it.Ref)
 			if it.Detail != "" {
@@ -307,7 +309,7 @@ func writeIdle(w io.Writer, res Result) {
 			fmt.Fprintf(w, "- … und %d weitere\n", len(res.Idle)-maxIdleListed)
 			break
 		}
-		fmt.Fprintf(w, "- #%d %s: seit %d Tagen, %d offene Kriterien", r.ID, r.Title, r.Days, r.OpenCriteria)
+		fmt.Fprintf(w, "- REQ-%d %s: seit %d Tagen, %d offene Kriterien", r.ID, r.Title, r.Days, r.OpenCriteria)
 		if r.Priority != "" {
 			fmt.Fprintf(w, ", Priorität %s", shorten(r.Priority, 40))
 		}

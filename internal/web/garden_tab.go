@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -475,7 +476,7 @@ func (a *app) autoApprove(pa *store.ProjectAccess, g store.GardenSettings, note 
 		if kind != gardenKindCommit {
 			return store.GardenAuto{}, false
 		}
-		evidence := fmt.Sprintf("%s (Gärtner-Vorschlag #%d, automatisch freigegeben, Regel von %s)", ref, note.ID, by)
+		evidence := fmt.Sprintf("%s (Gärtner-Vorschlag %s, automatisch freigegeben, Regel von %s)", ref, knref.Format(note.ID), by)
 		evID, err := a.store.ReplaceVanishedEvidence(criterion, note.Scope.Project, evidence, by)
 		if err != nil {
 			return store.GardenAuto{}, false

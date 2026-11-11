@@ -3,8 +3,10 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -66,7 +68,7 @@ func renderMachine(m store.Machine) string {
 			if e.Type != "" {
 				kind += "/" + e.Type
 			}
-			fmt.Fprintf(&b, "- %s #%d (%s): %s\n", kind, e.ID, where, oneLine(e.Title))
+			fmt.Fprintf(&b, "- %s %s (%s): %s\n", kind, entryRef(e.Kind, e.ID), where, oneLine(e.Title))
 		}
 	}
 	if len(m.Events) > 0 {
@@ -119,7 +121,7 @@ func (s *Server) handleMachineShareEntry(_ context.Context, _ *mcp.CallToolReque
 	if in.Unshare {
 		verb = "taken back from"
 	}
-	msg := fmt.Sprintf("%s #%d %s %s; now shared with: %s", in.Kind, in.ID, verb, in.Org, listOrNone(shared))
+	msg := fmt.Sprintf("%s %s %s %s; now shared with: %s", in.Kind, entryRef(in.Kind, in.ID), verb, in.Org, listOrNone(shared))
 	if in.Kind == store.EntryKnowledge {
 		if k, err := s.client.KnowledgeByID(in.ID); err == nil {
 			return s.withCard(textResult(msg), s.builder().KnowledgeCard(k)), nil, nil
@@ -140,4 +142,12 @@ func (s *Server) registerMachineTools(srv *mcp.Server) {
 	additive := false
 	mcp.AddTool(srv, &mcp.Tool{Name: "machine_get", Description: "Read a machine: who owns it (a person, or an organization for shared hosts such as build servers), how you stand to it, and which organizations it is shared with and with which role. Without a name it lists the machines that concern you. A machine you have no part in answers like one that does not exist. The page also lists the knowledge and runbooks that name this machine and that you may read: those of a project through your role in the project (knowledge about running a repository on this machine), those without a project only as owner of the machine or when shared with your organization. Search them with context_search machine=<name>. Sharing a machine with an organization is done by a person in the web UI; this tool only reads.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleMachineGet)
 	mcp.AddTool(srv, &mcp.Tool{Name: "machine_share_entry", Description: "Share one knowledge entry or runbook that has a machine scope with an organization, or take it back. Machine knowledge is private to the machine's owner until it is shared this way, and only into organizations a person has already shared the machine with (web UI). Only the owner of the machine (for organization machines a maintainer) may do it, and only for entries whose author may still vouch for the machine. To write an entry shared from the start, pass share_with_orgs to context_remember.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleMachineShareEntry)
+}
+
+// entryRef names a shareable entry: a knowledge entry as KN-n, a runbook by its number.
+func entryRef(kind string, id int64) string {
+	if kind == store.EntryKnowledge {
+		return knref.Format(id)
+	}
+	return "#" + strconv.FormatInt(id, 10)
 }

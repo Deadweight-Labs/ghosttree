@@ -98,7 +98,7 @@ func TestSearchHitStaysCompactAndNamesTheWayToTheFullText(t *testing.T) {
 	if !strings.Contains(got, "knowledge_id") {
 		t.Errorf("the hit does not say how to read the whole entry: %.400s", got)
 	}
-	if !strings.Contains(got, "#"+strconv.FormatInt(id, 10)) {
+	if !strings.Contains(got, "KN-"+strconv.FormatInt(id, 10)) {
 		t.Errorf("the hit does not carry the id needed to ask for it: %.400s", got)
 	}
 }

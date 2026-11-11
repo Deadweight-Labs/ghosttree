@@ -94,7 +94,7 @@ func TestGardenProposesCriteriaAndWritesDescriptionsAfterCheckingThem(t *testing
 	if len(st.written) != 1 || byRef["gardener:criterion:1:10"].Title == "" {
 		t.Fatalf("wrote %d notes: %+v", len(st.written), st.written)
 	}
-	if k := byRef["gardener:criterion:1:10"]; !strings.Contains(k.Body, "Beleg: commit "+head[:12]) || k.Title != "[Gärtner] Erfüllt? #1 Kriterium 1: Erstes Kriterium" {
+	if k := byRef["gardener:criterion:1:10"]; !strings.Contains(k.Body, "Beleg: commit "+head[:12]) || k.Title != "[Gärtner] Erfüllt? REQ-1 Kriterium 1: Erstes Kriterium" {
 		t.Errorf("criterion note:\n%s\n%s", k.Title, k.Body)
 	}
 	// The file the (root) merge brought and its directory are described by the
@@ -118,7 +118,7 @@ func TestGardenProposesCriteriaAndWritesDescriptionsAfterCheckingThem(t *testing
 		t.Errorf("file description = %+v", g)
 	}
 	// The invented evidence proposes nothing, and the report names it.
-	for _, want := range []string{"Kriterium 11 von #1: kein gültiger Beleg, nichts vorgeschlagen", "definiert keinen Test", "keine versionierte Datei", "kein Commit",
+	for _, want := range []string{"Kriterium 11 von REQ-1: kein gültiger Beleg, nichts vorgeschlagen", "definiert keinen Test", "keine versionierte Datei", "kein Commit",
 		"## Ledger: erfüllte Kriterien (Vorschläge)", "## Beschreibungen (Ghosts)", "1 criteria proposed as met", "2 descriptions written by the gardener"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the output lacks %q:\n%s", want, out.String())
@@ -208,7 +208,7 @@ func TestGardenListsIdleRequestsFromDataAloneInADryRunAndInApiMode(t *testing.T)
 	if code := runGardenAgent(st, gardenRepo(t), gardenProject, opts, gardenPrice, "", &out); code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out.String())
 	}
-	for _, want := range []string{"## Liegengeblieben", "- #5 Seit Wochen still: seit 111 Tagen, 1 offene Kriterien"} {
+	for _, want := range []string{"## Liegengeblieben", "- REQ-5 Seit Wochen still: seit 111 Tagen, 1 offene Kriterien"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the dry run lacks %q:\n%s", want, out.String())
 		}
@@ -231,7 +231,7 @@ func TestGardenListsIdleRequestsFromDataAloneInADryRunAndInApiMode(t *testing.T)
 	if code := runGardenCheck(st, gardenRepo(t), gardenProject, opts, m, gardenPrice, "", &out); code != 0 {
 		t.Fatalf("api mode exit %d:\n%s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "- #5 Seit Wochen still") {
+	if !strings.Contains(out.String(), "- REQ-5 Seit Wochen still") {
 		t.Errorf("api mode has no list of idle requests:\n%s", out.String())
 	}
 	// Off by --idle-days 0: no section, and the requests are not even read.

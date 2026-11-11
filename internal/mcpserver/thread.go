@@ -20,7 +20,7 @@ import (
 const defaultThreadPosts = 20
 
 type ThreadOpenInput struct {
-	Title string `json:"title" jsonschema:"the question this thread is about, as a title someone will search for in six months. 'Does pitfall #846 still hold after the parser change?' — not 'parser'"`
+	Title string `json:"title" jsonschema:"the question this thread is about, as a title someone will search for in six months. 'Does pitfall KN-846 still hold after the parser change?' — not 'parser'"`
 	// Alle weiteren Felder optional, deshalb omitempty (#846).
 	Question   string `json:"question,omitempty" jsonschema:"the leading question in full, if the title is too short to carry it"`
 	First      string `json:"first_post,omitempty" jsonschema:"your opening contribution — what you already know or suspect"`

@@ -71,7 +71,7 @@ func TestMachineToolsReadAndShareEntries(t *testing.T) {
 	w := newMachineWorld(t)
 	// Ein Eintrag über die Maschine, zunächst privat.
 	got := wireText(t, w.alice, "context_remember", map[string]any{"type": "note", "title": "Runner-Cache liegt unter /var/cache", "body": "cache entry", "scope_hint": "machine"})
-	mustHave(t, "remember machine entry", got, "stored #1", "[note|machine:build-1]")
+	mustHave(t, "remember machine entry", got, "stored KN-1", "[note|machine:build-1]")
 	if strings.Contains(wireText(t, w.lena, "context_search", map[string]any{"query": "Runner-Cache", "machine": "build-1"}), "Runner-Cache") {
 		t.Fatal("a private machine entry reached a colleague")
 	}
@@ -100,7 +100,7 @@ func TestMachineToolsReadAndShareEntries(t *testing.T) {
 		}
 	}
 	got = wireText(t, w.alice, "machine_share_entry", map[string]any{"kind": "knowledge", "id": 1, "org": "dw"})
-	mustHave(t, "machine_share_entry", got, "knowledge #1 shared with dw", "now shared with: dw", "Knowledge #1: Runner-Cache liegt unter /var/cache")
+	mustHave(t, "machine_share_entry", got, "knowledge KN-1 shared with dw", "now shared with: dw", "Knowledge KN-1: Runner-Cache liegt unter /var/cache")
 	mustHave(t, "member search", wireText(t, w.lena, "context_search", map[string]any{"query": "Runner-Cache", "machine": "build-1"}), "Runner-Cache")
 	if strings.Contains(wireText(t, w.gus, "context_search", map[string]any{"query": "Runner-Cache", "machine": "build-1"}), "Runner-Cache") {
 		t.Fatal("a stranger finds a shared machine entry")
@@ -147,21 +147,21 @@ func TestMachineGetListsProjectEntriesThroughTheProjectRole(t *testing.T) {
 	w.shareMachine(t, store.ShareRead)
 
 	got := wireText(t, w.alice, "context_remember", map[string]any{"type": "note", "title": "Deploy of y on build-1", "body": "run deploy.sh", "scope_hint": "project", "machine": "build-1"})
-	mustHave(t, "remember project plus machine", got, "stored #1", "machine:build-1", project)
+	mustHave(t, "remember project plus machine", got, "stored KN-1", "machine:build-1", project)
 	got = wireText(t, w.alice, "context_remember", map[string]any{"type": "note", "title": "Runner users of build-1", "body": "users", "scope_hint": "machine"})
-	mustHave(t, "remember machine only", got, "stored #2", "[note|machine:build-1]")
+	mustHave(t, "remember machine only", got, "stored KN-2", "[note|machine:build-1]")
 	if got, failed := callTool(t, connect(t, w.alice), "context_remember", map[string]any{"type": "note", "title": "bad", "body": "b", "scope_hint": "project", "machine": "build-1", "share_with_orgs": []string{"dw"}}); !failed {
 		t.Errorf("an entry with a project was shared with an organization: %s", got)
 	}
 
 	// The owner sees both on the machine page, the project one with its project.
 	got = wireText(t, w.alice, "machine_get", map[string]any{"name": "build-1"})
-	mustHave(t, "owner machine page", got, "entries that name this machine", "knowledge/note #1 (project "+project+")", "knowledge/note #2 (no project)")
+	mustHave(t, "owner machine page", got, "entries that name this machine", "knowledge/note KN-1 (project "+project+")", "knowledge/note KN-2 (no project)")
 
 	// lena reaches the machine through the share, but has no role in the project:
 	// the project entry is not on her page, and the private machine entry is not either.
 	got = wireText(t, w.lena, "machine_get", map[string]any{"name": "build-1"})
-	if strings.Contains(got, "#1") || strings.Contains(got, "#2") || strings.Contains(got, "Deploy of y") {
+	if strings.Contains(got, "#1") || strings.Contains(got, "KN-2") || strings.Contains(got, "Deploy of y") {
 		t.Errorf("a colleague without a project role reads entries on the machine page: %s", got)
 	}
 	// With a role in the project, the entry is on her page (and only that one).
@@ -169,8 +169,8 @@ func TestMachineGetListsProjectEntriesThroughTheProjectRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = wireText(t, w.lena, "machine_get", map[string]any{"name": "build-1"})
-	mustHave(t, "member machine page", got, "knowledge/note #1 (project "+project+")")
-	if strings.Contains(got, "#2") {
+	mustHave(t, "member machine page", got, "knowledge/note KN-1 (project "+project+")")
+	if strings.Contains(got, "KN-2") {
 		t.Errorf("the private machine entry is on a colleague's page: %s", got)
 	}
 	// Her session of the project, on another machine, reads the entry.

@@ -199,7 +199,7 @@ func TestCriterionNoteCarriesTheProofAndItsTargetAsNumbers(t *testing.T) {
 	if k.Harness != "gardener" || k.Confidence != "staged" || k.Status != "active" || k.Type != "note" || k.SessionRef != "gardener:criterion:457:1793" {
 		t.Errorf("note = %+v", k)
 	}
-	if k.Title != "[Gärtner] Erfüllt? #457 Kriterium 6: Erfüllte Kriterien werden mit Nachweis vorgeschlagen" {
+	if k.Title != "[Gärtner] Erfüllt? REQ-457 Kriterium 6: Erfüllte Kriterien werden mit Nachweis vorgeschlagen" {
 		t.Errorf("title = %q", k.Title)
 	}
 	want := []string{"commit 4584fb7a1c2d (#149)", "test cmd/x_test.go:TestX"}

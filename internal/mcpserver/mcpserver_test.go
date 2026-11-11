@@ -427,7 +427,7 @@ func TestDecisionWithoutReasoningGetsHint(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := text(t, res)
-	if !strings.Contains(got, "stored #") {
+	if !strings.Contains(got, "stored KN-") {
 		t.Errorf("hint must not replace the confirmation: %s", got)
 	}
 	for _, want := range []string{"why", "alternatives", "tradeoffs"} {

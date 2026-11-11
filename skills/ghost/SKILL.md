@@ -15,7 +15,7 @@ to that very page. Never put a token or a one-time login into a link.
 Give the human the page of one object.
 
 - `<what>` is `REQ-596`, `REQ-596#2` (a criterion), `TASK-124`, `PAIN-57`,
-  `IDEA-3`, `PKG-1`, `#4295` (knowledge), `pr:155`, `commit:2d950bf`,
+  `IDEA-3`, `PKG-1`, `KN-4295` (knowledge), `pr:155`, `commit:2d950bf`,
   `room:12`, `session:ID`, `doc:NAME`, `runbook:NAME`, `branch:NAME`,
   `preset:pr-ergebnis 155`, a repository path, a search line such as
   `is:open label:bug`, or `inbox`.
