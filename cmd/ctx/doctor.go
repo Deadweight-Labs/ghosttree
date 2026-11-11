@@ -195,6 +195,11 @@ func selectedSharedChecks(selected map[string]bool, home string) []installer.Che
 			cfgChecks := configChecks()
 			if len(cfgChecks) > 1 {
 				checks = append(checks, cfgChecks[1])
+				if cfgChecks[1].OK {
+					if cfg, err := config.Load(); err == nil {
+						checks = append(checks, serverVersionCheck(cfg))
+					}
+				}
 			} else {
 				checks = append(checks, installer.Check{Name: "server reachable", Detail: "not checked without client config", Fix: "run 'ctx setup --server <url> --token <token>'"})
 			}

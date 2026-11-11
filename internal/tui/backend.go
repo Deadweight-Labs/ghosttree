@@ -152,12 +152,17 @@ const (
 // Server is one entry of the server list. Today there is one; with server
 // profiles (REQ-610) there will be several, and the list takes them as is.
 type Server struct {
-	Name      string
-	URL       string
-	Default   bool
-	Token     TokenState
-	Account   string
-	Machine   string
+	Name    string
+	URL     string
+	Default bool
+	Token   TokenState
+	Account string
+	Machine string
+	// Since is when the stored login was made and Expires when it stops
+	// working; both stay zero when the server does not say (an older server),
+	// and Expires is zero for a login that does not expire.
+	Since     time.Time
+	Expires   time.Time
 	Checked   bool
 	Reachable bool
 	Version   string

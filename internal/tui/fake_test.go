@@ -27,7 +27,9 @@ type fakeBackend struct {
 	restarted int
 	loginErr  error
 	waitErr   error
-	waitBlock bool // WaitLogin waits until it is cancelled
+	waitBlock bool      // WaitLogin waits until it is cancelled
+	expires   time.Time // when the fake's login stops working; zero = never
+	oldServer bool      // the server says nothing about the login's times
 
 	known     map[string]bool // projects the server knows and shows
 	checkErr  error
@@ -228,7 +230,11 @@ func (f *fakeBackend) Local() Local {
 }
 
 func (f *fakeBackend) CheckServer(ctx context.Context, url string) Server {
-	return Server{URL: url, Default: true, Token: TokenValid, Account: "robin", Machine: "workstation", Checked: true, Reachable: true, Version: "0.2.0", Channel: "dev"}
+	s := Server{URL: url, Default: true, Token: TokenValid, Account: "robin", Machine: "workstation", Checked: true, Reachable: true, Version: "0.2.0", Channel: "dev"}
+	if !f.oldServer {
+		s.Since, s.Expires = time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC), f.expires
+	}
+	return s
 }
 
 func (f *fakeBackend) Resolve(ctx context.Context, input string) (links.Card, error) {

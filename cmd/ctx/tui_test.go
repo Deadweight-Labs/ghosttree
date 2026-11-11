@@ -136,6 +136,11 @@ func TestCLIBackendLoginWritesConfigAndNamesTheAccount(t *testing.T) {
 	if s.Token != tui.TokenValid || s.Account != "alice" || !s.Reachable {
 		t.Fatalf("server %+v", s)
 	}
+	// Since when the login exists comes from the server; this device login
+	// does not expire.
+	if s.Since.IsZero() || time.Since(s.Since) > time.Minute || time.Since(s.Since) < -time.Minute || !s.Expires.IsZero() {
+		t.Fatalf("login since %v expires %v", s.Since, s.Expires)
+	}
 	local := b.Local()
 	if len(local.Servers) != 1 || local.Servers[0].Token != tui.TokenStored || local.Channel != "dev" || local.ProfileURL != url+"/ui/profile" {
 		t.Fatalf("local %+v", local)

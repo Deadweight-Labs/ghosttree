@@ -351,6 +351,11 @@ type whoAmIResponse struct {
 	Email string `json:"email,omitempty"`
 	Admin bool   `json:"admin"`
 	State string `json:"state,omitempty"`
+	// TokenCreatedAt und TokenExpiresAt sagen, seit wann die Anmeldung dieses
+	// Tokens besteht und bis wann sie gilt (RFC 3339; leer = läuft nicht ab).
+	// Sie fehlen bei einer Websitzung, die kein Token hat. Nie das Token selbst.
+	TokenCreatedAt string `json:"token_created_at,omitempty"`
+	TokenExpiresAt string `json:"token_expires_at,omitempty"`
 }
 
 func (a *api) whoAmI(r *http.Request) whoAmIResponse {
@@ -358,6 +363,11 @@ func (a *api) whoAmI(r *http.Request) whoAmIResponse {
 	out := whoAmIResponse{Principal: p}
 	if acct, err := a.st.AccountByPrincipalID(p.ID); err == nil {
 		out.Email, out.Admin, out.State = acct.Email, acct.Admin, acct.State
+	}
+	if p.TokenID != 0 {
+		if tok, err := a.st.TokenByID(p.TokenID); err == nil {
+			out.TokenCreatedAt, out.TokenExpiresAt = tok.CreatedAt, tok.ExpiresAt
+		}
 	}
 	return out
 }
