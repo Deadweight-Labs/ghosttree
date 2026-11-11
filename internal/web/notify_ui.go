@@ -9,8 +9,17 @@ import (
 
 // Benachrichtigungen im Profil (P13.6). ghosttree hat keinen Versandweg außerhalb
 // der Oberfläche, deshalb gibt es je Art genau einen Schalter: ob sie im Posteingang
-// steht und an der Glocke zählt. Eine Art, die ein Konto abschaltet, fehlt dort
-// ganz; sie bleibt in ihrer Quelle (Raum, Aufgabe, Issue) lesbar.
+// steht. Eine Art, die ein Konto abschaltet, fehlt dort ganz; sie bleibt in ihrer
+// Quelle (Raum, Aufgabe, Issue) lesbar.
+//
+// Die Glocke zählt nur, was auf die Person wartet (waitingFor): Fragen, Entscheidungen,
+// Aufgaben und die Notizen des Gärtners. Für diese vier Arten folgt sie dem Schalter,
+// denn waitingFor lässt die abgeschalteten Arten weg (notifyKeep). Erwähnungen zählt
+// sie nie, weder an noch aus: sie stehen nur im Abschnitt "Erwähnt" des Posteingangs
+// (inboxMentions). Sie an der Glocke mitzuzählen hieße, auf jeder Seite die Räume des
+// Kontos samt ungelesenen Erwähnungen zu lesen (RoomSummaries), nur für eine Zahl im
+// Kopf; das steht in keinem Verhältnis. Darum nennt der Schalter der Erwähnungen
+// auch nur den Posteingang (notify.aria_inbox).
 
 // notifyKeys sind die Texte der Arten.
 var notifyKeys = map[string]string{store.NotifyMention: "notify.mention", store.NotifyQuestion: "notify.question",
@@ -44,8 +53,13 @@ func (a *app) notifyOff(r *http.Request) map[string]bool {
 
 // notifyKeep drops the rows of the kinds the viewer switched off.
 func (a *app) notifyKeep(r *http.Request, rows []forYouRow) []forYouRow {
+	// Zuerst die Zeilen: ohne sie braucht es die Schalter des Kontos nicht, und
+	// waitingFor läuft bei jedem Seitenaufruf.
+	if len(rows) == 0 {
+		return rows
+	}
 	off := a.notifyOff(r)
-	if len(off) == 0 || len(rows) == 0 {
+	if len(off) == 0 {
 		return rows
 	}
 	kept := make([]forYouRow, 0, len(rows))
@@ -74,7 +88,12 @@ func (a *app) profileNotifyRows(r *http.Request, l lang) []profileNotify {
 		if off[k] {
 			next = "1"
 		}
-		rows = append(rows, profileNotify{Kind: k, Label: label, Aria: l.msg("notify.aria", label), On: !off[k], Next: next})
+		aria := "notify.aria"
+		if k == store.NotifyMention {
+			// Erwähnungen stehen nur im Posteingang, nie an der Glocke.
+			aria = "notify.aria_inbox"
+		}
+		rows = append(rows, profileNotify{Kind: k, Label: label, Aria: l.msg(aria, label), On: !off[k], Next: next})
 	}
 	return rows
 }

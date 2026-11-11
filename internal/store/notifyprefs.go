@@ -8,7 +8,8 @@ import (
 // notifySchema: was ein Konto im Posteingang und an der Glocke sehen will. Es gibt
 // keinen Versandweg außerhalb der Oberfläche (weder E-Mail noch Web-Push); die
 // Einstellung betrifft deshalb genau das, was die Oberfläche selbst anzeigt: die
-// Zeilen des Posteingangs und die Zahl an der Glocke. Eine Art ist an, solange keine
+// Zeilen des Posteingangs und, für die Arten, die auf die Person warten, die Zahl an
+// der Glocke (Erwähnungen zählen dort nie, siehe internal/web/notify_ui.go). Eine Art ist an, solange keine
 // Zeile sie ausschaltet; gespeichert wird nur, was das Konto abgeschaltet hat.
 const notifySchema = `
 CREATE TABLE IF NOT EXISTS account_notify_off(

@@ -26,6 +26,13 @@ type fakeDetails struct {
 	runs     []map[string]any
 	status   map[string]any
 	paths    []string
+	// commitStatus lässt die Abfrage des Commits mit diesem Code scheitern; link ist
+	// der Link-Kopf der ersten Seite und tail die Antwort auf ?page=.
+	commitStatus int
+	link         string
+	tail         map[string]any
+	// expires ist der Ablauf (RFC 3339), den die Token-Antwort nennt.
+	expires string
 }
 
 func newFakeDetails(t *testing.T) *fakeDetails {
@@ -49,7 +56,11 @@ func newFakeDetails(t *testing.T) *fakeDetails {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": "itok-9"})
+		tok := map[string]string{"token": "itok-9"}
+		if f.expires != "" {
+			tok["expires_at"] = f.expires
+		}
+		_ = json.NewEncoder(w).Encode(tok)
 	})
 	record := func(r *http.Request) {
 		f.mu.Lock()
@@ -58,6 +69,17 @@ func newFakeDetails(t *testing.T) *fakeDetails {
 	}
 	mux.HandleFunc("GET /repos/{o}/{r}/commits/{sha}", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
+		if f.commitStatus != 0 {
+			http.Error(w, "no", f.commitStatus)
+			return
+		}
+		if r.URL.Query().Get("page") != "" && f.tail != nil {
+			_ = json.NewEncoder(w).Encode(f.tail)
+			return
+		}
+		if f.link != "" {
+			w.Header().Set("Link", f.link)
+		}
 		_ = json.NewEncoder(w).Encode(f.commit)
 	})
 	mux.HandleFunc("GET /repos/{o}/{r}/commits/{sha}/check-runs", func(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +150,122 @@ func TestCommitFilesWithoutTheRightIsErrPermissionMissing(t *testing.T) {
 	f.refuse["contents"] = http.StatusUnprocessableEntity
 	if _, err := f.app().CommitFiles(context.Background(), 5, "github.com/a/b", detailSHA); !errors.Is(err, ErrPermissionMissing) {
 		t.Fatalf("422 at the token: %v", err)
+	}
+}
+
+// 403 ist das fehlende Recht der Installation, 404 und 422 betreffen nur den einen
+// Commit (er kann nach einem Force-Push fehlen); so trennt der Aufrufer, ob er eine
+// Gruppe für alle abschaltet oder nur diesen Commit überspringt.
+func TestCommitFilesAndCITellAMissingRightFromAMissingCommit(t *testing.T) {
+	for _, c := range []struct {
+		status int
+		want   error
+	}{{http.StatusForbidden, ErrPermissionMissing}, {http.StatusNotFound, ErrCommitUnavailable}, {http.StatusUnprocessableEntity, ErrCommitUnavailable}} {
+		f := newFakeDetails(t)
+		f.commitStatus = c.status
+		if _, err := f.app().CommitFiles(context.Background(), 5, "github.com/a/b", detailSHA); !errors.Is(err, c.want) {
+			t.Errorf("files %d: got %v, want %v", c.status, err, c.want)
+		}
+	}
+	// Ein 404 beim Token heißt: die Installation gibt es nicht mehr, das gilt für alle Commits.
+	f := newFakeDetails(t)
+	f.refuse["contents"] = http.StatusNotFound
+	if _, err := f.app().CommitFiles(context.Background(), 5, "github.com/a/b", detailSHA); !errors.Is(err, ErrPermissionMissing) {
+		t.Errorf("404 at the token: %v", err)
+	}
+}
+
+func TestCommitFilesTotalComesFromTheLastPageWhenThereAreMorePages(t *testing.T) {
+	f := newFakeDetails(t)
+	page := func(n int) []map[string]any {
+		var files []map[string]any
+		for i := 0; i < n; i++ {
+			files = append(files, map[string]any{"filename": fmt.Sprintf("f%d.go", i), "additions": 1, "deletions": 0})
+		}
+		return files
+	}
+	f.commit = map[string]any{"stats": map[string]any{"additions": 400, "deletions": 0}, "files": page(100)}
+	f.tail = map[string]any{"files": page(37)}
+	f.link = `<` + f.srv.URL + `/repos/a/b/commits/` + detailSHA + `?page=2>; rel="next", <` + f.srv.URL + `/repos/a/b/commits/` + detailSHA + `?page=4>; rel="last"`
+	got, err := f.app().CommitFiles(context.Background(), 5, "github.com/a/b", detailSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 3*100+37 || len(got.Files) != 100 {
+		t.Fatalf("total %d (want 337), %d rows", got.Total, len(got.Files))
+	}
+	if len(f.paths) != 2 || !strings.HasSuffix(f.paths[1], "?page=4") {
+		t.Errorf("only the last page is asked one more time: %v", f.paths)
+	}
+	// Ohne Link-Kopf bleibt es bei einer Abfrage.
+	f2 := newFakeDetails(t)
+	f2.commit = map[string]any{"files": page(5)}
+	got, err = f2.app().CommitFiles(context.Background(), 5, "github.com/a/b", detailSHA)
+	if err != nil || got.Total != 5 || len(f2.paths) != 1 {
+		t.Fatalf("single page: %+v %v %v", got, err, f2.paths)
+	}
+	// Scheitert die letzte Seite, zeigt die Zahl der ersten: kein Fehler für eine Anzeige.
+	f3 := newFakeDetails(t)
+	f3.commit = f.commit
+	f3.link = f.link
+	got, err = f3.app().CommitFiles(context.Background(), 5, "github.com/a/b", detailSHA)
+	if err != nil || len(got.Files) != 100 {
+		t.Fatalf("failed tail: %+v %v", got, err)
+	}
+}
+
+func TestLastPageReadsTheLinkHeader(t *testing.T) {
+	for link, want := range map[string]int{
+		"": 0,
+		`<https://x/y?per_page=100&page=2>; rel="next"`:                                   0,
+		`<https://x/y?page=2>; rel="next", <https://x/y?page=9>; rel="last"`:              9,
+		`<https://x/y?per_page=100&page=3>; rel="last", <https://x/y?page=2>; rel="next"`: 3,
+		`<https://x/y?page=99999999999999999999>; rel="last"`:                             0,
+	} {
+		if got := lastPage(link); got != want {
+			t.Errorf("%q: got %d, want %d", link, got, want)
+		}
+	}
+}
+
+// Ein Lauf über viele Commits holt das Token einmal je Rechtesatz, nicht je Abruf.
+func TestInstallationTokenIsReusedUntilItNearsItsExpiry(t *testing.T) {
+	f := newFakeDetails(t)
+	f.commit = map[string]any{"files": []map[string]any{}}
+	f.expires = "2099-01-01T00:00:00Z"
+	app := f.app()
+	for i := 0; i < 3; i++ {
+		if _, err := app.CommitFiles(context.Background(), 5, "github.com/a/b", detailSHA); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(f.tokenReq) != 1 {
+		t.Fatalf("the token was fetched %d times, want once: %v", len(f.tokenReq), f.tokenReq)
+	}
+	// Ein anderer Rechtesatz oder eine andere Installation bekommt ein eigenes Token.
+	if _, err := app.CommitCI(context.Background(), 5, "github.com/a/b", detailSHA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.CommitFiles(context.Background(), 6, "github.com/a/b", detailSHA); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.tokenReq) != 3 {
+		t.Fatalf("other permissions or installation need their own token: %v", f.tokenReq)
+	}
+	// Ein Token ohne Ablauf oder kurz davor wird nicht aufgehoben.
+	for _, expires := range []string{"", "2000-01-01T00:00:00Z"} {
+		g := newFakeDetails(t)
+		g.commit = map[string]any{"files": []map[string]any{}}
+		g.expires = expires
+		a := g.app()
+		for i := 0; i < 2; i++ {
+			if _, err := a.CommitFiles(context.Background(), 5, "github.com/a/b", detailSHA); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(g.tokenReq) != 2 {
+			t.Errorf("expires %q: the token was kept (%d fetches)", expires, len(g.tokenReq))
+		}
 	}
 }
 

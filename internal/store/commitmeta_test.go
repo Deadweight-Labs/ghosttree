@@ -144,7 +144,7 @@ func TestCommitsNeedingDetailsListsWhatIsMissingOrStillRunning(t *testing.T) {
 	st, project := metaStore(t)
 	need := func() []string {
 		t.Helper()
-		got, err := st.CommitsNeedingDetails(project, 10)
+		got, err := st.CommitsNeedingDetails(project, 10, true, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -165,6 +165,53 @@ func TestCommitsNeedingDetailsListsWhatIsMissingOrStillRunning(t *testing.T) {
 	st.RecordCommitDetails(CommitDetailsChange{InstallationID: 99, Remote: project, SHA: metaSha, HaveCI: true, CI: ""})
 	if got := need(); len(got) != 0 {
 		t.Fatalf("no checks at all: %v", got)
+	}
+}
+
+// Fehlt der App nur ein Recht, bleibt die zugehörige Gruppe für immer leer. Fragt
+// der Aufrufer sie dann nicht mehr an, darf der Commit nicht in der Warteschlange
+// bleiben (sonst holt jeder Lauf dieselben neuesten Commits neu und die älteren
+// kommen nie dran).
+func TestCommitsNeedingDetailsFiltersEachGroupByItsOwnMarker(t *testing.T) {
+	st, project := metaStore(t)
+	need := func(files, ci bool) []string {
+		t.Helper()
+		got, err := st.CommitsNeedingDetails(project, 10, files, ci)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	// Dateien sind da, der Prüfstand fehlt, weil die App "Checks: read" nicht hat.
+	st.RecordCommitDetails(CommitDetailsChange{InstallationID: 99, Remote: project, SHA: metaSha, HaveFiles: true})
+	if got := need(true, true); len(got) != 1 {
+		t.Fatalf("with both groups the commit still lacks its checks: %v", got)
+	}
+	if got := need(true, false); len(got) != 0 {
+		t.Fatalf("without the checks group the commit is done and must leave the queue: %v", got)
+	}
+	if got := need(false, true); len(got) != 1 {
+		t.Fatalf("the checks group alone still wants it: %v", got)
+	}
+	if got := need(false, false); len(got) != 0 {
+		t.Fatalf("nothing asked, nothing listed: %v", got)
+	}
+	// Umgekehrt: nur der Prüfstand ist da, "Contents: read" fehlt.
+	st2, project2 := metaStore(t)
+	st2.RecordCommitDetails(CommitDetailsChange{InstallationID: 99, Remote: project2, SHA: metaSha, HaveCI: true, CI: CommitCISuccess})
+	if got, _ := st2.CommitsNeedingDetails(project2, 10, false, true); len(got) != 0 {
+		t.Fatalf("without the files group the commit is done: %v", got)
+	}
+	if got, _ := st2.CommitsNeedingDetails(project2, 10, true, false); len(got) != 1 {
+		t.Fatalf("the files group alone still wants it: %v", got)
+	}
+	// Eine laufende Prüfung bleibt Sache der Prüfstand-Gruppe.
+	st2.RecordCommitDetails(CommitDetailsChange{InstallationID: 99, Remote: project2, SHA: metaSha, HaveFiles: true, HaveCI: true, CI: CommitCIPending})
+	if got, _ := st2.CommitsNeedingDetails(project2, 10, true, false); len(got) != 0 {
+		t.Fatalf("a running check is none of the files group's business: %v", got)
+	}
+	if got, _ := st2.CommitsNeedingDetails(project2, 10, false, true); len(got) != 1 {
+		t.Fatalf("a running check is asked again: %v", got)
 	}
 }
 

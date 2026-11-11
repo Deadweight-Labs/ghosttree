@@ -257,18 +257,26 @@ func (s *Store) RecordCommitDetails(c CommitDetailsChange) (bool, error) {
 }
 
 // CommitsNeedingDetails nennt die Commits der PRs eines Projekts (jüngste zuerst),
-// zu denen noch Dateien oder ein Prüfstand fehlen, oder deren Prüfung beim letzten
-// Abruf noch lief: was ctx github sync-prs --commits nachholt.
-func (s *Store) CommitsNeedingDetails(project string, limit int) ([]string, error) {
+// zu denen noch etwas fehlt: was ctx github sync-prs --commits und der Webhook
+// nachholen. wantFiles fragt nach den Commits ohne Dateiliste, wantCI nach denen
+// ohne Prüfstand und nach denen, deren Prüfung beim letzten Abruf noch lief. Jede
+// Gruppe zählt nur nach ihrem eigenen *_at: darf die App eine Gruppe nicht holen
+// (Recht fehlt), fragt der Aufrufer sie nicht an, sonst stünde derselbe Commit
+// ewig vorn in der Warteschlange und verdrängte die älteren. Ohne beide Gruppen
+// ist die Antwort leer.
+func (s *Store) CommitsNeedingDetails(project string, limit int, wantFiles, wantCI bool) ([]string, error) {
 	if s.reader != nil {
-		return s.reader.CommitsNeedingDetails(project, limit)
+		return s.reader.CommitsNeedingDetails(project, limit, wantFiles, wantCI)
+	}
+	if !wantFiles && !wantCI {
+		return nil, nil
 	}
 	if limit <= 0 || limit > 2000 {
 		limit = 2000
 	}
 	rows, err := s.db.Query(`SELECT c.sha FROM git_pr_commits c LEFT JOIN git_commit_meta m ON m.project=c.project AND m.sha=c.sha
-		WHERE c.project=? AND c.in_pr=1 AND (m.sha IS NULL OR m.files_at='' OR m.ci_at='' OR m.ci='pending')
-		GROUP BY c.sha ORDER BY MAX(c.committed_at) DESC, c.sha LIMIT ?`, scopeNormalize(project), limit)
+		WHERE c.project=?1 AND c.in_pr=1 AND (m.sha IS NULL OR (?2 AND m.files_at='') OR (?3 AND (m.ci_at='' OR m.ci='pending')))
+		GROUP BY c.sha ORDER BY MAX(c.committed_at) DESC, c.sha LIMIT ?4`, scopeNormalize(project), wantFiles, wantCI, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
@@ -53,6 +54,9 @@ func TestProfileSwitchesTurnAKindOffInTheInboxAndAtTheBell(t *testing.T) {
 		t.Errorf("all five kinds start on, %d are", n)
 	}
 	mustNotContain(t, "profile", profile, "E-mail", "Browser")
+	// Mentions are only in the inbox, the bell never counts them: the switch must not claim the bell.
+	mustContain(t, "profile", profile, `aria-label="Mentions in the inbox"`)
+	mustNotContain(t, "profile", profile, "Mentions in the inbox and at the bell")
 	_, inbox := fetchPage(t, e.Member, e.Base+"/ui/inbox")
 	if !bell.MatchString(inbox) || !strings.Contains(inbox, "First thing") {
 		t.Fatal("the tasks wait before anything is switched off")
@@ -112,5 +116,18 @@ func TestProfileSwitchRefusesWhatIsNoKindAndNeedsTheToken(t *testing.T) {
 	// A guest sets their own switches too: it is their inbox.
 	if resp := notifySwitch(t, e, e.Guest, store.NotifyMention, false); resp.StatusCode != http.StatusSeeOther {
 		t.Errorf("guest -> %d", resp.StatusCode)
+	}
+}
+
+// waitingFor runs on every page; with nothing waiting the switches of the account
+// are not read at all (an app without a store would fail on the first query).
+func TestNotifyKeepDoesNotAskTheStoreWhenNothingWaits(t *testing.T) {
+	a := &app{}
+	r := httptest.NewRequest(http.MethodGet, "/ui/inbox", nil)
+	if got := a.notifyKeep(r, nil); len(got) != 0 {
+		t.Fatalf("no rows must stay no rows: %v", got)
+	}
+	if got := a.notifyKeep(r, []forYouRow{}); len(got) != 0 {
+		t.Fatalf("no rows must stay no rows: %v", got)
 	}
 }
