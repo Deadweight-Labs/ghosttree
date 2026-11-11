@@ -291,26 +291,11 @@ func (s *Store) RecordSessionGitEvents(account int64, events []SessionGitEvent) 
 	for project, list := range reportedShas {
 		var known []pullCommitAt
 		for _, sha := range uniqueStrings(list) {
-			rows, err := tx.Query(`SELECT DISTINCT sha, committed_at FROM git_pr_commits
-				WHERE project=? AND sha >= ? AND sha < ? AND committed_at != ''`, project, sha, sha+"g")
+			found, err := pullCommitsWithPrefix(tx, project, sha)
 			if err != nil {
 				return SessionGitResult{}, err
 			}
-			for rows.Next() {
-				var full, at string
-				if err := rows.Scan(&full, &at); err != nil {
-					rows.Close()
-					return SessionGitResult{}, err
-				}
-				if t, ok := parseGitTime(at); ok {
-					known = append(known, pullCommitAt{SHA: full, CommittedAt: t})
-				}
-			}
-			if err := rows.Err(); err != nil {
-				rows.Close()
-				return SessionGitResult{}, err
-			}
-			rows.Close()
+			known = append(known, found...)
 		}
 		if err := settleReported(tx, project, known); err != nil {
 			return SessionGitResult{}, err
@@ -508,71 +493,149 @@ func jsonStrings(v []string) string {
 // settleReported prüft die gemeldeten SHAs gegen Commits, die der Server aus den
 // PRs kennt, und verlängert kurze zu vollen.
 //
-// Eine gemeldete SHA ist eine Behauptung des Collectors. Kennt der Server den
-// Commit mit seiner Zeit, muss sie zum Zeitfenster des Vorgangs passen, der sie
-// gemeldet hat: ein Commit, der Stunden vor oder nach dem Aufruf entstand, kann
-// nicht aus diesem Aufruf stammen. Eine Zeile, die dem widerspricht, wird
-// verworfen, und so nimmt eine erfundene SHA keinem anderen einen Commit.
-// Passt sie, wird eine kurze SHA durch die volle ersetzt (Quelle bleibt reported).
+// Eine gemeldete SHA ist eine Behauptung des Collectors. Kennt der Server die
+// Commits, die zu ihr passen, muss mindestens einer zum Zeitfenster des Vorgangs
+// passen, der sie gemeldet hat: ein Commit, der Stunden vor oder nach dem Aufruf
+// entstand, kann nicht aus diesem Aufruf stammen. Widersprechen ALLE, wird die
+// Zeile verworfen (ab zwölf Zeichen; eine kürzere bleibt, ist aber für die Leser
+// unsichtbar, solange sie widerspricht), und eine erfundene SHA nimmt keinem
+// anderen einen Commit. Passt genau einer, wird eine kurze SHA durch die volle ersetzt (Quelle bleibt
+// reported); passen mehrere (ein Präfix von sieben Zeichen ist nicht eindeutig),
+// bleibt sie, wie sie ist. Ein Commit, der nur denselben Präfix trägt, verwirft
+// nie die Zeile einer Session, deren Commit ein anderer ist.
+//
+// commits sind die Commits, die gerade bekannt geworden sind; geprüft werden die
+// Zeilen, die zu einem von ihnen passen, gegen ALLE Commits mit ihrem Präfix.
 func settleReported(tx *sql.Tx, project string, commits []pullCommitAt) error {
 	type reported struct {
 		session int64
 		sha     string
 		seq     int
 	}
+	seen := map[reported]bool{}
+	var todo []reported
 	for _, c := range commits {
 		rows, err := tx.Query(`SELECT session_id, sha, chunk_seq FROM session_commits
 			WHERE project=? AND source='reported' AND sha IN (SELECT value FROM json_each(?))`, project, jsonStrings(shaPrefixes(c.SHA)))
 		if err != nil {
 			return err
 		}
-		var found []reported
 		for rows.Next() {
 			var r reported
 			if err := rows.Scan(&r.session, &r.sha, &r.seq); err != nil {
 				rows.Close()
 				return err
 			}
-			found = append(found, r)
+			if !seen[r] {
+				seen[r] = true
+				todo = append(todo, r)
+			}
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
 			return err
 		}
 		rows.Close()
-		for _, r := range found {
-			fits, err := reportedWindowFits(tx, r.session, r.seq, c.CommittedAt)
+	}
+	for _, r := range todo {
+		candidates, err := pullCommitsWithPrefix(tx, project, r.sha)
+		if err != nil {
+			return err
+		}
+		var fitting []pullCommitAt
+		for _, c := range candidates {
+			ok, err := reportedWindowFits(tx, r.session, r.seq, c.CommittedAt)
 			if err != nil {
 				return err
 			}
-			switch {
-			case !fits:
+			if ok {
+				fitting = append(fitting, c)
+			}
+		}
+		switch {
+		case len(candidates) == 0:
+		case len(fitting) == 0:
+			// Ein kurzer Präfix kann zu einem Commit gehören, den der Server noch
+			// nicht kennt; die Zeile bleibt, die Leser blenden sie aus
+			// (reportedContradicted), bis ein passender Commit sie bestätigt.
+			if len(r.sha) >= minDeleteSHA {
 				_, err = tx.Exec(`DELETE FROM session_commits WHERE session_id=? AND sha=? AND source='reported'`, r.session, r.sha)
-			case r.sha != c.SHA:
-				var have int
-				if err = tx.QueryRow(`SELECT COUNT(*) FROM session_commits WHERE session_id=? AND sha=?`, r.session, c.SHA).Scan(&have); err != nil {
-					return err
-				}
-				if have > 0 {
-					_, err = tx.Exec(`DELETE FROM session_commits WHERE session_id=? AND sha=?`, r.session, r.sha)
-				} else {
-					_, err = tx.Exec(`UPDATE session_commits SET sha=? WHERE session_id=? AND sha=?`, c.SHA, r.session, r.sha)
-				}
 			}
-			if err != nil {
+		case len(fitting) == 1 && r.sha != fitting[0].SHA:
+			var have int
+			if err = tx.QueryRow(`SELECT COUNT(*) FROM session_commits WHERE session_id=? AND sha=?`, r.session, fitting[0].SHA).Scan(&have); err != nil {
 				return err
 			}
+			if have > 0 {
+				_, err = tx.Exec(`DELETE FROM session_commits WHERE session_id=? AND sha=?`, r.session, r.sha)
+			} else {
+				_, err = tx.Exec(`UPDATE session_commits SET sha=? WHERE session_id=? AND sha=?`, fitting[0].SHA, r.session, r.sha)
+			}
+		}
+		if err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
+// dbQuerier ist, was *sql.DB und *sql.Tx gemeinsam können.
+type dbQuerier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// minDeleteSHA: erst ab dieser Länge ist ein Präfix eindeutig genug, dass ein
+// widersprechender Commit die gemeldete Zeile beweisbar entkräftet. Eine kürzere
+// kann zu einem Commit gehören, den der Server noch nicht kennt.
+const minDeleteSHA = 12
+
+// reportedContradicted sagt, ob eine gemeldete Zeile dem widerspricht, was der
+// Server über die Commits mit ihrem Präfix weiß: es gibt welche, und keiner passt
+// ins Fenster des Vorgangs. Eine Zeile ohne bekannten Commit widerspricht nicht.
+func reportedContradicted(q dbQuerier, project string, session int64, seq int, sha string) (bool, error) {
+	candidates, err := pullCommitsWithPrefix(q, project, sha)
+	if err != nil || len(candidates) == 0 {
+		return false, err
+	}
+	for _, c := range candidates {
+		ok, err := reportedWindowFits(q, session, seq, c.CommittedAt)
+		if err != nil || ok {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// pullCommitsWithPrefix nennt die Commits der PRs des Projekts, deren SHA mit
+// dem Präfix beginnt, mit ihrer Zeit (ohne Zeit nicht: sie lassen sich nicht
+// prüfen).
+func pullCommitsWithPrefix(q dbQuerier, project, prefix string) ([]pullCommitAt, error) {
+	rows, err := q.Query(`SELECT DISTINCT sha, committed_at FROM git_pr_commits
+		WHERE project=? AND sha >= ? AND sha < ? AND committed_at != ''`, project, prefix, prefix+"g")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []pullCommitAt
+	for rows.Next() {
+		var sha, at string
+		if err := rows.Scan(&sha, &at); err != nil {
+			return nil, err
+		}
+		if t, ok := parseGitTime(at); ok {
+			out = append(out, pullCommitAt{SHA: sha, CommittedAt: t})
+		}
+	}
+	return out, rows.Err()
+}
+
 // reportedWindowFits sagt, ob die Zeit eines Commits im Fenster des Vorgangs
 // liegt, der seine SHA gemeldet hat. Ein Vorgang, den es nicht gibt, widerspricht
 // nicht.
-func reportedWindowFits(tx *sql.Tx, session int64, seq int, at time.Time) (bool, error) {
+func reportedWindowFits(q dbQuerier, session int64, seq int, at time.Time) (bool, error) {
 	var started, ended string
-	err := tx.QueryRow(`SELECT started_at, ended_at FROM session_git_events WHERE session_id=? AND seq=? AND kind='commit'`, session, seq).Scan(&started, &ended)
+	err := q.QueryRow(`SELECT started_at, ended_at FROM session_git_events WHERE session_id=? AND seq=? AND kind='commit'`, session, seq).Scan(&started, &ended)
 	if errors.Is(err, sql.ErrNoRows) {
 		return true, nil
 	}
@@ -682,6 +745,10 @@ type windowEvent struct {
 //     und eine Zuordnung, die ein späterer zweiter Vorgang mehrdeutig macht, wird
 //     wieder zurückgenommen. Wer ein Fenster oder einen Branch erfindet, kann so
 //     fremde Arbeit nicht löschen; er kann nur seine eigene Zeile anlegen.
+//     Eine gemeldete SHA eines anderen Kontos legt ihre Zeile NEBEN die
+//     Zuordnung des Zeitfensters, sie ersetzt sie nicht: beide Quellen stehen mit
+//     ihrem Namen da (reported ist stärker als matched, das zeigt die Anzeige),
+//     und niemand kann mit einer Behauptung fremde Arbeit entfernen.
 func resolveCommit(tx *sql.Tx, project string, c pullCommitAt) (int, error) {
 	owner := instanceOwnerID(tx)
 	at := c.CommittedAt
@@ -1065,30 +1132,49 @@ func (s *Store) SessionsForCommit(project, sha string) ([]GitSessionLink, error)
 	set := linkSet{}
 	// Stufe 1: die SHA selbst, auch in ihrer kurzen Fassung und, wenn sie kurz
 	// angefragt wird, in jeder vollen, die mit ihr beginnt.
-	rows, err := s.db.Query(`SELECT session_id, source, patch_id, COALESCE(NULLIF(committed_at,''), recorded_at)
+	rows, err := s.db.Query(`SELECT session_id, source, patch_id, COALESCE(NULLIF(committed_at,''), recorded_at), sha, chunk_seq
 		FROM session_commits WHERE project=? AND (sha IN (SELECT value FROM json_each(?)) OR (sha >= ? AND sha < ?))`,
 		project, jsonStrings(shaPrefixes(sha)), sha, sha+"g")
 	if err != nil {
 		return nil, err
 	}
-	var patches []string
+	type directRow struct {
+		id                  int64
+		src, patch, at, sha string
+		seq                 int
+	}
+	var found []directRow
 	for rows.Next() {
-		var id int64
-		var src, patch, at string
-		if err := rows.Scan(&id, &src, &patch, &at); err != nil {
+		var r directRow
+		if err := rows.Scan(&r.id, &r.src, &r.patch, &r.at, &r.sha, &r.seq); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		set.add(GitSessionLink{SessionID: id, Sources: []string{src}, Commits: 1, At: at})
-		if patch != "" {
-			patches = append(patches, patch)
-		}
+		found = append(found, r)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
 		return nil, err
 	}
 	rows.Close()
+	var patches []string
+	for _, r := range found {
+		// Eine gemeldete kurze SHA, der die bekannten Commits mit diesem Präfix
+		// alle widersprechen, ist eine nicht belegte Behauptung.
+		if r.src == CommitSourceReported && len(r.sha) < 40 {
+			bad, err := reportedContradicted(s.db, project, r.id, r.seq, r.sha)
+			if err != nil {
+				return nil, err
+			}
+			if bad {
+				continue
+			}
+		}
+		set.add(GitSessionLink{SessionID: r.id, Sources: []string{r.src}, Commits: 1, At: r.at})
+		if r.patch != "" {
+			patches = append(patches, r.patch)
+		}
+	}
 	direct := len(set) > 0
 	if len(patches) > 0 {
 		rows, err := s.db.Query(`SELECT session_id, source, COALESCE(NULLIF(committed_at,''), recorded_at) FROM session_commits

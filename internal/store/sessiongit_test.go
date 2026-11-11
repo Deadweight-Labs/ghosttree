@@ -336,8 +336,11 @@ func TestAForgedReportedShaNeitherStealsNorDeletesAnotherAccountsCommit(t *testi
 	if got := f.owners(t, c); len(got) != 1 || got["s-robin"] != CommitSourceMatched {
 		t.Fatalf("a contradicted report is dropped: %v", got)
 	}
-	if got := f.owners(t, "7a8b9c0"); len(got) != 0 {
-		t.Fatalf("no short row remains: %v", got)
+	// Der Präfix ist kurz: die Zeile bleibt in der Datenbank (der echte Commit
+	// könnte noch unbekannt sein), die Leser sehen sie aber nicht.
+	links, err := f.st.SessionsForCommit(prProject, c)
+	if err != nil || len(links) != 1 || links[0].SessionID != f.robin.ID {
+		t.Fatalf("a contradicted short report is invisible: %+v %v", links, err)
 	}
 	// Anna meldet mit einem Fenster, das die Zeit enthält (so lang, wie ein
 	// Fenster sein darf): die Meldung ist plausibel und bleibt, aber Robins
@@ -346,6 +349,49 @@ func TestAForgedReportedShaNeitherStealsNorDeletesAnotherAccountsCommit(t *testi
 	got := f.owners(t, c)
 	if got["s-robin"] != CommitSourceMatched {
 		t.Fatalf("a plausible foreign report does not remove robin's assignment: %v", got)
+	}
+}
+
+// Zwei Commits desselben Präfixes: eine kurze gemeldete SHA gehört zu dem, der in
+// ihr Fenster passt; ein anderer mit demselben Präfix verwirft sie nicht (der
+// echte Commit kann noch unbekannt sein) und verlängert sie nicht.
+func TestAShortShaThatSeveralCommitsShareIsOnlyJudgedByTheOneInItsWindow(t *testing.T) {
+	f := gitFixture(t)
+	mine := "5555555" + strings.Repeat("a", 33)
+	theirs := "5555555" + strings.Repeat("b", 33)
+	f.record(t, 1, commitEvent(f.robin, 4, "2026-11-08T16:06:33.800Z", "2026-11-08T16:06:34.100Z", "feat/a", "5555555"))
+	// Erst der fremde Commit mit demselben Präfix, zu einer anderen Zeit.
+	f.pull(t, 7, "feat/a", PullCommit{SHA: theirs, CommittedAt: "2026-11-08T09:00:00Z"})
+	if got := f.owners(t, "5555555"); got["s-robin"] != CommitSourceReported {
+		t.Fatalf("a commit that only shares the prefix must not drop the row: %v", got)
+	}
+	if links, _ := f.st.SessionsForCommit(prProject, theirs); len(links) != 0 {
+		t.Fatalf("but the other commit is not robin's: %+v", links)
+	}
+	// Dann der eigene: er passt ins Fenster, die Kurzfassung wird zu seiner vollen SHA.
+	f.commits(t, 7, PullCommit{SHA: theirs, CommittedAt: "2026-11-08T09:00:00Z"}, PullCommit{SHA: mine, CommittedAt: "2026-11-08T16:06:34Z"})
+	if got := f.owners(t, mine); got["s-robin"] != CommitSourceReported {
+		t.Fatalf("upgraded to the commit in its window: %v", got)
+	}
+	if got := f.owners(t, theirs); len(got) != 0 {
+		t.Fatalf("the other commit stays without a session: %v", got)
+	}
+	if got := f.owners(t, "5555555"); len(got) != 0 {
+		t.Fatalf("no short row remains: %v", got)
+	}
+}
+
+// Ein langer Präfix ist eindeutig genug, dass ein Widerspruch die Zeile verwirft.
+func TestALongReportedShaThatContradictsTheCommitTimeIsDropped(t *testing.T) {
+	f := gitFixture(t)
+	c := "6666666666666" + strings.Repeat("c", 27)
+	f.pull(t, 7, "feat/a", PullCommit{SHA: c, CommittedAt: "2026-11-08T16:06:34Z"})
+	f.record(t, 2, commitEvent(f.anna, 2, "2026-11-08T12:00:00Z", "2026-11-08T12:00:01Z", "feat/b", c[:13]))
+	if got := f.owners(t, c[:13]); len(got) != 0 {
+		t.Fatalf("a contradicted long report is dropped: %v", got)
+	}
+	if got := f.owners(t, c); len(got) != 0 {
+		t.Fatalf("and does not turn into a claim: %v", got)
 	}
 }
 

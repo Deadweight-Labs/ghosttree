@@ -388,8 +388,9 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   session whose window and branch fit, and stays open when two sessions of one
   account on one branch share a window. An assignment is never taken back or
   taken over by another account. A hash a session reported itself wins when the
-  commit time fits its window (otherwise the report is dropped), and a short one
-  becomes the full hash once a pull request carries the commit. `GET /api/commits/{sha}/sessions` and
+  commit time fits its window (a contradicting report is dropped, or hidden while
+  it is only a short hash), and a short one becomes the full hash once a pull
+  request carries the commit. `GET /api/commits/{sha}/sessions` and
   `GET /api/pulls/{n}/sessions` name the sessions in three stages (the session that
   made the commit, the pull request whose merge commit it is, the pull request
   that carries it), so a squash merge still leads to the sessions of its branch
