@@ -171,7 +171,7 @@ func (s *Store) ftsGhostFiles(q, project string, limit int, anchor AnchorFilter,
 	if limit <= 0 {
 		limit = 20
 	}
-	where, args := `(? = '' OR g.project = ?)`, []any{ftsQuery(q), project, project}
+	where, args := `(? = '' OR g.project = ?)`, []any{project, project}
 	if af, afArgs := anchor.Where("g.anchor_id"); af != "" {
 		where += " AND " + af
 		args = append(args, afArgs...)
@@ -180,14 +180,16 @@ func (s *Store) ftsGhostFiles(q, project string, limit int, anchor AnchorFilter,
 		where += " AND " + of
 		args = append(args, ofArgs...)
 	}
-	rows, err := s.db.Query(`SELECT `+prefix(ghostCols, "g.")+`
+	return andThenOr(q, limit, limit, func(g GhostFile) int64 { return g.ID }, func(expr string) ([]GhostFile, error) {
+		rows, err := s.db.Query(`SELECT `+prefix(ghostCols, "g.")+`
 		FROM ghost_files_fts f JOIN ghost_files g ON g.id=f.rowid
 		WHERE ghost_files_fts MATCH ? AND `+where+`
-		ORDER BY f.rank LIMIT ?`, append(args, limit)...)
-	if err != nil {
-		return nil, err
-	}
-	return s.scanGhostFiles(rows)
+		ORDER BY f.rank LIMIT ?`, append(append([]any{expr}, args...), limit)...)
+		if err != nil {
+			return nil, err
+		}
+		return s.scanGhostFiles(rows)
+	})
 }
 
 // scanGhostFiles liest Zeilen von ghostCols und hängt ihnen den Anker an. Nicht

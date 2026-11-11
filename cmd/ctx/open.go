@@ -24,7 +24,7 @@ what is one of
   REQ-596          an issue          AC-596.2 or REQ-596#2   one requirement
   TASK-124         a human task      PAIN-57   a pain        IDEA-3  an idea
   FEAT-2           a feature
-  #4295            a knowledge entry PKG-1     a work package (checklist)
+  KN-4295          a knowledge entry PKG-1     a work package (checklist)
   pr:155           a pull request    commit:2d950bf          a commit
   room:12          a room thread     session:ID              a session
   doc:NAME         a document        runbook:NAME            a runbook

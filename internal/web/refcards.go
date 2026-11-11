@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -179,7 +180,7 @@ func (a *app) resolveRefCard(l lang, pa *store.ProjectAccess, now time.Time, pre
 		kd := refKinds["knowledge"]
 		// The card says what the entry is about, in words; a code block belongs on its page.
 		body, _, _ := strings.Cut(k.Body, "```")
-		card = refCardView{Key: "KN-" + strconv.FormatInt(id, 10), Long: "#" + strconv.FormatInt(id, 10), Class: kd.Class, Icon: template.HTML(kd.Icon),
+		card = refCardView{Key: "KN-" + strconv.FormatInt(id, 10), Long: knref.Format(id), Class: kd.Class, Icon: template.HTML(kd.Icon),
 			Tone: "gray", Title: links.Clean(c.Title, 140), Brief: links.Clean(body, 180), Who: k.Person, When: when(k.CreatedAt)}
 		if u, err := url.Parse(c.URL); err == nil && u.Path != "" {
 			href = u.RequestURI()

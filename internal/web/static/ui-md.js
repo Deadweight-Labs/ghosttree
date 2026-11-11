@@ -7,8 +7,10 @@
 // become markup or script. Links only to http(s) and relative addresses.
 // Supported: headings # to ######, bold, italic, strikethrough, code, code
 // blocks, lists, task lists, quotes, tables, rules, links, bare addresses,
-// @mentions, REQ-n, PAIN-n, TASK-n, IDEA-n, DEC-n, FEAT-n as pills (ui-pill.js)
-// and #1970 as the pill of a knowledge entry once the server confirms it.
+// @mentions, REQ-n, PAIN-n, TASK-n, IDEA-n, DEC-n, FEAT-n and KN-n (a knowledge
+// entry) as pills (ui-pill.js), and "#231" as in a code host: on the page of a
+// repository it is that repository's pull request 231 once the server confirms it,
+// else the knowledge entry of that number (the old spelling) or just text.
 // A box with data-md-anchors (the documents) gives its headings an address
 // "h-text" (a number after it counts up until it is free) and fills the nav
 // with data-toc with the outline.
@@ -58,16 +60,26 @@
   function pill(key) {
     return window.GTPill.ref(key, { href: refHref(key) });
   }
-  // A "#1970" may be a knowledge entry or just a number: it stays text, marked,
-  // until the server says it is one the reader may open (GTRefs.resolve).
-  function maybeKnowledge(num) {
+  // The repository the page belongs to ("github.com/owner/repo"), or "": a text on
+  // the page of a repository belongs to it. The server writes it into the body.
+  function pageRepo() {
+    var b = document.body;
+    return (b && b.getAttribute && b.getAttribute("data-repo")) || "";
+  }
+  // A "#231" is a number, nothing more, until the server says what it names
+  // (GTRefs.resolve). In a text of a repository it is first the pull request of
+  // that number (data-pr); knowledge is spelled KN-n, but the old "#1970" of a
+  // knowledge entry is still found when there is no such pull request. It stays text,
+  // marked, until then, and when the server knows nothing it was.
+  function maybeNumber(num) {
     var m = el("span", "", "#" + num);
     m.setAttribute("data-maybe", "KN-" + num);
+    if (pageRepo()) m.setAttribute("data-pr", num);
     return m;
   }
 
   var ESC = "\\`*_[]()#>@-!~|<+.";
-  var RE_REF = /(REQ|PAIN|TASK|IDEA|DEC|FEAT)-(\d+)(?![\p{L}\p{N}_-])/uy;
+  var RE_REF = /(REQ|PAIN|TASK|IDEA|DEC|FEAT|KN)-(\d+)(?![\p{L}\p{N}_-])/uy;
   var RE_KN = /#(\d{1,15})(?![\p{L}\p{N}_-])/uy;
   // A name may hold a dot or a colon between its words ("@claude:mainex"), never at its end.
   var RE_MENTION = /@[\p{L}\p{N}][\p{L}\p{N}_-]*(?:[.:][\p{L}\p{N}][\p{L}\p{N}_-]*)*/uy;
@@ -258,9 +270,9 @@
       }
       if (c === "#" && !o.noLink && (!prev || !/[\p{L}\p{N}_&#\/-]/u.test(prev))) {
         RE_KN.lastIndex = i;
-        if ((m = RE_KN.exec(src))) { flush(); parent.appendChild(maybeKnowledge(m[1])); i += m[0].length; continue; }
+        if ((m = RE_KN.exec(src))) { flush(); parent.appendChild(maybeNumber(m[1])); i += m[0].length; continue; }
       }
-      if (!o.noLink && (c === "R" || c === "P" || c === "T" || c === "I" || c === "D" || c === "F") && (!prev || !/[\p{L}\p{N}_-]/u.test(prev))) {
+      if (!o.noLink && (c === "R" || c === "P" || c === "T" || c === "I" || c === "D" || c === "F" || c === "K") && (!prev || !/[\p{L}\p{N}_-]/u.test(prev))) {
         RE_REF.lastIndex = i;
         if ((m = RE_REF.exec(src))) { flush(); parent.appendChild(pill(m[0])); i += m[0].length; continue; }
       }
@@ -569,7 +581,7 @@
   // A text the page keeps as it is (the transcript of a session, with the hits of
   // a search in it) is not Markdown, but the keys in it are still references:
   // inside a box with data-refify every "REQ-5" in a text node becomes the pill.
-  var RE_KEYS = /(REQ|PAIN|TASK|IDEA|DEC|FEAT)-(\d+)(?![\p{L}\p{N}_-])/gu;
+  var RE_KEYS = /(REQ|PAIN|TASK|IDEA|DEC|FEAT|KN)-(\d+)(?![\p{L}\p{N}_-])/gu;
   function refify(root) {
     var found = false;
     for (var box of root.querySelectorAll("[data-refify]")) {

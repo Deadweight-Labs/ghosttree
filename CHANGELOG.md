@@ -135,7 +135,7 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - Hybrid search is off unless `GHOSTTREE_EMBED_URL` is set. Sessions are only
   sent to the embedding server when `session` is named in
   `GHOSTTREE_EMBED_KINDS` (`all` does not include it; `all,session` does).
-- Building from source needs Go 1.26.10 or newer.
+- Building from source needs Go 1.26.11 or newer.
 - The first start after the upgrade builds a narrow index from chunks to
   sessions (`chunk_index_chunk`). On a large database this takes about as long
   as reading `chunk_index` once (around a minute for three million chunks on
@@ -311,6 +311,22 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 #### Git-native ledger
 
+- The commit page shows what GitHub says about a commit: parents as pills,
+  the whole message, co-authors, the changed files with their added and removed
+  lines, and the state of the checks; the list shows the checks and the
+  co-authors too, and both have a `<>` button to the code at that commit.
+  `ctx github sync-prs --commits` (and the webhook, for the newest commits,
+  after it has answered GitHub) fetches and stores it, so a page never asks
+  GitHub. The changed files need the App permission `Contents: read`, the checks
+  `Checks: read`; a missing permission leaves the block out, is noted per
+  installation, and does not keep those commits at the head of the queue. A
+  commit GitHub no longer knows (after a force push) is skipped on its own. A guest who may not read every branch gets
+  none of it.
+- The profile has a block "Notifications" with one switch per kind (mentions,
+  questions to me, decisions, tasks, gardener) for the inbox and the bell; a kind
+  switched off is missing there and from the count, and stays readable where it
+  comes from. Mentions only ever appear in the inbox, the bell does not count
+  them, so their switch names only the inbox. The profile grid follows the mock (portrait 296 px).
 - A GitHub App connects an organization: its repositories join the
   organization in ghosttree, and pull requests are bound by webhook
   (`ctx github sync-prs` catches up).
@@ -552,6 +568,29 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   563 MiB; the web search answers byte for byte as before. An older ghosttree
   started after `slim-search` does not find the moved sessions, so going back
   needs the backup.
+- The text of a transcript line is no longer stored twice. `session_chunks.text`
+  (the text the collector read from the original line) can be derived from the
+  stored line, and readers now do so whenever the column is empty: the session
+  page, the session API (`ReadSession`), the two quote checks of the
+  distiller and its input. The parsers moved from the collector to the leaf
+  package `internal/chunktext`; the collector uploads what it uploaded before.
+  The first start adds the column `session_chunks.text_chars` (metadata only).
+  `ctx serve --session-text=derived` (or `GHOSTTREE_SESSION_TEXT=derived`)
+  writes new chunks without text; the default `stored` changes nothing.
+  `ctx db slim-text --db <path>` empties the column of existing rows beside the
+  running server, in batches of 500 rows with short write locks (first
+  `--dry-run`, which counts rows whose derived text equals, differs by a
+  truncation mark, or differs otherwise, or cannot be derived at all, and prints
+  no text; then `ctx db vacuum` with the server stopped). A row with nothing to
+  derive keeps its text; for the rows that read the derived view afterwards only
+  the database backup brings the old text back. It refuses while `ctx db slim-search` has
+  not run and while a distillation batch is open (`--force` overrides the
+  latter). `--restore` writes the derived text back, which a rollback to an
+  older binary needs first. `ctx cost` and `ctx usage` read `text_chars`,
+  `chunk_index` and the stored line instead of the column and give the same
+  numbers. Where the stored line cuts a long tool output somewhere else than
+  the collector did (0.73 % of the rows on local transcripts, almost all
+  Codex), the derived, shorter view of the same output is what is read.
 - The agents' session search (`context_search` with sessions,
   `ctx search`) and the sessions of a request search the same fields as the
   web search: messages, thinking, commands and tool output. Instructions a
@@ -575,6 +614,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Changed
 
+- A bare `#231` in a text of a repository (comments, issues, documents, project
+  knowledge) now means that repository's pull request 231, as on GitHub: the web
+  interface shows it as the pull request's pill when ghosttree knows it, and only
+  falls back to the knowledge entry of that number (the old spelling) when there
+  is no such pull request. A knowledge entry is named `KN-231` everywhere: tools,
+  cards, the `ctx` output, the mirror in `.ghosttree/`, the gardener's notes and
+  threads, and the rule section `ctx install` writes (run it again to get the new
+  wording). `KN-n` is read wherever `#n` was read for knowledge
+  (`context_get action=link`, `ctx knowledge ...`, `--supersedes`, runbook
+  pitfalls, pain evidence); the old `#n` still works as input. Stored texts are
+  not rewritten. The gardener now writes requests as `REQ-n` instead of `#n`;
+  its notes and threads in the old form are still read.
 - `ctx` starts in 4.5 ms instead of 14.5 ms. It is one binary, and every start
   parsed the page templates of the web interface in both languages, although
   only `ctx serve` shows a page. They are now parsed when the server starts, so
@@ -747,6 +798,44 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - `ctx doc new` and `ctx doc pull` no longer repeat a date that the slug already
   starts with.
 - Organization names may not contain control characters.
+- The default search leaves out sessions. `context_search`, `ctx search`,
+  `/api/search` and the search page of the web interface answer without kind
+  (or with `kind=all`) from knowledge, requests, pains, ideas, features,
+  criteria, tasks, file descriptions, documents and messages. Sessions are
+  searched on request: `kind=sessions`, `kind:session` or `is:session` in the
+  line, `context_search action=sessions`, or the Sessions tab. The page of all
+  kinds ends in a plain link "Search in sessions too" that asks nothing and
+  shows no number. The session search was the slowest part of every search and
+  filled the answer with raw history; run `ctx install` again so the rules in
+  `CLAUDE.md` and `AGENTS.md` say so.
+- Several words are joined with AND first. The word searches over sessions,
+  knowledge, requests, file descriptions and documents asked the index for any
+  of the words, so every further word widened the set of hits and made the
+  search slower. They now ask for all words and add the hits of the OR search,
+  without duplicates, only when AND returned fewer than a page. On 310,000
+  chunks the session word search for two common words took 272 ms and now takes
+  142 ms, for a common and a middling word 179 ms and now 8.5 ms; one word, or
+  words that are rare together, cost the same.
+- The prompt hook searches the sessions for its hint ("X also came up in session
+  #n") only when the prompt asks about earlier work: a time behind us ("damals",
+  "last week"), "did we", "wie hatten wir", "schon besprochen", or a question
+  about a thing ("was ist mit X"). Any other prompt does not read the sessions
+  for it; a request that names the word is still pointed at ("also came up in
+  REQ-n"), because that costs little. On an archive of 100,000 chunks a prompt
+  with one rare word and no such question takes 3.4 ms of server time with
+  106 KB allocated, where the session lookup took 6.4 ms and 2.4 MB.
+- Searches wait for a place of their own, one less than there are read
+  connections, so a hook always finds a connection free. With three connections
+  and 12 searchers the read of a hook took 26 ms, or 3.4 s when the searches
+  went through sessions, and now takes 0.6 ms in both cases (0.46 ms idle,
+  310,000 chunks). The API (`/api/search`), the web search and the search of the
+  Sessions page share the places. An API search that gets none within two
+  seconds answers `search_busy` (503) with `Retry-After`. A read repeats such an
+  answer, like a 502, 503 or 504, up to the number of repetitions the client is
+  set to (the MCP server sets two), pausing at least as long as `Retry-After`
+  says, at most three seconds; a write and the prompt hook never repeat.
+- A search of one area (`kind=sessions`) ends with its request: when the caller
+  hangs up, the query stops and frees its place and its connection.
 
 ### Fixed
 
@@ -758,6 +847,12 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   now also waits for the registration backoff instead of being retried every
   30 seconds.
 
+- A search over several areas whose sessions, knowledge or requests run out of
+  time (8 s each, 24 s in all) names that area as missing and answers with the
+  others. Until now only the sessions had a budget, and the vector ranking of
+  sessions and the read of the sessions a reader may open ran past it. The
+  default search no longer asks the sessions at all, so this shows only for a
+  line that names several kinds.
 - A tool call during a restart of the server no longer returns the HTML error
   page of the proxy in front of it. The message is one line, a read is tried
   twice more first (`ctx mcp` only; a write is never repeated), and a failed
@@ -834,8 +929,8 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Security
 
-- Go 1.26.10 (GO-2026-6809 in `crypto/x509`); released binaries use the fixed
-  standard library.
+- Go 1.26.11 (GO-2026-6859 in `net/http`, after GO-2026-6809 in `crypto/x509`
+  fixed by 1.26.10); released binaries use the fixed standard library.
 - Pull request links only with a host boundary and a fixed path for coordination
   forwarding (CodeQL findings).
 - The Claude channel neutralizes `<channel` inside message text, bounds `send`
@@ -844,6 +939,13 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   coordination event stream no longer exposes the global event sequence.
 - Join sessions are hardened after review: invitation pages answer every invalid
   code with the same 404 and are rate limited per client address.
+- The benchmark harness `bench/agent-compare` no longer starts agents with
+  `--dangerously-skip-permissions` on the host. Every agent session runs in a
+  sandbox without a network (container by default, bubblewrap as an alternative)
+  with a throwaway home directory. The model is reachable only through a proxy
+  on a Unix socket that holds the API key; the agent gets a run token. The
+  harness writes an isolation report before and after each session and refuses
+  to start an agent when it does not pass.
 - Dependency updates: MCP Go SDK 1.8.0, `modernc.org/sqlite` 1.60, `golang.org/x/sys`,
   GoReleaser action and CodeQL action.
 

@@ -243,7 +243,7 @@ func TestIndexShowsTheWayThatWorksWithoutTheTool(t *testing.T) {
 func TestBacklinksAreDerivedFromMentionsAndSaySo(t *testing.T) {
 	got := docsByPath(Build(sampleInput()))
 	mentioned := got["knowledge/decision/43-ausloeser-sind-der-hauptkanal.md"]
-	if !strings.Contains(mentioned, "#42") {
+	if !strings.Contains(mentioned, "KN-42") {
 		t.Errorf("entry 43 is mentioned by 42 and must say so:\n%s", mentioned)
 	}
 	if !strings.Contains(mentioned, "derived from mentions") {
@@ -294,7 +294,7 @@ func TestPainsAreMirroredByStateWithEdgesAndEvidenceButNoNotesOrSessions(t *test
 	if !ok {
 		t.Fatalf("no pain file: %v", got)
 	}
-	for _, want := range []string{"# PAIN-7 Reading only works whole", "Remaining: search still reads whole", "Every read returns all text.", "- REQ-177 Ein offener Faden", "- #42 Null Treffer", "https://example.test/issue/1", "commit: abc123"} {
+	for _, want := range []string{"# PAIN-7 Reading only works whole", "Remaining: search still reads whole", "Every read returns all text.", "- REQ-177 Ein offener Faden", "- KN-42 Null Treffer", "https://example.test/issue/1", "commit: abc123"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("pain file lacks %q:\n%s", want, body)
 		}
@@ -323,5 +323,33 @@ func TestTheMirrorHasNoPainsDirectoryWithoutPains(t *testing.T) {
 	}
 	if strings.Contains(docsByPath(Build(sampleInput()))["INDEX.md"], "pains/") {
 		t.Error("index names pains although there are none")
+	}
+}
+
+// Knowledge is written KN-42 now; a bare #42 is a pull request on a code host. Both
+// still count as a mention, and a longer number does not.
+func TestBacklinksReadKNAndTheOldHash(t *testing.T) {
+	in := sampleInput()
+	in.Knowledge = append(in.Knowledge,
+		store.Knowledge{ID: 50, Type: "note", Title: "Neu", Body: "siehe KN-43 und KN-4300.", Confidence: "trusted", Status: "active", Scope: scope.Axes{Project: "github.com/x/y"}},
+		store.Knowledge{ID: 51, Type: "note", Title: "Alt", Body: "siehe #43.", Confidence: "trusted", Status: "active", Scope: scope.Axes{Project: "github.com/x/y"}},
+		store.Knowledge{ID: 52, Type: "note", Title: "Fern", Body: "siehe KN-430 und #4300.", Confidence: "trusted", Status: "active", Scope: scope.Axes{Project: "github.com/x/y"}})
+	got := Build(in)
+	var body string
+	for _, d := range got {
+		if strings.HasPrefix(d.Path, "knowledge/decision/43-") {
+			body = d.Body
+		}
+	}
+	if body == "" {
+		t.Fatal("entry 43 is not mirrored")
+	}
+	for _, want := range []string{"- KN-50 Neu", "- KN-51 Alt"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("entry 43 lacks the backlink %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "KN-52") {
+		t.Errorf("KN-430 and #4300 are not mentions of 43:\n%s", body)
 	}
 }

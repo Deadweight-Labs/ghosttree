@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -114,14 +115,14 @@ func cmdUsage(args []string, stdout io.Writer) int {
 		}
 		hits, lastUsed, err := st.KnowledgeUsage(k.ID)
 		if err != nil {
-			fmt.Fprintf(stdout, "usage for %d: %v\n", k.ID, err)
+			fmt.Fprintf(stdout, "usage for %s: %v\n", knref.Format(k.ID), err)
 			return 1
 		}
 		if lastUsed == "" {
 			lastUsed = "never"
 		}
-		fmt.Fprintf(stdout, "  #%d [%s|%s] %s — %d hits, last %s\n",
-			k.ID, k.Type, k.Confidence, k.Title, hits, lastUsed)
+		fmt.Fprintf(stdout, "  %s [%s|%s] %s — %d hits, last %s\n",
+			knref.Format(k.ID), k.Type, k.Confidence, k.Title, hits, lastUsed)
 	}
 	return 0
 }

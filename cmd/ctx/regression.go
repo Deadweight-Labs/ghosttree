@@ -4,11 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -73,15 +73,15 @@ func cmdRegression(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, regressionUsage)
 		return 2
 	}
-	id, err := strconv.ParseInt(positional[0], 10, 64)
-	if err != nil {
+	id, ok := knref.Parse(positional[0])
+	if !ok {
 		fmt.Fprintf(stdout, "not an id: %q\n%s\n", positional[0], regressionUsage)
 		return 2
 	}
 	state := strings.ReplaceAll(action, "-", "_")
 	test := strings.Join(positional[1:], " ")
 	if state == "covered" && test == "" {
-		fmt.Fprintf(stdout, "name the test that covers #%d\n%s\n", id, regressionUsage)
+		fmt.Fprintf(stdout, "name the test that covers %s\n%s\n", knref.Format(id), regressionUsage)
 		return 2
 	}
 	if err := c.SetRegressionCover(id, state, test); err != nil {
@@ -89,9 +89,9 @@ func cmdRegression(args []string, stdout io.Writer) int {
 		return 1
 	}
 	if test != "" {
-		fmt.Fprintf(stdout, "#%d covered by %s\n", id, test)
+		fmt.Fprintf(stdout, "%s covered by %s\n", knref.Format(id), test)
 	} else {
-		fmt.Fprintf(stdout, "#%d %s\n", id, state)
+		fmt.Fprintf(stdout, "%s %s\n", knref.Format(id), state)
 	}
 	return 0
 }
@@ -103,7 +103,7 @@ func listRegressionGaps(c *client.Client, ax scope.Axes, stdout io.Writer) int {
 		return 1
 	}
 	for _, k := range gaps {
-		fmt.Fprintf(stdout, "#%-5d %s\n", k.ID, k.Title)
+		fmt.Fprintf(stdout, "%-8s %s\n", knref.Format(k.ID), k.Title)
 	}
 	if len(gaps) == 0 {
 		fmt.Fprintln(stdout, "no fix is recorded as unguarded")
@@ -130,7 +130,7 @@ func listUnjudgedPitfalls(c *client.Client, ax scope.Axes, limit int, stdout io.
 			fmt.Fprintf(stdout, "... more than %d, raise --limit\n", limit)
 			break
 		}
-		fmt.Fprintf(stdout, "#%-5d %s\n", k.ID, k.Title)
+		fmt.Fprintf(stdout, "%-8s %s\n", knref.Format(k.ID), k.Title)
 		shown++
 	}
 	if shown == 0 {

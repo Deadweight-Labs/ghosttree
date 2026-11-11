@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -128,10 +129,18 @@ func parseCriterionRef(ref string) (request, criterion int64, ok bool) {
 	return request, criterion, err1 == nil && err2 == nil && request > 0 && criterion > 0
 }
 
-// parseCriterionTitle reads "[Gärtner] Erfüllt? #<request> Kriterium <n>: <text>".
+// parseCriterionTitle reads "[Gärtner] Erfüllt? REQ-<request> Kriterium <n>: <text>"
+// (written as "#<request>" before).
 func parseCriterionTitle(title string) (request int64, number int, ok bool) {
-	rest, found := strings.CutPrefix(strings.TrimSpace(title), "[Gärtner] Erfüllt? #")
+	rest, found := strings.CutPrefix(strings.TrimSpace(title), "[Gärtner] Erfüllt? ")
 	if !found {
+		return 0, 0, false
+	}
+	if r, ok := strings.CutPrefix(rest, "REQ-"); ok {
+		rest = r
+	} else if r, ok := strings.CutPrefix(rest, "#"); ok {
+		rest = r
+	} else {
 		return 0, 0, false
 	}
 	head, _, found := strings.Cut(rest, ": ")
@@ -260,7 +269,7 @@ func (a *app) reviewCriterion(w http.ResponseWriter, r *http.Request) {
 		// as in every other path that sets a criterion.
 		_ = a.store.ClaimDistilledRequest(plan.criterion.ID, store.RefCriterion, person)
 	}
-	evidence := fmt.Sprintf("%s (Gärtner-Vorschlag #%d, bestätigt von %s)", plan.evidence, note.ID, person)
+	evidence := fmt.Sprintf("%s (Gärtner-Vorschlag %s, bestätigt von %s)", plan.evidence, knref.Format(note.ID), person)
 	err = a.store.SetCriterionState(plan.criterion.ID, "met", requestdomain.Evidence{Kind: plan.kind, Ref: evidence, Person: person, GitAnchor: gitanchor.Web()})
 	switch {
 	case err == nil:

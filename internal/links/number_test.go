@@ -17,6 +17,8 @@ func TestParseNumberReadsEveryFormOfANumberTerm(t *testing.T) {
 		"TASK-3":    {N: 3, Kind: KindTask},
 		"task-3":    {N: 3, Kind: KindTask},
 		"IDEA-7":    {N: 7, Kind: KindIdea},
+		"KN-12":     {N: 12, Kind: KindKnowledge},
+		"kn-12":     {N: 12, Kind: KindKnowledge},
 		"Idea-7":    {N: 7, Kind: KindIdea},
 		"pr:217":    {N: 217, Kind: KindPull},
 		"PR:217":    {N: 217, Kind: KindPull},
@@ -64,7 +66,7 @@ func TestNumberTermKindsAreTheOneItNamesOrTheHashKinds(t *testing.T) {
 	for _, r := range hash.Refs() {
 		shorts = append(shorts, Short(r))
 	}
-	if !slices.Equal(shorts, []string{"REQ-7", "pr:7", "#7"}) {
+	if !slices.Equal(shorts, []string{"REQ-7", "pr:7", "KN-7"}) {
 		t.Errorf("short forms of #7: %v", shorts)
 	}
 }

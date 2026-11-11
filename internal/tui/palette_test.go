@@ -381,8 +381,8 @@ func TestPaletteOffersEveryKindAHashNumberCanMean(t *testing.T) {
 		return out
 	}
 	for input, want := range map[string][]string{
-		"#217":       {"ctx open REQ-217", "ctx open pr:217", "ctx open #217"},
-		"  #217  ":   {"ctx open REQ-217", "ctx open pr:217", "ctx open #217"},
+		"#217":       {"ctx open REQ-217", "ctx open pr:217", "ctx open KN-217"},
+		"  #217  ":   {"ctx open REQ-217", "ctx open pr:217", "ctx open KN-217"},
 		"REQ-217":    {"ctx open REQ-217"},
 		"pr:217":     {"ctx open pr:217"},
 		"TASK-5":     {"ctx open TASK-5"},

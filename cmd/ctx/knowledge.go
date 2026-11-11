@@ -10,6 +10,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -211,13 +212,9 @@ func addKnowledge(c *client.Client, here scope.Axes, k store.Knowledge, scopeHin
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
-	msg := fmt.Sprintf("stored #%d [%s|%s]", saved.ID, saved.Type, saved.Scope.Label())
+	msg := fmt.Sprintf("stored %s [%s|%s]", knref.Format(saved.ID), saved.Type, saved.Scope.Label())
 	if len(supersedes) > 0 {
-		parts := make([]string, len(supersedes))
-		for i, id := range supersedes {
-			parts[i] = "#" + strconv.FormatInt(id, 10)
-		}
-		msg += "; superseded " + strings.Join(parts, ", ")
+		msg += "; superseded " + knref.List(supersedes)
 	}
 	fmt.Fprintln(stdout, msg)
 	cliCard(stdout, clientBuilder(c, here.Project).KnowledgeCard(saved))
@@ -227,13 +224,13 @@ func addKnowledge(c *client.Client, here scope.Axes, k store.Knowledge, scopeHin
 func parseIDList(flagName, s string) ([]int64, error) {
 	var ids []int64
 	for _, part := range strings.Split(s, ",") {
-		part = strings.TrimPrefix(strings.TrimSpace(part), "#")
+		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		id, err := strconv.ParseInt(part, 10, 64)
-		if err != nil || id <= 0 {
-			return nil, fmt.Errorf("%s takes entry ids like 12,15, got %q", flagName, part)
+		id, ok := knref.Parse(part)
+		if !ok {
+			return nil, fmt.Errorf("%s takes entry ids like KN-12,KN-15 (or 12,15), got %q", flagName, part)
 		}
 		ids = append(ids, id)
 	}
@@ -248,9 +245,8 @@ func parseKnowledgeID(args []string, usage string, stdout io.Writer) (id int64, 
 		return 0, 0, false
 	}
 	if len(args) > 0 {
-		var err error
-		if id, err = strconv.ParseInt(strings.TrimPrefix(args[0], "#"), 10, 64); err == nil && id > 0 {
-			return id, 0, true
+		if n, ok := knref.Parse(args[0]); ok {
+			return n, 0, true
 		}
 	}
 	fmt.Fprintln(stdout, usage)
@@ -295,7 +291,7 @@ func cmdKnowledgeRetire(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "retired #%d\n", saved.ID)
+	fmt.Fprintf(stdout, "retired %s\n", knref.Format(saved.ID))
 	cliCard(stdout, cliBuilder(cfg, requestProjectAxes(cfg.Machine).Project).KnowledgeCard(saved))
 	return 0
 }
@@ -334,11 +330,7 @@ func cmdKnowledgeSupersede(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
-	parts := make([]string, len(ids))
-	for i, older := range ids {
-		parts[i] = "#" + strconv.FormatInt(older, 10)
-	}
-	fmt.Fprintf(stdout, "#%d now supersedes %s\n", saved.ID, strings.Join(parts, ", "))
+	fmt.Fprintf(stdout, "%s now supersedes %s\n", knref.Format(saved.ID), knref.List(ids))
 	cliCard(stdout, cliBuilder(cfg, requestProjectAxes(cfg.Machine).Project).KnowledgeCard(saved))
 	return 0
 }
@@ -358,7 +350,7 @@ func cmdKnowledgeShow(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "#%d %s\n[%s|%s|%s]\n", k.ID, k.Title, k.Type, k.Scope.Label(), k.Status)
+	fmt.Fprintf(stdout, "%s %s\n[%s|%s|%s]\n", knref.Format(k.ID), k.Title, k.Type, k.Scope.Label(), k.Status)
 	if k.Closure != nil {
 		fmt.Fprintln(stdout, k.Closure.Summary())
 	}
@@ -416,7 +408,7 @@ func moveKnowledge(c *client.Client, id int64, project, machine string, global b
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "moved #%d to %s\n", saved.ID, saved.Scope.Label())
+	fmt.Fprintf(stdout, "moved %s to %s\n", knref.Format(saved.ID), saved.Scope.Label())
 	cliCard(stdout, clientBuilder(c, requestProjectAxes("").Project).KnowledgeCard(saved))
 	return 0
 }

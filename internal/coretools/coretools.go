@@ -38,7 +38,7 @@ func Table() []Core { return table }
 var table = []Core{
 	{
 		Name:    "context_search",
-		Lead:    "Search what ghosttree knows before you write or re-derive it: knowledge (pitfalls, decisions, notes, plans), past session transcripts, file descriptions and the ledger. Defaults to this project, branch and machine; project or all_projects looks further.",
+		Lead:    "Search what ghosttree knows before you write or re-derive it: knowledge (pitfalls, decisions, notes, plans), file descriptions and the ledger. The default search leaves out session transcripts: ask for them with kind=sessions or action=sessions. Defaults to this project, branch and machine; project or all_projects looks further.",
 		Default: "search",
 		Actions: []Action{
 			{Name: "search", Tool: "context_search", Line: "words and/or qualifiers in query; knowledge_id reads one entry in full (plans, specs); kind narrows to knowledge, requests, sessions, files"},
@@ -56,7 +56,7 @@ var table = []Core{
 		Default: "context",
 		Actions: []Action{
 			{Name: "context", Tool: "context_get", Line: "with paths: the descriptions of those paths and their directories; without: the briefing of this project, branch and machine"},
-			{Name: "link", Tool: "open_link", Line: "web link and short card for REQ-n, TASK-n, PAIN-n, IDEA-n, #id, pr:n or preset:name (ref), to hand to the human"},
+			{Name: "link", Tool: "open_link", Line: "web link and short card for REQ-n, TASK-n, PAIN-n, IDEA-n, KN-n, pr:n or preset:name (ref), to hand to the human"},
 			{Name: "commit", Tool: "commit_get", Line: "what was said about a commit (commit: hash or 7+ characters)"},
 			{Name: "pull", Tool: "pull_get", Line: "one pull request with its package, feature checklist and anchored knowledge (pr)"},
 			{Name: "pulls", Rare: true, Tool: "pull_list", Line: "pull requests GitHub reported (state, branch, author)"},

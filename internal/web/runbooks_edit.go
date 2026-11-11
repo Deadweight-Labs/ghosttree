@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/runbook"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -210,9 +211,9 @@ func (v *runbookFormView) toSpec(targets []runbook.Target) (runbook.Spec, error)
 		if part = strings.TrimSpace(part); part == "" {
 			continue
 		}
-		id, err := strconv.ParseInt(strings.TrimPrefix(strings.ToUpper(part), "#"), 10, 64)
-		if err != nil || id <= 0 {
-			return runbook.Spec{}, errors.New("the pitfalls are numbers of knowledge entries, e.g. 4294, 4293")
+		id, ok := knref.Parse(part)
+		if !ok {
+			return runbook.Spec{}, errors.New("the pitfalls are numbers of knowledge entries, e.g. KN-4294, KN-4293")
 		}
 		spec.Pitfalls = append(spec.Pitfalls, id)
 	}

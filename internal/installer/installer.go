@@ -91,7 +91,9 @@ A wish you voice in passing, without working it out, belongs in ` + "`idea actio
 (look in ` + "`idea action=search`" + ` first); ` + "`idea action=promote`" + ` makes a request of it.
 ` + "`context_search`" + ` also takes qualifiers (is:open, label:bug, area:internal/store,
 pr:12, branch:...; the tool description lists them), and ` + "`context_search action=preset_run`" + ` runs saved
-searches such as pr-ergebnis (what was done in a pull request).
+searches such as pr-ergebnis (what was done in a pull request). The default search leaves out
+session transcripts; search them on purpose with ` + "`kind=sessions`" + `, ` + "`is:session`" + ` or
+` + "`context_search action=sessions`" + `.
 
 What only the human can provide (a key, a file, a decision, a manual step) you
 create with ` + "`human_task action=create`" + `, with where it lives and how to check it, instead
@@ -104,8 +106,13 @@ Give a task ` + "`steps`" + ` (numbered, one line each, with a link where a page
 ` + "`explanation`" + `: the person then gets a checklist, and nothing is generated for the task
 later. Every answer about one object ends with its web link and a short card; hand
 that link to the person instead of describing where to click. ` + "`context_get action=link`" + ` gives link
-and card for REQ-n, TASK-n, PAIN-n, #id, pr:n or preset:name values. Short commands:
+and card for REQ-n, TASK-n, PAIN-n, KN-n, pr:n or preset:name values. Short commands:
 ` + "`/ghost open|task|req|preset`" + ` in Claude Code, ` + "`$ghost ...`" + ` in Codex.
+
+Name ghosttree objects by their key: REQ-n, PAIN-n, TASK-n, IDEA-n, FEAT-n, and
+KN-n for a knowledge entry. A bare #n is, as on GitHub, the pull request n of this
+repository and the web interface links it as one: write KN-12 for knowledge, never
+#12, and #231 only for a pull request. Every tool and card names knowledge as KN-n.
 
 The people who read what you write change things but do not dive into every small
 finding of an agent. So give each entry a short ` + "`explanation`" + `: ` + "`context_remember`" + `

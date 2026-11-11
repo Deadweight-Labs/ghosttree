@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 )
 
 // Identifiers and avatars of the pages in the GitHub look (REQ-599, decisions
@@ -60,6 +62,16 @@ func safeRefHref(href string) string {
 	return href
 }
 
+// pillNum is the number a pill shows next to its icon: "#5" for the numbered kinds
+// that read like that on a code host, "KN-5" for knowledge, because a bare #5 means
+// a pull request there.
+func pillNum(prefix string, n int64) string {
+	if prefix == "KN" {
+		return knref.Format(n)
+	}
+	return "#" + strconv.FormatInt(n, 10)
+}
+
 // refHTML writes one identifier in its short form: icon and "#5", no frame. It is
 // what a list row or a column uses; the card on hover tells which one it is, and
 // aria-label tells a screen reader. href may be empty: then it is no link.
@@ -71,7 +83,7 @@ func refHTML(l lang, kind string, n int64, href string) template.HTML {
 	}
 	short := k.Prefix + "-" + strconv.FormatInt(n, 10)
 	name := html.EscapeString(l.msg(k.Key) + " " + strconv.FormatInt(n, 10))
-	inner := `<svg class="i" viewBox="0 0 16 16" aria-hidden="true">` + k.Icon + `</svg><span class="num">#` + strconv.FormatInt(n, 10) + `</span>`
+	inner := `<svg class="i" viewBox="0 0 16 16" aria-hidden="true">` + k.Icon + `</svg><span class="num">` + pillNum(k.Prefix, n) + `</span>`
 	if href == "" {
 		return template.HTML(`<span class="ref ` + k.Class + `" data-ref="` + short + `" aria-label="` + name + `">` + inner + `</span>`)
 	}

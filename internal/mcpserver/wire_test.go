@@ -188,7 +188,7 @@ func TestPlacementIsRequiredAtTheWire(t *testing.T) {
 	if failed {
 		t.Fatalf("a placed entry was rejected: %s", got)
 	}
-	if !strings.Contains(got, "stored #") {
+	if !strings.Contains(got, "stored KN-") {
 		t.Errorf("unexpected reply: %s", got)
 	}
 }

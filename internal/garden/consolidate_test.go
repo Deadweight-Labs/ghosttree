@@ -218,7 +218,7 @@ func TestCoverProposalIsStagedGardenerMarkedAndAsksOnce(t *testing.T) {
 	if k.Harness != Harness || k.Confidence != "staged" || k.Status != "active" || k.Type != "note" || k.Origin == "human" || k.RegressionState != "" {
 		t.Errorf("proposal = %+v", k)
 	}
-	if k.SessionRef != "gardener:regression:12:sketch" || !strings.HasPrefix(k.Title, "[Gärtner] Test fehlt? #12: ") {
+	if k.SessionRef != "gardener:regression:12:sketch" || !strings.HasPrefix(k.Title, "[Gärtner] Test fehlt? KN-12: ") {
 		t.Errorf("ref %q title %q", k.SessionRef, k.Title)
 	}
 	for _, want := range []string{"Herkunft gardener, nicht bestätigt", "Test: a/b_test.go:TestB", "Schritte:", "  zwei", "Begründung: weil"} {
@@ -261,7 +261,7 @@ func TestReportGivesTestSketchesASectionOfTheirOwn(t *testing.T) {
 	out := b.String()
 	sketch := out[strings.Index(out, "## Testskizzen"):]
 	sketch = sketch[:strings.Index(sketch, "\n\n")]
-	for _, want := range []string{"#12 Pitfall A", "a/b_test.go:TestB", "rufe auf"} {
+	for _, want := range []string{"KN-12 Pitfall A", "a/b_test.go:TestB", "rufe auf"} {
 		if !strings.Contains(sketch, want) {
 			t.Errorf("the sketch section lacks %q:\n%s", want, sketch)
 		}
@@ -376,7 +376,7 @@ func TestContradictionOpensOneThreadLinkedToBothWithTheQuotes(t *testing.T) {
 		t.Fatalf("outcome = %+v", out)
 	}
 	th := f.threads[0]
-	if th.Project != testProject || !strings.HasPrefix(th.Title, "[Gärtner] Widersprechen sich #12 „Dienst läuft auf server-a“ und #15") || !strings.HasSuffix(th.Title, "?") {
+	if th.Project != testProject || !strings.HasPrefix(th.Title, "[Gärtner] Widersprechen sich KN-12 „Dienst läuft auf server-a“ und KN-15") || !strings.HasSuffix(th.Title, "?") {
 		t.Errorf("title = %q", th.Title)
 	}
 	if th.Link == nil || th.Link.Kind != "knowledge" || th.Link.ID != "12" {

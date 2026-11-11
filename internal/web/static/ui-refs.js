@@ -14,12 +14,19 @@
 // the browser. Asked once for all the keys on the page that have no card yet,
 // at most 50 per call; "unknown" and "forbidden" are the same answer, so such a
 // pill stays without a card.
+//
+// A "#231" in a text on the page of a repository (ui-md.js marks it with
+// data-pr) is asked for twice in the same call: as the pull request 231 of that
+// repository (the key PR-231, "pr:231" with ?project=) and as the knowledge
+// entry KN-231. The pull request wins; only when there is none does the old
+// spelling of a knowledge entry still show the entry. A "#231" with neither stays text.
 (function () {
   "use strict";
-  var KEY = /^(?:REQ|PAIN|TASK|IDEA|DEC|FEAT|KN)-\d+$/;
-  // The lookup speaks the short forms of the API: a knowledge entry is "#1970" there.
-  function apiRef(key) { return key.indexOf("KN-") === 0 ? "#" + key.slice(3) : key; }
-  function localKey(ref) { return typeof ref === "string" && ref.charAt(0) === "#" ? "KN-" + ref.slice(1) : ref; }
+  var KEY = /^(?:REQ|PAIN|TASK|IDEA|DEC|FEAT|KN|PR)-\d+$/;
+  // The lookup speaks the short forms of the API: a pull request is "pr:231" there.
+  function apiRef(key) { return key.indexOf("PR-") === 0 ? "pr:" + key.slice(3) : key; }
+  // The repository of the page: pull requests are only asked for with it.
+  function pageRepo() { return (document.body && document.body.getAttribute("data-repo")) || ""; }
   function $$(s, c) { return [].slice.call((c || document).querySelectorAll(s)); }
 
   function template(key) {
@@ -38,7 +45,7 @@
     var kd = window.GTPill.kind(key.split("-")[0]), frag = document.createDocumentFragment();
     var h = node("div", "pc-h"), k = node("span", "pc-k " + kd.cls);
     k.appendChild(window.GTPill.icon(kd.icon));
-    k.appendChild(node("span", "", key.indexOf("KN-") === 0 ? "#" + key.slice(3) : key));
+    k.appendChild(node("span", "", key));
     h.appendChild(k);
     if (info.zustand) h.appendChild(node("span", "state sm gray", info.zustand));
     frag.appendChild(h);
@@ -99,7 +106,7 @@
     },
     // lookup: asks /ui/refs for the keys of the page without a card, calls done afterwards
     lookup: function (done) { lookup(done); },
-    // resolve: upgrades the marks of "#1970" in root (ui-md.js) to pills
+    // resolve: upgrades the marks of "#231" in root (ui-md.js) to pills
     resolve: function (root, done) { resolve(root, done); }
   };
 
@@ -123,12 +130,16 @@
     if (keys.length) {
       keys.forEach(function (k) { asked[k] = true; });
       var q = keys.map(function (k) { return "ref=" + encodeURIComponent(apiRef(k)); }).join("&");
+      if (keys.some(function (k) { return k.indexOf("PR-") === 0; })) q += "&project=" + encodeURIComponent(pageRepo());
       var req = fetch("/ui/refs?" + q, { credentials: "same-origin", headers: { Accept: "application/json" } })
         .then(function (r) { return r.ok ? r.json() : { refs: [] }; })
         .then(function (data) {
-          (data.refs || []).forEach(function (info) {
-            var key = info && info.gefunden ? localKey(info.ref) : "";
-            if (key && KEY.test(key)) remote[key] = info;
+          // The answer has one entry for each key, in the order asked; a list without
+          // entries means nothing was readable.
+          var list = data.refs || [];
+          if (list.length !== keys.length) return;
+          list.forEach(function (info, i) {
+            if (info && info.gefunden && KEY.test(keys[i])) remote[keys[i]] = info;
           });
         })
         .catch(function () {})
@@ -168,20 +179,38 @@
       if (title && window.GTPill) window.GTPill.setTitle(p, title);
     }
   }
-  // resolve turns the marks a text wrote for a "#1970" (ui-md.js) into pills:
-  // only for what the server knows and the viewer may read. A mark that is no
-  // knowledge entry goes back to the plain text it was. A mark whose key the
-  // first call had no room for is asked for in a call of its own.
+  // The pill of a pull request, the same as pill.go writes (prPillOf): the colour
+  // of the icon is the state, the card says title, branches and state in the words
+  // of the page's language (the server translates them).
+  var PR_STATE = { open: ["s-open", "open"], merged: ["s-merged", "done"], closed: ["s-closed", "bad"] };
+  function prPill(n, info) {
+    var st = PR_STATE[info.status] || null;
+    return window.GTPill.make({
+      cls: "k-pr " + (st ? st[0] : "s-unknown"), icon: "pr", text: "#" + n, href: safeLink(info.link),
+      card: { l: info.label, s: st ? info.zustand : "", t: st ? st[1] : "", h: info.titel, b: info.kurzfassung }
+    });
+  }
+  // resolve turns the marks a text wrote for a "#231" (ui-md.js) into pills: the
+  // pull request of that number when the text belongs to a repository that has it
+  // (data-pr), else the knowledge entry of that number (the old spelling), else
+  // the plain text it was. Only what the server knows and the viewer may read.
+  // A mark whose key the first call had no room for is asked for in a call of its own.
   function resolve(root, done, round) {
     var marks = $$("[data-maybe]", root);
     if (!marks.length) { if (done) done(); return; }
-    var keys = marks.map(function (m) { return m.getAttribute("data-maybe"); });
+    var keys = [];
+    marks.forEach(function (m) {
+      if (m.hasAttribute("data-pr")) keys.push("PR-" + m.getAttribute("data-pr"));
+      keys.push(m.getAttribute("data-maybe"));
+    });
     lookup(function () {
       var again = false;
       marks.forEach(function (m) {
-        var key = m.getAttribute("data-maybe"), href = window.GTRefs.href(key);
+        var key = m.getAttribute("data-maybe"), n = m.getAttribute("data-pr"), pkey = n ? "PR-" + n : "";
         var known = !!remote[key] || !!template(key);
-        if (!known && !asked[key]) { again = true; return; }
+        if ((pkey && !asked[pkey]) || (!known && !asked[key])) { again = true; return; }
+        if (pkey && remote[pkey]) { m.replaceWith(prPill(n, remote[pkey])); return; }
+        var href = window.GTRefs.href(key);
         if (known && href && window.GTPill) m.replaceWith(window.GTPill.ref(key, { href: href }));
         else m.replaceWith(document.createTextNode(m.textContent));
       });
@@ -310,7 +339,7 @@
     }
   }
   scan(document);
-  // ui-md.js ran before this script: its marks of "#1970" are resolved now.
+  // ui-md.js ran before this script: its marks of "#231" are resolved now.
   resolve(document);
   // The long form of the pills in a sentence says its title (the page's card or /ui/refs).
   if (document.querySelector("[data-ref][data-long]")) lookup();

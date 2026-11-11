@@ -11,6 +11,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -344,6 +345,21 @@ type CommitInfo struct {
 	Entries int `json:"entries"`
 	// Sources sagt, woher der Server den Commit kennt: ledger und/oder pr.
 	Sources []string `json:"sources"`
+	// Die folgenden Angaben kommen aus git_commit_meta (PR-Quelle) und fehlen, wenn
+	// sie nicht geholt wurden oder der Betrachter nicht alle Branches sehen darf.
+	// Parents, Message (ohne Titelzeile und Co-authored-by) und die Dateien füllt nur
+	// die Seite eines Commits; CI und CoAuthors auch die Liste.
+	Parents   []string `json:"parents,omitempty"`
+	Message   string   `json:"message,omitempty"`
+	CoAuthors []string `json:"co_authors,omitempty"`
+	// Files sind die geänderten Dateien; FilesKnown sagt, ob der Abruf gelungen ist.
+	Files      []CommitFileStat `json:"files,omitempty"`
+	FilesTotal int              `json:"files_total,omitempty"`
+	Additions  int              `json:"additions,omitempty"`
+	Deletions  int              `json:"deletions,omitempty"`
+	FilesKnown bool             `json:"files_known,omitempty"`
+	// CI ist der Stand der Prüfungen: success, failure oder pending; leer, wenn keiner bekannt ist.
+	CI string `json:"ci,omitempty"`
 }
 
 // CommitList ist eine Seite der Commits eines Projekts oder Branches.
@@ -447,7 +463,7 @@ func (e *entryResolver) load(r anchoredRow) *CommitEntry {
 		if err != nil || k.Scope.Project != project || !a.CanSeeKnowledge(k) {
 			return nil
 		}
-		return &CommitEntry{Kind: r.Kind, ID: r.ID, Ref: "#" + strconv.FormatInt(r.ID, 10), Title: oneLine(k.Title, 200), Person: k.Person}
+		return &CommitEntry{Kind: r.Kind, ID: r.ID, Ref: knref.Format(r.ID), Title: oneLine(k.Title, 200), Person: k.Person}
 	case CommitKindGhost:
 		if g, err := a.st.GhostFileByPath(project, r.Path); err == nil {
 			if !a.CanSeeGhost(g) {
@@ -708,7 +724,11 @@ func (a *ProjectAccess) Commits(project, branch string, limit, offset int) (Comm
 		return CommitList{}, err
 	}
 	all := sortedInfos(aggs)
-	return CommitList{Project: project, Branch: branch, Items: pageOf(all, limit, offset), Total: len(all), Limit: limit, Offset: offset}, nil
+	page := pageOf(all, limit, offset)
+	if err := a.attachCommitMeta(project, page, false); err != nil {
+		return CommitList{}, err
+	}
+	return CommitList{Project: project, Branch: branch, Items: page, Total: len(all), Limit: limit, Offset: offset}, nil
 }
 
 // commitsOfBranch führt die Commits eines Branches zusammen. Welche Commits
@@ -790,7 +810,13 @@ func (a *ProjectAccess) CommitView(project, sha string) (CommitDetail, error) {
 	if g == nil {
 		return CommitDetail{}, sql.ErrNoRows
 	}
-	return CommitDetail{CommitInfo: g.info(), Project: project, Said: g.entryList()}, nil
+	d := CommitDetail{CommitInfo: g.info(), Project: project, Said: g.entryList()}
+	one := []CommitInfo{d.CommitInfo}
+	if err := a.attachCommitMeta(project, one, true); err != nil {
+		return CommitDetail{}, err
+	}
+	d.CommitInfo = one[0]
+	return d, nil
 }
 
 // PullCommits liefert die Commits eines PRs in der Reihenfolge, in der GitHub sie

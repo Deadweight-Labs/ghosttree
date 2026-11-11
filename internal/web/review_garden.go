@@ -154,7 +154,27 @@ func (a *app) gardenChecked(pa *store.ProjectAccess, project string) (int, time.
 	return n, newest
 }
 
-// parseGardenTitle splits "[Gärtner] Veraltet? #12: Titel" into the verdict
+// gardenMarks are the ways a title of the gardener names what it is about: an entry
+// as " KN-12" and a request as " REQ-12" now, as " #12" in the titles written
+// before; a stored title is never rewritten, so all three are read.
+var gardenMarks = []string{" KN-", " REQ-", " #"}
+
+// cutGardenMark cuts a title at the first mark of gardenMarks: the label before it
+// and what follows it.
+func cutGardenMark(rest string) (label, after string, ok bool) {
+	at, width := -1, 0
+	for _, m := range gardenMarks {
+		if i := strings.Index(rest, m); i >= 0 && (at < 0 || i < at) {
+			at, width = i, len(m)
+		}
+	}
+	if at < 0 {
+		return "", "", false
+	}
+	return rest[:at], rest[at+width:], true
+}
+
+// parseGardenTitle splits "[Gärtner] Veraltet? KN-12: Titel" into the verdict
 // (in the language of the page) and the title of the entry it is about. A title
 // in another shape is shown whole.
 func parseGardenTitle(l lang, title string) (verdict, subject string) {
@@ -162,7 +182,7 @@ func parseGardenTitle(l lang, title string) (verdict, subject string) {
 	if path, ok := strings.CutPrefix(rest, "Beschreibung? "); ok {
 		return l.msg("review.garden.ghost"), path
 	}
-	label, after, ok := strings.Cut(rest, " #")
+	label, after, ok := cutGardenMark(rest)
 	if !ok {
 		return l.msg("review.garden.verdict"), rest
 	}
@@ -197,7 +217,7 @@ func gardenTone(title string) string {
 	if strings.HasPrefix(rest, "Beschreibung? ") {
 		return "don"
 	}
-	label, _, _ := strings.Cut(rest, " #")
+	label, _, _ := cutGardenMark(rest)
 	switch strings.TrimSpace(label) {
 	case "Veraltet?", "Korrektur?":
 		return "warn"

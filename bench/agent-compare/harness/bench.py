@@ -6,9 +6,18 @@ Projekt, frischer Gedächtniszustand. Ablauf: Lern-Sessions L1..L3 (je zwei
 Züge, zweiter per --resume), Schnappschuss, dann jede Folgeaufgabe F0..F6 als
 frische Session auf dem wiederhergestellten Schnappschuss, verdeckt bewertet.
 
+Jede Agentensitzung läuft in einer Sandbox ohne Netz (sandbox.py): Container (Standard) oder
+bubblewrap, gewählt mit BENCH_SANDBOX. Der Modellzugang geht nur über den Proxy auf einem
+Unix-Socket (modelproxy.py). Vor und nach jeder Sitzung steht ein Isolationsprotokoll
+(<tag>.isolation.json); besteht die Probe nicht, startet kein Agent. Alles, was Dateien aus dem
+Agenten-HOME ausführt (git, ctx, go test), läuft ebenfalls in der Sandbox.
+
 Aufruf:
   bench.py chain <arm> <rep> [--only-learning] [--tasks F1,F2]
+  bench.py probe [--keep]            Isolationsprobe ohne Modellaufruf, schreibt isolation.json
+  bench.py cleanup [<kennung>]       entfernt eigene Sandbox-Container nach Label (ohne Kennung nur verwaiste)
   bench.py grade <taskid> <workdir> <snapshot_sha>
+  bench.py regrade <kette>...
 """
 import json
 import os
@@ -17,6 +26,7 @@ import secrets
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tarfile
@@ -24,27 +34,44 @@ import time
 import urllib.request
 from pathlib import Path
 
-BASE = Path(os.environ.get("BENCH_BASE", Path.home() / "agentbench-data" / "agent-compare"))
 HARNESS = Path(__file__).resolve().parent
-HIDDEN = Path(os.environ.get("BENCH_HIDDEN", HARNESS.parent / "hidden"))
+sys.path.insert(0, str(HARNESS))
+import sandbox as sbx  # noqa: E402
+from modelproxy import ModelProxy  # noqa: E402
+
+# Von der Bedienung gesetzte Pfade werden aufgelöst: sandbox.verify_spec verlangt für jede Einhängung realpath == abspath
+# (ein Symlink im Stand des Agenten darf nie Quelle sein), also müssen diese Wurzeln selbst ohne Symlink dastehen.
+BASE = Path(os.environ.get("BENCH_BASE", Path.home() / "agentbench-data" / "agent-compare")).resolve()
+HIDDEN = Path(os.environ.get("BENCH_HIDDEN", HARNESS.parent / "hidden")).resolve()
 TEMPLATE = HARNESS.parent / "projects" / "ledgerly"
 SHARED = BASE / "shared"
-# Außerhalb des echten Benutzer-HOME: Claude Code lädt CLAUDE.md aus allen Elternverzeichnissen
-# des Arbeitsverzeichnisses, und ~/.claude/CLAUDE.md des Benutzers wäre sonst als "Project" im Kontext.
-RUNS = Path(os.environ.get("BENCH_RUNS", "/var/tmp/agentcmp/runs"))
+# Außerhalb des echten Benutzer-HOME: Die Sandbox sieht es ohnehin nicht, aber so bleibt auch der
+# Host-Pfad der Läufe frei von persönlichen Dateien.
+RUNS = Path(os.environ.get("BENCH_RUNS", "/var/tmp/agentcmp/runs")).resolve()
 RESULTS = BASE / "results"
-# Agent-Aufruf: claude selbst oder ein Wrapper, der Anmeldung/Route setzt (ANTHROPIC_BASE_URL usw.).
-CLAUPHIL = os.environ.get("BENCH_AGENT", "claude")
+# Agent-Aufruf IN der Sandbox: claude aus dem Image (bzw. bei bwrap vom Host).
+AGENT = os.environ.get("BENCH_AGENT", "claude")
+SANDBOX_KIND = os.environ.get("BENCH_SANDBOX", "container")
 MODEL = "claude-opus-5-5"
 MAX_TURNS = "80"
 SESSION_TIMEOUT = 1800
-CLAUDE_MEM_VERSION = "15.10.0"
 REMOTE = "https://github.com/acme-billing/ledgerly.git"
 ARMS = ("vanilla", "native", "claudemem", "ghosttree")
+SANDBOX_ARMS = ("vanilla", "native", "ghosttree")
 MEMFILE_NAMES = {"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"}
 ALLOWED_HELPER = re.compile(r"^claude-(haiku-4-5|haiku-5-5|sonnet-5-5)")
 INFRA_PAT = re.compile(r"API Error|overloaded|ECONNREFUSED|ECONNRESET|Connection error|socket hang up|"
                        r"fetch failed|502|503|504|529|Request timed out|rate limit", re.I)
+# git auf Repos, die der Agent beschrieben hat, läuft nur in der Sandbox und ohne Hooks des Repos.
+GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null",
+       "-c", "commit.gpgsign=false", "-c", "safe.directory=*"]
+# Konfiguration eines Repos, das die Bedienung selbst angelegt hat (git init, remote add): mehr nicht.
+GIT_CONFIG = ("[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n"
+              f'[remote "origin"]\n\turl = {REMOTE}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n')
+GIT_ID = ["-c", "user.name=Dev", "-c", "user.email=dev@acme-billing.example"]
+CTX_BIN_DIR = "/opt/bench/ctx-bin"
+GOMOD_DIR = "/opt/bench/gomod"
+GOCACHE_DIR = "/var/cache/gocache"
 
 PROJECTS = {
     "ledgerly": {"template": TEMPLATE, "prompts": HARNESS / "prompts.json",
@@ -56,13 +83,22 @@ PROJECTS = {
 }
 PROJECT = os.environ.get("BENCH_PROJECT", "ledgerly")
 P = PROJECTS[PROJECT]
-PROMPTS = json.loads(P["prompts"].read_text())
+PROMPTS = json.loads(P["prompts"].read_text()) if P["prompts"].exists() else {}
 RESULTS = P["results"]
+
+
+ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
+
+def valid_id(cid):
+    """Kennungen von Ketten landen in Pfaden, Container-Namen und Labels: nur einfache Bezeichner."""
+    return isinstance(cid, str) and bool(ID_PATTERN.fullmatch(cid))
 
 
 def log(chain, msg):
     line = f"{time.strftime('%H:%M:%S')} [{chain}] {msg}"
     print(line, flush=True)
+    BASE.mkdir(parents=True, exist_ok=True)
     with open(BASE / "bench.log", "a") as f:
         f.write(line + "\n")
 
@@ -74,6 +110,7 @@ def free_port():
 
 
 def sh(cmd, env=None, cwd=None, check=True, timeout=None, capture=True):
+    """Führt einen vertrauenswürdigen Host-Befehl aus (kein Agenten-Code, keine Agenten-Dateien)."""
     r = subprocess.run(cmd, env=env, cwd=cwd, timeout=timeout, text=True,
                        stdout=subprocess.PIPE if capture else None,
                        stderr=subprocess.STDOUT if capture else None, stdin=subprocess.DEVNULL)
@@ -82,57 +119,235 @@ def sh(cmd, env=None, cwd=None, check=True, timeout=None, capture=True):
     return r
 
 
+# ---------- Dateien aus dem Agenten-HOME lesen (R9) ----------
+def safe_file(path, root):
+    """Pfad einer regulären Datei unterhalb von root, sonst None. Der Harness folgt keinem Symlink aus der Sandbox."""
+    root_real = os.path.realpath(root)
+    rel = os.path.relpath(os.path.abspath(path), os.path.abspath(root))
+    if rel.startswith(".."):
+        return None
+    expected = os.path.join(root_real, rel)
+    try:
+        if os.path.realpath(expected) != expected or not stat.S_ISREG(os.lstat(expected).st_mode):
+            return None
+    except OSError:
+        return None
+    return Path(expected)
+
+
+def safe_text(path, root, default=""):
+    p = safe_file(path, root)
+    return p.read_text(errors="replace") if p else default
+
+
+def safe_glob(root, pattern):
+    return [p for p in sorted(Path(root).glob(pattern)) if safe_file(p, root)]
+
+
+def safe_walk(root, skip=(".git",)):
+    """Reguläre Dateien unter root und die Namen von Symlinks, ohne Symlinks zu folgen. Liefert (Pfad, ist_symlink)."""
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in skip]
+        for n in dirnames + filenames:
+            p = Path(dirpath, n)
+            if p.is_symlink():
+                yield p, True
+            elif n in filenames and safe_file(p, root):
+                yield p, False
+
+
+def rm_tree(path):
+    path = Path(path)
+    if path.is_symlink():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def require_real_dirs(root, *rels):
+    """Jeder Teil von rels unterhalb von root muss ein echtes Verzeichnis sein, kein Symlink und keine Datei.
+    Ein Symlink aus der Sandbox ist nur Text; auf dem Host würde glob, rmtree oder write_text ihm folgen.
+    Die Kette bricht ab, statt irgendetwas außerhalb des HOME anzufassen."""
+    for rel in rels:
+        cur = Path(root)
+        for part in Path(rel).parts:
+            cur = cur / part
+            try:
+                mode = os.lstat(cur).st_mode
+            except FileNotFoundError:
+                break
+            if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+                raise sbx.IsolationError(f"Der Agent hat {cur} durch einen Symlink oder eine Datei ersetzt")
+
+
+def reset_git_config(work):
+    """Ersetzt .git/config des Agenten-Repos durch die Konfiguration des Harness, bevor git darauf läuft.
+    Die Konfiguration stammt vom Agenten: filter.*.clean, core.pager, core.sshCommand, gpg.program, diff.*.textconv
+    und andere Schlüssel führen Befehle aus, und -c-Schalter allein decken nicht alle ab. `.git` muss ein echtes
+    Verzeichnis sein (kein Symlink, keine gitfile); config und commondir werden entfernt, ohne einem Symlink zu folgen."""
+    git = Path(work) / ".git"
+    try:
+        mode = os.lstat(git).st_mode
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(mode):
+        raise sbx.IsolationError(f"Der Agent hat {git} durch einen Symlink oder eine Datei ersetzt")
+    for name in ("config", "config.worktree", "commondir"):
+        try:
+            os.unlink(git / name)
+        except FileNotFoundError:
+            pass
+    fd = os.open(git / "config", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(GIT_CONFIG)
+
+
+def snapshot_filter(member, dest):
+    """Entpackt unsere eigenen Schnappschüsse: Pfade nur unterhalb des Ziels (auch durch bereits entpackte Symlinks
+    hindurch), Hardlinks nur auf Ziele darin. Symlinks bleiben Symlinks, sie sind Text und werden nie gefolgt."""
+    return tarfile.data_filter(member, dest) if member.islnk() else tarfile.tar_filter(member, dest)
+
+
 class Chain:
     def __init__(self, arm, rep, cid=None):
         assert arm in ARMS, arm
         self.arm, self.rep = arm, rep
         self.cid = cid or secrets.token_hex(3)
+        if not valid_id(self.cid):
+            raise ValueError(f"ungültige Kennung der Kette: {self.cid!r}")
         self.root = RUNS / self.cid
         self.home = self.root / "home"
         self.work = self.home / "src" / P["dir"]
+        self.iwork = f"{sbx.SANDBOX_HOME}/src/{P['dir']}"  # derselbe Ort aus Sicht der Sandbox
         self.out = RESULTS / self.cid
+        self.sock = self.root / "sock"
         self.meta_path = self.root / "chain.json"
-        self.meta = {"arm": arm, "rep": rep, "cid": self.cid, "project": PROJECT}
+        self.sandbox_kind = SANDBOX_KIND
+        self.token = secrets.token_hex(16)  # Laufkennzeichen für den Proxy, kein API-Schlüssel
+        self.proxy = None
+        self.gt_fwd = None
+        self.seq = 0
+        self.meta = {"arm": arm, "rep": rep, "cid": self.cid, "project": PROJECT, "sandbox": self.sandbox_kind}
         self.gt_proc = None
 
-    # ---------- Umgebung ----------
+    # ---------- Sandbox ----------
     def env(self):
-        bindirs = [str(self.home / ".local" / "bin"), str(SHARED / "bin")]
+        """Umgebung des Agenten in der Sandbox. Nichts wird vom Harness geerbt; jeder Name steht in sandbox.ALLOWED_ENV_NAMES."""
+        bindirs = [f"{sbx.SANDBOX_HOME}/.local/bin", "/opt/bench/bin"]
         if self.arm == "ghosttree":
-            bindirs.append(str(SHARED / "ctx-bin"))
+            bindirs.append(CTX_BIN_DIR)
         e = {
-            "PATH": ":".join(bindirs + ["/usr/local/bin", "/usr/bin", "/bin"]),
-            "HOME": str(self.home),
-            "USER": "main", "LOGNAME": "main",
+            "PATH": ":".join(bindirs + ["/usr/local/go/bin", "/usr/local/bin", "/usr/bin", "/bin"]),
+            "HOME": sbx.SANDBOX_HOME,
+            "USER": "agent", "LOGNAME": "agent",
             "LANG": "C.UTF-8", "TERM": "dumb", "SHELL": "/bin/bash",
-            # Kurz halten: Tests binden Unix-Sockets unter TMPDIR (sun_path max. 108 Bytes).
-            "TMPDIR": f"/tmp/ac-{self.cid}",
+            "TMPDIR": "/tmp",
             "GOTOOLCHAIN": "local",
-            "GOCACHE": str(SHARED / "gocache"),
-            "GOMODCACHE": str(SHARED / "gomod"),
+            "GOCACHE": GOCACHE_DIR,
+            "GOPROXY": "off",
             "GIT_CONFIG_NOSYSTEM": "1",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             "DISABLE_AUTOUPDATER": "1",
+            "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{sbx.PROXY_PORT}",
+            sbx.TOKEN_ENV: self.token,
         }
+        if (SHARED / "gomod").is_dir():
+            e["GOMODCACHE"] = GOMOD_DIR
         if self.arm != "native":
             e["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
-        if self.arm == "claudemem":
-            e["CLAUDE_MEM_WORKER_PORT"] = str(self.meta["cmem_port"])
-            e["CI"] = "1"
-            e["CLAUDE_MEM_ONLINE_OPTIN"] = "false"
-            e["NPM_CONFIG_CACHE"] = str(SHARED / "npm-cache")
-            e["UV_CACHE_DIR"] = str(SHARED / "uv-cache")
         return e
+
+    def trusted_path(self):
+        """PATH der Werkzeugschritte (git, ctx, go): wie der des Agenten, aber ohne Einträge im beschreibbaren HOME."""
+        return ":".join(d for d in self.env()["PATH"].split(":") if not d.startswith(sbx.SANDBOX_HOME))
+
+    def host_env(self):
+        """Umgebung für vertrauenswürdige Prozesse auf dem Host (ctx serve): knapp und ohne geerbte Zugangsdaten."""
+        return {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(self.root / "gt-server-home"), "LANG": "C.UTF-8",
+                "TMPDIR": str(self.root / "tmp"), "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def mounts(self):
+        ms = [sbx.Mount(str(self.home), sbx.SANDBOX_HOME, True), sbx.Mount(str(self.sock), sbx.RUN_DIR),
+              sbx.Mount(str(self.root / "gocache"), GOCACHE_DIR, True)]
+        if (SHARED / "gomod").is_dir():
+            ms.append(sbx.Mount(str(SHARED / "gomod"), GOMOD_DIR))
+        if self.arm == "ghosttree":
+            ms.append(sbx.Mount(str(SHARED / "ctx-bin"), CTX_BIN_DIR))
+        return ms
+
+    def new_sandbox(self, tag, extra_mounts=(), gocache=None, home=None, model=True, roots=()):
+        """Beschreibt und erzeugt eine Sandbox (startet sie nicht). Ein unbekannter Weg wirft IsolationError.
+        model=False (Bewertung): weder Proxy-Socket noch Laufkennzeichen, Agentencode erreicht das Modell nicht.
+        home / gocache ersetzen HOME und Go-Cache der Kette (die Bewertung nimmt eigene, leere)."""
+        self.seq += 1
+        replaced = {sbx.SANDBOX_HOME: home, GOCACHE_DIR: gocache}
+        mounts = [m for m in self.mounts() if replaced.get(m.dst) is None and (model or m.dst != sbx.RUN_DIR)]
+        mounts += [sbx.Mount(str(src), dst, True) for dst, src in replaced.items() if src is not None]
+        files = []
+        if self.sandbox_kind == "bwrap":
+            claude = shutil.which(AGENT)
+            if not claude:
+                raise RuntimeError(f"{AGENT} nicht im PATH: bwrap nutzt den claude des Hosts")
+            real = os.path.realpath(claude)
+            mounts.append(sbx.Mount(real, "/opt/bench/bin/claude"))
+            files.append(real)
+        env = self.env()
+        forwards = [(sbx.PROXY_PORT, f"{sbx.RUN_DIR}/model.sock")]
+        if self.arm == "ghosttree" and self.meta.get("gt_port"):
+            forwards.append((self.meta["gt_port"], f"{sbx.RUN_DIR}/gt.sock"))
+        if not model:
+            forwards = []
+            for name in ("ANTHROPIC_BASE_URL", sbx.TOKEN_ENV):
+                env.pop(name)
+        extra = [t.split(":") for t in os.environ.get("BENCH_PROBE_EXTRA_TARGETS", "").split(",") if ":" in t]
+        spec = sbx.SandboxSpec(
+            run_id=self.cid, mounts=mounts + list(extra_mounts), env=env, host_home=str(Path.home()),
+            allowed_roots=[str(RUNS), str(SHARED), str(HIDDEN), *map(str, roots)], allowed_files=files, forwards=forwards,
+            uid=os.getuid(), gid=os.getgid(), workdir=self.iwork, extra_probe_targets=[[h, int(p)] for h, p in extra])
+        tagname = re.sub(r"[^A-Za-z0-9_.-]", "_", tag)
+        return sbx.make_sandbox(self.sandbox_kind, spec, self.root / "in" / f"{self.seq:03d}-{tagname}")
+
+    def tool(self, *cmds, cwd=None, check=True, timeout=900, tag="tool", mounts=()):
+        """Führt Befehle nacheinander in einer frischen Sandbox aus (git, ctx, Aufräumen)."""
+        out = []
+        with self.new_sandbox(tag, extra_mounts=mounts) as box:
+            # kein python3, git oder go aus ~/.local/bin des Agenten, und keine globale git-Konfiguration aus dessen HOME
+            env = {**box.spec.env, "PATH": self.trusted_path(), "GIT_CONFIG_GLOBAL": "/dev/null"}
+            for argv in cmds:
+                r = box.exec(argv, env=env, cwd=cwd or self.iwork, timeout=timeout)
+                if check and r.rc != 0:
+                    raise RuntimeError(f"{argv!r} -> {r.rc}: {(r.stdout + r.stderr)[-2000:]}")
+                out.append(r)
+        return out
+
+    def ensure_proxy(self):
+        if self.proxy:
+            return self.proxy
+        self.sock.mkdir(parents=True, exist_ok=True)
+        self.out.mkdir(parents=True, exist_ok=True)
+        self.proxy = ModelProxy(self.sock / "model.sock", self.cid, self.token, usage_log=self.out / "proxy-usage.jsonl").start()
+        return self.proxy
+
+    def cleanup(self):
+        """Sandbox-Container dieser Kette entfernen (nach Kennung), Proxy und Weiterleitungen beenden."""
+        if self.sandbox_kind == "container":
+            sbx.remove_containers(self.cid)
+        self.stop_gt_forward()
+        if self.proxy:
+            self.proxy.stop()
+            self.proxy = None
 
     def save_meta(self):
         self.meta_path.write_text(json.dumps(self.meta, indent=2))
 
     # ---------- Aufbau ----------
     def prepare(self):
-        self.root.mkdir(parents=True)
-        Path(f"/tmp/ac-{self.cid}").mkdir(exist_ok=True)
-        if self.arm == "claudemem":
-            self.meta["cmem_port"] = free_port()
+        if self.arm not in SANDBOX_ARMS:
+            raise sbx.IsolationError(f"Arm {self.arm} läuft nicht in der Sandbox (Installation und Worker brauchen Netz); "
+                                     f"erlaubt: {', '.join(SANDBOX_ARMS)}")
+        self.root.mkdir(parents=True, exist_ok=True)
+        (self.root / "tmp").mkdir(exist_ok=True)
+        (self.root / "gocache").mkdir(exist_ok=True)
         self.out.mkdir(parents=True, exist_ok=True)
         self.home.mkdir()
         (self.home / ".claude").mkdir()
@@ -141,48 +356,21 @@ class Chain:
         (self.home / ".gitconfig").write_text("[user]\n\tname = Dev\n\temail = dev@acme-billing.example\n"
                                               "[init]\n\tdefaultBranch = main\n")
         shutil.copytree(P["template"], self.work)
-        env = self.env()
-        for c in (["git", "init", "-q"], ["git", "add", "-A"],
-                  ["git", "commit", "-q", "-m", "ledgerly: Stand vor der Arbeit"],
-                  ["git", "remote", "add", "origin", P["remote"]]):
-            sh(c, env=env, cwd=self.work)
-        if self.arm == "claudemem":
-            self.save_meta()
-            self.install_claudemem()
+        self.ensure_proxy()
+        self.tool(["sh", "-c", f"[ -d /opt/gowarm/cache ] && cp -a /opt/gowarm/cache/. {GOCACHE_DIR}/ || true"], tag="warm")
+        self.tool(["git", "init", "-q"], [*GIT, "add", "-A"],
+                  [*GIT, *GIT_ID, "commit", "-q", "-m", "ledgerly: Stand vor der Arbeit"],
+                  ["git", "remote", "add", "origin", P["remote"]], tag="prepare")
         if self.arm == "ghosttree":
             self.install_ghosttree()
         user_md = self.home / ".claude" / "CLAUDE.md"
-        self.meta["baseline_user_claude_md"] = user_md.read_text() if user_md.exists() else None
-        self.meta["baseline_settings"] = json.loads((self.home / ".claude" / "settings.json").read_text())
+        self.meta["baseline_user_claude_md"] = safe_text(user_md, self.home, None) if user_md.exists() else None
+        self.meta["baseline_settings"] = json.loads(safe_text(self.home / ".claude" / "settings.json", self.home))
         self.save_meta()
-        log(self.cid, f"prepared arm={self.arm} rep={self.rep}")
-
-    def install_claudemem(self):
-        env = self.env()
-        r = sh(["npx", "-y", f"claude-mem@{CLAUDE_MEM_VERSION}", "install", "--provider", "claude"],
-               env=env, cwd=self.work, check=False, timeout=900)
-        (self.root / "claudemem-install.log").write_text(r.stdout or "")
-        self.meta["cmem_install_rc"] = r.returncode
-        if r.returncode != 0:
-            raise RuntimeError("claude-mem install failed, see claudemem-install.log")
-        self.stop_chain_procs()
-        # Der Observer verwirft geerbte ANTHROPIC_*-Variablen und liest Zugangsdaten nur aus
-        # ~/.claude-mem/.env. Für Nutzer hinter einem Gateway ist das der dokumentierte Weg
-        # (CLAUDE_MEM_CLAUDE_AUTH_METHOD=gateway); hier zeigt er auf denselben Proxy wie der Agent.
-        cm = self.home / ".claude-mem"
-        st = json.loads((cm / "settings.json").read_text())
-        gw = os.environ.get("BENCH_CMEM_GATEWAY_URL")
-        if gw:
-            with open(cm / ".env", "a") as f:
-                f.write(f"ANTHROPIC_BASE_URL={gw}\nANTHROPIC_AUTH_TOKEN={os.environ.get('BENCH_CMEM_GATEWAY_TOKEN', 'none')}\n")
-            st["CLAUDE_MEM_CLAUDE_AUTH_METHOD"] = "gateway"
-        st["CLAUDE_MEM_WORKER_PORT"] = str(self.meta["cmem_port"])
-        (cm / "settings.json").write_text(json.dumps(st, indent=2))
+        log(self.cid, f"prepared arm={self.arm} rep={self.rep} sandbox={self.sandbox_kind}")
 
     def gt_env(self):
-        e = self.env()
-        e["HOME"] = str(self.root / "gt-server-home")
-        return e
+        return self.host_env()
 
     def install_ghosttree(self):
         gt = self.root / "gt"
@@ -199,11 +387,10 @@ class Chain:
             raise RuntimeError("no token in: " + r.stdout)
         (gt / "person-add.log").write_text(r.stdout.replace(token, "<token>"))
         self.start_gt_server()
-        env = self.env()
-        r1 = sh([ctx, "setup", "--server", f"http://127.0.0.1:{port}", "--token", token], env=env, cwd=self.work, check=False)
-        r2 = sh([ctx, "install", "claude"], env=env, cwd=self.work, check=False)
-        (gt / "install.log").write_text((r1.stdout or "").replace(token, "<token>") + "\n---\n" + (r2.stdout or ""))
-        if r1.returncode != 0 or r2.returncode != 0:
+        r1, r2 = self.tool([f"{CTX_BIN_DIR}/ctx", "setup", "--server", f"http://127.0.0.1:{port}", "--token", token],
+                           [f"{CTX_BIN_DIR}/ctx", "install", "claude"], check=False, tag="gt-install")
+        (gt / "install.log").write_text((r1.stdout + r1.stderr).replace(token, "<token>") + "\n---\n" + r2.stdout + r2.stderr)
+        if r1.rc != 0 or r2.rc != 0:
             raise RuntimeError("ghosttree setup/install failed, see gt/install.log")
 
     def start_gt_server(self):
@@ -216,12 +403,29 @@ class Chain:
         for _ in range(100):
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                    return
+                    break
             except OSError:
                 time.sleep(0.2)
-        raise RuntimeError("ctx serve did not come up")
+        else:
+            raise RuntimeError("ctx serve did not come up")
+        # Der Server ist für die Sandbox nur über diesen Socket erreichbar (socat in der Sandbox macht daraus 127.0.0.1).
+        self.sock.mkdir(parents=True, exist_ok=True)
+        # Mit der knappen Umgebung des Hosts: socat erbte sonst den API-Schlüssel des Harness.
+        self.gt_fwd = subprocess.Popen(["socat", f"UNIX-LISTEN:{self.sock}/gt.sock,fork,mode=600,unlink-early",
+                                        f"TCP:127.0.0.1:{port}"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, start_new_session=True, env=self.host_env())
+
+    def stop_gt_forward(self):
+        if self.gt_fwd and self.gt_fwd.poll() is None:
+            self.gt_fwd.terminate()
+            try:
+                self.gt_fwd.wait(10)
+            except subprocess.TimeoutExpired:
+                self.gt_fwd.kill()
+        self.gt_fwd = None
 
     def stop_gt_server(self):
+        self.stop_gt_forward()
         if self.gt_proc and self.gt_proc.poll() is None:
             os.killpg(self.gt_proc.pid, signal.SIGTERM)
             try:
@@ -230,58 +434,43 @@ class Chain:
                 os.killpg(self.gt_proc.pid, signal.SIGKILL)
         self.gt_proc = None
 
-    def stop_chain_procs(self):
-        """Beendet alle Prozesse, deren Umgebung HOME=<dieses HOME> trägt (Worker, Chroma, Watcher)."""
-        needle = ("HOME=" + str(self.home)).encode() + b"\0"
-        me = os.getpid()
-        victims = []
-        for p in Path("/proc").iterdir():
-            if not p.name.isdigit() or int(p.name) == me:
-                continue
-            try:
-                if needle in (p / "environ").read_bytes():
-                    victims.append(int(p.name))
-            except OSError:
-                pass
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            for pid in victims:
-                try:
-                    os.kill(pid, sig)
-                except OSError:
-                    pass
-            time.sleep(2 if sig == signal.SIGTERM else 0.5)
-        return victims
-
     # ---------- Session ----------
     def run_claude(self, prompt, tag, resume=None):
-        cmd = [CLAUPHIL, "--model", MODEL, "-p", prompt, "--output-format", "json",
+        """Eine Agentensitzung. --dangerously-skip-permissions gibt es nur hier, und nur hinter der Sandbox:
+        new_sandbox wirft IsolationError, bevor ein Prozess entsteht, und guarded prüft vor dem Agenten."""
+        cmd = [AGENT, "--model", MODEL, "-p", prompt, "--output-format", "json",
                "--dangerously-skip-permissions", "--max-turns", MAX_TURNS, "--disallowedTools", "Agent"]
         if resume:
             cmd += ["--resume", resume]
+        box = self.new_sandbox(tag)
+        usage0 = self.proxy.summary() if self.proxy else {"requests": 0, "tokens": 0}
         t0 = time.time()
-        timed_out = False
+        ilog = None
         try:
-            r = subprocess.run(cmd, env=self.env(), cwd=self.work, text=True, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=SESSION_TIMEOUT)
-            stdout, stderr, rc = r.stdout, r.stderr, r.returncode
-        except subprocess.TimeoutExpired as ex:
-            stdout = ex.stdout.decode() if isinstance(ex.stdout, bytes) else (ex.stdout or "")
-            stderr, rc, timed_out = "timeout", -9, True
+            with box:
+                res, ilog = box.guarded(cmd, self.out / f"{tag}.isolation.json", SESSION_TIMEOUT, cwd=self.iwork)
+        except sbx.IsolationError as ex:
+            log(self.cid, f"ISOLATION FAILED {tag}: {ex}")
+            raise
+        stdout, stderr, rc, timed_out = res.stdout, res.stderr, res.rc, res.timed_out
         wall = time.time() - t0
         (self.out / f"{tag}.stdout.json").write_text(stdout or "")
         (self.out / f"{tag}.stderr.txt").write_text(stderr or "")
         try:
-            res = json.loads(stdout)
+            parsed = json.loads(stdout)
         except Exception:
-            res = {}
+            parsed = {}
+        usage1 = self.proxy.summary() if self.proxy else usage0
         rec = {"tag": tag, "rc": rc, "t_start": t0, "wall_s": round(wall, 1), "timed_out": timed_out,
-               "session_id": res.get("session_id"), "is_error": res.get("is_error"),
-               "subtype": res.get("subtype"), "terminal_reason": res.get("terminal_reason"),
-               "api_error_status": res.get("api_error_status"), "num_turns": res.get("num_turns"),
-               "cost_usd": res.get("total_cost_usd"), "usage": res.get("usage"),
-               "modelUsage": res.get("modelUsage"), "result_head": (res.get("result") or "")[:400]}
+               "session_id": parsed.get("session_id"), "is_error": parsed.get("is_error"),
+               "subtype": parsed.get("subtype"), "terminal_reason": parsed.get("terminal_reason"),
+               "api_error_status": parsed.get("api_error_status"), "num_turns": parsed.get("num_turns"),
+               "cost_usd": parsed.get("total_cost_usd"), "usage": parsed.get("usage"),
+               "modelUsage": parsed.get("modelUsage"), "result_head": (parsed.get("result") or "")[:400],
+               "isolation_sha256": ilog.sha256() if ilog else None,
+               "proxy_usage": {k: usage1[k] - usage0[k] for k in usage1}}
         rec["infra_failure"] = self.is_infra_failure(rec, stdout, stderr)
-        rec["model_check"] = model_check(res.get("modelUsage") or {})
+        rec["model_check"] = model_check(parsed.get("modelUsage") or {})
         return rec
 
     @staticmethod
@@ -299,86 +488,74 @@ class Chain:
             return True
         return False
 
+    def memory_dirs(self):
+        """Auto-Memory-Verzeichnisse unter ~/.claude/projects. Alles, was der Agent dort durch einen Symlink ersetzt hat,
+        bricht die Kette ab (ein Symlink auf Gedächtnis innerhalb des HOME würde die Bereinigung umgehen)."""
+        projects = self.home / ".claude" / "projects"
+        if not projects.is_dir():
+            return []
+        out = []
+        for e in sorted(os.scandir(projects), key=lambda e: e.name):
+            if e.is_symlink() or not e.is_dir(follow_symlinks=False):
+                raise sbx.IsolationError(f"Der Agent hat {e.path} durch einen Symlink oder eine Datei ersetzt")
+            out.append(Path(e.path) / "memory")
+        return [m for m in out if m.is_symlink() or m.exists()]
+
     def post_session(self, tag):
         info = {}
-        if self.arm == "claudemem":
-            info["cmem_drain"] = self.wait_cmem_drain()
-            logs = self.home / ".claude-mem" / "logs"
-            if logs.exists():
-                shutil.copytree(logs, self.out / f"{tag}.cmem-logs", dirs_exist_ok=True)
         if self.arm == "ghosttree":
-            r = sh([str(SHARED / "ctx-bin" / "ctx"), "watch", "--once"], env=self.env(), cwd=self.work, check=False, timeout=600)
-            info["gt_watch_rc"] = r.returncode
-            (self.out / f"{tag}.gt-watch.log").write_text(r.stdout or "")
+            r = self.tool([f"{CTX_BIN_DIR}/ctx", "watch", "--once"], check=False, timeout=600, tag="gt-watch")[0]
+            info["gt_watch_rc"] = r.rc
+            (self.out / f"{tag}.gt-watch.log").write_text(r.stdout + r.stderr)
+        # Der Agent ist beendet, sein Container weg. Was er im HOME hinterlassen hat, ist nicht vertrauenswürdig, und
+        # jeder Schritt in der Sandbox, der das HOME beschreibbar einhängt (ctx watch), kann es wieder ändern.
+        # Darum steht die Prüfung hier, unmittelbar vor der Bereinigung auf dem Host, die keinem Symlink folgt.
+        require_real_dirs(self.home, "src", f"src/{P['dir']}", ".claude", ".claude/projects")
         removed = []
         if self.arm != "native":
-            for p in self.work.rglob("*"):
-                if ".git" in p.parts:
-                    continue
-                if p.name in MEMFILE_NAMES and p.is_file():
-                    txt = p.read_text(errors="replace")
-                    if self.arm == "claudemem" and "claude-mem-context" in txt:
-                        continue
-                    removed.append(str(p.relative_to(self.work)))
-                    (self.out / f"{tag}.removed-{p.name}").write_text(txt)
+            for p, is_link in safe_walk(self.work):
+                if p.name in MEMFILE_NAMES:
+                    rel = str(p.relative_to(self.work))
+                    if not is_link:
+                        (self.out / f"{tag}.removed-{p.name}").write_text(safe_text(p, self.work))
+                    removed.append(rel + (" (Symlink)" if is_link else ""))
                     p.unlink()
             # Agenten legen auf Bitte selbst Dateien im Auto-Memory-Pfad oder in der
             # Nutzer-CLAUDE.md an. Das ist der Mechanismus von Arm native, nicht dieses Arms.
-            for memdir in self.home.glob(".claude/projects/*/memory"):
-                files = [p for p in memdir.rglob("*") if p.is_file()]
+            for memdir in self.memory_dirs():
+                files = [] if memdir.is_symlink() else [p for p, link in safe_walk(memdir, skip=()) if not link]
                 if files:
                     keep = self.out / f"{tag}.removed-automemory"
                     keep.mkdir(exist_ok=True)
                     for p in files:
-                        shutil.copy(p, keep / p.name)
+                        (keep / p.name).write_text(safe_text(p, memdir))
                     removed.append(f"~/{memdir.relative_to(self.home)}/ ({len(files)} Dateien)")
-                shutil.rmtree(memdir)
+                rm_tree(memdir)
             user_md = self.home / ".claude" / "CLAUDE.md"
             base = self.meta.get("baseline_user_claude_md")
-            cur = user_md.read_text() if user_md.exists() else None
+            cur = safe_text(user_md, self.home, None) if (user_md.exists() or user_md.is_symlink()) else None
             if cur != base:
                 (self.out / f"{tag}.changed-user-CLAUDE.md").write_text(cur or "<gelöscht>")
                 removed.append("~/.claude/CLAUDE.md (auf Installationsstand zurückgesetzt)")
-                if base is None:
-                    user_md.unlink()
-                else:
+                if user_md.is_symlink() or base is None:
+                    user_md.unlink(missing_ok=True)
+                if base is not None:
                     user_md.write_text(base)
         info["removed_memfiles"] = removed
-        env = self.env()
-        sh(["git", "add", "-A"], env=env, cwd=self.work)
-        sh(["git", "-c", "user.name=Dev", "-c", "user.email=dev@acme-billing.example", "commit", "-q",
-            "--allow-empty", "-m", f"Arbeitsstand nach {tag.split('.')[0]}"], env=env, cwd=self.work)
-        info["head"] = sh(["git", "rev-parse", "HEAD"], env=env, cwd=self.work).stdout.strip()
+        # Die Konfiguration des Repos stammt vom Agenten: ohne GIT führte git core.fsmonitor und Hooks daraus aus, und
+        # filter.*, gpg.program usw. gehen nur über die Ersetzung der Datei.
+        reset_git_config(self.work)
+        _, _, head = self.tool([*GIT, "add", "-A"],
+                               [*GIT, *GIT_ID, "commit", "-q", "--allow-empty", "-m", f"Arbeitsstand nach {tag.split('.')[0]}"],
+                               [*GIT, "rev-parse", "HEAD"], tag="commit")
+        info["head"] = head.stdout.strip()
         return info
-
-    def wait_cmem_drain(self, timeout=900):
-        port = self.meta["cmem_port"]
-        t0 = time.time()
-        last, idle_since = None, None
-        while time.time() - t0 < timeout:
-            try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/processing-status", timeout=5) as r:
-                    st = json.loads(r.read())
-            except Exception as ex:
-                st = {"error": str(ex)}
-            last = st
-            busy = bool(st.get("isProcessing")) or int(st.get("queueDepth") or 0) > 0
-            if "error" in st:
-                busy = False
-            if not busy:
-                idle_since = idle_since or time.time()
-                if time.time() - idle_since > 15:
-                    break
-            else:
-                idle_since = None
-            time.sleep(3)
-        return {"waited_s": round(time.time() - t0, 1), "last": last}
 
     # ---------- Schnappschüsse ----------
     def snapshot(self, name):
         if self.arm == "ghosttree":
             self.stop_gt_server()
-        self.stop_chain_procs()
+        self.cleanup_sandboxes()
         snap = self.root / "snapshots"
         snap.mkdir(exist_ok=True)
         with tarfile.open(snap / f"{name}.tar", "w") as t:
@@ -388,24 +565,19 @@ class Chain:
         if self.arm == "ghosttree":
             self.start_gt_server()
 
+    def cleanup_sandboxes(self):
+        if self.sandbox_kind == "container":
+            sbx.remove_containers(self.cid)
+
     def restore(self, name):
         if self.arm == "ghosttree":
             self.stop_gt_server()
-        self.stop_chain_procs()
-        for attempt in range(6):
-            try:
-                shutil.rmtree(self.home)
-                break
-            except OSError:
-                # Nachzügler (Worker, Chroma) schreiben noch: erneut beenden, kurz warten
-                if attempt == 5:
-                    raise
-                self.stop_chain_procs()
-                time.sleep(2)
+        self.cleanup_sandboxes()
+        shutil.rmtree(self.home)
         if self.arm == "ghosttree":
             shutil.rmtree(self.root / "gt")
         with tarfile.open(self.root / "snapshots" / f"{name}.tar") as t:
-            t.extractall(self.root, filter="tar")
+            t.extractall(self.root, filter=snapshot_filter)
         if self.arm == "ghosttree":
             self.start_gt_server()
 
@@ -435,21 +607,17 @@ class Chain:
                                    "infra_failure": infra, **info})
                 break
         self.snapshot("post-learning")
-        self.meta["post_learning_head"] = sh(["git", "rev-parse", "HEAD"], env=self.env(), cwd=self.work).stdout.strip()
+        self.meta["post_learning_head"] = self.tool([*GIT, "rev-parse", "HEAD"], tag="head")[0].stdout.strip()
         self.meta["state_evidence"] = self.state_evidence()
         self.save_meta()
 
     def state_evidence(self):
         """Weist nach, dass der Gedächtniszustand des Arms existiert (Falle #1634)."""
         ev = {}
-        mem = list(self.home.glob(".claude/projects/*/memory/*.md"))
+        mem = safe_glob(self.home, ".claude/projects/*/memory/*.md")
         ev["auto_memory_files"] = [str(p.relative_to(self.home)) for p in mem]
-        ev["repo_memfiles"] = [str(p.relative_to(self.work)) for p in self.work.rglob("*")
-                               if p.name in MEMFILE_NAMES and ".git" not in p.parts]
-        if self.arm == "claudemem":
-            db = self.home / ".claude-mem" / "claude-mem.db"
-            ev["cmem_db_bytes"] = db.stat().st_size if db.exists() else None
-            ev["cmem_counts"] = sqlite_counts(db, ["observations", "session_summaries", "sdk_sessions", "user_prompts"])
+        ev["repo_memfiles"] = [str(p.relative_to(self.work)) for p, link in safe_walk(self.work)
+                               if p.name in MEMFILE_NAMES and not link]
         if self.arm == "ghosttree":
             db = self.root / "gt" / "ghosttree.db"
             ev["gt_db_bytes"] = db.stat().st_size if db.exists() else None
@@ -470,9 +638,9 @@ class Chain:
                     time.sleep(30)
                     continue
                 info = self.post_session(tag)
-                patch = sh(["git", "diff", "--binary", head, "HEAD"], env=self.env(), cwd=self.work, check=False)
+                patch = self.tool([*GIT, "diff", "--binary", "--no-ext-diff", "--no-textconv", head, "HEAD"], check=False, tag="patch")[0]
                 (self.out / f"{tag}.patch").write_text(patch.stdout or "")
-                grade = grade_task(F["id"], self.work, head, self.env())
+                grade = grade_task(F["id"], self.work, head, SandboxGradeRun(self, self.work))
                 tx = transcript_stats(self.home, rec.get("session_id"), F["id"])
                 self.write_record({"kind": "followup", "task": F["id"], "attempt": attempt, "invocations": [rec],
                                    "infra_failure": rec["infra_failure"], "grade": grade, "transcript": tx, **info})
@@ -480,7 +648,7 @@ class Chain:
                 break
         self.restore("post-learning")
         self.stop_gt_server()
-        self.stop_chain_procs()
+        self.cleanup_sandboxes()
 
     def write_record(self, rec):
         rec.update({"arm": self.arm, "rep": self.rep, "cid": self.cid, "ts": time.time()})
@@ -489,10 +657,12 @@ class Chain:
             for f in instruction_files(self.home, inv.get("session_id")):
                 if f not in files:
                     files.append(f)
+        # Pfade im Transkript sind Pfade der Sandbox
+        own_md = f"{sbx.SANDBOX_HOME}/.claude/CLAUDE.md"
         for f in files:
-            if f.startswith(str(self.work) + "/") or f == str(self.home / ".claude" / "CLAUDE.md"):
+            if f.startswith(self.iwork + "/") or f == own_md:
                 continue
-            if self.arm == "native" and f.startswith(str(self.home / ".claude" / "projects") + "/"):
+            if self.arm == "native" and f.startswith(f"{sbx.SANDBOX_HOME}/.claude/projects/"):
                 continue  # Auto-Memory (MEMORY.md) ist der Mechanismus dieses Arms
             violations.append(f)
         rec["instruction_files"] = files
@@ -502,8 +672,8 @@ class Chain:
         if rec.get("invocations"):
             sid = rec["invocations"][-1].get("session_id")
             if sid:
-                for p in self.home.glob(f".claude/projects/*/{sid}.jsonl"):
-                    shutil.copy(p, self.out / f"{rec['task']}.a{rec['attempt']}.transcript.jsonl")
+                for p in safe_glob(self.home, f".claude/projects/*/{sid}.jsonl"):
+                    shutil.copyfile(p, self.out / f"{rec['task']}.a{rec['attempt']}.transcript.jsonl")
         with open(self.out / "records.jsonl", "a") as f:
             f.write(json.dumps(rec) + "\n")
 
@@ -545,6 +715,7 @@ def model_check(mu):
 
 # ---------- Bewertung ----------
 SQL_STMT_SPLIT = re.compile(r";\s*")
+GRADE_SRC, GRADE_HIDDEN, GRADE_DIR = "/grade-src", "/grade-hidden", "/tmp/g"
 
 
 def hidden_test(task):
@@ -552,79 +723,167 @@ def hidden_test(task):
     return p if p.exists() else p.with_name(p.name + ".txt")
 
 
-def grade_task(task, work, snapshot_sha, env):
-    tmp = Path(env["TMPDIR"]) / f"grade-{task}-{secrets.token_hex(3)}"
-    shutil.copytree(work, tmp, ignore=shutil.ignore_patterns(".git"))
+class SandboxGradeRun:
+    """Bewertung eines Agentenstands: Der Stand wird nur lesbar in eine Sandbox ohne Netz gehängt, dort kopiert
+    (die Kopie macht cp -a in der Sandbox, nicht der Harness), die verdeckten Tests kommen nur dort hinein (R5/R6)."""
+
+    def __init__(self, chain, work, trusted_roots=()):
+        # trusted_roots: nur für ein Verzeichnis, das die Bedienung ausdrücklich nennt (`bench.py grade <aufgabe> <verzeichnis>`).
+        # Der Stand einer Kette ist nie eine eigene Wurzel: er liegt unter RUNS oder wird nicht eingehängt.
+        self.chain, self.work = chain, Path(work)
+        self.trusted_roots = [str(r) for r in trusted_roots]
+        self.hidden = None
+
+    def place_hidden(self, src, name):
+        self.hidden = (Path(src), name)
+
+    def _box(self):
+        # Direkt vor dem Einhängen: Der Stand liegt im HOME, in dem der Agent (und jeder Schritt, der es beschreibbar
+        # einhängt) Symlinks anlegen kann. Zeigte src/ledgerly irgendwohin, hinge die Sandbox dieses Verzeichnis des Hosts ein.
+        rel = os.path.relpath(self.work, self.chain.home)
+        if not rel.startswith(".."):
+            require_real_dirs(self.chain.home, rel)  # prüft jeden Teil: src, src/ledgerly
+        mounts = [sbx.Mount(str(self.work), GRADE_SRC)]
+        if self.hidden:
+            mounts.append(sbx.Mount(str(self.hidden[0]), f"{GRADE_HIDDEN}/{self.hidden[1]}"))
+        gocache = self.chain.root / "gocache-grade"  # nie vom Agenten benutzt
+        gocache.mkdir(exist_ok=True)
+        home = self.chain.root / "grade-home"  # leer: Agentencode bei der Bewertung sieht das HOME der Kette nicht
+        rm_tree(home)
+        home.mkdir()
+        return self.chain.new_sandbox("grade", extra_mounts=mounts, gocache=gocache, home=home, model=False,
+                                      roots=self.trusted_roots)
+
+    def _prep(self, hidden):
+        script = (f"set -e; rm -rf {GRADE_DIR}; mkdir -p {GRADE_DIR}; cp -a {GRADE_SRC}/. {GRADE_DIR}/; "
+                  f"rm -rf {GRADE_DIR}/.git {GRADE_DIR}/zzhidden; ")
+        if hidden and self.hidden:
+            script += f"mkdir {GRADE_DIR}/zzhidden; cp {GRADE_HIDDEN}/{self.hidden[1]} {GRADE_DIR}/zzhidden/{self.hidden[1]}; "
+        return script + f"cd {GRADE_DIR}; exec \"$@\""
+
+    def go(self, argv, timeout, hidden=False):
+        """Führt argv im frischen Abbild des Stands aus; hidden=True legt vorher die verdeckten Tests dazu."""
+        with self._box() as box:
+            if (self.chain.root / "gocache-grade").is_dir() and not any((self.chain.root / "gocache-grade").iterdir()):
+                box.exec(["sh", "-c", f"[ -d /opt/gowarm/cache ] && cp -a /opt/gowarm/cache/. {GOCACHE_DIR}/ || true"])
+            r = box.exec(["bash", "-c", self._prep(hidden), "_", *argv], cwd="/tmp", timeout=timeout)
+        return self._checked(r), r.stdout + r.stderr
+
+    def git(self, *args):
+        with self._box() as box:
+            r = box.exec([*GIT, "-C", GRADE_SRC, *args], cwd="/tmp", timeout=120)
+        return self._checked(r), r.stdout
+
+    @staticmethod
+    def _checked(r):
+        """Ein Fehler der Sandbox selbst (docker exec scheitert) ist kein „Aufgabe nicht gelöst“."""
+        if r.rc in (125, 126, 127) and ("OCI runtime" in r.stderr or "docker" in r.stderr or "bwrap" in r.stderr):
+            raise RuntimeError(f"Bewertung in der Sandbox nicht möglich: {r.stderr.strip()[-400:]}")
+        return r.rc
+
+
+class HostGradeRun:
+    """Nur für vertrauenswürdige Stände (validate_ledgerly.py: Referenzlösungen, kein Agenten-Code)."""
+
+    def __init__(self, work, env):
+        self.work, self.env, self.tmp = Path(work), env, None
+
+    def place_hidden(self, src, name):
+        self.hidden = (Path(src), name)
+
+    def go(self, argv, timeout, hidden=False):
+        tmp = Path(self.env["TMPDIR"]) / f"grade-{secrets.token_hex(3)}"
+        shutil.copytree(self.work, tmp, ignore=shutil.ignore_patterns(".git"))
+        try:
+            if hidden:
+                hid = tmp / "zzhidden"
+                hid.mkdir()
+                shutil.copy(self.hidden[0], hid / self.hidden[1])
+            r = subprocess.run(argv, env=self.env, cwd=tmp, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            return r.returncode, r.stdout
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def git(self, *args):
+        r = subprocess.run(["git", "-C", str(self.work), *args], env=self.env, text=True, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        return r.returncode, r.stdout
+
+
+def grade_task(task, work, snapshot_sha, gr):
     out = {"task": task, "checks": {}}
-    try:
-        # Repo-eigene Tests (ohne verdeckte)
-        r = sh(["go", "test", "-count=1"] + P["repo_tests"], env=env, cwd=tmp, check=False, timeout=900)
-        out["checks"]["repo_tests"] = r.returncode == 0
-        out["repo_tests_tail"] = (r.stdout or "")[-1500:]
-        hid = tmp / "zzhidden"
-        hid.mkdir()
-        shutil.copy(hidden_test(task), hid / f"{task.lower()}_test.go")
-        r = sh(["go", "test", "-count=1", "-json", "./zzhidden/"], env=env, cwd=tmp, check=False, timeout=600)
-        tests = {}
-        build_out = []
-        for line in (r.stdout or "").splitlines():
-            try:
-                ev = json.loads(line)
-            except Exception:
-                build_out.append(line)
-                continue
-            if ev.get("Test") and ev.get("Action") in ("pass", "fail") and "/" not in ev["Test"]:
-                tests[ev["Test"]] = ev["Action"] == "pass"
-            if ev.get("Action") == "output" and not ev.get("Test"):
-                build_out.append(ev.get("Output", ""))
-        src = hidden_test(task).read_text()
-        declared = re.findall(r"^func (Test\w+)\(", src, re.M)
-        for name in declared:
-            out["checks"][name] = tests.get(name, False)  # Kompilierfehler => alle falsch
-        out["hidden_output_tail"] = "".join(build_out)[-1500:]
-        func_ok = out["checks"]["repo_tests"] and all(v for k, v in out["checks"].items() if k.startswith("TestFunc_"))
-        know_checks = {k: v for k, v in out["checks"].items() if k.startswith("TestKnow_")}
-        if PROJECT == "ledgerly" and task == "F5":
-            mc = migration_checks(work, snapshot_sha, env)
-            out["migration"] = mc
-            func_ok = func_ok and mc["new_vat_migration"]
-            know_checks.update({"existing_unchanged": mc["existing_unchanged"], "no_not_null_without_default": mc["no_not_null_without_default"],
-                                "down_present": mc["down_present"]})
-        if PROJECT == "ledgerly" and task == "F6":
-            gomod = (work / "go.mod").read_text()
-            gosum = work / "go.sum"
-            know_checks["stdlib_only"] = "require" not in gomod and (not gosum.exists() or not gosum.read_text().strip())
-        out["know_checks"] = know_checks
-        out["func"] = bool(func_ok)
-        out["know"] = bool(all(know_checks.values())) if know_checks else None
-        out["success"] = out["func"] and (out["know"] is None or out["know"])
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+    hidden = hidden_test(task)
+    gr.place_hidden(hidden, f"{task.lower()}_test.go")
+    # Repo-eigene Tests (ohne verdeckte)
+    rc, text = gr.go(["go", "test", "-count=1"] + [t for t in P["repo_tests"]], 900)
+    out["checks"]["repo_tests"] = rc == 0
+    out["repo_tests_tail"] = text[-1500:]
+    rc, text = gr.go(["go", "test", "-count=1", "-json", "./zzhidden/"], 600, hidden=True)
+    tests = {}
+    build_out = []
+    for line in text.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:
+            build_out.append(line)
+            continue
+        if ev.get("Test") and ev.get("Action") in ("pass", "fail") and "/" not in ev["Test"]:
+            tests[ev["Test"]] = ev["Action"] == "pass"
+        if ev.get("Action") == "output" and not ev.get("Test"):
+            build_out.append(ev.get("Output", ""))
+    src = hidden.read_text()
+    declared = re.findall(r"^func (Test\w+)\(", src, re.M)
+    for name in declared:
+        out["checks"][name] = tests.get(name, False)  # Kompilierfehler => alle falsch
+    out["hidden_output_tail"] = "".join(build_out)[-1500:]
+    func_ok = out["checks"]["repo_tests"] and all(v for k, v in out["checks"].items() if k.startswith("TestFunc_"))
+    know_checks = {k: v for k, v in out["checks"].items() if k.startswith("TestKnow_")}
+    if PROJECT == "ledgerly" and task == "F5":
+        mc = migration_checks(gr, snapshot_sha)
+        out["migration"] = mc
+        func_ok = func_ok and mc["new_vat_migration"]
+        know_checks.update({"existing_unchanged": mc["existing_unchanged"], "no_not_null_without_default": mc["no_not_null_without_default"],
+                            "down_present": mc["down_present"]})
+    if PROJECT == "ledgerly" and task == "F6":
+        _, gomod = gr.git("show", "HEAD:go.mod")
+        has_sum = gr.git("cat-file", "-e", "HEAD:go.sum")[0] == 0
+        gosum = gr.git("show", "HEAD:go.sum")[1] if has_sum else ""
+        know_checks["stdlib_only"] = "require" not in gomod and not gosum.strip()
+    out["know_checks"] = know_checks
+    out["func"] = bool(func_ok)
+    out["know"] = bool(all(know_checks.values())) if know_checks else None
+    out["success"] = out["func"] and (out["know"] is None or out["know"])
     return out
 
 
-def migration_checks(work, snap, env):
-    r = sh(["git", "diff", "--name-status", snap, "HEAD", "--", "migrations/"], env=env, cwd=work, check=False)
+def migration_checks(gr, snap):
+    """Liest nur, was git im letzten Commit des Agenten verzeichnet (kein Lesen von Dateien des Agenten auf dem Host)."""
+    _, diff = gr.git("diff", "--name-status", snap, "HEAD", "--", "migrations/")
     changed_existing, added = [], []
-    for line in (r.stdout or "").splitlines():
+    for line in diff.splitlines():
         parts = line.split("\t")
         st, path = parts[0], parts[-1]
         if st.startswith("A"):
             added.append(path)
         else:
             changed_existing.append(line)
+
+    def blob(path):
+        return gr.git("show", f"HEAD:{path}")[1]
+
     ups = [p for p in added if p.endswith(".sql") and not p.endswith(".down.sql")]
-    vat_ups = [p for p in ups if "vat_id" in (work / p).read_text().lower()]
+    vat_ups = [p for p in ups if "vat_id" in blob(p).lower()]
     violations = []
     for p in vat_ups:
-        for stmt in SQL_STMT_SPLIT.split(re.sub(r"--[^\n]*", "", (work / p).read_text())):
+        for stmt in SQL_STMT_SPLIT.split(re.sub(r"--[^\n]*", "", blob(p))):
             if "vat_id" in stmt.lower() and re.search(r"not\s+null", stmt, re.I) and not re.search(r"\bdefault\b", stmt, re.I):
                 violations.append(stmt.strip()[:200])
     downs = [p[:-4] + ".down.sql" for p in vat_ups]
     return {"added": added, "changed_existing": changed_existing, "new_vat_migration": bool(vat_ups),
             "existing_unchanged": not changed_existing, "not_null_violations": violations,
             "no_not_null_without_default": bool(vat_ups) and not violations,
-            "down_present": bool(vat_ups) and all((work / d).exists() for d in downs)}
+            "down_present": bool(vat_ups) and all(gr.git("cat-file", "-e", f"HEAD:{d}")[0] == 0 for d in downs)}
 
 
 KEYWORDS = {
@@ -645,7 +904,7 @@ def instruction_files(home, sid):
     out = []
     if not sid:
         return out
-    for fn in home.glob(f".claude/projects/*/{sid}.jsonl"):
+    for fn in safe_glob(home, f".claude/projects/*/{sid}.jsonl"):
         for line in fn.read_text(errors="replace").splitlines():
             if '"instructions"' not in line:
                 continue
@@ -669,7 +928,7 @@ def transcript_stats(home, sid, task):
           "memory_tool_calls": 0, "injected_chars": 0}
     if not sid:
         return st
-    files = list(home.glob(f".claude/projects/*/{sid}.jsonl"))
+    files = safe_glob(home, f".claude/projects/*/{sid}.jsonl")
     if not files:
         return st
     pats = [re.compile(p) for p in KEYWORDS.get(task, [])]
@@ -718,37 +977,88 @@ def transcript_stats(home, sid, task):
 
 
 def regrade(cid):
-    """Bewertet die Folgesessions einer Kette neu: Schnappschuss entpacken, Patch anwenden, prüfen."""
+    """Bewertet die Folgesessions einer Kette neu: Schnappschuss entpacken, Patch anwenden, prüfen. Alles in der Sandbox."""
+    if not valid_id(cid):
+        raise ValueError(f"ungültige Kennung: {cid!r}")
     out = RESULTS / cid
     meta = json.loads((out / "chain.json").read_text())
     head = meta["post_learning_head"]
     tarp = RUNS / cid / "snapshots" / "post-learning.tar"
-    recs = [json.loads(l) for l in (out / "records.jsonl").read_text().splitlines()]
+    recs = [json.loads(line) for line in (out / "records.jsonl").read_text().splitlines()]
     res = []
     for r in recs:
         if r["kind"] != "followup":
             continue
-        tmp = Path(f"/tmp/rg-{secrets.token_hex(3)}")
-        tmp.mkdir()
+        ch = Chain("vanilla", meta.get("rep", 0), cid=f"rg-{secrets.token_hex(3)}")  # nur die Sandbox, kein Gedächtnis
+        ch.root.mkdir(parents=True)
+        (ch.root / "gocache").mkdir()
+        ch.sock.mkdir()
+        ch.ensure_proxy()
         try:
             with tarfile.open(tarp) as t:
-                t.extractall(tmp, filter="tar")
-            work = tmp / "home" / "src" / P["dir"]
-            env = dict(os.environ, HOME=str(tmp / "home"), TMPDIR=str(tmp), GOTOOLCHAIN="local", GOCACHE=str(SHARED / "gocache"),
-                       GOMODCACHE=str(SHARED / "gomod"), GIT_CONFIG_NOSYSTEM="1")
+                t.extractall(ch.root, filter=snapshot_filter)
+            require_real_dirs(ch.home, "src", f"src/{P['dir']}")
+            reset_git_config(ch.work)
             patch = out / f"{r['task']}.a{r['attempt']}.patch"
             if patch.exists() and patch.read_text().strip():
-                sh(["git", "update-index", "-q", "--refresh"], env=env, cwd=work, check=False)
-                sh(["git", "apply", "--binary", "--index", str(patch)], env=env, cwd=work)
-                sh(["git", "-c", "user.name=Dev", "-c", "user.email=dev@x", "commit", "-qm", "regrade"], env=env, cwd=work)
-            g = grade_task(r["task"], work, head, env)
+                # Der Patch kommt aus einem Verzeichnis des Harness, nur lesbar: ins HOME des Agenten wird nichts geschrieben,
+                # wo ein Symlink das Ziel umlenken könnte.
+                pdir = ch.root / "patch"
+                pdir.mkdir()
+                shutil.copyfile(patch, pdir / "regrade.patch")
+                ch.tool([*GIT, "update-index", "-q", "--refresh"], check=False, tag="regrade")
+                ch.tool([*GIT, "apply", "--binary", "--index", "/bench-patch/regrade.patch"],
+                        [*GIT, *GIT_ID, "commit", "-qm", "regrade"], tag="regrade",
+                        mounts=[sbx.Mount(str(pdir), "/bench-patch")])
+            g = grade_task(r["task"], ch.work, head, SandboxGradeRun(ch, ch.work))
             res.append({"task": r["task"], "attempt": r["attempt"], "old": {k: r["grade"][k] for k in ("func", "know", "success")},
                         "new": {k: g[k] for k in ("func", "know", "success")}, "grade": g})
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            ch.cleanup()
+            shutil.rmtree(ch.root, ignore_errors=True)
+            shutil.rmtree(ch.out, ignore_errors=True)
     (out / "regraded.jsonl").write_text("".join(json.dumps(x) + "\n" for x in res))
     for x in res:
         print(cid, x["task"], x["old"], "->", x["new"])
+
+
+# ---------- Vorabprüfung und Probelauf ----------
+def precheck():
+    """Ohne nutzbaren Sandbox-Weg gibt es keinen Lauf (geschlossen bei Fehler)."""
+    kind = (SANDBOX_KIND or "").strip().lower()
+    if kind not in sbx.KINDS:
+        raise sbx.IsolationError(f"BENCH_SANDBOX={SANDBOX_KIND!r}: erlaubt sind {', '.join(sbx.KINDS)}. "
+                                 "Es gibt keinen Weg ohne Sandbox.")
+    if kind == "container" and not sbx.docker_ready():
+        raise sbx.IsolationError("Container-Sandbox nicht bereit: Docker antwortet nicht oder das Image fehlt "
+                                 f"(BENCH_IMAGE={os.environ.get('BENCH_IMAGE', 'agent-compare:local')}; bauen mit image/build.sh)")
+    if kind == "bwrap" and not shutil.which(os.environ.get("BENCH_BWRAP", "bwrap")):
+        raise sbx.IsolationError("bubblewrap (bwrap) ist nicht installiert")
+
+
+def probe_run(keep=False):
+    """Isolationsprobe ohne Modellaufruf: vanilla-Kette aufbauen, vor und nach `claude --version` proben."""
+    precheck()
+    c = Chain("vanilla", 0, cid="probe-" + secrets.token_hex(3))
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    ok = False
+    try:
+        c.prepare()
+        with c.new_sandbox("probe") as box:
+            res, ilog = box.guarded([AGENT, "--version"], c.out / "isolation.json", 120, cwd=c.iwork)
+        print(f"{AGENT} --version -> rc={res.rc} {res.stdout.strip()[:80]}")
+        doc = json.loads(ilog.path.read_text())
+        for phase, rep in doc["phases"].items():
+            print(f"{phase}: {'bestanden' if rep['ok'] else 'NICHT bestanden'}")
+            for name, chk in rep["checks"].items():
+                print(f"  {'ok ' if chk['ok'] else 'FEHLER'} {name}: {chk['detail']}")
+        print(f"Protokoll: {ilog.path}  sha256={ilog.sha256()}")
+        ok = doc["ok"] and res.rc == 0
+    finally:
+        c.cleanup()
+        if not keep:
+            shutil.rmtree(c.root, ignore_errors=True)
+    return 0 if ok else 1
 
 
 def main():
@@ -758,9 +1068,11 @@ def main():
         only = None
         if "--tasks" in args:
             only = set(args[args.index("--tasks") + 1].split(","))
+        precheck()
         c = Chain(arm, rep)
         RESULTS.mkdir(parents=True, exist_ok=True)
         try:
+            c.ensure_proxy().require_key()
             c.prepare()
             c.learning()
             if "--only-learning" not in args:
@@ -773,15 +1085,35 @@ def main():
             raise
         finally:
             c.stop_gt_server()
-            c.stop_chain_procs()
-            c.save_meta()
-            shutil.copy(c.meta_path, c.out / "chain.json")
+            c.cleanup()
+            if c.meta_path.exists():
+                c.save_meta()
+                shutil.copy(c.meta_path, c.out / "chain.json")
+    elif args and args[0] == "probe":
+        sys.exit(probe_run("--keep" in args))
+    elif args and args[0] == "cleanup":
+        cid = args[1] if len(args) > 1 else None
+        if cid is not None and not valid_id(cid):
+            sys.exit(f"ungültige Kennung: {cid!r}")
+        print("entfernt:", sbx.remove_containers(cid) or "nichts")
     elif args and args[0] == "regrade":
+        precheck()
         for cid in args[1:]:
             regrade(cid)
     elif args and args[0] == "grade":
-        env = dict(os.environ, TMPDIR="/tmp", GOTOOLCHAIN="local")
-        print(json.dumps(grade_task(args[1], Path(args[2]), args[3], env), indent=2))
+        precheck()
+        c = Chain("vanilla", 0, cid="grade-" + secrets.token_hex(3))
+        c.root.mkdir(parents=True)
+        (c.root / "gocache").mkdir()
+        c.sock.mkdir()
+        c.ensure_proxy()
+        try:
+            work = Path(args[2]).resolve()
+            print(json.dumps(grade_task(args[1], work, args[3], SandboxGradeRun(c, work, trusted_roots=[work])), indent=2))
+        finally:
+            c.cleanup()
+            shutil.rmtree(c.root, ignore_errors=True)
+            shutil.rmtree(c.out, ignore_errors=True)
     else:
         print(__doc__)
         sys.exit(2)

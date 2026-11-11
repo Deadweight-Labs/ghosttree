@@ -230,3 +230,24 @@ func TestTaskHeadNamesTheWaitedForPersonOnce(t *testing.T) {
 		t.Errorf("the age is said twice: %s", head)
 	}
 }
+
+// On a code host a bare #n is a pull request, so a knowledge entry is named KN-n in
+// every pill, on the server and in the script; the other kinds keep #n.
+func TestKnowledgePillSaysKNAndTheOthersSayHash(t *testing.T) {
+	kn := string(numberedPill(langDE, "knowledge", 1970, "/ui/knowledge/1970", ""))
+	for _, want := range []string{`data-ref="KN-1970"`, `<span class="num">KN-1970</span>`, `class="ref pill k-know"`} {
+		if !strings.Contains(kn, want) {
+			t.Errorf("knowledge pill lacks %q: %s", want, kn)
+		}
+	}
+	if got := string(refPillHTML(langDE, "knowledge", 7, "")); !strings.Contains(got, `<span class="num">KN-7</span>`) {
+		t.Errorf("refPillHTML of knowledge: %s", got)
+	}
+	if got := string(refPillHTML(langDE, "request", 7, "")); !strings.Contains(got, `<span class="num">#7</span>`) {
+		t.Errorf("refPillHTML of a request: %s", got)
+	}
+	js := string(mustReadEmbeddedFile(t, "static/ui-pill.js"))
+	if !strings.Contains(js, `m[1] === "KN" ? key : "#" + m[2]`) {
+		t.Error("ui-pill.js does not write the knowledge pill as KN-n")
+	}
+}

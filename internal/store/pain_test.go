@@ -499,3 +499,30 @@ func TestPainSessionEvidenceIsStoredCanonically(t *testing.T) {
 		t.Error("unknown form accepted")
 	}
 }
+
+// A decision named as evidence is a knowledge entry: it is written KN-n and read in
+// every spelling it ever had.
+func TestPainEvidenceOfADecisionIsWrittenAsKN(t *testing.T) {
+	w := newPainWorld(t)
+	kid, err := w.st.InsertKnowledge(Knowledge{Type: "decision", Title: "Entscheidung", Body: "b", Scope: scope.Axes{Project: roleProject}, Person: "mia", Confidence: "trusted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pa := w.pa["mia"]
+	for _, ref := range []string{"KN-" + itoa(kid), "kn-" + itoa(kid), "#" + itoa(kid), itoa(kid)} {
+		id := w.newPain(t, "mia").Pain.ID
+		d, err := pa.SetPainState(id, pain.Resolved, "", pain.Evidence{Kind: "decision", Ref: ref}, "", pain.Actor{Person: "mia"})
+		if err != nil {
+			t.Fatalf("evidence %q: %v", ref, err)
+		}
+		if last := d.Events[len(d.Events)-1]; last.EvidenceRef != "KN-"+itoa(kid) {
+			t.Errorf("evidence %q is stored as %q", ref, last.EvidenceRef)
+		}
+	}
+	for _, ref := range []string{"KN-99999", "KN-", "REQ-" + itoa(kid), "x"} {
+		id := w.newPain(t, "mia").Pain.ID
+		if _, err := pa.SetPainState(id, pain.Resolved, "", pain.Evidence{Kind: "decision", Ref: ref}, "", pain.Actor{}); ruleCode(err) != "evidence_invalid" {
+			t.Errorf("evidence %q: %v", ref, err)
+		}
+	}
+}

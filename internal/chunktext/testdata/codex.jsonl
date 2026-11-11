@@ -1,0 +1,5 @@
+{"timestamp":"2026-07-16T23:10:34.871Z","type":"session_meta","payload":{"session_id":"019f6d31-504b-7b50-b171-8d89cc3e9c49","cwd":"/home/user/Projects/ExampleProject","originator":"codex-tui","cli_version":"0.144.5"}}
+{"timestamp":"2026-07-16T23:10:34.875Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"why does the build fail"}]}}
+{"timestamp":"2026-07-16T23:10:40.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The Makefile pins go 1.21."}]}}
+{"timestamp":"2026-07-16T23:10:41.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"x"}}
+{"timestamp":"2026-07-16T23:10:42.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"tool instructions follow"}]}}

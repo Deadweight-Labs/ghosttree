@@ -23,7 +23,9 @@
   /* The menu is as wide as the column; the tick shows what is chosen, the checkbox itself stays out of sight */
   & .side details.lbmenu { display: block; margin-top: 8px; }
   & .lbmenu > summary { width: 100%; justify-content: space-between; font-weight: 400; }
-  & .lbmenu > .pop { width: 100%; min-width: 0; }
+  /* The menu opens in the column and moves what follows down, so it never lies over the fields below; the tick sits after the label, so no empty column indents the labels. */
+  & .lbmenu > .pop { position: static; width: 100%; min-width: 0; max-height: 240px; margin-top: 4px; box-shadow: none; }
+  & .lbmenu .opt .chk { order: 1; margin-left: auto; }
   & .lbmenu .opt { cursor: pointer; }
   & .lbmenu .opt:has(input:focus-visible) { outline: 2px solid var(--accent-emphasis); outline-offset: -2px; }
   & .lbmenu .opt input:not(:checked) + .chk { visibility: hidden; }

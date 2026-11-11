@@ -12,4 +12,7 @@
 {{if .Profile.Agents}}<div class="sh2"><h2>{{t "profile.agents"}}</h2><span class="counter">{{.Profile.AgentCount}}</span></div><div class="ag">{{template "agentgroups" .Profile.Agents}}</div>{{end}}
 <div class="sh2"><h2>{{t "adm.tokens.title"}}</h2>{{if .Profile.Devices}}<span class="sp"></span><a class="gbtn sm" href="/ui/account/tokens">{{mi "term"}}{{t "profile.manage"}}</a>{{end}}</div>
 <div class="box">{{range .Profile.Devices}}<div class="row devrow"><span class="gav lg org" aria-hidden="true">{{mi "term"}}</span><div><b>{{.Name}}</b><div class="muted">{{.Seen}}</div></div></div>{{else}}<div class="box-empty"><span>{{t "adm.tokens.empty"}}</span></div>{{end}}</div>
+<div class="sh2" id="benachrichtigungen"><h2>{{t "notify.title"}}</h2></div>
+<div class="box">{{range .Profile.Notify}}<div class="row trow"><span>{{.Label}}</span><form method="post" action="/ui/profile/notifications"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="kind" value="{{.Kind}}"><input type="hidden" name="on" value="{{.Next}}"><button class="tog" role="switch" aria-checked="{{.On}}" aria-label="{{.Aria}}"{{if not $.Interactive}} disabled{{end}}><span class="tr"></span>{{t "notify.channel"}}</button></form></div>
+{{end}}</div>
 </div></div></div>{{template "foot" .}}{{end}}

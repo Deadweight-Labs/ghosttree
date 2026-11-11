@@ -32,4 +32,9 @@ storebench-small:
 	go run ./cmd/storebench --backend=queued --preset=small --output=$$task_dir/queued.json; \
 	echo "reports: $$task_dir"
 
-.PHONY: build build-all dist test fmt-check tidy-check verify storebench-small
+# Tests des Benchmark-Harness. Tests mit Docker (Image: bench/agent-compare/image/build.sh) oder bubblewrap
+# werden übersprungen, wenn beides fehlt.
+bench-test:
+	python3 -m unittest discover -s bench/agent-compare/tests -p 'test_*.py'
+
+.PHONY: build build-all dist test fmt-check tidy-check verify storebench-small bench-test

@@ -10,6 +10,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/garden"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 )
 
 const reviewUsage = `usage: ctx review [--project <remote>] [--limit <n>]
@@ -63,8 +64,8 @@ func cmdReview(args []string, stdout io.Writer) int {
 	// saying so beats listing the queue as if nothing had been asked for.
 	var ids []int64
 	for _, raw := range args {
-		id, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
+		id, ok := knref.Parse(raw)
+		if !ok {
 			fmt.Fprintf(stdout, "not an id: %q\n%s\n", raw, reviewUsage)
 			return 2
 		}
@@ -130,10 +131,10 @@ func cmdReview(args []string, stdout io.Writer) int {
 	}
 	for _, id := range ids {
 		if err := c.PatchKnowledge(id, patch); err != nil {
-			fmt.Fprintf(stdout, "#%d: %v\n", id, err)
+			fmt.Fprintf(stdout, "%s: %v\n", knref.Format(id), err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "#%d %sd\n", id, action)
+		fmt.Fprintf(stdout, "%s %sd\n", knref.Format(id), action)
 	}
 	return 0
 }
@@ -176,8 +177,8 @@ func listPending(c *client.Client, project string, limit int, stdout io.Writer) 
 
 func writePendingEntry(stdout io.Writer, p client.PendingEntry) {
 	k := p.Knowledge
-	fmt.Fprintf(stdout, "#%-4d %-11s %-8s seen in %d session(s)  %s\n",
-		k.ID, k.Confidence, k.Type, p.Recurrence, k.Title)
+	fmt.Fprintf(stdout, "%-8s %-11s %-8s seen in %d session(s)  %s\n",
+		knref.Format(k.ID), k.Confidence, k.Type, p.Recurrence, k.Title)
 	var scopeParts []string
 	if k.Scope.Project != "" {
 		scopeParts = append(scopeParts, "project="+k.Scope.Project)

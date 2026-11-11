@@ -438,14 +438,28 @@ func TestSessionFlowAndSearch(t *testing.T) {
 	if resp.StatusCode != 204 {
 		t.Fatalf("chunks status = %d", resp.StatusCode)
 	}
-	resp = req(t, "GET", srv.URL+"/api/search?q=livekit&kind=all", tok, nil)
 	var res struct {
 		Knowledge []store.Knowledge  `json:"knowledge"`
 		Sessions  []store.SessionHit `json:"sessions"`
 	}
-	json.NewDecoder(resp.Body).Decode(&res)
-	if len(res.Sessions) != 1 {
-		t.Errorf("session hits = %d, want 1", len(res.Sessions))
+	// The default search leaves sessions out (decision #4447); kind=sessions and a
+	// qualifier that names them ask for them.
+	for _, c := range []struct {
+		path string
+		want int
+	}{
+		{"/api/search?q=livekit&kind=all", 0},
+		{"/api/search?q=livekit", 0},
+		{"/api/search?q=livekit&kind=sessions", 1},
+		{"/api/search?q=livekit+is:session", 1},
+		{"/api/search?q=livekit+kind:session&kind=all", 1},
+	} {
+		res.Sessions = nil
+		resp = req(t, "GET", srv.URL+c.path, tok, nil)
+		json.NewDecoder(resp.Body).Decode(&res)
+		if len(res.Sessions) != c.want {
+			t.Errorf("%s: session hits = %d, want %d", c.path, len(res.Sessions), c.want)
+		}
 	}
 }
 

@@ -21,7 +21,7 @@ func TestSupersedeExistingEntryAndReadTheReasonBack(t *testing.T) {
 	if got, failed := callTool(t, session, "context_supersede", map[string]any{"id": fresh, "supersedes": []int64{old}, "reason": " "}); !failed || !strings.Contains(got, "reason") {
 		t.Errorf("without a reason: %v %s", failed, got)
 	}
-	if got, failed := callTool(t, session, "context_supersede", map[string]any{"id": fresh, "supersedes": []int64{old}, "reason": "the share was removed"}); failed || !strings.Contains(got, fmt.Sprintf("#%d now supersedes #%d", fresh, old)) {
+	if got, failed := callTool(t, session, "context_supersede", map[string]any{"id": fresh, "supersedes": []int64{old}, "reason": "the share was removed"}); failed || !strings.Contains(got, fmt.Sprintf("KN-%d now supersedes KN-%d", fresh, old)) {
 		t.Fatalf("supersede: %v %s", failed, got)
 	}
 	found, _ := callTool(t, session, "context_search", map[string]any{"query": "share location", "kind": "knowledge"})
@@ -29,7 +29,7 @@ func TestSupersedeExistingEntryAndReadTheReasonBack(t *testing.T) {
 		t.Errorf("search after supersede:\n%s", found)
 	}
 	full, _ := callTool(t, session, "context_search", map[string]any{"knowledge_id": old})
-	if want := fmt.Sprintf("superseded by #%d", fresh); !strings.Contains(full, want) || !strings.Contains(full, "the share was removed") {
+	if want := fmt.Sprintf("superseded by KN-%d", fresh); !strings.Contains(full, want) || !strings.Contains(full, "the share was removed") {
 		t.Errorf("detail of the superseded entry lacks the reason:\n%s", full)
 	}
 

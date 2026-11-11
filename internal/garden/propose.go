@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -68,7 +69,7 @@ func Proposal(project string, v Verdict) (store.Knowledge, bool) {
 	if v.Kind == Correction {
 		label = "Korrektur?"
 	}
-	fmt.Fprintf(&b, "Vorschlag des Gärtners (Herkunft gardener, nicht bestätigt) zu Eintrag #%d: %s\n\n", v.Entry.ID, v.Entry.Title)
+	fmt.Fprintf(&b, "Vorschlag des Gärtners (Herkunft gardener, nicht bestätigt) zu Eintrag %s: %s\n\n", knref.Format(v.Entry.ID), v.Entry.Title)
 	fmt.Fprintf(&b, "Urteil: %s\n\nBegründung: %s\n", label, v.Reason)
 	if len(v.Evidence) > 0 {
 		fmt.Fprintf(&b, "\nBelege: %s\n", strings.Join(v.Evidence, ", "))
@@ -78,7 +79,7 @@ func Proposal(project string, v Verdict) (store.Knowledge, bool) {
 	}
 	return store.Knowledge{
 		Type:       "note",
-		Title:      fmt.Sprintf("%s%s #%d: %s", titlePrefix, label, v.Entry.ID, v.Entry.Title),
+		Title:      fmt.Sprintf("%s%s %s: %s", titlePrefix, label, knref.Format(v.Entry.ID), v.Entry.Title),
 		Body:       b.String(),
 		Scope:      scope.Axes{Project: project},
 		Confidence: proposalState,
@@ -114,7 +115,7 @@ func relationText(r Relation, titles map[int64]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Vorschlag des Gärtners (Herkunft gardener, nicht bestätigt): %s\n\n", RelationLabel(r.Kind))
 	for _, id := range r.IDs {
-		fmt.Fprintf(&b, "- #%d: %s\n  Zitat: \"%s\"\n", id, titles[id], r.Quotes[id])
+		fmt.Fprintf(&b, "- %s: %s\n  Zitat: \"%s\"\n", knref.Format(id), titles[id], r.Quotes[id])
 	}
 	fmt.Fprintf(&b, "\nBegründung: %s\n", r.Reason)
 	if len(r.Evidence) > 0 {
@@ -128,7 +129,7 @@ func relationText(r Relation, titles map[int64]string) string {
 func RelationProposal(project string, r Relation, titles map[int64]string) store.Knowledge {
 	var ids []string
 	for _, id := range r.IDs {
-		ids = append(ids, fmt.Sprintf("#%d", id))
+		ids = append(ids, knref.Format(id))
 	}
 	return store.Knowledge{
 		Type:       "note",
@@ -193,7 +194,7 @@ func Propose(sink Sink, project string, existing []store.Knowledge, verdicts []V
 			continue
 		}
 		if _, err := sink.Remember(k, scope.Axes{Project: project}); err != nil {
-			return written, fmt.Errorf("propose for #%d: %w", v.Entry.ID, err)
+			return written, fmt.Errorf("propose for %s: %w", knref.Format(v.Entry.ID), err)
 		}
 		written++
 	}
