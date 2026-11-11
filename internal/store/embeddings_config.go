@@ -90,6 +90,13 @@ type embedShared struct {
 	// this is what a store, its readers and its views share.
 	gate searchGate
 
+	// language is what the language gate of relevance delivery remembers per
+	// account (relevance_language_cache.go).
+	language languageCache
+
+	// stmts are the prepared statements of the hot queries (stmt_cache.go).
+	stmts stmtCache
+
 	logMu      sync.Mutex
 	lastLog    time.Time
 	suppressed int

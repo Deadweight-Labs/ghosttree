@@ -75,6 +75,8 @@ type RelevanceQuery struct {
 	// remembered and nothing is held back, which is how delivery behaved before
 	// it had one.
 	Account, Session string
+	// Phase, when set, is told how long the steps of the query take (PAIN-76).
+	Phase PhaseFunc
 	// Record counts the delivery as a use of each entry. The replay of archived
 	// prompts must not, or it would move the numbers it is later judged by.
 	Record bool
@@ -165,6 +167,21 @@ const settled = `k.confidence NOT IN ('quarantined', 'staged') AND ` + notGarden
 // notGardener leaves out the gardener's notes, whatever their confidence.
 const notGardener = `k.harness != '` + GardenerHarness + `'`
 
+// PhaseFunc is told how long a step of a query takes: it is called with the name
+// of the step when the step begins and returns the function that ends it. A nil
+// PhaseFunc measures nothing. The server hands in its recorder of partial times
+// (PAIN-76); the store knows nothing of where they go.
+type PhaseFunc func(name string) (done func())
+
+func noPhase() {}
+
+func (f PhaseFunc) begin(name string) func() {
+	if f == nil {
+		return noPhase
+	}
+	return f(name)
+}
+
 // rareTerm is a word that got past both gates: df entries name it.
 type rareTerm struct {
 	term string
@@ -185,10 +202,12 @@ func (s *Store) relevance(q RelevanceQuery) (Relevance, error) {
 	// else neither displaces a result nor shifts how rare a term looks.
 	scopeSQL, scopeArgs := withGlobalScope(`1=1`, nil, "knowledge", q.Viewer)
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge
+	endTotal := q.Phase.begin("rel_total")
+	if err := s.queryRow(`SELECT COUNT(*) FROM knowledge
 		WHERE status = 'active' AND confidence != 'quarantined' AND `+scopeSQL, scopeArgs...).Scan(&total); err != nil {
 		return out, err
 	}
+	endTotal()
 	// At least one, so a young archive where every term is technically rare
 	// still requires a term to point at a single entry rather than at several.
 	ceiling := max(1, int(float64(total)*maxDocumentFrequency))
@@ -197,13 +216,16 @@ func (s *Store) relevance(q RelevanceQuery) (Relevance, error) {
 	veryRare := min(veryRareEntries, ceiling)
 
 	gate := s.newLanguageGate(q.Account)
+	gate.phase = q.Phase
 	// First gate: rare among the entries. A word in none of them stays in, for
 	// the hint; it can only fetch knowledge if at least one entry names it.
 	// Second gate: unusual in the reader's own language. Only the words that got
 	// past the first reach it, which is what keeps it cheap.
 	var rare []rareTerm
 	for _, term := range terms {
+		endDF := q.Phase.begin("rel_doc_freq")
 		n, err := s.documentFrequency(term, ceiling+1, q.Viewer...)
+		endDF()
 		if err != nil {
 			return out, err
 		}
@@ -272,11 +294,13 @@ func (s *Store) relevance(q RelevanceQuery) (Relevance, error) {
 			query += ` AND NOT ` + deliveredToSessionSQL
 			qargs = append(qargs, q.Account, q.Session)
 		}
+		endFTS := q.Phase.begin("rel_knowledge_fts")
 		rows, err := s.db.Query(query+` ORDER BY f.rank LIMIT ?`, append(qargs, limit)...)
 		if err != nil {
 			return out, err
 		}
 		ks, err := s.scanKnowledge(rows)
+		endFTS()
 		if err != nil {
 			return out, err
 		}
@@ -292,10 +316,14 @@ func (s *Store) relevance(q RelevanceQuery) (Relevance, error) {
 	// use there is, so it counts as one — this is the signal that tells a useful
 	// entry from one nobody has ever needed.
 	if q.Record && len(out.Hits) > 0 {
+		endRecord := q.Phase.begin("rel_record_use")
 		s.recordKnowledgeSearchHit(hitKnowledge(out.Hits))
+		endRecord()
 	}
 
+	endHints := q.Phase.begin("rel_hint_terms")
 	hints, err := s.hintTerms(q, rare, veryRare, where, args)
+	endHints()
 	if err != nil {
 		return out, err
 	}
@@ -362,7 +390,7 @@ func (s *Store) hintTerms(q RelevanceQuery, rare []rareTerm, veryRare int, where
 func (s *Store) documentFrequency(term string, upTo int, viewer ...SessionViewer) (int, error) {
 	var n int
 	scopeSQL, scopeArgs := withGlobalScope(`1=1`, nil, "k", viewer)
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM (SELECT 1 FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
+	err := s.queryRow(`SELECT COUNT(*) FROM (SELECT 1 FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
 		WHERE knowledge_fts MATCH ? AND k.status = 'active' AND k.confidence != 'quarantined' AND `+scopeSQL+` LIMIT ?)`,
 		append(append([]any{`"` + term + `"`}, scopeArgs...), upTo)...).Scan(&n)
 	return n, err

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"strings"
+	"time"
 )
 
 // The second gate of relevance delivery asks a different question from the
@@ -85,6 +86,7 @@ type languageGate struct {
 	on       bool
 	ceiling  int
 	spans    []sessionSpan
+	phase    PhaseFunc
 }
 
 // sessionSpan is where one session's chunks sit in the full-text index: every
@@ -109,6 +111,20 @@ func (s *Store) newLanguageGate(principal string) *languageGate {
 // rows with account 0) belong to the instance owner, as everywhere else.
 func (g *languageGate) prepare() error {
 	g.prepared = true
+	cache := &g.s.embedShared().language
+	if owner, on, ceiling, spans, ok := cache.sample(g.account, time.Now()); ok {
+		g.owner, g.on, g.ceiling, g.spans = owner, on, ceiling, spans
+		return nil
+	}
+	if err := g.draw(); err != nil {
+		return err
+	}
+	cache.storeSample(g.account, time.Now(), g.owner, g.on, g.ceiling, g.spans)
+	return nil
+}
+
+// draw reads the sample from the database.
+func (g *languageGate) draw() error {
 	g.owner = instanceOwnerID(g.s.db)
 	rows, err := g.s.db.Query(`SELECT id FROM sessions
 		WHERE account_id = ? OR (account_id = 0 AND ? = ?)
@@ -181,13 +197,31 @@ func (s *Store) sessionSpanOf(session int64) (span sessionSpan, size int, ok boo
 // returned, ordered by or shown.
 func (g *languageGate) unusual(term string) (bool, error) {
 	if !g.prepared {
-		if err := g.prepare(); err != nil {
+		endPrepare := g.phase.begin("rel_gate_sample")
+		err := g.prepare()
+		endPrepare()
+		if err != nil {
 			return false, err
 		}
 	}
 	if !g.on {
 		return true, nil
 	}
+	cache := &g.s.embedShared().language
+	if unusual, ok := cache.verdict(g.account, term, time.Now()); ok {
+		return unusual, nil
+	}
+	endCount := g.phase.begin("rel_gate_count")
+	unusual, err := g.count(term)
+	endCount()
+	if err == nil {
+		cache.storeVerdict(g.account, term, time.Now(), unusual)
+	}
+	return unusual, err
+}
+
+// count is the verdict itself, asked of the index.
+func (g *languageGate) count(term string) (bool, error) {
 	phrase := `"` + term + `"`
 	// A word that few chunks carry anywhere cannot be common in the reader's
 	// own: the reader's chunks are among them. This settles the words that
@@ -196,7 +230,7 @@ func (g *languageGate) unusual(term string) (bool, error) {
 	// chunks would. It is a shortcut to the same verdict, not a second criterion:
 	// no word is ever judged by what the others say, only spared the count.
 	var anywhere int
-	err := g.s.db.QueryRow(`SELECT count(*) FROM (SELECT 1 FROM (`+wordHits("")+`) LIMIT ?)`,
+	err := g.s.queryRow(`SELECT count(*) FROM (SELECT 1 FROM (`+wordHits("")+`) LIMIT ?)`,
 		phrase, phrase, g.ceiling+1).Scan(&anywhere)
 	if err != nil {
 		if missingTable(err) {
@@ -213,7 +247,7 @@ func (g *languageGate) unusual(term string) (bool, error) {
 		// other accounts, and those are read past, never counted. The limit
 		// counts matching own chunks only, so what lies between cannot move it.
 		var n int
-		err := g.s.db.QueryRow(`SELECT count(*) FROM (SELECT 1 FROM (
+		err := g.s.queryRow(`SELECT count(*) FROM (SELECT 1 FROM (
 			SELECT ci.chunk_id FROM chunk_fts CROSS JOIN chunk_index ci ON ci.chunk_id = chunk_fts.rowid
 			WHERE chunk_fts MATCH ?1 AND chunk_fts.rowid BETWEEN ?2 AND ?3 AND ci.session_id = ?4
 			UNION ALL
