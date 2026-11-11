@@ -598,7 +598,37 @@ func (a *app) coordPostThread(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, l.msg("coord.thread_need_text"), http.StatusBadRequest)
 		return
 	}
-	if state != "" {
+	// A state change comes after the reply: a reply that fails must not leave
+	// the thread already closed. Reply and intent are checked first, the
+	// state is set only once the post went through.
+	var (
+		replyTo  int64
+		intent   string
+		mentions []string
+	)
+	if body != "" {
+		replyTo, err = coordOptionalReplyTo(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		intent = strings.TrimSpace(r.FormValue("intent"))
+		if !validCoordComposerIntent(intent) {
+			http.Error(w, "a valid intent is required", http.StatusBadRequest)
+			return
+		}
+		mentions, body = coordBroadcastChip(splitCoordPrincipals(r.Form["mentions"]...), body)
+	}
+	unsent := false
+	if body != "" {
+		_, err = a.browserCoord(r).ThreadPost(threadID, store.CoordMessage{ClientID: newFormClientID(r), Body: body, Intent: intent, Mentions: mentions, ReplyTo: replyTo})
+		unsent = errors.Is(err, store.ErrAttentionRecipientRequired) && store.BodyHasBroadcast(body)
+		if err != nil && !unsent {
+			coordHTTPError(l, w, err)
+			return
+		}
+	}
+	if state != "" && !unsent {
 		if err := a.browserCoord(r).SetThreadState(threadID, state, gitanchor.Web()); err != nil {
 			coordHTTPError(l, w, err)
 			return
@@ -606,23 +636,6 @@ func (a *app) coordPostThread(w http.ResponseWriter, r *http.Request) {
 	}
 	if body == "" {
 		a.redirectToThread(w, r, l, threadID)
-		return
-	}
-	replyTo, err := coordOptionalReplyTo(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	intent := strings.TrimSpace(r.FormValue("intent"))
-	mentions, body := coordBroadcastChip(splitCoordPrincipals(r.Form["mentions"]...), body)
-	if !validCoordComposerIntent(intent) {
-		http.Error(w, "a valid intent is required", http.StatusBadRequest)
-		return
-	}
-	_, err = a.browserCoord(r).ThreadPost(threadID, store.CoordMessage{ClientID: newFormClientID(r), Body: body, Intent: intent, Mentions: mentions, ReplyTo: replyTo})
-	unsent := errors.Is(err, store.ErrAttentionRecipientRequired) && store.BodyHasBroadcast(body)
-	if err != nil && !unsent {
-		coordHTTPError(l, w, err)
 		return
 	}
 	home, err := a.browserCoord(r).ThreadHome(threadID)
@@ -873,6 +886,9 @@ func isAttentionIntent(intent string) bool {
 	}
 }
 
+// maxAttentionActionIDs caps how many items one attention action may name.
+const maxAttentionActionIDs = 10
+
 func (a *app) coordAttentionAction(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
@@ -880,21 +896,55 @@ func (a *app) coordAttentionAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// One card can carry several items (one per addressee); its buttons name all of them.
+	// The list is deduplicated and capped: a card never holds more than a few addressees.
 	var ids []int64
+	seen := map[int64]bool{}
 	for _, raw := range r.Form["attention_id"] {
 		id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 		if err != nil || id <= 0 {
 			http.Error(w, "attention item is required", http.StatusBadRequest)
 			return
 		}
-		ids = append(ids, id)
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
 	}
-	if len(ids) == 0 {
+	if len(ids) == 0 || len(ids) > maxAttentionActionIDs {
 		http.Error(w, "attention item is required", http.StatusBadRequest)
 		return
 	}
+	access := a.browserCoord(r)
+	action := strings.TrimSpace(r.FormValue("action"))
+	if len(ids) > 1 {
+		// Check every id against what this person may act on before resolving
+		// any: a foreign id in the list stops the whole action and answers like
+		// an id that does not exist, so nothing is resolved and nothing is told.
+		items, err := access.Attention()
+		if err != nil {
+			coordHTTPError(l, w, err)
+			return
+		}
+		mine := make(map[int64]bool, len(items))
+		for _, item := range items {
+			// The list also holds items this person only sent: they may withdraw
+			// those, but not answer them.
+			mine[item.ID] = item.IsRecipient && action != store.AttentionActionWithdraw || item.CanWithdraw && action == store.AttentionActionWithdraw
+		}
+		for _, id := range ids {
+			if !mine[id] {
+				coordHTTPError(l, w, store.ErrCoordNotFound)
+				return
+			}
+		}
+	}
 	for _, id := range ids {
-		if err := a.browserCoord(r).ResolveAttention(id, strings.TrimSpace(r.FormValue("action"))); err != nil {
+		err := access.ResolveAttention(id, action)
+		if errors.Is(err, store.ErrAttentionClosed) && len(ids) > 1 {
+			// Another addressee answered first: already done, not an error.
+			continue
+		}
+		if err != nil {
 			coordHTTPError(l, w, err)
 			return
 		}
@@ -1155,6 +1205,8 @@ func (a *app) coordThreadAnchor(r *http.Request, l lang, access store.CoordAcces
 	for i := range detail.Messages {
 		if detail.Messages[i].ID == thread.AnchorMessageID {
 			copyOf := detail.Messages[i]
+			// The "New" divider belongs to the room's stream, not above the anchor.
+			copyOf.NewFrom = false
 			anchor = &copyOf
 		}
 	}

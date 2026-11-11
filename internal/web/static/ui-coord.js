@@ -770,7 +770,9 @@
     postCoordForm(form, target, event.submitter);
   });
   // The status row of a thread: a different status makes the send button say
-  // what it will do, and the words become optional.
+  // what it will do, and the words become optional. The thread composer has no
+  // `required` of its own (without script a bare status change must post); this
+  // adds it back while the status is unchanged and the words are the only content.
   const syncThreadSend = (form) => {
     const picked = form.querySelector("input[data-state-input]:checked");
     const area = form.querySelector("textarea[name='body']");

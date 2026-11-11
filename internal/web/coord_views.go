@@ -323,7 +323,7 @@ func (r coordReplyView) Snippet() string {
 	return text
 }
 
-// Title is the tooltip of the quote line: who, and the whole text.
+// Title is the tooltip of the quote line: who is quoted ("Reply to <name>").
 func (r coordReplyView) Title() string {
 	return r.Lang.msg("coord.reply_to_name", r.Name())
 }

@@ -63,7 +63,10 @@
       pop.style.position = "fixed";
       pop.style.transform = "none";
       pop.style.left = "auto";
-      pop.style.right = `${Math.max(8, window.innerWidth - button.right)}px`;
+      // Right edge under the button, but never so far right that the left edge
+      // leaves the screen (a phone is narrower than the pop-up).
+      const right = Math.min(window.innerWidth - button.right, window.innerWidth - pop.offsetWidth - 8);
+      pop.style.right = `${Math.max(8, right)}px`;
       pop.style.maxHeight = `${Math.max(200, window.innerHeight - 24)}px`;
       if (room < pop.offsetHeight + 16 && button.top > room) {
         pop.style.top = "auto";
@@ -74,10 +77,17 @@
       }
     }, 0);
   }, true);
+  // A floating menu sits at fixed coordinates under its button: whatever moves
+  // the button (the message list, the page, a resized window) closes it.
+  const closeFloating = () => {
+    for (const menu of document.querySelectorAll("details[data-float][open]")) menu.open = false;
+  };
   document.addEventListener("scroll", (event) => {
     if (!(event.target instanceof Element) || !event.target.matches(".coord-messages")) return;
-    for (const menu of document.querySelectorAll("details[data-float][open]")) menu.open = false;
+    closeFloating();
   }, true);
+  window.addEventListener("scroll", closeFloating, { passive: true });
+  window.addEventListener("resize", closeFloating);
   // Where a tap is what a hover is elsewhere, the tools of the touched message unfold
   // under it (CSS, :focus-within); the list brings them into view.
   const touchLike = window.matchMedia("(hover: none), (max-width: 767px)");

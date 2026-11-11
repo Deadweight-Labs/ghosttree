@@ -208,8 +208,12 @@ func TestCoordSurfaceSwapCopiesTheIncomingNodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := strings.Index(string(src), "const replaceSurface")
-	if i < 0 || !strings.Contains(string(src)[i:i+700], "cloneNode(true)") {
+	text := string(src)
+	i := strings.Index(text, "const replaceSurface")
+	if i < 0 {
+		t.Fatal("replaceSurface is gone from ui-coord.js")
+	}
+	if end := min(len(text), i+700); !strings.Contains(text[i:end], "cloneNode(true)") {
 		t.Error("replaceSurface moves the incoming nodes: the second surface of the same list would be left empty")
 	}
 }
