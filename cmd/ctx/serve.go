@@ -35,9 +35,14 @@ type serveConfig struct {
 	SnapshotRoots  map[string]string
 	Writer         store.WriterConfig
 	// SessionText is stored or derived (store.ParseSessionText).
-	SessionText    string
-	OIDC           web.OIDCConfig
-	PublicURL      string
+	SessionText string
+	OIDC        web.OIDCConfig
+	PublicURL   string
+	// CheckPublicURL is the address written into the GitHub check run of a pull
+	// request. The check run is visible to everyone who can read the pull request, so
+	// it carries links only when this is set on purpose (a host that may be seen
+	// there); empty, it carries none.
+	CheckPublicURL string
 	Language       string
 	DistDir        string
 	TrustedProxies proxytrust.Set
@@ -61,6 +66,7 @@ const (
 	// envPublicURL and envTrustedProxies describe the TLS/proxy boundary; see
 	// the section "Running behind TLS or a reverse proxy" in docs/operations.md.
 	envPublicURL      = "GHOSTTREE_PUBLIC_URL"
+	envCheckPublicURL = "GHOSTTREE_CHECK_PUBLIC_URL"
 	envTrustedProxies = "GHOSTTREE_TRUSTED_PROXIES"
 	// envDistDir names a directory with the ctx release archives and
 	// checksums.txt; the server then serves /install.sh and /dist/.
@@ -145,6 +151,7 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.OIDC.Name, "oidc-name", os.Getenv(envOIDCName), "provider name on the sign-in button, e.g. ZITADEL; empty names no provider (env "+envOIDCName+")")
 	fs.StringVar(&cfg.OIDC.Signup, "oidc-signup", os.Getenv(envOIDCSignup), "offer \"Create an account\" on invitation links (OIDC prompt=create): 1 always, 0 never, empty only when the provider lists it (env "+envOIDCSignup+")")
 	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
+	fs.StringVar(&cfg.CheckPublicURL, "check-public-url", os.Getenv(envCheckPublicURL), "base URL for the links in the GitHub check run of a pull request; empty writes no links, because the check run is readable by everyone who reads the pull request (env "+envCheckPublicURL+")")
 	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
 	sessionText := fs.String("session-text", os.Getenv(envSessionText), "text of transcript chunks: stored (default) writes it next to the line, derived leaves it out and reads derive it from the line; see ctx db slim-text (env "+envSessionText+")")
 	fs.StringVar(&cfg.Language, "language", os.Getenv(envLanguage), "language of the web interface: en (default) or de (env "+envLanguage+")")
@@ -196,18 +203,18 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 		return serveConfig{}, fmt.Errorf("--explain must be auto or off, got %q", cfg.Explain.Mode)
 	}
 	if cfg.PublicURL != "" {
-		u, err := url.Parse(cfg.PublicURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
-			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-			return serveConfig{}, fmt.Errorf("--public-url must be http(s)://host[:port] without path, got %q", cfg.PublicURL)
+		u, err := normalizeBaseURL("--public-url", cfg.PublicURL)
+		if err != nil {
+			return serveConfig{}, err
 		}
-		if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
-			u.Host = strings.TrimSuffix(u.Host, ":"+u.Port())
+		cfg.PublicURL = u
+	}
+	if cfg.CheckPublicURL != "" {
+		u, err := normalizeBaseURL("--check-public-url", cfg.CheckPublicURL)
+		if err != nil {
+			return serveConfig{}, err
 		}
-		if !web.ValidPublicHost(u.Host) {
-			return serveConfig{}, fmt.Errorf("--public-url host %q has characters outside letters, digits, . : [ ] -", u.Host)
-		}
-		cfg.PublicURL = u.Scheme + "://" + u.Host
+		cfg.CheckPublicURL = u
 	}
 	if cfg.DistDir != "" {
 		if _, err := web.CheckDistDir(cfg.DistDir); err != nil {
@@ -470,7 +477,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 		root.Handle("/api/github/webhook", ghApp.WebhookHandlerWithRenames(func(installationID int64, add, remove []string) error {
 			_, err := st.SyncInstallationRepos(installationID, add, remove)
 			return err
-		}, pullWebhook(st, ghApp, func(err error) { logger.Error("github_pull_commits", "error", err.Error()) }), func(installationID int64, from, to string) error {
+		}, lastenheftWebhook(st, ghApp, cfg.CheckPublicURL, logger), func(installationID int64, from, to string) error {
 			_, err := st.RenameInstallationRepo(installationID, from, to)
 			return err
 		}, func(err error) { logger.Error("github_webhook", "error", err.Error()) }))
@@ -554,4 +561,31 @@ func proxyConfigWarning(cfg serveConfig) string {
 		return ""
 	}
 	return envPublicURL + " is set but " + envTrustedProxies + " is empty: behind a reverse proxy every client shares the proxy address, so the per-address limits (join page, device logins) apply to all clients together"
+}
+
+// lastenheftWebhook ist der Empfänger der pull_request-Ereignisse mit dem Check-Run
+// „Lastenheft“ (lastenheft.go). Dazu läuft eine Schleife, die geänderten Stand
+// nachträgt, solange der Prozess lebt.
+func lastenheftWebhook(st *store.Store, ghApp *forge.GitHubApp, publicURL string, logger *slog.Logger) forge.PullSync {
+	lh := newLastenheftPublisher(st, ghApp, publicURL, func(err error) { logger.Error("github_check_run", "error", err.Error()) })
+	go lh.loop(context.Background(), lastenheftSweepEvery)
+	hook, _ := pullWebhookWith(st, ghApp, lh, func(err error) { logger.Error("github_pull_commits", "error", err.Error()) })
+	return hook
+}
+
+// normalizeBaseURL prüft eine Basisadresse (Schema, Host, Port, kein Pfad) und gibt
+// sie ohne Standardport zurück.
+func normalizeBaseURL(flagName, raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("%s must be http(s)://host[:port] without path, got %q", flagName, raw)
+	}
+	if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
+		u.Host = strings.TrimSuffix(u.Host, ":"+u.Port())
+	}
+	if !web.ValidPublicHost(u.Host) {
+		return "", fmt.Errorf("%s host %q has characters outside letters, digits, . : [ ] -", flagName, u.Host)
+	}
+	return u.Scheme + "://" + u.Host, nil
 }

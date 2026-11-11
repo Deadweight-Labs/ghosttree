@@ -78,6 +78,25 @@ statuses: read`); without them the commit page simply leaves the blocks out, and
 `ctx github sync-prs --commits` says which permission is missing. Parents,
 message and co-authors need only `Pull requests: read`.
 
+The check run "ghosttree Lastenheft" at a pull request with a work package needs
+one more permission, `Checks: write` (a repository permission; the check run is
+written from the "Pull request" webhook the pull request pages already use). The
+App owner adds it in the App's settings, and the organization owner approves it on
+the installation's page on GitHub. Until then the server
+does nothing for the check run: no error, no log line per pull request, one
+attempt per hour and installation, so the permission works without a restart
+once it is granted. The check run stands on GitHub, where everyone who reads the
+pull request sees it, so the server writes it only when GitHub reports the
+repository as private (it learns that from the installation's repository list and
+from the `private` field of the "Pull request" webhook; a repository whose
+visibility is unknown counts as public) and never for an empty work package. It
+shows request numbers and counts, no titles or criteria, and carries links only
+when you set `--check-public-url` (env `GHOSTTREE_CHECK_PUBLIC_URL`) to an address
+that may be seen there; without it there is no link and no server address in the
+check run. A later change at the same commit updates the existing check run; a
+commit GitHub does not know is skipped until the next head commit, and a rate
+limit pauses the installation until it resets.
+
 Give the server the App's credentials. The private key (PEM, as downloaded from
 GitHub) and the webhook secret are read from files only and never logged or sent
 to the browser:

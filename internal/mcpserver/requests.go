@@ -227,6 +227,80 @@ func requestDetailResult(detail requestdomain.Detail, concise bool) *mcp.CallToo
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderRequestDetail(detail, concise)}}}
 }
 
+// maxRequestSessionLines: so viele Sessions nennt request_get mit Adresse; der
+// Rest steht als Zahl da. Der Agent liest gezielt nach, er braucht keine Liste von
+// hundert.
+const maxRequestSessionLines = 5
+
+// renderRequestSessions beschreibt die Sessions, die über die PRs im Paket und über
+// Commit-Nachweise zu einem Request gehören (IDEA-31 P4). Eine Adresse steht nur
+// da, wo der Server sie dem Aufrufer gegeben hat (Transkriptrecht); mit ihr liest
+// der Agent mit context_search action=sessions session_ref=… nach.
+func renderRequestSessions(links store.GitSessionLinks) string {
+	if len(links.Items) == 0 && links.Hidden == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nSessions behind the work (from the pull requests in the package and from commit evidence; read one with context_search action=sessions session_ref=<ref>)\n")
+	shown := 0
+	for _, it := range links.Items {
+		if shown == maxRequestSessionLines {
+			break
+		}
+		shown++
+		if it.SessionRef != "" {
+			fmt.Fprintf(&b, "- @%s", it.SessionRef)
+			if it.Title != "" {
+				fmt.Fprintf(&b, " %q", firstLine(it.Title, 80))
+			}
+		} else {
+			fmt.Fprintf(&b, "- session of %s", firstNonEmptyText(it.Person, "someone"))
+			if it.Date != "" {
+				fmt.Fprintf(&b, " on %s", it.Date)
+			}
+			b.WriteString(" (transcript not shared with you)")
+		}
+		var how []string
+		for _, o := range it.Origins {
+			switch o {
+			case store.RequestOriginPR:
+				if it.PR > 0 {
+					how = append(how, fmt.Sprintf("PR #%d", it.PR))
+				} else {
+					how = append(how, "PR")
+				}
+			case store.RequestOriginEvidence:
+				how = append(how, "commit evidence")
+			}
+		}
+		if it.Commits > 0 {
+			how = append(how, fmt.Sprintf("%d commits", it.Commits))
+		}
+		how = append(how, it.Sources...)
+		if len(how) > 0 {
+			fmt.Fprintf(&b, " — %s", strings.Join(how, ", "))
+		}
+		if it.Weak {
+			b.WriteString(" [weak: the author could not be checked, a candidate and no proof]")
+		}
+		b.WriteByte('\n')
+	}
+	if more := len(links.Items) - shown + links.More; more > 0 {
+		fmt.Fprintf(&b, "- %d more sessions you may see\n", more)
+	}
+	if links.Hidden > 0 {
+		fmt.Fprintf(&b, "- %d more sessions not shared with you\n", links.Hidden)
+	}
+	return b.String()
+}
+
+func firstNonEmptyText(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
 // countSessions zählt die unabhängigen Sitzungen, nicht die Zitate: zwei Sätze
 // aus derselben Sitzung sind ein Mal geäussert, nicht zwei.
 func countSessions(sightings []requestdomain.Sighting) int {
@@ -254,6 +328,11 @@ func pluralSessions(n int) string {
 }
 
 func renderRequestDetail(detail requestdomain.Detail, concise bool) string {
+	return renderRequestDetailWith(detail, concise, "")
+}
+
+// renderRequestDetailWith setzt dazu den Abschnitt der Sessions (leer lässt ihn weg).
+func renderRequestDetailWith(detail requestdomain.Detail, concise bool, sessions string) string {
 	var b strings.Builder
 	r := detail.Request
 	fmt.Fprintf(&b, "# %s — %s\n", r.HumanID(), r.Title)
@@ -334,6 +413,7 @@ func renderRequestDetail(detail requestdomain.Detail, concise bool) string {
 			b.WriteByte('\n')
 		}
 	}
+	b.WriteString(sessions)
 	if concise {
 		b.WriteString("\nconcise omits activity, older work, and criterion evidence; use response_format=detailed for the full history.\n")
 		return b.String()
@@ -394,6 +474,11 @@ func (s *Server) handleRequestGet(_ context.Context, _ *mcp.CallToolRequest, in 
 	out := RequestDetailOutput{Detail: detail}
 	res := requestDetailResult(detail, concise)
 	if err == nil {
+		// Eine Lücke hier ist keine Fehlermeldung wert: ein älterer Server kennt die
+		// Route nicht, und der Auftrag selbst ist vollständig.
+		if links, lerr := s.client.SessionsForRequest(in.RequestID); lerr == nil {
+			res = &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderRequestDetailWith(detail, concise, renderRequestSessions(links))}}}
+		}
 		res = s.withCard(res, s.builder().RequestCard(detail))
 	}
 	return res, out, err

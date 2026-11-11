@@ -50,6 +50,16 @@ func pullsEnv(t *testing.T) (shellEnv, *store.ProjectAccess) {
 		Scope: scope.Axes{Project: shellProject, Branch: "feat/x"}, GitAnchor: &gitanchor.Anchor{Commit: pullShaA, Branch: "feat/x"}}); err != nil {
 		t.Fatal(err)
 	}
+	// The package comes before the pull request opens, as an agent makes it at the start of the
+	// branch; an opened pull request whose branch has none gets one of its own (package_auto.go).
+	req := rqMake(t, e.St, rqSpec{Title: "Pull request tab", Criteria: []string{"Lists the pull requests", "Shows the checklist"}})
+	if _, err := e.St.CreatePackage(requestdomain.PackageInput{Project: shellProject, Branch: "feat/x", Name: "Git-native", PR: 12, Person: "alice",
+		Members: []requestdomain.PackageMember{{RequestID: req.Request.ID, Role: requestdomain.RolePflicht}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.St.SetCriterionState(req.Criteria[0].ID, "met", requestdomain.Evidence{RequestID: req.Request.ID, Kind: "commit", Ref: pullShaA, Person: "alice"}); err != nil {
+		t.Fatal(err)
+	}
 	record(shellProject, 77, store.PullRequestChange{Number: 12, Action: "opened", Title: "feat(web): Pull requests tab", Head: "feat/x", Base: "main", State: "open", Author: "alice-gh"})
 	record(shellProject, 77, store.PullRequestChange{Number: 13, Action: "closed", Title: "fix(store): count guests", Head: "feat/y", Base: "main", State: "merged", Author: "Anna-GH"})
 	record(shellProject, 77, store.PullRequestChange{Number: 14, Action: "closed", Title: "docs: old plan", Head: "feat/x", Base: "main", State: "closed", Author: "alice-gh"})
@@ -59,14 +69,6 @@ func pullsEnv(t *testing.T) (shellEnv, *store.ProjectAccess) {
 		{SHA: pullShaB, Author: "claude", Title: "feat(web): page of a pull request", CommittedAt: "2026-11-08T11:00:00Z"},
 	}}); err != nil || !res.Applied {
 		t.Fatalf("record commits: %+v %v", res, err)
-	}
-	req := rqMake(t, e.St, rqSpec{Title: "Pull request tab", Criteria: []string{"Lists the pull requests", "Shows the checklist"}})
-	if _, err := e.St.CreatePackage(requestdomain.PackageInput{Project: shellProject, Branch: "feat/x", Name: "Git-native", PR: 12, Person: "alice",
-		Members: []requestdomain.PackageMember{{RequestID: req.Request.ID, Role: requestdomain.RolePflicht}}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.St.SetCriterionState(req.Criteria[0].ID, "met", requestdomain.Evidence{RequestID: req.Request.ID, Kind: "commit", Ref: pullShaA, Person: "alice"}); err != nil {
-		t.Fatal(err)
 	}
 	return e, pa
 }

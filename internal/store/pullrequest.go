@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/knref"
@@ -43,6 +44,23 @@ func ensurePullRequests(db *sql.DB) error {
 	if err := ensureColumn(db, "git_pull_requests", "author", `TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("git_pull_requests.author: %w", err)
 	}
+	// head_sha: der neueste Commit des Head-Branches laut Webhook; an ihn hängt der
+	// Check-Run (lastenheft.go). Altzeilen bleiben leer, bis ein Ereignis ihn bringt.
+	if err := ensureColumn(db, "git_pull_requests", "head_sha", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("git_pull_requests.head_sha: %w", err)
+	}
+	// head_at: Zeitstempel des Ereignisses, das head_sha gebracht hat (updated_at des
+	// PRs laut GitHub). Webhooks kommen nicht in Reihenfolge an; ein älteres
+	// Ereignis darf den neueren Head-Commit nicht überschreiben.
+	if err := ensureColumn(db, "git_pull_requests", "head_at", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("git_pull_requests.head_at: %w", err)
+	}
+	if _, err := db.Exec(lastenheftSchema); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "github_check_runs", "check_run_id", `INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("github_check_runs.check_run_id: %w", err)
+	}
 	if _, err := db.Exec(pullCommitSchema); err != nil {
 		return err
 	}
@@ -69,6 +87,15 @@ type PullRequestChange struct {
 	Head, Base    string
 	DefaultBranch string
 	MergeSHA      string
+	// HeadSHA ist der neueste Commit des Head-Branches (Fremddaten, nur eine volle
+	// Hex-SHA gilt); an ihn hängt der Check-Run (lastenheft.go).
+	HeadSHA string
+	// HeadAt ist die Zeit des Ereignisses laut GitHub (updated_at des PRs, RFC 3339).
+	// Ein Ereignis, das älter ist als der gespeicherte Stand, ändert head_sha nicht.
+	HeadAt string
+	// RepoPrivate sagt, ob GitHub das Repo als privat meldet (nil: das Ereignis
+	// sagt es nicht). Davon hängt ab, ob der Check-Run geschrieben wird.
+	RepoPrivate *bool
 	// Author ist der Login des PR-Autors (Fremddaten, wird geprüft).
 	Author string
 	// State: open, closed oder merged.
@@ -83,7 +110,12 @@ type PullRequestResult struct {
 	Applied       bool
 	AnchorsTagged int
 	PackageBound  bool
-	Merged        bool
+	// PackageCreated: der PR war offen und sein Branch hatte kein Paket; der Server
+	// hat eines angelegt (package_auto.go). PackageMembers sind die Requests, die sich
+	// eindeutig herleiten ließen; 0 heißt, das Paket ist leer.
+	PackageCreated bool
+	PackageMembers int
+	Merged         bool
 	// Knowledge sind die Einträge, deren Anker nach dem Merge diesen PR tragen.
 	Knowledge        []int64
 	GhostsPromoted   int
@@ -136,6 +168,8 @@ const projectAnchorIDs = `
 //     ein Anker, der schon zu einem früheren PR desselben Branch-Namens gehört,
 //     bleibt dort;
 //   - ein offenes Arbeitspaket des Head-Branches ohne PR wird an ihn gebunden;
+//     hat der Branch keines, legt der Server beim offenen PR eines an (REQ-601
+//     AC-12, package_auto.go);
 //   - beim Merge (einmal) werden die Branch-Beschreibungen der Ghost-Dateien auf
 //     den Base-Branch gehoben und an den Requests des Pakets steht eine Notiz,
 //     welches Branch-Wissen hineingegangen ist.
@@ -167,6 +201,11 @@ func (s *Store) RecordPullRequest(c PullRequestChange) (PullRequestResult, error
 	mergeSHA := ""
 	if gitanchor.ValidPrefix(gitanchor.Normalize(c.MergeSHA)) {
 		mergeSHA = gitanchor.Normalize(c.MergeSHA)
+	}
+	headSHA, headAt := "", ""
+	if h := gitanchor.Normalize(c.HeadSHA); (len(h) == 40 || len(h) == 64) && gitanchor.ValidPrefix(h) {
+		headSHA = h
+		headAt = normalizeEventTime(c.HeadAt)
 	}
 
 	tx, err := s.db.Begin()
@@ -212,9 +251,11 @@ func (s *Store) RecordPullRequest(c PullRequestChange) (PullRequestResult, error
 		mergedAt = ts
 	}
 	author := cleanLogin(c.Author)
-	if _, err := tx.Exec(`INSERT INTO git_pull_requests(project,number,title,state,head_ref,base_ref,default_branch,merge_sha,opened_at,updated_at,merged_at,author)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+	if _, err := tx.Exec(`INSERT INTO git_pull_requests(project,number,title,state,head_ref,base_ref,default_branch,merge_sha,opened_at,updated_at,merged_at,author,head_sha,head_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(project,number) DO UPDATE SET
+			head_sha=CASE WHEN excluded.head_sha!='' AND excluded.head_at>=git_pull_requests.head_at THEN excluded.head_sha ELSE git_pull_requests.head_sha END,
+			head_at=CASE WHEN excluded.head_sha!='' AND excluded.head_at>=git_pull_requests.head_at THEN excluded.head_at ELSE git_pull_requests.head_at END,
 			author=CASE WHEN excluded.author!='' THEN excluded.author ELSE git_pull_requests.author END,
 			title=CASE WHEN excluded.title!='' THEN excluded.title ELSE git_pull_requests.title END,
 			state=excluded.state, head_ref=excluded.head_ref, base_ref=excluded.base_ref,
@@ -222,8 +263,28 @@ func (s *Store) RecordPullRequest(c PullRequestChange) (PullRequestResult, error
 			merge_sha=CASE WHEN excluded.merge_sha!='' THEN excluded.merge_sha ELSE git_pull_requests.merge_sha END,
 			updated_at=excluded.updated_at,
 			merged_at=CASE WHEN git_pull_requests.merged_at!='' THEN git_pull_requests.merged_at ELSE excluded.merged_at END`,
-		remote, c.Number, title, state, head, base, defaultBranch, mergeSHA, ts, ts, mergedAt, author); err != nil {
+		remote, c.Number, title, state, head, base, defaultBranch, mergeSHA, ts, ts, mergedAt, author, headSHA, headAt); err != nil {
 		return res, err
+	}
+	if c.RepoPrivate != nil {
+		if err := setRepoPrivateTx(tx, remote, *c.RepoPrivate, ts); err != nil {
+			return res, err
+		}
+	}
+	// Ein gemergter oder geschlossener PR schließt sein Paket: sonst hielte es den
+	// Branchnamen besetzt, und der nächste PR darauf bekäme kein eigenes Paket. Wird
+	// ein geschlossener PR wieder geöffnet, öffnet sich auch sein Paket, solange der
+	// Branch kein anderes offenes hat.
+	switch {
+	case state == "merged" || state == "closed":
+		if _, err := tx.Exec(`UPDATE work_packages SET state='closed', updated_at=? WHERE project=? AND pr=? AND state='open'`, ts, remote, c.Number); err != nil {
+			return res, err
+		}
+	case state == "open" && prevState == "closed":
+		if _, err := tx.Exec(`UPDATE work_packages SET state='open', updated_at=? WHERE project=? AND pr=? AND state='closed'
+			AND NOT EXISTS(SELECT 1 FROM work_packages o WHERE o.project=work_packages.project AND o.branch=work_packages.branch AND o.state='open')`, ts, remote, c.Number); err != nil {
+			return res, err
+		}
 	}
 	if prevState == "merged" {
 		return res, tx.Commit()
@@ -245,6 +306,11 @@ func (s *Store) RecordPullRequest(c PullRequestChange) (PullRequestResult, error
 	}
 	n, _ = r.RowsAffected()
 	res.PackageBound = n > 0
+	if !res.PackageBound && state == "open" {
+		if res.PackageCreated, res.PackageMembers, err = autoPackageTx(tx, remote, c.Number, head, title, ts); err != nil {
+			return res, err
+		}
+	}
 	if !justMerged {
 		return res, tx.Commit()
 	}
@@ -447,4 +513,15 @@ func (s *Store) PullSyncTargets(project string) ([]PullSyncTarget, error) {
 		br.Close()
 	}
 	return out, nil
+}
+
+// normalizeEventTime macht aus dem Zeitstempel eines Ereignisses (RFC 3339 von
+// GitHub) eine Form, die sich als Text richtig vergleichen lässt: UTC, feste Breite.
+// Ein Wert, der keine Zeit ist, wird zu "": er gilt dann als der älteste.
+func normalizeEventTime(raw string) string {
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return t.UTC().Format("2006-01-02T15:04:05Z")
 }
