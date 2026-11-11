@@ -190,3 +190,53 @@ func (a *ProjectAccess) PackagesOfProject(project, state string) ([]requestdomai
 	}
 	return out, nil
 }
+
+// packageRowsOfProject liefert die Pakete eines Projekts ohne Mitglieder, jüngstes
+// zuerst: eine Abfrage, keine je Paket.
+func (s *Store) packageRowsOfProject(project, state string) ([]requestdomain.Package, error) {
+	if s.reader != nil {
+		return s.reader.packageRowsOfProject(project, state)
+	}
+	q := `SELECT ` + packageCols + ` FROM work_packages WHERE project=?`
+	args := []any{project}
+	if state != "" {
+		q += ` AND state=?`
+		args = append(args, state)
+	}
+	q += ` ORDER BY id DESC LIMIT 500`
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []requestdomain.Package
+	for rows.Next() {
+		var p requestdomain.Package
+		if err := scanPackage(rows, &p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// PackageChoices ist die schlanke Paketliste für Menüs und Vorschläge: dieselben
+// Pakete, dieselbe Rechteprüfung und dieselbe Namenssicht wie PackagesOfProject,
+// aber ohne die Mitglieder und ohne Zahlen für Requests und Kriterien.
+func (a *ProjectAccess) PackageChoices(project, state string) ([]requestdomain.Package, error) {
+	project = scope.NormalizeRemote(strings.TrimSpace(project))
+	if state != "" && state != requestdomain.PackageOpen && state != requestdomain.PackageClosed {
+		return nil, requestdomain.NewRuleError("invalid_package_state", "package state must be open or closed", "use open or closed, or leave it out", nil)
+	}
+	if err := a.Check(project, ResRequest, ActRead, Object{}); err != nil {
+		return nil, err
+	}
+	list, err := a.st.packageRowsOfProject(project, state)
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		list[i] = a.PackageNameView(list[i])
+	}
+	return list, nil
+}

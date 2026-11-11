@@ -45,9 +45,12 @@ type gardenTabView struct {
 	Budget   string
 	Percent  int
 	Auto     []gardenAutoRow
-	Settings string
-	Token    string
-	Org      string
+	// ShowBudget: only the owner sees the month's spending; it adds up the runs
+	// of every repository of the namespace, also those another viewer has no role in.
+	ShowBudget bool
+	Settings   string
+	Token      string
+	Org        string
 }
 
 type gardenVerdictPill struct {
@@ -130,6 +133,7 @@ func (a *app) gardenTab(w http.ResponseWriter, r *http.Request, org store.Org) {
 	base := "/ui/" + url.PathEscape(org.Slug) + "/gardener"
 	v := &gardenTabView{Token: csrfOf(r), Org: org.Slug}
 	if org.Role == store.OrgOwner {
+		v.ShowBudget = true
 		v.Settings = "/ui/orgs?org=" + url.QueryEscape(org.Slug) + "#gardener"
 	}
 	notes := a.gardenNotes(r, org)

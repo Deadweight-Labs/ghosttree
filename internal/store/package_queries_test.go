@@ -107,3 +107,42 @@ func TestPackagesOfProjectCountPerPackage(t *testing.T) {
 		t.Fatalf("state check: %v", err)
 	}
 }
+
+// The lean list for menus and suggestions names the same packages, in the same
+// order, under the same names and with the same rights as the full list.
+func TestPackageChoicesMatchPackagesOfProject(t *testing.T) {
+	w := newPainWorld(t)
+	a := w.requestOn(t, roleProject, "", "a")
+	open, _ := w.st.CreatePackage(requestdomain.PackageInput{Project: roleProject, Branch: "feat/o", Members: []requestdomain.PackageMember{{RequestID: a}}})
+	closed, _ := w.st.CreatePackage(requestdomain.PackageInput{Project: roleProject, Branch: "feat/c", Members: []requestdomain.PackageMember{{RequestID: a}}})
+	st := requestdomain.PackageClosed
+	if _, err := w.st.UpdatePackage(closed.ID, requestdomain.PackagePatch{State: &st}); err != nil {
+		t.Fatal(err)
+	}
+	for _, who := range []string{"gus", "mia"} {
+		for _, state := range []string{"", "open", "closed"} {
+			full, err := w.pa[who].PackagesOfProject(roleProject, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lean, err := w.pa[who].PackageChoices(roleProject, state)
+			if err != nil || len(lean) != len(full) {
+				t.Fatalf("%s %q: lean %+v, full %+v, %v", who, state, lean, full, err)
+			}
+			for i := range full {
+				if lean[i] != full[i].Package {
+					t.Errorf("%s %q #%d: lean %+v, full %+v", who, state, i, lean[i], full[i].Package)
+				}
+			}
+		}
+	}
+	if lean, _ := w.pa["gus"].PackageChoices(roleProject, "open"); len(lean) != 1 || lean[0].ID != open.ID {
+		t.Errorf("open: %+v", lean)
+	}
+	if _, err := w.pa["nora"].PackageChoices(roleProject, ""); !errors.Is(err, ErrAccessNotFound) {
+		t.Errorf("a stranger lists packages: %v", err)
+	}
+	if _, err := w.pa["gus"].PackageChoices(roleProject, "weird"); ruleCode(err) != "invalid_package_state" {
+		t.Errorf("state check: %v", err)
+	}
+}

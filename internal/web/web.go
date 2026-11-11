@@ -242,6 +242,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.registerPainTaskPages(mux)
 	a.handle(mux, "GET /ui/search", a.requirePerson(http.HandlerFunc(a.searchPage)))
 	a.handle(mux, "GET /ui/search/stream", a.requirePerson(http.HandlerFunc(a.searchStream)))
+	a.handle(mux, "GET /ui/search/suggest", a.requirePerson(http.HandlerFunc(a.searchSuggest)))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
 	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
 	a.handle(mux, "POST /ui/knowledge/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeMove))))))
@@ -601,6 +602,7 @@ var webRoutes = map[string]webClass{
 	"GET /ui/review/held/{kind}/{id}":       webProject,
 	"GET /ui/search":                        webProject,
 	"GET /ui/search/stream":                 webProject,
+	"GET /ui/search/suggest":                webProject,
 	"POST /ui/review/bulk":                  webAdmin,
 	"POST /ui/review/held":                  webAdmin,
 	"POST /ui/review/{id}/{verdict}":        webAdmin,
