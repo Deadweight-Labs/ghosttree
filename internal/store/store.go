@@ -35,6 +35,9 @@ type Store struct {
 	embedOnce     sync.Once
 	chunkMap      *chunkMapState
 	chunkMapOnce  sync.Once
+	// textDerived: der Server schreibt session_chunks.text nicht
+	// (-session-text=derived, chunktext.go).
+	textDerived bool
 	// qctx ends the reads of a view made by WithContext; nil elsewhere.
 	qctx context.Context
 }
@@ -1185,6 +1188,10 @@ func openWithOptions(path string, options OpenOptions, seed bool) (*Store, error
 		return nil, err
 	}
 	if err := ensureRawCodec(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureChunkText(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

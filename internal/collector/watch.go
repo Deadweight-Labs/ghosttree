@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
+	"github.com/Deadweight-Labs/ghosttree/internal/chunktext"
 	"github.com/Deadweight-Labs/ghosttree/internal/projectlink"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -58,13 +59,6 @@ var uploadBatchBytes = 24 << 20
 
 // metaScanLines is how far into a file we look for the session metadata line.
 const metaScanLines = 200
-
-func parserFor(harness string) func([]byte) ParsedLine {
-	if harness == "codex" {
-		return ParseCodexLine
-	}
-	return ParseClaudeLine
-}
 
 // SyncFile uploads everything appended to path since the last confirmed run.
 // The offset only advances after the server accepted a batch.
@@ -113,7 +107,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 	if _, err := f.Seek(fs.Offset, io.SeekStart); err != nil {
 		return err
 	}
-	parse := parserFor(harness)
+	parse := chunktext.Parse(harness)
 	r := bufio.NewReaderSize(f, 1<<20)
 	offset := fs.Offset
 	var batch []store.Chunk

@@ -3,6 +3,12 @@ package store
 import "context"
 
 func OpenRuntime(path string, cfg WriterConfig) (*Store, error) {
+	return OpenRuntimeWithText(path, cfg, "")
+}
+
+// OpenRuntimeWithText öffnet den Laufzeitspeicher und wählt, wie er den Text neuer
+// Chunks schreibt (SessionTextStored, SessionTextDerived; leer heißt stored).
+func OpenRuntimeWithText(path string, cfg WriterConfig, sessionText string) (*Store, error) {
 	if sqliteFilePath(path) == "" || cfg.MaxOperations <= 0 || cfg.MaxBytes <= 0 || cfg.MaxBatch <= 0 || cfg.ReadConnections <= 0 {
 		return nil, ErrWriterInvalidConfig
 	}
@@ -13,6 +19,12 @@ func OpenRuntime(path string, cfg WriterConfig) (*Store, error) {
 	if err := ProbeContextSnapshotSchema(context.Background(), s.db); err != nil {
 		_ = s.Close()
 		return nil, err
+	}
+	if sessionText != "" {
+		if err := s.setSessionText(sessionText); err != nil {
+			_ = s.Close()
+			return nil, err
+		}
 	}
 	s.reader, err = OpenReadOnly(path, cfg.ReadConnections)
 	if err != nil {
@@ -35,7 +47,7 @@ func OpenRuntime(path string, cfg WriterConfig) (*Store, error) {
 }
 
 func (s *Store) direct() *Store {
-	return &Store{db: s.db, path: s.path, snapshotFault: s.snapshotFault, acfg: s.accessCfg()}
+	return &Store{db: s.db, path: s.path, snapshotFault: s.snapshotFault, acfg: s.accessCfg(), textDerived: s.textDerived}
 }
 
 func queueValue[T any](s *Store, payload []any, fn func(*Store, []any) (T, error)) (T, error) {

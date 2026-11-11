@@ -117,8 +117,8 @@ func (s *Store) ApplySessionDistillation(sessionID int64, digest, promptVersion 
 	sessionAnchor := sessionAnchorTx(tx, sessionID)
 	for _, item := range items {
 		itemScope := scope.DefaultAxes(item.Type, ax)
-		var chunkText string
-		if err := tx.QueryRow(`SELECT text FROM session_chunks WHERE session_id=? AND seq=?`, sessionID, item.ChunkSeq).Scan(&chunkText); err != nil {
+		chunkText, err := s.chunkTextTx(tx, sessionID, item.ChunkSeq)
+		if err != nil {
 			return 0, err
 		}
 		if item.Quote == "" || !strings.Contains(chunkText, item.Quote) {

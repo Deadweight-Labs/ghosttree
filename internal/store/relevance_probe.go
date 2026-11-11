@@ -40,9 +40,13 @@ func (s *Store) ProbeRelevance(sample, limit int) ([]RelevanceProbe, error) {
 	// is typed by anyone, and none of it reaches the hook this rule runs in.
 	// Leaving it in the sample would measure the rule against text it will never
 	// see, and it is long and full of unusual words, so it would measure high.
-	const eligible = `FROM session_chunks c JOIN sessions se ON se.id = c.session_id
-		WHERE c.role = 'user' AND se.project != ''
-		  AND length(c.text) BETWEEN 12 AND 4000 AND c.text NOT LIKE '<%'`
+	//
+	// The prompts come from chunk_index, not from session_chunks.text, which the
+	// server no longer has to store (IDEA-25).
+	const promptText = `CASE WHEN ci.fts = 1 THEN ci.prompt ELSE ci.text END`
+	const eligible = `FROM chunk_index ci JOIN sessions se ON se.id = ci.session_id
+		WHERE ci.is_prompt = 1 AND ci.role = 'user' AND se.project != ''
+		  AND length(` + promptText + `) BETWEEN 12 AND 4000 AND ` + promptText + ` NOT LIKE '<%'`
 	var eligibleCount int
 	if err := s.db.QueryRow(`SELECT COUNT(*) ` + eligible).Scan(&eligibleCount); err != nil {
 		return nil, err
@@ -54,8 +58,8 @@ func (s *Store) ProbeRelevance(sample, limit int) ([]RelevanceProbe, error) {
 	// is one conversation about one subject, which is exactly the sample that
 	// would flatter the rule.
 	step := max(1, eligibleCount/sample)
-	rows, err := s.db.Query(`SELECT se.project, se.account_id, c.text `+eligible+`
-		AND c.rowid % ? = 0 LIMIT ?`, step, sample)
+	rows, err := s.db.Query(`SELECT se.project, se.account_id, `+promptText+` `+eligible+`
+		AND ci.chunk_id % ? = 0 LIMIT ?`, step, sample)
 	if err != nil {
 		return nil, err
 	}
