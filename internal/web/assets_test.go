@@ -226,3 +226,13 @@ func TestDynamicPagesAreNotCompressed(t *testing.T) {
 		t.Errorf("an HTML page came back %q", res.Header.Get("Content-Encoding"))
 	}
 }
+
+func TestScriptBundleSeparatesItsParts(t *testing.T) {
+	a := loadAssets()["bundle-base.js"]
+	if a == nil {
+		t.Fatal("no bundle-base.js")
+	}
+	if n := strings.Count(string(a.body), "\n;\n"); n < len(assetBundles["bundle-base.js"]) {
+		t.Fatalf("expected a separating semicolon after each of the %d parts, found %d", len(assetBundles["bundle-base.js"]), n)
+	}
+}

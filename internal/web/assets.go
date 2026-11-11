@@ -71,6 +71,11 @@ var loadAssets = sync.OnceValue(func() assetSet {
 			if !bytes.HasSuffix(a.body, []byte("\n")) {
 				joined.WriteByte('\n')
 			}
+			// A script part that ends without a semicolon would otherwise be called
+			// by the next one when that starts with "(" (automatic semicolon insertion).
+			if path.Ext(name) == ".js" {
+				joined.WriteString(";\n")
+			}
 		}
 		set[name] = newAsset(name, joined.Bytes())
 	}
