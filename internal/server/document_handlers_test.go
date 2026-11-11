@@ -420,3 +420,23 @@ func TestDocumentWritesRefuseTooLargeTexts(t *testing.T) {
 		t.Fatalf("head moved to %d", got.HeadRevision)
 	}
 }
+
+// PAIN-22: the refusal names line, column and the label, and never the value;
+// a command name in Markdown code is no secret.
+func TestDocumentBodyRefusalNamesLineColumnAndLabel(t *testing.T) {
+	err := validateDocumentBody("# Spec\n\nSet it up.\n  pw: Xy7#abcQ9 is the login\n")
+	if err == nil {
+		t.Fatal("a labeled password was accepted")
+	}
+	for _, want := range []string{"line 4", "column 3", `"pw"`, "nothing was stored"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal lacks %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "Xy7") {
+		t.Errorf("the refusal holds the value: %v", err)
+	}
+	if err := validateDocumentBody("Apart from `pw export`/`pw deploy` and then `pw live`.\n"); err != nil {
+		t.Errorf("a command name was refused: %v", err)
+	}
+}
