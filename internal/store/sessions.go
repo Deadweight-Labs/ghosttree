@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
@@ -77,6 +78,12 @@ type Chunk struct {
 	// gepackter Rahmen). AppendChunks setzt es außerhalb des Schreibers; was ein
 	// Aufrufer hineinschreibt, wird überschrieben. Nie auf dem Draht.
 	Stored any `json:"-"`
+
+	// TextChars ist die Länge von Text in Zeichen, wie AppendChunks sie nach dem
+	// Schwärzen und Kürzen sieht. Sie geht in session_chunks.text_chars, auch
+	// wenn der Server den Text selbst nicht speichert (-session-text=derived).
+	// Nie auf dem Draht.
+	TextChars int `json:"-"`
 }
 
 type ChunkBatch struct {
@@ -169,6 +176,7 @@ func sanitizeChunks(in []Chunk) []Chunk {
 		// aus dem, was er bekommt (REQ-622).
 		text, _ := slim.Cap(redact.Redact(in[i].Text))
 		c.Raw, c.Text, c.Stored = raw, text, nil
+		c.TextChars = utf8.RuneCountInString(text)
 		out = append(out, c)
 	}
 	return out
@@ -255,7 +263,7 @@ func (s *Store) appendChunkBatches(batches []ChunkBatch) error {
 		}
 		sessions[batch.SessionID] = struct{}{}
 	}
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO session_chunks(session_id, seq, role, text, raw, slim_version) VALUES(?,?,?,?,?,?)`)
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO session_chunks(session_id, seq, role, text, raw, slim_version, text_chars) VALUES(?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -275,7 +283,13 @@ func (s *Store) appendChunkBatches(batches []ChunkBatch) error {
 			if stored == nil {
 				stored = enc.Encode(c.Raw)
 			}
-			res, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, c.Text, stored, slim.Version)
+			text := c.Text
+			if s.textDerived {
+				// -session-text=derived: readers derive the text from raw; text_chars
+				// keeps its length for ctx cost.
+				text = ""
+			}
+			res, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, text, stored, slim.Version, c.TextChars)
 			if err != nil {
 				return err
 			}
@@ -521,6 +535,7 @@ func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {
 	if limit <= 0 {
 		limit = 200
 	}
+	harness := s.sessionHarness(id)
 	rows, err := s.db.Query(`SELECT seq, role, text, raw FROM session_chunks
 		WHERE session_id = ? AND seq >= ? ORDER BY seq LIMIT ?`, id, fromSeq, limit)
 	if err != nil {
@@ -537,6 +552,7 @@ func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {
 		if c.Raw, err = s.rawLine(raw); err != nil {
 			return nil, fmt.Errorf("session %d chunk %d: %w", id, c.Seq, err)
 		}
+		c.Text = chunkTextOf(harness, c.Text, c.Raw)
 		out = append(out, c)
 	}
 	return out, rows.Err()

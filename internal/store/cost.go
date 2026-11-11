@@ -89,7 +89,7 @@ func (s *Store) PendingDistillationSize(filter scope.Axes, idleBefore string) (s
 	where, args := filter.FilterWhere()
 	args = append(args, idleBefore)
 	err = s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(size),0) FROM (
-		SELECT (SELECT COALESCE(SUM(length(c.text)),0) FROM session_chunks c WHERE c.session_id = sessions.id) AS size
+		SELECT (SELECT COALESCE(SUM(CASE WHEN c.text != '' THEN length(c.text) ELSE c.text_chars END),0) FROM session_chunks c WHERE c.session_id = sessions.id) AS size
 		FROM sessions
 		WHERE `+where+` AND last_seen_at < ? AND project != ''
 		  AND NOT EXISTS (SELECT 1 FROM session_distillations d WHERE d.session_id = sessions.id)
@@ -109,7 +109,7 @@ func (s *Store) BilledTranscriptChars(since string) (int, error) {
 	}
 	var chars int
 	err := s.db.QueryRow(`SELECT COALESCE(SUM(size),0) FROM (
-		SELECT (SELECT COALESCE(SUM(length(c.text)),0) FROM session_chunks c WHERE c.session_id = i.session_id) AS size
+		SELECT (SELECT COALESCE(SUM(CASE WHEN c.text != '' THEN length(c.text) ELSE c.text_chars END),0) FROM session_chunks c WHERE c.session_id = i.session_id) AS size
 		FROM distill_batch_items i
 		JOIN distill_batches b ON b.id = i.batch_id
 		WHERE i.prompt_tokens > 0 AND (? = '' OR b.created_at >= ?))`, since, since).Scan(&chars)

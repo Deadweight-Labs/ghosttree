@@ -1,6 +1,12 @@
 package store
 
-import "strings"
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/rawcodec"
+)
 
 // ToolCallRow is one project's use of a tool family.
 type ToolCallRow struct {
@@ -26,31 +32,61 @@ func (s *Store) ToolCallsPerProject(prefix string) ([]ToolCallRow, error) {
 	if s.reader != nil {
 		return s.reader.ToolCallsPerProject(prefix)
 	}
-	pattern := "%" + escapeLike(toolCallMarker+prefix) + "%"
-	rows, err := s.db.Query(`SELECT se.project, COUNT(*), COUNT(DISTINCT c.session_id)
-		FROM session_chunks c JOIN sessions se ON se.id = c.session_id
-		WHERE c.text LIKE ? ESCAPE '\'
-		GROUP BY se.project
-		ORDER BY COUNT(*) DESC, se.project`, pattern)
+	// The text of a chunk is derived from its line (IDEA-25), so the count walks
+	// the chunks that hold a tool call in chunk_index and reads their text by the
+	// same rule as ReadSession. LIKE was case-insensitive for ASCII; so is this.
+	needle := strings.ToLower(toolCallMarker + prefix)
+	rows, err := s.db.Query(`SELECT se.project, c.session_id, se.harness, c.text, c.raw
+		FROM chunk_index ci
+		JOIN session_chunks c ON c.id = ci.chunk_id
+		JOIN sessions se ON se.id = c.session_id
+		WHERE ci.tool_calls > 0`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []ToolCallRow{}
+	type tally struct {
+		calls    int
+		sessions map[int64]struct{}
+	}
+	byProject := map[string]*tally{}
 	for rows.Next() {
-		var r ToolCallRow
-		if err := rows.Scan(&r.Project, &r.Calls, &r.Sessions); err != nil {
+		var project, harness, text string
+		var session int64
+		var raw rawcodec.Value
+		if err := rows.Scan(&project, &session, &harness, &text, &raw); err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		if text == "" {
+			line, err := s.rawLine(raw)
+			if err != nil {
+				return nil, fmt.Errorf("session %d: %w", session, err)
+			}
+			text = chunkTextOf(harness, "", line)
+		}
+		if !strings.Contains(strings.ToLower(text), needle) {
+			continue
+		}
+		t := byProject[project]
+		if t == nil {
+			t = &tally{sessions: map[int64]struct{}{}}
+			byProject[project] = t
+		}
+		t.calls++
+		t.sessions[session] = struct{}{}
 	}
-	return out, rows.Err()
-}
-
-// escapeLike neutralises the wildcards in a literal. A tool name carrying an
-// underscore — every MCP tool does — would otherwise match any character there
-// and quietly count another tool's calls as this one's.
-func escapeLike(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return r.Replace(s)
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]ToolCallRow, 0, len(byProject))
+	for project, t := range byProject {
+		out = append(out, ToolCallRow{Project: project, Calls: t.calls, Sessions: len(t.sessions)})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Calls != out[j].Calls {
+			return out[i].Calls > out[j].Calls
+		}
+		return out[i].Project < out[j].Project
+	})
+	return out, nil
 }
