@@ -308,9 +308,9 @@ func (a *app) failFormTo(w http.ResponseWriter, r *http.Request, back string, st
 	a.failFormKeeping(w, r, back, status, text, field, "")
 }
 
-// failFormKeeping is failFormTo that leaves one field out of what comes back: the text
+// failFormKeeping is failFormTo that leaves fields out of what comes back: the text
 // that was refused because it looks like a secret is never written onto a page again.
-func (a *app) failFormKeeping(w http.ResponseWriter, r *http.Request, back string, status int, text, field, drop string) {
+func (a *app) failFormKeeping(w http.ResponseWriter, r *http.Request, back string, status int, text, field string, drop ...string) {
 	// Mit einem Merker (csrfGate) kommt nur wieder, was er nach geprüftem Token
 	// behielt: nach einem CSRF-Fehler ist er leer. Nur ohne Merker (eine Route außerhalb
 	// der angemeldeten Seiten) gilt der gelesene Körper.
@@ -321,8 +321,8 @@ func (a *app) failFormKeeping(w http.ResponseWriter, r *http.Request, back strin
 		values = r.PostForm
 	}
 	kept := keptFields(values)
-	if drop != "" {
-		delete(kept, drop)
+	for _, name := range drop {
+		delete(kept, name)
 	}
 	target := formBackOf(r)
 	if target == "" {

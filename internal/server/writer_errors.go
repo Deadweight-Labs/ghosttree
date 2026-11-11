@@ -4,15 +4,29 @@ import (
 	"errors"
 	"net/http"
 
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 func writeStoreError(w http.ResponseWriter, fallback int, err error) {
-	if writeWriterError(w, err, false) {
+	if writeSecretRefusal(w, err) || writeWriterError(w, err, false) {
 		return
 	}
 	writeErr(w, fallback, err.Error())
+}
+
+// writeSecretRefusal answers a write the store refused because the text carries
+// a secret (PAIN-17): 422 with the code secret_detected and a message that says
+// where and what to do, never the value. The message holds the instruction too,
+// because the MCP tools show an agent the message and not the resolution.
+func writeSecretRefusal(w http.ResponseWriter, err error) bool {
+	var rule *requestdomain.RuleError
+	if !errors.As(err, &rule) || rule.ErrorCode != "secret_detected" {
+		return false
+	}
+	writeCoded(w, http.StatusUnprocessableEntity, rule.ErrorCode, rule.Message)
+	return true
 }
 
 func writeWriterError(w http.ResponseWriter, err error, snapshotOperation bool) bool {

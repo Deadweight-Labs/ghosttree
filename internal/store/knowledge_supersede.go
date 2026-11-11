@@ -123,7 +123,7 @@ func checkSupersedeInput(oldIDs []int64, reason string) error {
 	if len(oldIDs) == 0 {
 		return fmt.Errorf("%w: name the entries to supersede", ErrRelationInvalid)
 	}
-	return nil
+	return refuseSecrets("supersede_reason", reason)
 }
 
 func supersedeTx(tx *sql.Tx, newID int64, oldIDs []int64, reason string, actor RelationActor) error {
@@ -183,6 +183,9 @@ func (s *Store) RetireKnowledge(id int64, reason, by string) error {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return fmt.Errorf("%w: say why the entry is retired", ErrReasonRequired)
+	}
+	if err := refuseSecrets("reason", reason); err != nil {
+		return err
 	}
 	if s.writer != nil {
 		return queueWrite(s, []any{id, reason, by}, func(d *Store, p []any) error {

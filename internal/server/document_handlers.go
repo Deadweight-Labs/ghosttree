@@ -195,11 +195,7 @@ func validateDocumentBody(body string) error {
 // author sees at once whether a command name (pw) or a real password was
 // meant.
 func secretRefusal(m redact.SecretMatch) error {
-	where := fmt.Sprintf("line %d, column %d", m.Line, m.Column)
-	if m.Keyword != "" {
-		where += fmt.Sprintf(", after the label %q", m.Keyword)
-	}
-	return fmt.Errorf("body contains a possible %s secret on %s; nothing was stored", m.Label, where)
+	return fmt.Errorf("body contains a possible %s secret on %s; nothing was stored", m.Label, m.Where())
 }
 
 // writeDocumentConflict sagt nicht nur, DASS der Kopf weitergezogen ist,

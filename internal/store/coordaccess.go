@@ -952,6 +952,9 @@ func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 	if len(message.Body) > CoordMaxBody {
 		return 0, false, ErrCoordBodyTooLong
 	}
+	if err := refuseSecrets("body", message.Body); err != nil {
+		return 0, false, err
+	}
 	if a.Store != nil && a.Store.writer != nil {
 		r, err := queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, message}, func(d *Store, p []any) (CoordSent, error) {
 			id, created, err := queuedCoordAccess(d, p).SendNew(p[3].(CoordMessage))
@@ -1578,6 +1581,9 @@ func (a CoordAccess) PromoteMessagesToThread(roomKey string, messageIDs []int64,
 	if len(messageIDs) == 0 || strings.TrimSpace(thread.Title) == "" {
 		return PromoteResult{}, fmt.Errorf("promoting needs messages and a title")
 	}
+	if err := refuseSecrets("title", thread.Title, "question", thread.Question); err != nil {
+		return PromoteResult{}, err
+	}
 	tx, err := a.Store.db.Begin()
 	if err != nil {
 		return PromoteResult{}, err
@@ -1662,6 +1668,9 @@ func (a CoordAccess) createTaskThread(roomKey string, anchorMessageID int64, tit
 	requestID = strings.TrimSpace(requestID)
 	if title == "" || (anchorMessageID <= 0 && roomKey == "") {
 		return 0, fmt.Errorf("home room and title are required")
+	}
+	if err := refuseSecrets("title", title, "question", question); err != nil {
+		return 0, err
 	}
 	tx, err := a.Store.db.Begin()
 	if err != nil {
@@ -2171,6 +2180,9 @@ func (a CoordAccess) ThreadSummary(threadID int64) (ThreadSummary, bool, error) 
 }
 
 func (a CoordAccess) PutThreadSummary(summary ThreadSummary) (int, error) {
+	if err := refuseSecrets("body", summary.Body, "open_questions", summary.OpenQuestions); err != nil {
+		return 0, err
+	}
 	if a.Store != nil && a.Store.writer != nil {
 		return queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, summary}, func(d *Store, p []any) (int, error) {
 			return queuedCoordAccess(d, p).PutThreadSummary(p[3].(ThreadSummary))
@@ -2253,6 +2265,9 @@ func (a CoordAccess) ThreadOutcomes(threadID int64) ([]ThreadOutcome, error) {
 }
 
 func (a CoordAccess) PutThreadOutcome(outcome ThreadOutcome) error {
+	if err := refuseSecrets("note", outcome.Note, "ref_id", outcome.RefID); err != nil {
+		return err
+	}
 	if a.Store != nil && a.Store.writer != nil {
 		return queueWrite(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, outcome}, func(d *Store, p []any) error {
 			return queuedCoordAccess(d, p).PutThreadOutcome(p[3].(ThreadOutcome))
@@ -2295,6 +2310,9 @@ func (a CoordAccess) PutThreadOutcome(outcome ThreadOutcome) error {
 }
 
 func (a CoordAccess) CreateGroup(in GroupInput) (CoordRoom, error) {
+	if err := refuseSecrets("label", in.Label); err != nil {
+		return CoordRoom{}, err
+	}
 	if a.Store != nil && a.Store.writer != nil {
 		return queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, in}, func(d *Store, p []any) (CoordRoom, error) {
 			return queuedCoordAccess(d, p).CreateGroup(p[3].(GroupInput))
@@ -2796,6 +2814,9 @@ func (a CoordAccess) Standing(roomKey string) ([]StandingInstruction, error) {
 }
 
 func (a CoordAccess) CreateStanding(in StandingInput) (int64, error) {
+	if err := refuseSecrets("body", in.Body); err != nil {
+		return 0, err
+	}
 	if a.Store != nil && a.Store.writer != nil {
 		return queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, in}, func(d *Store, p []any) (int64, error) {
 			return queuedCoordAccess(d, p).CreateStanding(p[3].(StandingInput))

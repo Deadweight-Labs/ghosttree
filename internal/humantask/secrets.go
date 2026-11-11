@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
 
@@ -37,15 +38,27 @@ var (
 // heuristic, not a guarantee: the duty stays with the writer. Neither the value
 // nor the matching pattern text is returned.
 func CheckText(field, text string) *requestdomain.RuleError {
-	if kind := detect(text); kind != "" {
-		return &requestdomain.RuleError{
-			ErrorCode:  "secret_detected",
-			Message:    fmt.Sprintf("%s looks like it contains a secret (%s)", field, kind),
-			Resolution: "name only where it lives (path, vault entry, env file), never the value",
+	kind := detect(text)
+	if kind == "" {
+		// What the rest of ghosttree refuses too: a value behind a label
+		// ("Passwort: ..."), found by where it stands and said with its place.
+		if m := redact.FindSecrets(text); len(m) > 0 {
+			kind = fmt.Sprintf("%s secret at %s", m[0].Label, m[0].Where())
 		}
 	}
-	return nil
+	if kind == "" {
+		return nil
+	}
+	return &requestdomain.RuleError{
+		ErrorCode:  "secret_detected",
+		Message:    fmt.Sprintf("%s looks like it contains a secret (%s); nothing was stored. %s", field, kind, secretResolution),
+		Resolution: secretResolution,
+	}
 }
+
+// secretResolution is what the writer does next. The message carries it too,
+// because the MCP tools show an agent the message and not the resolution.
+const secretResolution = "Do not repeat the value. Name only where it lives (path, vault entry, env file), never the value itself."
 
 func detect(text string) string {
 	for _, p := range secretPatterns {
