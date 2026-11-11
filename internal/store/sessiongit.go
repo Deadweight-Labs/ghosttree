@@ -753,25 +753,55 @@ const sqlPullSessionCommits = `SELECT sc.session_id, sc.source, COUNT(DISTINCT s
 func (s *Store) sessionsForPull(project string, number int64, via string, set linkSet) error {
 	// Ein "merged" gilt nur, solange der PR, wenn der Server ihn kennt, wirklich
 	// gemergt ist: die Meldung stammt vom Collector und ist eine Behauptung.
-	rows, err := s.db.Query(`SELECT sp.session_id, sp.source, sp.recorded_at FROM session_prs sp WHERE sp.project=? AND sp.pr=?
-		AND (sp.source != 'merged' OR COALESCE((SELECT p.state FROM git_pull_requests p WHERE p.project=sp.project AND p.number=sp.pr), 'merged') = 'merged')`, project, number)
+	//
+	// Ein "created" ist ebenfalls eine Behauptung: wer eine fremde PR-Adresse als
+	// Ausgabe von gh pr create meldet, würde sich sonst an den PR hängen. Kennt der
+	// Server den Autor des PRs, wird er wie der eines Commits gegen das GitHub-Konto
+	// des Besitzers der Session gelegt: ein anderer Login schließt die Verbindung aus,
+	// ein nicht prüfbarer macht sie schwach.
+	rows, err := s.db.Query(`SELECT sp.session_id, sp.source, sp.recorded_at,
+			CASE WHEN s.account_id=0 THEN ? ELSE s.account_id END, COALESCE(p.author,'')
+		FROM session_prs sp JOIN sessions s ON s.id=sp.session_id
+		LEFT JOIN git_pull_requests p ON p.project=sp.project AND p.number=sp.pr
+		WHERE sp.project=? AND sp.pr=?
+		AND (sp.source != 'merged' OR COALESCE(p.state, 'merged') = 'merged')`, instanceOwnerID(s.db), project, number)
 	if err != nil {
 		return err
 	}
+	type prClaim struct {
+		id           int64
+		src, at, who string
+		acct         int64
+	}
+	var claims []prClaim
 	for rows.Next() {
-		var id int64
-		var src, at string
-		if err := rows.Scan(&id, &src, &at); err != nil {
+		var c prClaim
+		if err := rows.Scan(&c.id, &c.src, &c.at, &c.acct, &c.who); err != nil {
 			rows.Close()
 			return err
 		}
-		set.add(GitSessionLink{SessionID: id, Sources: []string{src}, Via: via, PR: number, At: at})
+		claims = append(claims, c)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
 		return err
 	}
 	rows.Close()
+	m := newMatcher(s.db, instanceOwnerID(s.db))
+	for _, c := range claims {
+		weak := false
+		if c.src == PRSourceCreated {
+			lvl, err := m.fit(c.acct, c.who)
+			if err != nil {
+				return err
+			}
+			if lvl == fitNone {
+				continue
+			}
+			weak = lvl == fitWeak
+		}
+		set.add(GitSessionLink{SessionID: c.id, Sources: []string{c.src}, Via: via, PR: number, At: c.at, Weak: weak})
+	}
 	rows, err = s.db.Query(sqlPullSessionCommits, project, number)
 	if err != nil {
 		return err

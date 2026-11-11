@@ -585,3 +585,31 @@ func TestTheQueriesOfTheMatchUseIndexes(t *testing.T) {
 		t.Fatalf("index on git_pull_requests(project, merge_sha): %d %v", n, err)
 	}
 }
+
+// "created" ist eine Behauptung des Collectors: der Autor des PRs, soweit der Server
+// ihn kennt, wird gegen das GitHub-Konto der Session gelegt.
+func TestACreatedPullRequestMustFitTheAuthorOfThePullRequest(t *testing.T) {
+	f := gitFixture(t)
+	f.linkGitHub(t, "person:1", robinLogin, 11)
+	f.linkGitHub(t, "person:2", annaLogin, 22)
+	ev := prEvent(12, "opened", "open", "feat/a")
+	ev.Author = annaLogin
+	if _, err := f.st.RecordPullRequest(ev); err != nil {
+		t.Fatal(err)
+	}
+	created := func(s Session, seq int) SessionGitEvent {
+		return SessionGitEvent{Harness: s.Harness, SessionExternalID: s.ExternalID, Seq: seq, Kind: GitEventPRCreate,
+			StartedAt: "2026-11-08T10:00:00Z", EndedAt: "2026-11-08T10:00:03Z", OK: true, PR: 12, PRRemote: prProject}
+	}
+	// robin meldet die Adresse von annas PR als seine: keine Verbindung.
+	f.record(t, 1, created(f.robin, 1))
+	if links, _ := f.st.SessionsForPull(prProject, 12); len(links) != 0 {
+		t.Fatalf("a forged created link shows: %+v", links)
+	}
+	// anna hat ihn angelegt: stark.
+	f.record(t, 2, created(f.anna, 1))
+	links, _ := f.st.SessionsForPull(prProject, 12)
+	if len(links) != 1 || links[0].SessionID != f.anna.ID || links[0].Weak {
+		t.Fatalf("%+v", links)
+	}
+}
