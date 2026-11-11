@@ -81,7 +81,7 @@ func TestRoomComposerOffersTheNamesOfThePeopleAndAgentsOfTheRoom(t *testing.T) {
 	if !strings.Contains(page, `data-handle="zed-robin"`) {
 		t.Fatalf("member does not get the agent as a suggestion:\n%s", regexp.MustCompile(`(?s)comp-suggest.{0,600}`).FindString(page))
 	}
-	if !strings.Contains(page, `src="/static/mentions.js"`) {
+	if !strings.Contains(page, `src="/static/mentions.js?v=`) {
 		t.Error("the completion script is not loaded")
 	}
 }
