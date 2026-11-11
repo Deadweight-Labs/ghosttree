@@ -161,6 +161,17 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- `ctx doctor` sets this ctx against the server's version: a ctx older than
+  its server fails with the fix (`ctx update`, and the channel when the server
+  runs another one); a server older than this ctx, two dev builds and a server
+  without `/api/version` are reported as unverified. The settings of `ctx tui`
+  show since when the login exists and until when it holds (`/api/whoami` now
+  carries `token_created_at` and `token_expires_at`, never the token), and the
+  GitHub row names a command: `ctx account github link [--print]` opens the web
+  profile where the account is linked, without database access.
+- A knowledge entry stored, replaced or retired through MCP reaches the local
+  `.ghosttree/` mirror within a few seconds. A subagent that starts in a
+  worktree without a mirror has it written in the background.
 - The search page answers at once: it shows a progress bar and the groups of
   hits (requests, ideas, knowledge, sessions, tasks, pains) as each kind is
   done, streamed from `/ui/search/stream`. Each kind has a time budget; one
@@ -703,6 +714,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   listed by name and answer as before; where the harness loads tools on demand
   (Claude Code), the first call costs one tool search.
   `tools/list` loads 34.9 KB up front under `full` instead of 41.7 KB.
+- Commands (not hooks, the collector, the terminal interface, `doctor`, `status`
+  or the sign-in) repeat a read twice with a growing pause when the network is
+  briefly gone (refused connection, DNS timeout), as `ctx mcp` already did. A
+  write is repeated only when it is a request creation with an idempotency key.
 - The web interface's static files are cached by the browser and sent
   compressed. Every address carries a hash of the file's content
   (`/static/ui-base.css?v=…`, computed once at start) and is served with
@@ -954,6 +969,9 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- `request action=start_work` finds the own session in a project crowded with
+  newer sessions of other agents (an orchestrator with workers in worktrees):
+  it looks through 200 sessions instead of 20.
 - Uploading a session a second time failed with a UNIQUE violation as soon as a
   machine or global entry was tied to its project (the triggers of the project
   tie used `INSERT OR IGNORE`, which the `ON CONFLICT DO UPDATE` of the session
