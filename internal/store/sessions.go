@@ -645,7 +645,34 @@ func (s *Store) readableSessions(filter scope.Axes, keep func(Session) bool, pre
 // ftsSessionHits sind die Chunk-Treffer des Volltexts in der lesbaren Menge, beste
 // zuerst, ohne Ausschnitt und ohne Besitzer; cids sind die Chunk-Nummern dazu.
 func (s *Store) ftsSessionHits(q, excludeSession string, r readableSessions, pre SessionPrefilter, limit int) ([]SessionHit, []int64, error) {
-	args := append(wordArgs(ftsQuery(q)), excludeSession, excludeSession)
+	type chunkHit struct {
+		hit SessionHit
+		cid int64
+	}
+	// Mehrere Wörter: zuerst alle zusammen (UND), ODER nur, wenn das zu wenig ist.
+	found, err := andThenOr(q, min(limit, sessionAndEnough), limit, func(h chunkHit) int64 { return h.cid },
+		func(expr string) ([]chunkHit, error) {
+			hits, cids, err := s.ftsSessionHitsFor(expr, excludeSession, r, pre, limit)
+			out := make([]chunkHit, len(hits))
+			for i := range hits {
+				out[i] = chunkHit{hits[i], cids[i]}
+			}
+			return out, err
+		})
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]SessionHit, len(found))
+	cids := make([]int64, len(found))
+	for i, f := range found {
+		out[i], cids[i] = f.hit, f.cid
+	}
+	return out, cids, nil
+}
+
+// ftsSessionHitsFor sind die Treffer eines FTS5-Ausdrucks (ftsSessionHits).
+func (s *Store) ftsSessionHitsFor(expr, excludeSession string, r readableSessions, pre SessionPrefilter, limit int) ([]SessionHit, []int64, error) {
+	args := append(wordArgs(expr), excludeSession, excludeSession)
 	args = append(args, r.args...)
 	args = append(args, limit)
 	// bm25 (f.rank) hängt vom ganzen Index ab, auch von verborgenen Sessions:
