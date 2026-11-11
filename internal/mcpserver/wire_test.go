@@ -146,7 +146,7 @@ func TestCurrentSessionDoesNotComeBackAsEvidenceOverTheWire(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "eigenbeleg", Raw: "{}"}}); err != nil {
+		if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "eigenbeleg", Raw: promptRaw("codex", "eigenbeleg")}}); err != nil {
 			t.Fatal(err)
 		}
 	}

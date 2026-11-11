@@ -51,8 +51,9 @@ clean as a whole. They are counted, with the numbers of the entries, so that you
 can look at them.
 
 Every copy of the text is cleaned, not only session_chunks.text and .raw: the
-full-text index chunks_fts, the search index of the session view (chunk_index and
-sess_fts), the session title, and the quotes of knowledge evidence and request
+full-text index chunks_fts (while its trigger still fills it), the search index
+of the sessions (chunk_index with chunk_fts, older rows with sess_fts), the
+session title, and the quotes of knowledge evidence and request
 sightings. The vector of the session search (REQ-538) of a chunk that is changed
 was made from the text before and is dropped in the same transaction; the server
 makes it again from the text as it is now (counted as session_embeddings). Knowledge entries, requests, documents and messages are not touched

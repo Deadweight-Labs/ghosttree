@@ -21,7 +21,8 @@ func redactTestLine(text string) string {
 }
 
 // seedRedactDB legt eine Datenbank an, in der ein Passwort in text, raw, chunks_fts,
-// chunk_index, sess_fts und dem Titel steht, wie vor der Schwärzung gespeichert.
+// chunk_index (prompt), chunk_fts und dem Titel steht, wie vor der Schwärzung
+// gespeichert.
 func seedRedactDB(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "ghosttree.db")
@@ -45,6 +46,7 @@ func seedRedactDB(t *testing.T) string {
 	if err := s.IndexSession(id); err != nil {
 		t.Fatal(err)
 	}
+	keepChunksFTS(t, s.DB())
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -78,14 +80,14 @@ func readRedactState(t *testing.T, path string) (st redactState, hits map[string
 	}
 	st = redactState{
 		chunks: chunkTextRaw(t, db),
-		index:  dump(`SELECT text, tool_input FROM chunk_index ORDER BY chunk_id`),
+		index:  dump(`SELECT prompt, tool_input FROM chunk_index ORDER BY chunk_id`),
 		titles: dump(`SELECT title, '' FROM sessions ORDER BY id`),
 	}
 	hits = map[string]int{}
 	for _, q := range []struct{ table, word string }{
 		{"chunks_fts", "fakewrd"}, {"chunks_fts", "qdzt"}, {"chunks_fts", "7ktest"}, {"chunks_fts", "k7k7k7k7m2m2m2m2"},
-		{"sess_fts", "fakewrd"}, {"sess_fts", "7ktest"}, {"sess_fts", "k7k7k7k7m2m2m2m2"},
-		{"chunks_fts", "mailkonto"}, {"sess_fts", "mailkonto"},
+		{"chunk_fts", "fakewrd"}, {"chunk_fts", "7ktest"}, {"chunk_fts", "k7k7k7k7m2m2m2m2"},
+		{"chunks_fts", "mailkonto"}, {"chunk_fts", "mailkonto"},
 	} {
 		var n int
 		if err := db.QueryRow(`SELECT count(*) FROM `+q.table+` WHERE `+q.table+` MATCH ?`, q.word).Scan(&n); err != nil {
@@ -97,18 +99,14 @@ func readRedactState(t *testing.T, path string) (st redactState, hits map[string
 	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&ok); err != nil || ok != "ok" {
 		t.Fatalf("integrity_check: %q, %v", ok, err)
 	}
-	for _, fts := range []string{"chunks_fts", "sess_fts"} {
-		if _, err := db.Exec(`INSERT INTO ` + fts + `(` + fts + `, rank) VALUES('integrity-check', 1)`); err != nil {
-			t.Fatalf("%s integrity-check: %v", fts, err)
-		}
-	}
+	checkSearchIndexes(t, db)
 	return st, hits
 }
 
 func TestRedactSessionsCommand(t *testing.T) {
 	path := seedRedactDB(t)
 	before, hitsBefore := readRedactState(t, path)
-	if hitsBefore["chunks_fts fakewrd"] != 1 || hitsBefore["sess_fts 7ktest"] != 1 || !strings.Contains(before.chunks, redactTestPassword) || !strings.Contains(before.titles, "fakeWRD") {
+	if hitsBefore["chunks_fts fakewrd"] != 1 || hitsBefore["chunk_fts 7ktest"] != 1 || !strings.Contains(before.chunks, redactTestPassword) || !strings.Contains(before.titles, "fakeWRD") {
 		t.Fatalf("the seed does not hold the password where the test looks: %+v %v", before, hitsBefore)
 	}
 
@@ -117,7 +115,7 @@ func TestRedactSessionsCommand(t *testing.T) {
 	if code := cmdRedactSessions([]string{"--db", path, "--dry-run"}, &out); code != 0 {
 		t.Fatalf("dry run: code %d: %s", code, out.String())
 	}
-	for _, want := range []string{"dry run: nothing is written", "chunks with secrets would replace: 2", "of 3 in the table", "session_chunks.raw", "chunks_fts", "chunk_index", "sess_fts", "sessions.title", "labeled:password", "labeled:apikey"} {
+	for _, want := range []string{"dry run: nothing is written", "chunks with secrets would replace: 2", "of 3 in the table", "session_chunks.raw", "chunks_fts", "chunk_index", "chunk_fts", "sessions.title", "labeled:password", "labeled:apikey"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("dry run output lacks %q:\n%s", want, out.String())
 		}
@@ -134,7 +132,7 @@ func TestRedactSessionsCommand(t *testing.T) {
 	if code := cmdRedactSessions([]string{"--db", path, "--batch", "1", "--sleep", "0s"}, &out); code != 0 {
 		t.Fatalf("code %d: %s", code, out.String())
 	}
-	for _, want := range []string{"chunks with secrets replaced: 2", "full-text indexes merged: chunks_fts, sess_fts", "write-ahead log:", "ctx db vacuum --db " + path} {
+	for _, want := range []string{"chunks with secrets replaced: 2", "full-text indexes merged: chunks_fts, sess_fts, chunk_fts", "write-ahead log:", "ctx db vacuum --db " + path} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}

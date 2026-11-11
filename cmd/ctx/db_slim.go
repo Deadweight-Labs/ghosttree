@@ -23,8 +23,8 @@ Bring the stored transcripts to the form new lines are stored in (REQ-622):
 every line of session_chunks goes the way AppendChunks takes for a new one
 (images replaced, secrets redacted, copies and ballast dropped by the slim
 rule) and is then packed with deflate and a trained dictionary. Lines the rule
-drops entirely are deleted together with their rows in chunk_index, sess_fts,
-chunks_fts and their session vectors; a line a knowledge or request quote cites
+drops entirely are deleted together with their rows in chunk_index, their
+words in chunk_fts or sess_fts, chunks_fts and their session vectors; a line a knowledge or request quote cites
 stays. The text column is cut like long outputs (6 KB head, marker, 2 KB tail),
 except in sessions with an open distillation batch.
 

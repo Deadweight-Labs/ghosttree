@@ -24,7 +24,7 @@ func TestContextSearchQualifiersReachRoomMessagesAndSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendChunks(sid, []store.Chunk{{Seq: 0, Role: "user", Text: "Marker im Transkript", Raw: "{}"}}); err != nil {
+	if err := st.AppendChunks(sid, []store.Chunk{{Seq: 0, Role: "user", Text: "Marker im Transkript", Raw: promptRaw("claude-code", "Marker im Transkript")}}); err != nil {
 		t.Fatal(err)
 	}
 	session := connect(t, &Server{client: c, sessionRef: "agent-1", ctxAxes: scope.Axes{Project: project}})

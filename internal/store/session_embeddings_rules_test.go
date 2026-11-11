@@ -270,7 +270,7 @@ func TestSessionRulesVersionBringsMarkedSessionsBack(t *testing.T) {
 	}
 	// A later release takes the second prompt for a notice of a harness (here: the
 	// index says so).
-	if _, err := st.db.Exec(`UPDATE chunk_index SET text = '<task-notification>done</task-notification>' WHERE session_id = ? AND seq = 1`, s.ID); err != nil {
+	if _, err := st.db.Exec(`UPDATE chunk_index SET prompt = '<task-notification>done</task-notification>' WHERE session_id = ? AND seq = 1`, s.ID); err != nil {
 		t.Fatal(err)
 	}
 	due, err := st.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)

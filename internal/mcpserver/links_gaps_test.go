@@ -22,7 +22,7 @@ func TestRoomMessageSessionAndPresetAnswersCarryLinkAndCard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendChunks(sid, []store.Chunk{{Seq: 0, Role: "user", Text: "Karten bauen", Raw: "{}"}}); err != nil {
+	if err := st.AppendChunks(sid, []store.Chunk{{Seq: 0, Role: "user", Text: "Karten bauen", Raw: promptRaw("claude-code", "Karten bauen")}}); err != nil {
 		t.Fatal(err)
 	}
 	listed, err := st.ListSessions(scope.Axes{Project: linkProject}, 10)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -15,5 +16,11 @@ func TestMain(m *testing.M) {
 	// A developer's terminal must never be asked a question by a test.
 	installTTY = func() (terminal, error) { return nil, os.ErrNotExist }
 	dbTTY = func() (terminal, error) { return nil, os.ErrNotExist }
+	// The test binary must never start itself as `ctx hook refresh-files`. With
+	// no process to hand the files to, a session start writes them itself.
+	startProjectionRefresh = func(string) error { return errors.New("no ctx binary in tests") }
+	// What hooks remember between calls follows the HOME a test sets, never the
+	// state directory of the developer who runs the tests.
+	_ = os.Unsetenv("XDG_STATE_HOME")
 	os.Exit(testtmp.Run(m))
 }

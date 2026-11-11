@@ -58,6 +58,7 @@ func seedMaintDB(t *testing.T, chunks, chunkBytes, keepEvery int) string {
 			t.Fatal(err)
 		}
 	}
+	legacySearchLayout(t, s)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +466,7 @@ func TestVacuumFTSOptimizeCoversEveryFTSTable(t *testing.T) {
 		}
 		defer db.Close()
 		var n int
-		if err := db.QueryRow(`SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH 'needle3'`).Scan(&n); err != nil {
+		if err := db.QueryRow(`SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH 'needle2'`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n

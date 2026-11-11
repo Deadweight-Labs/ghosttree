@@ -319,7 +319,7 @@ func TestRelevantLanguageGateMeasuresOnlyTheCaller(t *testing.T) {
 			if dinge && i%3 == 0 {
 				text = fmt.Sprintf("die dinge laufen %d", from+i)
 			}
-			chunks[i] = store.Chunk{Seq: from + i, Role: "user", Text: text, Raw: "{}"}
+			chunks[i] = store.Chunk{Seq: from + i, Role: "user", Text: text, Raw: promptRaw("claude-code", text)}
 		}
 		if err := f.st.AppendChunks(f.id[session], chunks); err != nil {
 			t.Fatal(err)
@@ -368,7 +368,7 @@ func TestRelevantOncePerSessionOnTheRuntimeStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "hlpvpngw läuft wieder", Raw: "{}"}}); err != nil {
+	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "hlpvpngw läuft wieder", Raw: promptRaw("claude-code", "hlpvpngw läuft wieder")}}); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(New(st))

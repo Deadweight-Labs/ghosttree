@@ -280,7 +280,7 @@ func distilledWish(t *testing.T, st *store.Store, ax scope.Axes, external, said,
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendChunks(sid, []store.Chunk{{Seq: 1, Role: "user", Text: said, Raw: `{}`}}); err != nil {
+	if err := st.AppendChunks(sid, []store.Chunk{{Seq: 1, Role: "user", Text: said, Raw: promptRaw("claude-code", said)}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.ApplyRequestDistillation(sid, "d-"+external, "req-v1", ax, []store.DistilledRequest{{

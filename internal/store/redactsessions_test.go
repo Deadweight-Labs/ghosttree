@@ -162,6 +162,7 @@ func seedLegacy(t *testing.T, s *Store) (sessions [2]int64) {
 			t.Fatal(err)
 		}
 	}
+	legacySearchLayout(t, s)
 	for _, id := range []int{7, 8} {
 		if _, err := s.db.Exec(`INSERT INTO knowledge(id,type,title,body,project,origin,created_at,updated_at) VALUES(?,'note','Eintrag','Text','p','distilled','x','x')`, id); err != nil {
 			t.Fatal(err)
@@ -227,7 +228,7 @@ func dumpCopies(t *testing.T, db *sql.DB) string {
 	var sb strings.Builder
 	for _, q := range []string{
 		`SELECT id, session_id, seq, role, text, raw FROM session_chunks ORDER BY id`,
-		`SELECT chunk_id, text, thinking, tool_input, tool_output FROM chunk_index ORDER BY chunk_id`,
+		`SELECT chunk_id, text, thinking, tool_input, tool_output, prompt FROM chunk_index ORDER BY chunk_id`,
 		`SELECT id, title, msg_count FROM sessions ORDER BY id`,
 		`SELECT id, knowledge_id, chunk_seq, quote FROM knowledge_evidence ORDER BY id`,
 		`SELECT id, request_id, chunk_seq, quote FROM request_sightings ORDER BY id`,
@@ -260,16 +261,7 @@ func segmentHits(t *testing.T, db *sql.DB, table, word string) int {
 
 func checkIntegrity(t *testing.T, db *sql.DB) {
 	t.Helper()
-	var ok string
-	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&ok); err != nil || ok != "ok" {
-		t.Fatalf("integrity_check: %q, %v", ok, err)
-	}
-	for _, fts := range []string{"chunks_fts", "sess_fts"} {
-		// rank=1 compares the index with the content table
-		if _, err := db.Exec(`INSERT INTO ` + fts + `(` + fts + `, rank) VALUES('integrity-check', 1)`); err != nil {
-			t.Fatalf("%s integrity-check: %v", fts, err)
-		}
-	}
+	checkSearchIntegrity(t, db)
 }
 
 func fileHolds(t *testing.T, path string, needles ...string) []string {
@@ -366,7 +358,7 @@ func TestRedactSessionsCleansEveryCopy(t *testing.T) {
 			}
 			wantTables := map[string]int64{
 				"session_chunks.text": 2, "session_chunks.raw": 3, "chunks_fts": 2,
-				"chunk_index": 3, "sess_fts": 3, "sessions.title": 2,
+				"chunk_index": 3, "sess_fts": 3, "chunk_fts": 3, "sessions.title": 2,
 				"knowledge_evidence.quote": 2, "request_sightings.quote": 1,
 			}
 			if !reflect.DeepEqual(rep.Tables, wantTables) {
@@ -378,7 +370,7 @@ func TestRedactSessionsCleansEveryCopy(t *testing.T) {
 			if !reflect.DeepEqual(rep.CitedKnowledge, []int64{7, 8}) || !reflect.DeepEqual(rep.CitedRequests, []int64{5}) {
 				t.Fatalf("cited = %v %v", rep.CitedKnowledge, rep.CitedRequests)
 			}
-			if !reflect.DeepEqual(rep.Optimized, []string{"chunks_fts", "sess_fts"}) || rep.Checkpoint == "" {
+			if !reflect.DeepEqual(rep.Optimized, []string{"chunks_fts", "sess_fts", "chunk_fts"}) || rep.Checkpoint == "" {
 				t.Fatalf("optimized %v, checkpoint %q", rep.Optimized, rep.Checkpoint)
 			}
 
@@ -415,12 +407,13 @@ func TestRedactSessionsCleansEveryCopy(t *testing.T) {
 			for _, probe := range []struct{ table, word string }{
 				{"chunks_fts", pwWord1}, {"chunks_fts", pwWord2}, {"chunks_fts", "qdzt"}, {"chunks_fts", "sommer2026"}, {"chunks_fts", testToken},
 				{"sess_fts", pwWord1}, {"sess_fts", pwWord2}, {"sess_fts", "sommer2026"}, {"sess_fts", testToken},
+				{"chunk_fts", pwWord1}, {"chunk_fts", pwWord2}, {"chunk_fts", "sommer2026"}, {"chunk_fts", testToken},
 			} {
 				if n := ftsHits(t, read, probe.table, probe.word); n != 0 {
 					t.Errorf("%s MATCH %q: %d hits", probe.table, probe.word, n)
 				}
 			}
-			for _, table := range []string{"chunks_fts", "sess_fts"} {
+			for _, table := range []string{"chunks_fts", "sess_fts", "chunk_fts"} {
 				for _, word := range []string{pwWord1, "qdzt", "sommer", testToken} {
 					if n := segmentHits(t, read, table, word); n != 0 {
 						t.Errorf("%s segments still hold %q in %d blocks", table, word, n)
@@ -428,7 +421,7 @@ func TestRedactSessionsCleansEveryCopy(t *testing.T) {
 				}
 			}
 			// Was nicht geschwärzt wurde, bleibt auffindbar.
-			if ftsHits(t, read, "chunks_fts", "notiert") != 1 || ftsHits(t, read, "chunks_fts", "mailkonto") != 1 || ftsHits(t, read, "sess_fts", "mailkonto") != 1 {
+			if ftsHits(t, read, "chunks_fts", "notiert") != 1 || ftsHits(t, read, "chunks_fts", "mailkonto") != 1 || wordCount(t, read, "mailkonto") != 1 {
 				t.Error("the index lost entries that were not touched")
 			}
 			checkIntegrity(t, read)
@@ -565,10 +558,23 @@ func TestRedactSessionsRunsBesideALiveWriter(t *testing.T) {
 	if appended == 0 || rep.Changed != 120 {
 		t.Fatalf("appended %d, changed %d: no overlap", appended, rep.Changed)
 	}
-	for _, q := range []string{`SELECT text FROM session_chunks`, `SELECT raw FROM session_chunks`, `SELECT text FROM chunk_index`} {
+	for _, q := range []string{`SELECT text FROM session_chunks`, `SELECT raw FROM session_chunks`, `SELECT text, prompt FROM chunk_index`} {
 		if dump := dumpTable(t, s.db, q); strings.Contains(dump, "Hx7!kQ2p") || strings.Contains(dump, "Sommer2026") {
 			t.Fatalf("%s still holds a secret", q)
 		}
+	}
+	// The rows are in chunk_fts, which keeps no text: the words are gone from
+	// the index and, after 'optimize', from its segments.
+	for _, word := range []string{"hx7", "sommer2026"} {
+		if n := wordCount(t, s.db, word); n != 0 {
+			t.Errorf("the index still finds %q in %d chunks", word, n)
+		}
+		if n := segmentHits(t, s.db, "chunk_fts", word); n != 0 {
+			t.Errorf("chunk_fts segments still hold %q in %d blocks", word, n)
+		}
+	}
+	if wordCount(t, s.db, "note") == 0 {
+		t.Error("the index lost the words that were not secret")
 	}
 	checkIntegrity(t, s.db)
 }

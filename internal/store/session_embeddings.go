@@ -121,7 +121,7 @@ type sessionRef struct {
 // for the prompts: the answers are not read here, and nor are the 8 KB of a tool
 // call.
 func (s *Store) sessionPicked(id int64) ([]transcript.Picked, error) {
-	rows, err := s.db.Query(`SELECT chunk_id, seq, role, is_prompt, tool_calls, CASE WHEN role = 'user' AND is_prompt = 1 THEN text ELSE '' END
+	rows, err := s.db.Query(`SELECT chunk_id, seq, role, is_prompt, tool_calls, CASE WHEN role = 'user' AND is_prompt = 1 THEN `+promptTextCol+` ELSE '' END
 		FROM chunk_index WHERE session_id = ? AND (role != '' OR tool_calls > 0) ORDER BY seq`, id)
 	if err != nil {
 		return nil, err
