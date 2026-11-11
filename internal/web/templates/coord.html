@@ -1,5 +1,5 @@
 {{define "coord"}}{{template "head" .}}{{template "nav" .}}
-<main class="g2 coord-workspace room rooms" data-coord-event-cursor="{{.Coord.EventCursor}}" data-coord-texts="{{.Coord.Texts}}"><link rel="stylesheet" href="/static/ui-rooms.css"><div class="wrap">
+<main class="g2 coord-workspace room rooms" data-coord-event-cursor="{{.Coord.EventCursor}}" data-coord-texts="{{.Coord.Texts}}"><link rel="stylesheet" href="{{asset "ui-rooms.css"}}"><div class="wrap">
   <h1 class="sr">{{t "coord.title"}}</h1>
   <p id="coord-status" class="sr" aria-live="polite" aria-atomic="true"></p>
   <p class="coord-live-status sr" data-coord-live-status role="status">{{t "coord.live.connecting"}}</p>
@@ -40,7 +40,7 @@
     </aside>
   </div>
   <noscript><p class="coord-live-status coord-nojs-status">{{t "coord.live.off"}} <a href="{{if .Coord.Active}}{{.Coord.Active.Room.URL}}{{else}}/ui/coord{{end}}">{{t "coord.refresh"}}</a></p></noscript>
-</div><script src="/static/ui-coord.js" defer></script><script src="/static/ui-rooms.js" defer></script>
+</div><script src="{{asset "ui-coord.js"}}" defer></script><script src="{{asset "ui-rooms.js"}}" defer></script>
 {{template "foot" .}}{{end}}
 
 {{define "coord-room-main"}}{{with .Coord.Active}}

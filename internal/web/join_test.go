@@ -212,7 +212,7 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 			t.Errorf("CSP %q lacks %s", csp, want)
 		}
 	}
-	if !strings.Contains(page, `href="/static/ui-tokens.css"`) {
+	if !strings.Contains(page, `href="/static/ui-tokens.css?v=`) {
 		t.Error("join page does not load the self-hosted font faces")
 	}
 	if strings.Contains(csp, "script-src") || strings.Contains(csp, "unsafe") {

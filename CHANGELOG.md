@@ -635,6 +635,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Changed
 
+- The web interface's static files are cached by the browser and sent
+  compressed. Every address carries a hash of the file's content
+  (`/static/ui-base.css?v=…`, computed once at start) and is served with
+  `Cache-Control: public, max-age=31536000, immutable`; a request without the
+  current hash gets `no-cache`, an `ETag` and a `304` when nothing changed, so a
+  rollout never leaves old styles behind. Stylesheets and scripts are gzipped
+  once at start (`Vary: Accept-Encoding`), and the files every page loads are
+  joined into one stylesheet and one script. A page used to fetch 21 files
+  (about 230 KB) on every visit; the first visit now fetches 7 (about 60 KB) and
+  later visits fetch only the page itself. HTML pages stay
+  uncompressed, because they carry CSRF tokens next to text a reader typed
+  (BREACH).
 - A bare `#231` in a text of a repository (comments, issues, documents, project
   knowledge) now means that repository's pull request 231, as on GitHub: the web
   interface shows it as the pull request's pill when ghosttree knows it, and only

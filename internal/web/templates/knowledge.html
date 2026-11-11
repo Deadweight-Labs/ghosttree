@@ -4,9 +4,9 @@
 
 {{define "knmenus"}}<div class="gfilters">{{range .}}<details class="dd top-menu"><summary class="gbtn sm quiet{{if .Active}} on{{end}}">{{.Label}}{{mi "chev"}}</summary><div class="pop r">{{range .Items}}<a class="opt{{if .Current}} cur{{end}}" href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}><span class="chk{{if not .Current}} off{{end}}">{{mi "check"}}</span>{{.Label}}</a>{{end}}</div></details>{{end}}</div>{{end}}
 
-{{define "knresult"}}{{with .}}<div class="flash4{{if or (eq .Kind "rejected") (eq .Kind "retired")}} neu{{end}}" role="status" data-strip="done k was">{{if or (eq .Kind "rejected") (eq .Kind "retired")}}{{mi "x"}}{{else}}{{mi "check"}}{{end}}<span>{{.Text}}</span><span class="sp"></span>{{if .CanRestore}}<form method="post" action="/ui/review/{{.ID}}/restore"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="status" value="{{.Was}}"><button class="gbtn sm">{{t "knowledge.restore"}}</button></form>{{end}}</div><script src="/static/ui-notice.js" defer></script>{{end}}{{end}}
+{{define "knresult"}}{{with .}}<div class="flash4{{if or (eq .Kind "rejected") (eq .Kind "retired")}} neu{{end}}" role="status" data-strip="done k was">{{if or (eq .Kind "rejected") (eq .Kind "retired")}}{{mi "x"}}{{else}}{{mi "check"}}{{end}}<span>{{.Text}}</span><span class="sp"></span>{{if .CanRestore}}<form method="post" action="/ui/review/{{.ID}}/restore"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="status" value="{{.Was}}"><button class="gbtn sm">{{t "knowledge.restore"}}</button></form>{{end}}</div><script src="{{asset "ui-notice.js"}}" defer></script>{{end}}{{end}}
 
-{{define "knowledge"}}{{template "head" .}}{{template "nav" .}}<main class="g2 kn"><link rel="stylesheet" href="/static/ui-knowledge.css"><div class="wrap">
+{{define "knowledge"}}{{template "head" .}}{{template "nav" .}}<main class="g2 kn"><link rel="stylesheet" href="{{asset "ui-knowledge.css"}}"><div class="wrap">
 {{with .KnowledgeV}}{{template "knsegs" .Segs}}
 {{if or .Rows .NoMatch}}<form class="sbar" method="get" action="{{.ClearHref}}" role="search"><label class="gfield mono-in">{{mi "search"}}<input type="search" name="q" value="{{.Q}}" placeholder="{{t "knowledge.search_hint"}}" aria-label="{{t "shell.search_label"}}" autocomplete="off" spellcheck="false"></label>{{if and .Project (not $.Repo)}}<input type="hidden" name="project" value="{{.Project}}">{{end}}{{if .Type}}<input type="hidden" name="type" value="{{.Type}}">{{end}}{{if .Level}}<input type="hidden" name="level" value="{{.Level}}">{{end}}<button class="sr">{{t "knowledge.search"}}</button></form>{{end}}
 <div class="box"><div class="box-h lh">{{range .Tabs}}<a class="tab{{if .Current}} on{{end}}" href="{{.Href}}">{{.Label}}{{if .Count}}<span class="counter">{{.Count}}</span>{{end}}</a>{{end}}<span class="sp"></span>{{if or .Rows .NoMatch}}{{template "knmenus" .Menus}}{{end}}</div>
@@ -30,7 +30,7 @@
 {{if or .Refs .Evidence .Proof}}<div><h4>{{t "review.h.proofs"}}</h4><div class="chips">{{range .Refs}}<span>{{.Role}} <a href="{{.Href}}">{{.Text}}</a></span>{{end}}{{range .Evidence}}<span class="quote">{{.Quote}}{{if .Href}} <a href="{{.Href}}">{{t "knowledge.in_session"}}</a>{{end}}</span>{{end}}{{with .Proof}}<span class="chip sha">{{.Source}}</span><span class="muted">{{.Digest}} · {{.Run}}</span>{{if .Quote}}<span class="quote">{{.Quote}}</span>{{end}}{{end}}</div></div>{{end}}
 {{if or .Source .From}}<div><h4>{{t "review.h.source"}}</h4><div class="src">{{if .Gardener}}{{avatarOf .Who}}{{end}}{{if .Source}}<span>{{.Source}}</span>{{end}}{{template "exfrom" .From}}</div></div>{{end}}</div></details>{{end}}
 
-{{define "review"}}{{template "head" .}}{{template "nav" .}}<main class="g2 kn"><link rel="stylesheet" href="/static/ui-knowledge.css"><div class="wrap">
+{{define "review"}}{{template "head" .}}{{template "nav" .}}<main class="g2 kn"><link rel="stylesheet" href="{{asset "ui-knowledge.css"}}"><div class="wrap">
 {{with .ReviewV}}{{template "knsegs" .Segs}}
 {{template "knresult" .Result}}
 {{if .Rows}}<div class="box"><div class="box-h lh">{{range .Tabs}}<a class="tab{{if .Current}} on{{end}}" href="{{.Href}}">{{.Label}}{{if .Count}}<span class="counter">{{.Count}}</span>{{end}}</a>{{end}}<span class="sp"></span>{{with .Garden}}{{if .Source}}<span class="muted fw4">{{.Source}}</span>{{end}}{{with .AllReject}}{{template "gardenall" .}}{{end}}{{with .AllApprove}}{{template "gardenall" .}}{{end}}{{end}}</div>
@@ -41,7 +41,7 @@
 
 {{define "gardenall"}}<form method="post" action="/ui/review/bulk"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="source" value="gardener"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="verdict" value="{{.Verdict}}">{{range .IDs}}<input type="hidden" name="id" value="{{.}}">{{end}}<button class="gbtn sm{{if .Primary}} pri{{end}}">{{.Label}}</button></form>{{end}}
 
-{{define "knowledgeitem"}}{{template "head" .}}{{template "nav" .}}<main class="g2 kn"><link rel="stylesheet" href="/static/ui-knowledge.css"><div class="wrap">
+{{define "knowledgeitem"}}{{template "head" .}}{{template "nav" .}}<main class="g2 kn"><link rel="stylesheet" href="{{asset "ui-knowledge.css"}}"><div class="wrap">
 {{with .KnowledgeItemV}}{{template "knresult" .Result}}{{template "resultbanner" (dict "R" .CommentResult "Strip" "done fail")}}{{with .Card}}
 <div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">{{kn .ID}}</span></h1>
 <div class="gacts">{{if .CanEdit}}<a class="gbtn sm hide-m" href="{{.Href}}?edit=1#edit">{{mi "pencil"}}{{t "knowledge.edit"}}</a>{{end}}{{template "kndecide" .}}{{if $.KnowledgeItemV.Move}}<a class="gbtn sm" href="{{.Href}}?panel=move#move">{{mi "folder"}}{{t "move.title"}}</a>{{end}}</div></div>
@@ -79,7 +79,7 @@
 {{if .CanReject}}{{if .Retire}}{{template "uiconfirm" (dict "Summary" "gbtn sm" "Icon" "drop" "Text" (t "knowledge.retire") "Question" (t "knowledge.reject_ask") "Do" (t "knowledge.retire") "Action" (printf "/ui/review/%d/reject" .ID) "Token" .Token "Hidden" (dict "next" .Next "project" .Filter))}}{{else}}{{template "uiconfirm" (dict "Summary" "gbtn sm" "Icon" "drop" "Text" (t "knowledge.reject") "Question" (t "knowledge.reject_ask") "Do" (t "knowledge.reject") "Action" (printf "/ui/review/%d/reject" .ID) "Token" .Token "Hidden" (dict "next" .Next "project" .Filter))}}{{end}}{{end}}
 {{if .CanRestore}}<form method="post" action="/ui/review/{{.ID}}/restore"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="gbtn sm">{{t "knowledge.restore"}}</button></form>{{end}}{{end}}
 
-{{define "context"}}{{template "head" .}}{{template "nav" .}}<main class="g2 kn"><link rel="stylesheet" href="/static/ui-knowledge.css"><div class="wrap">
+{{define "context"}}{{template "head" .}}{{template "nav" .}}<main class="g2 kn"><link rel="stylesheet" href="{{asset "ui-knowledge.css"}}"><div class="wrap">
 {{with .ContextV}}{{if .Project}}{{template "knsegs" .Segs}}
 <div class="toolbar"><span class="lb neu">{{mi "ghost"}}{{t "context.agent_view"}}</span><span class="sp"></span><nav class="seg sm4" aria-label="{{t "context.label"}}"><a href="{{.DeliveredHref}}"{{if not .Preview}} class="on" aria-current="page"{{end}}>{{t "context.delivered"}}</a><a href="{{.PreviewHref}}"{{if .Preview}} class="on" aria-current="page"{{end}}>{{t "context.with_staged"}}{{if .Waiting}} <span class="counter">{{.Waiting}}</span>{{end}}</a></nav></div>
 {{if .Lines}}<div class="box ctx4"><div class="box-h">{{mi "ghost"}}<span class="t">{{t "context.session_start"}}</span><span class="muted fw4 hide-m">{{.Size}}</span><span class="sp"></span>{{if .Waiting}}<a class="gbtn sm" href="{{.ReviewHref}}">{{mi "check"}}{{t "context.review_n" .Waiting}}</a>{{end}}{{template "uicopy" (copyFromIcon "#ctx-raw")}}</div>
@@ -88,7 +88,7 @@
 {{else}}<div class="box"><div class="box-h"><span class="t">{{t "context.pick"}}</span></div>{{range .Choices}}<a class="row opt-row" href="?project={{.Remote}}" title="{{.Remote}}">{{mi "repo"}}{{.Label}}</a>{{end}}</div>{{end}}
 {{end}}</div>{{template "foot" .}}{{end}}
 
-{{define "heldpreview"}}{{template "head" .}}{{template "nav" .}}<main class="g2 kn"><link rel="stylesheet" href="/static/ui-knowledge.css"><div class="wrap">
+{{define "heldpreview"}}{{template "head" .}}{{template "nav" .}}<main class="g2 kn"><link rel="stylesheet" href="{{asset "ui-knowledge.css"}}"><div class="wrap">
 {{with .HeldV}}<div class="dhead"><div class="dtitle"><h1>{{.Title}}<span class="n">{{kn .ID}}</span></h1></div>
 <div class="dmeta"><span class="lb warn">{{t "review.held.title"}}</span><span class="lb neu">{{.KindLabel}}</span><span>{{.Author}}</span><span class="mono">{{.Project}}</span><span>{{ago .HeldAt}}</span></div></div>
 <div class="box"><div class="box-body"><pre class="heldtext">{{.Body}}</pre></div></div>

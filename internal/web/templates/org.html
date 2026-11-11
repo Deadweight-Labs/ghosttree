@@ -1,4 +1,4 @@
-{{define "org"}}{{template "head" .}}{{template "nav" .}}<main class="g2 org ag"><link rel="stylesheet" href="/static/ui-org.css"><link rel="stylesheet" href="/static/ui-agents.css"><div class="wrap">
+{{define "org"}}{{template "head" .}}{{template "nav" .}}<main class="g2 org ag"><link rel="stylesheet" href="{{asset "ui-org.css"}}"><link rel="stylesheet" href="{{asset "ui-agents.css"}}"><div class="wrap">
 {{with .OrgV}}
 {{if eq .Tab "repos"}}
 <div class="sbar sbar-repos"><label class="gfield mono-in">{{mi "search"}}<input type="search" data-list-filter=".orow" placeholder="{{t "org.search"}}" aria-label="{{t "org.search"}}" autocomplete="off" spellcheck="false"></label>
@@ -26,7 +26,7 @@
 <div class="box"><div class="box-h"><span class="t">{{if eq (len .Rooms) 1}}{{t "org.n_rooms_one"}}{{else}}{{t "org.n_rooms" (len .Rooms)}}{{end}}</span></div>
 {{range .Rooms}}<a class="row prow" href="{{.Href}}">{{mi "chat"}}<div><b>{{.Name}}</b> <span class="muted">{{.Repo}}</span></div></a>{{else}}<div class="empty"><span>{{t "org.no_rooms"}}</span></div>{{end}}</div>
 {{end}}
-{{end}}</div><script src="/static/ui-list.js" defer></script>
+{{end}}</div><script src="{{asset "ui-list.js"}}" defer></script>
 {{template "foot" .}}{{end}}
 
 {{define "agentpick"}}{{if .Values}}<details class="dd" data-pick="{{.Key}}" data-rows=".arow"><summary class="gbtn sm quiet"><span data-pick-label>{{template "agentpicklabel" .Key}}</span>{{mi "chev"}}</summary><div class="pop r"><div class="ph">{{template "agentpicklabel" .Key}}</div><button type="button" class="opt" data-value="" aria-pressed="true"><span class="chk">{{mi "check"}}</span>{{t "agents.filter.all"}}</button>{{range .Values}}<button type="button" class="opt" data-value="{{.}}" aria-pressed="false"><span class="chk">{{mi "check"}}</span>{{.}}</button>{{end}}</div></details>{{end}}{{end}}

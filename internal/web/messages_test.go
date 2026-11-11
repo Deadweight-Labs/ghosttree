@@ -140,6 +140,10 @@ func goMessageKeys(t *testing.T) []string {
 			t.Fatal(err)
 		}
 		for _, m := range goKeyRE.FindAllStringSubmatch(string(raw), -1) {
+			// "live.js" names a static file (assets.go), not a message.
+			if strings.HasSuffix(m[1], ".js") || strings.HasSuffix(m[1], ".css") {
+				continue
+			}
 			if !seen[m[1]] {
 				seen[m[1]] = true
 				keys = append(keys, m[1])

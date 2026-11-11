@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -434,7 +435,7 @@ func TestRoomsPathRedirectsToCoordination(t *testing.T) {
 func TestShellPagesCarryTheTokensAndNameNoForeignHost(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
 	_, page := fetchPage(t, owner, base+"/ui/knowledge")
-	if !strings.Contains(page, `href="/static/ui-tokens.css"`) || !strings.Contains(page, `rel="icon"`) {
+	if !strings.Contains(page, `href="/static/bundle-base.css?v=`) || !slices.Contains(assetBundles["bundle-base.css"], "ui-tokens.css") || !strings.Contains(page, `rel="icon"`) {
 		t.Error("shell lacks tokens stylesheet or favicon link")
 	}
 	// The footer links to the documentation; nothing else may leave the host.

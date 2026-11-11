@@ -14,17 +14,17 @@
 {{with .Active}}<section class="box agroup asec" data-list-group aria-labelledby="ag-act"><div class="box-h"><h2 class="t" id="ag-act">{{t "agents.section.active"}}</h2><span class="counter" data-list-count>{{len .}}</span></div>{{range .}}{{template "agentrow" .}}{{end}}</section>{{end}}
 {{with .Inactive}}<details class="box agroup asec ainact" data-list-group><summary class="box-h"><span class="chv">{{mi "chev"}}</span><h2 class="t">{{t "agents.section.inactive"}}</h2><span class="counter" data-list-count>{{len .}}</span></summary>{{range .}}{{template "agentrow" .}}{{end}}</details>{{end}}{{template "listnone"}}{{end}}
 
-{{define "agents"}}{{template "head" .}}{{template "nav" .}}<main class="g2 ag"><link rel="stylesheet" href="/static/ui-agents.css"><div class="wrap">
+{{define "agents"}}{{template "head" .}}{{template "nav" .}}<main class="g2 ag"><link rel="stylesheet" href="{{asset "ui-agents.css"}}"><div class="wrap">
 {{with .Agents}}{{with $.Shell.Tabs}}{{if not $.Repo}}<div class="segrow"><nav class="gseg seg" aria-label="{{t $.Shell.TabsLabel}}">{{range .}}<a data-tab="{{.Key}}" href="{{.Href}}"{{if .Current}} class="on" aria-current="page"{{end}}>{{t .Label}}</a>{{end}}</nav></div>{{end}}{{end}}
 {{if .Sections.Any}}<div class="sbar"><label class="gfield mono-in">{{mi "search"}}<input type="search" data-list-filter=".arow" placeholder="{{t "agent.search"}}" aria-label="{{t "agent.search"}}" autocomplete="off" spellcheck="false"></label>{{if and .Cards .CanAdd}}<a class="gbtn" href="{{.Connect}}">{{mi "plus"}}{{t "ov.connect_another"}}</a>{{end}}</div>{{end}}
 {{if .Sections.Any}}<div class="agroups">{{template "agentsections" .Sections}}</div>
 {{else if .Guest}}<div class="box"><div class="box-empty">{{t "ov.nothing"}}</div></div>
 {{else if .Machines}}<div class="box"><div class="box-h"><span class="t">{{t "ov.start"}}</span></div><div class="box-r">{{template "uicmd" .Cmd}}</div></div>{{else}}<div class="box"><div class="box-empty"><span>{{t "ov.no_agents"}}</span>{{if .CanAdd}}<a class="gbtn pri" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}</div></div>{{end}}
 {{if and .Machines (not .Guest)}}<div class="box gap"><div class="box-h"><span class="t">{{t "ov.machines"}}</span></div>{{range .Machines}}<div class="row mrow"><span class="mono">{{.Name}}</span><span class="muted"><i class="dot{{if ne .State "active"}} idle{{end}}"></i> {{.StateText}} · {{.Age}}</span></div>{{end}}</div>{{end}}
-{{end}}</div><script src="/static/ui-list.js" defer></script>
+{{end}}</div><script src="{{asset "ui-list.js"}}" defer></script>
 {{template "foot" .}}{{end}}
 
-{{define "agent"}}{{template "head" .}}{{template "nav" .}}<main class="g2 ag ag-detail"><link rel="stylesheet" href="/static/ui-agents.css"><div class="wrap">
+{{define "agent"}}{{template "head" .}}{{template "nav" .}}<main class="g2 ag ag-detail"><link rel="stylesheet" href="{{asset "ui-agents.css"}}"><div class="wrap">
 {{with .AgentV}}{{with .Card}}
 <div class="dhead"><div class="dtitle"><h1>{{lower .ShortName}}{{if .Machine}} {{if .MachineHref}}<a class="n" href="{{.MachineHref}}">@{{.Machine}}</a>{{else}}<span class="n">@{{.Machine}}</span>{{end}}{{end}}</h1><div class="gacts"><a class="gbtn sm" href="{{.RoomHref}}">{{mi "chat"}}{{t "agent.open_room"}}</a>{{if .SessionHref}}<a class="gbtn sm" href="{{.SessionHref}}">{{mi "term"}}{{t "agent.open_session"}}</a>{{end}}</div></div>
 <div class="dmeta"><span class="state {{if eq .Presence "work"}}open{{else if or (eq .Presence "wait_you") (eq .Presence "stuck")}}bad{{else if eq .Presence "wait_other"}}warn{{else}}gray{{end}}">{{if eq .Presence "work"}}{{mi "play"}}{{else if or (eq .Presence "wait_you") (eq .Presence "stuck")}}{{mi "tri"}}{{else if eq .Presence "wait_other"}}{{mi "clock"}}{{else}}{{mi "pause"}}{{end}}{{.PresenceText}}</span>{{avatarX "lg" (agentKindOf .Provider) .ShortName "" false}}{{if .Project}}<span class="rp" title="{{.ProjectTitle}}">{{mi "repo"}}{{.Project}}</span>{{end}}{{if .Branch}}{{branchPill .Branch ""}}{{end}}<span class="muted">{{.Age}}</span></div></div>
@@ -45,7 +45,7 @@
 {{end}}{{end}}</div>
 {{template "foot" .}}{{end}}
 
-{{define "agentmodels"}}{{template "head" .}}{{template "nav" .}}<main class="g2 ag"><link rel="stylesheet" href="/static/ui-agents.css"><div class="wrap">
+{{define "agentmodels"}}{{template "head" .}}{{template "nav" .}}<main class="g2 ag"><link rel="stylesheet" href="{{asset "ui-agents.css"}}"><div class="wrap">
 {{with $.Shell.Tabs}}{{if not $.Repo}}<div class="segrow"><nav class="gseg seg" aria-label="{{t $.Shell.TabsLabel}}">{{range .}}<a data-tab="{{.Key}}" href="{{.Href}}"{{if .Current}} class="on" aria-current="page"{{end}}>{{t .Label}}</a>{{end}}</nav></div>{{end}}{{end}}
 {{with .AgentModels}}{{if .Rows}}<div class="box"><table class="mstats"><thead><tr><th>{{t "agents.models_agent"}}</th><th>{{t "agents.models_model"}}</th><th class="n">{{t "agents.models_entries"}}</th><th class="n">{{t "agents.models_criteria"}}</th><th class="n">{{t "agents.models_requests"}}</th><th class="n">{{t "agents.models_features"}}</th></tr></thead><tbody>
 {{range .Rows}}<tr{{if .Human}} class="people"{{end}}><td><span class="person">{{avatar .Kind .Name}}<span>{{.Name}}</span></span></td><td{{if .Raw}} title="{{.Raw}}"{{end}}>{{if .Model}}{{.Model}}{{else if not .Human}}<span class="muted">{{t "agents.models_unknown"}}</span>{{end}}</td><td class="n">{{.Entries}}</td><td class="n">{{.Criteria}}</td><td class="n">{{.Requests}}</td><td class="n">{{.Features}}</td></tr>{{end}}

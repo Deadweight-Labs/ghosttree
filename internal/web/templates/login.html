@@ -3,7 +3,7 @@
 {{define "autherr"}}<p class="auth-error" role="alert">{{mi "tri"}}<span>{{.}}</span></p>{{end}}
 {{define "authprov"}}{{if eq . "GitHub"}}{{mi "gh"}}{{end}}{{end}}
 
-{{define "login"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="/static/ui-auth.css"><div class="authbox">{{template "loginbrand"}}
+{{define "login"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox">{{template "loginbrand"}}
 <h1>{{if .Bootstrap}}{{t "login.title_setup"}}{{else}}{{t "login.title"}}{{end}}</h1>
 {{if and .Error (not .TokenOpen)}}{{template "autherr" .Error}}{{end}}
 <section class="auth-card"><form class="login-form" method="post" action="/ui/login/code">
@@ -21,7 +21,7 @@
 {{define "invfacts"}}<ul class="facts">{{if .Org}}<li><span class="gav hc-5 org" aria-hidden="true">{{.OrgMark}}</span><b>{{.Org}}</b></li>{{end}}{{if .RoleText}}<li><span class="lb out">{{.RoleText}}</span></li>{{end}}{{if .ExpiresIn}}<li>{{mi "clock"}}<time datetime="{{.ExpiresAt}}">{{.ExpiresIn}}</time></li>{{end}}</ul>{{end}}
 {{define "invname"}}<label class="pfield"><span>{{t "join.name_label"}}</span><span class="gfield{{if .NameError}} is-bad{{end}}"><input name="name" value="{{.NameValue}}" maxlength="64" required pattern=".*\S.*" autocomplete="nickname" autocapitalize="none" spellcheck="false" placeholder="{{t "login.name_placeholder"}}" autofocus{{if .NameError}} aria-invalid="true"{{end}}></span>{{if .NameError}}<small class="bad" role="alert">{{.NameError}}</small>{{end}}</label>{{end}}
 
-{{define "logincode"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="/static/ui-auth.css"><div class="authbox{{if .InviteV}} wide{{end}}">{{template "loginbrand"}}
+{{define "logincode"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox{{if .InviteV}} wide{{end}}">{{template "loginbrand"}}
 {{if .InviteV}}{{template "invhead" .InviteV}}{{if .Error}}{{template "autherr" .Error}}{{end}}
 <section class="auth-card">{{template "invfacts" .InviteV}}
 {{if .OIDC}}<form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}">{{if .InviteV.Signup}}<input type="hidden" name="signup" value="1"><button class="gbtn pri blk">{{t "join.create_account"}}</button></form><div class="auth-or" role="separator"><span>{{t "login.or"}}</span></div><form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><button class="gbtn blk">{{template "authprov" .ProviderName}}{{if .ProviderName}}{{t "join.with" .ProviderName}}{{else}}{{t "join.sign_in_join"}}{{end}}</button></form>{{else}}<button class="gbtn pri blk">{{template "authprov" .ProviderName}}{{if .ProviderName}}{{t "join.with_join" .ProviderName}}{{else}}{{t "join.sign_in_join"}}{{end}}</button></form>{{end}}
@@ -38,11 +38,11 @@
 <p class="auth-back"><a href="/ui/login">{{t "login.back"}}</a></p>{{end}}
 {{template "authfoot"}}</div>{{template "foot" .}}{{end}}
 
-{{define "loginmsg"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="/static/ui-auth.css"><div class="authbox">{{template "loginbrand"}}
+{{define "loginmsg"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox">{{template "loginbrand"}}
 <div class="ico att">{{mi "tri"}}</div><h1>{{.Title}}</h1>
 <section class="auth-card center"><p class="lead" role="alert">{{.Error}}</p><a class="gbtn blk" href="/ui/login">{{t "login.back_to_sign_in"}}</a></section>{{template "authfoot"}}</div>{{template "foot" .}}{{end}}
 
-{{define "register"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="/static/ui-auth.css"><div class="authbox">{{template "loginbrand"}}
+{{define "register"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox">{{template "loginbrand"}}
 <h1>{{t "register.title"}}</h1>
 {{if .Error}}{{template "autherr" .Error}}{{end}}
 <section class="auth-card"><form class="login-form" method="post" action="/ui/register"><label class="pfield"><span>{{t "register.link_label"}}</span><span class="gfield"><input name="link" type="text" inputmode="url" value="{{.Code}}" autocomplete="off" spellcheck="false" required autofocus placeholder="{{t "register.link_placeholder"}}"></span></label><button class="gbtn pri blk">{{t "register.next"}}</button></form></section>

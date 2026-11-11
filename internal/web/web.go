@@ -719,15 +719,3 @@ func WebRouteClasses() map[string]string {
 	}
 	return out
 }
-
-// staticFiles liefert die eingebetteten Dateien. Die Schriften ändern sich nur
-// mit einer neuen Schriftversion (Ordner v5) und liegen lange im Cache.
-func (a *app) staticFiles() http.Handler {
-	fileServer := http.FileServerFS(files)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/static/fonts/") {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		}
-		fileServer.ServeHTTP(w, r)
-	})
-}
