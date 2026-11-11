@@ -49,6 +49,10 @@ type bandView struct {
 	// Head is the owner above the tabs of an organization or a person: picture,
 	// name and where it lives on GitHub (REQ-623).
 	Head *bandHead
+	// Waiting are the people a task of the repository waits for (REQ-599),
+	// WaitingHref where those tasks are listed.
+	Waiting     []string
+	WaitingHref string
 }
 
 // bandHead is the owner line above the tabs.

@@ -161,6 +161,17 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- The search field answers while you type: Ctrl+K (Cmd+K) or `/` jumps into
+  it, a number (`#217`, `REQ-12`, `pr:5`) lists the object it names first, and
+  the qualifier being typed is completed (`is:`, `kind:`, `branch:`, `package:`,
+  `label:` and the others the search knows). The lists of issues and pull
+  requests filter by work package (`package:7`, a Package menu), an open task
+  shows as the person it waits for on the repository band and on every branch,
+  and the checklist of a pull request shows the agent that works on an issue
+  right now. `repo:` is completed as `owner/name`, a value with a comma is
+  written in quotes, and nothing is completed inside a phrase that is still
+  open. The interface scripts have tests that run in CI in under a second.
+
 - `ctx doctor` sets this ctx against the server's version: a ctx older than
   its server fails with the fix (`ctx update`, and the channel when the server
   runs another one); a server older than this ctx, two dev builds and a server
@@ -765,6 +776,14 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   lock for about 3 ms.
 
 ### Changed
+
+- The inbox has two sections, what waits for you and what was said to you.
+  A direct message stands in the second beside the mentions in rooms, and what
+  nobody read for two weeks leaves the inbox before anything is counted; it
+  stays in its room. A question that still waits for an answer stays.
+
+- The month's spending on the gardener tab is shown to the owner only: it adds
+  up the runs of every repository, also those a lead or reviewer has no role in.
 
 - `feature`, `runbook` and `comment` are no longer loaded up front in any
   session (REQ-643). In the last days they were called in 2.0 %, 0 % and 3.9 %

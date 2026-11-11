@@ -1120,7 +1120,7 @@ var messages = map[string]string{
 	"shell.theme":                   "Light or dark",
 	"inbox.title":                   "Inbox",
 	"inbox.waiting":                 "Waiting for you",
-	"inbox.mentioned":               "Mentioned",
+	"inbox.mentioned":               "Said to you",
 	"inbox.none":                    "Nothing here.",
 	"inbox.empty":                   "Nothing is waiting for you.",
 	"inbox.act.done":                "Done: leaves the inbox",
@@ -1319,7 +1319,6 @@ var messages = map[string]string{
 	"ui.cmd.mac":                    "macOS",
 	"ui.cmd.linux":                  "Linux",
 	// Posteingang: Filter, Direkt an dich, Antworten (REQ-599, Teil A)
-	"inbox.direct":            "Direct to you",
 	"inbox.filters":           "Filter",
 	"inbox.filter.alle":       "All",
 	"inbox.filter.direkt":     "Direct",

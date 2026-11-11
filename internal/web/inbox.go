@@ -133,9 +133,7 @@ type inboxSection struct {
 type inboxView struct {
 	Waiting, Mentioned []inboxRow
 	WaitingBox         inboxSection
-	DirectBox          inboxSection
 	MentionedBox       inboxSection
-	Direct             []inboxRow
 	// Filters is the chip row, Filter the key of the one that is on.
 	Filters []inboxFilterChip
 	Filter  string
@@ -424,6 +422,19 @@ func (a *app) inboxDirect(r *http.Request) ([]inboxRow, error) {
 	return rows, nil
 }
 
+// inboxMentionDays is how long what was said stays in the inbox when nobody
+// reads it: the room keeps it, the inbox is for what is current.
+const inboxMentionDays = 14
+
+// inboxRecent keeps the rows of what was said that are not older than
+// inboxMentionDays; a row without a time stays, and so does a question that
+// waits for an answer (Cats has "fragen"), however old.
+func inboxRecent(rows []inboxRow, now time.Time) []inboxRow {
+	return slices.DeleteFunc(rows, func(row inboxRow) bool {
+		return !row.at.IsZero() && now.Sub(row.at) > inboxMentionDays*24*time.Hour && !slices.Contains(row.Cats, "fragen")
+	})
+}
+
 // sortInboxRows puts the newest row first.
 func sortInboxRows(rows []inboxRow) {
 	slices.SortStableFunc(rows, func(x, y inboxRow) int { return y.at.Compare(x.at) })
@@ -526,21 +537,23 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	v := &inboxView{Waiting: a.inboxRows(r, waiting), Mentioned: mentioned, Direct: direct}
+	now := overviewNow().UTC()
+	// What was said to the person, in a room or directly: one list, and what fell
+	// out of the two weeks is gone before anything is counted or tested for empty.
+	said := inboxRecent(append(slices.Clone(mentioned), direct...), now)
+	v := &inboxView{Waiting: a.inboxRows(r, waiting), Mentioned: said}
 	token, forms := csrfOf(r), interactive(r)
 	if forms {
 		a.inboxProposals(r, a.access(r), project, v.Waiting)
 		a.inboxDecisionRows(l, token, v.Waiting)
 	}
-	for _, rows := range [][]inboxRow{v.Mentioned, v.Direct} {
-		for i := range rows {
-			rows[i].Token, rows[i].Forms = token, forms
-			if !forms {
-				rows[i].Actions, rows[i].Reply = nil, nil
-			}
+	for i := range v.Mentioned {
+		v.Mentioned[i].Token, v.Mentioned[i].Forms = token, forms
+		if !forms {
+			v.Mentioned[i].Actions, v.Mentioned[i].Reply = nil, nil
 		}
 	}
-	for _, rows := range [][]inboxRow{v.Waiting, v.Mentioned, v.Direct} {
+	for _, rows := range [][]inboxRow{v.Waiting, v.Mentioned} {
 		for i := range rows {
 			for j := range rows[i].Actions {
 				rows[i].Actions[j].Token = token
@@ -548,7 +561,6 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	pa := a.access(r)
-	now := overviewNow().UTC()
 	var ids []int64
 	for _, row := range v.Waiting {
 		if row.RequestID != 0 && !slices.Contains(ids, row.RequestID) {
@@ -568,10 +580,10 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 	v.LiveIDs = strings.Join(idText, ",")
 	base := a.shellBaseFor(r)
 	v.Projects, v.AllSelected, v.CanAll = base.projects, base.all, base.who.kind == viewerOwner || len(base.projects) > 1
-	v.Empty = len(v.Waiting) == 0 && len(v.Mentioned) == 0 && len(v.Direct) == 0
+	v.Empty = len(v.Waiting) == 0 && len(v.Mentioned) == 0
 	v.Filter = inboxFilter(r)
-	counts := map[string]int{"alle": len(v.Waiting) + len(v.Mentioned) + len(v.Direct)}
-	for _, rows := range [][]inboxRow{v.Waiting, v.Mentioned, v.Direct} {
+	counts := map[string]int{"alle": len(v.Waiting) + len(v.Mentioned)}
+	for _, rows := range [][]inboxRow{v.Waiting, v.Mentioned} {
 		for _, row := range rows {
 			for _, c := range row.Cats {
 				counts[c]++
@@ -592,11 +604,14 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 		}
 		v.Filters = append(v.Filters, inboxFilterChip{Key: key, Label: inboxFilterKeys[key], Href: href, Count: counts[key], Current: key == v.Filter})
 	}
-	waitingRows, directRows, mentionedRows := inboxKeep(v.Waiting, v.Filter), inboxKeep(v.Direct, v.Filter), inboxKeep(v.Mentioned, v.Filter)
+	// Two sections only (REQ-599 AC-7): what waits for the person, and what was
+	// said to them, in a room or directly, newest first (inboxRecent has already
+	// dropped what was said long ago; it stays in its room).
+	waitingRows, mentionedRows := inboxKeep(v.Waiting, v.Filter), inboxKeep(v.Mentioned, v.Filter)
+	sortInboxRows(mentionedRows)
 	v.WaitingBox = inboxSection{ID: "waiting", Title: "inbox.waiting", None: "inbox.none", Rows: waitingRows, Warn: true}
-	v.DirectBox = inboxSection{ID: "direct", Title: "inbox.direct", None: "inbox.none", Rows: directRows}
 	v.MentionedBox = inboxSection{ID: "mentioned", Title: "inbox.mentioned", None: "inbox.none", Rows: mentionedRows}
-	v.FilteredEmpty = !v.Empty && len(waitingRows)+len(directRows)+len(mentionedRows) == 0
+	v.FilteredEmpty = !v.Empty && len(waitingRows)+len(mentionedRows) == 0
 	if code := r.URL.Query().Get("fail"); code != "" {
 		v.Result = &requestResult{Text: l.msg(inboxFailKey(code)), Kind: "failed", Fail: true}
 	}

@@ -367,14 +367,7 @@ const taskListMax = 200
 // tasksTabCount ist die Zahl der offenen Aufgaben, die der Betrachter am Projekt
 // lesen darf, für den Reiter.
 func (a *app) tasksTabCount(pa *store.ProjectAccess, remote string) string {
-	if pa == nil {
-		return ""
-	}
-	list, err := a.store.ListHumanTasks(pa, store.TaskFilter{Project: remote, State: humantask.Open, Limit: repoCountAt})
-	if err != nil {
-		return ""
-	}
-	return countText(len(list))
+	return countText(len(a.repoOpenTasks(pa, remote)))
 }
 
 // HasFirst says whether the page opens with the bubble: the text, where, the

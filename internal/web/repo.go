@@ -38,6 +38,9 @@ type repoView struct {
 	External string
 	Project  string
 	Tabs     []repoTab
+	// Waiting are the people the open tasks of the repository wait for; the band
+	// shows them as one stack that leads to the task list.
+	Waiting []string
 }
 
 type repoTab struct {
@@ -58,7 +61,7 @@ var repoTabIcons = map[string]string{"code": "code", "issues": "issue", "pulls":
 // Band is the tab band under the header: the row, and behind the separator the
 // tabs of the second group.
 func (v *repoView) Band() *bandView {
-	b := &bandView{Label: "repo.tabs"}
+	b := &bandView{Label: "repo.tabs", Waiting: v.Waiting, WaitingHref: v.Href + "/tasks"}
 	for _, t := range v.Tabs {
 		bt := bandTab{Key: t.Key, Label: t.Label, Href: t.Href, Icon: repoTabIcons[t.Key], Count: t.Count, Mentions: t.Mentions, Current: t.Current}
 		if t.More {
@@ -394,7 +397,9 @@ func (a *app) repoViewFor(r *http.Request, pa *store.ProjectAccess, kind viewerK
 	tab("sessions", "repo.tab.sessions", a.sessionCount(pa, remote), true)
 	tab("features", "repo.tab.features", a.featureCount(pa, remote), true)
 	tab("commits", "repo.tab.commits", a.commitCount(pa, remote), true)
-	tab("tasks", "repo.tab.tasks", a.tasksTabCount(pa, remote), true)
+	tasks := a.repoOpenTasks(pa, remote)
+	v.Waiting = waitersOf(tasks)
+	tab("tasks", "repo.tab.tasks", countText(len(tasks)), true)
 	tab("packages", "repo.tab.packages", a.packageCount(pa, remote), true)
 	if pa != nil && pa.Check(remote, store.ResLabel, store.ActEdit, store.Object{}) == nil {
 		tab("settings", "repo.tab.settings", "", true)
