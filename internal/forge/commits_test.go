@@ -64,7 +64,8 @@ func newFakeCommits(t *testing.T) *fakeCommits {
 		var out []map[string]any
 		for i := (page - 1) * 100; i < f.total && i < page*100; i++ {
 			c := map[string]any{
-				"sha": fmt.Sprintf("%040x", i+1),
+				"sha":     fmt.Sprintf("%040x", i+1),
+				"parents": []map[string]any{{"sha": fmt.Sprintf("%040x", i)}},
 				"commit": map[string]any{
 					"message":   fmt.Sprintf("commit %d\n\nlonger text that must not travel", i),
 					"author":    map[string]any{"name": "Mia M."},

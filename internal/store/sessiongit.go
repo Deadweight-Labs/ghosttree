@@ -2,7 +2,6 @@ package store
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -483,11 +482,6 @@ func shaPrefixes(sha string) []string {
 		out = append(out, sha[:n])
 	}
 	return out
-}
-
-func jsonStrings(v []string) string {
-	b, _ := json.Marshal(v)
-	return string(b)
 }
 
 // settleReported prüft die gemeldeten SHAs gegen Commits, die der Server aus den

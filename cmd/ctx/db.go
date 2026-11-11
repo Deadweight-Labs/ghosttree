@@ -22,6 +22,7 @@ const dbUsage = `usage: ctx db vacuum --db <path> [--tmpdir <dir>] [--fts-optimi
        ctx db chunk-stats --db <path> [--sample N] [--json]
        ctx db slim-sessions --db <path> [--dry-run] [--batch N] [--pause D] [--json]
        ctx db slim-search --db <path> [--dry-run] [--batch N] [--pause D] [--json]
+       ctx db slim-text --db <path> [--dry-run] [--restore] [--batch N] [--pause D] [--json]
        ctx db migrate-owners --db <path> --dry-run|--apply --backup <file> [--plan <file>]
 
 Maintenance of the database file with the SQL functions of the schema. The
@@ -35,6 +36,7 @@ ghosttree_valid_utf8, which only ctx registers, so "sqlite3 <db> VACUUM" and
   chunk-stats  bytes of stored transcript lines per line type, from a sample
   slim-sessions  slim and pack the stored transcript lines (may run beside the server)
   slim-search    one search index over sessions, no text copies (may run beside the server)
+  slim-text      empty session_chunks.text, readers derive it from the stored line (may run beside the server)
   migrate-owners   projects to their owners (organization or person), REQ-623`
 
 const dbChunkStatsUsage = `usage: ctx db chunk-stats --db <path> [--sample N] [--json]
@@ -125,6 +127,8 @@ func cmdDB(args []string, stdout io.Writer) int {
 		return cmdDBSlimSessions(args[1:], stdout)
 	case "slim-search":
 		return cmdDBSlimSearch(args[1:], stdout)
+	case "slim-text":
+		return cmdDBSlimText(args[1:], stdout)
 	case "migrate-owners":
 		return cmdDBMigrateOwners(args[1:], stdout)
 	case "help", "--help", "-h":

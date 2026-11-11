@@ -58,6 +58,9 @@ type PullCommit struct {
 	// Title ist die erste Zeile der Commit-Nachricht.
 	Title       string
 	CommittedAt string
+	// Message ist die ganze Commit-Nachricht, Parents sind die SHAs der Eltern.
+	Message string
+	Parents []string
 }
 
 // PullCommitsChange ersetzt die Commits eines PRs durch den Stand von GitHub.
@@ -150,6 +153,9 @@ func (s *Store) RecordPullCommits(c PullCommitsChange) (PullCommitsResult, error
 			ON CONFLICT(project,pr,sha) DO UPDATE SET author=excluded.author, author_name=excluded.author_name, title=excluded.title,
 				committed_at=excluded.committed_at, position=excluded.position, in_pr=1`,
 			remote, c.Number, sha, cleanLogin(k.Author), cleanLine(k.AuthorName, 100), title, committed, i, ts); err != nil {
+			return res, err
+		}
+		if err := recordCommitMetaTx(tx, remote, sha, k.Parents, k.Message, ts); err != nil {
 			return res, err
 		}
 		res.Recorded++

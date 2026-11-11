@@ -686,3 +686,46 @@ func (r rawScanner) Scan(src any) error {
 	*r.dst = line
 	return err
 }
+
+// After ctx db slim-text the column text is empty and the quotes of the
+// evidence come from the derived text. A pattern secret that redact-sessions
+// finds in raw only must leave the quotes as clean as it does when the text is
+// stored.
+func TestRedactSessionsCleansQuotesAfterSlimText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedLegacy(t, s)
+	emptyText(t, s)
+	var stored int
+	if err := s.db.QueryRow(`SELECT count(*) FROM session_chunks WHERE text != ''`).Scan(&stored); err != nil || stored != 0 {
+		t.Fatalf("%d rows still have text, %v", stored, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := RedactSessions(context.Background(), path, RedactSessionsOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Tables["session_chunks.raw"] != 3 || rep.Tables["session_chunks.text"] != 0 {
+		t.Fatalf("tables: %v", rep.Tables)
+	}
+	if rep.Tables["knowledge_evidence.quote"] != 2 || rep.Tables["request_sightings.quote"] != 1 {
+		t.Fatalf("the quotes were not cleaned after slim-text: %v", rep.Tables)
+	}
+	read, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()
+	quotes := dumpTable(t, read, `SELECT quote FROM knowledge_evidence ORDER BY id`) +
+		dumpTable(t, read, `SELECT quote FROM request_sightings ORDER BY id`)
+	if strings.Contains(quotes, testPassword) || !strings.Contains(quotes, "das Passwort [REDACTED:labeled] für") ||
+		!strings.Contains(quotes, redactQuoteMarker) || !strings.Contains(quotes, "weiter") {
+		t.Fatalf("quotes: %s", quotes)
+	}
+}
