@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
 )
 
@@ -434,11 +435,11 @@ func validateAnswer(repo *Repo, text string, pkg Package, known map[int64]Entry,
 	for _, a := range ans.Verdicts {
 		e, ok := byID[a.ID]
 		if !ok {
-			reject("Urteil für #%d: nicht im Paket", a.ID)
+			reject("Urteil für %s: nicht im Paket", knref.Format(a.ID))
 			continue
 		}
 		if done[a.ID] {
-			reject("Urteil für #%d: doppelt", a.ID)
+			reject("Urteil für %s: doppelt", knref.Format(a.ID))
 			continue
 		}
 		v := Verdict{Entry: e, Reason: strings.TrimSpace(a.Reason), Correction: strings.TrimSpace(a.Correction)}
@@ -467,7 +468,7 @@ func validateAnswer(repo *Repo, text string, pkg Package, known map[int64]Entry,
 				v.Reason = "Korrektur ohne Text. " + v.Reason
 			}
 		default:
-			reject("Urteil für #%d: unbekanntes Urteil %q", a.ID, a.Verdict)
+			reject("Urteil für %s: unbekanntes Urteil %q", knref.Format(a.ID), a.Verdict)
 			continue
 		}
 		done[a.ID] = true
@@ -495,15 +496,15 @@ func validateAnswer(repo *Repo, text string, pkg Package, known map[int64]Entry,
 		e, ok := asked[a.ID]
 		switch {
 		case !ok:
-			reject("Absicherung #%d: nicht erfragt", a.ID)
+			reject("Absicherung %s: nicht erfragt", knref.Format(a.ID))
 			continue
 		case covered[a.ID]:
-			reject("Absicherung #%d: doppelt", a.ID)
+			reject("Absicherung %s: doppelt", knref.Format(a.ID))
 			continue
 		}
 		c, why := validateCover(repo, a, e, looked)
 		if why != "" {
-			reject("Absicherung #%d (%s): %s", a.ID, a.Kind, why)
+			reject("Absicherung %s (%s): %s", knref.Format(a.ID), a.Kind, why)
 			continue
 		}
 		covered[a.ID] = true
@@ -520,7 +521,7 @@ func validateRelation(repo *Repo, r agentRelation, known map[int64]Entry, looked
 	var list []int64
 	for _, id := range r.IDs {
 		if _, ok := known[id]; !ok {
-			return Relation{}, fmt.Sprintf("#%d ist kein aktiver Eintrag dieses Projekts", id)
+			return Relation{}, fmt.Sprintf("%s ist kein aktiver Eintrag dieses Projekts", knref.Format(id))
 		}
 		if !ids[id] {
 			ids[id] = true
@@ -549,7 +550,7 @@ func validateRelation(repo *Repo, r agentRelation, known map[int64]Entry, looked
 	}
 	for _, id := range list {
 		if rel.Quotes[id] == "" {
-			return Relation{}, fmt.Sprintf("kein wörtliches Zitat aus #%d gefunden", id)
+			return Relation{}, fmt.Sprintf("kein wörtliches Zitat aus %s gefunden", knref.Format(id))
 		}
 	}
 	for _, ref := range r.Evidence {

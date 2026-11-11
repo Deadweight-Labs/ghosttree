@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -295,7 +296,7 @@ func renderRequestDetail(detail requestdomain.Detail, concise bool) string {
 				fmt.Fprintf(&b, " REQ-%d", relation.OtherRequestID)
 			}
 			if relation.KnowledgeID != 0 {
-				fmt.Fprintf(&b, " knowledge #%d", relation.KnowledgeID)
+				fmt.Fprintf(&b, " knowledge %s", knref.Format(relation.KnowledgeID))
 			}
 			if relation.ExternalRef != "" {
 				fmt.Fprintf(&b, " %s", relation.ExternalRef)

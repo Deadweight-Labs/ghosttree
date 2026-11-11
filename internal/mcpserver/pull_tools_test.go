@@ -43,7 +43,7 @@ func TestPullAndCommitToolsOverTheWire(t *testing.T) {
 	got = wireText(t, s, "pull_get", map[string]any{"pr": 9})
 	mustHave(t, "pull_get", got, "PR #9 [open] Der PR", "package: none bound", "1 knowledge entries", "Pull request #9", "link: "+c.ServerURL()+"/ui/x/y/pulls/9")
 	got = wireText(t, s, "commit_get", map[string]any{"commit": sha[:8]})
-	mustHave(t, "commit_get", got, "commit "+sha[:12]+" Titel", "1 entries were written", "#1 am Commit gesagt", "link: "+c.ServerURL()+"/ui/x/y/commit/"+sha)
+	mustHave(t, "commit_get", got, "commit "+sha[:12]+" Titel", "1 entries were written", "KN-1 am Commit gesagt", "link: "+c.ServerURL()+"/ui/x/y/commit/"+sha)
 
 	for tool, args := range map[string]map[string]any{"pull_get": {"pr": 77}, "commit_get": {"commit": strings.Repeat("e", 40)}} {
 		if got, failed := callTool(t, session, tool, args); !failed || !strings.Contains(got, "not found") {

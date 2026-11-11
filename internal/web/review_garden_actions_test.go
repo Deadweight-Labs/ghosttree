@@ -138,7 +138,7 @@ func TestDuplicateNoteOffersMergeOnlyToWhoMayDoWhatItDoes(t *testing.T) {
 	if !strings.Contains(lead, form) {
 		t.Fatalf("a lead is not offered to merge:\n%s", lead)
 	}
-	for _, want := range []string{"Duplicate?", "Merge", "Stays:", "#" + idStr(newer) + " Dienst neu", "Replaced:", "#" + idStr(older) + " Dienst alt"} {
+	for _, want := range []string{"Duplicate?", "Merge", "Stays:", "KN-" + idStr(newer) + " Dienst neu", "Replaced:", "KN-" + idStr(older) + " Dienst alt"} {
 		if !strings.Contains(lead, want) {
 			t.Errorf("the card lacks %q", want)
 		}
@@ -187,7 +187,7 @@ func TestMergeSupersedesTheOlderEntryByTheNewerAndClosesTheNote(t *testing.T) {
 		t.Fatalf("relations of the older entry: %v %v", rels, err)
 	}
 	if r := rels[0]; r.Kind != store.RelSupersedes || r.FromID != newer || r.ToID != older ||
-		r.Reason != "Gärtner-Vorschlag #"+idStr(note)+", bestätigt von lars" {
+		r.Reason != "Gärtner-Vorschlag KN-"+idStr(note)+", bestätigt von lars" {
 		t.Errorf("supersede relation = %+v", r)
 	}
 	// The note is closed as confirmed by the person, which is what leaves the queue.

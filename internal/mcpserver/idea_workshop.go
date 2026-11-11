@@ -10,6 +10,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -293,7 +294,7 @@ func decisionOutput(d idea.Decision) DecisionOutput {
 	out := DecisionOutput{Ref: d.HumanID(), Subject: subject, Question: d.Question, State: d.State, Way: d.Way, WayWhy: d.WayWhy, NeedsHuman: d.NeedsHuman(),
 		Detail: d.Detail, Chosen: d.ChosenVariant, Answer: d.Answer, Reason: d.Reason, Trigger: d.Trigger, DecidedBy: d.DecidedBy, ByAgent: d.ByAgent}
 	if d.KnowledgeID != 0 {
-		out.Knowledge = fmt.Sprintf("#%d", d.KnowledgeID)
+		out.Knowledge = knref.Format(d.KnowledgeID)
 	}
 	for _, v := range d.Variants {
 		vo := VariantOutput{Label: v.Label, Title: v.Title, Text: v.Text, Pro: v.Pro, Contra: v.Contra}

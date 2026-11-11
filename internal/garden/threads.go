@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -61,7 +62,8 @@ const (
 	maxQuoteRunes  = 800
 )
 
-var standRe = regexp.MustCompile(`#(\d+) \(([0-9a-f]{8,64})\)`)
+// standRe reads both spellings: threads asked before KN-n carry #n.
+var standRe = regexp.MustCompile(`(?:KN-|#)(\d+) \(([0-9a-f]{8,64})\)`)
 
 // ThreadAgentID is the coordination id under which the gardener speaks in the
 // room of a project.
@@ -81,7 +83,7 @@ func shorten(s string, n int) string {
 func ThreadTitle(r Relation, titles map[int64]string) string {
 	var parts []string
 	for _, id := range r.IDs {
-		parts = append(parts, fmt.Sprintf("#%d „%s“", id, shorten(titles[id], 60)))
+		parts = append(parts, fmt.Sprintf("%s „%s“", knref.Format(id), shorten(titles[id], 60)))
 	}
 	return shorten(fmt.Sprintf("%sWidersprechen sich %s?", titlePrefix, strings.Join(parts, " und ")), maxThreadTitle)
 }
@@ -91,7 +93,7 @@ func ThreadTitle(r Relation, titles map[int64]string) string {
 func threadQuestion(r Relation, known map[int64]Entry) string {
 	var stand []string
 	for _, id := range r.IDs {
-		stand = append(stand, fmt.Sprintf("#%d (%s)", id, HashOf(known[id])))
+		stand = append(stand, fmt.Sprintf("%s (%s)", knref.Format(id), HashOf(known[id])))
 	}
 	return fmt.Sprintf("Behaupten diese Einträge Unvereinbares, und welcher gilt? Der Gärtner (Herkunft gardener, nicht bestätigt) hat den Widerspruch gefunden; die Begründung und die wörtlichen Zitate stehen im ersten Beitrag. Der Gärtner entscheidet nichts.\n\n%s %s",
 		standLabel, strings.Join(stand, ", "))
@@ -221,7 +223,7 @@ func (o *threadOpener) open(r Relation) ThreadOutcome {
 		ts, err := o.sink.ThreadsForObject("knowledge", strconv.FormatInt(id, 10), o.agent)
 		if err != nil {
 			// Not knowing whether there is a thread is not a reason to open one.
-			out.State, out.Err = ThreadFailed, fmt.Errorf("look for threads on #%d: %w", id, err)
+			out.State, out.Err = ThreadFailed, fmt.Errorf("look for threads on %s: %w", knref.Format(id), err)
 			return out
 		}
 		for _, t := range ts {
@@ -252,7 +254,7 @@ func (o *threadOpener) open(r Relation) ThreadOutcome {
 	var warn []string
 	for _, other := range r.IDs[1:] {
 		if err := o.sink.LinkThread(store.ThreadLink{ThreadID: id, Kind: "knowledge", ID: strconv.FormatInt(other, 10)}, o.agent); err != nil {
-			warn = append(warn, fmt.Sprintf("link #%d: %v", other, err))
+			warn = append(warn, fmt.Sprintf("link %s: %v", knref.Format(other), err))
 		}
 	}
 	if _, err := o.sink.SendCoordMessage(store.CoordMessage{

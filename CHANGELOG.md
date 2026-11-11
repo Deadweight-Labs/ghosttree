@@ -135,7 +135,7 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - Hybrid search is off unless `GHOSTTREE_EMBED_URL` is set. Sessions are only
   sent to the embedding server when `session` is named in
   `GHOSTTREE_EMBED_KINDS` (`all` does not include it; `all,session` does).
-- Building from source needs Go 1.26.10 or newer.
+- Building from source needs Go 1.26.11 or newer.
 - The first start after the upgrade builds a narrow index from chunks to
   sessions (`chunk_index_chunk`). On a large database this takes about as long
   as reading `chunk_index` once (around a minute for three million chunks on
@@ -575,6 +575,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Changed
 
+- A bare `#231` in a text of a repository (comments, issues, documents, project
+  knowledge) now means that repository's pull request 231, as on GitHub: the web
+  interface shows it as the pull request's pill when ghosttree knows it, and only
+  falls back to the knowledge entry of that number (the old spelling) when there
+  is no such pull request. A knowledge entry is named `KN-231` everywhere: tools,
+  cards, the `ctx` output, the mirror in `.ghosttree/`, the gardener's notes and
+  threads, and the rule section `ctx install` writes (run it again to get the new
+  wording). `KN-n` is read wherever `#n` was read for knowledge
+  (`context_get action=link`, `ctx knowledge ...`, `--supersedes`, runbook
+  pitfalls, pain evidence); the old `#n` still works as input. Stored texts are
+  not rewritten. The gardener now writes requests as `REQ-n` instead of `#n`;
+  its notes and threads in the old form are still read.
 - `ctx` starts in 4.5 ms instead of 14.5 ms. It is one binary, and every start
   parsed the page templates of the web interface in both languages, although
   only `ctx serve` shows a page. They are now parsed when the server starts, so
@@ -750,6 +762,14 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- `ctx watch` no longer syncs the journals that Claude Code's Workflow tool
+  writes under `subagents/workflows/<run>/journal.jsonl`. They are not
+  transcripts and carry no session id, so every journal registered as session
+  `journal`, the server refused it with `409 session_id_collision`, and the
+  collector retried each one on every sweep. A registration refused with 409
+  now also waits for the registration backoff instead of being retried every
+  30 seconds.
+
 - A tool call during a restart of the server no longer returns the HTML error
   page of the proxy in front of it. The message is one line, a read is tried
   twice more first (`ctx mcp` only; a write is never repeated), and a failed
@@ -826,8 +846,8 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Security
 
-- Go 1.26.10 (GO-2026-6809 in `crypto/x509`); released binaries use the fixed
-  standard library.
+- Go 1.26.11 (GO-2026-6859 in `net/http`, after GO-2026-6809 in `crypto/x509`
+  fixed by 1.26.10); released binaries use the fixed standard library.
 - Pull request links only with a host boundary and a fixed path for coordination
   forwarding (CodeQL findings).
 - The Claude channel neutralizes `<channel` inside message text, bounds `send`

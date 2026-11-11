@@ -8,6 +8,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/runbook"
@@ -301,7 +302,7 @@ func (b Builder) DecisionCard(d idea.Decision) Card {
 
 // KnowledgeCard describes a knowledge entry.
 func (b Builder) KnowledgeCard(k store.Knowledge) Card {
-	c := Card{Kind: "Knowledge", Ref: fmt.Sprintf("#%d", k.ID), Title: k.Title, Status: k.Type + "/" + k.Status, Who: k.Person,
+	c := Card{Kind: "Knowledge", Ref: knref.Format(k.ID), Title: k.Title, Status: k.Type + "/" + k.Status, Who: k.Person,
 		URL: b.WithProject(k.Scope.Project).Knowledge(k.ID)}
 	if k.Status == "active" {
 		c.Next = "none"

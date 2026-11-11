@@ -462,7 +462,7 @@ func validateLedger(repo *Repo, text string, reqs []LedgerRequest, looked *Looke
 	for _, a := range ans.Criteria {
 		r, ok := byID[a.Request]
 		if !ok {
-			reject("Kriterium %d: Auftrag #%d nicht im Paket", a.Criterion, a.Request)
+			reject("Kriterium %d: Auftrag REQ-%d nicht im Paket", a.Criterion, a.Request)
 			continue
 		}
 		var crit *LedgerCriterion
@@ -473,7 +473,7 @@ func validateLedger(repo *Repo, text string, reqs []LedgerRequest, looked *Looke
 		}
 		switch {
 		case crit == nil:
-			reject("Kriterium %d: kein offenes Kriterium von Auftrag #%d", a.Criterion, a.Request)
+			reject("Kriterium %d: kein offenes Kriterium von Auftrag REQ-%d", a.Criterion, a.Request)
 			continue
 		case done[crit.ID]:
 			reject("Kriterium %d: doppelt", crit.ID)
@@ -481,7 +481,7 @@ func validateLedger(repo *Repo, text string, reqs []LedgerRequest, looked *Looke
 		}
 		reason := shorten(a.Reason, maxProofReasonRunes)
 		if len([]rune(reason)) < minProofReason {
-			reject("Kriterium %d von #%d: ohne Begründung", crit.ID, r.ID)
+			reject("Kriterium %d von REQ-%d: ohne Begründung", crit.ID, r.ID)
 			continue
 		}
 		p := Proof{Request: r, Criterion: *crit, Reason: reason}
@@ -489,7 +489,7 @@ func validateLedger(repo *Repo, text string, reqs []LedgerRequest, looked *Looke
 		for _, it := range a.Evidence {
 			item, why := validateProofItem(repo, it, looked)
 			if why != "" {
-				reject("Kriterium %d von #%d, Beleg %s: %s", crit.ID, r.ID, firstNonEmpty(it.Kind, "?"), why)
+				reject("Kriterium %d von REQ-%d, Beleg %s: %s", crit.ID, r.ID, firstNonEmpty(it.Kind, "?"), why)
 				continue
 			}
 			if key := item.Kind + " " + item.Ref; !seen[key] && len(p.Items) < maxProofItems {
@@ -498,7 +498,7 @@ func validateLedger(repo *Repo, text string, reqs []LedgerRequest, looked *Looke
 			}
 		}
 		if len(p.Items) == 0 {
-			reject("Kriterium %d von #%d: kein gültiger Beleg, nichts vorgeschlagen", crit.ID, r.ID)
+			reject("Kriterium %d von REQ-%d: kein gültiger Beleg, nichts vorgeschlagen", crit.ID, r.ID)
 			continue
 		}
 		sort.SliceStable(p.Items, func(i, j int) bool { return proofRank(p.Items[i].Kind) < proofRank(p.Items[j].Kind) })
@@ -528,7 +528,7 @@ func CriterionRef(requestID, criterionID int64) string {
 // CriterionTitle is the title of a criterion note; the review page holds it to
 // the reference.
 func CriterionTitle(requestID int64, number int, description string) string {
-	return fmt.Sprintf("%s%s #%d Kriterium %d: %s", titlePrefix, LabelProof, requestID, number, shorten(description, 100))
+	return fmt.Sprintf("%s%s REQ-%d Kriterium %d: %s", titlePrefix, LabelProof, requestID, number, shorten(description, 100))
 }
 
 // proofLine is a line of evidence in a criterion note.
@@ -539,7 +539,7 @@ const proofLinePrefix = "Beleg: "
 // confirms the note on the review page.
 func CriterionProposal(project string, p Proof) store.Knowledge {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Vorschlag des Gärtners (Herkunft gardener, nicht bestätigt) zu Auftrag #%d, Kriterium %d: %s\n\n", p.Request.ID, p.Criterion.Number, shorten(p.Criterion.Description, 300))
+	fmt.Fprintf(&b, "Vorschlag des Gärtners (Herkunft gardener, nicht bestätigt) zu Auftrag REQ-%d, Kriterium %d: %s\n\n", p.Request.ID, p.Criterion.Number, shorten(p.Criterion.Description, 300))
 	fmt.Fprintf(&b, "Urteil: %s\nAuftrag: %s\n\n", LabelProof, shorten(p.Request.Title, 200))
 	for _, it := range p.Items {
 		fmt.Fprintf(&b, "%s%s %s\n", proofLinePrefix, it.Kind, it.Ref)
@@ -610,7 +610,7 @@ func ProposeCriteria(sink Sink, project string, existing []store.Knowledge, proo
 			continue
 		}
 		if _, err := sink.Remember(CriterionProposal(project, p), scope.Axes{Project: project}); err != nil {
-			return written, fmt.Errorf("propose criterion %d of #%d: %w", p.Criterion.ID, p.Request.ID, err)
+			return written, fmt.Errorf("propose criterion %d of REQ-%d: %w", p.Criterion.ID, p.Request.ID, err)
 		}
 		written++
 	}

@@ -396,7 +396,7 @@ func TestGardenerWritesOnlyMarkedStagedProposalsAndThreadsAndNothingThatDecides(
 		}
 	}
 	proof := refs[fmt.Sprintf("gardener:criterion:%d:%d", fx.request, fx.criterion)]
-	if proof.Title != fmt.Sprintf("[Gärtner] Erfüllt? #%d Kriterium 1: Das Kriterium ist offen", fx.request) || !strings.Contains(proof.Body, "Beleg: commit "+fx.head[:12]) {
+	if proof.Title != fmt.Sprintf("[Gärtner] Erfüllt? REQ-%d Kriterium 1: Das Kriterium ist offen", fx.request) || !strings.Contains(proof.Body, "Beleg: commit "+fx.head[:12]) {
 		t.Errorf("criterion note = %q\n%s", proof.Title, proof.Body)
 	}
 	// The descriptions are the gardener's, by its account, on the commit that

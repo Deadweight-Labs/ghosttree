@@ -116,7 +116,7 @@ func TestCriterionNoteRecordsTheProofOnlyWhenAPersonConfirmsIt(t *testing.T) {
 	}
 	ev := c.Evidence[0]
 	if ev.Kind != "commit" || ev.Person != "lars" ||
-		ev.Ref != proofCommitRef+"; test cmd/ctx/garden_test.go:TestX (Gärtner-Vorschlag #"+idStr(note)+", bestätigt von lars)" {
+		ev.Ref != proofCommitRef+"; test cmd/ctx/garden_test.go:TestX (Gärtner-Vorschlag KN-"+idStr(note)+", bestätigt von lars)" {
 		t.Errorf("evidence = %+v", ev)
 	}
 	// Only the criterion: the request stays open, the other criterion too, and the note is closed as confirmed.
@@ -236,7 +236,7 @@ func TestCriterionNoteThatOnlyLooksLikeTheGardenersIsNotActedOn(t *testing.T) {
 		}},
 		{"a title that names another request", func(j jobRequest) int64 {
 			return criterionNote(t, e, shellProject, j.proof(), func(n *store.Knowledge) {
-				n.Title = strings.Replace(n.Title, "#"+idStr(j.req)+" ", "#"+idStr(other.req)+" ", 1)
+				n.Title = strings.Replace(n.Title, "REQ-"+idStr(j.req)+" ", "REQ-"+idStr(other.req)+" ", 1)
 			})
 		}},
 		{"a title that names another criterion number", func(j jobRequest) int64 {
@@ -670,5 +670,24 @@ func TestWebReadsWhatTheGardenerWritesForTheLedgerAndTheGhosts(t *testing.T) {
 	g.Old = ""
 	if f, ok := parseGhostNote(garden.GhostProposal("p", g).Body); !ok || f.Was != "keine" {
 		t.Errorf("a note without an earlier description parsed as %+v %v", f, ok)
+	}
+}
+
+// A criterion note written before REQ-n was the form reads as well as a new one.
+func TestParseCriterionTitleReadsBothSpellingsOfTheRequest(t *testing.T) {
+	for title, want := range map[string][2]int64{
+		"[Gärtner] Erfüllt? REQ-457 Kriterium 6: Text": {457, 6},
+		"[Gärtner] Erfüllt? #457 Kriterium 6: Text":    {457, 6},
+		"[Gärtner] Erfüllt? REQ-12 Kriterium 1: a: b":  {12, 1},
+	} {
+		r, n, ok := parseCriterionTitle(title)
+		if !ok || r != want[0] || int64(n) != want[1] {
+			t.Errorf("%q read as %d %d %v", title, r, n, ok)
+		}
+	}
+	for _, title := range []string{"[Gärtner] Erfüllt? 457 Kriterium 6: x", "[Gärtner] Erfüllt? KN-457 Kriterium 6: x", "[Gärtner] Erfüllt? REQ-x Kriterium 6: x", "[Gärtner] Erfüllt? REQ-0 Kriterium 6: x", "[Gärtner] Erfüllt? REQ-4 Kriterium 0: x", "[Gärtner] Erfüllt? REQ-4 Kriterium 6"} {
+		if r, n, ok := parseCriterionTitle(title); ok {
+			t.Errorf("%q read as %d %d", title, r, n)
+		}
 	}
 }
