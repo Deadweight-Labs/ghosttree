@@ -186,7 +186,7 @@ loopback. Put it behind TLS or a private-network address before you connect a
 second machine.
 
 <!-- one-liner:start -->
-There is no hosted one-line installer yet. Build from source (Go 1.26.10 or
+There is no hosted one-line installer yet. Build from source (Go 1.26.11 or
 newer) or download the archive for your platform from the
 [releases page](https://github.com/Deadweight-Labs/ghosttree/releases) and
 unpack `ctx`. A server you run can hand out an installer for your other

@@ -195,7 +195,7 @@ func TestCardPerKind(t *testing.T) {
 	check("feature carried forward", b.FeatureCard(feat), "Feature", "version 3", repo+"/features/2", "next: none")
 	feat.State = feature.Retired
 	check("feature retired", b.FeatureCard(feat), "Feature", "retired", repo+"/features/2", "next: none")
-	check("knowledge", b.KnowledgeCard(store.Knowledge{ID: 4295, Title: "Wissen", Type: "decision", Status: "active", Scope: axes, Person: "robin"}), "Knowledge", "decision/active", repo+"/knowledge/4295", "#4295")
+	check("knowledge", b.KnowledgeCard(store.Knowledge{ID: 4295, Title: "Wissen", Type: "decision", Status: "active", Scope: axes, Person: "robin"}), "Knowledge", "decision/active", repo+"/knowledge/4295", "KN-4295")
 	check("document", b.DocumentCard(store.Document{Slug: "plan", Title: "Plan", Project: project, Status: "active", HeadRevision: 3}), "Document", "active r3", repo+"/docs/plan", "plan")
 	check("room", b.ThreadCard(store.Thread{ID: 12, Project: project, Title: "Frage", State: "open"}, 99), "Room", "open", repo+"/rooms/12#message-99", "thread 12")
 	check("session", b.SessionCard(store.Session{ID: 5, PublicID: "ab12", Title: "Sitzung", Harness: "claude-code", Scope: axes}), "Session", "claude-code", repo+"/sessions/ab12", "ab12")
@@ -225,6 +225,8 @@ func TestParseRef(t *testing.T) {
 		{"PKG-4", Ref{Kind: KindPackage, ID: 4}},
 		{"DEC-9", Ref{Kind: KindDecision, ID: 9}},
 		{"#4295", Ref{Kind: KindKnowledge, ID: 4295}},
+		{"KN-4295", Ref{Kind: KindKnowledge, ID: 4295}},
+		{"kn-4295", Ref{Kind: KindKnowledge, ID: 4295}},
 		{"REQ-603#2", Ref{Kind: KindCriterion, ID: 603, Num: 2}},
 		{"AC-603.2", Ref{Kind: KindCriterion, ID: 603, Num: 2}},
 		{"pr:155", Ref{Kind: KindPull, ID: 155}},
@@ -253,7 +255,7 @@ func TestParseRef(t *testing.T) {
 	if err != nil || p.Kind != KindPreset || p.Text != "pr-ergebnis" || len(p.Args) != 1 || p.Args[0] != "155" {
 		t.Errorf("preset: %+v %v", p, err)
 	}
-	for _, bad := range []string{"", "   ", "banane", "pr:", "pr:x", "commit:xyz", "#abc", "REQ-", "room:0", "preset:", "path:", "doc:", "doc:voiceapp/x", "doc:a/b/c/d/e", "doc:owner/repo/"} {
+	for _, bad := range []string{"", "   ", "banane", "pr:", "pr:x", "commit:xyz", "#abc", "KN-", "KN-x", "REQ-", "room:0", "preset:", "path:", "doc:", "doc:voiceapp/x", "doc:a/b/c/d/e", "doc:owner/repo/"} {
 		if got, err := ParseRef(bad); err == nil {
 			t.Errorf("ParseRef(%q) = %+v, want an error", bad, got)
 		}
@@ -333,6 +335,7 @@ func TestResolveEveryShortFormHasOneCanonicalURL(t *testing.T) {
 		"FEAT-2":                            repo + "/features/2",
 		"DEC-9":                             repo + "/decisions/9",
 		"#4295":                             repo + "/knowledge/4295",
+		"KN-4295":                           repo + "/knowledge/4295",
 		"PKG-1":                             repo + "/packages/1",
 		"room:7":                            repo + "/rooms/7",
 		"session:ab12":                      repo + "/sessions/ab12",

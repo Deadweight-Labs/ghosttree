@@ -19,6 +19,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/garden"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -637,7 +638,7 @@ func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gard
 			err := opts.State.SaveGardenCheck(project, store.GardenCheck{KnowledgeID: v.Entry.ID, CheckedAt: now().UTC().Format(time.RFC3339Nano),
 				Commit: head, EntryHash: garden.HashOf(v.Entry), Verdict: v.Kind})
 			if err != nil {
-				fmt.Fprintf(stdout, "could not remember the check of #%d: %v\n", v.Entry.ID, err)
+				fmt.Fprintf(stdout, "could not remember the check of %s: %v\n", knref.Format(v.Entry.ID), err)
 			}
 		}
 	}

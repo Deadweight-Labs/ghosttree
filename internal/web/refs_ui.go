@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -54,7 +55,30 @@ func (a *app) refsLookup(w http.ResponseWriter, r *http.Request) {
 		// None readable: an empty list, the same body for "unknown" and "not allowed".
 		list = []links.Info{}
 	}
+	l := a.langFor(r)
+	out := make([]refEntry, len(list))
+	for i, info := range list {
+		out[i] = refEntry{Info: info}
+		if info.Kind == links.KindPull && info.Gefunden {
+			// The script draws the pill of a pull request itself: the raw state picks
+			// its colour, the translated word goes on the card.
+			out[i].Status = info.Zustand
+			if st, ok := prStates[info.Zustand]; ok {
+				out[i].Zustand = l.msg(st.Key)
+			}
+			out[i].Label = l.msg("ref.kind.pull") + " #" + strconv.FormatInt(info.Nummer, 10)
+		}
+	}
 	_ = json.NewEncoder(w).Encode(struct {
-		Refs []links.Info `json:"refs"`
-	}{list})
+		Refs []refEntry `json:"refs"`
+	}{out})
+}
+
+// refEntry is an answer of /ui/refs. For a pull request it also says the state as
+// the store keeps it (open, merged, closed) and the kind and number as the page's
+// language writes them, so that ui-refs.js can draw the pill of pill.go.
+type refEntry struct {
+	links.Info
+	Status string `json:"status,omitempty"`
+	Label  string `json:"label,omitempty"`
 }

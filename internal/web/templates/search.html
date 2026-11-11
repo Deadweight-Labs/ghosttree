@@ -3,33 +3,36 @@
 {{if .Notice}}<div class="callout {{if eq .NoticeKind "err"}}is-danger{{else}}neu{{end}}" role="{{if eq .NoticeKind "err"}}alert{{else}}note{{end}}">{{mi "tri"}}<div>{{.Notice}}</div></div>{{end}}
 {{if .Preset}}<div class="pre-h"><span class="lb out">{{mi "filter"}}{{.PresetName}}</span>{{if .Lines}}<details class="pre-l"><summary class="muted">{{t "search.lines"}}</summary>{{range .Lines}}<code class="mono">{{.}}</code>{{end}}</details>{{end}}</div>{{end}}
 {{if .CanSave}}<details class="save-s"><summary class="gbtn sm">{{t "issues.save_search"}}</summary><form class="save-f" method="post" action="/ui/searches"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="project" value="{{.Project}}"><input type="hidden" name="q" value="{{.Q}}"><input type="hidden" name="back" value="/ui/search"><input class="gfield" name="name" maxlength="80" required placeholder="{{t "issues.save_name"}}" aria-label="{{t "issues.save_name"}}" autocomplete="off">{{template "uisavescope" .Scopes}}<button class="gbtn pri sm">{{t "issues.save_do"}}</button></form></details>{{end}}
-{{if .Groups}}<div class="slayout"><aside>
-<section class="box facets" aria-labelledby="kinds-h"><div class="box-h"><h2 class="t" id="kinds-h">{{t "search.kinds"}}</h2></div>
-<a class="frow{{if not .Kind}} on{{end}}" href="{{.AllHref}}">{{mi "list"}}<span class="nm">{{t "search.kind_all"}}</span><span class="counter">{{.AllCount}}</span></a>
-{{range .Groups}}{{template "searchkind" .}}{{end}}</section>
+{{if .Live}}{{template "searchlive" .}}
+{{else if or .Groups .Exact}}<div class="slayout"><aside>
+{{if .Groups}}<section class="box facets" aria-labelledby="kinds-h"><div class="box-h"><h2 class="t" id="kinds-h">{{t "search.kinds"}}</h2></div>
+<a class="frow{{if not .Kind}} on{{end}}" href="{{.AllHref}}" data-kind="">{{mi "list"}}<span class="nm">{{t "search.kind_all"}}</span><span class="counter">{{.AllCount}}</span></a>
+{{range .Groups}}{{template "searchkind" .}}{{end}}</section>{{end}}
 {{template "quickfilters" .}}
 </aside>
-<div class="box hits">{{range .Groups}}{{if or (not $.SearchV.Kind) (eq .Key $.SearchV.Kind)}}{{template "searchgroup" .}}{{end}}{{end}}</div></div>
-{{else if .Live}}{{template "searchlive" .}}
-{{else if .Searched}}<div class="slayout"><aside>{{template "quickfilters" .}}</aside><div class="box"><div class="box-empty"><span>{{if .Q}}{{t "search.none_for" .Q}}{{else}}{{t "search.none"}}{{end}}</span></div></div></div>
+<div><div class="box hits">{{template "searchexact" $.SearchV}}{{range .Groups}}{{if or (not $.SearchV.Kind) (eq .Key $.SearchV.Kind)}}{{template "searchgroup" .}}{{end}}{{end}}</div>{{template "searchsessions" .}}</div></div>
+{{else if .Searched}}<div class="slayout"><aside>{{template "quickfilters" .}}</aside><div><div class="box"><div class="box-empty"><span>{{if .Q}}{{t "search.none_for" .Q}}{{else}}{{t "search.none"}}{{end}}</span></div></div>{{template "searchsessions" .}}</div></div>
 {{else}}<div class="slayout"><aside>{{template "quickfilters" .}}</aside><div></div></div>{{end}}
 {{end}}</div>{{template "foot" .}}{{end}}
-{{define "searchkind"}}<a class="frow{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Mark}}<span class="nm">{{.Label}}</span><span class="counter">{{.Count}}</span></a>{{end}}
-{{define "searchgroup"}}{{$g := .}}<div class="box-h"><h2 class="t">{{.Label}}</h2><span class="sp"></span><span class="muted">{{.TotalLabel}}</span></div>
-{{range .Hits}}<div class="hit"><span class="hm">{{mi $g.Mark}}</span><div><div class="hl">{{if .RefN}}{{refPill .RefKind .RefN ""}}{{end}}<a class="ht rl" href="{{.Href}}">{{.Marked}}</a></div>{{if or .Lead .Date .Area}}<div class="hs">{{.Lead}}{{if .Date}}{{if .Lead}} · {{end}}<span class="hd" title="{{.Stamp}}">{{.Date}}</span>{{end}}{{if .Area}} <span class="chip ar">{{mi "folder"}}{{.Area}}</span>{{end}}</div>{{end}}{{if .SnipHTML}}<div class="hx">{{.SnipHTML}}</div>{{end}}</div></div>
-{{end}}{{if .More}}<a class="row morelink" href="{{.More}}">{{t "search.more_hits"}}</a>{{end}}{{end}}
+{{define "searchkind"}}<a class="frow{{if .On}} on{{end}}" href="{{.Href}}" data-kind="{{.Key}}">{{mi .Mark}}<span class="nm">{{.Label}}</span><span class="counter">{{.Count}}</span></a>{{end}}
+{{define "searchhit"}}<div class="hit{{if .Exact}} hit-exact{{end}}"{{if .Exact}} data-facet="{{.Facet}}"{{end}}><span class="hm">{{mi .Mark}}</span><div><div class="hl">{{if .RefN}}{{if eq .RefKind "pr"}}{{prPill .RefN "" .PRState}}{{else}}{{refPill .RefKind .RefN ""}}{{end}}{{end}}<a class="ht rl" href="{{.Href}}">{{.Marked}}</a></div>{{if or .Lead .Date .Area .Exact}}<div class="hs">{{.Lead}}{{if .Date}}{{if .Lead}} · {{end}}<span class="hd" title="{{.Stamp}}">{{.Date}}</span>{{end}}{{if .Area}} <span class="chip ar">{{mi "folder"}}{{.Area}}</span>{{end}}{{if .Exact}} <span class="chip-exact">{{t "search.exact"}}</span>{{end}}</div>{{end}}{{if .SnipHTML}}<div class="hx">{{.SnipHTML}}</div>{{end}}</div></div>{{end}}
+{{define "searchexact"}}{{if .Exact}}<div class="hg" data-exact>{{range .Exact}}{{template "searchhit" .}}{{end}}</div>{{end}}{{end}}
+{{define "searchgroup"}}{{$g := .}}<div class="hg" data-group="{{.Key}}" data-total="{{.Total}}"{{if .Capped}} data-capped{{end}} data-narrow="{{.Href}}"{{with .Full}} data-full="{{.}}"{{end}}><div class="box-h"><h2 class="t">{{.Label}}</h2><span class="sp"></span><span class="muted" data-count>{{.TotalLabel}}</span></div>
+{{range .Hits}}{{template "searchhit" .}}
+{{end}}{{if .More}}<a class="row morelink" href="{{.More}}">{{t "search.more_hits"}}</a>{{end}}</div>{{end}}
 {{define "searchlive"}}{{with .Live}}<noscript><meta http-equiv="refresh" content="0;url={{.Sync}}"></noscript>
-<div class="sprog" data-search-live="{{.Stream}}" data-sync="{{.Sync}}" data-total="{{.Total}}"><span class="bar" aria-hidden="true"><span></span></span><span class="tx" role="status" data-fmt="{{t "search.progress"}}"></span><button type="button" class="gbtn sm" data-search-stop>{{t "search.stop"}}</button></div>{{end}}
+<div class="sprog" data-search-live="{{.Stream}}" data-sync="{{.Sync}}" data-total="{{.Total}}" data-kind="{{.Kind}}" data-per="{{.PerGroup}}" data-page="{{.KindPage}}" data-step="{{.Step}}" data-cap="{{.Cap}}" data-more-hits="{{t "search.more_hits"}}"><span class="bar" aria-hidden="true"><span></span></span><span class="tx" role="status" data-fmt="{{t "search.progress"}}"></span><button type="button" class="gbtn sm" data-search-stop>{{t "search.stop"}}</button></div>{{end}}
 <div class="slayout"><aside>
 <section class="box facets" aria-labelledby="kinds-h" data-search-kinds hidden><div class="box-h"><h2 class="t" id="kinds-h">{{t "search.kinds"}}</h2></div>
-<a class="frow{{if not .Kind}} on{{end}}" href="{{.AllHref}}">{{mi "list"}}<span class="nm">{{t "search.kind_all"}}</span><span class="counter" data-search-all></span></a>
+<a class="frow{{if not .Kind}} on{{end}}" href="{{.AllHref}}" data-kind="">{{mi "list"}}<span class="nm">{{t "search.kind_all"}}</span><span class="counter" data-search-all></span></a>
 {{range .Live.Slots}}<template data-kind-side="{{.Key}}"></template>{{end}}</section>
 {{template "quickfilters" .}}
 </aside>
-<div><div class="box hits" data-search-hits hidden>{{range .Live.Slots}}{{if .Show}}<template data-kind-body="{{.Key}}"></template><template data-kind-retry="{{.Key}}"><div class="box-h"><h2 class="t">{{.Label}}</h2></div>
-<div class="hit"><span class="hm">{{mi .Mark}}</span><div><button type="button" class="gbtn sm" data-search-more="{{.Key}}">{{t "search.more"}}</button></div></div>
-</template>{{end}}{{end}}</div>
-<div class="box" data-search-none hidden><div class="box-empty"><span>{{t "search.none"}}</span></div></div></div></div>{{end}}
+<div><div class="box hits" data-search-hits hidden>{{template "searchexact" .}}{{range .Live.Slots}}<template data-kind-body="{{.Key}}"></template><template data-kind-retry="{{.Key}}"><div class="hg" data-group="{{.Key}}" data-retry><div class="box-h"><h2 class="t">{{.Label}}</h2></div>
+<div class="hit retry"><span class="hm">{{mi .Mark}}</span><div><button type="button" class="gbtn sm" data-search-more="{{.Key}}">{{t "search.more"}}</button></div></div></div>
+</template>{{end}}</div>
+<div class="box" data-search-none hidden><div class="box-empty"><span>{{t "search.none"}}</span></div></div>{{template "searchsessions" .}}</div></div>{{end}}
+{{define "searchsessions"}}{{if .SessionsHref}}<div class="box ses-more"><a class="sesl" href="{{.SessionsHref}}">{{t "search.in_sessions"}}</a></div>{{end}}{{end}}
 {{define "uisavescope"}}{{if gt (len .) 1}}<select class="gfield" name="scope" aria-label="{{t "search.scope.label"}}">{{range .}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}{{end}}
 {{define "quickfilters"}}<section class="box facets" aria-labelledby="qf-h"><div class="box-h"><h2 class="t" id="qf-h">{{t "search.quick"}}</h2></div>
 {{range .Quick}}{{if .Arg}}<form class="frow qf{{if .Current}} on{{end}}" method="get" action="/ui/search">{{mi "filter"}}<input type="hidden" name="preset" value="{{.Name}}">{{if .Project}}<input type="hidden" name="project" value="{{.Project}}">{{end}}<span class="nm">{{.Title}}</span><input class="gfield" name="{{.Arg}}" required maxlength="80" placeholder="{{.ArgLabel}}" aria-label="{{.Title}}" autocomplete="off"><button class="gbtn sm" aria-label="{{.Title}}">{{mi "search"}}</button></form>{{else}}<a class="frow{{if .Current}} on{{end}}" href="{{.Href}}">{{mi "filter"}}<span class="nm">{{.Title}}</span></a>{{end}}{{end}}

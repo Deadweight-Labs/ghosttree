@@ -23,7 +23,7 @@ func TestReportListsIdleRequestsWithoutAModelCall(t *testing.T) {
 	}
 	// A dry run: no session ran, and the list is there all the same.
 	out := reportOf(Result{DryRun: true, Agent: true, Idle: IdleRequests(facts, now, DefaultIdleDays), IdleDays: DefaultIdleDays})
-	for _, want := range []string{"## Liegengeblieben", "mindestens 30 Tagen", "- #12 Alter Auftrag: seit 75 Tagen, 3 offene Kriterien, Priorität hoch", "- #13 Mittel alt: seit 31 Tagen, 1 offene Kriterien",
+	for _, want := range []string{"## Liegengeblieben", "mindestens 30 Tagen", "- REQ-12 Alter Auftrag: seit 75 Tagen, 3 offene Kriterien, Priorität hoch", "- REQ-13 Mittel alt: seit 31 Tagen, 1 offene Kriterien",
 		"Arbeit in einer privaten Session eines anderen Kontos fehlt hier"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report lacks %q:\n%s", want, out)
@@ -32,7 +32,7 @@ func TestReportListsIdleRequestsWithoutAModelCall(t *testing.T) {
 	if strings.Contains(out, "Frisch") {
 		t.Error("a request with recent activity is listed")
 	}
-	if strings.Index(out, "#12") > strings.Index(out, "#13") {
+	if strings.Index(out, "REQ-12") > strings.Index(out, "REQ-13") {
 		t.Error("the longest idle is not first")
 	}
 	// Off: no section.
@@ -54,7 +54,7 @@ func TestReportShowsProofsAndProposedDescriptionsAsProposals(t *testing.T) {
 		Items: []ProofItem{{Kind: ProofCommit, Ref: "4584fb7a1c2d (#149)", Detail: "2026-10-19 feat: x (#149)"}}}
 	g := GhostProposalData{GhostPath: GhostPath{Path: "internal/store/x.go", State: GhostStale, Percent: 42}, Description: "Erste Zeile.\nZweite Zeile.", Reason: "umgeschrieben"}
 	out := reportOf(Result{Agent: true, Proofs: []Proof{proof}, GhostDescribed: []GhostProposalData{g}, GhostKept: []GhostPath{{Path: "cmd/ok.go"}}})
-	for _, want := range []string{"## Ledger: erfüllte Kriterien (Vorschläge)", "Geschlossen wird nichts", "- #457 Gärtner pflegt das Ledger, Kriterium 6:", "Beleg commit: 4584fb7a1c2d (#149)",
+	for _, want := range []string{"## Ledger: erfüllte Kriterien (Vorschläge)", "Geschlossen wird nichts", "- REQ-457 Gärtner pflegt das Ledger, Kriterium 6:", "Beleg commit: 4584fb7a1c2d (#149)",
 		"## Beschreibungen (Ghosts)", "- internal/store/x.go (veraltet (42 % der Zeilen seit der Beschreibung geändert))", "  > Erste Zeile.\n  > Zweite Zeile.", "stimmt noch", "cmd/ok.go"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report lacks %q:\n%s", want, out)

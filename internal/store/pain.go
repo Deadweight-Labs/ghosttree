@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
@@ -260,7 +261,7 @@ func (a *ProjectAccess) SetPainState(id int64, to, remaining string, ev pain.Evi
 // and is readable, and normalizes its spelling.
 func (a *ProjectAccess) checkEvidenceRef(project string, ev pain.Evidence) (string, error) {
 	bad := requestdomain.NewRuleError("evidence_invalid", "the evidence points at nothing you can see",
-		"name an existing request (REQ-n) or decision (#n) of this project", nil)
+		"name an existing request (REQ-n) or decision (KN-n) of this project", nil)
 	switch ev.Kind {
 	case "request":
 		n, ok := pain.ParseNumberRef(ev.Ref, "REQ-")
@@ -272,14 +273,14 @@ func (a *ProjectAccess) checkEvidenceRef(project string, ev pain.Evidence) (stri
 		}
 		return idRef("REQ-", n), nil
 	case "decision":
-		n, ok := pain.ParseNumberRef(ev.Ref, "")
+		n, ok := knref.Parse(ev.Ref)
 		if !ok {
 			return "", bad
 		}
 		if _, err := a.resolveLinkTarget(project, "knowledge", n); err != nil {
 			return "", bad
 		}
-		return idRef("#", n), nil
+		return knref.Format(n), nil
 	case "session":
 		if canon, ok := canonicalSessionRef(ev.Ref); ok {
 			return canon, nil

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -55,7 +56,8 @@ func parsePullQuery(q string) pullQuery {
 	for _, tok := range strings.Fields(q) {
 		key, val, ok := strings.Cut(tok, ":")
 		key = strings.ToLower(key)
-		if !ok || val == "" || !qualifierKey.MatchString(key) || strings.HasPrefix(val, "//") {
+		if _, isNumber := links.ParseNumber(tok); isNumber || !ok || val == "" || !qualifierKey.MatchString(key) || strings.HasPrefix(val, "//") {
+			// A number (#217, pr:217) is a word of the text: pullMatches reads it.
 			text = append(text, tok)
 			continue
 		}
@@ -99,7 +101,7 @@ func pullMatches(p store.PullSummary, text string, visible branchVisible) bool {
 	}
 	hay = strings.ToLower(hay)
 	for _, w := range strings.Fields(strings.ToLower(text)) {
-		if strings.TrimPrefix(w, "#") == strconv.FormatInt(p.Number, 10) {
+		if pullNumberWord(w, p.Number) {
 			continue
 		}
 		if !strings.Contains(hay, w) {
@@ -107,6 +109,15 @@ func pullMatches(p store.PullSummary, text string, visible branchVisible) bool {
 		}
 	}
 	return true
+}
+
+// pullNumberWord says whether the word is the number of the pull request: #217
+// or pr:217 as the search reads it (links.ParseNumber), or the plain number.
+func pullNumberWord(w string, number int64) bool {
+	if t, ok := links.ParseNumber(w); ok {
+		return t.N == number && t.Is(links.KindPull)
+	}
+	return w == strconv.FormatInt(number, 10)
 }
 
 type pullsView struct {

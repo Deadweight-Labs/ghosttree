@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
@@ -359,5 +360,39 @@ func TestFooterNamesTheCommands(t *testing.T) {
 	m.setMode(modeInbox)
 	if !strings.Contains(plainView(m), "ctrl+k Befehle") {
 		t.Fatal("inbox footer")
+	}
+}
+
+// #217 names no kind: the palette offers one entry for each kind it can mean, in
+// the order of links.HashKinds (the same the web search shows), and a number that
+// names a kind gets exactly one.
+func TestPaletteOffersEveryKindAHashNumberCanMean(t *testing.T) {
+	f := newFake()
+	m := ready(f, Options{}, 110, 40, darkBG)
+	m = runCmd(m, m.openPalette(), 0)
+	hints := func(input string) []string {
+		m2 := typeText(m, input)
+		var out []string
+		for _, it := range m2.palVisible() {
+			if strings.HasPrefix(it.id, "jump:ref:") {
+				out = append(out, it.hint)
+			}
+		}
+		return out
+	}
+	for input, want := range map[string][]string{
+		"#217":       {"ctx open REQ-217", "ctx open pr:217", "ctx open KN-217"},
+		"  #217  ":   {"ctx open REQ-217", "ctx open pr:217", "ctx open KN-217"},
+		"REQ-217":    {"ctx open REQ-217"},
+		"pr:217":     {"ctx open pr:217"},
+		"TASK-5":     {"ctx open TASK-5"},
+		"IDEA-3":     {"ctx open IDEA-3"},
+		"PAIN-9":     {"ctx open PAIN-9"},
+		"read me":    nil,
+		"REQ-217 ab": nil,
+	} {
+		if got := hints(input); !slices.Equal(got, want) {
+			t.Errorf("palette for %q offers %v, want %v", input, got, want)
+		}
 	}
 }

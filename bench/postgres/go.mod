@@ -1,6 +1,6 @@
 module github.com/Deadweight-Labs/ghosttree/bench/postgres
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/Deadweight-Labs/ghosttree v0.0.0

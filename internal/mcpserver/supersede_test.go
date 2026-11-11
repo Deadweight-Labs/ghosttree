@@ -28,7 +28,7 @@ func TestSupersedeAndRetireOverTheWire(t *testing.T) {
 	got, failed := remember("share location removed again", map[string]any{
 		"supersedes": []int64{old.ID}, "supersede_reason": "the share was removed",
 	})
-	if failed || !strings.Contains(got, fmt.Sprintf("superseded #%d", old.ID)) {
+	if failed || !strings.Contains(got, fmt.Sprintf("superseded KN-%d", old.ID)) {
 		t.Fatalf("remember with supersedes: %v %s", failed, got)
 	}
 	found, _ := callTool(t, session, "context_search", map[string]any{"query": "share location", "kind": "knowledge"})

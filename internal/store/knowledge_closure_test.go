@@ -31,7 +31,7 @@ func TestKnowledgeClosureNamesTheReasonOfASupersededOrRetiredEntry(t *testing.T)
 	}
 	if c := closure(old); c == nil || c.Kind != "superseded" || c.Reason != "the state changed" || c.SupersededBy != fresh || c.By != "robin" {
 		t.Errorf("superseded = %+v", c)
-	} else if got := c.Summary(); !strings.HasPrefix(got, "superseded by #") || !strings.HasSuffix(got, ": the state changed") {
+	} else if got := c.Summary(); !strings.HasPrefix(got, "superseded by KN-") || !strings.HasSuffix(got, ": the state changed") {
 		t.Errorf("summary = %q", got)
 	}
 	if c := closure(gone); c == nil || c.Kind != "retired" || c.Reason != "the thing was removed" {

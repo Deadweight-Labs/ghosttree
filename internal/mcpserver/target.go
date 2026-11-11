@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 )
 
 // targetHint is appended to the descriptions of the tools that write something
@@ -51,5 +53,5 @@ func (s *Server) handleMove(_ context.Context, _ *mcp.CallToolRequest, in MoveIn
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.withCard(textResult(fmt.Sprintf("moved #%d to %s", saved.ID, scopeLabel(saved.Scope))), s.builder().KnowledgeCard(saved)), nil, nil
+	return s.withCard(textResult(fmt.Sprintf("moved %s to %s", knref.Format(saved.ID), scopeLabel(saved.Scope))), s.builder().KnowledgeCard(saved)), nil, nil
 }

@@ -86,6 +86,10 @@ type embedShared struct {
 
 	queries queryVectors
 
+	// gate holds the places for searches (search_slots.go); it is here because
+	// this is what a store, its readers and its views share.
+	gate searchGate
+
 	logMu      sync.Mutex
 	lastLog    time.Time
 	suppressed int

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -136,28 +137,28 @@ func supersedeTx(tx *sql.Tx, newID int64, oldIDs []int64, reason string, actor R
 	var status, confidence string
 	var at scope.Axes
 	if err := tx.QueryRow(`SELECT status, confidence, project, branch, machine FROM knowledge WHERE id=?`, newID).Scan(&status, &confidence, &at.Project, &at.Branch, &at.Machine); err != nil {
-		return fmt.Errorf("%w: no entry #%d", ErrRelationInvalid, newID)
+		return fmt.Errorf("%w: no entry %s", ErrRelationInvalid, knref.Format(newID))
 	}
 	if !currentStatus(status) {
-		return fmt.Errorf("%w: #%d is %s and cannot supersede another entry", ErrNotCurrent, newID, status)
+		return fmt.Errorf("%w: %s is %s and cannot supersede another entry", ErrNotCurrent, knref.Format(newID), status)
 	}
 	if confidence != "trusted" && confidence != "verified" {
-		return fmt.Errorf("%w: #%d is %s", ErrNotDeliverable, newID, confidence)
+		return fmt.Errorf("%w: %s is %s", ErrNotDeliverable, knref.Format(newID), confidence)
 	}
 	ts := now()
 	for _, id := range olds {
 		var old scope.Axes
 		if err := tx.QueryRow(`SELECT status, project, branch, machine FROM knowledge WHERE id=?`, id).Scan(&status, &old.Project, &old.Branch, &old.Machine); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("%w: no entry #%d", ErrRelationInvalid, id)
+				return fmt.Errorf("%w: no entry %s", ErrRelationInvalid, knref.Format(id))
 			}
 			return err
 		}
 		if !currentStatus(status) {
-			return fmt.Errorf("%w: #%d is %s", ErrNotCurrent, id, status)
+			return fmt.Errorf("%w: %s is %s", ErrNotCurrent, knref.Format(id), status)
 		}
 		if !old.Same(at) {
-			return fmt.Errorf("%w: #%d is %s, the new entry is %s; move it first, then supersede", ErrScopeMismatch, id, old.Label(), at.Label())
+			return fmt.Errorf("%w: %s is %s, the new entry is %s; move it first, then supersede", ErrScopeMismatch, knref.Format(id), old.Label(), at.Label())
 		}
 		if _, err := addRelationTx(tx, RelationInput{FromID: newID, ToID: id, Kind: RelSupersedes, State: RelActive, Origin: origin, Reason: reason}, actor); err != nil {
 			return err
@@ -198,14 +199,14 @@ func (s *Store) RetireKnowledge(id int64, reason, by string) error {
 		return err
 	}
 	if !currentStatus(status) {
-		return fmt.Errorf("%w: #%d is %s", ErrNotCurrent, id, status)
+		return fmt.Errorf("%w: %s is %s", ErrNotCurrent, knref.Format(id), status)
 	}
 	var heads int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM knowledge WHERE superseded_by=?`, id).Scan(&heads); err != nil {
 		return err
 	}
 	if heads > 0 {
-		return fmt.Errorf("%w: retire those first, or supersede #%d again instead", ErrHasPredecessors, id)
+		return fmt.Errorf("%w: retire those first, or supersede %s again instead", ErrHasPredecessors, knref.Format(id))
 	}
 	ts := now()
 	if err := archiveKnowledgeTx(tx, id, by, ts); err != nil {
@@ -258,7 +259,7 @@ type KnowledgeClosure struct {
 func (c KnowledgeClosure) Summary() string {
 	what := "retired"
 	if c.Kind == "superseded" {
-		what = fmt.Sprintf("superseded by #%d", c.SupersededBy)
+		what = "superseded by " + knref.Format(c.SupersededBy)
 	}
 	who := c.By
 	if len(c.At) >= 10 {
