@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -143,6 +144,9 @@ type coordRoomDetailView struct {
 	Room         coordRoomView
 	Messages     []coordMessageView
 	Participants []coordParticipantView
+	// Here is who is here, for the list: people one by one, an agent once with
+	// its sessions beneath it (same owner, same tool, same machine).
+	Here []coordHereView
 	// ToDefault is the addressee the composer starts with: the sender of the
 	// message being answered, empty for the whole room.
 	ToDefault string
@@ -175,17 +179,26 @@ type coordRoomDetailView struct {
 	UnreachedNote string
 	// Draft is the text the composer starts with (a link may bring one).
 	Draft string
+	// UnreadFrom is the sequence of the first message the viewer had not read when the page was built.
+	UnreadFrom int64
+	// Stack is who is here for the avatars in the head: people first, then the agents.
+	Stack []coordHereView
 }
 
 type coordThreadView struct {
-	ID, AnchorMessageID                               int64
+	ID, AnchorMessageID, AnchorSequence               int64
 	Title, Question, State, URL, AnchorURL            string
 	Archived                                          bool
 	RequestID, RequestTitle, RequestState, RequestURL string
+	// StateText and StateTone are the state as words and as the colour of the pill.
+	StateText, StateTone string
 }
 
 type coordThreadDetailView struct {
 	coordThreadView
+	// Anchor is the message the thread was started from, loaded by itself so it
+	// stands at the top however old it is.
+	Anchor                                 *coordMessageView
 	Messages                               []coordMessageView
 	FirstSequence, LastSequence, HighWater int64
 	OlderURL, NewerURL                     string
@@ -241,6 +254,16 @@ type coordMessageView struct {
 	ThreadTitle, ThreadMeta string
 	Directive               *coordDirectiveView
 	Request                 *coordRequestView
+	// DOMID is the id of the list item: "message-N" in a room, "thread-message-N"
+	// in a thread. ThreadAnchor marks the message a thread was started from.
+	DOMID        string
+	ThreadAnchor bool
+	// NewFrom marks the first unread message: the divider "New" stands above it.
+	NewFrom bool
+	// WorkNoteTitle says that the work note is the agent's own word.
+	WorkNoteTitle string
+	// ExpiredText is "expired" for a message past its end.
+	ExpiredText string
 }
 
 // coordDirectiveView is a standing instruction shown as a pinned plate. Active
@@ -263,19 +286,46 @@ type coordRequestView struct {
 	State   string
 	Items   []coordAttentionView
 	Explain *explainView
+	// WithdrawLabel names the withdraw action in the language of the page.
+	WithdrawLabel string
 }
 
 type coordReplyView struct {
-	Sequence          int64
-	Author, Body, URL string
-	Missing           bool
-	Lang              lang
+	MessageID, Sequence int64
+	Author, Body, URL   string
+	Missing             bool
+	Lang                lang
 }
 
-// Head reads "Reply to #12 · Mia".
-func (r coordReplyView) Head() string {
-	l := r.Lang
-	return l.msg("coord.reply_to", r.Sequence) + " · " + r.Author
+// Name is who is quoted, short: an agent label "Claude _ ghosttree" or
+// "Claude · Robin · mainex" is "Claude".
+func (r coordReplyView) Name() string {
+	name := r.Author
+	for _, sep := range []string{" · ", " _ ", "@"} {
+		if i := strings.Index(name, sep); i > 0 {
+			name = name[:i]
+		}
+	}
+	return strings.TrimSpace(name)
+}
+
+// quoteMarkup is a link of Markdown, kept as its words in the one-line quote.
+var quoteMarkup = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
+
+// Snippet is the quoted text in one line, cut after a good length.
+func (r coordReplyView) Snippet() string {
+	text := quoteMarkup.ReplaceAllString(r.Body, "$1")
+	text = strings.NewReplacer("**", "", "__", "", "`", "", "~~", "").Replace(text)
+	text = strings.Join(strings.Fields(text), " ")
+	if len([]rune(text)) > 160 {
+		text = string([]rune(text)[:160]) + "…"
+	}
+	return text
+}
+
+// Title is the tooltip of the quote line: who is quoted ("Reply to <name>").
+func (r coordReplyView) Title() string {
+	return r.Lang.msg("coord.reply_to_name", r.Name())
 }
 
 type coordRefView struct {
@@ -339,6 +389,15 @@ type coordParticipantView struct {
 	AskURL string
 	// ReachKey and WorkKey are the raw store values; empty without evidence.
 	ReachKey, WorkKey string
+	// Person (the owner of an agent) and Machine tell sessions of the same agent apart from others.
+	Person, Machine string
+}
+
+// First is the name before the first separator of the label: the session or
+// agent name ("claude-build" of "claude-build · Robin · build-1").
+func (p coordParticipantView) First() string {
+	first, _, _ := strings.Cut(p.Label, " · ")
+	return first
 }
 
 // coordParticipantUnknown is the neutral value for a state nobody reported.
@@ -537,16 +596,28 @@ func coordThreadComposerURL(room string, threadID int64) string {
 	return strings.TrimSuffix(coordThreadURL(room, threadID), "#coord-thread") + "#coord-thread-body"
 }
 
-func buildCoordThreadViews(in []store.RoomThread) []coordThreadView {
+// coordThreadState names a thread state in words and gives the tone of its pill.
+func coordThreadState(l lang, state string) (text, tone string) {
+	switch state {
+	case "open":
+		return l.msg("coord.state.open"), "open"
+	case "resolved":
+		return l.msg("coord.state.resolved"), "done"
+	}
+	return l.msg("coord.state.deferred"), "gray"
+}
+
+func buildCoordThreadViews(l lang, in []store.RoomThread) []coordThreadView {
 	out := make([]coordThreadView, 0, len(in))
 	for _, item := range in {
 		view := coordThreadView{
 			ID: item.Thread.ID, AnchorMessageID: item.Home.AnchorMessageID,
 			Title: item.Thread.Title, Question: item.Thread.Question, State: item.Thread.State,
-			Archived: item.Thread.Archived, URL: coordThreadURL(item.Home.RoomKey, item.Thread.ID),
+			Archived: item.Thread.Archived, URL: coordThreadURL(item.Home.RoomKey, item.Thread.ID), AnchorSequence: item.AnchorSequence,
 			RequestID: item.RequestID, RequestTitle: item.RequestTitle, RequestState: item.RequestState,
 			RequestURL: "/ui/requests/" + strings.TrimPrefix(item.RequestID, "REQ-"),
 		}
+		view.StateText, view.StateTone = coordThreadState(l, item.Thread.State)
 		if item.AnchorSequence > 0 {
 			view.AnchorURL = coordRoomURL(item.Home.RoomKey, "around", item.AnchorSequence) + "#message-" + strconv.FormatInt(item.AnchorSequence, 10)
 		}
@@ -580,7 +651,7 @@ func coordRoomLabel(l lang, room store.CoordRoom, principalID string, labels map
 
 func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, roomKey string, labels map[string]string) []coordMessageView {
 	out := make([]coordMessageView, 0, len(messages))
-	previousAuthorID, previousAuthorKind, previousCard := "", "", false
+	previousAuthorID, previousAuthorKind, previousTo, previousCard := "", "", "", false
 	for _, presentation := range messages {
 		message := presentation.Message
 		author := strings.TrimSpace(presentation.AuthorLabel)
@@ -602,6 +673,7 @@ func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, r
 			Body: message.Body, Intent: message.Intent, Expired: message.Expired,
 			ReplyURL:   coordRoomReplyURL(roomKey, message.ID, message.Sequence),
 			ReplyCount: presentation.ReplyCount,
+			DOMID:      "message-" + strconv.FormatInt(message.Sequence, 10),
 			GroupStart: groupStart,
 			System:     message.AuthorKind == store.AuthorSystem,
 			Clock:      coordClock(l, message.CreatedAt),
@@ -622,15 +694,16 @@ func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, r
 		view.Initials = coordInitials(readableAuthor(l, author))
 		if message.AuthorKind == store.AuthorAgent {
 			view.WorkNote = strings.TrimSpace(message.SenderWorkNote)
+			view.WorkNoteTitle = l.msg("coord.self_reported")
 		}
 		for _, mention := range presentation.Mentions {
 			// The store names people the viewer may see in this room; the sender
 			// reads the name of whom he mentioned, not "Someone".
 			if name := strings.TrimSpace(presentation.MentionLabels[mention]); name != "" {
-				view.Mentions = append(view.Mentions, name)
+				view.Mentions = appendShortName(view.Mentions, name)
 				continue
 			}
-			view.Mentions = append(view.Mentions, coordIdentityLabel(l, mention, labels))
+			view.Mentions = appendShortName(view.Mentions, coordIdentityLabel(l, mention, labels))
 		}
 		view.MentionsText = coordJoinNames(l, view.Mentions)
 		switch {
@@ -638,12 +711,21 @@ func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, r
 			view.To = l.msg("coord.to_agents")
 		case len(view.Mentions) > 0:
 			view.To = l.msg("coord.to", view.MentionsText)
-		default:
-			view.To = l.msg("coord.to_all")
+		}
+		if message.Expired {
+			view.ExpiredText = l.msg("coord.expired")
+		}
+		// What one author writes to somebody else starts a new group: the addressee
+		// stands in the head of a group, so a continuation always has the same one.
+		if !view.GroupStart && view.To != previousTo {
+			view.GroupStart = true
+		}
+		if view.System {
+			view.Body = coordSystemText(l, message.Body)
 		}
 		view.PeerOnly = coordPeerOnly(message.AuthorKind, message.Intent, presentation.Mentions)
 		if presentation.Reply != nil {
-			view.Reply = &coordReplyView{Sequence: presentation.Reply.Sequence, Author: readableAuthor(l, presentation.Reply.Author), Body: presentation.Reply.Body, Missing: presentation.Reply.Missing, Lang: l}
+			view.Reply = &coordReplyView{MessageID: presentation.Reply.MessageID, Sequence: presentation.Reply.Sequence, Author: readableAuthor(l, presentation.Reply.Author), Body: presentation.Reply.Body, Missing: presentation.Reply.Missing, Lang: l}
 			if !view.Reply.Missing {
 				view.Reply.URL = coordRoomURL(roomKey, "around", view.Reply.Sequence) + "#message-" + strconv.FormatInt(view.Reply.Sequence, 10)
 			}
@@ -672,9 +754,36 @@ func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, r
 			view.Delivery = strings.Join(parts, " · ")
 		}
 		out = append(out, view)
-		previousAuthorID, previousAuthorKind, previousCard = authorID, message.AuthorKind, card
+		previousAuthorID, previousAuthorKind, previousTo, previousCard = authorID, message.AuthorKind, view.To, card
+	}
+	// A quote names the author as the message itself does.
+	shown := make(map[int64]string, len(out))
+	for _, view := range out {
+		shown[view.ID] = view.ShortName()
+	}
+	for i := range out {
+		if reply := out[i].Reply; reply != nil && !reply.Missing {
+			if name := shown[reply.MessageID]; name != "" {
+				reply.Author = name
+			}
+		}
 	}
 	return out
+}
+
+// appendShortName adds the name an addressee goes by in the head of a message:
+// an agent without its owner, machine and branch, each name once.
+func appendShortName(names []string, label string) []string {
+	if i := strings.Index(label, " · "); i > 0 {
+		label = label[:i]
+	}
+	label = strings.TrimSpace(label)
+	for _, n := range names {
+		if n == label {
+			return names
+		}
+	}
+	return append(names, label)
 }
 
 // markViewerMentions flags the messages that mention viewerID. views and
@@ -732,6 +841,7 @@ func parseCoordExpiry(raw, offset string, server *time.Location) (string, error)
 func buildCoordThreadMessageViews(l lang, messages []store.CoordMessagePresentation, room string, threadID int64, labels map[string]string) []coordMessageView {
 	out := buildCoordMessageViews(l, messages, "", labels)
 	for i := range out {
+		out[i].DOMID = "thread-message-" + strconv.FormatInt(out[i].Sequence, 10)
 		out[i].ReplyURL = coordThreadReplyURL(room, threadID, out[i].ID, out[i].Sequence)
 		if out[i].Reply != nil && !out[i].Reply.Missing {
 			out[i].Reply.URL = coordThreadMessageURL(room, threadID, out[i].Reply.Sequence)
@@ -927,6 +1037,7 @@ func buildCoordParticipants(l lang, room store.CoordRoom, peers []store.CoordAge
 			Worktree: peer.Worktree, LastSeen: peer.LastSeenAt, DisplayTimestamp: coordDisplayTimestamp(peer.LastSeenAt), Branch: peer.Branch,
 			Current: peer.ExternalID == current.ID, Reachability: coordParticipantUnknown, WorkState: coordParticipantUnknown,
 			Role: peer.Role, CanReview: peer.CanReview, WorkNote: peer.WorkNote,
+			Person: strings.TrimSpace(peer.Person), Machine: strings.TrimSpace(peer.Machine),
 		}
 		view := byID[peer.ExternalID]
 		pr := store.Presence{}
@@ -1273,7 +1384,11 @@ func decorateCoordParticipant(l lang, p *coordParticipantView) {
 // decorateCoordMessages adds what depends on the viewer and on the room: own
 // bubbles, directive plates, request cards with the open attention entries for
 // the very message, and the waiting time. views and pres are index-aligned.
-func decorateCoordMessages(l lang, views []coordMessageView, pres []store.CoordMessagePresentation, viewerID, roomKey, roomLabel string, standing []coordStandingView, attention []coordAttentionView, roleRoom bool, now time.Time) {
+func decorateCoordMessages(l lang, views []coordMessageView, pres []store.CoordMessagePresentation, viewerID, roomKey, roomLabel string, standing []coordStandingView, attention []coordAttentionView, roleRoom bool, now time.Time, threadID ...int64) {
+	var thread int64
+	if len(threadID) > 0 {
+		thread = threadID[0]
+	}
 	activeStanding := make(map[string]coordStandingView, len(standing))
 	for _, item := range standing {
 		activeStanding[item.MessageID] = item
@@ -1295,10 +1410,15 @@ func decorateCoordMessages(l lang, views []coordMessageView, pres []store.CoordM
 			views[i].Directive = &coordDirectiveView{Active: ok, CanEnd: ok && item.CanEnd, MessageID: id, RoomKey: roomKey, Scope: scope,
 				Request: roleRoom && views[i].SenderRole != "" && !coordCanDirect(views[i].SenderRole)}
 		case isAttentionIntent(message.Intent):
-			request := &coordRequestView{Title: coordRequestTitle(l, message.Intent, views[i].MentionsText)}
+			request := &coordRequestView{Title: coordRequestTitle(l, message.Intent, ""), WithdrawLabel: l.msg("coord.withdraw")}
 			seen := map[int64]bool{}
 			for _, item := range attention {
-				if item.Thread || item.RoomKey != roomKey || item.Sequence != message.Sequence || seen[item.ID] {
+				if thread > 0 {
+					// A question in a thread: the item points at this message of the thread.
+					if !item.Thread || item.URL != coordThreadMessageURL(roomKey, thread, message.Sequence) || seen[item.ID] {
+						continue
+					}
+				} else if item.Thread || item.RoomKey != roomKey || item.Sequence != message.Sequence || seen[item.ID] {
 					continue
 				}
 				seen[item.ID] = true
@@ -1336,13 +1456,19 @@ var coordClosedKeys = map[string]string{
 // applyRequestStates names how closed requests ended, from the viewer's own
 // attention entries for that message.
 func applyRequestStates(l lang, views []coordMessageView, pres []store.CoordMessagePresentation, roomKey string, items []store.AttentionItem, labels map[string]string) {
+	applyRequestStatesIn(l, views, pres, store.DestinationRoom, roomKey, items, labels)
+}
+
+// applyRequestStatesIn is applyRequestStates for any destination: a room, or the
+// discussion of a thread (kind DestinationDiscussion, id store.ThreadDestinationID).
+func applyRequestStatesIn(l lang, views []coordMessageView, pres []store.CoordMessagePresentation, kind, destination string, items []store.AttentionItem, labels map[string]string) {
 	for i := range views {
 		if i >= len(pres) || views[i].Request == nil || len(views[i].Request.Items) > 0 {
 			continue
 		}
 		var parts []string
 		for _, item := range items {
-			if item.State == store.AttentionOpen || item.DestinationKind != store.DestinationRoom || item.DestinationID != roomKey || item.Sequence != pres[i].Message.Sequence {
+			if item.State == store.AttentionOpen || item.DestinationKind != kind || item.DestinationID != destination || item.Sequence != pres[i].Message.Sequence {
 				continue
 			}
 			if key, ok := coordClosedKeys[item.Reason+"."+item.State]; ok {
@@ -1381,7 +1507,7 @@ var coordClientTextKeys = []string{
 	"coord.js.loading", "coord.js.load_failed", "coord.js.render_failed", "coord.js.updated", "coord.js.offline_page",
 	"coord.js.no_uploads", "coord.js.no_token", "coord.js.working", "coord.js.failed", "coord.js.done", "coord.js.offline_post",
 	"coord.js.live", "coord.js.refresh_failed", "coord.js.refresh_failed_announce", "coord.js.unsupported", "coord.js.resync",
-	"coord.js.session_ended", "coord.js.offline_retry", "coord.js.offline_retry_announce",
+	"coord.js.session_ended", "coord.js.offline_retry", "coord.js.offline_retry_announce", "coord.js.need_to", "coord.js.kept",
 }
 
 // coordClientTexts is the catalog slice the page script needs, as JSON for a

@@ -820,11 +820,11 @@ func TestCoordThreadContextReplacesDefaultInspector(t *testing.T) {
 	}
 
 	defaultPage := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	if !strings.Contains(defaultPage, `class="coord-context-default rdetails box"`) || strings.Contains(defaultPage, `class="coord-context-thread`) {
+	if !strings.Contains(defaultPage, `class="rctx box"`) || strings.Contains(defaultPage, `class="coord-context-thread`) {
 		t.Fatal("room view must render only the default inspector mode")
 	}
 	threadPage := coordPageBody(t, client, srv.URL+coordThreadURL(room, threadID))
-	if !strings.Contains(threadPage, `coord-thread-detail`) || strings.Contains(threadPage, `class="coord-context-default rdetails box"`) {
+	if !strings.Contains(threadPage, `coord-thread-detail`) || strings.Contains(threadPage, `class="rctx box"`) {
 		t.Fatal("selected thread must replace the default inspector mode")
 	}
 }
@@ -893,8 +893,8 @@ func TestCoordWorkspaceRendersAuthorizedIdentityLabelsAndHonestPresence(t *testi
 
 	html := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
 	for _, want := range []string{
-		"robin", "Build Agent", "Alex", "Handoff to Build Agent", "to Build Agent",
-		"<span>codex</span>", `title="Worktree: /worktrees/ui"`, "feat/ui",
+		"robin", "Build Agent", "Alex", ">Handoff<", "to Build Agent",
+		"Codex", `title="Worktree: /worktrees/ui"`, "feat/ui",
 		"Reachability: unknown (not observed)", "Work state: unknown (not observed)",
 	} {
 		if !strings.Contains(html, want) {
@@ -1112,7 +1112,7 @@ func TestHumanCanReplyInRoomAndThreadWithoutJavaScript(t *testing.T) {
 
 	page := coordPageBody(t, client, srv.URL+coordRoomURL(room, "", 0))
 	replyURL := coordRoomReplyURL(room, parentID, 1)
-	for _, want := range []string{`href="` + strings.ReplaceAll(replyURL, "&", "&amp;") + `"`, `>Reply</a>`} {
+	for _, want := range []string{`href="` + strings.ReplaceAll(replyURL, "&", "&amp;") + `"`, `<span>Reply</span></a>`} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("room reply control missing %q", want)
 		}
@@ -1133,7 +1133,7 @@ func TestHumanCanReplyInRoomAndThreadWithoutJavaScript(t *testing.T) {
 		t.Fatalf("room reply messages=%+v err=%v", roomMessages, err)
 	}
 	rendered := coordPageBody(t, client, srv.URL+coordRoomURL(room, "", 0))
-	if !strings.Contains(rendered, "Reply to #") || !strings.Contains(rendered, "Room parent") {
+	if !strings.Contains(rendered, `class="cm-quote"`) || !strings.Contains(rendered, "<span>Room parent</span>") {
 		t.Fatalf("room reply preview missing: %s", rendered)
 	}
 	res = authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
@@ -1576,8 +1576,9 @@ func TestCoordDirectRoomShowsPrivateSignalInHeadAndComposer(t *testing.T) {
 	}
 	composer := page[strings.Index(page, `class="coord-composer rm-compose"`):]
 	composer = composer[:strings.Index(composer, "</form>")]
-	if !strings.Contains(composer, `class="coord-private-hint"`) || !strings.Contains(composer, "bob") {
-		t.Errorf("composer lacks the private hint: %s", composer)
+	// A conversation of two has one addressee: no choice, no second statement of the privacy.
+	if strings.Contains(composer, `class="coord-private-hint"`) || strings.Contains(composer, "Everyone in the room") || !strings.Contains(composer, `type="hidden" name="mentions" value="`) {
+		t.Errorf("composer of a direct room: %s", composer)
 	}
 	other := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(project))
 	if strings.Contains(other, "Private, only you") || strings.Contains(other, `class="coord-private-hint"`) {

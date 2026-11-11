@@ -166,7 +166,7 @@ func TestGuestWebViewsShowTypedMentionsNotDeliveredOnes(t *testing.T) {
 	inPage, inOverview := build(true)
 	outPage, outOverview := build(false)
 	for name, page := range map[string]string{"room/in": inPage, "room/out": outPage} {
-		if !strings.Contains(page, "Asks Claude") {
+		if !strings.Contains(page, "to Claude") {
 			t.Errorf("%s: the guest does not read back what it typed", name)
 		}
 	}

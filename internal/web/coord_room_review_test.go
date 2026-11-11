@@ -167,11 +167,11 @@ func TestCoordRequestCardNamesTheSenderRoleAndKeepsItsStateAfterAnswering(t *tes
 	}
 	card := func() string {
 		page := e.page(t, e.alice)
-		start := strings.LastIndex(page[:strings.Index(page, "Roles first?")], `<article class="rm-msg is-ask">`)
+		start := strings.LastIndex(page[:strings.Index(page, "Roles first?")], `<article tabindex="-1" class="rm-msg is-ask">`)
 		return page[start : start+strings.Index(page[start:], "</article>")]
 	}
-	if c := card(); !roleLabelRE("member").MatchString(c) {
-		t.Errorf("request card lacks the sender role: %s", c)
+	if c := card(); !strings.Contains(c, `title="`+msg("role.member")) {
+		t.Errorf("request card lacks the sender role in the tooltip of the name: %s", c)
 	}
 	items, _ := e.aliceAcc.Attention()
 	if res := e.post(t, e.alice, "/ui/coord/attention/action", url.Values{"attention_id": {strconv.FormatInt(items[0].ID, 10)}, "action": {"answer"}}); res.StatusCode != http.StatusSeeOther {
@@ -227,5 +227,5 @@ func plateOf(t *testing.T, page, body string) string {
 
 // roleLabelRE matches the role label of a message, whose hover text explains it.
 func roleLabelRE(role string) *regexp.Regexp {
-	return regexp.MustCompile(`<span class="cm-role" title="[^"]+">` + msg("role."+role) + `</span>`)
+	return regexp.MustCompile(`<span (class="cm-role" )?title="[^"]+">` + msg("role."+role) + `</span>`)
 }
