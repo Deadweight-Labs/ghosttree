@@ -1012,7 +1012,7 @@ class ContainerStopTest(unittest.TestCase):
         path.write_text(f"""#!/bin/sh
 case "$1" in
   rm) exit {rm_exit} ;;
-  inspect) [ {inspect_exit} -eq 0 ] && echo abc; exit {inspect_exit} ;;
+  inspect) [ {inspect_exit} -eq 0 ] && echo abc; [ {inspect_exit} -eq 1 ] && echo "Error: No such object: x" >&2; exit {inspect_exit} ;;
 esac
 exit 0
 """)
@@ -1031,6 +1031,13 @@ exit 0
             box = sbx.ContainerSandbox(make_spec(), d, docker=self.fake_docker(d, 0, 1))
             box.started = True
             box.stop()
+
+    def test_an_inspect_failure_that_proves_nothing_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            box = sbx.ContainerSandbox(make_spec(), d, docker=self.fake_docker(d, 0, 2))
+            box.started = True
+            with self.assertRaises(sbx.IsolationError):
+                box.stop()
 
     def test_remove_containers_raises_when_rm_fails(self):
         with tempfile.TemporaryDirectory() as d:

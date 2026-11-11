@@ -466,8 +466,12 @@ class ContainerSandbox(Sandbox):
             # "the session instance has ended" nor "no concurrent writer before mounting" holds.
             gone = subprocess.run([self.docker, "inspect", "--format", "{{.Id}}", self.name], capture_output=True,
                                   text=True, stdin=subprocess.DEVNULL)
-            if gone.returncode == 0:
-                raise IsolationError(f"Container {self.name} ließ sich nicht entfernen: {r.stderr.strip()[:200]}")
+            # Fail closed: only docker's own "no such container" proves it is gone; any other
+            # failure of inspect (daemon unreachable, wrapper error) proves nothing.
+            proven_gone = gone.returncode != 0 and "no such" in (gone.stderr or "").lower()
+            if not proven_gone:
+                raise IsolationError(f"Container {self.name} ließ sich nicht entfernen: "
+                                     f"{(r.stderr or gone.stderr).strip()[:200]}")
         super().stop()
 
 
