@@ -232,8 +232,8 @@
 
 /* Profile as in the mock: a card at the left, agents and devices at the right */
 :is(.g2.pf) {
-  & .pgrid { display: grid; grid-template-columns: 256px minmax(0, 1fr); gap: 24px; align-items: start; }
-  & .pav .gav { width: 160px; height: 160px; font-size: 56px; border-radius: 50%; }
+  & .pgrid { display: grid; grid-template-columns: 296px minmax(0, 1fr); gap: 32px; align-items: start; }
+  & .pav .gav { width: 296px; height: 296px; font-size: 104px; border-radius: 50%; }
   & .pn { margin: 16px 0; font-size: 24px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; }
   & .pedit { margin-bottom: 16px; }
   & .pedit > summary { list-style: none; justify-content: center; cursor: pointer; }
@@ -248,6 +248,14 @@
   & .porgs .gav { width: 20px; height: 20px; border-radius: 4px; }
   & .porgs .gav .i { width: 12px; height: 12px; }
   & .devrow { display: flex; align-items: center; gap: 12px; padding: 12px 16px; text-align: left; }
+  & .trow { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; min-height: 49px; }
+  & .trow form { margin: 0; }
+  /* the switch is a button, so it works without scripts: a click posts the other state */
+  & button.tog { padding: 0; border: 0; background: none; color: var(--fg-default); font: inherit; font-size: 14px; font-weight: 500; }
+  & button.tog:disabled { cursor: default; opacity: .6; }
+  & button.tog[aria-checked="true"] .tr { background: var(--accent-emphasis); border-color: var(--accent-emphasis); }
+  & button.tog[aria-checked="true"] .tr::after { transform: translateX(16px); background: #fff; }
+  & button.tog:focus-visible .tr { outline: 2px solid var(--accent-emphasis); outline-offset: 2px; }
   & .pmain .sh2:not(:first-child) { margin-top: 24px; }
   & .pmain .sh2 { margin-bottom: 8px; }
 }

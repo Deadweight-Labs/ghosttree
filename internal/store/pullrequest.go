@@ -46,6 +46,9 @@ func ensurePullRequests(db *sql.DB) error {
 	if _, err := db.Exec(pullCommitSchema); err != nil {
 		return err
 	}
+	if _, err := db.Exec(commitMetaSchema); err != nil {
+		return err
+	}
 	return nil
 }
 
