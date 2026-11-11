@@ -43,6 +43,14 @@ func ensurePullRequests(db *sql.DB) error {
 	if err := ensureColumn(db, "git_pull_requests", "author", `TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("git_pull_requests.author: %w", err)
 	}
+	// head_sha: der neueste Commit des Head-Branches laut Webhook; an ihn hängt der
+	// Check-Run (lastenheft.go). Altzeilen bleiben leer, bis ein Ereignis ihn bringt.
+	if err := ensureColumn(db, "git_pull_requests", "head_sha", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("git_pull_requests.head_sha: %w", err)
+	}
+	if _, err := db.Exec(lastenheftSchema); err != nil {
+		return err
+	}
 	if _, err := db.Exec(pullCommitSchema); err != nil {
 		return err
 	}
@@ -69,6 +77,9 @@ type PullRequestChange struct {
 	Head, Base    string
 	DefaultBranch string
 	MergeSHA      string
+	// HeadSHA ist der neueste Commit des Head-Branches (Fremddaten, nur eine volle
+	// Hex-SHA gilt); an ihn hängt der Check-Run (lastenheft.go).
+	HeadSHA string
 	// Author ist der Login des PR-Autors (Fremddaten, wird geprüft).
 	Author string
 	// State: open, closed oder merged.
@@ -175,6 +186,10 @@ func (s *Store) RecordPullRequest(c PullRequestChange) (PullRequestResult, error
 	if gitanchor.ValidPrefix(gitanchor.Normalize(c.MergeSHA)) {
 		mergeSHA = gitanchor.Normalize(c.MergeSHA)
 	}
+	headSHA := ""
+	if h := gitanchor.Normalize(c.HeadSHA); (len(h) == 40 || len(h) == 64) && gitanchor.ValidPrefix(h) {
+		headSHA = h
+	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -219,9 +234,10 @@ func (s *Store) RecordPullRequest(c PullRequestChange) (PullRequestResult, error
 		mergedAt = ts
 	}
 	author := cleanLogin(c.Author)
-	if _, err := tx.Exec(`INSERT INTO git_pull_requests(project,number,title,state,head_ref,base_ref,default_branch,merge_sha,opened_at,updated_at,merged_at,author)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+	if _, err := tx.Exec(`INSERT INTO git_pull_requests(project,number,title,state,head_ref,base_ref,default_branch,merge_sha,opened_at,updated_at,merged_at,author,head_sha)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(project,number) DO UPDATE SET
+			head_sha=CASE WHEN excluded.head_sha!='' THEN excluded.head_sha ELSE git_pull_requests.head_sha END,
 			author=CASE WHEN excluded.author!='' THEN excluded.author ELSE git_pull_requests.author END,
 			title=CASE WHEN excluded.title!='' THEN excluded.title ELSE git_pull_requests.title END,
 			state=excluded.state, head_ref=excluded.head_ref, base_ref=excluded.base_ref,
@@ -229,7 +245,7 @@ func (s *Store) RecordPullRequest(c PullRequestChange) (PullRequestResult, error
 			merge_sha=CASE WHEN excluded.merge_sha!='' THEN excluded.merge_sha ELSE git_pull_requests.merge_sha END,
 			updated_at=excluded.updated_at,
 			merged_at=CASE WHEN git_pull_requests.merged_at!='' THEN git_pull_requests.merged_at ELSE excluded.merged_at END`,
-		remote, c.Number, title, state, head, base, defaultBranch, mergeSHA, ts, ts, mergedAt, author); err != nil {
+		remote, c.Number, title, state, head, base, defaultBranch, mergeSHA, ts, ts, mergedAt, author, headSHA); err != nil {
 		return res, err
 	}
 	if prevState == "merged" {

@@ -333,3 +333,60 @@ func TestCommitCIFallsBackToChecksAloneAndNamesAMissingRight(t *testing.T) {
 		t.Fatalf("no checks right: %v", err)
 	}
 }
+
+// PublishCheckRun schreibt mit dem Recht „Checks: write“ und nur damit; fehlt es,
+// kommt ErrPermissionMissing, und nichts wird gesendet.
+func TestPublishCheckRunNeedsTheWriteRightAndSaysWhenItIsMissing(t *testing.T) {
+	f := newFakeDetails(t)
+	var posted []map[string]any
+	f.srv.Config.Handler.(*http.ServeMux).HandleFunc("POST /repos/{o}/{r}/check-runs", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		posted = append(posted, body)
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":1}`))
+	})
+	run := CheckRun{Name: "ghosttree Lastenheft", Title: "2 of 3 criteria met", Summary: "- REQ-1", Conclusion: CheckFailure, DetailsURL: "https://example.test/p/1"}
+	if err := f.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run); err != nil {
+		t.Fatalf("with the right: %v", err)
+	}
+	if len(posted) != 1 || posted[0]["head_sha"] != detailSHA || posted[0]["conclusion"] != "failure" || posted[0]["status"] != "completed" {
+		t.Fatalf("posted: %+v", posted)
+	}
+	if out, _ := posted[0]["output"].(map[string]any); out["title"] != "2 of 3 criteria met" {
+		t.Errorf("output: %+v", posted[0]["output"])
+	}
+	if len(f.tokenReq) != 1 || f.tokenReq[0] != "checks" {
+		t.Errorf("the token asks for the checks right only: %v", f.tokenReq)
+	}
+
+	// Ohne das Recht: GitHub verweigert das Token, nichts geht hinaus.
+	posted = nil
+	f2 := newFakeDetails(t)
+	f2.refuse["checks"] = http.StatusUnprocessableEntity
+	f2.srv.Config.Handler.(*http.ServeMux).HandleFunc("POST /repos/{o}/{r}/check-runs", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("a check run was sent without the right")
+	})
+	if err := f2.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run); !errors.Is(err, ErrPermissionMissing) {
+		t.Fatalf("without the right: %v", err)
+	}
+	// Ein Token, das GitHub gibt, dessen Check-Run-Aufruf aber 403 bekommt, heißt dasselbe.
+	f3 := newFakeDetails(t)
+	f3.srv.Config.Handler.(*http.ServeMux).HandleFunc("POST /repos/{o}/{r}/check-runs", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Resource not accessible by integration", http.StatusForbidden)
+	})
+	if err := f3.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, run); !errors.Is(err, ErrPermissionMissing) {
+		t.Fatalf("forbidden: %v", err)
+	}
+	// Ungültige Eingaben gehen gar nicht erst hinaus.
+	for _, bad := range []CheckRun{{Name: "x", Conclusion: "maybe"}} {
+		if err := f.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", detailSHA, bad); err == nil {
+			t.Errorf("%+v was accepted", bad)
+		}
+	}
+	if err := f.app().PublishCheckRun(context.Background(), 5, "github.com/a/b", "nothex", run); err == nil {
+		t.Error("a sha that is not hexadecimal was accepted")
+	}
+}

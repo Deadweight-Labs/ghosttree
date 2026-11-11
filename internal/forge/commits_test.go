@@ -193,3 +193,12 @@ func TestPullEventCarriesTheAuthor(t *testing.T) {
 		t.Fatalf("event: %+v ok=%v", ev, ok)
 	}
 }
+
+func TestPullEventCarriesTheHeadCommit(t *testing.T) {
+	body := []byte(`{"action":"synchronize","number":7,"installation":{"id":5},"repository":{"full_name":"Deadweight-Labs/GT","default_branch":"main"},
+		"pull_request":{"number":7,"title":"x","state":"open","user":{"login":"mia-gh"},"head":{"ref":"feat/x","sha":"` + detailSHA + `","repo":{"full_name":"Deadweight-Labs/GT"}},"base":{"ref":"main"}}}`)
+	ev, ok := ParsePullEvent("pull_request", body)
+	if !ok || ev.HeadSHA != detailSHA {
+		t.Fatalf("event: %+v ok=%v", ev, ok)
+	}
+}

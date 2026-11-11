@@ -470,7 +470,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 		root.Handle("/api/github/webhook", ghApp.WebhookHandlerWithRenames(func(installationID int64, add, remove []string) error {
 			_, err := st.SyncInstallationRepos(installationID, add, remove)
 			return err
-		}, pullWebhook(st, ghApp, func(err error) { logger.Error("github_pull_commits", "error", err.Error()) }), func(installationID int64, from, to string) error {
+		}, lastenheftWebhook(st, ghApp, cfg.PublicURL, logger), func(installationID int64, from, to string) error {
 			_, err := st.RenameInstallationRepo(installationID, from, to)
 			return err
 		}, func(err error) { logger.Error("github_webhook", "error", err.Error()) }))
@@ -554,4 +554,14 @@ func proxyConfigWarning(cfg serveConfig) string {
 		return ""
 	}
 	return envPublicURL + " is set but " + envTrustedProxies + " is empty: behind a reverse proxy every client shares the proxy address, so the per-address limits (join page, device logins) apply to all clients together"
+}
+
+// lastenheftWebhook ist der Empfänger der pull_request-Ereignisse mit dem Check-Run
+// „Lastenheft“ (lastenheft.go). Dazu läuft eine Schleife, die geänderten Stand
+// nachträgt, solange der Prozess lebt.
+func lastenheftWebhook(st *store.Store, ghApp *forge.GitHubApp, publicURL string, logger *slog.Logger) forge.PullSync {
+	lh := newLastenheftPublisher(st, ghApp, publicURL, func(err error) { logger.Error("github_check_run", "error", err.Error()) })
+	go lh.loop(context.Background(), lastenheftSweepEvery)
+	hook, _ := pullWebhookWith(st, ghApp, lh, func(err error) { logger.Error("github_pull_commits", "error", err.Error()) })
+	return hook
 }
