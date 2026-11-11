@@ -66,6 +66,10 @@
   & .dmeta b, & .dmeta .person { color: var(--fg-default); font-weight: 600; }
   & .dgrid { display: grid; grid-template-columns: minmax(0, 1fr) 256px; gap: 24px; align-items: start; }
   & .dmain, & .side { min-width: 0; }
+  /* What stands below the timeline of a page (pictures, workshop, a closing note) is set in like the
+     boxes of the timeline: avatar column (40 px) plus its gap (16 px), the same space between all of them.
+     The composer is already in this column. On the phone the timeline has no avatar column. */
+  & .dmain > .tlx ~ :is(.box, .callout) { margin: 0 0 16px 56px; }
   /* A page without facts does not keep the column: no aside, or one with nothing in it */
   & .dgrid:not(:has(> .side *)) { grid-template-columns: minmax(0, 1fr); }
   & .side:not(:has(*)) { display: none; }
@@ -163,4 +167,8 @@
     & .lh .tab { min-height: 44px; }
     & .ntools .seg { width: 100%; }
   }
+}
+
+@media (max-width: 767px) {
+  :is(.g2) .dmain > .tlx ~ :is(.box, .callout) { margin-left: 0; }
 }

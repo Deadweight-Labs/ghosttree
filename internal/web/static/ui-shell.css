@@ -54,7 +54,9 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
    carries the breadcrumb). */
 .rband { background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); font: 14px/1.5 var(--ui-font); color: var(--fg-default); }
 .rband.slim { padding-top: 8px; }
-.rband .wrap { display: flex; align-items: flex-end; gap: 16px; }
+/* The band runs the full width of the header: its first tab (and the owner line of an organisation) stands on
+   the same edge as the logo, not on the narrower content column below. */
+.rband .wrap { display: flex; align-items: flex-end; gap: 16px; max-width: none; margin: 0; }
 /* The row stands in a box. The nav inside is 12 px wider on each side (padding and
    negative margin cancel out) and 1 px taller at the bottom, so that the folder card
    of the open tab, its side shadow and its cover over the band line stay inside the
