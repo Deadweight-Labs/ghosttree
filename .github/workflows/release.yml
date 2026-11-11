@@ -36,11 +36,24 @@ jobs:
           else
             git branch -r --contains HEAD | sed 's/^[* ]*//' | grep -Fxq "origin/main"
           fi
-      - name: Test with race detector (all packages except store)
-        run: go test -race -count=1 -timeout 55m $(go list ./... | grep -v '/internal/store$')
+      # Same tests as the push run in ci.yml, one after the other. The test
+      # databases live in RAM: on the runner's disk every migration commit waits
+      # for fsync (see ci.yml).
+      - name: Test web with race detector
+        env:
+          TMPDIR: /dev/shm
+        run: go test -race -count=1 -timeout 35m ./internal/web/
+      - name: Test with race detector (all packages except store and web)
+        env:
+          TMPDIR: /dev/shm
+        run: go test -race -count=1 -timeout 30m $(go list ./... | grep -v -e '/internal/store$' -e '/internal/web$')
       - name: Test store
-        run: go test -count=1 -timeout 15m ./internal/store/
+        env:
+          TMPDIR: /dev/shm
+        run: go test -count=1 -timeout 20m ./internal/store/
       - name: Test store concurrency with race detector
+        env:
+          TMPDIR: /dev/shm
         run: go test -race -count=1 -timeout 30m -run 'Concurren|Race|Racing|Contend|Admission|Writer|Pool|Runtime|Crash|Drain|Queue|AtomicAndStable' ./internal/store/
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
