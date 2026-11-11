@@ -173,6 +173,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.registerPackageRoutes(mux)
 	a.registerPullRoutes(mux)
 	a.registerCommitRoutes(mux)
+	a.registerSessionGitRoutes(mux)
 	a.registerRefRoutes(mux)
 	a.registerCommentRoutes(mux)
 	a.registerReactionRoutes(mux)
