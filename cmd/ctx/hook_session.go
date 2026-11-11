@@ -60,18 +60,19 @@ func sessionLogDir(sessionID string) (string, error) {
 	return filepath.Join(root, "ghosttree", "session-log", hex.EncodeToString(sum[:12])), nil
 }
 
-func appendLine(path, line string, limit int64) {
+func appendLine(path, line string, limit int64) bool {
 	if limit > 0 {
 		if info, err := os.Stat(path); err == nil && info.Size() >= limit {
-			return
+			return false
 		}
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		return
+		return false
 	}
 	defer f.Close()
-	_, _ = f.WriteString(line + "\n")
+	_, err = f.WriteString(line + "\n")
+	return err == nil
 }
 
 // hookToolCall is the part of a PostToolUse payload the session log reads.

@@ -18,6 +18,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/deliverylog"
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
 	"github.com/Deadweight-Labs/ghosttree/internal/hookbudget"
 	"github.com/Deadweight-Labs/ghosttree/internal/hookstate"
@@ -96,6 +97,8 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 	}
 	var identity struct {
 		SessionID string `json:"session_id"`
+		// AgentID is set when the hook runs for a subagent of the session.
+		AgentID string `json:"agent_id"`
 	}
 	raw, err := io.ReadAll(io.LimitReader(stdin, (4<<20)+1))
 	attempted := false
@@ -132,18 +135,31 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 				registerHookSession(raw, *harness, eventArg == "session-start" || eventArg == "user-prompt-submit", event)
 			}
 		}()
+		// What the render functions deliver is written down as it is built, to
+		// be logged once the budget has decided how much of it goes out.
+		trace, endTrace := beginTrace()
 		text := render(bytes.NewReader(raw))
+		defer endTrace()
 		coord = <-coordDone
 		<-registerDone
 		// Nothing to say is the usual answer before a tool call, and blank
 		// lines say nothing either. Neither is delivered: a delivery takes the
 		// budget lock, writes the receipt and counts against the session.
 		if strings.TrimSpace(text) != "" {
+			emitted := ""
 			_ = hookbudget.Deliver(identity.SessionID, text, func(bounded string) error {
 				out.HookSpecificOutput.AdditionalContext = joinHookContext(bounded, coord)
 				attempted = true
-				return json.NewEncoder(stdout).Encode(out)
+				err := json.NewEncoder(stdout).Encode(out)
+				if err == nil {
+					emitted = bounded
+				}
+				return err
 			})
+			logDelivery(trace, identity.SessionID, *harness, deliveryRoute(eventArg), identity.AgentID != "", emitted)
+		}
+		if eventArg != "pre-tool-use" {
+			noteSessionSignals(identity.SessionID, *harness, trace.project)
 		}
 	}
 	if !attempted {
@@ -151,6 +167,18 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 		json.NewEncoder(stdout).Encode(out)
 	}
 	return 0
+}
+
+// deliveryRoute is the route a hook event delivers by, which is the route of
+// the text around the parts the log can name.
+func deliveryRoute(event string) string {
+	switch event {
+	case "session-start":
+		return deliverylog.ViaBootstrap
+	case "user-prompt-submit":
+		return deliverylog.ViaRelevance
+	}
+	return deliverylog.ViaPath
 }
 
 func joinHookContext(memory, coord string) string {
@@ -205,16 +233,20 @@ func relevantContext(stdin io.Reader) string {
 	gitCtx := collector.ResolveGitContext(cwd)
 	// Die Abläufe laufen daneben: ein Stichwort im Prompt ("ausrollen") liefert den
 	// passenden Ablauf, über denselben Weg und dasselbe Budget wie das Wissen.
-	runbooks := make(chan string, 1)
+	runbooks := make(chan client.Delivered, 1)
 	go func() {
 		runbooks <- triggeredRunbooks(cfg, gitCtx, in.SessionID, runbookTrigger{prompt: in.Prompt})
 	}()
-	md, err := client.NewWithTimeout(cfg, relevanceTimeout).Relevant(in.Prompt,
+	traceProject(gitCtx.Project)
+	md, err := client.NewWithTimeout(cfg, relevanceTimeout).RelevantDelivered(in.Prompt,
 		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Lineage: gitCtx.Lineage, Machine: cfg.Machine}, 0, in.SessionID)
 	if err != nil {
-		md = ""
+		md = client.Delivered{}
 	}
-	return joinHookContext(md, <-runbooks)
+	rb := <-runbooks
+	traceParts(md.Parts...)
+	traceParts(rb.Parts...)
+	return joinHookContext(md.Text, rb.Text)
 }
 
 // runbookTrigger ist, woran die Auslöser der Abläufe geprüft werden: ein Prompt,
@@ -229,16 +261,16 @@ type runbookTrigger struct {
 // passen (REQ-604). Wie die anderen Hook-Abfragen: kurzer Timeout, Schweigen im
 // Zweifel, nie ein Fehler nach außen. Der Server liefert jeden Ablauf höchstens
 // einmal je Session und höchstens zwei je Aufruf.
-func triggeredRunbooks(cfg config.Config, gitCtx collector.GitContext, session string, t runbookTrigger) string {
+func triggeredRunbooks(cfg config.Config, gitCtx collector.GitContext, session string, t runbookTrigger) client.Delivered {
 	if t.prompt == "" && t.command == "" && len(t.paths) == 0 {
-		return ""
+		return client.Delivered{}
 	}
-	md, err := client.NewWithTimeout(cfg, relevanceTimeout).TriggeredRunbooks(client.RunbookTrigger{
+	md, err := client.NewWithTimeout(cfg, relevanceTimeout).TriggeredRunbooksDelivered(client.RunbookTrigger{
 		Prompt: t.prompt, Command: t.command, Paths: t.paths, RepoPath: gitCtx.RepoPath,
 		Session: session, Project: gitCtx.Project, Machine: cfg.Machine,
 	})
 	if err != nil {
-		return ""
+		return client.Delivered{}
 	}
 	return md
 }
@@ -274,12 +306,14 @@ func bootstrapContext(stdin io.Reader) string {
 		cwd, _ = os.Getwd()
 	}
 	gitCtx := collector.ResolveGitContext(cwd)
-	md, err := client.New(cfg).Bootstrap(
+	traceProject(gitCtx.Project)
+	md, err := client.New(cfg).BootstrapDelivered(
 		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Lineage: gitCtx.Lineage, Machine: cfg.Machine},
 		activation.Context{RepoPath: gitCtx.RepoPath}, 0, in.SessionID)
 	if err != nil {
 		return ""
 	}
+	traceParts(md.Parts...)
 	// Einmal je Session, damit ein Agent den Baum aktuell vorfindet, auch wenn
 	// die letzte Beschreibung auf einer anderen Maschine entstand, und ebenso
 	// Wissen, Dokumente und den Ledger: wer nachsehen will, soll nicht erst ein
@@ -287,7 +321,7 @@ func bootstrapContext(stdin io.Reader) string {
 	// ist das der einzige Kanal, der überhaupt trägt. Die Session wartet darauf
 	// nur, wo es noch nichts zu lesen gibt (hook_projection.go).
 	refreshProjection(cfg, gitCtx)
-	return md
+	return md.Text
 }
 
 // writingTools sind die Werkzeuge, bei denen der Agent ohnehin gerade den Urge
@@ -332,22 +366,26 @@ func ghostContext(stdin io.Reader) string {
 	// Gefragt wird der Server nur, wenn ein Auslöser zu Befehl oder Pfad passt
 	// (hook_runbooks.go): die allermeisten Aufrufe lösen keinen Ablauf aus.
 	trigger := runbookTrigger{command: toolCommand(in.ToolInput), paths: targets}
-	runbooks := make(chan string, 1)
+	runbooks := make(chan client.Delivered, 1)
 	go func() {
 		if !toolMayTriggerRunbook(cfg, gitCtx, trigger) {
-			runbooks <- ""
+			runbooks <- client.Delivered{}
 			return
 		}
 		runbooks <- triggeredRunbooks(cfg, gitCtx, in.SessionID, trigger)
 	}()
-	return joinHookContext(ghostContextFor(cfg, gitCtx, in.SessionID, in.ToolName, targets), <-runbooks)
+	traceProject(gitCtx.Project)
+	ghosts := ghostContextFor(cfg, gitCtx, in.SessionID, in.ToolName, targets)
+	rb := <-runbooks
+	traceParts(rb.Parts...)
+	return joinHookContext(ghosts, rb.Text)
 }
 
 func ghostContextFor(cfg config.Config, gitCtx collector.GitContext, sessionID, toolName string, targets []string) string {
 	if len(targets) == 0 {
 		return ""
 	}
-	contexts := make([]string, len(targets))
+	contexts := make([]pathDelivery, len(targets))
 	var wg sync.WaitGroup
 	for i, target := range targets {
 		wg.Add(1)
@@ -359,13 +397,20 @@ func ghostContextFor(cfg config.Config, gitCtx collector.GitContext, sessionID, 
 	wg.Wait()
 	// Only what was said: a path nothing is known about must not leave an
 	// empty line that is then delivered as context.
-	said := contexts[:0]
+	var said []string
 	for _, c := range contexts {
-		if strings.TrimSpace(c) != "" {
-			said = append(said, c)
+		if strings.TrimSpace(c.text) != "" {
+			said = append(said, c.text)
+			traceParts(c.parts...)
 		}
 	}
 	return strings.Join(said, "\n")
+}
+
+// pathDelivery is what the hook says about one path, and the parts it is made of.
+type pathDelivery struct {
+	text  string
+	parts []deliverylog.Part
 }
 
 func toolPaths(raw json.RawMessage, cwd, root string) []string {
@@ -612,7 +657,7 @@ func repositoryRelativePath(target, cwd, root string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
-func ghostContextForPath(cfg config.Config, gitCtx collector.GitContext, sessionID, toolName, target string) string {
+func ghostContextForPath(cfg config.Config, gitCtx collector.GitContext, sessionID, toolName, target string) pathDelivery {
 	abs := target
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(gitCtx.Root, target)
@@ -620,11 +665,11 @@ func ghostContextForPath(cfg config.Config, gitCtx collector.GitContext, session
 	rel, err := filepath.Rel(gitCtx.Root, abs)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		// Ausserhalb des Repos: nicht unser Baum.
-		return ""
+		return pathDelivery{}
 	}
 	rel = filepath.ToSlash(rel)
 	if rel == ".ghosttree" || strings.HasPrefix(rel, ".ghosttree/") {
-		return ""
+		return pathDelivery{}
 	}
 
 	// Gehasht wird für die Frische. Der Blob reiste hier einmal zum Server mit,
@@ -637,12 +682,12 @@ func ghostContextForPath(cfg config.Config, gitCtx collector.GitContext, session
 	sessionKey := "claude:" + sessionID
 	// Die Features des Bereichs (REQ-612) laufen parallel zu den Beschreibungen,
 	// damit der Hook keinen zweiten Umlauf nacheinander wartet.
-	features := make(chan string, 1)
-	go func() { features <- featureContextForPath(cfg, gitCtx, sessionKey, rel) }()
+	features := make(chan pathDelivery, 1)
+	go func() { features <- featureDeliveryForPath(cfg, gitCtx, sessionKey, rel) }()
 	entries, err := client.NewWithTimeout(cfg, relevanceTimeout).
 		GhostsForPathAt(gitCtx.Project, rel, sessionKey, scope.Axes{Branch: gitCtx.Branch, Lineage: gitCtx.Lineage})
 	if err != nil {
-		return ""
+		return pathDelivery{}
 	}
 
 	// Auch die Vorfahren werden bewertet, nicht nur der angefasste Pfad. Sie
@@ -707,21 +752,29 @@ func ghostContextForPath(cfg config.Config, gitCtx collector.GitContext, session
 			priorVersions = n
 		}
 	}
-	return renderGhostDelivery(entries, fresh, writingTools[toolName], describedTarget, rel, priorVersions) + <-features
+	text, parts := renderGhostDeliveryParts(entries, fresh, writingTools[toolName], describedTarget, rel, priorVersions)
+	feat := <-features
+	return pathDelivery{text: text + feat.text, parts: append(parts, feat.parts...)}
 }
 
 // featureContextForPath liefert die Features, in deren Bereichen der Pfad liegt
 // (REQ-612), kurz und mit Budget, je Session einmal je Fassung. Wie die
 // Beschreibungen ist es eine Zugabe: bei jedem Fehler schweigt es.
 func featureContextForPath(cfg config.Config, gitCtx collector.GitContext, sessionKey, rel string) string {
+	return featureDeliveryForPath(cfg, gitCtx, sessionKey, rel).text
+}
+
+func featureDeliveryForPath(cfg config.Config, gitCtx collector.GitContext, sessionKey, rel string) pathDelivery {
 	if gitCtx.Project == "" {
-		return ""
+		return pathDelivery{}
 	}
 	fc, err := client.NewWithTimeout(cfg, relevanceTimeout).FeatureContext(gitCtx.Project, []string{rel}, sessionKey, 0)
-	if err != nil {
-		return ""
+	if err != nil || fc.Text == "" {
+		return pathDelivery{}
 	}
-	return fc.Text
+	return pathDelivery{text: fc.Text, parts: []deliverylog.Part{
+		{Via: deliverylog.ViaPath, Kind: deliverylog.KindFeature, Chars: deliverylog.Runes(fc.Text)},
+	}}
 }
 
 func pluralVersions(n int) string {
@@ -748,10 +801,23 @@ func describedNow(cfg config.Config, gitCtx collector.GitContext, rel string) (s
 }
 
 func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Freshness, writing, describedTarget bool, target string, priorVersions int) string {
+	text, _ := renderGhostDeliveryParts(entries, fresh, writing, describedTarget, target, priorVersions)
+	return text
+}
+
+// renderGhostDeliveryParts is renderGhostDelivery that also says how many
+// characters each description took (REQ-636). Descriptions of paths are the
+// largest single item of what the hooks deliver, and the log counts them per
+// path. The heading and the notes about the description itself belong to the
+// part of the entry they stand next to; what follows the last entry (the
+// request to write a description) is left to the frame of the delivery.
+func renderGhostDeliveryParts(entries []store.GhostFile, fresh map[string]ghost.Freshness, writing, describedTarget bool, target string, priorVersions int) (string, []deliverylog.Part) {
 	var b strings.Builder
+	var parts []deliverylog.Part
 	if len(entries) > 0 {
 		b.WriteString("## What is known about this path\n\n")
 		for _, g := range entries {
+			start := b.Len()
 			name := g.Path
 			if name == "" {
 				name = "(Repo-Wurzel)"
@@ -776,6 +842,8 @@ func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Fresh
 				fmt.Fprintf(&b, "(%s — `context_search action=file_history` if the current description no longer fits)\n\n",
 					pluralVersions(priorVersions))
 			}
+			parts = append(parts, deliverylog.Part{Via: deliverylog.ViaPath, Kind: deliverylog.KindGhost, Path: g.Path,
+				Chars: deliverylog.Runes(b.String()[start:])})
 		}
 	}
 	if writing {
@@ -786,7 +854,7 @@ func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Fresh
 			fmt.Fprintf(&b, "The description of %s is out of date; the gardener revises it after the merge. Add with `context_remember action=describe_file` only what the code does not show.\n", target)
 		}
 	}
-	return b.String()
+	return b.String(), parts
 }
 
 // pauseGate is the PreToolUse hook behind a human pause. It stats one local

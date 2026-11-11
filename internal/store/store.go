@@ -1290,6 +1290,10 @@ func openWithOptions(path string, options OpenOptions, seed bool) (*Store, error
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureDeliveryLog(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureRunbooks(db); err != nil {
 		_ = db.Close()
 		return nil, err

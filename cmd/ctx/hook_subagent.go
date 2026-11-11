@@ -14,6 +14,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/deliverylog"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -51,7 +52,13 @@ func subagentStart(stdin io.Reader, harness string, stdout io.Writer) int {
 	out.HookSpecificOutput.HookEventName = "SubagentStart"
 	if os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" && harness == "claude" {
 		if raw, err := io.ReadAll(io.LimitReader(stdin, 4<<20)); err == nil {
+			trace, endTrace := beginTrace()
 			out.HookSpecificOutput.AdditionalContext = subagentBriefing(raw)
+			endTrace()
+			// The briefing goes to the subagent without passing the session budget,
+			// so it is logged under the session it was started from, flagged as a
+			// subagent's (REQ-636). Its size is what the briefing has.
+			logDelivery(trace, hookSessionID(raw), harness, deliverylog.ViaSubagent, true, out.HookSpecificOutput.AdditionalContext)
 		}
 	}
 	_ = json.NewEncoder(stdout).Encode(out)
@@ -78,7 +85,9 @@ func subagentBriefing(raw []byte) string {
 	git := collector.ResolveGitContext(cwd)
 	task := subagentTask(in)
 
+	traceProject(git.Project)
 	var pkg, relevant string
+	var relevantParts []deliverylog.Part
 	if cfg, err := config.Load(); err == nil && git.Project != "" {
 		c := client.NewWithTimeout(cfg, subagentBriefDeadline)
 		ax := scope.Axes{Project: git.Project, Branch: git.Branch, Lineage: git.Lineage, Machine: cfg.Machine}
@@ -93,7 +102,9 @@ func subagentBriefing(raw []byte) string {
 		}()
 		if strings.TrimSpace(task) != "" {
 			// No session: the subagent has seen none of what its parent was given.
-			relevant, _ = c.Relevant(task, ax, subagentRelevantLimit, "")
+			if d, err := c.RelevantDelivered(task, ax, subagentRelevantLimit, ""); err == nil {
+				relevant, relevantParts = d.Text, d.Parts
+			}
 		}
 		pkg = <-pkgDone
 	}
@@ -103,8 +114,13 @@ func subagentBriefing(raw []byte) string {
 	b.WriteString(subagentRules)
 	if pkg != "" {
 		b.WriteString("\n" + pkg)
+		traceParts(deliverylog.Part{Via: deliverylog.ViaSubagent, Kind: deliverylog.KindLedger, Chars: deliverylog.Runes(pkg)})
 	}
 	if strings.TrimSpace(relevant) != "" {
+		for _, p := range relevantParts {
+			p.Via = deliverylog.ViaSubagent
+			traceParts(p)
+		}
 		b.WriteString("\n### Known pitfalls and decisions for this task\n")
 		b.WriteString(strings.TrimSpace(stripFirstHeading(relevant)) + "\n")
 	}
