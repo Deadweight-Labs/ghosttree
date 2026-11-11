@@ -488,6 +488,12 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   descriptions of confirmed-deleted files.
 - Knowledge that arrives with a prompt is picked from rare words, arrives once
   per session and names the word that triggered it.
+- `ctx knowledge triage` lists machine and global entries for review without
+  changing them: those that arose in exactly one project (probably project
+  knowledge about a host, to be filed with `ctx knowledge move`), and those
+  nobody picked up on a prompt word or a search for 90 days. `ctx knowledge
+  everywhere <id>` flags an entry as holding in every project
+  (`PUT /api/knowledge/{id}/everywhere`, `GET /api/knowledge-triage`).
 
 #### Search
 
@@ -857,6 +863,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   says, at most three seconds; a write and the prompt hook never repeat.
 - A search of one area (`kind=sessions`) ends with its request: when the caller
   hangs up, the query stops and frees its place and its connection.
+- The start-up briefing no longer hands out machine and global knowledge that
+  has no tie to the project of the session (PAIN-74). A tie is computed, not
+  maintained: the entry was written in a session of the project, a session of
+  the project is evidence for it, or a person flagged it as holding everywhere
+  (`knowledge_project_affinity`, `knowledge.everywhere`, filled by triggers and
+  built from the stock on the first start). Project knowledge now stands first,
+  the quarter of the budget reserved for broad knowledge holds only entries with
+  a tie, and the closing line counts what was left out. A word in a prompt still
+  delivers it and the search finds it. A search in a project returns at most a
+  quarter of its hits (5 of 20) from machine and global knowledge while there
+  are enough project hits; across projects (`all_projects`) and with qualifiers
+  the search is unchanged. Binding instructions are not affected.
 
 ### Fixed
 

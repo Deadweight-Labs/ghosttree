@@ -80,6 +80,11 @@ func UpgradeSchema(path string) (string, error) {
 	steps := []string{
 		`DROP TRIGGER IF EXISTS knowledge_ai`,
 		`DROP TRIGGER IF EXISTS knowledge_au`,
+		// The triggers of the project affinity on other tables read knowledge; a
+		// table that is dropped and renamed cannot stay under them (REQ-641).
+		`DROP TRIGGER IF EXISTS knowledge_affinity_evidence`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_insert`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_update`,
 		`CREATE TABLE knowledge_new(
 		  id INTEGER PRIMARY KEY,
 		  type TEXT NOT NULL CHECK(type IN ('pitfall','decision','note','plan')),
@@ -227,6 +232,11 @@ func UpgradeTypes(path string) (string, error) {
 	steps := []string{
 		`DROP TRIGGER IF EXISTS knowledge_ai`,
 		`DROP TRIGGER IF EXISTS knowledge_au`,
+		// The triggers of the project affinity on other tables read knowledge; a
+		// table that is dropped and renamed cannot stay under them (REQ-641).
+		`DROP TRIGGER IF EXISTS knowledge_affinity_evidence`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_insert`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_update`,
 		`CREATE TABLE knowledge_new(
 		  id INTEGER PRIMARY KEY,
 		  type TEXT NOT NULL CHECK(type IN ('pitfall','decision','note','plan','instruction','request')),
@@ -358,6 +368,11 @@ func UpgradeRequestDomain(path string) (string, error) {
 		`DELETE FROM instruction_activation_path WHERE knowledge_id IN (SELECT id FROM knowledge WHERE type='request')`,
 		`DROP TRIGGER IF EXISTS knowledge_ai`,
 		`DROP TRIGGER IF EXISTS knowledge_au`,
+		// The triggers of the project affinity on other tables read knowledge; a
+		// table that is dropped and renamed cannot stay under them (REQ-641).
+		`DROP TRIGGER IF EXISTS knowledge_affinity_evidence`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_insert`,
+		`DROP TRIGGER IF EXISTS knowledge_affinity_session_update`,
 		`CREATE TABLE knowledge_new(
 		 id INTEGER PRIMARY KEY,
 		 type TEXT NOT NULL CHECK(type IN ('pitfall','decision','note','plan','instruction')),

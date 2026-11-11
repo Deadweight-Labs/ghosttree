@@ -18,6 +18,12 @@ func TestGlobalEntriesReachOnlyTheirAuthorOnEveryRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	rid, kid := g.Request.ID, f.id["k-global"]
+	// The briefing hands a global entry out only where it is tied to the project
+	// or flagged as applying everywhere (REQ-641); this test is about who may see
+	// it, so the entry is flagged.
+	if err := f.st.SetKnowledgeEverywhere(kid, true); err != nil {
+		t.Fatal(err)
+	}
 	routes := []string{
 		"/api/knowledge",
 		"/api/search?q=pitfall&kind=knowledge",

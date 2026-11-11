@@ -120,6 +120,8 @@ var accessRoutes = map[string]routeClass{
 	"POST /api/knowledge/{id}/supersede":          classProject,
 	"PUT /api/knowledge/{id}/regression":          classProject,
 	"GET /api/knowledge/regression-gaps":          classProject,
+	"PUT /api/knowledge/{id}/everywhere":          classProject,
+	"GET /api/knowledge-triage":                   classProject,
 	"POST /api/migrated-knowledge":                classProject,
 	"GET /api/migrations":                         classProject,
 	"GET /api/migrations/documents":               classProject,

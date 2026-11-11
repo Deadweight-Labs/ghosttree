@@ -790,7 +790,14 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			delivered := filterTo(ks, limit, readable)
+			var delivered []store.Knowledge
+			if filter.Project != "" && r.URL.Query().Get("scope") == "union" {
+				// A search in a project reads machine and global knowledge as
+				// well; the quota keeps it from crowding the project's own.
+				delivered = capBroadHits(filterTo(ks, 0, readable), limit)
+			} else {
+				delivered = filterTo(ks, limit, readable)
+			}
 			a.st.RecordKnowledgeSearchHits(delivered)
 			res.Knowledge = pa.KnowledgeViews(delivered)
 			gaps.done()
@@ -924,7 +931,10 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	body, shown, sizes := renderBootstrapParts(entries, intParam(r, "budget", defaultBudget), false)
+	// Breites Wissen ohne Bezug zum Projekt der Sitzung kommt nicht mit (DEC-15);
+	// ein Wort im Prompt stellt es weiterhin zu, die Suche findet es.
+	entries, withheldBroad := a.withoutUntiedBroad(entries, axesFromQuery(r).Project)
+	body, shown, sizes := renderBootstrapWith(entries, intParam(r, "budget", defaultBudget), false, withheldBroad)
 	// Recorded before the answer goes out, so the first prompt of the session
 	// cannot be handled ahead of it. A failed write costs only a possible repeat
 	// later, and the briefing is not worth failing for that.
@@ -1038,6 +1048,14 @@ func renderBootstrapShown(entries []store.Knowledge, budget int, includeStaged b
 // characters each shown entry took, in the order of shown (REQ-636: the
 // delivery log counts per entry).
 func renderBootstrapParts(entries []store.Knowledge, budget int, includeStaged bool) (string, []int64, []int) {
+	return renderBootstrapWith(entries, budget, includeStaged, 0)
+}
+
+// renderBootstrapWith is renderBootstrapParts for an entry list from which
+// withheldBroad machine and global entries were left out because they have no
+// tie to the project (REQ-641). The briefing says so in its closing line: an
+// agent cannot search for what it has no reason to think exists.
+func renderBootstrapWith(entries []store.Knowledge, budget int, includeStaged bool, withheldBroad int) (string, []int64, []int) {
 	if budget <= 0 {
 		budget = defaultBudget
 	}
@@ -1046,6 +1064,9 @@ func renderBootstrapParts(entries []store.Knowledge, budget int, includeStaged b
 	}
 	var instructions, confirmed, staged []store.Knowledge
 	held := map[string]int{}
+	if withheldBroad > 0 {
+		held[heldBroadKey] = withheldBroad
+	}
 	for _, k := range entries {
 		if k.Confidence == "staged" {
 			if includeStaged {
@@ -1081,22 +1102,33 @@ func renderBootstrapParts(entries []store.Knowledge, budget int, includeStaged b
 	// allowance for all remaining groups regardless of instruction length.
 	contentLimit := budget + b.Len()
 	broad, projectScoped := splitByScopeBreadth(confirmed)
-	// Global and machine knowledge is bounded by construction: adding a
-	// repository does not add machine facts. Project knowledge is unbounded and
-	// will always win a straight contest, which is how a distiller release
-	// displaced the two machine notes that were the only entries with a
-	// measured effect. Broad knowledge therefore goes first, and its ceiling
-	// applies only while there is project knowledge to protect. Whatever the
-	// reserve does not use stays available to the project.
-	broadLimit := contentLimit
+	// Project knowledge comes first (PAIN-74). What stands in the reserve below
+	// it is machine and global knowledge that was already chosen for its tie to
+	// the project; the caller left out the rest.
+	//
+	// The reserve stays because the reason for it holds: global and machine
+	// knowledge is bounded, project knowledge is not and would win every
+	// straight contest, which is how a distiller release displaced the two
+	// machine notes that were the only entries with a measured effect. A quarter
+	// of the budget is written first into a scratch buffer, so that its size is
+	// known before the project's pass is cut, and appended after the project.
+	// Whatever the reserve does not use stays available to the project.
+	broadLimit := budget
 	if len(projectScoped) > 0 {
-		broadLimit = min(b.Len()+budget/broadScopeReserveDivisor, contentLimit)
+		broadLimit = budget / broadScopeReserveDivisor
 	}
-	// The two passes exist for the reserve, not for the reader: one shared set
-	// of headings keeps them from looking like two separate sections.
+	var broadPart strings.Builder
+	var broadShown []int64
+	var broadSizes []int
+	// One heading for the whole group: the types are listed pitfalls first inside
+	// it, without a second set of type headings under the project's.
+	noTypeHeadings := map[string]bool{"pitfall": true, "decision": true, "note": true, "plan": true}
+	truncated := writeGroups(&broadPart, broad, broadLimit, "\n### Machine and global knowledge tied to this project\n", noTypeHeadings, &broadShown, &broadSizes)
 	headings := map[string]bool{}
-	truncated := writeGroups(&b, broad, broadLimit, "", headings, &shown, &sizes)
-	truncated = writeGroups(&b, projectScoped, contentLimit, "", headings, &shown, &sizes) || truncated
+	truncated = writeGroups(&b, projectScoped, contentLimit-broadPart.Len(), "", headings, &shown, &sizes) || truncated
+	b.WriteString(broadPart.String())
+	shown = append(shown, broadShown...)
+	sizes = append(sizes, broadSizes...)
 	if len(staged) > 0 && !truncated {
 		truncated = writePreviewGroup(&b, staged, contentLimit)
 	}
@@ -1126,6 +1158,13 @@ func writeHeldIndex(b *strings.Builder, held map[string]int) {
 			label += "s"
 		}
 		parts = append(parts, fmt.Sprintf("%d %s", n, label))
+	}
+	if n := held[heldBroadKey]; n > 0 {
+		noun := "entries"
+		if n == 1 {
+			noun = "entry"
+		}
+		parts = append(parts, fmt.Sprintf("%d machine or global %s without a link to this project", n, noun))
 	}
 	if len(parts) == 0 {
 		return
