@@ -135,7 +135,7 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - Hybrid search is off unless `GHOSTTREE_EMBED_URL` is set. Sessions are only
   sent to the embedding server when `session` is named in
   `GHOSTTREE_EMBED_KINDS` (`all` does not include it; `all,session` does).
-- Building from source needs Go 1.26.10 or newer.
+- Building from source needs Go 1.26.11 or newer.
 - The first start after the upgrade builds a narrow index from chunks to
   sessions (`chunk_index_chunk`). On a large database this takes about as long
   as reading `chunk_index` once (around a minute for three million chunks on
@@ -884,8 +884,8 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Security
 
-- Go 1.26.10 (GO-2026-6809 in `crypto/x509`); released binaries use the fixed
-  standard library.
+- Go 1.26.11 (GO-2026-6859 in `net/http`, after GO-2026-6809 in `crypto/x509`
+  fixed by 1.26.10); released binaries use the fixed standard library.
 - Pull request links only with a host boundary and a fixed path for coordination
   forwarding (CodeQL findings).
 - The Claude channel neutralizes `<channel` inside message text, bounds `send`
