@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // phaseSet collects the partial times of one request (PAIN-76). A hook route
@@ -43,6 +45,27 @@ func (p *phaseSet) start(name string) func() {
 	}
 	began := time.Now()
 	return func() { p.add(name, time.Since(began)) }
+}
+
+// trackPool measures the wait for read connections of the whole request as the
+// change of the pool's wait counters between now and the call of the returned
+// function, which a handler defers. It takes no connection, so measuring adds no
+// wait. The phase "pool_wait" is the time queries of the pool waited in that
+// span: it lies inside the other phases rather than next to them, and it is an
+// approximation, because the counters belong to the pool and the waits of
+// requests that run at the same time are in it too (an upper bound under load).
+// The phase takes its place at the start of the group, so the log reads the same
+// whatever the route did.
+func (p *phaseSet) trackPool(st *store.Store) func() {
+	if p == nil {
+		return func() {}
+	}
+	p.add("pool_wait", 0)
+	mark := st.MarkPoolWait()
+	return func() {
+		d, _ := mark.Since()
+		p.add("pool_wait", d)
+	}
 }
 
 func (p *phaseSet) add(name string, d time.Duration) {

@@ -162,7 +162,7 @@ step, next to the total `duration_ms`:
 
 | Phase | What it is |
 |---|---|
-| `pool_wait` | waiting for a read connection (a connection is taken and given back at once) |
+| `pool_wait` | how long queries of the read pool waited for a connection during the request: the change of the pool's wait counter between the start and the end of the route, so no connection is taken to measure it. An approximation: the counter belongs to the pool, so the waits of requests that run at the same time are in it too (an upper bound under load). It lies inside the other steps, not beside them |
 | `access` | building the rights of the caller |
 | `knowledge` (bootstrap) | reading the entries of the scope |
 | `rights` | the visibility and delivery rules over those entries |
@@ -174,7 +174,7 @@ step, next to the total `duration_ms`:
 
 Steps that did not run are absent from the line. `hint` contains
 `hint_requests`, `hint_sessions` and `hint_claim`, and `rel_*` are inside the
-search; add only the outer steps to compare with the total.
+search, and `pool_wait` is inside all of them; add only the outer steps to compare with the total.
 
 Percentiles of one route over the last hour, with `jq` (needs `jq` 1.6 or
 newer; the unit name is the one of your installation):

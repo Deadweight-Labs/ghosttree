@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"testing"
 	"time"
+	"unsafe"
 )
+
+func unsafeStringData(s string) *byte { return unsafe.StringData(s) }
 
 // A verdict on a word is kept for a short while, per account: a second prompt
 // with the word does not count it again. The count is a verdict, so a change in
@@ -18,8 +21,8 @@ func TestLanguageGateKeepsItsVerdictPerAccount(t *testing.T) {
 	if hits := hitTitles(relevantFor(t, s, prompt, reader, "")); len(hits) != 1 {
 		t.Fatalf("a word nobody says must deliver, hits = %v", hits)
 	}
-	// The word becomes the reader's everyday word, behind the back of the cache
-	// (a direct write: appendChunks would forget it on purpose).
+	// The word becomes the reader's everyday word. Uploads do not forget verdicts
+	// (see languageVerdictTTL), only a different sample or a reset does.
 	id, err := s.UpsertSession(Session{Harness: "claude-code", ExternalID: "talk2", AccountID: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -66,5 +69,43 @@ func TestLanguageCacheAgesAndIsPerAccount(t *testing.T) {
 	c.storeSample(1, now, 7, true, 40, nil)
 	if _, ok := c.verdict(1, "wort", now); ok {
 		t.Fatal("a verdict outlived the sample it was made against")
+	}
+}
+
+// The event that drops the verdicts is the sample changing: other sessions in it,
+// even when there are as many as before (a new session pushing the oldest out of
+// a full sample), or another ceiling. A range that only grew, because chunks came
+// in for a sampled session, is the same sample.
+func TestLanguageCacheDropsVerdictsWhenTheSampleChanges(t *testing.T) {
+	var c languageCache
+	now := time.Now()
+	spans := []sessionSpan{{session: 1, lo: 1, hi: 50}, {session: 2, lo: 51, hi: 90}}
+	c.storeSample(1, now, 7, true, 20, spans)
+	c.storeVerdict(1, "wort", now, true)
+
+	grown := []sessionSpan{{session: 1, lo: 1, hi: 80}, {session: 2, lo: 51, hi: 120}}
+	c.storeSample(1, now.Add(time.Minute), 7, true, 20, grown)
+	if _, ok := c.verdict(1, "wort", now.Add(time.Minute)); !ok {
+		t.Fatal("chunks that came in for the sampled sessions dropped the verdicts")
+	}
+
+	swapped := []sessionSpan{{session: 1, lo: 1, hi: 80}, {session: 3, lo: 200, hi: 230}}
+	c.storeSample(1, now.Add(2*time.Minute), 7, true, 20, swapped)
+	if _, ok := c.verdict(1, "wort", now.Add(2*time.Minute)); ok {
+		t.Fatal("a verdict outlived a sample with another session in it")
+	}
+}
+
+// A verdict's key is a piece cut out of the prompt; the cache keeps a copy, so
+// that it does not hold the prompt in memory.
+func TestLanguageCacheKeysDoNotPinThePrompt(t *testing.T) {
+	var c languageCache
+	prompt := "ein langer prompt " + string(make([]byte, 4096))
+	term := prompt[3:7]
+	c.storeVerdict(1, term, time.Now(), true)
+	for key := range c.accounts[1].verdicts {
+		if unsafeStringData(key) == unsafeStringData(term) {
+			t.Fatal("the key shares its memory with the prompt")
+		}
 	}
 }

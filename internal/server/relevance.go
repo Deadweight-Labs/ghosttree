@@ -52,10 +52,8 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 		limit = maxRelevantEntries
 	}
 	ph := phases(r)
-	end := ph.start("pool_wait")
-	a.st.AwaitReadConn(r.Context())
-	end()
-	end = ph.start("access")
+	defer ph.trackPool(a.st)()
+	end := ph.start("access")
 	pa := a.access(r)
 	pa.Filtered()
 	end()

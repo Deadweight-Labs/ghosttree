@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"sync/atomic"
+	"time"
 )
 
 // WithContext returns a view of the store for one piece of work that may be
@@ -39,20 +40,38 @@ func (s *Store) ReadPoolSize() int {
 	return s.db.Stats().MaxOpenConnections
 }
 
-// AwaitReadConn takes a read connection and gives it back at once. What it
-// costs is the wait a read of this moment would have: the time a hook spends in
-// the queue of the pool, or opening a connection after the pool ran dry. It is
-// for the measurement of a route (PAIN-76), which cannot see inside database/sql
-// where a query waited; the pool hands the connection it just released to the
-// next query, so the probe does not cost a second connection.
-func (s *Store) AwaitReadConn(ctx context.Context) {
+// PoolWaitMark is the state of the wait counters of the read pool at one moment.
+type PoolWaitMark struct {
+	db       *sql.DB
+	count    int64
+	duration time.Duration
+}
+
+// MarkPoolWait notes the wait counters of the read pool. It takes no connection
+// and queues nowhere (db.Stats only reads the counters), so a request that
+// measures its wait does not add a wait of its own, which a probe that borrowed
+// a connection did when the pool was full: the connection it gave back went to
+// another waiter, and the request waited a second time (PAIN-76, KN-4518).
+func (s *Store) MarkPoolWait() PoolWaitMark {
 	if s.reader != nil {
-		s.reader.AwaitReadConn(ctx)
-		return
+		return s.reader.MarkPoolWait()
 	}
-	if conn, err := s.db.Conn(ctx); err == nil {
-		_ = conn.Close()
+	st := s.db.Stats()
+	return PoolWaitMark{db: s.db, count: st.WaitCount, duration: st.WaitDuration}
+}
+
+// Since is how long queries of the pool have waited for a connection since the
+// mark, and in how many waits. It is an approximation for one request: the
+// counters belong to the pool, so the waits of requests that run at the same time
+// are in it too, and a wait that has not ended yet is not counted until it does.
+// With few requests at once it is the request's own wait; under load it is an
+// upper bound that grows with the queue, which is the thing it is read for.
+func (m PoolWaitMark) Since() (time.Duration, int64) {
+	if m.db == nil {
+		return 0, 0
 	}
+	st := m.db.Stats()
+	return st.WaitDuration - m.duration, st.WaitCount - m.count
 }
 
 // chunkMapState remembers whether the database has chunk_index_chunk. A store

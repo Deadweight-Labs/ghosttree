@@ -911,15 +911,13 @@ const defaultBudget = 4000
 
 func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	ph := phases(r)
-	end := ph.start("pool_wait")
-	a.st.AwaitReadConn(r.Context())
-	end()
+	defer ph.trackPool(a.st)()
 	actx, err := activationFromQuery(r)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	end = ph.start("access")
+	end := ph.start("access")
 	pa := a.access(r)
 	viewer := pa.Viewer()
 	end()

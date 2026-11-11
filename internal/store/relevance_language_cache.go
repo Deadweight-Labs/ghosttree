@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,6 +22,16 @@ import (
 // languageSampleTTL old; chunks written since are not in the ranges until the
 // sample is drawn again, which only lets the newest few minutes of the reader's
 // own text go uncounted.
+//
+// What ends a verdict early is the sample changing: when a draw yields other
+// sessions or another ceiling, the verdicts of the account are dropped (see
+// storeSample). The age limits are chosen on purpose for everything else. Chunks
+// that arrive in a sampled session move a word's share by a chunk or two, and
+// dropping the verdicts at every upload would empty the cache while the reader is
+// typing, the one time it is read. A maintenance job that rewrites text (redact,
+// slim) runs in its own process and cannot reach this cache, so its effect shows
+// within languageVerdictTTL at the latest; ResetRelevanceCache is for code that
+// shares the process.
 const (
 	languageSampleTTL  = time.Minute
 	languageVerdictTTL = 10 * time.Minute
@@ -68,12 +79,31 @@ func (c *languageCache) storeSample(account int64, now time.Time, owner int64, o
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	a := c.account(account)
-	// A new sample can change a verdict (its ceiling, its ranges): the verdicts
-	// of an older one are dropped when the sample differs in what they depend on.
-	if a.on != on || a.ceiling != ceiling || len(a.spans) != len(spans) {
+	// A verdict is made against a sample: the sessions it is drawn from and the
+	// ceiling those give. A new draw that differs in either is the event that can
+	// change a verdict, so the verdicts of the older sample go with it. A draw that
+	// is the same sample keeps them, with their own age.
+	if a.on != on || a.ceiling != ceiling || !sameSpans(a.spans, spans) {
 		a.verdicts = nil
 	}
 	a.drawn, a.owner, a.on, a.ceiling, a.spans = now, owner, on, ceiling, spans
+}
+
+// sameSpans says whether two samples are made of the same sessions, in the same
+// order. The length alone would miss a new session that pushes the oldest one out
+// of a full sample. The ranges are not compared: the session being written grows
+// its range with every upload, and that is the few new chunks a verdict is
+// allowed to miss (see the top of the file), not a different sample.
+func sameSpans(a, b []sessionSpan) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].session != b[i].session {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *languageCache) verdict(account int64, term string, now time.Time) (unusual, ok bool) {
@@ -97,7 +127,10 @@ func (c *languageCache) storeVerdict(account int64, term string, now time.Time, 
 	if a.verdicts == nil || len(a.verdicts) >= languageVerdictMax {
 		a.verdicts = make(map[string]cachedVerdict)
 	}
-	a.verdicts[term] = cachedVerdict{at: now, unusual: unusual}
+	// term is a piece of the prompt (strings.FieldsFunc cuts words out of it
+	// without copying), and a map key that is a substring keeps the whole prompt
+	// alive for as long as the verdict lives.
+	a.verdicts[strings.Clone(term)] = cachedVerdict{at: now, unusual: unusual}
 }
 
 func (c *languageCache) account(account int64) *accountLanguage {
