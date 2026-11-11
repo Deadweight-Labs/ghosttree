@@ -364,9 +364,9 @@ func TestSecondEditDoesNotClaimTheDescriptionIsMissing(t *testing.T) {
 		// Die gezielte Nachfrage kennt keine Einmal-je-Sitzung-Regel.
 		case strings.Contains(r.URL.Path, "/tree"):
 			w.Write([]byte(described))
-		// Die Abläufe (REQ-604) fragt der Hook parallel ab; sie zählen nicht
-		// als Auslieferung von Beschreibungen.
-		case strings.HasPrefix(r.URL.Path, "/api/runbooks"):
+		// Die Abläufe (REQ-604) und ihre Auslöser fragt der Hook parallel ab;
+		// sie zählen nicht als Auslieferung von Beschreibungen.
+		case strings.HasPrefix(r.URL.Path, "/api/runbook"):
 			w.Write([]byte(`[]`))
 		// Ebenso die Features des Bereichs (REQ-612), parallel zu den Beschreibungen.
 		case strings.HasPrefix(r.URL.Path, "/api/features"):

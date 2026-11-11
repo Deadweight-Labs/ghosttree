@@ -52,6 +52,10 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 		return 0
 	}
 	eventArg := args[0]
+	if eventArg == "refresh-files" {
+		// Not a harness event: the process a session start leaves behind.
+		return refreshFiles(args[1:])
+	}
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	harness := fs.String("harness", "", "calling harness")
@@ -131,11 +135,16 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 		text := render(bytes.NewReader(raw))
 		coord = <-coordDone
 		<-registerDone
-		_ = hookbudget.Deliver(identity.SessionID, text, func(bounded string) error {
-			out.HookSpecificOutput.AdditionalContext = joinHookContext(bounded, coord)
-			attempted = true
-			return json.NewEncoder(stdout).Encode(out)
-		})
+		// Nothing to say is the usual answer before a tool call, and blank
+		// lines say nothing either. Neither is delivered: a delivery takes the
+		// budget lock, writes the receipt and counts against the session.
+		if strings.TrimSpace(text) != "" {
+			_ = hookbudget.Deliver(identity.SessionID, text, func(bounded string) error {
+				out.HookSpecificOutput.AdditionalContext = joinHookContext(bounded, coord)
+				attempted = true
+				return json.NewEncoder(stdout).Encode(out)
+			})
+		}
 	}
 	if !attempted {
 		out.HookSpecificOutput.AdditionalContext = coord
@@ -160,7 +169,8 @@ const hookUsage = `usage: ctx hook session-start [--harness claude|codex]
        ctx hook post-tool-use [--harness claude|codex]
        ctx hook turn-end [--harness claude]
        ctx hook subagent-start [--harness claude]
-       ctx hook pause-gate [--harness claude]`
+       ctx hook pause-gate [--harness claude]
+       ctx hook refresh-files <repo>`
 
 // relevanceTimeout is short because this hook sits between the keystroke and
 // the answer. Knowledge that arrives late is worse than knowledge that does not
@@ -271,17 +281,12 @@ func bootstrapContext(stdin io.Reader) string {
 		return ""
 	}
 	// Einmal je Session, damit ein Agent den Baum aktuell vorfindet, auch wenn
-	// die letzte Beschreibung auf einer anderen Maschine entstand. Fehler
-	// geschluckt: der Bootstrap darf an einer Projektion nicht scheitern.
-	if home, err := os.UserHomeDir(); err == nil {
-		_ = WriteTree(client.New(cfg), gitCtx.Project, gitCtx.Root, home)
-	}
-	// Derselbe Gedanke für Wissen, Dokumente und den Ledger: wer nachsehen will,
-	// soll nicht erst ein Werkzeug aufrufen müssen — und auf einer Harness ohne
-	// MCP und ohne Hooks ist das der einzige Kanal, der überhaupt trägt.
-	_ = WriteMirror(client.New(cfg),
-		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Lineage: gitCtx.Lineage, Machine: cfg.Machine},
-		gitCtx.Root)
+	// die letzte Beschreibung auf einer anderen Maschine entstand, und ebenso
+	// Wissen, Dokumente und den Ledger: wer nachsehen will, soll nicht erst ein
+	// Werkzeug aufrufen müssen — und auf einer Harness ohne MCP und ohne Hooks
+	// ist das der einzige Kanal, der überhaupt trägt. Die Session wartet darauf
+	// nur, wo es noch nichts zu lesen gibt (hook_projection.go).
+	refreshProjection(cfg, gitCtx)
 	return md
 }
 
@@ -324,10 +329,16 @@ func ghostContext(stdin io.Reader) string {
 	}
 	// Die Abläufe laufen neben den Beschreibungen: ein passender Befehl (ssh prod)
 	// oder Pfad liefert den Ablauf, auch dort, wo es kein Projekt gibt.
-	command := toolCommand(in.ToolInput)
+	// Gefragt wird der Server nur, wenn ein Auslöser zu Befehl oder Pfad passt
+	// (hook_runbooks.go): die allermeisten Aufrufe lösen keinen Ablauf aus.
+	trigger := runbookTrigger{command: toolCommand(in.ToolInput), paths: targets}
 	runbooks := make(chan string, 1)
 	go func() {
-		runbooks <- triggeredRunbooks(cfg, gitCtx, in.SessionID, runbookTrigger{command: command, paths: targets})
+		if !toolMayTriggerRunbook(cfg, gitCtx, trigger) {
+			runbooks <- ""
+			return
+		}
+		runbooks <- triggeredRunbooks(cfg, gitCtx, in.SessionID, trigger)
 	}()
 	return joinHookContext(ghostContextFor(cfg, gitCtx, in.SessionID, in.ToolName, targets), <-runbooks)
 }
@@ -346,7 +357,15 @@ func ghostContextFor(cfg config.Config, gitCtx collector.GitContext, sessionID, 
 		}()
 	}
 	wg.Wait()
-	return strings.Join(contexts, "\n")
+	// Only what was said: a path nothing is known about must not leave an
+	// empty line that is then delivered as context.
+	said := contexts[:0]
+	for _, c := range contexts {
+		if strings.TrimSpace(c) != "" {
+			said = append(said, c)
+		}
+	}
+	return strings.Join(said, "\n")
 }
 
 func toolPaths(raw json.RawMessage, cwd, root string) []string {

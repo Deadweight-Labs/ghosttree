@@ -588,6 +588,31 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Changed
 
+- `ctx` starts in 4.5 ms instead of 14.5 ms. It is one binary, and every start
+  parsed the page templates of the web interface in both languages, although
+  only `ctx serve` shows a page. They are now parsed when the server starts, so
+  a broken template still stops it at once. Every hook and every command is
+  that much faster. Together with the request it no longer makes, the hook
+  before a shell command that names no file takes 7.8 ms instead of 18.9 ms
+  against a local server.
+- A session start no longer waits for the files under `.ghosttree/` to be
+  rewritten. The hook asked the server once per document and several times per
+  discussion before the model saw anything: 71 requests in a small project,
+  1.8 seconds at 25 ms a request. Where the files exist, a process of its own
+  (`ctx hook refresh-files <repo>`) now rewrites them while the session
+  begins, and the hook waits for two requests (79 ms in the same setup). For
+  those seconds the files show the state of the previous session start. A
+  checkout without the files still gets them before the session starts.
+- The hook before a tool call asks the server about runbooks only when a
+  command or path trigger matches. It keeps the triggers of the project for
+  five minutes (`GET /api/runbook-triggers`, under
+  `$XDG_STATE_HOME/ghosttree/runbook-triggers`) and matches them with the
+  server's own rule, so a Bash call that names no file costs no request
+  instead of one. A runbook approved in the meantime reaches the tool hook
+  within those five minutes and the prompt hook at once. A server without the
+  route is asked before every call, as before.
+- A tool call on several paths nothing is known about no longer delivers a
+  line break as context, and no longer counts against the session budget.
 - The MCP server lists twelve core tools instead of 76: `context_search`,
   `context_get`, `context_remember`, `request`, `pain`, `idea`, `coord`,
   `human_task`, `package`, `feature`, `runbook` and `comment`. Each takes an
@@ -596,6 +621,22 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   from 100,709 to about 41,600 bytes, and every core tool asks Claude Code to
   load it up front (`_meta` `anthropic/alwaysLoad`), so agents see the
   descriptions without tool search.
+- A core tool answers with text alone. An answer used to carry the rendered
+  text and a structured copy of the records, and Claude Code shows its model
+  only the copy: the summary and the card with the web link never arrived,
+  every timestamp did. `request action=get` on a request with nine criteria now
+  reaches the model as 3,500 characters instead of 4,600, with
+  `response_format=detailed` as 4,300 instead of 10,100, and names the
+  `criterion_id` next to each criterion.
+- A core tool follows a field name that was guessed from a neighbouring tool
+  (`id` for `request_id`, `content` for `body`, `detailed` for
+  `response_format`), takes a reference like `REQ-12` where the number is asked
+  for, and names a missing field with what it is for.
+- `context_search` takes `limit` (default 20, at most 50 per area).
+- `context_remember action=describe_file` takes an absolute path for a file in
+  another worktree of the repository and files the description under that
+  worktree's branch. A relative path that is not found says where it was
+  looked for.
 - A subagent in Claude Code starts with a short ghosttree briefing: the working
   rules, the branch's work package with its open criteria, the pitfalls its
   task names and where the `.ghosttree/` mirror is (SubagentStart hook).
@@ -722,6 +763,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- A tool call during a restart of the server no longer returns the HTML error
+  page of the proxy in front of it. The message is one line, a read is tried
+  twice more first (`ctx mcp` only; a write is never repeated), and a failed
+  write says that it is not known whether it arrived.
 - Searching sessions by meaning no longer takes 40 s or more for a reader who
   may read only part of the transcripts. SQLite looked every embedding up once
   per readable session; it now looks it up once (0.1 s with a thousand readable

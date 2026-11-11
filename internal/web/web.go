@@ -169,6 +169,7 @@ func uiHeaders(h http.Header) {
 }
 
 func newApp(st *store.Store, opts ...Option) http.Handler {
+	parsePages()
 	a := &app{store: st, sessions: newSessions(), joinLimits: newJoinLimiter(), inviteNames: newInviteNameGuard(), inviteLinks: newInviteLinks(), sourceFlows: newSourceFlows()}
 	for _, opt := range opts {
 		opt(a)
