@@ -106,9 +106,46 @@ number or session:
   out, because its sum cannot be split.
 - `ctx usage signals --since DAY` per signal value: sessions, and of the finished
   sessions with a stored transcript the share with at most three prompts.
+- `ctx usage context --since DAY` per route and kind, and per profile: how many of
+  the delivered entries and runbooks the agent used afterwards (see below), and
+  their share of the characters.
 
 Only people who may write knowledge in a project can add to its log, like the tool
 counts.
+
+## Was the delivered context used
+
+A job in `ctx serve` reads the transcript of a finished session and writes into
+the delivery log (`used`, `judged_at`) whether the agent used what a hook
+delivered. It works in the background: a few sessions per step, with a pause
+between steps, reading through the read pool and writing in one short transaction
+at the end of a step. A session counts as finished after an hour without
+activity. The job reads only sessions that belong to the account whose rows it
+judges, and writes numbers, never text. `GHOSTTREE_USAGE_JUDGE=off` switches it off.
+
+Judged are knowledge entries and runbooks. Only what the agent said and did after
+the delivery counts, not what the person wrote and not what tools returned (a
+search result names an entry without anyone using it):
+
+| `used` | Meaning | Reading |
+|---|---|---|
+| 1 | picked up | the agent named the entry by number (`KN-4251`, `#4251`, a link to the entry, a `knowledge_id` lookup) or by two distinguishing words of its title; for a runbook, by its name |
+| 2 | followed | a tool call opens a path the entry names, runs a command in backticks that the entry names, or (runbook) runs or reports it |
+| 0 | not used | neither |
+| -1 | open | not judged yet, or judged without result (no transcript after 14 days, entry gone) |
+
+Path descriptions, hint lines, briefing sections and subagent briefings stay at
+-1: they have no number or title to recognize, and the concept measures path
+descriptions differently. The reports count them but do not judge them.
+
+An entry for all projects (machine or global) that was delivered in a project and
+picked up there gets that project as a tie, which the briefing already respects
+(`knowledge_project_affinity`, source `used`). `knowledge_usage` counts per entry
+the sessions it was delivered in, picked up in, and followed in.
+
+The signal is a hint. Two title words can be a coincidence in a session about
+that very subject, so nothing is lowered, held back or retired because of it; a
+check against a sample of judged deliveries comes before any such step.
 
 ## Descriptions for removed paths
 

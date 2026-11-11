@@ -25,6 +25,7 @@ var deliveryLogRoutes = map[string]routeClass{
 	"GET /api/usage/tools":      classProject,
 	"GET /api/usage/deliveries": classProject,
 	"GET /api/usage/signals":    classProject,
+	"GET /api/usage/context":    classProject,
 }
 
 func init() {
@@ -38,6 +39,7 @@ func (a *api) registerDeliveryLogRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "GET /api/usage/tools", a.usageTools)
 	a.routeFunc(mux, "GET /api/usage/deliveries", a.usageDeliveries)
 	a.routeFunc(mux, "GET /api/usage/signals", a.usageSignals)
+	a.routeFunc(mux, "GET /api/usage/context", a.usageContext)
 }
 
 func (a *api) recordContextLog(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +142,33 @@ func (a *api) usageSignals(w http.ResponseWriter, r *http.Request) {
 		lines = append(lines, deliverylog.SignalLine{Name: l.Name, Value: l.Value, Sessions: l.Sessions, Measured: l.Measured, Short: l.Short})
 	}
 	writeJSON(w, http.StatusOK, deliverylog.SignalUsage{Since: rep.Since, Lines: lines})
+}
+
+// usageContext is the use of the delivered context (REQ-645, P3): what share of
+// the parts the hooks delivered the agent picked up or followed, per route and
+// kind and per profile. The rights are those of the delivery report.
+func (a *api) usageContext(w http.ResponseWriter, r *http.Request) {
+	project, since, ok := reportWindow(w, r)
+	if !ok {
+		return
+	}
+	rep, err := a.access(r).ContextUseReport(project, since)
+	if denyAccess(w, err) {
+		return
+	}
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	lines := func(in []store.ContextUseLine) []deliverylog.UseLine {
+		out := make([]deliverylog.UseLine, 0, len(in))
+		for _, l := range in {
+			out = append(out, deliverylog.UseLine{Via: l.Via, Kind: l.Kind, Profile: l.Profile, Parts: l.Parts, Judged: l.Judged,
+				PickedUp: l.PickedUp, Followed: l.Followed, Pending: l.Pending, Chars: l.Chars, JudgedChars: l.JudgedChars, UsedChars: l.UsedChars})
+		}
+		return out
+	}
+	writeJSON(w, http.StatusOK, deliverylog.ContextUse{Since: rep.Since, Lines: lines(rep.Lines), Profiles: lines(rep.Profiles)})
 }
 
 // setDelivered tells the hook how the body about to be sent divides into parts.

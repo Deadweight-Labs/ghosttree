@@ -693,6 +693,32 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   asks for the report), and a cut after a spent budget falls on a whole line.
   The briefing of a lean session carries the "ctx too old, run `ctx update`" hint
   like the full one.
+- Use of the delivered context, read from the session transcripts (REQ-645, P3 of
+  the concept; measurement only, nothing an agent is given changes). A job in
+  `ctx serve` goes through the delivery log in the background, a few sessions per
+  step, and records for each delivered knowledge entry or runbook whether the
+  agent used it afterwards: `used` 1 when it named the entry (its number, two
+  distinguishing words of its title, a lookup of it, or the name of the runbook),
+  2 when it also followed it (opened a path the entry names, ran a command it
+  names, reported the runbook), 0 when it did neither; `judged_at` dates the
+  judgement. Only what the agent said and did counts, from the delivery on; the
+  messages of the person and the results of tools do not. A broad entry that was
+  delivered in a project and picked up there is tied to that project (source
+  `used` of the project tie), and `knowledge_usage` counts per entry in how many
+  sessions it was delivered, picked up and followed. The job reads only
+  sessions the account of the delivery rows owns and that have been idle for an
+  hour, reads through the read pool and holds the write lock only for the short
+  write at the end of a step; it leaves path descriptions, hints and subagent
+  briefings unjudged. A row whose session never arrived is closed after 14 days
+  without a verdict. `GHOSTTREE_USAGE_JUDGE=off` switches the job off. `ctx usage
+  context --since DAY` shows, per route and kind and per profile, how many parts
+  were judged, picked up and followed, and the share of their characters, with
+  the rights of `ctx usage deliveries` and sums only. The signal is a hint, not
+  a proof (it can read word equality as use); nothing is lowered or held back on
+  it yet. Measured on a generated database (120 sessions of 600 lines, 217 MB of
+  transcript, 10 deliveries each): about 10 ms of reading and matching per
+  session and 0.2 ms of writing, the write of a step of 20 sessions holds the
+  lock for about 3 ms.
 
 ### Changed
 

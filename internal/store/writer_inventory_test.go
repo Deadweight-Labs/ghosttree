@@ -19,6 +19,8 @@ var writerMethodClasses = map[string]string{
 	"DeliveryReport":                "read",
 	"SignalReport":                  "read",
 	"ToolReportSince":               "read",
+	"ContextUseReport":              "read",
+	"JudgeDeliveries":               "administrative",
 	"ToolUseStats":                  "read",
 	"RawDictSample":                 "read",
 	"TranscriptStats":               "read",
