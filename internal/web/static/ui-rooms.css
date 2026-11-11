@@ -90,7 +90,7 @@
   & .pp-session .coord-participant-meta { margin-top: 2px; }
   & .pp-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
   & .pp-title { font-weight: 600; font-size: 14px; }
-  & .pp-sub { font-size: 12px; }
+  & .pp-sub { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
   & .pp-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
   & .pp-state .dot.pulse { animation: gpulse 1.8s ease-out infinite; }
   & .pp-detail small, & .coord-participant-meta { font-size: 12px; }
@@ -101,49 +101,54 @@
   & .coord-paging { display: flex; gap: 8px; padding: 8px 16px; }
   & .coord-paging:not(:has(*)) { display: none; }
 
-  /* Messages. A new author starts a group (the avatar, name and time; a hairline
-     above it); what the same author writes next stands close under it, its time shows
-     on hover. The variants of ui-rooms-rv.css set the chrome around them. */
-  & .coord-messages { flex: 1 1 0; min-height: 0; margin: 0; padding: 4px 0 8px; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
+  /* Messages, as the conversation of a pull request: the avatar stands in a column of
+     its own, every message is a box with a head bar (name, time, whom it is for) and
+     the text below it. A new author starts a group with the avatar; what the same
+     author writes next is the next box close under it, its time shows on hover. */
+  & .coord-messages { flex: 1 1 0; min-height: 0; margin: 0; padding: 16px 16px 20px; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
   & .coord-messages > li { position: relative; margin: 0; }
-  & .coord-message-group-start:not(:first-child) { margin-top: 12px; border-top: 1px solid var(--border-muted); }
-  & .cm-new + .coord-message-group-start { margin-top: 0; border-top: 0; }
+  & .coord-message-group-start:not(:first-child) { margin-top: 16px; }
+  & .coord-message-continuation { margin-top: 6px; }
+  & .coord-messages > .cm-new + .coord-message-group-start { margin-top: 0; }
   & .coord-empty { display: flex; align-items: center; gap: 12px; padding: 24px; color: var(--fg-muted); }
-  & .cm-new { display: flex; align-items: center; gap: 12px; margin: 10px 16px 4px; font-size: 12px; font-weight: 600; color: var(--danger-fg); }
+  & .coord-messages > .cm-new { display: flex; align-items: center; gap: 12px; margin: 16px 0 8px; font-size: 12px; font-weight: 600; color: var(--danger-fg); }
   & .cm-new::before, & .cm-new::after { content: ""; flex: 1; height: 1px; background: currentColor; opacity: .45; }
-  & .rm-msg { position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 4px 16px 6px; }
-  & .coord-message-group-start .rm-msg { padding-top: 12px; }
-  & .coord-message-continuation .rm-msg { padding-top: 8px; }
-  & .rm-msg:hover, & .rm-msg:focus-within { background: var(--row-hover); }
-  & .rm-msg > .gav { width: 32px; height: 32px; font-size: 12px; }
+  & .rm-msg { position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; align-items: start; }
+  & .rm-msg > .gav { width: 32px; height: 32px; margin-top: 2px; font-size: 12px; }
   & .rm-msg > .gav .i { width: 18px; height: 18px; }
   & .rm-msg > .gav .own { width: 16px; height: 16px; font-size: 7px; }
-  & .coord-message-mentioned > .rm-msg { background: color-mix(in srgb, var(--accent-subtle) 40%, transparent); box-shadow: inset 3px 0 0 var(--accent-emphasis); }
-  & .cm-gutter { padding-top: 1px; font-size: 11px; line-height: 20px; text-align: right; color: var(--fg-muted); opacity: 0; }
+  & .cm-gutter { padding-top: 12px; font-size: 11px; line-height: 20px; text-align: right; color: var(--fg-muted); opacity: 0; }
   & .rm-msg:hover .cm-gutter, & .rm-msg:focus-within .cm-gutter { opacity: 1; }
-  & .rm-main { min-width: 0; }
+  /* The box of a message. Whoever wrote it, I wrote it (blue) or it mentions me
+     (blue edge) is told by the colour of its border and head bar. */
+  & .rm-main { position: relative; min-width: 0; overflow: hidden; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; }
+  & .is-own .rm-main { border-color: var(--accent-muted); }
+  & .coord-message-mentioned .rm-main { border-color: var(--accent-muted); box-shadow: inset 3px 0 0 var(--accent-emphasis); }
   /* The head holds the name and the time and, quiet, whom it is for. Role, machine and
      branch of an agent are the tooltip of the name. */
-  & .rm-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; min-height: 20px; line-height: 20px; }
+  & .rm-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0 8px; min-height: 38px; padding: 8px 12px; line-height: 20px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); }
+  & .is-own .rm-head { background: var(--accent-subtle); border-bottom-color: var(--accent-muted); }
+  & .rm-head .cm-time { order: 3; margin-left: auto; }
   & .rm-name { font-size: 14px; font-weight: 600; }
   & .rm-head .coord-mention-you { align-self: center; }
   & .cm-time { font-size: 12px; color: var(--fg-muted); }
   & .rm-to, & .cm-note { font-size: 12px; color: var(--fg-muted); }
   & .rm-to { opacity: .8; }
   /* What a message answers, one line above it. */
-  & .cm-quote { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 4px 0; padding-left: 10px; border-left: 2px solid var(--border-default); font-size: 12px; line-height: 18px; color: var(--fg-muted); }
+  & .cm-quote { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; padding: 6px 12px; border-bottom: 1px solid var(--border-muted); font-size: 12px; line-height: 18px; color: var(--fg-muted); }
   & .cm-quote .i { flex: none; width: 12px; height: 12px; }
   & .cm-quote b { flex: none; font-weight: 600; color: var(--fg-default); }
   & .cm-quote span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  & a.cm-quote:hover { color: var(--fg-default); text-decoration: none; border-left-color: var(--accent-fg); }
-  & .cm-bubble { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  & a.cm-quote:hover { color: var(--fg-default); text-decoration: none; background: var(--row-hover); }
+  & .cm-bubble { margin: 0; padding: 10px 12px; min-width: 0; overflow-wrap: anywhere; }
   /* Text of a chat is tighter than a document: paragraphs, lists and code 8 px apart. */
   & .cm-bubble .prose, & .ask-t .prose { font-size: 14px; }
   & .cm-bubble .prose > :is(p, ul, ol, pre, blockquote, table), & .ask-t .prose > :is(p, ul, ol, pre, blockquote, table) { margin: 0 0 8px; }
   & .cm-bubble .prose > :first-child, & .ask-t .prose > :first-child { margin-top: 0; }
   & .cm-bubble .prose > :last-child, & .ask-t .prose > :last-child { margin-bottom: 0; }
-  /* Reply and start a thread: only where the pointer or the keyboard is. */
-  & .cm-tools { position: absolute; z-index: 3; top: -14px; right: 16px; display: flex; align-items: center; gap: 2px; padding: 2px; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-pop); opacity: 0; pointer-events: none; transition: opacity .1s; }
+  /* Reply and start a thread: over the head bar, only where the pointer or the keyboard is
+     (where there is no pointer to hover with, see the end of this file). */
+  & .cm-tools { position: absolute; z-index: 3; top: 5px; right: 8px; display: flex; align-items: center; gap: 2px; padding: 2px; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-pop); opacity: 0; pointer-events: none; transition: opacity .1s; }
   & .rm-msg:hover .cm-tools, & .rm-msg:focus-within .cm-tools { opacity: 1; pointer-events: auto; }
   & .cm-tools:has(details[open]) { opacity: 1; pointer-events: auto; }
   & .cm-tools > .gbtn, & .cm-tools > details > summary { border-color: transparent; background: transparent; }
@@ -154,16 +159,17 @@
   & .replyto b { flex: none; font-weight: 600; color: var(--fg-default); }
   & .replyto span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   & .replyto a { flex: none; display: inline-flex; color: var(--fg-muted); }
-  & .coord-refs { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--fg-muted); }
-  & .cm-thread { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px; }
+  & .coord-refs { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 0 12px 10px; list-style: none; font-size: 12px; color: var(--fg-muted); }
+  & .cm-thread, & .coord-reply-count { display: flex; align-items: center; gap: 6px; margin: 0; padding: 8px 12px; border-top: 1px solid var(--border-muted); background: var(--canvas-subtle); }
+  & .cm-thread { font-size: 13px; }
   & .cm-thread b { font-weight: 600; }
-  & .coord-reply-count { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; }
   /* A line of the system: small, in the middle, never a message. */
-  & .cm-event { display: flex; align-items: baseline; justify-content: center; gap: 8px; margin: 0 auto; padding: 10px 24px; max-width: 640px; font-size: 12px; line-height: 18px; text-align: center; color: var(--fg-muted); }
+  & .cm-event { display: flex; align-items: baseline; justify-content: center; gap: 8px; margin: 0 auto; padding: 14px 24px; max-width: 640px; font-size: 12px; line-height: 18px; text-align: center; color: var(--fg-muted); }
   & .cm-event time { flex: none; opacity: .75; }
 
   /* Request cards: question, approval, blocker, handoff */
-  & .rq4 { margin-top: 6px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); overflow: hidden; }
+  /* The card is the body of its message box: no box in the box. */
+  & .rq4 { margin: 0; background: var(--canvas-default); }
   & .rq4-h { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px 0; }
   & .rqk-question { color: var(--accent-fg); background: var(--accent-subtle); border-color: var(--accent-muted); }
   & .rqk-blocker { color: var(--danger-fg); background: var(--danger-subtle); border-color: var(--danger-muted); }
@@ -187,7 +193,7 @@
   & .rm-fold-b .ex { margin: 0; }
   /* The foot of a card: the one thing to say about it on the left, the one main action
      and the menu with the rest on the right. */
-  & .rq4-f { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border-muted); }
+  & .rq4-f { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border-muted); background: var(--canvas-subtle); }
   & .rq4-f:not(:has(*)) { display: none; }
   & .rq4-f form { display: inline-flex; margin: 0; }
   & .rq4-n { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-muted); }
@@ -197,7 +203,7 @@
   & .rq4-menu .pop .opt { width: 100%; text-align: left; }
 
   /* Standing instruction */
-  & .slab { padding: 12px 16px; background: var(--attention-subtle); border: 1px solid var(--attention-muted); border-radius: 6px; }
+  & .slab { margin-left: 44px; padding: 12px 16px; background: var(--attention-subtle); border: 1px solid var(--attention-muted); border-radius: 6px; }
   & .slab.is-ended { background: var(--canvas-subtle); border-color: var(--border-default); }
   & .slab-k { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
   & .slab-pin { color: var(--attention-fg); display: inline-flex; }
@@ -240,12 +246,14 @@
   & .rttl h3 { font-size: 20px; font-weight: 600; overflow-wrap: anywhere; }
   & .rtmeta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0 0; color: var(--fg-muted); }
   & .rtanchor { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
-  & .rlead { margin: 12px 0 8px; padding: 8px 16px; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; }
-  & .rlead b { font-size: 12px; color: var(--fg-muted); }
-  & .rlead p { margin: 0; }
+  /* The guiding question is a box like a message: head bar, text below. */
+  & .rlead { margin: 12px 0 8px; overflow: hidden; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; }
+  & .rlead b { display: block; padding: 6px 12px; font-size: 12px; color: var(--fg-muted); background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); }
+  & .rlead p { margin: 0; padding: 8px 12px; }
   & .rthread > .rbody { border-top: 1px solid var(--border-default); }
   & .rside, & .rtside { min-width: 0; }
-  & .rtside .coord-participant { padding: 6px 0; }
+  & .rtside .coord-participant { padding: 8px 0; }
+  & .rtside .coord-participant + .coord-participant { border-top: 1px solid var(--border-muted); }
   & .rtside .coord-participants { max-height: 460px; overflow-y: auto; }
   & .rtside .rwho-find { position: static; margin: 0 0 8px; padding: 0; }
   & .rtside .sblk h3 { font-weight: 600; }
@@ -281,7 +289,7 @@
        the threads and the people below it (the page scrolls to them). */
     & .coord-shell, & .coord-shell:has(#coord-context > *), & .coord-shell:has(#coord-context):has(.coord-thread-detail) { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; height: auto; min-height: 0; gap: 12px; }
     & #coord-rooms, & .coord-conversation, & #coord-context, & .coord-shell:has(.coord-thread-detail) .coord-conversation, & .coord-shell:has(.coord-thread-detail) #coord-context { grid-column: 1; grid-row: auto; }
-    & .coord-conversation { height: calc(100dvh - var(--coord-top, 190px) - 68px); min-height: 440px; }
+    & .coord-conversation { height: calc(100dvh - var(--coord-top, 190px) - 16px); min-height: 440px; }
     & .coord-shell:has(.coord-thread-detail) .coord-conversation { height: calc(100dvh - var(--coord-top, 190px)); }
     & .coord-shell:has(.coord-thread-detail) #coord-rooms { display: none; }
     & #coord-context { overflow-y: visible; }
@@ -297,10 +305,16 @@
   :is(.g2.rooms) {
     & .cx-f { flex-wrap: wrap; }
     & .cx-f .cx-hint { display: none; }
-    & .rhead { flex-wrap: wrap; }
-    & .rhead .rsearch { flex: 1 1 120px; width: auto; min-width: 0; }
+    /* The head of the room stays one row: name, two faces, the search takes what is left. */
+    & .rhead { gap: 8px; padding: 6px 12px; }
+    & .rhead h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    & .rhead .stackav .gav:nth-child(n+3), & .rhead .stackmore { display: none; }
+    & .rhead > .sp { display: none; }
+    & .rhead .rsearch { flex: 1 1 0; width: auto; min-width: 0; }
+    & .coord-composer .cx textarea, & .coord-thread-composer .cx textarea { min-height: 44px; }
+    & .cx-f { padding: 8px; }
     & .rttl .rsearch { display: none; }
-    & .rlead { margin: 8px 0; padding: 6px 12px; }
+    & .rlead { margin: 8px 0; }
     & .rlead p { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
     /* The footer of the composer in two rows: the two pickers side by side, the buttons beneath. */
     & .cx-f { gap: 6px; }
@@ -309,7 +323,10 @@
     & .cx-f > .sp { flex: 1 0 100%; height: 0; }
     & .cx-f > .rm-ask { margin-left: auto; }
     & .rttl { flex-direction: column; align-items: stretch; }
-    & .rm-msg { gap: 8px; padding-left: 12px; padding-right: 12px; }
+    & .coord-messages { padding: 12px 12px 16px; }
+    & .rm-msg { grid-template-columns: 28px minmax(0, 1fr); gap: 8px; }
+    & .rm-msg > .gav { width: 28px; height: 28px; }
+    & .slab { margin-left: 36px; }
     /* The note of a card takes a line of its own above the action. */
     & .rq4-f { flex-wrap: wrap; }
     & .rq4-n { flex: 1 0 100%; white-space: normal; }
@@ -319,11 +336,16 @@
     & .rstart-pop { width: calc(100% - 16px); }
   }
 }
-/* Where there is no pointer to hover with, the tools of a message stand under it. */
+/* Where there is no pointer to hover with (a phone, a tablet), a tap on a message is what
+   a hover is elsewhere: the tools are the last row of its box and unfold under the message
+   that was touched (the article takes the focus of the tap, tabindex -1), and stay while
+   one of them is open. */
 @media (hover: none), (max-width: 767px) {
   :is(.g2.rooms) {
-    & .cm-tools { position: static; width: fit-content; margin-top: 4px; padding: 0; background: none; border: 0; box-shadow: none; opacity: 1; pointer-events: auto; }
-    & .cm-tools > .gbtn, & .cm-tools > details > summary { height: 28px; font-size: 12px; }
+    & .rm-main { display: flex; flex-direction: column; }
+    & .rm-msg { outline: 0; }
+    & .cm-tools { position: static; order: 9; width: auto; max-height: 0; gap: 4px; padding: 0 8px; overflow: hidden; background: var(--canvas-subtle); border: 0 solid var(--border-muted); border-radius: 0; box-shadow: none; opacity: 1; pointer-events: auto; transition: none; }
+    & .rm-msg:focus-within .cm-tools, & .cm-tools:has(details[open]) { max-height: 64px; padding: 4px 8px; border-top-width: 1px; overflow: visible; }
     & .cm-gutter { visibility: hidden; }
   }
 }

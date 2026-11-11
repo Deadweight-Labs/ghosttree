@@ -2,7 +2,6 @@ package web
 
 import (
 	"html/template"
-	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -180,16 +179,6 @@ func msgAvatar(l lang, m coordMessageView, size string) template.HTML {
 		kind = avSystem
 	}
 	return avatarMarkup(l, avatarSpec{Kind: kind, Name: name, Size: size, Owner: owner})
-}
-
-// roomVariant reads the look of the message list that is being compared; any
-// other value is the default look.
-func roomVariant(r *http.Request) string {
-	switch v := r.URL.Query().Get("rv"); v {
-	case "a", "b", "c":
-		return v
-	}
-	return ""
 }
 
 // coordSystemPrefixes maps the English text the store writes for system lines to

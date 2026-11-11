@@ -78,6 +78,15 @@
     if (!(event.target instanceof Element) || !event.target.matches(".coord-messages")) return;
     for (const menu of document.querySelectorAll("details[data-float][open]")) menu.open = false;
   }, true);
+  // Where a tap is what a hover is elsewhere, the tools of the touched message unfold
+  // under it (CSS, :focus-within); the list brings them into view.
+  const touchLike = window.matchMedia("(hover: none), (max-width: 767px)");
+  document.addEventListener("focusin", (event) => {
+    if (!touchLike.matches || !(event.target instanceof Element)) return;
+    const msg = event.target.closest(".coord-messages .rm-msg");
+    if (!msg) return;
+    requestAnimationFrame(() => msg.querySelector(".cm-tools")?.scrollIntoView({ block: "nearest" }));
+  });
   wire();
   // The page swaps its surfaces after an event; look again then.
   new MutationObserver(wire).observe(document.body, { childList: true, subtree: true });

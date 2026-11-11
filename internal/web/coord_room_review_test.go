@@ -167,7 +167,7 @@ func TestCoordRequestCardNamesTheSenderRoleAndKeepsItsStateAfterAnswering(t *tes
 	}
 	card := func() string {
 		page := e.page(t, e.alice)
-		start := strings.LastIndex(page[:strings.Index(page, "Roles first?")], `<article class="rm-msg is-ask">`)
+		start := strings.LastIndex(page[:strings.Index(page, "Roles first?")], `<article tabindex="-1" class="rm-msg is-ask">`)
 		return page[start : start+strings.Index(page[start:], "</article>")]
 	}
 	if c := card(); !strings.Contains(c, `title="`+msg("role.member")) {

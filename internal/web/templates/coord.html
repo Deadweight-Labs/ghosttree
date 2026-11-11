@@ -1,5 +1,5 @@
 {{define "coord"}}{{template "head" .}}{{template "nav" .}}
-<main class="g2 coord-workspace room rooms{{with .Coord.RoomVariant}} rv-{{.}}{{end}}" data-coord-event-cursor="{{.Coord.EventCursor}}" data-coord-texts="{{.Coord.Texts}}"><link rel="stylesheet" href="/static/ui-rooms.css"><link rel="stylesheet" href="/static/ui-rooms-rv.css"><div class="wrap">
+<main class="g2 coord-workspace room rooms" data-coord-event-cursor="{{.Coord.EventCursor}}" data-coord-texts="{{.Coord.Texts}}"><link rel="stylesheet" href="/static/ui-rooms.css"><div class="wrap">
   <h1 class="sr">{{t "coord.title"}}</h1>
   <p id="coord-status" class="sr" aria-live="polite" aria-atomic="true"></p>
   <p class="coord-live-status sr" data-coord-live-status role="status">{{t "coord.live.connecting"}}</p>
@@ -118,7 +118,7 @@
 {{define "threadstate"}}<svg class="i" viewBox="0 0 16 16" aria-hidden="true">{{if eq . "open"}}<circle cx="8" cy="8" r="6.25"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/>{{else if eq . "resolved"}}<circle cx="8" cy="8" r="6.25"/><path d="m5.2 8.3 2 2 3.6-4"/>{{else}}<circle cx="8" cy="8" r="6.25"/><path d="M6.4 5.6v4.8M9.6 5.6v4.8"/>{{end}}</svg>{{end}}
 
 {{define "coord-thread-side"}}{{with .Coord.Active}}{{with .Thread}}
-      <div class="rtside">
+      <div class="rtside rctx box">
       <div class="sblk"><h3>{{t "coord.participants"}}</h3>{{if gt (len $.Coord.Active.Here) 7}}<form class="rsearch rwho-find" role="search"><label class="gfield">{{mi "search"}}<input type="search" data-here-filter placeholder="{{t "room.who_filter"}}" aria-label="{{t "room.who_filter"}}" autocomplete="off"></label></form>{{end}}<ul class="coord-participants rm-here">{{range $.Coord.Active.Here}}{{template "coord-here" .}}{{end}}</ul><p class="rwho-none muted" hidden>{{t "room.who_none"}}</p></div>
       {{if $.Coord.Active.WaitCycles}}<div class="sblk"><section class="coord-wait-cycles callout" role="alert"><div><strong>{{t "coord.wait_cycles"}}</strong><ul>{{range $.Coord.Active.WaitCycles}}<li>{{.}}</li>{{end}}</ul></div></section></div>{{end}}
       {{if $.Coord.Active.Standing}}<div class="sblk" data-coord-standing-list><h3>{{t "coord.directives"}}</h3>{{range $.Coord.Active.Standing}}<article class="coord-standing"><div><p>{{.Body}}</p><small class="muted"><span>{{.Person}}</span> · <span>{{.Scope}}</span></small></div>{{if .CanEnd}}<form method="post" action="/ui/coord/standing/end"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{$.Coord.Active.Room.Key}}"><input type="hidden" name="message_id" value="{{.MessageID}}"><button class="gbtn sm quiet" data-coord-focus-key="standing-end-list-{{.MessageID}}">{{t "coord.end"}}</button></form>{{end}}</article>{{end}}</div>{{end}}
@@ -153,7 +153,7 @@
   <p class="slab-t">{{.Body}}</p>
   <div class="slab-s"><span class="muted">{{.Directive.Scope}}</span>{{if .Directive.Active}}{{if .Directive.CanEnd}}<form method="post" action="/ui/coord/standing/end"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="room" value="{{.Directive.RoomKey}}"><input type="hidden" name="message_id" value="{{.Directive.MessageID}}"><button class="gbtn sm quiet slab-end" data-coord-focus-key="standing-end-{{.Directive.MessageID}}">{{t "coord.end"}}</button></form>{{end}}{{else}}<span class="slab-ended lb neu">{{t "coord.ended"}}</span>{{end}}</div>
 </article>
-{{- else if .Request}}<article class="rm-msg is-ask">{{msgAvatar . "xl"}}
+{{- else if .Request}}<article tabindex="-1" class="rm-msg is-ask">{{msgAvatar . "xl"}}
   <div class="rm-main">
     {{template "coord-head" .}}
     {{template "coord-quote" .}}
@@ -167,7 +167,7 @@
     {{template "coord-message-links" .}}
   </div>
 </article>
-{{- else}}<article class="rm-msg{{if .PeerOnly}} is-peer{{end}}{{if .Own}} is-own{{end}}">{{if .GroupStart}}{{msgAvatar . "xl"}}{{else}}<span class="cm-gutter"><time datetime="{{.Timestamp}}" title="{{.TimeTitle}}">{{.HM}}</time></span>{{end}}
+{{- else}}<article tabindex="-1" class="rm-msg{{if .PeerOnly}} is-peer{{end}}{{if .Own}} is-own{{end}}">{{if .GroupStart}}{{msgAvatar . "xl"}}{{else}}<span class="cm-gutter"><time datetime="{{.Timestamp}}" title="{{.TimeTitle}}">{{.HM}}</time></span>{{end}}
   <div class="rm-main cm-body">
     {{if .GroupStart}}{{template "coord-head" .}}{{else}}<span class="sr"><strong>{{if .Own}}{{t "coord.you"}}{{else}}{{.ShortName}}{{end}}</strong> <time datetime="{{.Timestamp}}">{{.Clock}}</time></span>{{end}}
     {{template "coord-quote" .}}

@@ -25,9 +25,6 @@ type coordPageView struct {
 	Recipients        []coordRecipientView
 	IncomingAttention []coordAttentionView
 	OutgoingAttention []coordAttentionView
-	// RoomVariant switches the look of the message list while the variants are
-	// compared (query rv=a|b|c); empty is the default look.
-	RoomVariant string
 }
 
 const coordAttentionVisible = 3

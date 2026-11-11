@@ -232,7 +232,6 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		Recipients:        buildCoordRecipientViews(l, recipients),
 		IncomingAttention: incomingAttention,
 		OutgoingAttention: outgoingAttention,
-		RoomVariant:       roomVariant(r),
 	}
 	if room == "" {
 		// The landing is the room with the latest event, never a picker.

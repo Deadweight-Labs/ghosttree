@@ -103,7 +103,7 @@ func attentionCard(t *testing.T, page, needle string) string {
 	if at < 0 {
 		t.Fatalf("no attention card for %q", needle)
 	}
-	start := strings.LastIndex(page[:at], `<article class="rm-msg is-ask">`)
+	start := strings.LastIndex(page[:at], `<article tabindex="-1" class="rm-msg is-ask">`)
 	return page[start : start+strings.Index(page[start:], "</article>")]
 }
 
