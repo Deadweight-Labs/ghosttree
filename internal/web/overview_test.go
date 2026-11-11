@@ -294,7 +294,7 @@ func TestShellHeadSetsTheJSClassBeforeFirstPaint(t *testing.T) {
 	e := shellWebAll(t)
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/inbox")
 	head := page[:strings.Index(page, "</head>")]
-	if strings.Contains(head, "<script>") || !strings.Contains(head, `<script src="/static/shell.js"></script>`) {
+	if strings.Contains(head, "<script>") || !regexp.MustCompile(`<script src="/static/shell\.js\?v=[0-9a-f]+"></script>`).MatchString(head) {
 		t.Error("the js class script is not a synchronous external script in the head")
 	}
 	js := body(t, mustGet(t, e.Base+"/static/shell.js"))

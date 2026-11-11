@@ -31,7 +31,7 @@ func TestLoginPageWithoutOIDCHasCodeFieldAndNoProviderButton(t *testing.T) {
 		`class="g2 auth"`, `<h1>Sign in to ghosttree</h1>`, `name="code"`, `action="/ui/login/code"`,
 		`Code or login link`, `placeholder="e.g. 4f9k-2m7q-x8dp"`,
 		`Sign in with a token`, `name="token"`, `action="/ui/login"`,
-		`href="/static/ui-auth.css"`,
+		`href="/static/ui-auth.css?v=`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("login page lacks %q", want)

@@ -5,7 +5,7 @@
 {{range .Rows}}<div class="row dcrow"><span class="st" aria-hidden="true">{{mi "file"}}</span><div class="dcmain"><a class="dcname rl" href="{{.Href}}">{{.Title}}</a><span class="lb out">{{.Kind}}</span><div class="dcslug mono">{{.Slug}}</div></div><div class="dcmeta">{{actor .Actor .Person}}<span class="muted dcage">{{ago .At}}</span><a class="chip sha" href="{{.Href}}">{{t "docs.rev" .Rev}}</a></div></div>
 {{end}}{{template "listnone"}}</div>
 {{else}}<div class="box"><div class="box-empty">{{t "docs.empty"}}</div></div>{{end}}{{end}}
-</div><script src="/static/ui-list.js" defer></script>
+</div><script src="{{asset "ui-list.js"}}" defer></script>
 {{template "foot" .}}{{end}}
 
 {{define "doc"}}{{template "head" .}}{{template "nav" .}}<main class="g2 dc"><div class="wrap">

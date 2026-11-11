@@ -1,4 +1,4 @@
-{{define "sessions"}}{{template "head" .}}{{template "nav" .}}<main class="g2 sess"><link rel="stylesheet" href="/static/ui-sessions.css"><div class="wrap">
+{{define "sessions"}}{{template "head" .}}{{template "nav" .}}<main class="g2 sess"><link rel="stylesheet" href="{{asset "ui-sessions.css"}}"><div class="wrap">
 {{with .SessionsV}}{{with $.Shell.Tabs}}{{if not $.Repo}}<div class="segrow"><nav class="gseg seg" aria-label="{{t $.Shell.TabsLabel}}">{{range .}}<a data-tab="{{.Key}}" href="{{.Href}}"{{if .Current}} class="on" aria-current="page"{{end}}>{{t .Label}}</a>{{end}}</nav></div>{{end}}{{end}}
 <form class="sbar" method="get" action="/ui/sessions" role="search"><label class="gfield mono-in">{{mi "search"}}<input id="sess-q" type="search" name="q" value="{{.Q}}" placeholder="{{t "sessions.search_placeholder"}}" aria-label="{{t "sessions.search_label"}}" autocomplete="off" spellcheck="false" data-sessions-search></label>{{if .Q}}<a class="gbtn" href="{{.ClearHref}}">{{t "sessions.clear_search"}}</a>{{end}}{{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}<button class="sr">{{t "sessions.apply"}}</button></form>
 {{if .Indexing}}<p class="callout" role="status">{{mi "tri"}}<span>{{.Indexing}}</span></p>{{end}}
@@ -34,10 +34,10 @@
 {{end}}
 {{end}}
 {{end}}
-</div><script src="/static/sessions.js"></script>
+</div><script src="{{asset "sessions.js"}}"></script>
 {{template "foot" .}}{{end}}
 
-{{define "session"}}{{template "head" .}}{{template "nav" .}}<main class="g2 sess sess-detail"><link rel="stylesheet" href="/static/ui-sessions.css"><div class="wrap">
+{{define "session"}}{{template "head" .}}{{template "nav" .}}<main class="g2 sess sess-detail"><link rel="stylesheet" href="{{asset "ui-sessions.css"}}"><div class="wrap">
 {{with .SessionV}}{{if .Confirm}}
 <form class="callout sconfirm" method="post" action="{{.Confirm.Action}}">{{mi "tri"}}<div><p>{{.Confirm.Text}}</p><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="level" value="{{.Confirm.Level}}"><input type="hidden" name="confirm" value="1"><div class="gacts"><button class="gbtn pri">{{t "sessions.share_anyway"}}</button><a class="gbtn" href="{{.Confirm.Back}}">{{t "sessions.cancel"}}</a></div></div></form>
 {{else}}
@@ -80,7 +80,7 @@
 {{if and .RawView .Prompts}}<div class="sblk prompts"><h3>{{t "sessions.prompts"}}</h3><ol>{{range .Prompts}}<li class="pr{{if .Current}} is-current{{end}}"><a href="{{.Href}}"><span class="pr-n">{{.N}}</span><span class="pr-t">{{.Text}}</span><span class="pr-m"><span>{{.Time}}</span><span>{{.Tools}}</span></span>{{if .Hits}}<span class="pr-hits">{{.Hits}}</span>{{end}}</a></li>{{end}}</ol>{{if .MorePrompts.Href}}<a class="pr-more" href="{{.MorePrompts.Href}}">{{.MorePrompts.Text}}</a>{{end}}</div>{{end}}
 </aside></div>
 {{end}}{{end}}
-</div><script src="/static/sessions.js"></script>
+</div><script src="{{asset "sessions.js"}}"></script>
 {{template "foot" .}}{{end}}
 
 {{define "code"}}<div class="code-box"><div class="code-head"><span>{{.Label}}</span>{{if .Total}}<span class="code-total">{{.Total}}</span>{{end}}</div>

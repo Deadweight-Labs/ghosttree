@@ -290,7 +290,7 @@ func TestSearchLivePageIsTheFrame(t *testing.T) {
 	if !strings.Contains(sessions, `data-kind-body="sessions"`) || strings.Contains(sessions, `search.in_sessions`) || strings.Contains(sessions, "Search in sessions too") {
 		t.Errorf("the frame narrowed to sessions has no place for them or still offers the link:\n%s", sessions)
 	}
-	if !strings.Contains(page, `/static/ui-search.js`) {
+	if !strings.Contains(page, `/static/bundle-base.js?v=`) || !slices.Contains(assetBundles["bundle-base.js"], "ui-search.js") {
 		t.Error("the page script is not loaded")
 	}
 	_, guest := e.get(t, e.Guest, "/ui/search?q=zebrafish&live=1")

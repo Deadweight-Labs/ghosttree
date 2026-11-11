@@ -142,8 +142,10 @@ func (l lang) dateTime(t time.Time) string {
 // Vorlagen sind an ihre Sprache gebunden.
 func parseTemplates(l lang) *template.Template {
 	return template.Must(template.New("").Funcs(template.FuncMap{
-		"t":   l.msg,
-		"ago": func(stamp string) template.HTML { return timeTag(l, stamp) },
+		"t": l.msg,
+		// asset is the address of a static file with its content hash (assets.go).
+		"asset": assetURL,
+		"ago":   func(stamp string) template.HTML { return timeTag(l, stamp) },
 		// agot writes a sentence around a time: the text of key has %s where the time goes.
 		"agot": func(key, stamp string) template.HTML {
 			return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), timeTag(l, stamp)))

@@ -2,6 +2,7 @@ package web
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -19,8 +20,7 @@ func TestListRowsStretchTheTitleLinkOverTheRow(t *testing.T) {
 			t.Errorf("ui-rows.css lacks %q", want)
 		}
 	}
-	head, err := os.ReadFile("templates/layout.html")
-	if err != nil || !strings.Contains(string(head), "/static/ui-rows.css") {
+	if !slices.Contains(assetBundles["bundle-base.css"], "ui-rows.css") {
 		t.Error("the head does not load ui-rows.css")
 	}
 	// Each list marks the primary link of its row.

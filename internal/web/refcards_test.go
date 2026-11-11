@@ -1,6 +1,7 @@
 package web
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -108,7 +109,7 @@ func TestPageCarriesTheCardsOfItsReferences(t *testing.T) {
 			t.Errorf("page lacks %q", want)
 		}
 	}
-	if !strings.Contains(page, `/static/ui-refs.js`) || !strings.Contains(page, `/static/ui-md.js`) {
+	if !strings.Contains(page, `/static/bundle-base.js?v=`) || !slices.Contains(assetBundles["bundle-base.js"], "ui-refs.js") || !slices.Contains(assetBundles["bundle-base.js"], "ui-md.js") {
 		t.Error("page does not load the scripts of the cards and the preview")
 	}
 	// The card carries no script and no inline style.
