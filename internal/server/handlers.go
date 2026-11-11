@@ -19,6 +19,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
+	"github.com/Deadweight-Labs/ghosttree/internal/profile"
 	"github.com/Deadweight-Labs/ghosttree/internal/query"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -924,6 +925,12 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	// Maschinenwissen nur für den Besitzer der Maschine.
 	pa := a.access(r)
 	entries = filterTo(entries, 0, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
+	// A session that asked for the lean profile (REQ-643) gets the short briefing
+	// and none of the ledger sections below.
+	if p, _ := profile.Parse(r.URL.Query().Get("profile")); p == profile.Lean {
+		a.leanBootstrap(w, r, entries)
+		return
+	}
 	openRequests := 0
 	if pa.CanSeeProject(axesFromQuery(r).Project, store.ResRequest) {
 		if openRequests, err = a.st.CountOpenRequestsFor(pa.Viewer(), axesFromQuery(r)); err != nil {

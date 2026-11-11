@@ -24,8 +24,7 @@ import (
 // one call. This is the cheap version of that agent.
 func connect(t *testing.T, s *Server) *mcp.ClientSession {
 	t.Helper()
-	srv := mcp.NewServer(&mcp.Implementation{Name: "ghosttree", Version: "test"}, nil)
-	s.Register(srv)
+	srv := s.NewMCP("test")
 	serverT, clientT := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := srv.Connect(ctx, serverT, nil); err != nil {

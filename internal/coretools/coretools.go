@@ -19,9 +19,29 @@ type Action struct {
 	Line  string
 }
 
+// Tier says how early a core tool is loaded into a session, by profile (see
+// internal/profile): the profile decides which tiers a session loads up front,
+// the rest stays listed by name and is loaded on demand.
+type Tier int
+
+const (
+	// TierCore is what every session needs, even a short helper run: search,
+	// read, remember and the ledger. Loaded up front under every profile.
+	TierCore Tier = iota + 1
+	// TierWork is what working sessions use: the other objects of the ledger
+	// and the room. Loaded up front under the full profile only.
+	TierWork
+	// TierRare is used in a few sessions in a hundred (REQ-643: comment 3.9 %,
+	// feature 2.0 %, runbook 0 % of the sessions on production since
+	// 2026-11-10). Never loaded up front, under any profile.
+	TierRare
+)
+
 // Core is one tool in the list an agent sees.
 type Core struct {
 	Name string
+	// Tier is when the tool is loaded up front, by profile.
+	Tier Tier
 	Lead string
 	// Default is the action used when the call names none; empty means the
 	// action is required.
@@ -38,6 +58,7 @@ func Table() []Core { return table }
 var table = []Core{
 	{
 		Name:    "context_search",
+		Tier:    TierCore,
 		Lead:    "Search what ghosttree knows before you write or re-derive it: knowledge (pitfalls, decisions, notes, plans), file descriptions and the ledger. The default search leaves out session transcripts: ask for them with kind=sessions or action=sessions. Defaults to this project, branch and machine; project or all_projects looks further.",
 		Default: "search",
 		Actions: []Action{
@@ -52,6 +73,7 @@ var table = []Core{
 	},
 	{
 		Name:    "context_get",
+		Tier:    TierCore,
 		Lead:    "Read one thing directly: the context package for paths you work on, an object by its number, a commit, a pull request, a machine or a snapshot.",
 		Default: "context",
 		Actions: []Action{
@@ -67,6 +89,7 @@ var table = []Core{
 	},
 	{
 		Name:    "context_remember",
+		Tier:    TierCore,
 		Lead:    "Keep what you learned in ghosttree instead of in source comments: a pitfall, decision, note or plan, a file's description, or a correction of what is stored. Search first; when a known state changed, supersede the old entry instead of adding a follow-up.",
 		Default: "remember",
 		Actions: []Action{
@@ -82,6 +105,7 @@ var table = []Core{
 	},
 	{
 		Name: "request",
+		Tier: TierCore,
 		Lead: "The work ledger (issues): look for a matching request before substantial work, attach your session to it, and record progress with evidence. Trivial local fixes need no request.",
 		Actions: []Action{
 			{Name: "search", Tool: "request_search", Line: "list or search requests (query; state, type)"},
@@ -102,6 +126,7 @@ var table = []Core{
 	},
 	{
 		Name: "pain",
+		Tier: TierWork,
 		Lead: "A problem without a solution yet (with a solution, write a request). A pain is mitigated or resolved with evidence, never by a finished request alone.",
 		Actions: []Action{
 			{Name: "record", Tool: "pain_record", Line: "record a problem (title; body, explanation)"},
@@ -112,6 +137,7 @@ var table = []Core{
 	},
 	{
 		Name: "idea",
+		Tier: TierWork,
 		Lead: "A wish voiced in passing, without working it out; later it is promoted to a request or worked out into a concept with open decisions. Look in search first.",
 		Actions: []Action{
 			{Name: "record", Tool: "idea_record", Line: "record a wish (title; body, raw, summary, concept, motivated_by_pain)"},
@@ -139,6 +165,7 @@ var table = []Core{
 	},
 	{
 		Name: "coord",
+		Tier: TierWork,
 		Lead: "Talk to the other agents and people in this project's room and on this machine, and keep lasting discussions (threads). Messages for you also arrive by themselves in hook context.",
 		Actions: []Action{
 			{Name: "status", Tool: "coord_status", Line: "say in one sentence what you work on (note; empty clears it). Set it when you start on a PR or branch"},
@@ -158,6 +185,7 @@ var table = []Core{
 	},
 	{
 		Name: "human_task",
+		Tier: TierWork,
 		Lead: "What only the human can provide (a key, a file, a decision, a manual step): ask with a task instead of in chat, with where it lives and how to check it, never a secret. You never mark one done; you confirm or reopen what the human marked done.",
 		Actions: []Action{
 			{Name: "create", Tool: "human_task_create", Line: "ask (kind, title; location, check_hint, steps, explanation, request_id)"},
@@ -169,6 +197,7 @@ var table = []Core{
 	},
 	{
 		Name: "package",
+		Tier: TierWork,
 		Lead: "Work packages: the requests a branch or pull request carries as its requirements. Without package_id the current branch's package is meant.",
 		Actions: []Action{
 			{Name: "get", Tool: "package_get", Line: "the package with open criteria and waiting human tasks (branch, pr, package_id)"},
@@ -182,6 +211,7 @@ var table = []Core{
 	},
 	{
 		Name: "feature",
+		Tier: TierRare,
 		Lead: "Feature pages: what the product does now, across files (a wish is an idea). Look here before describing the same thing twice; after a change, write the new state.",
 		Actions: []Action{
 			{Name: "search", Tool: "feature_search", Line: "list features, or those living in a path (query, path)"},
@@ -197,6 +227,7 @@ var table = []Core{
 	},
 	{
 		Name: "runbook",
+		Tier: TierRare,
 		Lead: "Runbooks: named procedures that must be done the same way every time (build, roll out, check). Follow them exactly and report the run.",
 		Actions: []Action{
 			{Name: "get", Tool: "runbook_get", Line: "read one with parameters filled in (name, params); without name lists those that apply"},
@@ -206,6 +237,7 @@ var table = []Core{
 	},
 	{
 		Name: "comment",
+		Tier: TierRare,
 		Lead: "Comments, reactions, labels and topics on requests, ideas, pains and knowledge entries.",
 		Actions: []Action{
 			{Name: "add", Tool: "comment_add", Line: "comment on REQ-n, IDEA-n or PAIN-n (ref, body)"},
@@ -325,6 +357,14 @@ func Classify(toolName, action string) (core, act string, ok bool) {
 		return r.core, r.action.Name, true
 	}
 	return "", "", false
+}
+
+// TierOf is the tier of a core tool; a name that is no core tool is TierRare.
+func TierOf(core string) Tier {
+	if c, ok := byCore[core]; ok {
+		return c.Tier
+	}
+	return TierRare
 }
 
 // Tools lists every registered tool the table routes to, sorted.

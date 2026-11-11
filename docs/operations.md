@@ -153,6 +153,29 @@ project: the collector treats such a folder as one without a remote, and the
 server answers `invalid_remote` for writes and stores a session from it without
 its project.
 
+## Short helper runs: the lean profile
+
+Every session carries about 55 KB of fixed context from ghosttree: the tool
+list, the rule section and the briefing at the start. A reviewer, a script that
+calls `claude -p` or any other short helper run needs little of it. Set
+`GHOSTTREE_PROFILE=lean` in the environment of such an agent (the variable
+reaches `ctx mcp` and the hooks through the process that starts the agent; the
+installed hooks need no change):
+
+| | `full` (default) | `lean` |
+|---|---|---|
+| tools loaded up front | `context_search`, `context_get`, `context_remember`, `request`, `pain`, `idea`, `coord`, `human_task`, `package` (34.9 KB) | the first four (15.8 KB) |
+| briefing at session start | everything it has | binding instructions, at most three pitfalls of the project, 1,500 characters |
+| context the hooks may add | 24,000 characters | 6,000 characters |
+
+Tools not loaded up front (`feature`, `runbook` and `comment` always, the rest
+under `lean`) stay in the tool list by name. Claude Code loads one when the
+agent searches for it, Codex through `tool_search`, and every one answers under
+either profile. The profile is set on purpose only: without the variable, and
+with a value other than `lean` or `full`, the session is `full`. `ctx status`
+shows which profile applies to the shell it runs in. The profile of a session
+that a harness started with its own environment is not visible from there.
+
 ## The gardener's schedule
 
 Owners switch the gardener on per organization or person in the settings

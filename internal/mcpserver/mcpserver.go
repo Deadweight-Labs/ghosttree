@@ -15,6 +15,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
+	"github.com/Deadweight-Labs/ghosttree/internal/profile"
 	"github.com/Deadweight-Labs/ghosttree/internal/query"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -61,7 +62,14 @@ type Server struct {
 	// usageHarness and reportUses: see usage.go.
 	usageHarness string
 	reportUses   func(store.ToolUseBatch)
+	// profile says which core tools are loaded up front; the zero value is full.
+	profile profile.Profile
 }
+
+// SetProfile sets the profile of the session (GHOSTTREE_PROFILE). It decides
+// which tools carry alwaysLoad in the tool list and what the server instructions
+// say; every tool stays listed and callable under every profile.
+func (s *Server) SetProfile(p profile.Profile) { s.profile = p }
 
 // SetLineageResolver setzt, wie die Vorfahren eines anderen Branches als des
 // ausgecheckten bestimmt werden. Als Rückruf, weil git in collector sitzt.
@@ -289,9 +297,16 @@ func (s *Server) Register(srv *mcp.Server) {
 }
 
 func Run(ctx context.Context, s *Server, version string) error {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "ghosttree", Version: version}, nil)
+	return s.NewMCP(version).Run(ctx, &mcp.StdioTransport{})
+}
+
+// NewMCP is the MCP server with ghosttree's tools registered and the
+// instructions the profile calls for.
+func (s *Server) NewMCP(version string) *mcp.Server {
+	srv := mcp.NewServer(&mcp.Implementation{Name: "ghosttree", Version: version},
+		&mcp.ServerOptions{Instructions: s.instructions()})
 	s.Register(srv)
-	return srv.Run(ctx, &mcp.StdioTransport{})
+	return srv
 }
 
 func textResult(s string) *mcp.CallToolResult {

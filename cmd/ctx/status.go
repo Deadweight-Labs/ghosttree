@@ -13,6 +13,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/installer"
+	"github.com/Deadweight-Labs/ghosttree/internal/profile"
 	ver "github.com/Deadweight-Labs/ghosttree/internal/version"
 )
 
@@ -36,6 +37,8 @@ func cmdStatus(args []string, stdout io.Writer) int {
 			}
 		}
 	}
+
+	fmt.Fprintf(stdout, "profile     %s\n", profileLabel(os.Getenv(profile.EnvVar)))
 
 	if pid, running := watchProcess(); running {
 		fmt.Fprintf(stdout, "watch       running (pid %d)\n", pid)
@@ -64,6 +67,21 @@ func cmdStatus(args []string, stdout io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// profileLabel says which profile the sessions started from this environment
+// get, and where that comes from. It is the profile of the process that runs
+// `ctx status`: a session that sets GHOSTTREE_PROFILE for itself is not seen
+// from here.
+func profileLabel(value string) string {
+	p, ok := profile.Parse(value)
+	switch {
+	case !ok:
+		return fmt.Sprintf("%s (%s=%q is no profile: lean or full; full applies)", p, profile.EnvVar, value)
+	case strings.TrimSpace(value) == "":
+		return fmt.Sprintf("%s (default; %s=lean for short helper runs)", p, profile.EnvVar)
+	}
+	return fmt.Sprintf("%s (%s)", p, profile.EnvVar)
 }
 
 func installedLabel(ok bool) string {

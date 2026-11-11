@@ -278,10 +278,30 @@ func (r *coreRouter) coreTool(c coretools.Core, tools []*mcp.Tool) *mcp.Tool {
 		Name:        c.Name,
 		Description: strings.TrimRight(desc.String(), "\n"),
 		InputSchema: schema,
-		Meta:        mcp.Meta{alwaysLoadMeta: true},
 		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &closed, ReadOnlyHint: readOnly},
 	}
+	// A tool the profile does not load up front is still listed, with its name,
+	// and a harness that defers tools loads it when the agent looks for it
+	// (Claude Code through tool search, Codex through tool_search). Dropping the
+	// tool from the list instead would leave a harness that only calls listed
+	// tools no way to reach it.
+	if r.srv.profile.Preloads(c.Tier) {
+		tool.Meta = mcp.Meta{alwaysLoadMeta: true}
+	}
 	return tool
+}
+
+// instructions is the text the server hands the harness at the start of the
+// session. Claude Code puts it into the first turn next to the names of the
+// deferred tools, which is what tells an agent that a search for a tool is
+// worth making: nothing else in the first turn says that the tools exist.
+func (s *Server) instructions() string {
+	deferred := s.profile.Deferred()
+	if len(deferred) == 0 {
+		return ""
+	}
+	return "ghosttree tools not loaded up front in this session: " + strings.Join(deferred, ", ") +
+		". Each is listed by name and takes an `action`; look it up with tool search when you need it."
 }
 
 func enumOf(names []string) []any {

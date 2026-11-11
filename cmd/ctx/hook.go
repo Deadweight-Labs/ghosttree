@@ -22,6 +22,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
 	"github.com/Deadweight-Labs/ghosttree/internal/hookbudget"
 	"github.com/Deadweight-Labs/ghosttree/internal/hookstate"
+	"github.com/Deadweight-Labs/ghosttree/internal/profile"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -307,9 +308,9 @@ func bootstrapContext(stdin io.Reader) string {
 	}
 	gitCtx := collector.ResolveGitContext(cwd)
 	traceProject(gitCtx.Project)
-	md, err := client.New(cfg).BootstrapDelivered(
+	md, err := client.New(cfg).BootstrapDeliveredFor(
 		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Lineage: gitCtx.Lineage, Machine: cfg.Machine},
-		activation.Context{RepoPath: gitCtx.RepoPath}, 0, in.SessionID)
+		activation.Context{RepoPath: gitCtx.RepoPath}, 0, in.SessionID, profile.FromEnv())
 	if err != nil {
 		return ""
 	}
