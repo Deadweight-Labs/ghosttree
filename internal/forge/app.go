@@ -296,8 +296,12 @@ func (g *GitHubApp) ProveInstallation(ctx context.Context, code, redirectURI str
 		acct := Account{Login: strings.ToLower(in.Account.Login), InstallationID: in.ID}
 		// Der Admin-Nachweis liegt vor; kann GitHub die Repos nicht liefern, wird
 		// die Org ohne Repos angeboten statt alle zu verwerfen.
-		if repos, err := g.InstallationRepos(ctx, in.ID); err == nil {
-			acct.Repos = repos
+		if infos, err := g.InstallationRepoInfos(ctx, in.ID); err == nil {
+			acct.Visibility = map[string]bool{}
+			for _, r := range infos {
+				acct.Repos = append(acct.Repos, r.Remote)
+				acct.Visibility[r.Remote] = r.Private
+			}
 		}
 		out = append(out, acct)
 	}
@@ -328,25 +332,49 @@ func (g *GitHubApp) Identify(ctx context.Context, code, redirectURI string) (Ide
 	return parseIdentity(u.Login, u.ID)
 }
 
+// RepoInfo ist ein Repo der Installation mit dem, was GitHub über seine Sichtbarkeit
+// sagt.
+type RepoInfo struct {
+	// Remote ist die normalisierte Remote (github.com/owner/repo, klein).
+	Remote  string
+	Private bool
+}
+
 // InstallationRepos listet alle Repos der Installation (auch private) als
 // normalisierte Remotes, über ein auf Metadata: read begrenztes Token.
 func (g *GitHubApp) InstallationRepos(ctx context.Context, installationID int64) ([]string, error) {
+	infos, err := g.InstallationRepoInfos(ctx, installationID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(infos))
+	for _, r := range infos {
+		out = append(out, r.Remote)
+	}
+	return out, nil
+}
+
+// InstallationRepoInfos ist InstallationRepos mit der Sichtbarkeit je Repo (das Feld
+// private der Antwort). Davon hängt ab, ob ghosttree etwas auf GitHub schreibt, das
+// jeder lesen kann.
+func (g *GitHubApp) InstallationRepoInfos(ctx context.Context, installationID int64) ([]RepoInfo, error) {
 	tok, err := g.installationToken(ctx, installationID, map[string]string{"metadata": "read"})
 	if err != nil {
 		return nil, err
 	}
-	var out []string
+	var out []RepoInfo
 	for page := 1; page <= maxRepoPages; page++ {
 		var resp struct {
 			Repositories []struct {
 				FullName string `json:"full_name"`
+				Private  bool   `json:"private"`
 			} `json:"repositories"`
 		}
 		if err := g.getAs(ctx, tok, fmt.Sprintf("/installation/repositories?per_page=100&page=%d", page), &resp); err != nil {
 			return nil, err
 		}
 		for _, r := range resp.Repositories {
-			out = append(out, "github.com/"+strings.ToLower(r.FullName))
+			out = append(out, RepoInfo{Remote: "github.com/" + strings.ToLower(r.FullName), Private: r.Private})
 		}
 		if len(resp.Repositories) < 100 {
 			break

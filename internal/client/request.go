@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"strconv"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -24,7 +25,10 @@ func (c *Client) CreateRequest(in requestdomain.CreateInput) (requestdomain.Deta
 		body["derived_from"] = in.DerivedFrom
 	}
 	var out requestdomain.Detail
-	err := c.do("POST", "/api/requests", nil, body, &out)
+	// With an idempotency key the server answers a second try with the request
+	// the first one made, so a short outage may be waited out. Without one a
+	// failed creation is never repeated.
+	err := c.doRepeating(context.Background(), in.IdempotencyKey != "", "POST", "/api/requests", nil, body, &out)
 	return out, err
 }
 

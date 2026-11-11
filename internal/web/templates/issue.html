@@ -68,6 +68,7 @@
 {{if .Blockers}}<div class="sblk"><h3>{{t "issues.side.blocked_by"}}</h3><div class="v">{{range .Blockers}}<span class="pair">{{template "uihc" (hc (printf "#%d" .N) .Title .Where (printf "#task-%d" .N))}}{{avatarWait .Assignee}}</span>{{end}}</div></div>{{end}}
 {{range .Links}}{{if ne .Rel "parent"}}<div class="sblk"><h3>{{.Label}}</h3><div class="v"><span>{{template "uihc" (hc (printf "#%d" .N) .Title .Label .Href)}}</span></div></div>{{end}}{{end}}
 {{if .Work}}<div class="sblk"><h3>{{t "issues.side.sessions"}}</h3><div class="v">{{range .Work}}{{if .Href}}<a href="{{.Href}}">{{avatarX "" .Kind .Handle .Owner .LiveNow}}<span>{{if .Handle}}{{.Handle}}{{else}}{{.Title}}{{end}}</span>{{if .Active}}<span class="dot push{{if not .LiveNow}} idle{{end}}" title="{{.StateLabel}}"></span>{{end}}</a>{{end}}{{end}}</div></div>{{end}}
+{{template "sessblock" .Sess}}
 {{if .Threads}}<div class="sblk"><h3>{{t "issues.side.discussion"}}</h3><div class="v">{{range .Threads}}<a href="{{.URL}}">{{mi "chat"}}{{.Title}}</a>{{end}}</div></div>{{end}}
 {{$src := false}}{{range .Relations}}{{if or (eq .Kind "knowledge") (eq .Kind "external")}}{{$src = true}}{{end}}{{end}}
 {{if $src}}<div class="sblk"><h3>{{t "issues.side.sources"}}</h3><div class="v">{{range .Relations}}{{if or (eq .Kind "knowledge") (eq .Kind "external")}}{{if .Href}}<a href="{{.Href}}"{{if eq .Kind "external"}} rel="noopener noreferrer"{{end}}>{{.Text}}</a>{{else}}<span>{{.Text}}</span>{{end}}{{end}}{{end}}</div></div>{{end}}

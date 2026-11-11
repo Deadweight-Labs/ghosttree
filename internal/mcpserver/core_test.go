@@ -228,11 +228,19 @@ func TestMCPCountsCallsForHarnessesWithoutAToolHook(t *testing.T) {
 	session := connect(t, srv)
 	callTool(t, session, "pain", map[string]any{"action": "search"})
 	callTool(t, session, "request_search", map[string]any{"query": "x"})
-	for _, want := range []string{"pain search", "request search"} {
+	// The reports leave in the background, so their order is not fixed.
+	seen := map[string]bool{}
+	for range 2 {
 		b := <-got
 		u := b.Uses[0]
-		if b.Harness != "codex" || b.SessionRef != "codex-sess-1" || u.Tool+" "+u.Action != want || u.Calls != 1 {
-			t.Fatalf("report %+v, want %s", b, want)
+		if b.Harness != "codex" || b.SessionRef != "codex-sess-1" || u.Calls != 1 {
+			t.Fatalf("report %+v", b)
+		}
+		seen[u.Tool+" "+u.Action] = true
+	}
+	for _, want := range []string{"pain search", "request search"} {
+		if !seen[want] {
+			t.Fatalf("no report for %s, got %v", want, seen)
 		}
 	}
 	// Without a harness to count for (Claude Code: its hook counts) nothing is sent.

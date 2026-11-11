@@ -161,6 +161,47 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- `ctx doctor` sets this ctx against the server's version: a ctx older than
+  its server fails with the fix (`ctx update`, and the channel when the server
+  runs another one); a server older than this ctx, two dev builds and a server
+  without `/api/version` are reported as unverified. The settings of `ctx tui`
+  show since when the login exists and until when it holds (`/api/whoami` now
+  carries `token_created_at` and `token_expires_at`, never the token), and the
+  GitHub row names a command: `ctx account github link [--print]` opens the web
+  profile where the account is linked, without database access.
+- A knowledge entry stored, replaced or retired through MCP reaches the local
+  `.ghosttree/` mirror within a few seconds. A subagent that starts in a
+  worktree without a mirror has it written in the background.
+- Pull request, commit and request pages show which sessions the work came
+  from ("Built in", IDEA-31 P4). A request names the sessions behind the pull
+  requests of its work package and behind its commit evidence, without
+  `start_work` and apart from the sessions `start_work` already lists
+  (`GET /api/requests/{id}/sessions`); `request_get` lists their addresses
+  (`@ref`, at most five) so an agent can read one with
+  `context_search action=sessions session_ref=...`. What a viewer sees follows
+  what they may read: title and link with the right to read the transcript,
+  person and date with the right to read the metadata, otherwise only a
+  number ("2 more sessions, not shared"); a stranger and an anonymous reader
+  get nothing. An assignment that rests on a time window only, with the author
+  unverified, carries the label "weak".
+- A pull request that opens on a branch without a work package gets one from
+  the server (REQ-601): named like the pull request, bound to it, holding the
+  requests that a session on the branch works on as main task with
+  `request_start_work` and the requests named as `REQ-n` in the title of the
+  pull request. A branch name an earlier pull request already used, or more
+  than twenty candidates, leaves the package empty; the requests are then added
+  by hand. The note on each request says where it came from. An explicit
+  `package_update create` on such a branch answers `package_exists` and names the
+  package to add to. Pull requests first seen as merged or closed get none.
+- Check run "ghosttree Lastenheft" at the head commit of a pull request with a
+  work package (REQ-601): neutral without mandatory requests, failing while
+  mandatory criteria are open, succeeding when all are met or waived. It is
+  written when the pull request opens or gets a new commit and again, at most
+  every five minutes, when the state of the criteria changes. It shows request
+  numbers and counts with links, never titles or criteria. The App needs the
+  permission `Checks: write`; without it the server does nothing (no error, one
+  attempt per hour and installation). See `deploy/README.md`.
+
 - The search page answers at once: it shows a progress bar and the groups of
   hits (requests, ideas, knowledge, sessions, tasks, pains) as each kind is
   done, streamed from `/ui/search/stream`. Each kind has a time budget; one
@@ -732,6 +773,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   listed by name and answer as before; where the harness loads tools on demand
   (Claude Code), the first call costs one tool search.
   `tools/list` loads 34.9 KB up front under `full` instead of 41.7 KB.
+- Commands (not hooks, the collector, the terminal interface, `doctor`, `status`
+  or the sign-in) repeat a read twice with a growing pause when the network is
+  briefly gone (refused connection, DNS timeout), as `ctx mcp` already did. A
+  write is repeated only when it is a request creation with an idempotency key.
 - The web interface's static files are cached by the browser and sent
   compressed. Every address carries a hash of the file's content
   (`/static/ui-base.css?v=…`, computed once at start) and is served with
@@ -983,6 +1028,9 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- `request action=start_work` finds the own session in a project crowded with
+  newer sessions of other agents (an orchestrator with workers in worktrees):
+  it looks through 200 sessions instead of 20.
 - Uploading a session a second time failed with a UNIQUE violation as soon as a
   machine or global entry was tied to its project (the triggers of the project
   tie used `INSERT OR IGNORE`, which the `ON CONFLICT DO UPDATE` of the session

@@ -29,7 +29,7 @@ func pullChange(ev forge.PullEvent) store.PullRequestChange {
 	return store.PullRequestChange{
 		InstallationID: ev.InstallationID, Remote: ev.Remote, HeadRemote: ev.HeadRemote, Number: int64(ev.Number),
 		Action: ev.Action, Title: ev.Title, Head: ev.Head, Base: ev.Base, DefaultBranch: ev.DefaultBranch,
-		MergeSHA: ev.MergeSHA, Author: ev.Author, State: ev.State,
+		MergeSHA: ev.MergeSHA, HeadSHA: ev.HeadSHA, HeadAt: ev.UpdatedAt, RepoPrivate: ev.RepoPrivate, Author: ev.Author, State: ev.State,
 	}
 }
 
@@ -245,6 +245,12 @@ func pullWebhook(st *store.Store, l commitLister, onCommitError func(error)) for
 // pullWebhookJobs ist pullWebhook mit den Hintergrundabrufen, auf die ein Test
 // warten kann.
 func pullWebhookJobs(st *store.Store, l commitLister, onCommitError func(error)) (forge.PullSync, *detailJobs) {
+	return pullWebhookWith(st, l, nil, onCommitError)
+}
+
+// pullWebhookWith ist pullWebhookJobs, das bei offenen PRs mit Paket auch den
+// Check-Run „Lastenheft“ schreibt, wenn lh gesetzt ist (lastenheft.go).
+func pullWebhookWith(st *store.Store, l commitLister, lh *lastenheftPublisher, onCommitError func(error)) (forge.PullSync, *detailJobs) {
 	jobs := &detailJobs{}
 	report := func(err error) {
 		if onCommitError != nil {
@@ -256,12 +262,18 @@ func pullWebhookJobs(st *store.Store, l commitLister, onCommitError func(error))
 		if err != nil {
 			return err
 		}
-		if l == nil || !res.Applied {
+		if !res.Applied {
 			return nil
 		}
 		switch ev.Action {
 		case "opened", "reopened", "synchronize":
 		default:
+			return nil
+		}
+		if lh != nil && ev.State == "open" && ev.HeadSHA != "" {
+			lh.publishAsync(jobs, store.LastenheftTarget{Project: res.Project, PR: ev.Number, HeadSHA: ev.HeadSHA, InstallationID: ev.InstallationID})
+		}
+		if l == nil {
 			return nil
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), pullCommitTimeout)

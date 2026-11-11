@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/forge"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // fakeAppProver ist die GitHub-App: sie prüft die Installation aus der Adresse
@@ -124,5 +125,30 @@ func TestNameAndAddressFollowGitHubOnlyAfterTheOwnerSwitchesItOn(t *testing.T) {
 	postOrg(t, alice, base, "/ui/orgs/follow", url.Values{"org": {"deadweight-labs"}, "follow": {"0"}})
 	if got, _ := st.OrgByRef("deadweight-labs"); got.DisplaySource != "user" {
 		t.Fatalf("after switching off: %+v", got)
+	}
+}
+
+// Was GitHub über die Sichtbarkeit der Repos sagt, wird gemerkt, aber nur für Repos
+// unter dem Login der verbundenen Quelle: der Check-Run am PR hängt daran.
+func TestRepoVisibilityFromTheInstallationIsRecordedForTheSourceLoginOnly(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/vis.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	a := &app{store: st}
+	a.recordRepoVisibility("Deadweight-Labs", map[string]bool{
+		"github.com/deadweight-labs/secret": true,
+		"github.com/deadweight-labs/open":   false,
+		"github.com/elsewhere/other":        true,
+	})
+	if private, _ := st.RepoPrivate("github.com/deadweight-labs/secret"); !private {
+		t.Error("a private repo of the source is recorded")
+	}
+	if private, _ := st.RepoPrivate("github.com/deadweight-labs/open"); private {
+		t.Error("a public repo is not private")
+	}
+	if private, _ := st.RepoPrivate("github.com/elsewhere/other"); private {
+		t.Error("a repo outside the login of the source must not be recorded")
 	}
 }

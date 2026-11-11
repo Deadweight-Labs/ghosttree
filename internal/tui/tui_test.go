@@ -403,6 +403,78 @@ func TestSettingsShowLoginStateWithoutToken(t *testing.T) {
 	}
 }
 
+func TestSettingsShowSinceWhenTheLoginExistsAndUntilWhenItHolds(t *testing.T) {
+	f := newFake()
+	m := ready(f, Options{}, 120, 40, darkBG)
+	v := plainView(drive(m, key("ctrl+s")))
+	for _, want := range []string{"Anmeldung gültig", "seit 2026-10-12", "läuft nicht ab"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("login without expiry misses %q:\n%s", want, v)
+		}
+	}
+
+	f = newFake()
+	f.expires = time.Date(2026, 12, 31, 12, 0, 0, 0, time.UTC)
+	m = ready(f, Options{}, 120, 40, darkBG)
+	v = plainView(drive(m, key("ctrl+s")))
+	for _, want := range []string{"seit 2026-10-12", "gültig bis 2026-12-31"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("login with expiry misses %q:\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, "läuft nicht ab") {
+		t.Errorf("an expiring login says it does not expire:\n%s", v)
+	}
+
+	// English words for an English locale.
+	m = ready(f, Options{}, 120, 40, darkBG)
+	m.lang = langEN
+	v = plainView(drive(m, key("ctrl+s")))
+	if !strings.Contains(v, "since 2026-10-12") || !strings.Contains(v, "valid until 2026-12-31") {
+		t.Errorf("english settings:\n%s", v)
+	}
+}
+
+func TestSettingsNameNoTimeForAnOlderServer(t *testing.T) {
+	// An older server says neither since when nor until when: the row then
+	// shows what it knows and no invented dates.
+	f := newFake()
+	f.oldServer = true
+	m := ready(f, Options{}, 120, 40, darkBG)
+	v := plainView(drive(m, key("ctrl+s")))
+	if !strings.Contains(v, "Anmeldung gültig") {
+		t.Errorf("the login state vanished:\n%s", v)
+	}
+	if strings.Contains(v, "seit ") || strings.Contains(v, "läuft nicht ab") || strings.Contains(v, "gültig bis") {
+		t.Errorf("dates shown without data:\n%s", v)
+	}
+}
+
+// Every row of the settings names a command a script can run instead; a web
+// address is not one (REQ-619 AC-6).
+func TestEverySettingRowNamesAnEquivalentCommand(t *testing.T) {
+	f := newFake()
+	f.local.Servers = append(f.local.Servers, Server{Name: "Firma", URL: "https://ghosttree.firma.example", Token: TokenNone})
+	m := ready(f, Options{}, 100, 40, darkBG)
+	seen := map[string]bool{}
+	for _, row := range m.settingsRows() {
+		eq := m.equivalent(row)
+		seen[row.kind] = true
+		if !strings.HasPrefix(eq, "ctx ") || strings.Contains(eq, "://") && !strings.Contains(eq, "--server") {
+			t.Errorf("row %s: equivalent %q is not a command", row.kind, eq)
+		}
+	}
+	for _, kind := range []string{"server", "add-server", "channel", "harness", "collector", "machine", "github"} {
+		if !seen[kind] {
+			t.Errorf("settings have no row %s", kind)
+		}
+	}
+	m = settingsAt(t, m, "github")
+	if v := plainView(m); !strings.Contains(v, "ctx account github link") {
+		t.Fatalf("github row shows no command:\n%s", v)
+	}
+}
+
 func TestServerSectionIsAList(t *testing.T) {
 	f := newFake()
 	f.local.Servers = append(f.local.Servers, Server{Name: "Firma", URL: "https://ghosttree.firma.example", Token: TokenNone})

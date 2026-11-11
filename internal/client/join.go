@@ -87,6 +87,22 @@ func (c *Client) WhoAmIContext(ctx context.Context) (store.Principal, error) {
 	return principal, err
 }
 
+// WhoAmIInfo ist die Antwort von /api/whoami samt den Angaben zur Anmeldung:
+// seit wann das Token besteht und bis wann es gilt. Ein älterer Server liefert
+// die beiden Zeiten nicht; sie bleiben dann leer.
+type WhoAmIInfo struct {
+	store.Principal
+	TokenCreatedAt string `json:"token_created_at,omitempty"`
+	TokenExpiresAt string `json:"token_expires_at,omitempty"`
+}
+
+// WhoAmIInfoContext fragt wie WhoAmIContext, behält aber die Zeiten des Tokens.
+func (c *Client) WhoAmIInfoContext(ctx context.Context) (WhoAmIInfo, error) {
+	var info WhoAmIInfo
+	err := c.doContext(ctx, "GET", "/api/whoami", nil, nil, &info)
+	return info, err
+}
+
 // ListOrgsContext ist ListOrgs mit Kontext.
 func (c *Client) ListOrgsContext(ctx context.Context) ([]store.Org, error) {
 	var out []store.Org

@@ -129,6 +129,12 @@ func subagentBriefing(raw []byte) string {
 		if info, err := os.Stat(index); err == nil && info.Mode().IsRegular() {
 			fmt.Fprintf(&b, "\n### Mirror\nWhat ghosttree knows about this repository is on disk: %s (start there; grep -ril <topic> %s).\n",
 				index, filepath.Join(git.Root, ".ghosttree", "knowledge"))
+		} else if git.Project != "" && startProjectionRefresh(git.Root) == nil {
+			// A worktree an orchestrator just cut has no mirror, and no session
+			// start of its own is going to write one. Writing takes longer than
+			// the briefing may (REQ-436 AC-1): a process of its own does it.
+			fmt.Fprintf(&b, "\n### Mirror\nWhat ghosttree knows about this repository is being written to %s and is readable within a few seconds (start at INDEX.md; grep -ril <topic> %s).\n",
+				filepath.Join(git.Root, ".ghosttree"), filepath.Join(git.Root, ".ghosttree", "knowledge"))
 		}
 	}
 	return cutRunesPlain(b.String(), subagentBriefMaxRunes)

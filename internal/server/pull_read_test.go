@@ -109,12 +109,19 @@ func TestPullDetailCarriesPackageChecklistAndBrief(t *testing.T) {
 	f := accessAPI(t, true)
 	f.seedPulls(t)
 	fid := decode[struct{ ID int64 }](t, f.expect(t, "mia", 201, "POST", "/api/features", map[string]any{"project": accProject, "name": "Pakete", "areas": []string{"internal/store/package.go"}})).ID
-	pkg, err := f.st.CreatePackage(requestdomain.PackageInput{Project: accProject, Branch: "feat/x", Name: "Paket", PR: 12,
-		Members: []requestdomain.PackageMember{{RequestID: f.id["r-mia"], Role: requestdomain.RolePflicht}, {RequestID: f.id["r-robin"], Role: requestdomain.RoleOptional}}, Person: "mia"})
+	// Der offene PR hat schon sein Paket (der Server legt es beim Öffnen an); die
+	// Requests kommen von Hand hinein.
+	pkg, err := f.st.PackageForPR(accProject, 12)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = pkg
+	name := "Paket"
+	if _, err := f.st.UpdatePackage(pkg.ID, requestdomain.PackagePatch{Name: &name}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AddPackageRequests(pkg.ID, []requestdomain.PackageMember{{RequestID: f.id["r-mia"], Role: requestdomain.RolePflicht}, {RequestID: f.id["r-robin"], Role: requestdomain.RoleOptional}}, "", "mia"); err != nil {
+		t.Fatal(err)
+	}
 	f.expect(t, "mia", 201, "POST", fmt.Sprintf("/api/requests/%d/criteria", f.id["r-mia"]), map[string]string{"description": "es geht"})
 	f.expect(t, "mia", 200, "POST", "/api/features/pr-paths", map[string]any{"project": accProject, "pr": 12, "paths": []string{"internal/store/package.go"}})
 

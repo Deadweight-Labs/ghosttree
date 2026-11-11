@@ -36,8 +36,16 @@ func packageFixture(t *testing.T) (shellEnv, requestdomain.PackageDetail, reques
 		t.Fatal(err)
 	}
 	hiddenReq := rqMake(t, e.St, rqSpec{Title: "SECRET-REQUEST", Project: shellHiddenProject})
-	other, err := e.St.CreatePackage(requestdomain.PackageInput{Project: shellHiddenProject, Branch: "feat/secret", Name: "SECRET-PACKAGE", Person: "alice",
-		Members: []requestdomain.PackageMember{{RequestID: hiddenReq.Request.ID, Role: requestdomain.RolePflicht}}})
+	// PR 99 of the hidden repository is open, so its branch has a package already (package_auto.go).
+	auto, err := e.St.PackageForPR(shellHiddenProject, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "SECRET-PACKAGE"
+	if _, err := e.St.UpdatePackage(auto.ID, requestdomain.PackagePatch{Name: &name}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := e.St.AddPackageRequests(auto.ID, []requestdomain.PackageMember{{RequestID: hiddenReq.Request.ID, Role: requestdomain.RolePflicht}}, "", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}

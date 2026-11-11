@@ -35,8 +35,11 @@ type Server struct {
 	repoRoot string
 	// afterWrite schreibt den Baum neu. Als Rückruf, weil das Schreiben in
 	// cmd/ctx sitzt und mcpserver nicht von main abhängen darf.
-	afterWrite    func()
-	afterSnapshot func(context.Context, string) error
+	afterWrite func()
+	// afterKnowledge schreibt den Spiegel neu, nachdem ein Wissenseintrag
+	// gespeichert, ersetzt oder zurückgezogen wurde (SetAfterKnowledge).
+	afterKnowledge func()
+	afterSnapshot  func(context.Context, string) error
 	// mentioned sind die Pfade, auf die dieser Prozess schon hingewiesen hat.
 	// Der Prozess ist die Sitzung, deshalb reicht der Hauptspeicher; siehe
 	// firstMentionOf. Unter einem Schloss, weil Werkzeugaufrufe im go-sdk
@@ -79,6 +82,19 @@ func (s *Server) SetLineageResolver(f func(branch string) []string) { s.lineageO
 func (s *Server) SetRepoRoot(root string) { s.repoRoot = root }
 
 func (s *Server) SetAfterWrite(f func()) { s.afterWrite = f }
+
+// SetAfterKnowledge sets what runs after context_remember, supersede or retire
+// succeeded: cmd/ctx rewrites the mirror under .ghosttree/ then, so that an
+// entry this session just stored is on disk for the next grep (REQ-436 AC-2).
+// The callback must return at once (cmd/ctx debounces it and works in the
+// background).
+func (s *Server) SetAfterKnowledge(f func()) { s.afterKnowledge = f }
+
+func (s *Server) knowledgeChanged() {
+	if s.afterKnowledge != nil {
+		s.afterKnowledge()
+	}
+}
 
 func (s *Server) SetAfterSnapshot(f func(context.Context, string) error) { s.afterSnapshot = f }
 
@@ -666,6 +682,7 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if err != nil {
 		return nil, nil, err
 	}
+	s.knowledgeChanged()
 	msg := fmt.Sprintf("stored %s [%s|%s]", knref.Format(saved.ID), saved.Type, scopeLabel(saved.Scope))
 	if len(in.Supersedes) > 0 {
 		msg += fmt.Sprintf("; superseded %s", idList(in.Supersedes))

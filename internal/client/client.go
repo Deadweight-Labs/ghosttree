@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -155,9 +156,22 @@ func unavailable(status int) bool {
 // Retry-After of up to three seconds lengthens the pause). A
 // restart of the server takes a few seconds, and an agent that reads during
 // them otherwise gets an error it can only answer by calling again. Writes are
-// never repeated: whether one arrived is not known. A hook leaves this off,
+// never repeated, whether one arrived is not known; the one exception is a
+// request creation that carries an idempotency key, which the server answers
+// with the request the first try made. A hook leaves this off,
 // because it must not make a person wait.
 func (c *Client) SetReadRetries(n int) { c.readRetries = n }
+
+// defaultReadRetries is what New gives every client: how often a read is
+// repeated by the commands a person or a script runs (REQ-436 AC-6). main sets
+// it once, before any client exists, and leaves it at 0 for what must not make
+// anybody wait (hooks, the collector, the terminal interface, diagnosis).
+// NewWithTimeout, which hooks use, never takes it.
+var defaultReadRetries int
+
+// SetDefaultReadRetries sets the repetitions New gives a client. Call it once
+// at the start of the process.
+func SetDefaultReadRetries(n int) { defaultReadRetries = n }
 
 // readRetryWait is the pause before the n-th repetition (from 0).
 var readRetryWait = func(n int) time.Duration { return time.Duration(n+1) * 700 * time.Millisecond }
@@ -192,6 +206,13 @@ func worthRepeating(err error) bool {
 	if errors.As(err, &ae) {
 		return unavailable(ae.Status) || ae.Code == "search_busy"
 	}
+	// A resolver that did not answer in time or is momentarily out of order
+	// (a timeout, a temporary failure) is a short outage, and the budget of
+	// the call is not spent. A name that does not exist is an answer.
+	var de *net.DNSError
+	if errors.As(err, &de) {
+		return !de.IsNotFound
+	}
 	var ue *url.Error
 	if errors.As(err, &ue) {
 		// A timeout already cost the whole budget of the call.
@@ -219,7 +240,7 @@ func IsRouteMissing(err error) bool {
 }
 
 func New(cfg config.Config) *Client {
-	return &Client{cfg: cfg, http: &http.Client{Timeout: 30 * time.Second}}
+	return &Client{cfg: cfg, http: &http.Client{Timeout: 30 * time.Second}, readRetries: defaultReadRetries}
 }
 
 // NewWithTimeout is for callers that sit in front of a person waiting. The
@@ -274,8 +295,17 @@ func (c *Client) do(method, path string, query url.Values, in, out any) error {
 }
 
 func (c *Client) doContext(ctx context.Context, method, path string, query url.Values, in, out any) error {
+	return c.doRepeating(ctx, method == http.MethodGet || method == http.MethodHead, method, path, query, in, out)
+}
+
+// doRepeating is doContext with the decision whether the call may be repeated
+// made by the caller: a read always may, a write only when repeating it cannot
+// do harm because the server recognises it (a request creation with an
+// idempotency key). A write without such a key is never repeated, because
+// after a failure nobody knows whether it arrived.
+func (c *Client) doRepeating(ctx context.Context, repeatable bool, method, path string, query url.Values, in, out any) error {
 	err := c.doOnce(ctx, method, path, query, in, out)
-	if method != http.MethodGet && method != http.MethodHead {
+	if !repeatable {
 		return err
 	}
 	for n := 0; n < c.readRetries && err != nil && worthRepeating(err); n++ {

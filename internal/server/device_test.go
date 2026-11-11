@@ -102,6 +102,19 @@ func TestDeviceLoginEndToEnd(t *testing.T) {
 	if resp.StatusCode != 200 || who["machine"] != "laptop" || who["token_kind"] != "device" || who["label"] != "alice" {
 		t.Fatalf("whoami: %d %v", resp.StatusCode, who)
 	}
+	// Seit wann die Anmeldung besteht, steht in der Antwort (ein Geräte-Token
+	// läuft nicht ab); das Token selbst steht nie darin.
+	if created, _ := who["token_created_at"].(string); created == "" {
+		t.Fatalf("whoami says nothing about the login's start: %v", who)
+	}
+	if _, has := who["token_expires_at"]; has {
+		t.Fatalf("device login reported an expiry: %v", who)
+	}
+	for k, v := range who {
+		if s, ok := v.(string); ok && s == token {
+			t.Fatalf("whoami leaks the token in %q", k)
+		}
+	}
 
 	// Einmalig.
 	clock.t = clock.t.Add(time.Minute)

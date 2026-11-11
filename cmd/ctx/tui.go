@@ -58,7 +58,9 @@ Every setting it changes has a command of its own:
   sign out              ctx logout
   update channel        ctx config set channel stable|dev
   harness check/repair  ctx doctor / ctx doctor --fix
-  collector restart     ctx install watch --restart`
+  collector restart     ctx install watch --restart
+  machine name          ctx login --machine NAME
+  link GitHub account   ctx account github link [--print]`
 
 func tuiOptions(look, switchStyle string) (tui.Options, error) {
 	if look == "" {
@@ -222,7 +224,7 @@ func (b cliBackend) Local() tui.Local {
 		}
 		if cfg.ServerURL != "" {
 			l.Servers = []tui.Server{{URL: cfg.ServerURL, Default: true, Token: token, Machine: cfg.Machine}}
-			l.ProfileURL = strings.TrimRight(cfg.ServerURL, "/") + "/ui/profile"
+			l.ProfileURL = profileURL(cfg)
 		}
 		g := currentGitContext(cfg.Machine)
 		l.Project, l.Branch = g.axes.Project, g.axes.Branch
@@ -278,7 +280,7 @@ func (b cliBackend) CheckServer(ctx context.Context, url string) tui.Server {
 	if cfg.Token == "" {
 		return s
 	}
-	who, err := c.WhoAmIContext(ctx)
+	who, err := c.WhoAmIInfoContext(ctx)
 	if err != nil {
 		var se *client.StatusError
 		if errors.As(err, &se) && (se.Status == http.StatusUnauthorized || se.Status == http.StatusForbidden) {
@@ -292,7 +294,18 @@ func (b cliBackend) CheckServer(ctx context.Context, url string) tui.Server {
 	if m := links.Clean(who.Machine, 64); m != "" {
 		s.Machine = m
 	}
+	s.Since, s.Expires = parseServerTime(who.TokenCreatedAt), parseServerTime(who.TokenExpiresAt)
 	return s
+}
+
+// parseServerTime reads a time the server wrote (RFC 3339); anything else,
+// including an empty text, is the zero time.
+func parseServerTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(s))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 func (b cliBackend) Resolve(ctx context.Context, input string) (links.Card, error) {

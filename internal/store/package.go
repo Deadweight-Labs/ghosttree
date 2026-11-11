@@ -215,12 +215,26 @@ func (s *Store) CreatePackage(in requestdomain.PackageInput) (requestdomain.Pack
 }
 
 func createPackageTx(tx *sql.Tx, in requestdomain.PackageInput) (requestdomain.Package, error) {
+	// Ein offenes Paket, dessen PR gemergt oder geschlossen ist, hält den Branch
+	// nicht mehr besetzt.
+	if _, err := closeFinishedPackagesTx(tx, in.Project, in.Branch, now()); err != nil {
+		return requestdomain.Package{}, err
+	}
 	var existing int64
-	err := tx.QueryRow(`SELECT id FROM work_packages WHERE project=? AND branch=? AND state='open'`, in.Project, in.Branch).Scan(&existing)
+	var prState string
+	err := tx.QueryRow(`SELECT w.id, COALESCE(g.state,'') FROM work_packages w
+		LEFT JOIN git_pull_requests g ON g.project=w.project AND g.number=w.pr
+		WHERE w.project=? AND w.branch=? AND w.state='open'`, in.Project, in.Branch).Scan(&existing, &prState)
 	if err == nil {
+		// Nur das Paket eines offenen PRs ist von selbst entstanden; der Hinweis darauf
+		// wäre bei einem anderen Paket falsch.
+		resolution := "add the requests to that package instead"
+		if prState == "open" {
+			resolution = "an opened pull request gets its package automatically; add the requests to that package with package action=add"
+		}
 		return requestdomain.Package{}, requestdomain.NewRuleError("package_exists",
 			fmt.Sprintf("branch %s already has the open work package PKG-%d", in.Branch, existing),
-			"add the requests to that package instead", []string{fmt.Sprintf("PKG-%d", existing)})
+			resolution, []string{fmt.Sprintf("PKG-%d", existing)})
 	}
 	if err != sql.ErrNoRows {
 		return requestdomain.Package{}, err

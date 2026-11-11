@@ -143,8 +143,10 @@ type requestView struct {
 	Progress                       string
 	Criteria                       []criterionLine
 	Work                           []workLine
-	Relations                      []relationLine
-	Pains                          []requestPainLine
+	// Sess is the block "Built in": sessions behind the pull requests of the package and the commit proofs.
+	Sess      *sessBlock
+	Relations []relationLine
+	Pains     []requestPainLine
 	// Ideas are the ideas the issue came out of; the issue page shows them as its source.
 	Ideas                    []ideaFact
 	Tasks                    []requestTaskLine
@@ -433,6 +435,7 @@ func (a *app) buildRequestView(w http.ResponseWriter, r *http.Request) (*request
 	}
 	v.CanComplete = v.Open && v.CanEdit && open == 0
 	v.Work = a.workLines(l, pa, detail.Work, now)
+	v.Sess = requestSessionBlock(l, pa, req.ID)
 	v.Relations = a.relationLines(l, pa, detail.Relations)
 	for _, p := range detail.Pains {
 		v.Pains = append(v.Pains, requestPainLine{ID: p.ID, Href: painURL(p.ID), Title: p.Title, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining})
