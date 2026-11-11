@@ -241,5 +241,24 @@ func main() {
 	if asGhclaude(os.Args) {
 		os.Exit(runGhclaude(os.Args[0], os.Args[1:], os.Stdout))
 	}
+	client.SetDefaultReadRetries(cliReadRetries(os.Args[1:]))
 	os.Exit(run(os.Args[1:], os.Stdout))
+}
+
+// cliReadRetries is how often a command repeats a read when the server is
+// briefly not there (REQ-436 AC-6): twice, with a growing pause, which spans a
+// restart of the server. It repeats nothing where somebody waits for the
+// answer or the first failure is the answer: the hooks (they must not make an
+// agent wait), the collector and the channel (they poll anyway), the terminal
+// interface and the diagnosis (they show the outage as it is), the sign-in and
+// the server itself. ctx mcp sets its own.
+func cliReadRetries(args []string) int {
+	if len(args) == 0 {
+		return 0
+	}
+	switch args[0] {
+	case "hook", "watch", "channel", "claude", "tui", "doctor", "status", "login", "logout", "join", "setup", "serve", "mcp", "version":
+		return 0
+	}
+	return 2
 }

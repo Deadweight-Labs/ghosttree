@@ -638,3 +638,18 @@ func TestAccountAddQuotesTheTokenHint(t *testing.T) {
 		t.Fatalf("hint not quoted: %s", out.String())
 	}
 }
+
+// REQ-436 AC-6: the commands repeat a read after a short outage, except where a
+// person waits for the answer or the first failure is the answer.
+func TestCommandsRepeatReadsExceptWhereNobodyShouldWait(t *testing.T) {
+	for _, args := range [][]string{{"search", "x"}, {"request", "get", "1"}, {"pain", "list"}, {"coord", "inbox"}, {"update"}, {"open", "REQ-1"}} {
+		if got := cliReadRetries(args); got != 2 {
+			t.Errorf("ctx %v repeats %d times, want 2", args, got)
+		}
+	}
+	for _, args := range [][]string{nil, {"hook", "session-start"}, {"watch"}, {"channel"}, {"claude"}, {"tui"}, {"doctor"}, {"status"}, {"login"}, {"join"}, {"serve"}, {"mcp"}} {
+		if got := cliReadRetries(args); got != 0 {
+			t.Errorf("ctx %v repeats %d times, want none", args, got)
+		}
+	}
+}
