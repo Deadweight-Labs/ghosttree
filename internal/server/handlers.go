@@ -781,7 +781,9 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	}
 	// Transkripte tragen keinen Git-Anker: mit einem Anker-Filter gibt es
 	// keine Session-Treffer, statt Treffer zu zeigen, die der Filter nicht prüfen kann.
-	if (kind == "sessions" || kind == "all") && !anchor.Active() && !origin.Active() {
+	// Die Standardsuche (all) enthält keine Sessions (Entscheidung #4447): sie
+	// laufen nur mit kind=sessions.
+	if kind == "sessions" && !anchor.Active() && !origin.Active() {
 		st, done := gaps.budget()
 		hits, err := a.searchSessions(st, pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch, store.SearchAuto)
 		err = done(err)

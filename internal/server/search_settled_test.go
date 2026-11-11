@@ -75,8 +75,17 @@ func TestSearchAllAnswersWhenOneAreaFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := url.Values{"q": {"zentrifol"}, "project": {accProject}}
+	// The default search does not ask the sessions: their index failing costs nothing.
 	res := decode[searchResult](t, f.expect(t, "robin", 200, "GET", "/api/search?"+v.Encode(), nil))
-	if len(res.Knowledge) != 1 || len(res.Unavailable) != 1 || res.Unavailable[0] != (store.SearchGap{Area: "sessions", Reason: store.GapFailed}) {
+	if len(res.Knowledge) != 1 || len(res.Unavailable) != 0 {
+		t.Errorf("kind=all without sessions: %+v / %+v", res.Knowledge, res.Unavailable)
+	}
+	// Another area failing is a gap in it, and the hits of the others still come back.
+	if _, err := f.st.DB().Exec(`DROP TABLE search_documents_fts`); err != nil {
+		t.Fatal(err)
+	}
+	res = decode[searchResult](t, f.expect(t, "robin", 200, "GET", "/api/search?"+v.Encode(), nil))
+	if len(res.Knowledge) != 1 || len(res.Unavailable) != 1 || res.Unavailable[0] != (store.SearchGap{Area: "requests", Reason: store.GapFailed}) {
 		t.Errorf("kind=all: %+v / %+v", res.Knowledge, res.Unavailable)
 	}
 	v.Set("q", "zentrifol kind:knowledge,session")

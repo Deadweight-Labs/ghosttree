@@ -134,9 +134,10 @@ func (p *searchPlan) liveView(r *http.Request) *searchLive {
 		kind = ""
 		qs.Del("kind")
 	}
-	lv := &searchLive{Stream: "/ui/search/stream?" + qs.Encode(), Sync: "/ui/search?" + qs.Encode(), Total: len(p.kinds), Kind: kind,
+	kinds := p.runKinds()
+	lv := &searchLive{Stream: "/ui/search/stream?" + qs.Encode(), Sync: "/ui/search?" + qs.Encode(), Total: len(kinds), Kind: kind,
 		PerGroup: searchPerGroup, KindPage: searchKindPage, Step: kindStep, Cap: searchCountCap}
-	for _, k := range p.kinds {
+	for _, k := range kinds {
 		lv.Slots = append(lv.Slots, searchSlot{Key: k, Label: p.l.msg(searchKindLabel[k]), Mark: searchKindMark[k]})
 	}
 	return lv
@@ -163,7 +164,7 @@ func (a *app) searchStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := a.planSearch(r)
-	kinds, budget := p.kinds, searchKindBudget
+	kinds, budget := p.runKinds(), searchKindBudget
 	only := r.URL.Query().Get("only")
 	if only != "" {
 		kinds, budget = nil, searchKindFullBudget

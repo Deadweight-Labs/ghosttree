@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,11 +41,19 @@ func repoRemote(v string) string {
 
 // searchKinds sagt, welche Arten die Anfrage will: der Parameter kind und die
 // Qualifier zusammen.
+//
+// Die Standardsuche (kind leer oder all) enthält keine Sessions (Entscheidung
+// #4447): Sessions sind Millionen Zeilen Rohverlauf und ihre Teilsuche der
+// teuerste Teil. Sie kommen nur auf ausdrücklichen Wunsch dazu: kind=sessions
+// oder ein Qualifier, der sie nennt (kind:session, is:session).
 func searchKinds(kindParam string, q query.Query) []string {
 	var want []string
 	switch strings.ToLower(kindParam) {
 	case "", "all":
-		want = []string{query.KindKnowledge, query.KindRequest, query.KindPain, query.KindIdea, query.KindFeature, query.KindCriterion, query.KindTask, query.KindFile, query.KindMessage, query.KindSession}
+		want = []string{query.KindKnowledge, query.KindRequest, query.KindPain, query.KindIdea, query.KindFeature, query.KindCriterion, query.KindTask, query.KindFile, query.KindMessage}
+		if slices.Contains(q.Kinds(), query.KindSession) {
+			want = append(want, query.KindSession)
+		}
 	case "messages", "message":
 		want = []string{query.KindMessage}
 	case "sessions", "session":
