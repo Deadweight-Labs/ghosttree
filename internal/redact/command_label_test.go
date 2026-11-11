@@ -3,6 +3,7 @@ package redact
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // PAIN-22: "pw" is the name of a command-line tool. Text that names it in
@@ -51,6 +52,10 @@ func TestLabelWithARealValueIsStillASecret(t *testing.T) {
 		{"Passwort Hx`7!kQ2pz", "Passwort"},
 		{"pw Hx`7!kQ2pz", "pw"},
 		{"Passwort ist `Hx7!kQ2pz`", "Passwort"},
+		// In a code span too, a backtick followed by more of the run is a
+		// character of the password, and the run is read whole.
+		{"the `pw Hx7`!kQ2pz` call", "pw"},
+		{"the `pw Hx`7!kQ2pz call", "pw"},
 	} {
 		got := FindSecrets(tc.in)
 		if len(got) != 1 || got[0].Label != "labeled" || got[0].Keyword != tc.label {
@@ -115,5 +120,24 @@ func TestFindSecretsColumnOfAPatternMatch(t *testing.T) {
 	got := FindSecrets(in)
 	if len(got) != 1 || got[0].Line != 2 || got[0].Column != 7 || got[0].Keyword != "" {
 		t.Fatalf("matches = %+v", got)
+	}
+}
+
+// The code-span state is read once per line, not once per label: a long line
+// of command names must not cost time quadratic in its length.
+func TestCodeSpanRuleIsLinearOnALongLine(t *testing.T) {
+	line := strings.Repeat("`pw export`/", 100000)
+	began := time.Now()
+	if got := FindSecrets(line); len(got) != 0 {
+		t.Fatalf("matches = %d", len(got))
+	}
+	if took := time.Since(began); took > 5*time.Second {
+		t.Fatalf("a line of %d bytes took %v", len(line), took)
+	}
+	// And with a label that is no command: the line is a finding, not a hang.
+	began = time.Now()
+	FindSecrets(strings.Repeat("pw Ab`", 100000))
+	if took := time.Since(began); took > 5*time.Second {
+		t.Fatalf("took %v", took)
 	}
 }

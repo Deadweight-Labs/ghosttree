@@ -177,6 +177,11 @@ type unit struct {
 type labelScanner struct {
 	s    string
 	json bool
+
+	// The state of insideCodeSpan: s[:spanAt] has been read, and spanOpen says
+	// whether a code span is open at that point.
+	spanAt   int
+	spanOpen bool
 }
 
 func hex4(s string) (rune, bool) {
@@ -617,7 +622,7 @@ func scanLabeledWith(s string, mode Mode, first *[256]bool) []hit {
 		// nothing ties the value to it: the span ends at its closing backtick, and
 		// what lies behind that is the next command, not a password.
 		if level <= levelWord {
-			if k := strings.IndexByte(s[vs:ve], '`'); k >= 0 && sc.insideCodeSpan(i) {
+			if k := strings.IndexByte(s[vs:ve], '`'); k >= 0 && sc.closesCodeSpan(vs+k+1) && sc.insideCodeSpan(i) {
 				if ve = vs + k; ve == vs {
 					continue
 				}
@@ -641,18 +646,42 @@ func scanLabeledWith(s string, mode Mode, first *[256]bool) []hit {
 // backticks on its line: in an inline code span that is still open. Outside of
 // one a backtick is a character like any other, and a password that has one
 // ("Passwort Hx`7!kQ2pz") is not cut.
+//
+// It reads forward from where the last call stopped, so a line with many labels
+// is read once, not once per label. The labels come in rising order; one that
+// does not starts over.
 func (sc *labelScanner) insideCodeSpan(i int) bool {
-	open := false
-	for k := i - 1; k >= 0; k-- {
-		c := sc.s[k]
-		if c == '\n' || sc.json && c == 'n' && k > 0 && sc.s[k-1] == '\\' && escapeStartsAt(sc.s, k-1) {
-			break
-		}
-		if c == '`' {
-			open = !open
+	if i < sc.spanAt {
+		sc.spanAt, sc.spanOpen = 0, false
+	}
+	for ; sc.spanAt < i; sc.spanAt++ {
+		k := sc.spanAt
+		switch c := sc.s[k]; {
+		case c == '`':
+			sc.spanOpen = !sc.spanOpen
+		case c == '\n', sc.json && c == 'n' && k > 0 && sc.s[k-1] == '\\' && escapeStartsAt(sc.s, k-1):
+			sc.spanOpen = false
 		}
 	}
-	return open
+	return sc.spanOpen
+}
+
+// closesCodeSpan is true when the backtick that ends at s[after] is followed
+// the way a code span is: by the end, a blank, or a mark that goes between
+// code spans or closes a sentence (`pw export`/`pw deploy`, `pw live`.). A
+// backtick followed by more characters of the run ("Hx7`!kQ2pz") is part of a
+// password, and the run is read whole.
+func (sc *labelScanner) closesCodeSpan(after int) bool {
+	if after >= len(sc.s) {
+		return true
+	}
+	switch c := sc.s[after]; c {
+	case ' ', '\t', '\r', '\n', '/', ',', '.', ';', ':', ')', ']', '}', '-', '\'', '"':
+		return true
+	case '\\':
+		return sc.json && after+1 < len(sc.s) && strings.IndexByte("nrt\"", sc.s[after+1]) >= 0
+	}
+	return false
 }
 
 func redactLabeled(s string, mode Mode, stats Stats) string {
