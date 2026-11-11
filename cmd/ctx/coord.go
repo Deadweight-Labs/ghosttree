@@ -17,6 +17,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/codexadapter"
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -238,10 +239,24 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	if code != 0 && sub != "rooms" {
 		return code
 	}
+	// Lesen ist keine Arbeit am Projekt. In einem Repo, das der Server nicht als
+	// Projekt kennt, tritt ein lesender Befehl dem Raum nicht bei: der Beitritt
+	// würde die CLI-Identität an diesen Raum binden (PAIN-67), und danach
+	// verlangte jeder andere Raum --agent-name. Ist die Identität dort schon
+	// angemeldet (ein früheres Schreiben), liest sie trotzdem; sonst antwortet
+	// der Server mit 403 und der Befehl sagt, dass es nichts zu lesen gibt.
+	joinsRoom := code == 0
+	unjoined := ""
+	if joinsRoom && coordReadsOnly(sub) && !machine {
+		if project, known := coordUnknownProject(c, room); !known {
+			joinsRoom = false
+			unjoined = project
+		}
+	}
 	// Auch die CLI ist Teilnehmerin. Wer schreibt und liest, gehört in die
 	// Liste — sonst zeigt `coord peers` für einen Agenten "niemand da",
 	// während am selben Raum gerade jemand mitliest.
-	if code == 0 {
+	if joinsRoom {
 		if _, err := c.RegisterCoordAgent(store.CoordAgent{
 			ExternalID: me, Provider: "ctx-cli", RoomKey: room, DisplayName: me, Machine: cfg.Machine,
 		}); err != nil && sub != "rooms" {
@@ -256,6 +271,10 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	case "peers":
 		peers, err := c.CoordPeers(room, "", me)
 		if err != nil {
+			if unjoined != "" && coordNotJoined(err) {
+				coordNothingToRead(stdout, unjoined)
+				return 0
+			}
 			fmt.Fprintf(stdout, "peers: %v\n", err)
 			return 1
 		}
@@ -325,10 +344,19 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	case "inbox":
 		after := int64(0)
 		if !all {
-			after, _ = c.CoordCursor(me, store.DestinationRoom, room)
+			var cerr error
+			after, cerr = c.CoordCursor(me, store.DestinationRoom, room)
+			if cerr != nil && unjoined != "" && coordNotJoined(cerr) {
+				coordNothingToRead(stdout, unjoined)
+				return 0
+			}
 		}
 		msgs, err := c.CoordInbox(store.DestinationRoom, room, me, after, 0)
 		if err != nil {
+			if unjoined != "" && coordNotJoined(err) {
+				coordNothingToRead(stdout, unjoined)
+				return 0
+			}
 			fmt.Fprintf(stdout, "inbox: %v\n", err)
 			return 1
 		}
@@ -368,6 +396,9 @@ func cmdCoord(args []string, stdout io.Writer) int {
 
 	case "rooms":
 		rooms, err := c.CoordRoomsFor(me)
+		if err != nil && unjoined != "" && coordNotJoined(err) {
+			err, rooms = nil, nil
+		}
 		if err != nil {
 			fmt.Fprintf(stdout, "rooms: %v\n", err)
 			return 1
@@ -384,6 +415,47 @@ func cmdCoord(args []string, stdout io.Writer) int {
 
 	fmt.Fprintln(stdout, coordUsage)
 	return 2
+}
+
+// coordReadsOnly nennt die Unterbefehle, die nichts schreiben und deshalb
+// einem unbekannten Projekt weder beitreten noch es anlegen dürfen.
+func coordReadsOnly(sub string) bool {
+	return sub == "peers" || sub == "inbox" || sub == "rooms"
+}
+
+// coordNotJoined erkennt die Antwort auf eine Identität, die dem Raum nie
+// beigetreten ist: 403 (die Raum-Abfragen antworten so, ohne zu verraten,
+// ob der Raum existiert).
+func coordNotJoined(err error) bool {
+	status, _, ok := coordAPIError(err)
+	return ok && status == http.StatusForbidden
+}
+
+func coordNothingToRead(stdout io.Writer, project string) {
+	fmt.Fprintf(stdout, "%s is not a project on the server yet, so there is nothing to read in its room.\n"+
+		"A project starts with real work in it (a session, an entry) or with 'ctx project claim'; this command only reads and creates none.\n", project)
+}
+
+// coordUnknownProject fragt per GET, ob der Projektraum zu einem Projekt
+// gehört, das der Server kennt und das dieses Konto sieht. known ist auch dann
+// wahr, wenn die Frage scheitert: ein Netzfehler soll den Befehl nicht
+// verstecken, die Folgeanfrage meldet ihn selbst.
+func coordUnknownProject(c *client.Client, room string) (project string, known bool) {
+	project, ok := strings.CutPrefix(room, "project:")
+	if !ok {
+		return "", true
+	}
+	list, err := visibleProjects(c)
+	if err != nil {
+		return project, true
+	}
+	want := scope.NormalizeRemote(project)
+	for _, p := range list {
+		if p.ID == project || (want != "" && scope.NormalizeRemote(p.ID) == want) {
+			return project, true
+		}
+	}
+	return project, false
 }
 
 // coordRoomKey löst den Raum genauso auf wie das MCP-Werkzeug: aus der
