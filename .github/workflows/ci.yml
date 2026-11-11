@@ -9,9 +9,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request replaces its older run. Pushes to dev, main,
+# release and hotfix branches always run to the end: with a merge every few
+# minutes, cancelling the previous run meant no race run ever finished.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The race detector makes the suite about eight times slower. Pull requests run
 # every test without it plus the concurrency tests with it; pushes to dev, main,
@@ -74,14 +77,21 @@ jobs:
             GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -trimpath -o /tmp/ctx-${target%/*}-${target#*/} ./cmd/ctx
           done
 
+  # The web package has about a thousand tests. Under the race detector one job
+  # needed about 13 minutes on a quiet developer machine, so it runs in three
+  # slices; scripts/test-shard.sh gives every test to exactly one of them.
   go-test-web:
-    name: Go tests (web)
+    name: Go tests (web ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     # Test databases live in RAM: on the runner's disk every migration commit
     # waits for fsync, which made opening one fresh store take seconds.
     env:
       TMPDIR: /dev/shm
-    timeout-minutes: 80
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -89,9 +99,9 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Test web
-        run: go test ${{ env.RACE }} -count=1 -timeout 70m ./internal/web/
+        run: scripts/test-shard.sh ${{ matrix.shard }} 3 ./internal/web/ ${{ env.RACE }} -count=1 -timeout 30m
       - name: Test web concurrency with race detector
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && matrix.shard == 1
         run: go test -race -count=1 -timeout 20m -run "$RACE_SUBSET" ./internal/web/
 
   go-test-rest:
@@ -101,7 +111,7 @@ jobs:
     # waits for fsync, which made opening one fresh store take seconds.
     env:
       TMPDIR: /dev/shm
-    timeout-minutes: 60
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -109,7 +119,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Test all packages except store and web
-        run: go test ${{ env.RACE }} -count=1 -timeout 50m $(go list ./... | grep -v -e '/internal/store$' -e '/internal/web$')
+        run: go test ${{ env.RACE }} -count=1 -timeout 30m $(go list ./... | grep -v -e '/internal/store$' -e '/internal/web$')
       - name: Test concurrency with race detector (all packages except store and web)
         if: github.event_name == 'pull_request'
         run: go test -race -count=1 -timeout 20m -run "$RACE_SUBSET" $(go list ./... | grep -v -e '/internal/store$' -e '/internal/web$')
