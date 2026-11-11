@@ -49,8 +49,13 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 	axes := axesFromQuery(r)
 	account := principalOf(r).ID
 	session := store.CleanSessionKey(r.URL.Query().Get("session"))
+	text := r.URL.Query().Get("q")
+	// The hint searches the sessions, so it is made only for a prompt that asks
+	// about earlier work (PAIN-70, PAIN-76).
+	wantHint := asksAboutEarlierWork(text)
 	res, err := a.st.RelevantFor(store.RelevanceQuery{
-		Text:    r.URL.Query().Get("q"),
+		NoHints: !wantHint,
+		Text:    text,
 		Axes:    axes,
 		Limit:   a.overfetch(limit),
 		Viewer:  []store.SessionViewer{pa.Viewer()},
@@ -87,10 +92,12 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 		}
 		hits = filterTo(hits, 0, func(h store.RelevantHit) bool { return won[h.ID] })
 	}
-	hint, err := a.relevanceHint(r, pa, res.Hints, axes, account, session)
-	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
-		return
+	hint := ""
+	if wantHint {
+		if hint, err = a.relevanceHint(r, pa, res.Hints, axes, account, session); err != nil {
+			writeStoreError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)

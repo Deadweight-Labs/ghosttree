@@ -78,6 +78,9 @@ type RelevanceQuery struct {
 	// Record counts the delivery as a use of each entry. The replay of archived
 	// prompts must not, or it would move the numbers it is later judged by.
 	Record bool
+	// NoHints leaves out the candidates for a hint (Relevance.Hints). The caller
+	// that does not make a hint does not pay for finding them.
+	NoHints bool
 }
 
 // RelevantHit is an entry together with the word that brought it up, so the
@@ -295,6 +298,9 @@ func (s *Store) relevance(q RelevanceQuery) (Relevance, error) {
 		s.recordKnowledgeSearchHit(hitKnowledge(out.Hits))
 	}
 
+	if q.NoHints {
+		return out, nil
+	}
 	hints, err := s.hintTerms(q, rare, veryRare, where, args)
 	if err != nil {
 		return out, err
