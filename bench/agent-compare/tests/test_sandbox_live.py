@@ -49,7 +49,8 @@ class LiveMixin:
         self.box.start()
 
     def make_box(self, cls=None):
-        env = {"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": sbx.SANDBOX_HOME, "LANG": "C.UTF-8",
+        # wie beim Harness: der beschreibbare Ordner des Agenten steht im PATH vorn
+        env = {"PATH": f"{sbx.SANDBOX_HOME}/.local/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": sbx.SANDBOX_HOME, "LANG": "C.UTF-8",
                "TMPDIR": "/tmp", "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{sbx.PROXY_PORT}", sbx.TOKEN_ENV: self.token}
         spec = sbx.SandboxSpec(
             run_id="live", env=env, host_home=self.host_home, allowed_roots=[str(self.root)],
@@ -111,6 +112,75 @@ class LiveMixin:
         r = self.box.exec(["python3", "-c", code], timeout=60)
         self.assertEqual(r.stdout.split(), ["200", "live"], r.stderr)
 
+    # ---------- Review-Befunde (PR #239) ----------
+    def test_a_python3_planted_in_the_home_cannot_forge_the_probe(self):
+        """M1: Der PATH des Agenten beginnt mit dem beschreibbaren ~/.local/bin; ein dortiges python3 sagte „alles ok“."""
+        home = self.root / "home"
+        fake = home / ".local" / "bin" / "python3"
+        fake.parent.mkdir(parents=True)
+        checks = {n: {"ok": True, "detail": "gefaelscht"} for n in sbx.REQUIRED_CHECKS}
+        fake.write_text("#!/bin/sh\necho forged > \"$HOME/fake-ran\"\n"
+                        f"echo '{json.dumps({'probe_version': 1, 'uid': 1000, 'checks': checks})}'\n")
+        fake.chmod(0o755)
+        # Beleg, dass der Angriff gegen den PATH des Agenten wirkt: dort läuft das falsche python3
+        r = self.box.exec(["python3", "-c", "print('echt')"])
+        self.assertIn("gefaelscht", r.stdout, "das falsche python3 antwortet statt des echten")
+        self.assertTrue((home / "fake-ran").exists())
+        (home / "fake-ran").unlink()
+        report = self.box.probe()
+        self.assertFalse((home / "fake-ran").exists(), "die Probe hat das falsche python3 gestartet")
+        self.assertTrue(report["ok"], report)
+        self.assertNotEqual(report["checks"]["dns"]["detail"], "gefaelscht")
+
+    ATTACK = r'''
+import subprocess, sys, time
+child = r"""
+import os, signal, socket, time
+for pid in filter(str.isdigit, os.listdir("/proc")):
+    try:
+        cmd = open("/proc/%s/cmdline" % pid, "rb").read().decode(errors="replace")
+    except OSError:
+        continue
+    needle = "TCP-LISTEN:" + "1831" + "7"  # nicht zusammenhängend im eigenen Text, sonst träfe es diesen Prozess
+    if needle in cmd and int(pid) != os.getpid():
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except OSError:
+            pass
+time.sleep(0.5)
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 18317))
+s.listen(16)
+while True:
+    c, _ = s.accept()
+    data = c.recv(65536).decode(errors="replace")
+    open(os.environ["HOME"] + "/fake-answered", "a").write("x")
+    if "falsches-kennzeichen" in data:
+        status, body = 401, "{}"
+    elif data.startswith("GET /_bench/ping"):
+        status, body = 200, '{"proxy": "gefaelscht", "run_id": "live", "requests": 0, "tokens": 0}'
+    else:
+        status, body = 403, "{}"
+    c.sendall(("HTTP/1.0 %d x\r\ncontent-length: %d\r\n\r\n%s" % (status, len(body), body)).encode())
+    c.close()
+"""
+subprocess.Popen([sys.executable, "-c", child], start_new_session=True, stdin=subprocess.DEVNULL,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+time.sleep(2)
+'''
+
+    def test_a_background_process_of_the_session_cannot_answer_the_after_probe(self):
+        """M1: Ein mit setsid gestarteter Prozess überlebt das exec und besetzt Port 18317 für die Nachher-Probe."""
+        marker = self.root / "home" / "fake-answered"
+        res, log = self.box.guarded(["python3", "-c", self.ATTACK], self.root / "isolation.json", 60)
+        self.assertEqual(res.rc, 0, res.stderr)
+        self.assertFalse(marker.exists(), "der Hintergrundprozess der Sitzung hat die Nachher-Probe beantwortet")
+        doc = json.loads((self.root / "isolation.json").read_text())
+        self.assertTrue(doc["ok"], doc)
+        self.assertEqual(sorted(doc["phases"]), ["after", "before"])
+        self.assertFalse(self.box.started)
+
     def test_bench_probe_run_writes_isolation_json(self):
         if self.kind == "bwrap" and not shutil.which("claude"):
             self.skipTest("claude nicht im PATH (bwrap nutzt den des Hosts)")
@@ -124,14 +194,87 @@ class LiveMixin:
         self.assertTrue(all(rep["ok"] and set(sbx.REQUIRED_CHECKS) <= set(rep["checks"]) for rep in doc["phases"].values()))
 
 
+class ChainLiveMixin:
+    """Schritte des Harness (post_session, Bewertung) gegen eine echte Sandbox."""
+
+    def make_chain(self):
+        c = bench.Chain("vanilla", 0, cid="lv-" + secrets.token_hex(3))
+        c.sandbox_kind = self.kind
+        for d in (c.home / ".claude", c.work, c.root / "tmp", c.root / "gocache", c.sock, c.out):
+            d.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, c.root, True)
+        self.addCleanup(shutil.rmtree, c.out, True)
+        patcher = mock.patch.object(bench, "AGENT", "/usr/bin/true")  # bwrap hängt den claude des Hosts ein
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return c
+
+    def plant_fsmonitor(self, c):
+        """Der Agent trägt in die Konfiguration seines Repos einen Befehl ein, den git bei `add` ausführen würde."""
+        subprocess.run(["git", "init", "-q", str(c.work)], check=True, capture_output=True)
+        hook = c.home / "fsmon.sh"
+        hook.write_text(f"#!/bin/sh\necho ran >> {sbx.SANDBOX_HOME}/fsmon-ran\nexit 0\n")
+        hook.chmod(0o755)
+        subprocess.run(["git", "-C", str(c.work), "config", "core.fsmonitor", f"{sbx.SANDBOX_HOME}/fsmon.sh"],
+                       check=True, capture_output=True)
+        (c.work / "datei.txt").write_text("x")
+        return c.home / "fsmon-ran"
+
+    def test_post_session_does_not_run_the_fsmonitor_of_the_agents_repo(self):
+        """M3: `git add -A` und `git rev-parse` in post_session liefen ohne -c core.fsmonitor=false."""
+        c = self.make_chain()
+        marker = self.plant_fsmonitor(c)
+        c.tool(["git", "add", "-A"], tag="control")  # Beleg: ohne Schutz läuft der Befehl des Agenten
+        self.assertTrue(marker.exists(), "der Angriff wirkt nicht: die Gegenprobe ist sinnlos")
+        marker.unlink()
+        info = c.post_session("F1.a0")
+        self.assertFalse(marker.exists(), "git hat core.fsmonitor des Agenten ausgeführt")
+        self.assertRegex(info["head"], r"^[0-9a-f]{40}$")
+
+    def test_grading_refuses_a_workdir_that_became_a_symlink(self):
+        c = self.make_chain()
+        secret = self.root / "secret"
+        secret.mkdir()
+        (secret / "geheim.txt").write_text("nur auf dem Host")
+        shutil.rmtree(c.work)
+        c.work.symlink_to(secret)
+        with self.assertRaises(sbx.IsolationError):
+            bench.SandboxGradeRun(c, c.work).go(["cat", f"{bench.GRADE_DIR}/geheim.txt"], 30)
+
+
 @unittest.skipUnless(bwrap_usable(), "bubblewrap nicht nutzbar")
-class BwrapLiveTest(LiveMixin, unittest.TestCase):
+class BwrapLiveTest(ChainLiveMixin, LiveMixin, unittest.TestCase):
     kind = "bwrap"
+
+    def test_user_namespaces_and_dangerous_syscalls_are_closed(self):
+        """m5/m6: Ein Agent in bwrap kann keinen neuen User-Namensraum anlegen; der Kernel filtert (Seccomp: 2)."""
+        code = ("import ctypes\n"
+                "libc = ctypes.CDLL(None, use_errno=True)\n"
+                "print('unshare', libc.unshare(0x10000000), ctypes.get_errno())\n"
+                "print('mount', libc.mount(b'none', b'/tmp', b'tmpfs', 0, None), ctypes.get_errno())\n"
+                "print([l for l in open('/proc/self/status') if l.startswith('Seccomp:')][0].split()[1])\n")
+        r = self.box.exec(["python3", "-c", code])
+        lines = r.stdout.split("\n")
+        self.assertEqual(lines[0].split()[:2], ["unshare", "-1"], r.stdout + r.stderr)
+        self.assertEqual(lines[1].split()[:2], ["mount", "-1"], r.stdout)
+        self.assertEqual(lines[2], "2", "Seccomp-Filter fehlt")
+
+    def test_the_filter_does_not_get_in_the_way_of_ordinary_tools(self):
+        r = self.box.exec(["sh", "-c", "git --version && python3 -c 'import threading,subprocess;print(1)' && ls / >/dev/null && echo fertig"])
+        self.assertTrue(r.stdout.endswith("fertig\n"), r.stdout + r.stderr)
 
 
 @unittest.skipUnless(sbx.docker_ready(), "Docker antwortet nicht oder das Image fehlt (image/build.sh, BENCH_IMAGE)")
-class ContainerLiveTest(LiveMixin, unittest.TestCase):
+class ContainerLiveTest(ChainLiveMixin, LiveMixin, unittest.TestCase):
     kind = "container"
+
+    def test_the_attack_does_forge_a_probe_that_stays_in_the_dead_sessions_container(self):
+        """Gegenprobe zu M1: Wäre die Nachher-Probe im selben Container gelaufen, hätte der Hintergrundprozess sie beantwortet."""
+        marker = self.root / "home" / "fake-answered"
+        self.box.exec(["python3", "-c", self.ATTACK], timeout=60)
+        report = self.box.probe()
+        self.assertTrue(marker.exists(), "der Angriff wirkt nicht: der Test beweist nichts")
+        self.assertTrue(report["ok"], "ohne frischen Container wäre die gefälschte Antwort durchgegangen")
 
     def test_tampered_start_with_network_is_refused_before_the_agent(self):
         class WithNetwork(sbx.ContainerSandbox):

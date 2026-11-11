@@ -9,7 +9,6 @@ import json
 import os
 import re
 import socket
-import subprocess
 import sys
 import threading
 
@@ -125,8 +124,10 @@ def privileges(cfg):
     status = dict(line.split(":\t", 1) for line in open("/proc/self/status").read().splitlines() if ":\t" in line)
     caps_zero = int(status.get("CapEff", "1").strip(), 16) == 0 and int(status.get("CapBnd", "1").strip(), 16) == 0
     nnp = status.get("NoNewPrivs", "0").strip() == "1"
-    ok = os.getuid() != 0 and caps_zero and nnp
-    return check(ok, f"uid={os.getuid()} Capabilities leer={caps_zero} no_new_privs={nnp}")
+    # Seccomp: 0 = der Kernel filtert keine Systemaufrufe; 1 = strikt, 2 = Filter (Docker-Standardprofil, bwrap --seccomp)
+    seccomp = status.get("Seccomp", "0").strip() in ("1", "2")
+    ok = os.getuid() != 0 and caps_zero and nnp and seccomp
+    return check(ok, f"uid={os.getuid()} Capabilities leer={caps_zero} no_new_privs={nnp} seccomp_filter={seccomp}")
 
 
 def http(port, method, path, token, body=None):
@@ -159,36 +160,9 @@ def proxy(cfg):
     return check(ok, f"Ping ok; falsches Kennzeichen {bad_status} (401), fremdes Modell {model_status} (403), fremder Pfad {path_status} (403)")
 
 
-def git_state(cfg):
-    g = cfg.get("git")
-    if not g:
-        return None
-    base = ["git", "-c", "safe.directory=*", "-c", "core.hooksPath=/dev/null", "-C", g["repo"]]
-
-    def run(*args):
-        return subprocess.run(base + list(args), capture_output=True, text=True, timeout=60)
-
-    problems = []
-    for sha in g.get("absent_objects", []):
-        if run("cat-file", "-e", sha + "^{commit}").returncode == 0:
-            problems.append(f"Objekt {sha[:12]} ist vorhanden")
-    refs = run("for-each-ref", "--format=%(refname)")
-    if refs.returncode != 0:
-        problems.append("git for-each-ref scheitert")
-    elif "allowed_refs" in g:
-        extra = [r for r in refs.stdout.split() if r not in g["allowed_refs"]]
-        if extra:
-            problems.append(f"unerwartete Refs: {extra}")
-    if "commit_count" in g:
-        n = run("rev-list", "--all", "--count")
-        if n.returncode != 0 or n.stdout.strip() != str(g["commit_count"]):
-            problems.append(f"Commits: {n.stdout.strip()!r}, erwartet {g['commit_count']}")
-    return check(not problems, "; ".join(problems) or "Repo enthält nur die erwarteten Objekte und Refs")
-
-
 CHECKS = [("net_public", net_public), ("net_interfaces", net_interfaces), ("dns", dns), ("host_paths", host_paths),
           ("env_names", env_names), ("env_secrets", env_secrets), ("mounts", mounts), ("root_readonly", root_readonly),
-          ("privileges", privileges), ("proxy", proxy), ("git", git_state)]
+          ("privileges", privileges), ("proxy", proxy)]
 
 
 def main():

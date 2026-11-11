@@ -37,7 +37,7 @@ def make_spec(**kw):
 
 
 def good_probe(spec, **override):
-    names = list(sbx.REQUIRED_CHECKS) + (["git"] if spec.git else [])
+    names = list(sbx.REQUIRED_CHECKS)
     checks = {n: {"ok": True, "detail": "ok"} for n in names}
     checks.update(override)
     return json.dumps({"probe_version": 1, "uid": 1000, "checks": checks})
@@ -84,6 +84,29 @@ class VerifySpecTest(unittest.TestCase):
     def test_forward_socket_must_live_under_run_dir(self):
         self.assertTrue(sbx.verify_spec(make_spec(forwards=[(1, "/etc/passwd")])))
 
+    def test_a_mount_source_that_is_a_symlink_is_refused_even_inside_the_roots(self):
+        """M3: Ein Symlink aus der Sandbox (src/ledgerly -> irgendein Verzeichnis) darf nie Quelle einer Einhängung sein,
+        auch wenn das Ziel selbst unter einer erlaubten Wurzel liegt oder die Wurzel mit dem Ziel mitwandert."""
+        base = Path(tempfile.mkdtemp(prefix="symsrc-", dir=_TMP))
+        real, secret = base / "real", base / "secret"
+        real.mkdir()
+        secret.mkdir()
+        (base / "link").symlink_to(secret)
+        (base / "inner").symlink_to(real)
+        (real / "sub").mkdir()
+        for src, roots in ((base / "link", [str(base)]), (base / "link", [str(secret)]), (base / "inner", [str(base)]),
+                           (base / "inner" / "sub", [str(base)])):
+            spec = make_spec(mounts=[sbx.Mount(str(src), "/grade-src")], allowed_roots=roots)
+            bad = sbx.verify_spec(spec)
+            self.assertTrue(any("Symlink" in b for b in bad), (src, bad))
+        ok = make_spec(mounts=[sbx.Mount(str(real), "/grade-src")], allowed_roots=[str(base)])
+        self.assertEqual(sbx.verify_spec(ok), [])
+
+    def test_the_run_id_must_be_a_plain_identifier(self):
+        for rid in ("../x", "a b", "", "x;y", "a/b", "-rf"):
+            self.assertTrue(any("Kennung" in b for b in sbx.verify_spec(make_spec(run_id=rid))), rid)
+        self.assertEqual(sbx.verify_spec(make_spec(run_id="rg-1a2b3c")), [])
+
 
 class ProbeEvaluationTest(unittest.TestCase):
     def setUp(self):
@@ -111,11 +134,11 @@ class ProbeEvaluationTest(unittest.TestCase):
         for raw in ("", "kein json", "{}", '{"checks": 3}'):
             self.assertFalse(sbx.evaluate_probe(raw, self.spec)["ok"], raw)
 
-    def test_git_check_is_required_when_configured(self):
-        spec = make_spec(git={"repo": "/x", "absent_objects": ["a" * 40]})
-        data = json.loads(good_probe(spec))
-        del data["checks"]["git"]
-        self.assertEqual(sbx.evaluate_probe(json.dumps(data), spec)["failed"], ["git"])
+    def test_the_dead_git_check_is_gone(self):
+        """n6: Das Feld git der Sandbox-Beschreibung wurde nie belegt; die Probe führt keinen git-Befehl aus."""
+        self.assertNotIn("git", sbx.SandboxSpec.__dataclass_fields__)
+        self.assertNotIn("git", sbx.REQUIRED_CHECKS)
+        self.assertNotIn("git_state", (HARNESS / "probe.py").read_text())
 
 
 class FakeSandbox(sbx.Sandbox):
@@ -125,21 +148,32 @@ class FakeSandbox(sbx.Sandbox):
     def __init__(self, spec, in_dir, probes):
         super().__init__(spec, in_dir)
         self.probes, self.agent_runs = list(probes), []
+        self.agent_envs = []
+        self.events = []  # (Ereignis, Instanz) in der Reihenfolge des Ablaufs
+        self.probe_calls = []
 
     def _start(self):
-        pass
+        self.events.append(("start", id(self)))
+
+    def stop(self):
+        self.events.append(("stop", id(self)))
+        super().stop()
 
     def exec(self, argv, env=None, cwd=None, timeout=900):
-        if argv[0] == "python3":
+        if any(str(a).endswith("probe.py") for a in argv):
+            self.events.append(("probe", id(self)))
+            self.probe_calls.append((list(argv), env))
             return sbx.ExecResult(0, self.probes.pop(0), "")
+        self.events.append(("agent", id(self)))
         self.agent_runs.append(argv)
+        self.agent_envs.append(env)
         return sbx.ExecResult(0, '{"result": "fertig"}', "")
 
 
 class GuardedSessionTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="guard-", dir=_TMP))
-        self.spec = make_spec()
+        self.spec = make_spec(allowed_roots=[ROOT, str(self.dir)])  # die frische Instanz startet wirklich (verify_spec)
 
     def box(self, probes):
         b = FakeSandbox(self.spec, self.dir / "in", probes)
@@ -172,6 +206,47 @@ class GuardedSessionTest(unittest.TestCase):
         self.assertEqual(doc["sandbox"], "fake")
         self.assertEqual(len(doc["spec_sha256"]), 64)
         self.assertEqual(len(log.sha256()), 64)
+
+    def test_the_probe_runs_with_an_absolute_interpreter_and_a_path_without_the_home(self):
+        """M1: `env -i PATH=… python3` fand ein python3 im beschreibbaren ~/.local/bin des Agenten."""
+        spec = make_spec(env={"PATH": f"{sbx.SANDBOX_HOME}/.local/bin:/usr/bin", "HOME": sbx.SANDBOX_HOME,
+                              sbx.TOKEN_ENV: "laufkennzeichen"})
+        box = FakeSandbox(spec, self.dir / "in", [good_probe(spec)])
+        box.started = True
+        box.probe()
+        argv, env = box.probe_calls[0]
+        self.assertEqual(argv[:3], ["/usr/bin/python3", "-I", "-S"])
+        self.assertTrue(os.path.isabs(argv[3]) and argv[3].endswith("probe.py"))
+        self.assertIsNotNone(env, "die Probe bekommt eine eigene Umgebung statt der des Agenten")
+        for entry in env["PATH"].split(":"):
+            self.assertTrue(entry.startswith("/") and not entry.startswith(sbx.SANDBOX_HOME), env["PATH"])
+        self.assertEqual(sorted(env), sorted(spec.env), "dieselben Namen wie beim Agenten, die Probe prüft sie")
+
+    def test_the_after_probe_runs_in_a_fresh_instance_once_the_session_is_dead(self):
+        """M1: Hintergrundprozesse der Sitzung überleben das exec. Vor der Nachher-Probe wird die Instanz beendet und
+        mit denselben Einhängungen neu gestartet."""
+        box = self.box([good_probe(self.spec), good_probe(self.spec)])
+        box.guarded(["claude"], self.dir / "i.json", 10)
+        kinds = [e[0] for e in box.events]
+        self.assertEqual(kinds, ["probe", "agent", "stop", "start", "probe", "stop"])
+        before, agent, stopped, started, after, _ = box.events
+        self.assertEqual(before[1], agent[1])
+        self.assertEqual(agent[1], stopped[1], "die Sitzungsinstanz wird beendet")
+        self.assertNotEqual(started[1], agent[1], "die Nachher-Probe läuft nicht in der Instanz der Sitzung")
+        self.assertEqual(started[1], after[1])
+        self.assertFalse(box.started, "nach der Sitzung ist die Instanz nicht mehr benutzbar")
+
+    def test_a_fresh_instance_that_breaks_the_rules_fails_the_session(self):
+        class Tampered(FakeSandbox):
+            def fresh(self):
+                inst = super().fresh()
+                inst.spec = make_spec(network="bridge")
+                return inst
+
+        box = Tampered(self.spec, self.dir / "in", [good_probe(self.spec), good_probe(self.spec)])
+        box.started = True
+        with self.assertRaises(sbx.IsolationError):
+            box.guarded(["claude"], self.dir / "i.json", 10)
 
     def test_unstarted_sandbox_does_not_execute(self):
         box = FakeSandbox(self.spec, self.dir / "in", [])
@@ -247,6 +322,76 @@ class BackendDescriptionTest(unittest.TestCase):
         self.assertEqual(box.verify_runtime({}), [])
         self.assertEqual(box.launcher_env(), {"PATH": "/usr/bin:/bin"})  # bwrap selbst erbt nichts vom Harness
 
+    def test_bwrap_closes_user_namespaces_and_carries_a_seccomp_filter(self):
+        """m5: Ohne diese beiden bliebe der Kernel-Angriffsraum (neue User-Namensräume, bpf, io_uring …) offen."""
+        box = sbx.make_sandbox("bwrap", make_spec(), self.dir / "b")
+        with mock.patch.object(sbx, "bwrap_supports", return_value=True):
+            args = box.bwrap_args("/", seccomp_fd=7)
+            self.assertIn("--disable-userns", args)
+            self.assertEqual(args[args.index("--seccomp") + 1], "7")
+            self.assertEqual(box.verify_runtime({}), [])
+            self.assertEqual(box.facts_summary()["userns_disabled"], True)
+            for missing in ("--disable-userns", "--seccomp"):
+                tampered = [a for a in box.bwrap_args("/", seccomp_fd=7) if a != missing]
+                with mock.patch.object(sbx.BwrapSandbox, "bwrap_args", return_value=tampered):
+                    self.assertTrue(any(missing in b for b in box.verify_runtime({})), missing)
+
+    def test_bwrap_without_disable_userns_is_recorded_not_hidden(self):
+        box = sbx.make_sandbox("bwrap", make_spec(), self.dir / "b")
+        with mock.patch.object(sbx, "bwrap_supports", return_value=False):
+            self.assertNotIn("--disable-userns", box.bwrap_args("/", seccomp_fd=7))
+            self.assertEqual(box.facts_summary()["userns_disabled"], False)
+
+    def test_seccomp_filter_is_a_valid_bpf_program_that_refuses_unknown_architectures(self):
+        prog = sbx.seccomp_filter()
+        self.assertTrue(prog and len(prog) % 8 == 0)
+        with mock.patch("platform.machine", return_value="riscv64"), self.assertRaises(sbx.IsolationError):
+            sbx.seccomp_filter()
+
+    def test_container_runtime_check_refuses_an_unconfined_seccomp_profile(self):
+        box = sbx.make_sandbox("container", make_spec(), self.dir / "c", image="img:test")
+        raw = {"State": {"Running": True},
+               "HostConfig": {"NetworkMode": "none", "ReadonlyRootfs": True, "CapDrop": ["ALL"], "CapAdd": None,
+                              "SecurityOpt": ["no-new-privileges", "seccomp=unconfined"], "Privileged": False, "Devices": [],
+                              "PortBindings": {}, "PidMode": "", "IpcMode": "private", "UsernsMode": "", "Memory": 8 << 30,
+                              "PidsLimit": 2048},
+               "Config": {"User": "1000:1000", "Env": ["PATH=/usr/bin"]},
+               "Mounts": [{"Type": "bind", "Source": m.src, "Destination": m.dst, "RW": m.rw} for m in box.all_mounts()]}
+        self.assertTrue(any("seccomp" in b.lower() for b in box.verify_runtime({"raw": raw})))
+
+    def test_container_cleanup_without_an_id_removes_only_own_orphans(self):
+        """n3: `bench.py cleanup` ohne Kennung entfernt keine Container anderer Benutzer und keine laufender Läufe."""
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+
+            class R:
+                returncode = 0
+                stdout = ("aaa 4000000\n"          # Harness-Prozess existiert nicht mehr: verwaist
+                          f"bbb {os.getpid()}\n"    # der Harness lebt: nicht anfassen
+                          "ccc \n")                 # ohne Angabe: nicht eindeutig, nicht anfassen
+                stderr = ""
+            return R()
+
+        with mock.patch.object(sbx.subprocess, "run", fake_run), mock.patch.object(sbx, "_pid_alive", lambda p: p == os.getpid()):
+            removed = sbx.remove_containers()
+        ps = calls[0]
+        self.assertIn(f"label=bench.owner={os.getuid()}", ps)
+        self.assertEqual(removed, ["aaa"])
+        self.assertEqual(calls[1][-1], "aaa")
+        calls.clear()
+        with mock.patch.object(sbx.subprocess, "run", fake_run):
+            sbx.remove_containers("kette1")
+        self.assertIn("label=bench.run=kette1", calls[0])
+        self.assertIn(f"label=bench.owner={os.getuid()}", calls[0])
+
+    def test_containers_carry_owner_labels(self):
+        box = sbx.make_sandbox("container", make_spec(), self.dir / "c", image="img:test")
+        joined = " ".join(box.run_args())
+        self.assertIn(f"bench.owner={os.getuid()}", joined)
+        self.assertIn(f"bench.pid={os.getpid()}", joined)
+
     def test_spec_hash_changes_with_the_mounts(self):
         a = sbx.make_sandbox("bwrap", make_spec(), self.dir / "a").fingerprint
         b = sbx.make_sandbox("bwrap", make_spec(mounts=[sbx.Mount(f"{ROOT}/t1/home", sbx.SANDBOX_HOME, True)]),
@@ -297,7 +442,7 @@ class HarnessWithoutIsolationTest(unittest.TestCase):
         orig = FailingBox.exec
 
         def spy(self, argv, *a, **k):
-            if argv[0] != "python3":
+            if not any(str(a).endswith("probe.py") for a in argv):
                 box_runs.append(argv)
             return orig(self, argv, *a, **k)
 
@@ -355,6 +500,191 @@ class ChainEnvironmentTest(unittest.TestCase):
         self.assertNotIn(sbx.TOKEN_ENV, box.spec.env)
         self.assertEqual(box.spec.forwards, [])
         self.assertNotIn(sbx.RUN_DIR, [m.dst for m in box.spec.mounts])
+
+
+class ChainReviewFixesTest(unittest.TestCase):
+    """Befunde des Sicherheitsreviews zu PR #239 (bench.py)."""
+
+    def test_tool_steps_run_with_a_path_the_agent_cannot_write_to(self):
+        """M1/Nachlauf: git, go und ctx der Werkzeugschritte dürfen nicht aus ~/.local/bin des Agenten kommen."""
+        c = bench.Chain("ghosttree", 1, cid="p-" + os.urandom(3).hex())
+        boxes = []
+
+        def new_sandbox(tag, **kw):
+            boxes.append(FakeSandbox(make_spec(), c.root / "in" / tag, []))
+            return boxes[-1]
+
+        c.new_sandbox = new_sandbox
+        c.tool(["git", "status"], tag="t")
+        env = boxes[0].agent_envs[0]
+        self.assertIsNotNone(env)
+        self.assertEqual(env["PATH"], c.trusted_path())
+        for entry in env["PATH"].split(":"):
+            self.assertFalse(entry.startswith(sbx.SANDBOX_HOME), env["PATH"])
+        self.assertIn(bench.CTX_BIN_DIR, env["PATH"].split(":"))
+        self.assertTrue(c.env()["PATH"].startswith(f"{sbx.SANDBOX_HOME}/.local/bin"), "der Agent behält seinen PATH")
+
+    def test_every_git_call_on_an_agent_repo_switches_off_fsmonitor_and_hooks(self):
+        """M3: `git add -A` lief ohne Schutz: core.fsmonitor aus der Konfiguration des Agenten wurde ausgeführt."""
+        src = (HARNESS / "bench.py").read_text()
+        import re
+        bare = set(re.findall(r'\["git", "([A-Za-z][\w-]*)"', src))
+        self.assertLessEqual(bare, {"init", "remote"}, f"git ohne GIT-Präfix: {bare}")
+        self.assertIn("core.fsmonitor=false", " ".join(bench.GIT))
+        self.assertIn("core.hooksPath=/dev/null", " ".join(bench.GIT))
+
+        c = bench.Chain("vanilla", 1, cid="g-" + os.urandom(3).hex())
+        (c.home / ".claude").mkdir(parents=True)
+        c.work.mkdir(parents=True)
+        c.out.mkdir(parents=True, exist_ok=True)
+        calls = []
+
+        class R:
+            stdout, stderr, rc = "abc123\n", "", 0
+
+        def record(self, *cmds, **kw):
+            calls.extend(cmds)
+            return [R() for _ in cmds]
+
+        with mock.patch.object(bench.Chain, "tool", record):
+            c.post_session("F1.a0")
+        gits = [argv for argv in calls if argv[0] == "git"]
+        self.assertTrue(gits)
+        for argv in gits:
+            for needed in ("core.fsmonitor=false", "core.hooksPath=/dev/null"):
+                self.assertIn(needed, argv, argv)
+        subs = {next(a for a in argv[1:] if not a.startswith("-") and "=" not in a and a != "/dev/null") for argv in gits}
+        self.assertTrue({"add", "rev-parse"} <= subs, subs)
+
+    def test_ids_are_validated(self):
+        """n4: Die Kennung landet in Pfaden, Namen und Labels."""
+        for bad in ("../x", "a/b", "", "a b", "-x", "x;y", ".hidden", "a" * 100):
+            self.assertFalse(bench.valid_id(bad), repr(bad))
+            if bad:  # "" heißt: Kennung erzeugen
+                with self.assertRaises(ValueError, msg=repr(bad)):
+                    bench.Chain("vanilla", 0, cid=bad)
+        for good in ("a1b2c3", "rg-a1b2c3", "probe-ff00aa", "e_token", "grade-0123ab"):
+            self.assertTrue(bench.valid_id(good), good)
+
+    def test_regrade_refuses_an_invalid_id_before_touching_anything(self):
+        with mock.patch.object(bench, "RESULTS", Path(_TMP) / "res"):
+            for bad in ("../../etc", "a/../b", ""):
+                with self.assertRaises(ValueError, msg=repr(bad)):
+                    bench.regrade(bad)
+
+    def test_the_ghosttree_forward_does_not_inherit_the_harness_environment(self):
+        """m7: socat für gt.sock erbte die Umgebung des Harness samt API-Schlüssel."""
+        c = bench.Chain("ghosttree", 1, cid="f-" + os.urandom(3).hex())
+        (c.root / "gt").mkdir(parents=True)
+        (c.root / "gt-server-home").mkdir()
+        c.meta["gt_port"] = 4711
+        popens = []
+
+        class P:
+            def __init__(self, argv, **kw):
+                popens.append((argv, kw))
+
+        class Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "nur-im-test"}), \
+                mock.patch.object(bench.subprocess, "Popen", P), \
+                mock.patch.object(bench.socket, "create_connection", lambda *a, **k: Conn()):
+            c.start_gt_server()
+        self.assertEqual(len(popens), 2)
+        for argv, kw in popens:
+            self.assertEqual(kw["env"], c.host_env(), argv)
+            self.assertNotIn("ANTHROPIC_API_KEY", kw["env"])
+        self.assertEqual(popens[1][0][0], "socat")
+
+    def test_the_chain_proxy_starts_with_cost_limits(self):
+        """m3: Chain.ensure_proxy bekommt Grenzen aus der Umgebung (oder die Standardwerte), nie einen offenen Proxy."""
+        c = bench.Chain("vanilla", 0, cid="lim-" + os.urandom(3).hex())
+        with mock.patch.dict(os.environ, {"BENCH_PROXY_MAX_REQUESTS": "11", "BENCH_PROXY_MAX_TOKENS": "999"}):
+            proxy = c.ensure_proxy()
+        self.addCleanup(c.cleanup)
+        self.assertEqual((proxy.max_requests, proxy.max_tokens), (11, 999))
+        d = bench.Chain("vanilla", 0, cid="lim2-" + os.urandom(3).hex())
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("BENCH_PROXY_MAX_REQUESTS", None)
+            os.environ.pop("BENCH_PROXY_MAX_TOKENS", None)
+            proxy2 = d.ensure_proxy()
+        self.addCleanup(d.cleanup)
+        self.assertGreater(proxy2.max_requests, 0)
+        self.assertGreater(proxy2.max_tokens, 0)
+
+
+class GradeMountTest(unittest.TestCase):
+    """M3: Beim Bewerten lässt sich über einen Symlink im Stand des Agenten kein Verzeichnis des Hosts einhängen."""
+
+    def setUp(self):
+        self.c = bench.Chain("vanilla", 1, cid="m-" + os.urandom(3).hex())
+        self.c.work.mkdir(parents=True)
+        (self.c.root / "gocache-grade").mkdir()
+        self.secret = Path(tempfile.mkdtemp(prefix="hostdir-", dir=_TMP))
+        (self.secret / "geheim.txt").write_text("nur auf dem Host")
+        self.started = []
+
+        def boom(*a, **k):
+            self.started.append(a[:1])
+            raise AssertionError(f"Es darf kein Prozess entstehen: {a[:1]}")
+
+        for target in ("subprocess.run", "subprocess.Popen"):
+            p = mock.patch(target, boom)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def swap_work_for_symlink(self):
+        import shutil
+        shutil.rmtree(self.c.work)
+        self.c.work.symlink_to(self.secret)
+
+    def test_the_workdir_is_not_a_root_of_its_own(self):
+        gr = bench.SandboxGradeRun(self.c, self.c.work)
+        box = gr._box()
+        self.assertNotIn(str(self.c.work), box.spec.allowed_roots)
+        self.assertEqual(sbx.verify_spec(box.spec, box.base_mounts()), [])
+
+    def test_a_symlinked_workdir_is_refused_before_the_sandbox_exists(self):
+        self.swap_work_for_symlink()
+        with self.assertRaises(sbx.IsolationError):
+            bench.SandboxGradeRun(self.c, self.c.work)._box()
+        with self.assertRaises(sbx.IsolationError):
+            bench.SandboxGradeRun(self.c, self.c.work).go(["true"], 10)
+        with self.assertRaises(sbx.IsolationError):
+            bench.SandboxGradeRun(self.c, self.c.work).git("log")
+        self.assertEqual(self.started, [])
+
+    def test_a_symlinked_src_directory_is_refused_too(self):
+        import shutil
+        shutil.rmtree(self.c.home / "src")
+        (self.c.home / "src").symlink_to(self.secret)
+        (self.secret / "ledgerly").mkdir()
+        with self.assertRaises(sbx.IsolationError):
+            bench.SandboxGradeRun(self.c, self.c.work)._box()
+        self.assertEqual(self.started, [])
+
+    def test_verify_spec_still_refuses_when_the_symlink_appears_after_the_check(self):
+        """Die Prüfung in _box und die in start() sind unabhängig: fällt eine aus, hält die andere."""
+        self.swap_work_for_symlink()
+        with mock.patch.object(bench, "require_real_dirs", lambda *a, **k: None):
+            box = bench.SandboxGradeRun(self.c, self.c.work)._box()
+            with self.assertRaises(sbx.IsolationError):
+                box.start()
+        self.assertEqual(self.started, [])
+
+    def test_a_workdir_outside_the_runs_needs_roots_given_by_the_operator(self):
+        """`bench.py grade <aufgabe> <verzeichnis>` nimmt ein Verzeichnis des Bedieners: das ist eine ausdrückliche Wurzel."""
+        elsewhere = Path(tempfile.mkdtemp(prefix="operator-", dir="/var/tmp"))
+        self.addCleanup(__import__("shutil").rmtree, elsewhere, True)
+        box = bench.SandboxGradeRun(self.c, elsewhere)._box()
+        self.assertTrue(any("erlaubten Wurzeln" in b for b in sbx.verify_spec(box.spec, box.base_mounts())))
+        box = bench.SandboxGradeRun(self.c, elsewhere, trusted_roots=[elsewhere])._box()
+        self.assertEqual(sbx.verify_spec(box.spec, box.base_mounts()), [])
 
 
 class SafeReadTest(unittest.TestCase):
@@ -536,6 +866,21 @@ class ProbeScriptTest(unittest.TestCase):
         compile(src, "probe.py", "exec")
         imports = {line.split()[1].split(".")[0] for line in src.splitlines() if line.startswith(("import ", "from "))}
         self.assertLessEqual(imports, set(sys.stdlib_module_names))
+
+    def test_privilege_check_requires_a_seccomp_filter(self):
+        """m6: Seccomp: 0 heißt, der Kernel filtert keine Systemaufrufe (bwrap ohne Filter, Docker mit seccomp=unconfined)."""
+        import probe
+
+        def status(sec):
+            return f"CapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t{sec}\n"
+
+        for sec, ok in ((0, False), (1, True), (2, True)):
+            with mock.patch("builtins.open", mock.mock_open(read_data=status(sec))), mock.patch.object(probe.os, "getuid", return_value=1000):
+                res = probe.privileges({})
+            self.assertEqual(res["ok"], ok, (sec, res))
+        with mock.patch("builtins.open", mock.mock_open(read_data="CapEff:\t0\nCapBnd:\t0\nNoNewPrivs:\t1\n")), \
+                mock.patch.object(probe.os, "getuid", return_value=1000):
+            self.assertFalse(probe.privileges({})["ok"], "ohne Seccomp-Zeile ist es nicht nachgewiesen")
 
     def test_probe_script_reports_every_required_check(self):
         """Ohne Sandbox-Eigenschaften laufen die Proben trotzdem durch und melden jede geforderte Prüfung (auch als FEHLER)."""

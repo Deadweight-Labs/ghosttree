@@ -15,7 +15,7 @@ Agenten-HOME ausführt (git, ctx, go test), läuft ebenfalls in der Sandbox.
 Aufruf:
   bench.py chain <arm> <rep> [--only-learning] [--tasks F1,F2]
   bench.py probe [--keep]            Isolationsprobe ohne Modellaufruf, schreibt isolation.json
-  bench.py cleanup                   entfernt Sandbox-Container nach Label
+  bench.py cleanup [<kennung>]       entfernt eigene Sandbox-Container nach Label (ohne Kennung nur verwaiste)
   bench.py grade <taskid> <workdir> <snapshot_sha>
   bench.py regrade <kette>...
 """
@@ -39,13 +39,15 @@ sys.path.insert(0, str(HARNESS))
 import sandbox as sbx  # noqa: E402
 from modelproxy import ModelProxy  # noqa: E402
 
-BASE = Path(os.environ.get("BENCH_BASE", Path.home() / "agentbench-data" / "agent-compare"))
-HIDDEN = Path(os.environ.get("BENCH_HIDDEN", HARNESS.parent / "hidden"))
+# Von der Bedienung gesetzte Pfade werden aufgelöst: sandbox.verify_spec verlangt für jede Einhängung realpath == abspath
+# (ein Symlink im Stand des Agenten darf nie Quelle sein), also müssen diese Wurzeln selbst ohne Symlink dastehen.
+BASE = Path(os.environ.get("BENCH_BASE", Path.home() / "agentbench-data" / "agent-compare")).resolve()
+HIDDEN = Path(os.environ.get("BENCH_HIDDEN", HARNESS.parent / "hidden")).resolve()
 TEMPLATE = HARNESS.parent / "projects" / "ledgerly"
 SHARED = BASE / "shared"
 # Außerhalb des echten Benutzer-HOME: Die Sandbox sieht es ohnehin nicht, aber so bleibt auch der
 # Host-Pfad der Läufe frei von persönlichen Dateien.
-RUNS = Path(os.environ.get("BENCH_RUNS", "/var/tmp/agentcmp/runs"))
+RUNS = Path(os.environ.get("BENCH_RUNS", "/var/tmp/agentcmp/runs")).resolve()
 RESULTS = BASE / "results"
 # Agent-Aufruf IN der Sandbox: claude aus dem Image (bzw. bei bwrap vom Host).
 AGENT = os.environ.get("BENCH_AGENT", "claude")
@@ -79,6 +81,14 @@ PROJECT = os.environ.get("BENCH_PROJECT", "ledgerly")
 P = PROJECTS[PROJECT]
 PROMPTS = json.loads(P["prompts"].read_text()) if P["prompts"].exists() else {}
 RESULTS = P["results"]
+
+
+ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
+
+def valid_id(cid):
+    """Kennungen von Ketten landen in Pfaden, Container-Namen und Labels: nur einfache Bezeichner."""
+    return isinstance(cid, str) and bool(ID_PATTERN.fullmatch(cid))
 
 
 def log(chain, msg):
@@ -177,6 +187,8 @@ class Chain:
         assert arm in ARMS, arm
         self.arm, self.rep = arm, rep
         self.cid = cid or secrets.token_hex(3)
+        if not valid_id(self.cid):
+            raise ValueError(f"ungültige Kennung der Kette: {self.cid!r}")
         self.root = RUNS / self.cid
         self.home = self.root / "home"
         self.work = self.home / "src" / P["dir"]
@@ -218,6 +230,10 @@ class Chain:
         if self.arm != "native":
             e["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
         return e
+
+    def trusted_path(self):
+        """PATH der Werkzeugschritte (git, ctx, go): wie der des Agenten, aber ohne Einträge im beschreibbaren HOME."""
+        return ":".join(d for d in self.env()["PATH"].split(":") if not d.startswith(sbx.SANDBOX_HOME))
 
     def host_env(self):
         """Umgebung für vertrauenswürdige Prozesse auf dem Host (ctx serve): knapp und ohne geerbte Zugangsdaten."""
@@ -269,8 +285,9 @@ class Chain:
         """Führt Befehle nacheinander in einer frischen Sandbox aus (git, ctx, Aufräumen)."""
         out = []
         with self.new_sandbox(tag, extra_mounts=mounts) as box:
+            env = {**box.spec.env, "PATH": self.trusted_path()}  # kein python3, git oder go aus ~/.local/bin des Agenten
             for argv in cmds:
-                r = box.exec(argv, cwd=cwd or self.iwork, timeout=timeout)
+                r = box.exec(argv, env=env, cwd=cwd or self.iwork, timeout=timeout)
                 if check and r.rc != 0:
                     raise RuntimeError(f"{argv!r} -> {r.rc}: {(r.stdout + r.stderr)[-2000:]}")
                 out.append(r)
@@ -314,7 +331,7 @@ class Chain:
         shutil.copytree(P["template"], self.work)
         self.ensure_proxy()
         self.tool(["sh", "-c", f"[ -d /opt/gowarm/cache ] && cp -a /opt/gowarm/cache/. {GOCACHE_DIR}/ || true"], tag="warm")
-        self.tool(["git", "init", "-q"], ["git", "add", "-A"],
+        self.tool(["git", "init", "-q"], [*GIT, "add", "-A"],
                   [*GIT, *GIT_ID, "commit", "-q", "-m", "ledgerly: Stand vor der Arbeit"],
                   ["git", "remote", "add", "origin", P["remote"]], tag="prepare")
         if self.arm == "ghosttree":
@@ -366,9 +383,10 @@ class Chain:
             raise RuntimeError("ctx serve did not come up")
         # Der Server ist für die Sandbox nur über diesen Socket erreichbar (socat in der Sandbox macht daraus 127.0.0.1).
         self.sock.mkdir(parents=True, exist_ok=True)
+        # Mit der knappen Umgebung des Hosts: socat erbte sonst den API-Schlüssel des Harness.
         self.gt_fwd = subprocess.Popen(["socat", f"UNIX-LISTEN:{self.sock}/gt.sock,fork,mode=600,unlink-early",
                                         f"TCP:127.0.0.1:{port}"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL, start_new_session=True)
+                                       stderr=subprocess.DEVNULL, start_new_session=True, env=self.host_env())
 
     def stop_gt_forward(self):
         if self.gt_fwd and self.gt_fwd.poll() is None:
@@ -497,9 +515,10 @@ class Chain:
                 if base is not None:
                     user_md.write_text(base)
         info["removed_memfiles"] = removed
-        _, _, head = self.tool(["git", "add", "-A"],
+        # Die Konfiguration des Repos stammt vom Agenten: ohne GIT führte git core.fsmonitor und Hooks daraus aus.
+        _, _, head = self.tool([*GIT, "add", "-A"],
                                [*GIT, *GIT_ID, "commit", "-q", "--allow-empty", "-m", f"Arbeitsstand nach {tag.split('.')[0]}"],
-                               ["git", "rev-parse", "HEAD"], tag="commit")
+                               [*GIT, "rev-parse", "HEAD"], tag="commit")
         info["head"] = head.stdout.strip()
         return info
 
@@ -559,7 +578,7 @@ class Chain:
                                    "infra_failure": infra, **info})
                 break
         self.snapshot("post-learning")
-        self.meta["post_learning_head"] = self.tool(["git", "rev-parse", "HEAD"], tag="head")[0].stdout.strip()
+        self.meta["post_learning_head"] = self.tool([*GIT, "rev-parse", "HEAD"], tag="head")[0].stdout.strip()
         self.meta["state_evidence"] = self.state_evidence()
         self.save_meta()
 
@@ -590,7 +609,7 @@ class Chain:
                     time.sleep(30)
                     continue
                 info = self.post_session(tag)
-                patch = self.tool(["git", "diff", "--binary", head, "HEAD"], check=False, tag="patch")[0]
+                patch = self.tool([*GIT, "diff", "--binary", "--no-ext-diff", "--no-textconv", head, "HEAD"], check=False, tag="patch")[0]
                 (self.out / f"{tag}.patch").write_text(patch.stdout or "")
                 grade = grade_task(F["id"], self.work, head, SandboxGradeRun(self, self.work))
                 tx = transcript_stats(self.home, rec.get("session_id"), F["id"])
@@ -679,14 +698,22 @@ class SandboxGradeRun:
     """Bewertung eines Agentenstands: Der Stand wird nur lesbar in eine Sandbox ohne Netz gehängt, dort kopiert
     (die Kopie macht cp -a in der Sandbox, nicht der Harness), die verdeckten Tests kommen nur dort hinein (R5/R6)."""
 
-    def __init__(self, chain, work):
+    def __init__(self, chain, work, trusted_roots=()):
+        # trusted_roots: nur für ein Verzeichnis, das die Bedienung ausdrücklich nennt (`bench.py grade <aufgabe> <verzeichnis>`).
+        # Der Stand einer Kette ist nie eine eigene Wurzel: er liegt unter RUNS oder wird nicht eingehängt.
         self.chain, self.work = chain, Path(work)
+        self.trusted_roots = [str(r) for r in trusted_roots]
         self.hidden = None
 
     def place_hidden(self, src, name):
         self.hidden = (Path(src), name)
 
     def _box(self):
+        # Direkt vor dem Einhängen: Der Stand liegt im HOME, in dem der Agent (und jeder Schritt, der es beschreibbar
+        # einhängt) Symlinks anlegen kann. Zeigte src/ledgerly irgendwohin, hinge die Sandbox dieses Verzeichnis des Hosts ein.
+        rel = os.path.relpath(self.work, self.chain.home)
+        if not rel.startswith(".."):
+            require_real_dirs(self.chain.home, rel)  # prüft jeden Teil: src, src/ledgerly
         mounts = [sbx.Mount(str(self.work), GRADE_SRC)]
         if self.hidden:
             mounts.append(sbx.Mount(str(self.hidden[0]), f"{GRADE_HIDDEN}/{self.hidden[1]}"))
@@ -696,7 +723,7 @@ class SandboxGradeRun:
         rm_tree(home)
         home.mkdir()
         return self.chain.new_sandbox("grade", extra_mounts=mounts, gocache=gocache, home=home, model=False,
-                                      roots=[self.work])
+                                      roots=self.trusted_roots)
 
     def _prep(self, hidden):
         script = (f"set -e; rm -rf {GRADE_DIR}; mkdir -p {GRADE_DIR}; cp -a {GRADE_SRC}/. {GRADE_DIR}/; "
@@ -922,6 +949,8 @@ def transcript_stats(home, sid, task):
 
 def regrade(cid):
     """Bewertet die Folgesessions einer Kette neu: Schnappschuss entpacken, Patch anwenden, prüfen. Alles in der Sandbox."""
+    if not valid_id(cid):
+        raise ValueError(f"ungültige Kennung: {cid!r}")
     out = RESULTS / cid
     meta = json.loads((out / "chain.json").read_text())
     head = meta["post_learning_head"]
@@ -947,8 +976,8 @@ def regrade(cid):
                 pdir = ch.root / "patch"
                 pdir.mkdir()
                 shutil.copyfile(patch, pdir / "regrade.patch")
-                ch.tool(["git", "update-index", "-q", "--refresh"], check=False, tag="regrade")
-                ch.tool(["git", "apply", "--binary", "--index", "/bench-patch/regrade.patch"],
+                ch.tool([*GIT, "update-index", "-q", "--refresh"], check=False, tag="regrade")
+                ch.tool([*GIT, "apply", "--binary", "--index", "/bench-patch/regrade.patch"],
                         [*GIT, *GIT_ID, "commit", "-qm", "regrade"], tag="regrade",
                         mounts=[sbx.Mount(str(pdir), "/bench-patch")])
             g = grade_task(r["task"], ch.work, head, SandboxGradeRun(ch, ch.work))
@@ -1033,7 +1062,10 @@ def main():
     elif args and args[0] == "probe":
         sys.exit(probe_run("--keep" in args))
     elif args and args[0] == "cleanup":
-        print("entfernt:", sbx.remove_containers() or "nichts")
+        cid = args[1] if len(args) > 1 else None
+        if cid is not None and not valid_id(cid):
+            sys.exit(f"ungültige Kennung: {cid!r}")
+        print("entfernt:", sbx.remove_containers(cid) or "nichts")
     elif args and args[0] == "regrade":
         precheck()
         for cid in args[1:]:
@@ -1047,7 +1079,7 @@ def main():
         c.ensure_proxy()
         try:
             work = Path(args[2]).resolve()
-            print(json.dumps(grade_task(args[1], work, args[3], SandboxGradeRun(c, work)), indent=2))
+            print(json.dumps(grade_task(args[1], work, args[3], SandboxGradeRun(c, work, trusted_roots=[work])), indent=2))
         finally:
             c.cleanup()
             shutil.rmtree(c.root, ignore_errors=True)

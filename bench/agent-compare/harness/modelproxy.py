@@ -8,8 +8,10 @@ seiner eigenen Umgebung (Variable `key_env`); er steht nie in der Umgebung der S
 in einer Datei und nie im Protokoll.
 
 Durchgelassen werden nur POST /v1/messages und POST /v1/messages/count_tokens mit gültigem
-Laufkennzeichen und einem Modell aus der Erlaubnisliste. Je Lauf gelten Grenzen für Anfragen,
-Tokens und gleichzeitige Anfragen (Rate-Gate). Der Verbrauch je Anfrage geht als JSON-Zeile
+Laufkennzeichen und einem Modell aus der Erlaubnisliste. Weitergeleitet wird nie der Rohtext des
+Agenten, sondern die geprüfte Anfrage, neu serialisiert (doppelte JSON-Schlüssel werden abgelehnt).
+Je Lauf gelten Grenzen für Anfragen, Tokens, gleichzeitige Anfragen (Rate-Gate) und Verbindungen,
+und jede Verbindung hat eine Lesefrist. Der Verbrauch je Anfrage geht als JSON-Zeile
 in `usage_log`. GET /_bench/ping antwortet ohne Modellaufruf und dient der Isolationsprobe.
 
 Aufruf als Programm (der Harness benutzt die Klasse direkt):
@@ -18,10 +20,12 @@ Aufruf als Programm (der Harness benutzt die Klasse direkt):
 import argparse
 import hmac
 import http.client
+import ipaddress
 import json
 import os
 import re
 import socketserver
+import sys
 import threading
 import time
 import urllib.parse
@@ -29,7 +33,15 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 DEFAULT_UPSTREAM = "https://api.anthropic.com"
-DEFAULT_MODELS = r"^claude-(opus-5-5|sonnet-5-5|haiku-(4-5|5-5))"
+# Muss den ganzen Modellnamen treffen (fullmatch): nur ein Datum und die Kontextkennung dürfen folgen.
+DEFAULT_MODELS = r"claude-(opus-5-5|sonnet-5-5|haiku-(4-5|5-5))(-\d{8})?(\[1m\])?"
+# Grenzen je Lauf (je Kette). Sie fangen einen entlaufenen Agenten ab, sie sind kein Budget: Eine Kette braucht
+# in der Regel einige hundert bis wenige tausend Anfragen; die Tokens zählen Eingabe, Ausgabe und beide Cache-Felder.
+DEFAULT_MAX_REQUESTS = 6000
+DEFAULT_MAX_TOKENS = 600_000_000
+DEFAULT_READ_TIMEOUT = 60
+DEFAULT_MAX_CONNECTIONS = 64
+LOOPBACK_NAMES = ("localhost",)
 ALLOWED_POST = ("/v1/messages", "/v1/messages/count_tokens")
 PING_PATH = "/_bench/ping"
 MAX_BODY = 32 * 1024 * 1024
@@ -37,6 +49,42 @@ MAX_BODY = 32 * 1024 * 1024
 FORWARD_REQUEST_HEADERS = ("anthropic-version", "anthropic-beta", "content-type", "accept", "user-agent",
                            "x-stainless-lang", "x-stainless-package-version", "x-app")
 FORWARD_RESPONSE_HEADERS = ("content-type", "request-id", "retry-after", "x-should-retry", "anthropic-ratelimit-requests-remaining")
+
+
+def _env_int(name, default, minimum):
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name}={raw!r} ist keine ganze Zahl") from None
+    if value < minimum:
+        raise ValueError(f"{name}={raw!r} ist zu klein (mindestens {minimum})")
+    return value
+
+
+def _is_loopback(host):
+    if host in LOOPBACK_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _no_duplicates(pairs):
+    """object_pairs_hook: Ein Schlüssel kommt je Objekt nur einmal vor. Sonst sähe der Upstream einen anderen Wert als die Prüfung."""
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"doppelter Schlüssel {key!r}")
+        out[key] = value
+    return out
+
+
+def _no_constants(name):
+    raise ValueError(f"unzulässige Zahl {name}")
 
 
 class ProxyError(Exception):
@@ -91,16 +139,25 @@ class Usage:
 
 class ModelProxy:
     def __init__(self, sock_path, run_id, token, upstream=None, key_env=None, usage_log=None,
-                 models=None, max_requests=5000, max_tokens=0, max_concurrent=4, auth_style=None):
+                 models=None, max_requests=None, max_tokens=None, max_concurrent=4, auth_style=None,
+                 read_timeout=DEFAULT_READ_TIMEOUT, max_connections=DEFAULT_MAX_CONNECTIONS):
         self.sock_path = str(sock_path)
         self.run_id = run_id
         self.token = token
         self.upstream = urllib.parse.urlsplit(upstream or os.environ.get("BENCH_UPSTREAM_URL") or DEFAULT_UPSTREAM)
+        if self.upstream.scheme not in ("http", "https") or not self.upstream.hostname:
+            raise ValueError(f"Upstream {self.upstream.geturl()!r}: erlaubt sind https://… und http:// nur zu Loopback")
+        if self.upstream.scheme == "http" and not _is_loopback(self.upstream.hostname):
+            raise ValueError(f"Upstream {self.upstream.geturl()!r}: http:// nur zu Loopback, der Schlüssel ginge sonst unverschlüsselt hinaus")
         self.key_env = key_env or os.environ.get("BENCH_UPSTREAM_KEY_ENV") or "ANTHROPIC_API_KEY"
         self.auth_style = auth_style or os.environ.get("BENCH_UPSTREAM_AUTH") or "x-api-key"
         self.usage_log = Path(usage_log) if usage_log else None
         self.models = re.compile(models or os.environ.get("BENCH_PROXY_MODELS") or DEFAULT_MODELS)
-        self.max_requests, self.max_tokens = max_requests, max_tokens
+        # None: aus der Umgebung (BENCH_PROXY_MAX_REQUESTS / BENCH_PROXY_MAX_TOKENS), sonst die Standardwerte. Beide sind
+        # immer gesetzt: ein Proxy ohne Grenze gibt es nicht.
+        self.max_requests = max_requests if max_requests is not None else _env_int("BENCH_PROXY_MAX_REQUESTS", DEFAULT_MAX_REQUESTS, 1)
+        self.max_tokens = max_tokens if max_tokens is not None else _env_int("BENCH_PROXY_MAX_TOKENS", DEFAULT_MAX_TOKENS, 1)
+        self.read_timeout, self.max_connections = read_timeout, max_connections
         self._gate = threading.BoundedSemaphore(max_concurrent)
         self._lock = threading.Lock()
         self.requests = 0
@@ -118,8 +175,9 @@ class ModelProxy:
 
         class Handler(_Handler):
             owner = proxy
+            timeout = proxy.read_timeout  # Lesefrist je Verbindung (Anfragezeile, Kopfzeilen, Rumpf)
 
-        self._server = _UnixServer(self.sock_path, Handler)
+        self._server = _UnixServer(self.sock_path, Handler, max_connections=self.max_connections)
         os.chmod(self.sock_path, 0o600)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True, name="modelproxy")
         self._thread.start()
@@ -153,13 +211,18 @@ class ModelProxy:
         if path not in ALLOWED_POST:
             raise ProxyError(403, "permission_error", f"Pfad nicht erlaubt: {path}")
         try:
-            req = json.loads(body)
-        except ValueError:
-            raise ProxyError(400, "invalid_request_error", "Anfrage ist kein JSON")
+            req = json.loads(body, object_pairs_hook=_no_duplicates, parse_constant=_no_constants)
+        except (ValueError, RecursionError) as ex:
+            raise ProxyError(400, "invalid_request_error", f"Anfrage ist kein gültiges JSON ({type(ex).__name__})") from None
         model = req.get("model") if isinstance(req, dict) else None
-        if not isinstance(model, str) or not self.models.match(model):
+        if not isinstance(model, str) or not self.models.fullmatch(model):
             raise ProxyError(403, "permission_error", f"Modell nicht erlaubt: {model!r}")
         return req
+
+    @staticmethod
+    def forward_body(req):
+        """Der Upstream bekommt genau die geprüfte Anfrage, neu serialisiert, nie die Rohbytes des Agenten."""
+        return json.dumps(req).encode("ascii")
 
     def reserve(self):
         with self._lock:
@@ -184,6 +247,8 @@ class ModelProxy:
     # ---------- Weiterleitung ----------
     def upstream_headers(self, headers):
         out = {k: v for k, v in headers.items() if k.lower() in FORWARD_REQUEST_HEADERS}
+        if any(("\r" in v or "\n" in v) for v in out.values()):
+            raise ProxyError(400, "invalid_request_error", "Kopfzeile mit Zeilenumbruch")
         key = os.environ.get(self.key_env)
         if not key:
             raise ProxyError(503, "api_error", f"Umgebungsvariable {self.key_env} fehlt im Proxy")
@@ -204,6 +269,43 @@ class ModelProxy:
 class _UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     request_queue_size = 64
+    BUSY = b"HTTP/1.0 503 Service Unavailable\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{}"
+
+    def __init__(self, path, handler, max_connections=DEFAULT_MAX_CONNECTIONS):
+        self._slots = threading.BoundedSemaphore(max_connections)
+        super().__init__(path, handler)
+
+    def process_request(self, request, client_address):
+        # Mehr gleichzeitige Verbindungen als erlaubt bekommen sofort 503, es entsteht kein weiterer Thread.
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.settimeout(0.2)
+                try:
+                    request.recv(65536)  # was der Client schon geschickt hat: sonst endet das Schließen als Verbindungsabbruch
+                except OSError:
+                    pass
+                request.sendall(self.BUSY)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+    def handle_error(self, request, client_address):
+        # Der Agent bricht eine Verbindung ab: kein Traceback. Alles andere bleibt sichtbar.
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -238,7 +340,17 @@ class _Handler(BaseHTTPRequestHandler):
         except ProxyError as ex:
             self._error(ex)
 
-    do_PUT = do_DELETE = do_PATCH = do_GET
+    def _method_not_allowed(self):
+        try:
+            self.owner.authorize(self.headers)
+            self.send_response(405)
+            self.send_header("allow", "GET, POST")
+            self.send_header("content-length", "0")
+            self.end_headers()
+        except ProxyError as ex:
+            self._error(ex)
+
+    do_PUT = do_DELETE = do_PATCH = _method_not_allowed
 
     def do_POST(self):
         o = self.owner
@@ -253,9 +365,13 @@ class _Handler(BaseHTTPRequestHandler):
                 raise ProxyError(400, "invalid_request_error", "Content-Length fehlt oder ist ungültig")
             if length > MAX_BODY:
                 raise ProxyError(413, "request_too_large", "Anfrage zu groß")
-            body = self.rfile.read(length)
+            try:
+                body = self.rfile.read(length)
+            except OSError:  # Lesefrist überschritten oder Verbindung weg
+                raise ProxyError(408, "request_timeout", "Anfrage nicht rechtzeitig vollständig gelesen") from None
             req = o.check_post(path, body)
             headers = o.upstream_headers(self.headers)
+            body = o.forward_body(req)
             o.reserve()
         except ProxyError as ex:
             return self._error(ex)
@@ -263,6 +379,7 @@ class _Handler(BaseHTTPRequestHandler):
         usage = Usage()
         status = 502
         with o._gate:
+            conn = None
             try:
                 conn = o.connect()
                 conn.request("POST", self.path, body=body, headers=headers)
@@ -287,13 +404,15 @@ class _Handler(BaseHTTPRequestHandler):
                         whole += chunk
                 if not streaming:
                     usage.feed_json(whole)
-                conn.close()
-            except (OSError, http.client.HTTPException) as ex:
+            except (OSError, http.client.HTTPException, ValueError) as ex:
                 if status == 502:
                     try:
                         self._json(502, {"type": "error", "error": {"type": "api_error", "message": f"Upstream nicht erreichbar: {type(ex).__name__}"}})
                     except OSError:
                         pass
+            finally:
+                if conn is not None:
+                    conn.close()
         o.record({"path": path, "model": req.get("model"), "status": status, "duration_s": round(time.time() - t0, 2),
                   "tokens": usage.total, **usage.totals})
 
@@ -305,8 +424,8 @@ def main():
     ap.add_argument("--token", required=True)
     ap.add_argument("--upstream")
     ap.add_argument("--usage-log")
-    ap.add_argument("--max-requests", type=int, default=5000)
-    ap.add_argument("--max-tokens", type=int, default=0)
+    ap.add_argument("--max-requests", type=int, help=f"Standard: BENCH_PROXY_MAX_REQUESTS oder {DEFAULT_MAX_REQUESTS}")
+    ap.add_argument("--max-tokens", type=int, help=f"Standard: BENCH_PROXY_MAX_TOKENS oder {DEFAULT_MAX_TOKENS}")
     a = ap.parse_args()
     p = ModelProxy(a.sock, a.run_id, a.token, upstream=a.upstream, usage_log=a.usage_log,
                    max_requests=a.max_requests, max_tokens=a.max_tokens)

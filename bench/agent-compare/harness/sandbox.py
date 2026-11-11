@@ -12,14 +12,22 @@ Geschlossen bei Fehler, in drei Stufen:
   2. `inspect`/`verify_runtime`: Der Start wird nachgemessen (Docker: `docker inspect`).
   3. Isolationsprobe (probe.py) in der Sandbox, vor und nach der Sitzung. Der Harness wertet die
      Ausgabe aus und schreibt das Isolationsprotokoll; was die Probe nicht meldet, gilt als nicht bestanden.
+     Die Probe läuft mit absolutem Interpreter (`/usr/bin/python3 -I -S`) und einem PATH ohne HOME, und die
+     Nachher-Probe läuft in einer frischen Instanz (neuer Container, neues bwrap) mit denselben Einhängungen,
+     nachdem alle Prozesse der Sitzung beendet sind: nichts, was der Agent im HOME ablegt oder im Hintergrund
+     startet, kann sie beantworten.
 Jede Stufe, die nicht besteht, wirft `IsolationError`, bevor der Agent läuft.
 """
+import copy
+import functools
 import hashlib
 import json
 import os
+import platform
 import re
 import secrets
 import shutil
+import struct
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +51,9 @@ SECRET_LIKE = re.compile(r"(API_?KEY|SECRET|PASSW|CREDENTIAL|PRIVATE|^SSH_|^AWS_
 REQUIRED_CHECKS = ("net_public", "net_interfaces", "dns", "host_paths", "env_names", "env_secrets",
                    "mounts", "root_readonly", "privileges", "proxy")
 EXEC_TIMEOUT_RCS = (124, 137)
+PROBE_PYTHON = ("/usr/bin/python3", "-I", "-S")
+PROBE_PATH = "/usr/bin:/bin"  # keine Einträge unter HOME: dort schreibt der Agent
+RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
 class IsolationError(RuntimeError):
@@ -74,7 +85,6 @@ class SandboxSpec:
     workdir: str = SANDBOX_HOME
     limits: dict = field(default_factory=lambda: {"cpus": 4, "memory": "8g", "pids": 2048})
     proxy_port: int = PROXY_PORT
-    git: dict | None = None  # {"repo": ..., "absent_objects": [...], "allowed_refs": [...], "commit_count": n}
     extra_probe_targets: list = field(default_factory=list)  # [["host", port]], aus der Umgebung des Harness
 
 
@@ -97,6 +107,8 @@ def _real(path):
 def verify_spec(spec, extra_mounts=()):
     """Prüft die Beschreibung einer Sandbox, ohne etwas zu starten. Gibt die Verstöße zurück."""
     bad = []
+    if not RUN_ID.fullmatch(spec.run_id or ""):
+        bad.append(f"Kennung des Laufs ungültig: {spec.run_id!r}")
     if spec.network != "none":
         bad.append(f"Netz ist nicht aus (network={spec.network!r})")
     if not spec.read_only_root:
@@ -118,6 +130,10 @@ def verify_spec(spec, extra_mounts=()):
     seen = set()
     for m in list(spec.mounts) + list(extra_mounts):
         src, dst = _real(m.src), os.path.normpath(m.dst)
+        if src != os.path.abspath(m.src):
+            # Ein Symlink im Stand des Agenten ist nur Text; als Quelle hängte er ein beliebiges Verzeichnis des Hosts ein.
+            bad.append(f"Quelle ist oder enthält einen Symlink: {m.src} -> {src}")
+            continue
         if not os.path.isabs(m.dst) or dst == "/":
             bad.append(f"Ziel der Einhängung ungültig: {m.dst}")
         if dst in seen:
@@ -146,8 +162,7 @@ def evaluate_probe(raw, spec):
             raise TypeError("checks ist kein Objekt")
     except (ValueError, KeyError, TypeError):
         return {"ok": False, "failed": ["probe_output"], "checks": {}, "detail": "Ausgabe der Probe unlesbar"}
-    required = list(REQUIRED_CHECKS) + (["git"] if spec.git else [])
-    failed = [n for n in required if not (isinstance(checks.get(n), dict) and checks[n].get("ok") is True)]
+    failed = [n for n in REQUIRED_CHECKS if not (isinstance(checks.get(n), dict) and checks[n].get("ok") is True)]
     return {"ok": not failed, "failed": failed, "checks": checks, "uid": data.get("uid")}
 
 
@@ -156,7 +171,7 @@ def spec_fingerprint(spec, extra_mounts, extra=None):
     doc = {
         "mounts": sorted((m.dst, m.rw) for m in list(spec.mounts) + list(extra_mounts)),
         "env_names": sorted(spec.env), "forwards": sorted(spec.forwards), "network": spec.network,
-        "limits": spec.limits, "uid": spec.uid, "git": spec.git,
+        "limits": spec.limits, "uid": spec.uid,
         "probe_sha256": hashlib.sha256((HERE / "probe.py").read_bytes()).hexdigest(),
         "shell_sha256": hashlib.sha256((IMAGE_DIR / "sandbox-run.sh").read_bytes()).hexdigest(),
         **(extra or {}),
@@ -221,8 +236,6 @@ class Sandbox:
                "expected_mounts": {m.dst: m.rw for m in self.all_mounts()},
                "implicit_mounts": list(self.implicit_mounts), "allowed_secret_like": [TOKEN_ENV],
                "extra_targets": s.extra_probe_targets}
-        if s.git:
-            cfg["git"] = s.git
         return cfg
 
     def prepare_in(self):
@@ -271,16 +284,23 @@ class Sandbox:
         env = self.spec.env if env is None else env
         inner = ["/bin/bash", f"{IN_DIR}/sandbox-run.sh", str(timeout), "env", "-i",
                  *[f"{k}={v}" for k, v in env.items()], *argv]
+        cmd, fds = self._launch(inner, cwd or self.spec.workdir)
         try:
-            r = subprocess.run(self._wrap(inner, cwd or self.spec.workdir), stdin=subprocess.DEVNULL,
-                               capture_output=True, timeout=timeout + 90, env=self.launcher_env())
+            r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout + 90,
+                               env=self.launcher_env(), pass_fds=fds)
         except subprocess.TimeoutExpired as ex:
             return ExecResult(-9, (ex.stdout or b"").decode(errors="replace"), "timeout", True)
+        finally:
+            for fd in fds:
+                os.close(fd)
         return ExecResult(r.returncode, r.stdout.decode(errors="replace"), r.stderr.decode(errors="replace"),
                           r.returncode in EXEC_TIMEOUT_RCS)
 
     def probe(self):
-        r = self.exec(["python3", f"{IN_DIR}/probe.py", f"{IN_DIR}/probe.json"], timeout=120)
+        # Absoluter Interpreter und ein PATH ohne HOME: ein python3 im beschreibbaren ~/.local/bin des Agenten
+        # darf die Probe weder ersetzen noch fälschen. Dieselben Umgebungsnamen wie beim Agenten (die Probe prüft sie).
+        env = {**self.spec.env, "PATH": PROBE_PATH}
+        r = self.exec([*PROBE_PYTHON, f"{IN_DIR}/probe.py", f"{IN_DIR}/probe.json"], env=env, timeout=120)
         report = evaluate_probe(r.stdout, self.spec)
         if r.rc != 0 and report["ok"]:
             report = {"ok": False, "failed": ["probe_exit"], "checks": report["checks"], "detail": f"rc={r.rc}"}
@@ -296,18 +316,45 @@ class Sandbox:
         if not before["ok"]:
             raise IsolationError(f"Isolationsprobe vor der Sitzung nicht bestanden: {before['failed']}")
         result = self.exec(argv, cwd=cwd, timeout=timeout)
-        after = self.probe()
+        # Alle Prozesse der Sitzung beenden (auch setsid-Kinder, die das exec überleben) und die Nachher-Probe in einer
+        # frischen Instanz mit denselben Einhängungen laufen lassen.
+        self.stop()
+        after_box = self.fresh()
+        try:
+            after_box.start()
+            after = after_box.probe()
+            after["instance"] = after_box.facts_summary()
+        except IsolationError as ex:
+            log.record("after", {"ok": False, "failed": ["restart"], "checks": {}, "detail": str(ex)})
+            raise
+        finally:
+            after_box.stop()
         log.record("after", after)
         if not after["ok"]:
             raise IsolationError(f"Isolationsprobe nach der Sitzung nicht bestanden: {after['failed']}")
         return result, log
 
+    def fresh(self):
+        """Eine neue, nicht gestartete Instanz mit derselben Beschreibung und denselben Einhängungen."""
+        new = copy.copy(self)
+        new.started = False
+        new.facts = {}
+        new._renew()
+        return new
+
     # ---------- Unterklassen ----------
+    def _renew(self):
+        """Gibt der Kopie eine eigene Identität (Container-Name)."""
+
     def _start(self):
         raise NotImplementedError
 
     def _wrap(self, inner, cwd):
         raise NotImplementedError
+
+    def _launch(self, inner, cwd):
+        """(Befehl, Dateideskriptoren für pass_fds). Der Aufrufer schließt die Deskriptoren."""
+        return self._wrap(inner, cwd), ()
 
     def launcher_env(self) -> dict | None:
         """Umgebung des Startprogramms (docker, bwrap). None heißt: erben."""
@@ -337,13 +384,17 @@ class ContainerSandbox(Sandbox):
     def fingerprint_extra(self):
         return {"kind": self.kind, "image": self.image, "image_id": self.facts.get("image_id")}
 
+    def _renew(self):
+        self.name = f"bench-{self.spec.run_id}-{secrets.token_hex(3)}"
+
     def facts_summary(self):
         return {k: self.facts.get(k) for k in ("image", "image_id", "container", "network_mode") if k in self.facts}
 
     def run_args(self):
         s = self.spec
         args = [self.docker, "run", "-d", "--init", "--name", self.name, "--label", "bench.sandbox=1",
-                "--label", f"bench.run={s.run_id}", "--network", s.network, "--read-only", "--cap-drop", "ALL",
+                "--label", f"bench.run={s.run_id}", "--label", f"bench.owner={os.getuid()}",
+                "--label", f"bench.pid={os.getpid()}", "--network", s.network, "--read-only", "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges", "--user", f"{s.uid}:{s.gid}",
                 "--cpus", str(s.limits["cpus"]), "--memory", s.limits["memory"], "--memory-swap", s.limits["memory"],
                 "--pids-limit", str(s.limits["pids"]), "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=2g,mode=1777",
@@ -385,6 +436,8 @@ class ContainerSandbox(Sandbox):
             bad.append(f"Capabilities: drop={host.get('CapDrop')} add={host.get('CapAdd')}")
         if not any(o.startswith("no-new-privileges") for o in host.get("SecurityOpt") or []):
             bad.append("no-new-privileges fehlt")
+        if any(o.replace(" ", "").startswith("seccomp=unconfined") for o in host.get("SecurityOpt") or []):
+            bad.append("Seccomp-Profil ist ausgeschaltet (seccomp=unconfined)")
         if host.get("Privileged") or host.get("Devices") or host.get("PortBindings") or host.get("PidMode") or \
                 host.get("IpcMode") == "host" or host.get("UsernsMode") == "host":
             bad.append("Container ist privilegiert oder teilt Namensräume mit dem Host")
@@ -416,9 +469,67 @@ def _bytes(size):
     return int(m.group(1)) * {"": 1, "k": 1 << 10, "m": 1 << 20, "g": 1 << 30}[m.group(2)] if m else None
 
 
+def _bpf(code, jt, jf, k):
+    return struct.pack("=HBBI", code, jt, jf, k)
+
+
+# Systemaufrufe, die ein Agent in bwrap nie braucht und die Kernel-Angriffsfläche öffnen: Einhängen, Namensräume,
+# Module, bpf, io_uring, perf, Schlüsselbund, Uhr und Neustart. Nummern aus <asm/unistd_64.h> bzw. <asm-generic/unistd.h>.
+_SECCOMP_COMMON = {
+    "x86_64": {"mount": 165, "umount2": 166, "pivot_root": 155, "swapon": 167, "swapoff": 168, "reboot": 169, "acct": 163,
+               "settimeofday": 164, "clock_settime": 227, "clock_adjtime": 305, "adjtimex": 159, "kexec_load": 246,
+               "kexec_file_load": 320, "init_module": 175, "finit_module": 313, "delete_module": 176, "setns": 308,
+               "unshare": 272, "perf_event_open": 298, "bpf": 321, "userfaultfd": 323, "keyctl": 250, "add_key": 248,
+               "request_key": 249, "open_by_handle_at": 304, "name_to_handle_at": 303, "process_vm_readv": 310,
+               "process_vm_writev": 311, "chroot": 161, "quotactl": 179, "lookup_dcookie": 212, "iopl": 172, "ioperm": 173},
+    "aarch64": {"mount": 40, "umount2": 39, "pivot_root": 41, "swapon": 224, "swapoff": 225, "reboot": 142, "acct": 89,
+                "settimeofday": 170, "clock_settime": 112, "clock_adjtime": 266, "adjtimex": 171, "kexec_load": 104,
+                "kexec_file_load": 294, "init_module": 105, "finit_module": 273, "delete_module": 106, "setns": 268,
+                "unshare": 97, "perf_event_open": 241, "bpf": 280, "userfaultfd": 282, "keyctl": 219, "add_key": 217,
+                "request_key": 218, "open_by_handle_at": 265, "name_to_handle_at": 264, "process_vm_readv": 270,
+                "process_vm_writev": 271, "chroot": 51, "quotactl": 60, "lookup_dcookie": 18},
+}
+_SECCOMP_NEW_API = {"io_uring_setup": 425, "io_uring_enter": 426, "io_uring_register": 427, "open_tree": 428,
+                    "move_mount": 429, "fsopen": 430, "fsconfig": 431, "fsmount": 432, "fspick": 433, "pidfd_getfd": 438,
+                    "mount_setattr": 442}  # auf beiden Architekturen gleich
+_AUDIT_ARCH = {"x86_64": 0xC000003E, "aarch64": 0xC00000B7}
+
+
+def seccomp_filter():
+    """Klassisches BPF-Programm für `bwrap --seccomp`: alles erlaubt außer der Liste oben (dann EPERM). Eine fremde
+    Architektur oder die x32-Schnittstelle töten den Prozess. Für andere Architekturen gibt es keinen Filter, und
+    ohne Filter startet bwrap nicht (IsolationError)."""
+    arch = platform.machine()
+    if arch not in _AUDIT_ARCH:
+        raise IsolationError(f"kein Seccomp-Filter für die Architektur {arch!r}: bwrap ist hier nicht zugelassen, nimm den Container")
+    nrs = sorted({*_SECCOMP_COMMON[arch].values(), *_SECCOMP_NEW_API.values()})
+    kill, allow, eperm = 0x80000000, 0x7FFF0000, 0x00050000 | 1
+    prog = [_bpf(0x20, 0, 0, 4),                        # A = arch
+            _bpf(0x15, 1, 0, _AUDIT_ARCH[arch]),         # arch == erwartet: weiter
+            _bpf(0x06, 0, 0, kill),
+            _bpf(0x20, 0, 0, 0)]                        # A = Nummer des Systemaufrufs
+    if arch == "x86_64":
+        prog += [_bpf(0x35, 0, 1, 0x40000000), _bpf(0x06, 0, 0, kill)]  # x32-Aufrufe
+    for i, nr in enumerate(nrs):
+        prog.append(_bpf(0x15, len(nrs) - i, 0, nr))    # Treffer: zum EPERM-Ende springen
+    prog += [_bpf(0x06, 0, 0, allow), _bpf(0x06, 0, 0, eperm)]
+    return b"".join(prog)
+
+
+@functools.lru_cache(maxsize=None)
+def bwrap_supports(flag, bwrap="bwrap"):
+    """True, wenn `bwrap --help` die Option nennt (--disable-userns gibt es erst in neueren Versionen)."""
+    try:
+        r = subprocess.run([bwrap, "--help"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return flag in (r.stdout + r.stderr)
+
+
 class BwrapSandbox(Sandbox):
     """bubblewrap: kein Daemon, kein root. Die Werkzeuge kommen vom Host (/usr), Grenzen für Speicher und
-    Prozesse gibt es hier nicht. Gedacht für lokale Probeläufe; das Protokoll nennt den Weg."""
+    Prozesse gibt es hier nicht. Gedacht für lokale Probeläufe; das Protokoll nennt den Weg. Gehärtet mit
+    `--disable-userns` (wenn bwrap es kennt; das Protokoll hält fest, ob) und einem Seccomp-Filter (seccomp_filter)."""
 
     kind = "bwrap"
     implicit_mounts = ("/proc", "/dev", "/tmp", "/usr", "/bin", "/sbin", "/lib", "/lib64")
@@ -428,11 +539,14 @@ class BwrapSandbox(Sandbox):
         self.bwrap = bwrap or os.environ.get("BENCH_BWRAP", "bwrap")
 
     def facts_summary(self):
-        return {"limits_enforced": False}
+        return {"limits_enforced": False, "userns_disabled": bwrap_supports("--disable-userns", self.bwrap), "seccomp": True}
 
-    def bwrap_args(self, cwd):
+    def bwrap_args(self, cwd, seccomp_fd=3):
         a = [self.bwrap, "--unshare-all", "--die-with-parent", "--new-session", "--clearenv", "--hostname", "bench",
              "--setenv", "PATH", "/usr/bin:/bin", "--ro-bind", "/usr", "/usr"]
+        if bwrap_supports("--disable-userns", self.bwrap):
+            a += ["--unshare-user", "--disable-userns"]  # --unshare-all macht den User-Namensraum nur „try“; disable braucht ihn fest
+        a += ["--seccomp", str(seccomp_fd)]
         for d in ("bin", "sbin", "lib", "lib64"):
             p = f"/{d}"
             if os.path.islink(p):
@@ -452,13 +566,23 @@ class BwrapSandbox(Sandbox):
     def _start(self):
         if not shutil.which(self.bwrap):
             raise IsolationError("bubblewrap (bwrap) ist nicht installiert")
+        seccomp_filter()  # wirft IsolationError für eine Architektur ohne Filter, bevor etwas startet
 
     def _wrap(self, inner, cwd):
         return self.bwrap_args(cwd) + ["--", *inner]
 
+    def _launch(self, inner, cwd):
+        fd = os.memfd_create("bench-seccomp")
+        os.write(fd, seccomp_filter())
+        os.lseek(fd, 0, os.SEEK_SET)
+        return self.bwrap_args(cwd, seccomp_fd=fd) + ["--", *inner], (fd,)
+
     def verify_runtime(self, facts):
         args = self.bwrap_args(self.spec.workdir)
-        bad = [f"bwrap ohne {flag}" for flag in ("--unshare-all", "--clearenv", "--die-with-parent") if flag not in args]
+        required = ["--unshare-all", "--clearenv", "--die-with-parent", "--seccomp"]
+        if bwrap_supports("--disable-userns", self.bwrap):
+            required.append("--disable-userns")
+        bad = [f"bwrap ohne {flag}" for flag in required if flag not in args]
         bad += [f"bwrap mit {flag}" for flag in ("--share-net", "--cap-add", "--unshare-all-try") if flag in args]
         return bad
 
@@ -475,12 +599,37 @@ def make_sandbox(kind, spec, in_dir, **kw):
     return cls(spec, in_dir, **kw)
 
 
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def remove_containers(run_id=None, docker=None):
-    """Entfernt Sandbox-Container nach Kennung (Label), nie nach einem Muster in Prozessen."""
+    """Entfernt Sandbox-Container nach Kennung (Label), nie nach einem Muster in Prozessen.
+
+    Mit Kennung: die eigenen Container dieses Laufs. Ohne Kennung: nur eigene (Label bench.owner = Benutzer) und
+    verwaiste (der Harness-Prozess aus bench.pid lebt nicht mehr). Container anderer Benutzer, laufender Kampagnen
+    und solche ohne Angabe bleiben unberührt."""
     docker = docker or os.environ.get("BENCH_DOCKER", "docker")
-    flt = ["--filter", "label=bench.sandbox=1"] + (["--filter", f"label=bench.run={run_id}"] if run_id else [])
-    r = subprocess.run([docker, "ps", "-aq", *flt], capture_output=True, text=True, stdin=subprocess.DEVNULL)
-    ids = r.stdout.split()
+    flt = ["--filter", "label=bench.sandbox=1", "--filter", f"label=bench.owner={os.getuid()}"]
+    if run_id:
+        flt += ["--filter", f"label=bench.run={run_id}"]
+    r = subprocess.run([docker, "ps", "-a", *flt, "--format", '{{.ID}} {{.Label "bench.pid"}}'], capture_output=True,
+                       text=True, stdin=subprocess.DEVNULL)
+    ids = []
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        if run_id:
+            ids.append(parts[0])
+        elif len(parts) == 2 and parts[1].isdigit() and not _pid_alive(int(parts[1])):
+            ids.append(parts[0])
     if ids:
         subprocess.run([docker, "rm", "-f", *ids], capture_output=True, stdin=subprocess.DEVNULL)
     return ids
