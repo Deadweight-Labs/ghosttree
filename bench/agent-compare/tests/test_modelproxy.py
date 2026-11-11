@@ -163,6 +163,33 @@ class ProxyTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.proxy.require_key()
 
+    def raw(self, request):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(5)
+        s.connect(str(self.dir / "m.sock"))
+        s.sendall(request)
+        data = b""
+        try:
+            while chunk := s.recv(4096):
+                data += chunk
+        except socket.timeout:
+            self.fail("der Proxy hängt: er liest ohne Grenze weiter")
+        finally:
+            s.close()
+        return data
+
+    def test_negative_or_invalid_content_length_is_a_400_and_does_not_hang(self):
+        for value in (b"-1", b"abc", b"-99999999999"):
+            reply = self.raw(b"POST /v1/messages HTTP/1.0\r\nauthorization: Bearer " + TOKEN.encode()
+                             + b"\r\ncontent-length: " + value + b"\r\n\r\n")
+            self.assertTrue(reply.startswith(b"HTTP/1.0 400"), (value, reply[:60]))
+        self.assertEqual(FakeUpstream.seen, [])
+
+    def test_oversized_content_length_is_a_413_before_any_read(self):
+        reply = self.raw(b"POST /v1/messages HTTP/1.0\r\nauthorization: Bearer " + TOKEN.encode()
+                         + b"\r\ncontent-length: 99999999999\r\n\r\n")
+        self.assertTrue(reply.startswith(b"HTTP/1.0 413"), reply[:60])
+
     def test_socket_is_private(self):
         self.assertEqual(os.stat(self.dir / "m.sock").st_mode & 0o077, 0)
 

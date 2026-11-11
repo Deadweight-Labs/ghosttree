@@ -245,7 +245,12 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             o.authorize(self.headers)
             path = self.path.split("?")[0]
-            length = int(self.headers.get("content-length") or 0)
+            try:
+                length = int(self.headers.get("content-length") or 0)
+            except ValueError:
+                length = -1
+            if length < 0:  # rfile.read(-1) läse bis zum Ende der Verbindung, ohne Grenze
+                raise ProxyError(400, "invalid_request_error", "Content-Length fehlt oder ist ungültig")
             if length > MAX_BODY:
                 raise ProxyError(413, "request_too_large", "Anfrage zu groß")
             body = self.rfile.read(length)

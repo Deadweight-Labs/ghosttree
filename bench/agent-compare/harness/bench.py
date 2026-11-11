@@ -150,6 +150,28 @@ def rm_tree(path):
         shutil.rmtree(path)
 
 
+def require_real_dirs(root, *rels):
+    """Jeder Teil von rels unterhalb von root muss ein echtes Verzeichnis sein, kein Symlink und keine Datei.
+    Ein Symlink aus der Sandbox ist nur Text; auf dem Host würde glob, rmtree oder write_text ihm folgen.
+    Die Kette bricht ab, statt irgendetwas außerhalb des HOME anzufassen."""
+    for rel in rels:
+        cur = Path(root)
+        for part in Path(rel).parts:
+            cur = cur / part
+            try:
+                mode = os.lstat(cur).st_mode
+            except FileNotFoundError:
+                break
+            if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+                raise sbx.IsolationError(f"Der Agent hat {cur} durch einen Symlink oder eine Datei ersetzt")
+
+
+def snapshot_filter(member, dest):
+    """Entpackt unsere eigenen Schnappschüsse: Pfade nur unterhalb des Ziels (auch durch bereits entpackte Symlinks
+    hindurch), Hardlinks nur auf Ziele darin. Symlinks bleiben Symlinks, sie sind Text und werden nie gefolgt."""
+    return tarfile.data_filter(member, dest) if member.islnk() else tarfile.tar_filter(member, dest)
+
+
 class Chain:
     def __init__(self, arm, rep, cid=None):
         assert arm in ARMS, arm
@@ -243,10 +265,10 @@ class Chain:
         tagname = re.sub(r"[^A-Za-z0-9_.-]", "_", tag)
         return sbx.make_sandbox(self.sandbox_kind, spec, self.root / "in" / f"{self.seq:03d}-{tagname}")
 
-    def tool(self, *cmds, cwd=None, check=True, timeout=900, tag="tool"):
+    def tool(self, *cmds, cwd=None, check=True, timeout=900, tag="tool", mounts=()):
         """Führt Befehle nacheinander in einer frischen Sandbox aus (git, ctx, Aufräumen)."""
         out = []
-        with self.new_sandbox(tag) as box:
+        with self.new_sandbox(tag, extra_mounts=mounts) as box:
             for argv in cmds:
                 r = box.exec(argv, cwd=cwd or self.iwork, timeout=timeout)
                 if check and r.rc != 0:
@@ -421,7 +443,23 @@ class Chain:
             return True
         return False
 
+    def memory_dirs(self):
+        """Auto-Memory-Verzeichnisse unter ~/.claude/projects. Alles, was der Agent dort durch einen Symlink ersetzt hat,
+        bricht die Kette ab (ein Symlink auf Gedächtnis innerhalb des HOME würde die Bereinigung umgehen)."""
+        projects = self.home / ".claude" / "projects"
+        if not projects.is_dir():
+            return []
+        out = []
+        for e in sorted(os.scandir(projects), key=lambda e: e.name):
+            if e.is_symlink() or not e.is_dir(follow_symlinks=False):
+                raise sbx.IsolationError(f"Der Agent hat {e.path} durch einen Symlink oder eine Datei ersetzt")
+            out.append(Path(e.path) / "memory")
+        return [m for m in out if m.is_symlink() or m.exists()]
+
     def post_session(self, tag):
+        # Der Agent ist beendet, sein Container weg. Was er im HOME hinterlassen hat, ist trotzdem nicht vertrauenswürdig:
+        # die Bereinigung unten läuft auf dem Host und folgt keinem Symlink.
+        require_real_dirs(self.home, "src", f"src/{P['dir']}", ".claude", ".claude/projects")
         info = {}
         if self.arm == "ghosttree":
             r = self.tool([f"{CTX_BIN_DIR}/ctx", "watch", "--once"], check=False, timeout=600, tag="gt-watch")[0]
@@ -438,8 +476,8 @@ class Chain:
                     p.unlink()
             # Agenten legen auf Bitte selbst Dateien im Auto-Memory-Pfad oder in der
             # Nutzer-CLAUDE.md an. Das ist der Mechanismus von Arm native, nicht dieses Arms.
-            for memdir in self.home.glob(".claude/projects/*/memory"):
-                files = [p for p, link in safe_walk(memdir, skip=()) if not link]
+            for memdir in self.memory_dirs():
+                files = [] if memdir.is_symlink() else [p for p, link in safe_walk(memdir, skip=()) if not link]
                 if files:
                     keep = self.out / f"{tag}.removed-automemory"
                     keep.mkdir(exist_ok=True)
@@ -490,7 +528,7 @@ class Chain:
         if self.arm == "ghosttree":
             shutil.rmtree(self.root / "gt")
         with tarfile.open(self.root / "snapshots" / f"{name}.tar") as t:
-            t.extractall(self.root, filter="tar")
+            t.extractall(self.root, filter=snapshot_filter)
         if self.arm == "ghosttree":
             self.start_gt_server()
 
@@ -899,13 +937,19 @@ def regrade(cid):
         ch.ensure_proxy()
         try:
             with tarfile.open(tarp) as t:
-                t.extractall(ch.root, filter="tar")
+                t.extractall(ch.root, filter=snapshot_filter)
+            require_real_dirs(ch.home, "src", f"src/{P['dir']}")
             patch = out / f"{r['task']}.a{r['attempt']}.patch"
             if patch.exists() and patch.read_text().strip():
-                shutil.copyfile(patch, ch.home / ".regrade.patch")
+                # Der Patch kommt aus einem Verzeichnis des Harness, nur lesbar: ins HOME des Agenten wird nichts geschrieben,
+                # wo ein Symlink das Ziel umlenken könnte.
+                pdir = ch.root / "patch"
+                pdir.mkdir()
+                shutil.copyfile(patch, pdir / "regrade.patch")
                 ch.tool(["git", "update-index", "-q", "--refresh"], check=False, tag="regrade")
-                ch.tool(["git", "apply", "--binary", "--index", f"{sbx.SANDBOX_HOME}/.regrade.patch"],
-                        [*GIT, *GIT_ID, "commit", "-qm", "regrade"], tag="regrade")
+                ch.tool(["git", "apply", "--binary", "--index", "/bench-patch/regrade.patch"],
+                        [*GIT, *GIT_ID, "commit", "-qm", "regrade"], tag="regrade",
+                        mounts=[sbx.Mount(str(pdir), "/bench-patch")])
             g = grade_task(r["task"], ch.work, head, SandboxGradeRun(ch, ch.work))
             res.append({"task": r["task"], "attempt": r["attempt"], "old": {k: r["grade"][k] for k in ("func", "know", "success")},
                         "new": {k: g[k] for k in ("func", "know", "success")}, "grade": g})

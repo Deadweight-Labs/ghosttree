@@ -393,6 +393,125 @@ class SafeReadTest(unittest.TestCase):
         self.assertEqual(found.get("AGENTS.md"), False)
 
 
+class HostCleanupSymlinkTest(unittest.TestCase):
+    """Der Agent kann im HOME Symlinks auf Pfade des Hosts anlegen (nur Text). Die Nachbereitung auf dem Host
+    darf ihnen nicht folgen: nichts außerhalb des HOME wird gelöscht, überschrieben oder gelesen."""
+
+    def setUp(self):
+        import tarfile  # noqa: F401
+        self.c = bench.Chain("vanilla", 1, cid="s-" + os.urandom(3).hex())
+        self.home = self.c.home
+        (self.home / ".claude").mkdir(parents=True)
+        self.work = self.c.work
+        self.work.mkdir(parents=True)
+        self.outside = Path(tempfile.mkdtemp(prefix="outside-", dir=_TMP))
+        (self.outside / "wichtig.txt").write_text("unberührt")
+        self.c.out.mkdir(parents=True, exist_ok=True)
+
+        class R:
+            stdout, stderr, rc = "abc123\n", "", 0
+
+        patcher = mock.patch.object(bench.Chain, "tool", return_value=[R(), R(), R()])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def assert_untouched(self):
+        self.assertEqual((self.outside / "wichtig.txt").read_text(), "unberührt")
+        self.assertEqual(sorted(p.name for p in self.outside.iterdir()), ["wichtig.txt"])
+
+    def test_symlinked_claude_directory_aborts_the_chain(self):
+        (self.home / ".claude").rmdir()
+        (self.home / ".claude").symlink_to(self.outside)
+        with self.assertRaises(sbx.IsolationError):
+            self.c.post_session("F1.a0")
+        self.assert_untouched()
+
+    def test_symlinked_src_directory_aborts_the_chain(self):
+        for p in (self.work, self.home / "src"):
+            if p.exists():
+                (p.rmdir() if p.is_dir() else p.unlink())
+        (self.home / "src").symlink_to(self.outside)
+        (self.outside / "CLAUDE.md").write_text("fremd")
+        with self.assertRaises(sbx.IsolationError):
+            self.c.post_session("F1.a0")
+        self.assertEqual((self.outside / "CLAUDE.md").read_text(), "fremd")
+
+    def test_symlinked_project_directory_aborts_the_chain(self):
+        (self.home / ".claude" / "projects").mkdir()
+        (self.home / ".claude" / "projects" / "x").symlink_to(self.outside)
+        with self.assertRaises(sbx.IsolationError):
+            self.c.post_session("F1.a0")
+        self.assert_untouched()
+
+    def test_symlinked_memory_directory_is_unlinked_not_followed(self):
+        proj = self.home / ".claude" / "projects" / "x"
+        proj.mkdir(parents=True)
+        (self.outside / "MEMORY.md").write_text("fremd")
+        (proj / "memory").symlink_to(self.outside)
+        self.c.post_session("F1.a0")
+        self.assertFalse((proj / "memory").exists() or (proj / "memory").is_symlink())
+        self.assertEqual((self.outside / "MEMORY.md").read_text(), "fremd")
+        self.assertEqual((self.outside / "wichtig.txt").read_text(), "unberührt")
+
+    def test_symlinked_claude_md_is_unlinked_and_baseline_written_as_a_regular_file(self):
+        (self.outside / "CLAUDE.md").write_text("fremd")
+        (self.home / ".claude" / "CLAUDE.md").symlink_to(self.outside / "CLAUDE.md")
+        self.c.meta["baseline_user_claude_md"] = "Installationsstand"
+        self.c.post_session("F1.a0")
+        mine = self.home / ".claude" / "CLAUDE.md"
+        self.assertFalse(mine.is_symlink())
+        self.assertEqual(mine.read_text(), "Installationsstand")
+        self.assertEqual((self.outside / "CLAUDE.md").read_text(), "fremd")
+
+    def test_symlinked_memory_file_in_the_work_tree_is_unlinked_not_followed(self):
+        (self.outside / "AGENTS.md").write_text("fremd")
+        (self.work / "AGENTS.md").symlink_to(self.outside / "AGENTS.md")
+        (self.work / "CLAUDE.md").write_text("gedächtnis")
+        self.c.post_session("F1.a0")
+        self.assertFalse((self.work / "AGENTS.md").is_symlink())
+        self.assertFalse((self.work / "CLAUDE.md").exists())
+        self.assertEqual((self.outside / "AGENTS.md").read_text(), "fremd")
+        self.assertFalse((self.c.out / "F1.a0.removed-AGENTS.md").exists())  # den Inhalt hinter dem Link liest der Harness nicht
+
+    def test_snapshot_filter_refuses_a_hardlink_to_somewhere_else(self):
+        import io
+        import tarfile
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as t:
+            info = tarfile.TarInfo("home/h")
+            info.type = tarfile.LNKTYPE
+            info.linkname = "../../etc/passwd"
+            t.addfile(info)
+        buf.seek(0)
+        dest = Path(tempfile.mkdtemp(prefix="extract-", dir=_TMP))
+        with tarfile.open(fileobj=buf) as t, self.assertRaises(tarfile.TarError):
+            t.extractall(dest, filter=bench.snapshot_filter)
+
+    def test_snapshot_filter_does_not_write_through_an_extracted_symlink(self):
+        import io
+        import tarfile
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as t:
+            link = tarfile.TarInfo("home/x")
+            link.type = tarfile.SYMTYPE
+            link.linkname = str(self.outside)
+            t.addfile(link)
+            data = b"ueberschrieben"
+            f = tarfile.TarInfo("home/x/wichtig.txt")
+            f.size = len(data)
+            t.addfile(f, io.BytesIO(data))
+        buf.seek(0)
+        dest = Path(tempfile.mkdtemp(prefix="extract-", dir=_TMP))
+        with tarfile.open(fileobj=buf) as t, self.assertRaises(tarfile.TarError):
+            t.extractall(dest, filter=bench.snapshot_filter)
+        self.assert_untouched()
+
+    def test_regrade_patch_is_not_written_into_the_agent_home(self):
+        src = (HARNESS / "bench.py").read_text()
+        self.assertNotIn(".regrade.patch", src)
+        self.assertIn('mounts=[sbx.Mount(str(pdir), "/bench-patch")]', src)
+
+
 class ProbeScriptTest(unittest.TestCase):
     def test_probe_script_is_python311_stdlib_only(self):
         src = (HARNESS / "probe.py").read_text()
