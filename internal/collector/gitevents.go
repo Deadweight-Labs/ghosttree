@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitcmd"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitmsg"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
 )
@@ -353,10 +354,12 @@ func (g *gitScan) finish(p *pendingGitCall, output string, failed bool, ended st
 			if !failed && g.observer != nil {
 				ev.Observed = g.observer.observeCall(p.cwd, c.Dir, p.started, ended)
 			}
+			// Die Nachricht des Befehls, als Schlüssel: nie der Text verlässt den Speicher.
+			ev.MsgTitle, ev.MsgFull = commitMessageKeys(p.calls)
 		case gitcmd.KindPush:
 			// Auf der Gegenseite, nicht der Branch der Session: so läuft er gegen den
-			// head_ref eines PRs.
-			ev.Branch = gitcmd.PushedBranch(output)
+			// head_ref eines PRs. Der Bereich old..new sagt, welche Commits der Push brachte.
+			ev.PushRefs, ev.Branch, ev.PushOld, ev.PushNew = pushedRefs(output)
 		case gitcmd.KindPRCreate:
 			ev.PRRemote, ev.PR = gitcmd.PullCreated(output)
 		case gitcmd.KindPRMerge:
@@ -365,6 +368,47 @@ func (g *gitScan) finish(p *pendingGitCall, output string, failed bool, ended st
 		}
 		g.add(ev)
 	}
+}
+
+// commitMessageKeys liest die Schlüssel der Nachricht eines Tool-Aufrufs. Trägt er mehr als
+// einen Commit mit Nachricht (ein Skript, das zweimal committet), ist der Vorgang keinem
+// Text zuzuordnen: dann keine Schlüssel. Ein Commit, dem git Zeilen anhängt (--signoff,
+// --trailer), hat nur den Titel als sicheren Teil.
+func commitMessageKeys(calls []gitcmd.Call) (title, full string) {
+	var found *gitcmd.Call
+	for i := range calls {
+		c := &calls[i]
+		if c.Kind != gitcmd.KindCommit || (c.Op != gitcmd.OpCommit && c.Op != gitcmd.OpAmend && c.Op != gitcmd.OpMerge) {
+			continue
+		}
+		if found != nil {
+			return "", ""
+		}
+		found = c
+	}
+	if found == nil || found.Message == "" {
+		return "", ""
+	}
+	k := gitmsg.Of(found.Message)
+	if found.MessageAdded {
+		k.Full = ""
+	}
+	return k.Title, k.Full
+}
+
+// pushedRefs liest die Refs, die ein Push verändert hat: alle für den Server, und den
+// ersten (mit seinem Bereich) für Branch, PushOld und PushNew des Vorgangs.
+func pushedRefs(output string) (refs []store.PushedRef, branch, oldSHA, newSHA string) {
+	for _, r := range gitcmd.PushRefs(output) {
+		if !r.Pushed() {
+			continue
+		}
+		refs = append(refs, store.PushedRef{Branch: r.Dst, Src: r.Src, Old: r.Old, New: r.New, NewBranch: r.NewBranch, Forced: r.Forced})
+	}
+	if len(refs) == 0 {
+		return nil, "", "", ""
+	}
+	return refs, refs[0].Branch, refs[0].Old, refs[0].New
 }
 
 func (g *gitScan) add(ev store.SessionGitEvent) {

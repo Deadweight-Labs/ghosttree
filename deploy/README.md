@@ -417,7 +417,15 @@ not in the transcript. There are three sources, and the coverage report names
 them: `reported` (the hash a commit printed, the number `gh pr create` printed),
 `observed` (the collector read the reflog of `HEAD` in the working directory of
 the call: full hash, kind, patch ID) and `matched` (the server laid the time
-window of the call over the commits of a pull request).
+window of the call over the commits of a pull request). Since P6 there are
+three more: `message` (the call carried the commit message, which the server
+compares as a hash with the commits of the pull requests and the time window),
+`pushed` (the output of `git push` named the range `old..new`, and the number of
+the session's commit calls since its last push equals the number of commits in
+it) and `message+pushed` (both agree). Neither stores a message: the collector
+sends two hashes of it (title, and title with body), and the server keeps them on
+the event and on `git_pr_commits`. Both come from the client, so the source
+names how an assignment was found while "weak" still comes from the author check.
 
 `observed` needs nothing from the operator. It runs in `ctx watch` on the
 machine of the session, only after a successful commit call, with at most three
@@ -436,8 +444,8 @@ $RUN db backfill-session-git --db $DB             # beside the running server
 $RUN db backfill-session-git --db $DB --resume    # after an interruption
 ```
 
-It needs the server of this version to have started once (the three tables
-`session_git_events`, `session_commits`, `session_prs`). It reads
+It needs the server of this version to have started once (the tables
+`session_git_events`, `session_commits`, `session_prs`, `session_git_pushes`). It reads
 `session_chunks.raw` session by session (not the `text` column, which is empty
 after `slim-text` and cuts the arguments of a call at 600 characters) and runs
 the recognition of the collector over each session. It writes what
@@ -449,15 +457,23 @@ a weak assignment (shown as weak, never as proof).
 
 The report ends with the coverage of the whole database: commit calls, pull
 requests and commits of pull requests that have a session now, split into
-`reported`, `observed` and `matched` (with the weak part of `matched`) and
-`none`. The first time on a database there is no `observed`; run the report
-again after the collectors have been updated and have seen new commits.
+`reported`, `observed`, `message+pushed`, `message`, `pushed` and `matched` (with
+the weak part of each) and `none`. The first time on a database there is no
+`observed`; run the report again after the collectors have been updated and have
+seen new commits. A database filled by an earlier run needs no special step:
+run the command again (without `--resume`, whose progress key changed with P6 so
+that it starts at the first session), and it adds the message and the range to
+the events already written (`enriched`), lays them over the pull requests and
+upgrades a `matched` row to `message` or `pushed` where a signal confirms it. The
+server of this version must have started once before: it adds the columns and
+rebuilds `session_commits` for the new sources (all rows kept).
 
-Only those three tables are written, in transactions of at most `--batch`
+Only the four small tables (`session_git_events`, `session_commits`, `session_prs`,
+`session_git_pushes`) are written, in transactions of at most `--batch`
 events (100) or `--match-batch` commits (20), each opened with
 `BEGIN IMMEDIATE` and followed by a pause at least as long as the write lock was
 held (`--pause`, 20 ms). Reading takes no lock. `--dry-run` creates temporary
-copies of the three tables in the connection and runs the same steps against
+copies of those tables in the connection and runs the same steps against
 them, so its numbers are those the real run produces, and it leaves the file as
 it was (it can take as long as the real run, minus the pauses). A second run
 writes nothing new (a call whose time has since come into the past of the

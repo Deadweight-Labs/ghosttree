@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitmsg"
 )
 
 // Sessions an Commits und PRs (IDEA-31, P1 und P3).
@@ -42,6 +43,10 @@ CREATE TABLE IF NOT EXISTS session_git_events(
   branch TEXT NOT NULL DEFAULT '',
   resolved INTEGER NOT NULL DEFAULT 0 CHECK(resolved IN (0,1)),
   account_id INTEGER NOT NULL DEFAULT 0,
+  msg_title TEXT NOT NULL DEFAULT '',
+  msg_full TEXT NOT NULL DEFAULT '',
+  push_old TEXT NOT NULL DEFAULT '',
+  push_new TEXT NOT NULL DEFAULT '',
   UNIQUE(session_id, seq, kind));
 CREATE INDEX IF NOT EXISTS session_git_events_open
   ON session_git_events(project, started_at) WHERE kind = 'commit' AND ok = 1 AND resolved = 0;
@@ -50,7 +55,7 @@ CREATE TABLE IF NOT EXISTS session_commits(
   session_id INTEGER NOT NULL REFERENCES sessions(id),
   project TEXT NOT NULL,
   sha TEXT NOT NULL CHECK(length(sha) >= 7),
-  source TEXT NOT NULL CHECK(source IN ('reported','observed','matched')),
+  source TEXT NOT NULL CHECK(source IN ('reported','observed','message+pushed','message','pushed','matched')),
   op TEXT NOT NULL DEFAULT 'commit'
      CHECK(op IN ('commit','amend','merge','rebase','cherry-pick','am','revert')),
   chunk_seq INTEGER NOT NULL DEFAULT -1,
@@ -72,6 +77,23 @@ CREATE TABLE IF NOT EXISTS session_prs(
   recorded_at TEXT NOT NULL,
   PRIMARY KEY(session_id, project, pr, source)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS session_prs_pr ON session_prs(project, pr);
+
+-- Die Refs, die ein Push auf der Gegenseite verändert hat, einer je Zeile (ein Push
+-- kann mehrere nennen). old und new sind SHA-Präfixe des Bereichs; leer bei einem
+-- neuen Branch.
+CREATE TABLE IF NOT EXISTS session_git_pushes(
+  session_id INTEGER NOT NULL REFERENCES sessions(id),
+  seq INTEGER NOT NULL,
+  n INTEGER NOT NULL,
+  project TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  src TEXT NOT NULL DEFAULT '',
+  old TEXT NOT NULL DEFAULT '',
+  new TEXT NOT NULL DEFAULT '',
+  new_branch INTEGER NOT NULL DEFAULT 0 CHECK(new_branch IN (0,1)),
+  forced INTEGER NOT NULL DEFAULT 0 CHECK(forced IN (0,1)),
+  PRIMARY KEY(session_id, seq, n)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_git_pushes_branch ON session_git_pushes(project, branch);
 
 -- Wie viele Vorgänge ein Konto an einem Tag melden durfte (Last, nicht Recht).
 CREATE TABLE IF NOT EXISTS session_git_quota(
@@ -95,6 +117,8 @@ CREATE INDEX IF NOT EXISTS session_git_events_span
 CREATE INDEX IF NOT EXISTS session_git_events_account_span
   ON session_git_events(project, kind, account_id, started_at, ended_at) WHERE ok = 1;
 CREATE INDEX IF NOT EXISTS git_pull_requests_merge ON git_pull_requests(project, merge_sha);
+CREATE INDEX IF NOT EXISTS session_git_events_msg
+  ON session_git_events(project, msg_title, started_at) WHERE msg_title != '';
 `
 
 // ensureSessionGit legt die Tabellen additiv an; auf jeder Datenbank beliebig
@@ -111,8 +135,58 @@ func ensureSessionGit(db *sql.DB) error {
 	if err := ensureColumn(db, "session_commits", "weak", `INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return fmt.Errorf("session_commits.weak: %w", err)
 	}
+	// Nachricht und Push-Bereich (P6): nur Hashes der Nachricht, nie ihr Text.
+	for _, c := range []string{"msg_title", "msg_full", "push_old", "push_new"} {
+		if err := ensureColumn(db, "session_git_events", c, `TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("session_git_events.%s: %w", c, err)
+		}
+	}
+	if err := allowEvidenceSources(db); err != nil {
+		return fmt.Errorf("session_commits sources: %w", err)
+	}
 	_, err := db.Exec(sessionGitIndexes)
 	return err
+}
+
+// allowEvidenceSources erweitert die Prüfung der Quellen von session_commits um message,
+// pushed und message+pushed. SQLite ändert eine CHECK-Bedingung nicht; die Tabelle wird
+// deshalb neu gebaut: gleiche Spalten, alle Zeilen, danach die Indizes. Auf einer
+// Datenbank, die die Quellen schon kennt, geschieht nichts.
+func allowEvidenceSources(db *sql.DB) error {
+	var ddl string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='session_commits'`).Scan(&ddl); err != nil {
+		return err
+	}
+	if strings.Contains(ddl, "'message+pushed'") {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	steps := []string{
+		`ALTER TABLE session_commits RENAME TO session_commits_old`,
+		`DROP INDEX IF EXISTS session_commits_sha`,
+		`DROP INDEX IF EXISTS session_commits_short`,
+		`DROP INDEX IF EXISTS session_commits_patch`,
+	}
+	for _, q := range steps {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(sessionGitSchema); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO session_commits(session_id,project,sha,source,op,chunk_seq,patch_id,committed_at,recorded_at,weak)
+		SELECT session_id,project,sha,source,op,chunk_seq,patch_id,committed_at,recorded_at,weak FROM session_commits_old`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DROP TABLE session_commits_old`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Art eines Vorgangs und Quellen einer Zuordnung.
@@ -234,7 +308,33 @@ type SessionGitEvent struct {
 	// der Meldung von gh pr merge.
 	PR       int64  `json:"pr,omitempty"`
 	PRRemote string `json:"pr_remote,omitempty"`
+	// MsgTitle und MsgFull sind die Schlüssel der Commit-Nachricht, die der Befehl trug
+	// (gitmsg): der Hash der Titelzeile, und der von Titel und Rumpf (leer ohne Rumpf, oder
+	// wenn git der Nachricht Zeilen anhängt). Nie der Text. Nur bei einem Commit-Vorgang.
+	MsgTitle string `json:"msg_title,omitempty"`
+	MsgFull  string `json:"msg_full,omitempty"`
+	// PushOld und PushNew sind der Bereich "old..new" des ersten verändernden Refs eines
+	// Push (SHA-Präfixe aus der Ausgabe); leer bei einem neuen Branch oder ohne Ausgabe
+	// (git push -q). Alle Refs des Push stehen in PushRefs.
+	PushOld  string      `json:"push_old,omitempty"`
+	PushNew  string      `json:"push_new,omitempty"`
+	PushRefs []PushedRef `json:"push_refs,omitempty"`
 }
+
+// PushedRef ist ein Ref, den ein Push auf der Gegenseite verändert hat.
+type PushedRef struct {
+	// Branch ist der Name auf der Gegenseite, Src das lokale Ref.
+	Branch string `json:"branch"`
+	Src    string `json:"src,omitempty"`
+	// Old und New sind SHA-Präfixe des Bereichs; leer bei einem neuen Branch.
+	Old       string `json:"old,omitempty"`
+	New       string `json:"new,omitempty"`
+	NewBranch bool   `json:"new_branch,omitempty"`
+	Forced    bool   `json:"forced,omitempty"`
+}
+
+// maxPushRefs begrenzt die Refs, die ein Push-Vorgang trägt.
+const maxPushRefs = 8
 
 // ObservedCommit ist ein Commit, den der Collector im Reflog des Arbeitsverzeichnisses
 // im Zeitfenster eines Aufrufs gelesen hat.
@@ -264,6 +364,9 @@ type SessionGitResult struct {
 	Reason   string `json:"reason,omitempty"`
 	// Capped zählt, was an der Grenze je Session oder je Tag liegen blieb.
 	Capped int `json:"capped,omitempty"`
+	// Enriched zählt die Vorgänge, die schon bekannt waren und jetzt Nachricht oder
+	// Push-Bereich bekamen (P6: ein Bestandslauf trägt sie nach).
+	Enriched int `json:"enriched,omitempty"`
 }
 
 // RecordSessionGitEvents schreibt die Vorgänge fort. Idempotent: der Collector
@@ -367,11 +470,17 @@ func (s *Store) RecordSessionGitEvents(account int64, machine string, events []S
 	if err := m.settleClaims(batch); err != nil {
 		return SessionGitResult{}, err
 	}
+	// Nachricht und Push-Bereich vor dem Zeitfenster: ein Vorgang, den sie beantworten,
+	// tritt nicht mehr gegen andere an.
+	ne, err := m.matchEvidence(batch)
+	if err != nil {
+		return SessionGitResult{}, err
+	}
 	n, err := m.matchWindows(batch)
 	if err != nil {
 		return SessionGitResult{}, err
 	}
-	res.Matched += n
+	res.Matched += ne + n
 	if res.Recorded > 0 {
 		if _, err := tx.Exec(`INSERT INTO session_git_quota(account_id,day,events) VALUES(?,?,?)
 			ON CONFLICT(account_id,day) DO UPDATE SET events=events+excluded.events`, account, day, res.Recorded); err != nil {
@@ -400,10 +509,13 @@ type gitSession struct {
 type gitBatch struct {
 	claimed map[string][]string
 	windows map[string][]gitWindow
+	// evidence sind die Vorgänge mit Nachricht oder Push-Bereich (P6), je Projekt; der
+	// Abgleich liest sie aus der Datenbank (sessiongit_evidence.go).
+	evidence map[string][]evidenceEvent
 }
 
 func newGitBatch() *gitBatch {
-	return &gitBatch{claimed: map[string][]string{}, windows: map[string][]gitWindow{}}
+	return &gitBatch{claimed: map[string][]string{}, windows: map[string][]gitWindow{}, evidence: map[string][]evidenceEvent{}}
 }
 
 // writeGitEvent schreibt einen Vorgang einer Session fort und alles, was sich ohne
@@ -423,15 +535,32 @@ func writeGitEvent(tx dbTx, sess *gitSession, account int64, e SessionGitEvent, 
 	if e.OK {
 		ok1 = 1
 	}
-	r, err := tx.Exec(`INSERT INTO session_git_events(session_id,project,seq,kind,op,started_at,ended_at,ok,branch,account_id)
-		VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,seq,kind) DO NOTHING`,
-		sess.id, sess.project, e.Seq, e.Kind, e.Op, e.StartedAt, e.EndedAt, ok1, branch, account)
+	r, err := tx.Exec(`INSERT INTO session_git_events(session_id,project,seq,kind,op,started_at,ended_at,ok,branch,account_id,msg_title,msg_full,push_old,push_new)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,seq,kind) DO NOTHING`,
+		sess.id, sess.project, e.Seq, e.Kind, e.Op, e.StartedAt, e.EndedAt, ok1, branch, account, e.MsgTitle, e.MsgFull, e.PushOld, e.PushNew)
 	if err != nil {
 		return err
 	}
 	if n, _ := r.RowsAffected(); n > 0 {
 		res.Recorded++
 		sess.events++
+	} else if e.MsgTitle != "" || e.PushNew != "" || len(e.PushRefs) > 0 {
+		// Der Vorgang ist bekannt (ein früherer Lauf kannte Nachricht und Push-Bereich noch
+		// nicht): nur nachtragen, was fehlt, nie etwas ersetzen.
+		r, err := tx.Exec(`UPDATE session_git_events SET
+				msg_title=CASE WHEN msg_title='' THEN ? ELSE msg_title END,
+				msg_full=CASE WHEN msg_full='' THEN ? ELSE msg_full END,
+				push_old=CASE WHEN push_old='' THEN ? ELSE push_old END,
+				push_new=CASE WHEN push_new='' THEN ? ELSE push_new END
+			WHERE session_id=? AND seq=? AND kind=?
+			  AND ((msg_title='' AND ?!='') OR (msg_full='' AND ?!='') OR (push_old='' AND ?!='') OR (push_new='' AND ?!=''))`,
+			e.MsgTitle, e.MsgFull, e.PushOld, e.PushNew, sess.id, e.Seq, e.Kind, e.MsgTitle, e.MsgFull, e.PushOld, e.PushNew)
+		if err != nil {
+			return err
+		}
+		if n, _ := r.RowsAffected(); n > 0 {
+			res.Enriched++
+		}
 	}
 	if sess.project == "" {
 		// Ohne Projekt gibt es nichts, woran sich eine SHA oder ein PR binden
@@ -514,6 +643,19 @@ func writeGitEvent(tx dbTx, sess *gitSession, account int64, e SessionGitEvent, 
 	if e.Kind == GitEventCommit && e.OK && len(e.SHAs) == 0 && len(e.Observed) == 0 {
 		batch.windows[sess.project] = append(batch.windows[sess.project], gitWindow{from: e.StartedAt, to: e.EndedAt})
 	}
+	if e.Kind == GitEventCommit && e.OK {
+		// Auch ein Aufruf ohne Nachricht: ein Push danach muss ihn zählen können.
+		batch.evidence[sess.project] = append(batch.evidence[sess.project], evidenceEvent{session: sess.id, seq: e.Seq, kind: GitEventCommit, title: e.MsgTitle, op: e.Op, from: e.StartedAt, to: e.EndedAt})
+	}
+	if e.Kind == GitEventPush && len(e.PushRefs) > 0 {
+		for n, r := range e.PushRefs {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO session_git_pushes(session_id,seq,n,project,branch,src,old,new,new_branch,forced) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+				sess.id, e.Seq, n, sess.project, r.Branch, r.Src, r.Old, r.New, boolInt(r.NewBranch), boolInt(r.Forced)); err != nil {
+				return err
+			}
+			batch.evidence[sess.project] = append(batch.evidence[sess.project], evidenceEvent{session: sess.id, seq: e.Seq, kind: GitEventPush, branch: r.Branch})
+		}
+	}
 	return nil
 }
 
@@ -593,6 +735,15 @@ func cleanSessionGitEvent(e SessionGitEvent) (SessionGitEvent, error) {
 	if e.Kind != GitEventCommit || !e.OK {
 		e.Observed = nil
 	}
+	// Nachricht und Push-Bereich (P6). Ein Schlüssel, der keiner ist, entfällt; der
+	// Vorgang bleibt.
+	if e.Kind != GitEventCommit || (e.Op != "" && e.Op != "commit" && e.Op != "amend" && e.Op != "merge") || !gitmsg.Valid(e.MsgTitle) {
+		e.MsgTitle, e.MsgFull = "", ""
+	}
+	if !gitmsg.Valid(e.MsgFull) {
+		e.MsgFull = ""
+	}
+	e.PushRefs, e.PushOld, e.PushNew = cleanPushRefs(e)
 	if e.PR < 0 || e.PR > 1<<31 {
 		return bad("pr must be a pull request number")
 	}
@@ -608,6 +759,55 @@ func cleanSessionGitEvent(e SessionGitEvent) (SessionGitEvent, error) {
 		e.PR, e.PRRemote = 0, ""
 	}
 	return e, nil
+}
+
+// cleanPushRefs prüft die Refs eines Push: gültige Namen, SHA-Präfixe nur als Hex von
+// sieben bis 64 Zeichen. Ein Ref ohne Bereich und ohne neuen Branch sagt nichts über Commits
+// und entfällt. Ein Client, der nur PushOld und PushNew meldet (ein Ref), bekommt daraus das
+// Ref des Branches. Der erste Ref bestimmt PushOld und PushNew des Vorgangs.
+func cleanPushRefs(e SessionGitEvent) (refs []PushedRef, oldSHA, newSHA string) {
+	if e.Kind != GitEventPush {
+		return nil, "", ""
+	}
+	in := e.PushRefs
+	if len(in) == 0 && e.Branch != "" && (e.PushOld != "" || e.PushNew != "") {
+		in = []PushedRef{{Branch: e.Branch, Old: e.PushOld, New: e.PushNew}}
+	}
+	seen := map[string]bool{}
+	for _, r := range in {
+		b, ok := cleanRef(r.Branch)
+		if !ok {
+			continue
+		}
+		r.Branch = b
+		r.Src, _ = cleanRef(r.Src)
+		r.Old, r.New = gitanchor.Normalize(r.Old), gitanchor.Normalize(r.New)
+		if r.Old != "" && !gitanchor.ValidPrefix(r.Old) {
+			r.Old = ""
+		}
+		if !gitanchor.ValidPrefix(r.New) {
+			r.New = ""
+		}
+		if r.New == "" {
+			r.Old = ""
+		}
+		if r.New == "" && !r.NewBranch {
+			continue
+		}
+		key := r.Branch + "\x00" + r.Old + "\x00" + r.New
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		refs = append(refs, r)
+		if len(refs) >= maxPushRefs {
+			break
+		}
+	}
+	if len(refs) > 0 {
+		oldSHA, newSHA = refs[0].Old, refs[0].New
+	}
+	return refs, oldSHA, newSHA
 }
 
 // cleanObserved lässt nur Commits mit voller SHA stehen (eine kürzere kann der
@@ -918,7 +1118,7 @@ func (s *Store) sessionsForPull(project string, number int64, via string, set li
 		if err := rows.Scan(&id, &src, &n, &at, &weak); err != nil {
 			return err
 		}
-		set.add(GitSessionLink{SessionID: id, Sources: []string{src}, Via: via, PR: number, Commits: n, At: at, Weak: weak == 1})
+		set.add(GitSessionLink{SessionID: id, Sources: SourceNames(src), Via: via, PR: number, Commits: n, At: at, Weak: weak == 1})
 	}
 	return rows.Err()
 }
@@ -1004,7 +1204,7 @@ func (s *Store) SessionsForCommit(project, sha string) ([]GitSessionLink, error)
 				continue
 			}
 		}
-		set.add(GitSessionLink{SessionID: r.id, Sources: []string{r.src}, Commits: 1, At: r.at, Weak: r.weak})
+		set.add(GitSessionLink{SessionID: r.id, Sources: SourceNames(r.src), Commits: 1, At: r.at, Weak: r.weak})
 		if r.patch != "" {
 			patches = append(patches, r.patch)
 		}
@@ -1024,7 +1224,7 @@ func (s *Store) SessionsForCommit(project, sha string) ([]GitSessionLink, error)
 				return nil, err
 			}
 			if _, ok := set[id]; !ok {
-				set.add(GitSessionLink{SessionID: id, Sources: []string{src}, Via: LinkViaPatch, Commits: 1, At: at})
+				set.add(GitSessionLink{SessionID: id, Sources: SourceNames(src), Via: LinkViaPatch, Commits: 1, At: at})
 			}
 		}
 		if err := rows.Err(); err != nil {

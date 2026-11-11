@@ -3,11 +3,13 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitmsg"
 )
 
 // pullCommitSchema: die Commits eines PRs, wie GitHub sie über
@@ -36,6 +38,61 @@ CREATE INDEX IF NOT EXISTS git_pr_commits_time ON git_pr_commits(project, commit
 // MaxPullCommits ist, wie viele Commits je PR gespeichert werden. GitHub liefert
 // selbst höchstens 250.
 const MaxPullCommits = 250
+
+// ensurePullCommitKeys legt die Schlüssel der Nachricht an den Commits der PRs an (P6):
+// title_key gilt der Titelzeile, msg_key Titel und Rumpf (leer, solange der Rumpf nicht
+// bekannt ist oder es keinen gibt). Mit ihnen vergleicht der Abgleich die Commit-Nachricht
+// aus einem Transkript (gitmsg), ohne dass irgendwo ein Text liegt, der nicht schon da
+// war. Die Zeilen von vor dieser Spalte werden hier einmal nachgetragen.
+func ensurePullCommitKeys(db *sql.DB) error {
+	for _, c := range []string{"title_key", "msg_key"} {
+		if err := ensureColumn(db, "git_pr_commits", c, `TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("git_pr_commits.%s: %w", c, err)
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS git_pr_commits_title ON git_pr_commits(project, title_key) WHERE title_key != ''`); err != nil {
+		return err
+	}
+	rows, err := db.Query(`SELECT c.project, c.pr, c.sha, c.title, COALESCE(m.message,'')
+		FROM git_pr_commits c LEFT JOIN git_commit_meta m ON m.project=c.project AND m.sha=c.sha
+		WHERE c.title_key='' AND c.title != ''`)
+	if err != nil {
+		return err
+	}
+	type fill struct {
+		project, sha, title, msg string
+		pr                       int64
+	}
+	var todo []fill
+	for rows.Next() {
+		var f fill
+		if err := rows.Scan(&f.project, &f.pr, &f.sha, &f.title, &f.msg); err != nil {
+			rows.Close()
+			return err
+		}
+		todo = append(todo, f)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || len(todo) == 0 {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, f := range todo {
+		k := gitmsg.OfParts(f.title, f.msg)
+		if k.Title == "" {
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE git_pr_commits SET title_key=?, msg_key=? WHERE project=? AND pr=? AND sha=?`, k.Title, k.Full, f.project, f.pr, f.sha); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
 
 var loginPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._\-]{0,38}(\[bot\])?$`)
 
@@ -148,11 +205,17 @@ func (s *Store) RecordPullCommits(c PullCommitsChange) (PullCommitsResult, error
 			committed = t.UTC().Format(time.RFC3339)
 		}
 		title := cleanLine(firstLine(k.Title), 200)
-		if _, err := tx.Exec(`INSERT INTO git_pr_commits(project,pr,sha,author,author_name,title,committed_at,position,in_pr,recorded_at)
-			VALUES(?,?,?,?,?,?,?,?,1,?)
+		keys := commitKeys(k)
+		if _, err := tx.Exec(`INSERT INTO git_pr_commits(project,pr,sha,author,author_name,title,committed_at,position,in_pr,recorded_at,title_key,msg_key)
+			VALUES(?,?,?,?,?,?,?,?,1,?,?,?)
 			ON CONFLICT(project,pr,sha) DO UPDATE SET author=excluded.author, author_name=excluded.author_name, title=excluded.title,
 				committed_at=excluded.committed_at, position=excluded.position, in_pr=1`,
-			remote, c.Number, sha, cleanLogin(k.Author), cleanLine(k.AuthorName, 100), title, committed, i, ts); err != nil {
+			remote, c.Number, sha, cleanLogin(k.Author), cleanLine(k.AuthorName, 100), title, committed, i, ts, keys.Title, keys.Full); err != nil {
+			return res, err
+		}
+		// Die Schlüssel der Nachricht eines schon bekannten Commits folgen dem Stand von GitHub.
+		if _, err := tx.Exec(`UPDATE git_pr_commits SET title_key=?, msg_key=? WHERE project=? AND pr=? AND sha=?`,
+			keys.Title, keys.Full, remote, c.Number, sha); err != nil {
 			return res, err
 		}
 		if err := recordCommitMetaTx(tx, remote, sha, k.Parents, k.Message, ts); err != nil {
@@ -177,6 +240,15 @@ func (s *Store) RecordPullCommits(c PullCommitsChange) (PullCommitsResult, error
 	// scheitern.
 	s.matchPullCommits(remote, timed)
 	return res, nil
+}
+
+// commitKeys bildet die Schlüssel der Nachricht eines PR-Commits: aus der ganzen
+// Nachricht, wenn GitHub sie geliefert hat, sonst aus dem Titel.
+func commitKeys(k PullCommit) gitmsg.Keys {
+	if strings.TrimSpace(k.Message) != "" {
+		return gitmsg.Of(k.Message)
+	}
+	return gitmsg.OfParts(firstLine(k.Title), "")
 }
 
 func firstLine(s string) string {

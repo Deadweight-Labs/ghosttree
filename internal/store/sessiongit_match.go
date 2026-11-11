@@ -69,6 +69,10 @@ type matcher struct {
 	deadline time.Time
 	budget   int
 	stopped  bool
+	// evAdded und evUpgraded zählen, was Nachricht und Push-Bereich in diesem Lauf geschrieben
+	// haben: neue Zeilen, und Zeilen, die eine stärkere Quelle bekamen (matched wird message,
+	// message und pushed werden message+pushed).
+	evAdded, evUpgraded int
 }
 
 func newMatcher(q dbTx, owner int64) *matcher {
@@ -492,6 +496,8 @@ type windowEvent struct {
 	branch   string
 	started  string
 	reported bool
+	// msgTitle und msgFull sind die Schlüssel der Nachricht, die der Aufruf trug (P6).
+	msgTitle, msgFull string
 	// weak (nur für gehaltene Zeilen): die Zuordnung ist als schwach gespeichert.
 	weak bool
 }
@@ -500,15 +506,15 @@ type windowEvent struct {
 const (
 	// Vorgänge, deren Fenster eine Zeit enthält. %s: leer oder "AND e.account_id=?".
 	sqlWindowEvents = `SELECT e.id, e.session_id, CASE WHEN e.account_id!=0 THEN e.account_id WHEN s.account_id=0 THEN ? ELSE s.account_id END,
-			e.seq, e.op, COALESCE(NULLIF(e.branch,''), s.branch), e.started_at,
-			EXISTS(SELECT 1 FROM session_commits r WHERE r.session_id=e.session_id AND r.chunk_seq=e.seq AND r.source IN ('reported','observed'))
+			e.seq, e.op, COALESCE(NULLIF(e.branch,''), s.branch), e.started_at, e.msg_title, e.msg_full,
+			EXISTS(SELECT 1 FROM session_commits r WHERE r.session_id=e.session_id AND r.chunk_seq=e.seq AND r.source IN (` + sqlEvidenceSources + `))
 		FROM session_git_events e JOIN sessions s ON s.id=e.session_id
 		WHERE e.project=? AND e.kind='commit' AND e.ok=1 %s AND e.started_at >= ? AND e.started_at <= ? AND e.ended_at >= ?
 		LIMIT ?`
 	sqlClaimants = `SELECT r.session_id, CASE WHEN e.account_id!=0 THEN e.account_id WHEN s.account_id=0 THEN ? ELSE s.account_id END
 		FROM session_commits r JOIN sessions s ON s.id=r.session_id
 		JOIN session_git_events e ON e.session_id=r.session_id AND e.seq=r.chunk_seq AND e.kind='commit'
-		WHERE r.project=? AND r.source IN ('reported','observed') AND r.sha IN (SELECT value FROM json_each(?))
+		WHERE r.project=? AND r.source IN (` + sqlEvidenceSources + `) AND r.sha IN (SELECT value FROM json_each(?))
 		  AND e.started_at <= ? AND e.ended_at >= ?
 		LIMIT ?`
 	sqlHeldMatches = `SELECT r.session_id, CASE WHEN s.account_id=0 THEN ? ELSE s.account_id END, r.chunk_seq, r.weak
@@ -527,10 +533,30 @@ func windowEventsSQL(byAccount bool) string {
 	return strings.Replace(sqlWindowEvents, "%s", cond, 1)
 }
 
+// msgKeys sind die Schlüssel der Nachricht eines Commits der PRs (gitmsg).
+type msgKeys struct{ title, full string }
+
+// contradicts: der Vorgang trug eine Nachricht, und es ist nicht die des Commits.
+func (k msgKeys) contradicts(e windowEvent) bool {
+	if k.title == "" || e.msgTitle == "" {
+		return false
+	}
+	return k.title != e.msgTitle || (k.full != "" && e.msgFull != "" && k.full != e.msgFull)
+}
+
+func (m *matcher) msgKeysOf(project, sha string) (msgKeys, error) {
+	var k msgKeys
+	err := m.q.QueryRow(`SELECT title_key, msg_key FROM git_pr_commits WHERE project=? AND sha=? AND title_key != '' LIMIT 1`, project, sha).Scan(&k.title, &k.full)
+	if errors.Is(err, sql.ErrNoRows) {
+		return msgKeys{}, nil
+	}
+	return k, err
+}
+
 // windowEvents liest die Vorgänge ohne gemeldete SHA, deren Fenster die Zeit
 // enthält. Mit acct != 0 nur die dieses Kontos. crowded: es sind mehr als
 // maxWindowCandidates, die Zeit sagt dann nichts mehr aus.
-func (m *matcher) windowEvents(project string, at time.Time, acct int64) (events []windowEvent, crowded bool, err error) {
+func (m *matcher) windowEvents(project string, at time.Time, acct int64, keys msgKeys) (events []windowEvent, crowded bool, err error) {
 	loStr := at.Add(-gitMatchSlack).Format(time.RFC3339)
 	hiStr := at.Add(gitMatchSlack).Format(time.RFC3339)
 	lo := at.Add(-gitMatchSlack).Add(-maxGitCallWindow).Format(time.RFC3339)
@@ -547,13 +573,14 @@ func (m *matcher) windowEvents(project string, at time.Time, acct int64) (events
 	n := 0
 	for rows.Next() {
 		var e windowEvent
-		if err := rows.Scan(&e.id, &e.session, &e.account, &e.seq, &e.op, &e.branch, &e.started, &e.reported); err != nil {
+		if err := rows.Scan(&e.id, &e.session, &e.account, &e.seq, &e.op, &e.branch, &e.started, &e.msgTitle, &e.msgFull, &e.reported); err != nil {
 			return nil, false, err
 		}
 		n++
 		// Ein Vorgang mit gemeldeter SHA hat seine Antwort; er nimmt weder teil noch
-		// blockiert er.
-		if !e.reported {
+		// blockiert er. Ebenso einer, dessen Nachricht der des Commits widerspricht: sein
+		// eigener Commit trägt seine Nachricht.
+		if !e.reported && !keys.contradicts(e) {
 			events = append(events, e)
 		}
 	}
@@ -630,6 +657,10 @@ func (m *matcher) claimants(project string, c pullCommitAt) (list []windowEvent,
 //     matched, das zeigt die Anzeige), und niemand kann mit einer Behauptung fremde
 //     Arbeit entfernen.
 func (m *matcher) resolveCommit(project string, c pullCommitAt) (int, error) {
+	keys, err := m.msgKeysOf(project, c.SHA)
+	if err != nil {
+		return 0, err
+	}
 	// Das Konto des Autors, wenn es seine GitHub-Verknüpfung bewiesen hat.
 	var authorAcct int64
 	if c.Author != "" {
@@ -664,7 +695,7 @@ func (m *matcher) resolveCommit(project string, c pullCommitAt) (int, error) {
 		useStrong, claims = true, strongClaims
 	} else {
 		if authorAcct != 0 {
-			ev, crowded, err := m.windowEvents(project, c.CommittedAt, authorAcct)
+			ev, crowded, err := m.windowEvents(project, c.CommittedAt, authorAcct, keys)
 			if err != nil || crowded {
 				return 0, err
 			}
@@ -675,7 +706,7 @@ func (m *matcher) resolveCommit(project string, c pullCommitAt) (int, error) {
 		if !useStrong {
 			claims = weakClaims
 			if len(claims) == 0 {
-				ev, crowded, err := m.windowEvents(project, c.CommittedAt, 0)
+				ev, crowded, err := m.windowEvents(project, c.CommittedAt, 0, keys)
 				if err != nil || crowded {
 					return 0, err
 				}
@@ -856,6 +887,10 @@ func (s *Store) matchPullCommits(project string, commits []pullCommitAt) {
 	defer tx.Rollback()
 	m := newMatcher(tx, instanceOwnerID(tx))
 	if err := m.settleReported(project, commits); err != nil {
+		log.Printf("session git match for %s: %v", project, err)
+		return
+	}
+	if _, err := m.matchEvidenceCommits(project, commits); err != nil {
 		log.Printf("session git match for %s: %v", project, err)
 		return
 	}

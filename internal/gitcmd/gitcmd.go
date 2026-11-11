@@ -52,6 +52,15 @@ type Call struct {
 	// Repo ist bei gh das Repo, das -R/--repo nennt ("owner/name" oder
 	// "host/owner/name"); leer heißt: das Repo des Arbeitsverzeichnisses.
 	Repo string
+	// Message ist die Commit-Nachricht, die der Befehl selbst trägt (-m, mehrere -m,
+	// --message, "$(cat <<'EOF' … EOF)", -F - mit Heredoc); leer, wenn der Befehl
+	// keine trägt (--amend --no-edit, -F datei, -C) oder der Text erst die Shell
+	// auflöst ($VAR, $(date), Backticks). Der Text bleibt im Speicher: der Collector
+	// bildet daraus Schlüssel (gitmsg) und meldet nur die.
+	Message string
+	// MessageAdded: git hängt der Nachricht Zeilen an (--signoff, --trailer); nur
+	// die Titelzeile ist dann die des Commits.
+	MessageAdded bool
 }
 
 // maxDepth begrenzt das Auspacken von "bash -c '…'".
@@ -67,21 +76,24 @@ func parseDepth(command string, depth int, dir string) []Call {
 		return nil
 	}
 	var out []Call
-	for _, cmd := range splitCommands(command) {
-		words := cmd
+	cmds := splitShell(command)
+	for idx, cmd := range cmds {
+		words, kinds := cmd.words, cmd.kinds
+		// drop entfernt die ersten n Wörter samt ihrer Art.
+		drop := func(n int) { words, kinds = words[n:], kinds[n:] }
 		for len(words) > 0 {
 			w := words[0]
 			switch {
 			case isAssignment(w), w == "!", w == "{", w == "then", w == "do", w == "else", w == "elif",
 				w == "if", w == "while", w == "until",
 				w == "sudo", w == "command", w == "builtin", w == "exec", w == "time", w == "nohup", w == "nice":
-				words = words[1:]
+				drop(1)
 				continue
 			case w == "env":
-				words = skipEnv(words[1:])
+				drop(len(words) - len(skipEnv(words[1:])))
 				continue
 			case w == "timeout":
-				words = skipTimeout(words[1:])
+				drop(len(words) - len(skipTimeout(words[1:])))
 				continue
 			}
 			break
@@ -99,7 +111,13 @@ func parseDepth(command string, depth int, dir string) []Call {
 				out = append(out, parseDepth(script, depth+1, dir)...)
 			}
 		case "git":
-			if c, ok := parseGit(words[1:], dir); ok {
+			// Der Text für -F - kommt aus dem Heredoc des Befehls, oder aus dem eines
+			// "cat <<EOF" davor in derselben Pipe.
+			stdin := cmd.docs
+			if len(stdin) == 0 && idx > 0 && len(cmds[idx-1].words) > 0 && base(cmds[idx-1].words[0]) == "cat" {
+				stdin = cmds[idx-1].docs
+			}
+			if c, ok := parseGit(words[1:], kinds[1:], dir, stdin); ok {
 				out = append(out, c)
 			}
 		case "gh":
@@ -194,7 +212,7 @@ var gitValueOpts = map[string]bool{
 	"--super-prefix": true, "--config-env": true,
 }
 
-func parseGit(args []string, dir string) (Call, bool) {
+func parseGit(args []string, kinds []wordKind, dir string, stdin []heredocBody) (Call, bool) {
 	i := 0
 	for i < len(args) {
 		a := args[i]
@@ -227,7 +245,7 @@ func parseGit(args []string, dir string) (Call, bool) {
 	if i >= len(args) {
 		return Call{}, false
 	}
-	sub, rest := args[i], args[i+1:]
+	sub, rest, restKinds := args[i], args[i+1:], kinds[i+1:]
 	switch sub {
 	case "push":
 		if has(rest, "--dry-run", "-n", "-h", "--help") {
@@ -245,6 +263,9 @@ func parseGit(args []string, dir string) (Call, bool) {
 			c.Op = OpAmend
 		}
 		c.Quiet = quietFlag(rest)
+	}
+	if sub == "commit" || sub == "merge" {
+		c.Message, c.MessageAdded = commitMessage(sub, rest, restKinds, stdin)
 	}
 	return c, true
 }
@@ -341,32 +362,83 @@ func parseGH(args []string, dir string) (Call, bool) {
 
 // ------------------------------------------------------------ Zerlegen
 
+// shellCmd ist ein einfacher Befehl: seine Wörter, ob die Shell sie noch verändert
+// (wordKind) und die Rümpfe der Heredocs, die ihm gehören.
+type shellCmd struct {
+	words []string
+	kinds []wordKind
+	docs  []heredocBody
+}
+
 // splitCommands zerlegt einen Shell-Text in einfache Befehle (Wortlisten).
+func splitCommands(s string) [][]string {
+	cmds := splitShell(s)
+	out := make([][]string, len(cmds))
+	for i, c := range cmds {
+		out[i] = c.words
+	}
+	return out
+}
+
+// splitShell zerlegt einen Shell-Text in einfache Befehle.
 // Es ist KEIN Shell-Parser: Anführungszeichen, Escapes, Kommentare, Heredocs und
 // die Trenner && || ; | & ( ) und Backticks reichen, um Aufrufe von Text zu
 // unterscheiden. Was darüber hinausgeht (Variablen, Substitution in Wörtern),
-// bleibt Text.
-func splitCommands(s string) [][]string {
+// bleibt Text; wordKind merkt sich, welche Wörter das betrifft, damit eine
+// Commit-Nachricht nur dann gelesen wird, wenn sie wörtlich dasteht.
+func splitShell(s string) []shellCmd {
 	var (
-		cmds     [][]string
-		cur      []string
+		cmds     []shellCmd
+		cur      shellCmd
 		word     strings.Builder
+		kind     wordKind
 		inWord   bool
 		heredocs []heredoc
 	)
 	endWord := func() {
 		if inWord {
-			cur = append(cur, word.String())
+			cur.words = append(cur.words, word.String())
+			cur.kinds = append(cur.kinds, kind)
 			word.Reset()
+			kind = 0
 			inWord = false
 		}
 	}
 	endCmd := func() {
 		endWord()
-		if len(cur) > 0 {
+		if len(cur.words) > 0 {
 			cmds = append(cmds, cur)
-			cur = nil
+			cur = shellCmd{}
 		}
+	}
+	// heredocOperator liest "<<[-] DELIM" ab rs[i] (auf dem ersten <) und merkt es für
+	// das Zeilenende; es liefert die Position des letzten gelesenen Zeichens.
+	heredocOperator := func(rs []rune, i int) int {
+		j := i + 2
+		strip := false
+		if j < len(rs) && rs[j] == '-' {
+			strip = true
+			j++
+		}
+		for j < len(rs) && (rs[j] == ' ' || rs[j] == '\t') {
+			j++
+		}
+		var delim strings.Builder
+		quoted := false
+		for j < len(rs) && !strings.ContainsRune(" \t\n;&|()<>", rs[j]) {
+			if strings.ContainsRune("'\"\\", rs[j]) {
+				quoted = true
+				j++
+				continue
+			}
+			delim.WriteRune(rs[j])
+			j++
+		}
+		if delim.Len() > 0 {
+			// Dem Befehl, der gerade entsteht: er bekommt den Index, den endCmd ihm gibt.
+			heredocs = append(heredocs, heredoc{delim: delim.String(), strip: strip, quoted: quoted, owner: len(cmds)})
+		}
+		return j - 1
 	}
 	rs := []rune(s)
 	for i := 0; i < len(rs); i++ {
@@ -400,6 +472,7 @@ func splitCommands(s string) [][]string {
 					// Heredoc-Rümpfen, nicht beim nächsten ".
 					end := skipSubstitution(rs, j+2)
 					word.WriteString(string(rs[j:end]))
+					kind |= kindSubst
 					j = end
 					continue
 				}
@@ -409,6 +482,9 @@ func splitCommands(s string) [][]string {
 					}
 					j += 2
 					continue
+				}
+				if rs[j] == '`' || (rs[j] == '$' && j+1 < len(rs) && hasExpansion(string(rs[j:j+2]))) {
+					kind |= kindExpands
 				}
 				word.WriteRune(rs[j])
 				j++
@@ -422,35 +498,20 @@ func splitCommands(s string) [][]string {
 		case c == '\n':
 			endCmd()
 			if len(heredocs) > 0 {
-				i = skipHeredocs(rs, i+1, heredocs) - 1
+				end, bodies := readHeredocs(rs, i+1, heredocs)
+				for n, d := range heredocs {
+					if d.owner < len(cmds) {
+						cmds[d.owner].docs = append(cmds[d.owner].docs, bodies[n])
+					}
+				}
+				i = end - 1
 				heredocs = nil
 			}
 		case c == ' ' || c == '\t' || c == '\r':
 			endWord()
 		case c == '<' && i+1 < len(rs) && rs[i+1] == '<' && !(i+2 < len(rs) && rs[i+2] == '<'):
 			endWord()
-			j := i + 2
-			strip := false
-			if j < len(rs) && rs[j] == '-' {
-				strip = true
-				j++
-			}
-			for j < len(rs) && (rs[j] == ' ' || rs[j] == '\t') {
-				j++
-			}
-			var delim strings.Builder
-			for j < len(rs) && !strings.ContainsRune(" \t\n;&|()<>", rs[j]) {
-				if strings.ContainsRune("'\"\\", rs[j]) {
-					j++
-					continue
-				}
-				delim.WriteRune(rs[j])
-				j++
-			}
-			if delim.Len() > 0 {
-				heredocs = append(heredocs, heredoc{delim: delim.String(), strip: strip})
-			}
-			i = j - 1
+			i = heredocOperator(rs, i)
 		case c == '<' && i+1 < len(rs) && rs[i+1] == '<':
 			// Here-String <<<: das Wort dahinter ist Text.
 			word.WriteString("<<<")
@@ -468,6 +529,9 @@ func splitCommands(s string) [][]string {
 			endCmd()
 			i++
 		default:
+			if c == '$' && i+1 < len(rs) && hasExpansion(string(rs[i:i+2])) {
+				kind |= kindExpands
+			}
 			word.WriteRune(c)
 			inWord = true
 		}
@@ -479,6 +543,10 @@ func splitCommands(s string) [][]string {
 type heredoc struct {
 	delim string
 	strip bool
+	// quoted: die Kennung stand in Anführungszeichen, der Rumpf ist wörtlich.
+	quoted bool
+	// owner ist der Index des Befehls, dessen Standardeingabe der Rumpf ist.
+	owner int
 }
 
 // skipSubstitution liest eine Befehlsersetzung "$( … )" (from steht hinter dem "$(")
@@ -569,14 +637,24 @@ func skipDoubleQuoted(rs []rune, from int) int {
 // Position hinter der letzten Abschlusszeile. Ein nicht geschlossenes Heredoc
 // frisst den Rest: besser nichts erkennen als Text für Befehle halten.
 func skipHeredocs(rs []rune, from int, docs []heredoc) int {
+	end, _ := readHeredocs(rs, from, docs)
+	return end
+}
+
+// readHeredocs liest die Rümpfe wie skipHeredocs und gibt sie zusätzlich zurück, je
+// einen je Heredoc in der Reihenfolge ihrer Operatoren (ohne die Abschlusszeile).
+func readHeredocs(rs []rune, from int, docs []heredoc) (int, []heredocBody) {
 	pos := from
+	bodies := make([]heredocBody, 0, len(docs))
 	for _, d := range docs {
+		var lines []string
 		for pos < len(rs) {
 			end := pos
 			for end < len(rs) && rs[end] != '\n' {
 				end++
 			}
-			line := string(rs[pos:end])
+			raw := string(rs[pos:end])
+			line := raw
 			if d.strip {
 				line = strings.TrimLeft(line, "\t")
 			}
@@ -584,12 +662,14 @@ func skipHeredocs(rs []rune, from int, docs []heredoc) int {
 			if strings.TrimRight(line, "\r") == d.delim {
 				break
 			}
+			lines = append(lines, strings.TrimRight(line, "\r"))
 		}
+		bodies = append(bodies, heredocBody{text: strings.Join(lines, "\n"), literal: d.quoted})
 	}
 	if pos > len(rs) {
 		pos = len(rs)
 	}
-	return pos
+	return pos, bodies
 }
 
 // ----------------------------------------------------------------- Ausgabe
@@ -618,17 +698,102 @@ func CommitSHAs(output string) []string {
 	return out
 }
 
-var pushRefRe = regexp.MustCompile(`(?m)^\s*(?:[0-9a-f]{7,40}\.\.\.?[0-9a-f]{7,40}|\*\s+\[new (?:branch|tag)\]|\+\s+[0-9a-f]{7,40}\.\.\.[0-9a-f]{7,40}\s+\(forced update\)|\+\s+[0-9a-f]{7,40}\.\.\.[0-9a-f]{7,40})\s+\S+\s+->\s+(\S+)`)
+// maxPushRefs begrenzt, wie viele Refs ein Push meldet (git push --all).
+const maxPushRefs = 8
+
+// PushRef ist eine Zeile der Ausgabe von git push: was auf der Gegenseite mit einem
+// Ref geschah.
+type PushRef struct {
+	// Src ist das lokale Ref, Dst das auf der Gegenseite (ohne refs/heads/).
+	Src, Dst string
+	// Old und New sind die SHA-Präfixe des Bereichs "Old..New", den der Push dem Ref
+	// hinzugefügt hat; leer bei [new branch], abgelehnt und gelöscht. Bei einem
+	// Force-Push ("Old...New") ist Old der verdrängte Stand.
+	Old, New string
+	// NewBranch: das Ref gab es auf der Gegenseite nicht; der Push brachte alle Commits.
+	NewBranch bool
+	// NewTag: ein Tag oder anderes Ref, kein Branch.
+	NewTag bool
+	// Forced: der Bereich ersetzt Commits (forced update).
+	Forced bool
+	// Rejected: die Gegenseite hat das Ref nicht angenommen; es ist nichts gepusht.
+	Rejected bool
+	// Deleted und UpToDate: das Ref wurde gelöscht bzw. war schon aktuell.
+	Deleted, UpToDate bool
+}
+
+// Pushed sagt, ob der Push dieses Ref auf der Gegenseite verändert hat und es ein Branch ist.
+func (r PushRef) Pushed() bool {
+	return !r.Rejected && !r.Deleted && !r.UpToDate && !r.NewTag && r.Dst != ""
+}
+
+var pushLineRe = regexp.MustCompile(`^[ \t]*([ +\-*!=])?[ \t]+(\[[^\]\n]+\]|[0-9a-f]{7,64}\.\.\.?[0-9a-f]{7,64})[ \t]+(\S+)(?:[ \t]+->[ \t]+(\S+))?(?:[ \t]+\(([^)\n]*)\))?[ \t]*$`)
+
+// PushRefs liest die Ref-Zeilen aus der Ausgabe von git push, in der Reihenfolge der
+// Ausgabe:
+//
+//	  abc1234..def5678  feat/x -> feat/x
+//	* [new branch]      feat/y -> feat/y
+//	+ abc1234...def5678 feat/z -> feat/z (forced update)
+//	! [rejected]        main -> main (non-fast-forward)
+//
+// Ein Push mit -q gibt nichts aus; dann ist die Liste leer.
+func PushRefs(output string) []PushRef {
+	var out []PushRef
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimRight(line, "\r")
+		m := pushLineRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		flag, summary, from, to := m[1], m[2], m[3], m[4]
+		r := PushRef{Src: from, Dst: strings.TrimPrefix(to, "refs/heads/")}
+		if to == "" {
+			// "- [deleted]  name": nur ein Name.
+			r.Dst = strings.TrimPrefix(from, "refs/heads/")
+		}
+		switch {
+		case strings.HasPrefix(summary, "["):
+			switch strings.Trim(summary, "[]") {
+			case "new branch":
+				r.NewBranch = true
+			case "new tag", "new reference":
+				r.NewTag = true
+			case "rejected", "remote rejected", "remote failure":
+				r.Rejected = true
+			case "deleted":
+				r.Deleted = true
+			case "up to date":
+				r.UpToDate = true
+			default:
+				continue
+			}
+		default:
+			if flag == "-" || flag == "!" || flag == "=" || flag == "*" {
+				continue
+			}
+			old, new, _ := strings.Cut(strings.Replace(summary, "...", "..", 1), "..")
+			r.Old, r.New = old, new
+			r.Forced = flag == "+" || strings.Contains(summary, "...")
+		}
+		out = append(out, r)
+		if len(out) >= maxPushRefs {
+			break
+		}
+	}
+	return out
+}
 
 // PushedBranch nennt den ersten Branch, den der Push auf der Gegenseite
 // verändert hat ("   abc..def  feat/x -> feat/x"); leer, wenn die Ausgabe keine
 // Zeile dieser Art enthält (Everything up-to-date, Fehler, gekürzt).
 func PushedBranch(output string) string {
-	m := pushRefRe.FindStringSubmatch(output)
-	if m == nil {
-		return ""
+	for _, r := range PushRefs(output) {
+		if r.Pushed() {
+			return r.Dst
+		}
 	}
-	return strings.TrimPrefix(m[1], "refs/heads/")
+	return ""
 }
 
 var prCreatedRe = regexp.MustCompile(`https?://([A-Za-z0-9.\-]+)/([A-Za-z0-9._\-]+)/([A-Za-z0-9._\-]+)/pull/(\d+)`)

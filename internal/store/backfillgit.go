@@ -69,26 +69,55 @@ type BackfillGitOptions struct {
 	Progress func(BackfillGitReport)
 }
 
-// BySource zählt nach der stärksten Quelle: reported vor observed vor matched; None hat
-// keine. MatchedWeak ist der Teil von Matched, dessen Zuordnung nur schwach ist
-// (der Autor ließ sich nicht prüfen).
+// BySource zählt nach der stärksten Quelle: reported vor observed vor message+pushed vor
+// message vor pushed vor matched; None hat keine. SignalWeak ist der Teil von MessagePushed,
+// Message und Pushed, MatchedWeak der Teil von Matched, dessen Zuordnung nur schwach ist (der
+// Autor ließ sich nicht prüfen).
 type BySource struct {
-	Reported    int64 `json:"reported"`
-	Observed    int64 `json:"observed"`
-	Matched     int64 `json:"matched"`
-	MatchedWeak int64 `json:"matched_weak"`
-	None        int64 `json:"none"`
+	Reported      int64 `json:"reported"`
+	Observed      int64 `json:"observed"`
+	MessagePushed int64 `json:"message_pushed"`
+	Message       int64 `json:"message"`
+	Pushed        int64 `json:"pushed"`
+	SignalWeak    int64 `json:"signal_weak"`
+	Matched       int64 `json:"matched"`
+	MatchedWeak   int64 `json:"matched_weak"`
+	None          int64 `json:"none"`
 }
 
-func (b BySource) With() int64 { return b.Reported + b.Observed + b.Matched }
+// Die Ränge einer Quelle: kleiner ist stärker.
+const (
+	rankReported = iota
+	rankObserved
+	rankMessagePushed
+	rankMessage
+	rankPushed
+	rankMatched
+)
+
+func (b BySource) With() int64 {
+	return b.Reported + b.Observed + b.MessagePushed + b.Message + b.Pushed + b.Matched
+}
 
 func (b *BySource) add(rank int, weak bool) {
 	switch rank {
-	case 0:
+	case rankReported:
 		b.Reported++
-	case 1:
+	case rankObserved:
 		b.Observed++
-	case 2:
+	case rankMessagePushed, rankMessage, rankPushed:
+		switch rank {
+		case rankMessagePushed:
+			b.MessagePushed++
+		case rankMessage:
+			b.Message++
+		default:
+			b.Pushed++
+		}
+		if weak {
+			b.SignalWeak++
+		}
+	case rankMatched:
 		b.Matched++
 		if weak {
 			b.MatchedWeak++
@@ -144,11 +173,23 @@ type BackfillGitReport struct {
 	Capped   int64 `json:"capped"`
 	// ReportedAdded sind die neuen Zeilen in session_commits (SHAs aus der Ausgabe).
 	ReportedAdded int64 `json:"reported_added"`
+	// Enriched sind Vorgänge, die schon da waren und jetzt Nachricht oder Push-Bereich bekamen
+	// (aus raw nachgetragen, P6).
+	Enriched int64 `json:"enriched"`
 	// Abgleich: geprüfte gemeldete oder beobachtete SHAs, geprüfte Vorgänge ohne SHA, und
 	// die Commits, die dabei eine Session bekamen (matched, neu).
 	ClaimsChecked  int64 `json:"claims_checked"`
 	EventsMatched  int64 `json:"events_matched"`
 	CommitsMatched int64 `json:"commits_matched"`
+	// Nachricht und Push-Bereich (P6): geprüfte Commits der PRs mit einer Nachricht, die ein
+	// Vorgang trägt, geprüfte Pushes, und die Zeilen, die dabei neu entstanden (message, pushed,
+	// message+pushed).
+	EvidenceCommits int64 `json:"evidence_commits"`
+	EvidencePushes  int64 `json:"evidence_pushes"`
+	EvidenceAdded   int64 `json:"evidence_added"`
+	// EvidenceUpgraded: Zeilen, die dabei eine stärkere Quelle bekamen (matched wurde message oder
+	// pushed, message und pushed zusammen message+pushed).
+	EvidenceUpgraded int64 `json:"evidence_upgraded"`
 
 	Coverage BackfillCoverage `json:"coverage"`
 
@@ -168,7 +209,10 @@ type BackfillGitReport struct {
 	LockMax time.Duration `json:"lock_max_ns"`
 }
 
-const backfillGitCursor = "backfill_session_git_cursor"
+// backfillGitCursor: der Fortschritt eines Laufs. Seit P6 trägt der Lauf Nachricht und Push-Bereich
+// nach; der Fortschritt eines früheren Laufs gilt darum nicht mehr (anderer Schlüssel), und
+// --resume beginnt bei der ersten Session.
+const backfillGitCursor = "backfill_session_git_cursor_p6"
 
 // backfillGitDSN öffnet die Datenbank für den Lauf; Tests setzen ein kurzes busy_timeout.
 //
@@ -260,6 +304,9 @@ func BackfillSessionGit(ctx context.Context, path string, opts BackfillGitOption
 	if err := run.settleClaims(); err != nil {
 		return fail(err)
 	}
+	if err := run.matchEvidence(); err != nil {
+		return fail(err)
+	}
 	if err := run.matchEvents(); err != nil {
 		return fail(err)
 	}
@@ -292,7 +339,7 @@ func (r *backfillRun) finishLocks() {
 
 // preconditions prüft, dass der Server dieser Version die Tabellen angelegt hat.
 func (r *backfillRun) preconditions() error {
-	for _, t := range []string{"sessions", "session_chunks", "session_git_events", "session_commits", "session_prs", "git_pr_commits", "git_pull_requests"} {
+	for _, t := range []string{"sessions", "session_chunks", "session_git_events", "session_commits", "session_prs", "session_git_pushes", "git_pr_commits", "git_pull_requests"} {
 		var n int
 		if err := r.db.QueryRowContext(r.ctx, `SELECT count(*) FROM main.sqlite_master WHERE type='table' AND name=?`, t).Scan(&n); err != nil {
 			return err
@@ -301,21 +348,29 @@ func (r *backfillRun) preconditions() error {
 			return fmt.Errorf("no %s table: start the new ghosttree server once so it migrates the database", t)
 		}
 	}
-	for _, c := range [][2]string{{"session_git_events", "account_id"}, {"session_commits", "weak"}} {
+	for _, c := range [][2]string{{"session_git_events", "account_id"}, {"session_commits", "weak"}, {"session_git_events", "msg_title"},
+		{"session_git_events", "push_new"}, {"git_pr_commits", "title_key"}} {
 		if ok, err := hasColumn(r.db, c[0], c[1]); err != nil {
 			return err
 		} else if !ok {
 			return fmt.Errorf("%s has no %s column: start the new ghosttree server once so it migrates the database", c[0], c[1])
 		}
 	}
+	var ddl string
+	if err := r.db.QueryRowContext(r.ctx, `SELECT sql FROM main.sqlite_master WHERE type='table' AND name='session_commits'`).Scan(&ddl); err != nil {
+		return err
+	}
+	if !strings.Contains(ddl, "'message+pushed'") {
+		return errors.New("session_commits does not take the sources message and pushed yet: start the new ghosttree server once so it migrates the database")
+	}
 	return nil
 }
 
-// tempCopies legt TEMP-Kopien von session_git_events, session_commits, session_prs und
-// session_git_quota an. Der Name ohne Schema meint danach die Kopie: alles, was der Lauf
+// tempCopies legt TEMP-Kopien von session_git_events, session_commits, session_prs,
+// session_git_pushes und session_git_quota an. Der Name ohne Schema meint danach die Kopie: alles, was der Lauf
 // schreibt oder liest, geht an ihr vorbei an der Datei.
 func (r *backfillRun) tempCopies() error {
-	for _, table := range []string{"session_git_events", "session_commits", "session_prs", "session_git_quota"} {
+	for _, table := range []string{"session_git_events", "session_commits", "session_prs", "session_git_pushes", "session_git_quota"} {
 		var ddl string
 		if err := r.db.QueryRowContext(r.ctx, `SELECT sql FROM main.sqlite_master WHERE type='table' AND name=?`, table).Scan(&ddl); err != nil {
 			return fmt.Errorf("%s: %w", table, err)

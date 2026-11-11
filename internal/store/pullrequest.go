@@ -79,7 +79,7 @@ func ensurePullRequests(db *sql.DB) error {
 	if _, err := db.Exec(commitMetaSchema); err != nil {
 		return err
 	}
-	return nil
+	return ensurePullCommitKeys(db)
 }
 
 // PullRequestChange ist ein PR-Ereignis von GitHub (Webhook oder Nachholen

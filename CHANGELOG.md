@@ -509,6 +509,39 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   transactions, is repeatable and resumable (`--resume`, `--after-id`), and
   `--dry-run` runs the same steps against temporary copies of the three tables
   without writing to the file. See `deploy/README.md`.
+- Sessions on commits from the commit message and the pushed range (IDEA-31 P6,
+  sources `message`, `pushed` and `message+pushed`). `git commit -q` prints no
+  hash, but the call carries the message (`-m`, several `-m`, `--message`,
+  `-F -` with a heredoc, `"$(cat <<'EOF' … EOF)"`; not when the shell builds it,
+  as in `$(date)` or `$VAR`), and the output of `git push` carries the range
+  `old..new` per ref (also `[new branch]`, forced update, several refs; a
+  rejected ref is skipped). The collector reports only hashes of the message
+  (title, and title with body), never the text, and the ranges; the server compares
+  the hashes with the commits of the pull requests (`title_key`, `msg_key` on
+  `git_pr_commits`) and the time window of the call, so a quiet commit finds its
+  session even when two sessions of one account share a branch and a window. The
+  commits of a pushed range belong to the pushing session when the number of its
+  successful commit calls since its last push equals the number of commits in the
+  range (an amend replaces the commit before it, a rebase or cherry-pick makes the
+  count unusable); the message goes first, and what it already placed is taken out
+  before the rest is paired in order. A commit rewritten later by amend or rebase
+  still finds its call when the same session rewrote at that time or a patch ID
+  ties it. A message that contradicts the commit also keeps a call out of the time
+  window match. The author rules stay as they were: a commit by another known
+  person is never assigned, an author who cannot be checked gives a weak
+  assignment, a weak one never holds against a strong one (the author's own strong
+  assignment replaces it, and only that), and a message or range never removes
+  another account's strong assignment. Message and range together are the strongest of
+  the new sources, but not "strong": both come from the client and can be copied
+  from a pull request, so only the author check makes an assignment strong.
+  `ctx db backfill-session-git` fills the message and the range into events an
+  earlier run wrote (`enriched`), lays them over the pull requests, stays
+  repeatable, and splits its coverage by `message+pushed`, `message`, `pushed`
+  and `matched`. Start the server of this version once first: it adds the
+  columns and rebuilds `session_commits` for the new sources, keeping every row.
+  On a copy of 208 local transcripts (122,000 lines) with 557 commits of 126
+  branches the share of commits with a session rose from 31.8 % to 50.3 %
+  (commit calls 39.4 % to 66.6 %) in the same 2.4 s. Older servers ignore the new fields.
 - Reactions on comments, ideas and issues from a fixed list (+1, -1, laugh,
   hooray, confused, heart, rocket, eyes), `PUT|DELETE|GET /api/reactions`,
   `ctx react`, `reaction_set`, `reaction_list`: members react, guests read.

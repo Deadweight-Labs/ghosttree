@@ -37,18 +37,24 @@ runs after a pull request sync:
      time window of every commit call without a hash over them (source matched),
      under the author rules of the server (a commit by another known person is
      not assigned; an author who cannot be checked gives a weak assignment).
-  4. It prints the coverage: how many commit calls, pull requests and commits of
-     pull requests have a session now, split by reported, observed and matched.
+  4. It lays the commit message and the pushed range over the pull requests
+     (sources message, pushed and message+pushed): the call of git commit -m
+     carries the message, the output of git push the range old..new. Only hashes
+     of the message are kept, never the text. Events written by an earlier run
+     get their message and range added from the stored lines; nothing is replaced.
+  5. It prints the coverage: how many commit calls, pull requests and commits of
+     pull requests have a session now, split by reported, observed, message+pushed,
+     message, pushed and matched.
 
-Only the three small tables session_git_events, session_commits and session_prs
-are written, in short transactions (--batch events, --match-batch commits, and a
+Only the small tables session_git_events, session_commits, session_prs and
+session_git_pushes are written, in short transactions (--batch events, --match-batch commits, and a
 pause at least as long as the write lock was held). It may run while the server is
 up; the server must already run the version that brings the tables. Reading takes
 no lock. A second run writes nothing new; an interrupted run may be started again,
 with --resume (continues behind the last session it finished) or --after-id.
 
 --dry-run writes nothing to the file: it runs the same steps against temporary
-copies of the three tables and prints the coverage the real run would leave. Run it
+copies of the tables and prints the coverage the real run would leave. Run it
 first; on a large database it takes as long as the real run, minus the pauses.
 Only numbers are printed.`
 
@@ -136,12 +142,14 @@ func reportBackfillGit(stdout io.Writer, r store.BackfillGitReport, interrupted 
 	if r.DryRun {
 		verb = "that would be written"
 	}
-	fmt.Fprintf(stdout, "  new %s: %d events, %d hashes printed by commits (reported); already known: %d\n", verb, r.Recorded, r.ReportedAdded, r.Known)
+	fmt.Fprintf(stdout, "  new %s: %d events, %d hashes printed by commits (reported); already known: %d (message or push range added to %d)\n", verb, r.Recorded, r.ReportedAdded, r.Known, r.Enriched)
 	if r.Rejected > 0 || r.Capped > 0 {
 		fmt.Fprintf(stdout, "  not taken: %d invalid, %d over the per-session limit\n", r.Rejected, r.Capped)
 	}
 	fmt.Fprintf(stdout, "match: %d hashes checked, %d commit calls without a hash laid over the pull requests, %d commits assigned (matched)\n",
 		r.ClaimsChecked, r.EventsMatched, r.CommitsMatched)
+	fmt.Fprintf(stdout, "message and push range: %d commits with a message checked, %d pushes checked, %d assignments added (message, pushed, message+pushed), %d upgraded from a weaker source\n",
+		r.EvidenceCommits, r.EvidencePushes, r.EvidenceAdded, r.EvidenceUpgraded)
 	if interrupted {
 		reportBackfillLocks(stdout, r)
 		return
@@ -164,8 +172,8 @@ func coverageLine(stdout io.Writer, what string, b store.BySource) {
 	if total > 0 {
 		pct = 100 * float64(b.With()) / float64(total)
 	}
-	fmt.Fprintf(stdout, "  %-15s %d of %d have a session (%.1f%%): reported %d, observed %d, matched %d (%d weak), none %d\n",
-		what, b.With(), total, pct, b.Reported, b.Observed, b.Matched, b.MatchedWeak, b.None)
+	fmt.Fprintf(stdout, "  %-15s %d of %d have a session (%.1f%%): reported %d, observed %d, message+pushed %d, message %d, pushed %d (%d of these three weak), matched %d (%d weak), none %d\n",
+		what, b.With(), total, pct, b.Reported, b.Observed, b.MessagePushed, b.Message, b.Pushed, b.SignalWeak, b.Matched, b.MatchedWeak, b.None)
 }
 
 func reportBackfillLocks(stdout io.Writer, r store.BackfillGitReport) {
