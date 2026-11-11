@@ -36,6 +36,13 @@ jobs:
           else
             git branch -r --contains HEAD | sed 's/^[* ]*//' | grep -Fxq "origin/main"
           fi
+      # The scripts of the web interface come first: a second, and a script that
+      # loops is stopped by the limits.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Test interface scripts
+        run: timeout 60 node --max-old-space-size=300 --test --test-timeout=20000 internal/web/jstest/*.test.mjs
       # Same tests as the push run in ci.yml, one after the other. The test
       # databases live in RAM: on the runner's disk every migration commit waits
       # for fsync (see ci.yml).
@@ -47,8 +54,6 @@ jobs:
         env:
           TMPDIR: /dev/shm
         run: go test -race -count=1 -timeout 30m $(go list ./... | grep -v -e '/internal/store$' -e '/internal/web$')
-      - name: Test interface scripts
-        run: timeout 60 node --max-old-space-size=300 --test --test-timeout=20000 internal/web/jstest/*.test.mjs
       - name: Test store
         env:
           TMPDIR: /dev/shm

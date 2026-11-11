@@ -3,13 +3,17 @@
 // /ui/search/suggest sends them (templates/search.html, "searchsuggest").
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadPage, Event } from "./dom.mjs";
+import { readFileSync } from "node:fs";
+import { loadPage, manualTimers, Event } from "./dom.mjs";
 
-const FRAME = `
-<form class="hsf" role="search" method="get" action="/ui/search"><label class="gfield hsearch"><input id="shell-search" type="search" name="q" aria-label="Search everything" data-suggest="/ui/search/suggest" data-suggest-project="github.com/acme/shell"></label></form>
-<textarea class="comp-in"></textarea>`;
+// The field of the header and the rows are what the Go templates render: the
+// fixtures are written by TestJSFixturesAreWhatTheTemplatesRender
+// (jstest_fixtures_test.go), which fails when a template changes under them.
+const fixture = (name) => readFileSync(new URL("./fixtures/" + name, import.meta.url), "utf8");
+const FRAME = fixture("suggest-field.html") + `<textarea class="comp-in"></textarea>`;
+const REPO = "github.com/x/shell";
 
-const hit = `<li role="option" class="sg"><a class="sg-a" href="/ui/acme/shell/issues/7" tabindex="-1"><span class="sg-t">Fix the deploy</span></a></li>`;
+const hit = `<li role="option" class="sg"><a class="sg-a" href="/ui/x/shell/issues/7" tabindex="-1"><span class="sg-t">Fix the deploy</span></a></li>`;
 const qual = (insert) => `<li role="option" class="sg sg-q" data-insert="${insert}"><span class="sg-k">${insert}</span></li>`;
 const all = (q) => `<li role="option" class="sg sg-all"><a class="sg-a" href="/ui/search?q=${q}" tabindex="-1"><span class="sg-t">Search for ${q}</span></a></li>`;
 
@@ -24,7 +28,7 @@ function page(answer = () => "") {
     return Promise.resolve({ ok: true, text: () => Promise.resolve(answer(url)) });
   };
   const hooks = { fetch, setTimeout: (fn) => { fn(); return 1; }, clearTimeout: () => {} };
-  const p = loadPage(FRAME, { url: "http://localhost/ui/acme/shell", scripts: ["ui-suggest.js"], hooks });
+  const p = loadPage(FRAME, { url: "http://localhost/ui/x/shell", scripts: ["ui-suggest.js"], hooks });
   const input = p.document.getElementById("shell-search");
   const list = p.document.querySelector("ul.sg-list");
   const rows = () => [...list.querySelectorAll("li.sg")];
@@ -65,7 +69,7 @@ test("what is typed asks for suggestions with the repository of the page and sho
   assert.equal(p.calls.length, 1);
   const url = new URL(p.calls[0], "http://localhost");
   assert.equal(url.pathname, "/ui/search/suggest");
-  assert.deepEqual([url.searchParams.get("q"), url.searchParams.get("project")], ["deploy", "github.com/acme/shell"]);
+  assert.deepEqual([url.searchParams.get("q"), url.searchParams.get("project")], ["deploy", "github.com/x/shell"]);
   assert.equal(p.list.hidden, false);
   assert.equal(p.rows().length, 2);
   assert.equal(p.input.getAttribute("aria-expanded"), "true");
@@ -107,7 +111,7 @@ test("the arrows move over the rows, Enter takes the row, and without a row Ente
   let followed = null;
   p.rows()[0].querySelector("a").addEventListener("click", (e) => { followed = e.target.getAttribute("href"); });
   const enter = p.key("Enter", {}, p.input);
-  assert.equal(followed, "/ui/acme/shell/issues/7");
+  assert.equal(followed, "/ui/x/shell/issues/7");
   assert.equal(enter.defaultPrevented, true, "the form is not sent as well");
 
   // Without a chosen row the form is sent: Enter is left alone.
@@ -177,7 +181,6 @@ test("Escape closes the list, leaving the field closes it, and an answer that co
   input.value = "dep2";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.blur();
-  input.dispatchEvent(new Event("blur"));
   waiting[2](hit);
   await tick();
   assert.equal(list.hidden, true, "an answer after the field was left does not open the list");
@@ -200,7 +203,6 @@ test("a field that has the focus from the start (the search page) does not open 
   const p = page(() => hit);
   p.input.value = "deploy";
   p.input.focus();
-  p.input.dispatchEvent(new Event("focus"));
   await tick();
   assert.equal(p.calls.length, 0);
   assert.equal(p.list.hidden, true);
@@ -208,4 +210,106 @@ test("a field that has the focus from the start (the search page) does not open 
   await tick();
   assert.equal(p.calls.length, 1, "the arrow asks for the list");
   assert.equal(p.list.hidden, false);
+});
+
+test("the rows the real template renders are shown, and a value with a quote and a comma is taken whole", async () => {
+  const p = page(() => fixture("suggest-rows.html"));
+  await p.type("deploy is:o");
+  assert.equal(p.rows().length, 6);
+  assert.deepEqual(p.rows().filter((r) => r.classList.contains("sg-q")).map((r) => r.dataset.insert), ["is:", "is:open", 'branch:"feat/a,b"'], "&#34; is a quotation mark");
+  assert.equal(p.rows()[0].querySelector("a").getAttribute("href"), "/ui/x/shell/issues/7");
+  assert.equal(p.rows().at(-1).querySelector("a").getAttribute("href"), "/ui/search?q=deploy+is%3Ao", "&#43; is a plus");
+
+  p.rows()[4].click();
+  assert.equal(p.input.value, 'deploy branch:"feat/a,b" ', "the value is written with its quotes, and ends the word");
+});
+
+test("a newer request cancels the one on its way, and the cancelled one leaves the list alone", async () => {
+  const signals = [];
+  const fetch = (_url, init) => {
+    signals.push(init.signal);
+    return new Promise((resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+      if (signals.length === 2) resolve({ ok: true, text: () => Promise.resolve(hit) });
+    });
+  };
+  const p = loadPage(FRAME, { url: "http://localhost/ui/", scripts: ["ui-suggest.js"], hooks: { fetch, setTimeout: (fn) => { fn(); return 1; }, clearTimeout: () => {} } });
+  const input = p.document.getElementById("shell-search");
+  const list = p.document.querySelector("ul.sg-list");
+  input.focus();
+  input.value = "de";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  assert.equal(signals[0].aborted, false);
+  input.value = "dep";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  assert.equal(signals[0].aborted, true, "the first request is cancelled when the second one is sent");
+  assert.equal(signals[1].aborted, false);
+  await tick();
+  await tick();
+  assert.equal(list.querySelectorAll("li.sg").length, 1, "the answer of the second request is shown; the cancelled one did not close the list");
+
+  input.value = "dep2";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.blur();
+  assert.equal(signals[2].aborted, true, "leaving the field cancels what is on its way");
+});
+
+test("Enter and Tab that confirm an input method composition are left to the field", async () => {
+  const p = page(() => qual("is:open") + all("is:o"));
+  await p.type("is:o");
+  p.key("ArrowDown", {}, p.input);
+  const composing = p.key("Enter", { isComposing: true }, p.input);
+  assert.equal(composing.defaultPrevented, false, "the composition is confirmed, no row is taken");
+  assert.equal(p.input.value, "is:o");
+  const legacy = p.key("Enter", { keyCode: 229 }, p.input);
+  assert.equal(legacy.defaultPrevented, false, "keyCode 229 is the same for older browsers");
+  assert.equal(p.key("Enter", {}, p.input).defaultPrevented, true, "the next Enter takes the row");
+  assert.equal(p.input.value, "is:open ");
+});
+
+test("an answer that is a redirect, a failure or a whole page (the login) is not put into the list", async () => {
+  for (const [name, answer] of [
+    ["a redirect", { ok: true, redirected: true, text: () => Promise.resolve(qual("is:open")) }],
+    ["a failure", { ok: false, text: () => Promise.resolve(qual("is:open")) }],
+    ["a login page", { ok: true, text: () => Promise.resolve("<!doctype html><html><body><form action=\"/login\"><li class=\"sg\">sign in</li></form></body></html>") }],
+    ["a page without doctype", { ok: true, text: () => Promise.resolve("<html><body>sign in</body></html>") }],
+  ]) {
+    const p = loadPage(FRAME, { url: "http://localhost/ui/", scripts: ["ui-suggest.js"], hooks: { fetch: () => Promise.resolve(answer), setTimeout: (fn) => { fn(); return 1; }, clearTimeout: () => {} } });
+    const input = p.document.getElementById("shell-search");
+    input.focus();
+    input.value = "is:o";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+    assert.equal(p.document.querySelector("ul.sg-list").querySelectorAll("li.sg").length, 0, name);
+    assert.equal(p.document.querySelector("ul.sg-list").hidden, true, name);
+  }
+});
+
+test("typing waits for a pause: one request for what was typed in a burst, none when the field is left first", async () => {
+  const clock = manualTimers();
+  const calls = [];
+  const fetch = (url) => { calls.push(url); return Promise.resolve({ ok: true, text: () => Promise.resolve(hit) }); };
+  const p = loadPage(FRAME, { url: "http://localhost/ui/", scripts: ["ui-suggest.js"], hooks: { fetch, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout } });
+  const input = p.document.getElementById("shell-search");
+  input.focus();
+  for (const text of ["d", "de", "dep"]) {
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    clock.advance(50);
+  }
+  assert.equal(calls.length, 0, "50 ms after the last key nothing was asked yet");
+  assert.equal(clock.pending(), 1, "the earlier waits were cleared, one is left");
+  clock.advance(69);
+  assert.equal(calls.length, 0, "119 ms after the last key");
+  clock.advance(1);
+  assert.equal(calls.length, 1, "120 ms after the last key it asks");
+  assert.equal(new URL(calls[0], "http://localhost").searchParams.get("q"), "dep", "once, for what is in the field");
+  await tick();
+  assert.equal(p.document.querySelector("ul.sg-list").hidden, false);
+
+  input.value = "depl";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.blur();
+  clock.advance(500);
+  assert.equal(calls.length, 1, "the field was left before the pause was over: nothing is asked");
 });

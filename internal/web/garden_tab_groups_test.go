@@ -2,6 +2,7 @@ package web
 
 import (
 	"html"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -147,5 +148,84 @@ func TestGardenerTabWithoutARunSaysSo(t *testing.T) {
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/alpha/gardener")
 	if !strings.Contains(page, `class="box-empty"`) || !strings.Contains(page, "No open proposals") {
 		t.Errorf("an empty tab says nothing:\n%s", page)
+	}
+}
+
+// The tab is for those who review the gardener's proposals, and it shows each
+// of them only what their roles read: a lead or reviewer of one repository gets
+// neither the proposals, nor the runs, nor the repository's name, nor its share
+// of any number from the repository they have no role in ("hidden").
+func TestGardenerTabFollowsTheRolesOfTheViewer(t *testing.T) {
+	e := gardenGroupsEnv(t)
+	org, _ := e.St.OrgByRef("alpha")
+	account := "person:" + idStr(e.St.GardenerAccountID())
+	over, err := e.St.StartGardenRun(account, org.ID, shellHiddenProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.St.FinishGardenRun(account, over, "budget", 1.5, "Budget erreicht"); err != nil {
+		t.Fatal(err)
+	}
+	done, err := e.St.StartGardenRun(account, org.ID, shellProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.St.FinishGardenRun(account, done, "done", 0.42, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/alpha/gardener")
+	for _, want := range []string{"cmd/other/main.go", "1.50 $", "4 open proposals"} {
+		if !strings.Contains(owner, want) {
+			t.Fatalf("the owner lacks %q, so the check below proves nothing:\n%s", want, owner)
+		}
+	}
+	for name, c := range map[string]*http.Client{"lead": e.Lead, "reviewer": e.Reviewer} {
+		status, page := fetchPage(t, c, e.Base+"/ui/alpha/gardener")
+		if status != http.StatusOK {
+			t.Fatalf("%s: tab = %d", name, status)
+		}
+		for _, leak := range []string{"cmd/other/main.go", "1.50 $", "budget reached", ">hidden<", "repo=hidden", "x/hidden", "1.92 $", "4 open proposals"} {
+			if strings.Contains(page, leak) {
+				t.Errorf("%s: the tab gives away the repository without a role (%q):\n%s", name, leak, page)
+			}
+		}
+		if !strings.Contains(page, "3 open proposals") || !strings.Contains(page, "0.42 $") {
+			t.Errorf("%s: the tab lacks the proposals and the run of the repository they work in:\n%s", name, page)
+		}
+		if got := pillCount(page, "Description?"); got != "2" {
+			t.Errorf("%s: Description? group = %q, want 2", name, got)
+		}
+		if got := pillCount(page, "Duplicate?"); got != "1" {
+			t.Errorf("%s: Duplicate? group = %q, want 1", name, got)
+		}
+		if got := pillCount(page, "shell"); got != "3" || pillCount(page, "hidden") != "" {
+			t.Errorf("%s: repository pills: shell=%q hidden=%q", name, got, pillCount(page, "hidden"))
+		}
+		_, band := fetchPage(t, c, e.Base+"/ui/alpha")
+		if !regexp.MustCompile(`data-tab="gardener"[^>]*>(?s:.*?)<span class="counter">3</span>`).MatchString(band) {
+			t.Errorf("%s: the number on the tab counts what they may not see:\n%s", name, band)
+		}
+		// The repository they have no role in is as unknown as one that does not exist.
+		_, narrowed := fetchPage(t, c, e.Base+"/ui/alpha/gardener?repo=hidden")
+		_, missing := fetchPage(t, c, e.Base+"/ui/alpha/gardener?repo=nothere")
+		same := func(page, repo string) string {
+			page = regexp.MustCompile(`name="csrf_token" value="[0-9a-f]+"`).ReplaceAllString(page, "")
+			return strings.ReplaceAll(page, "repo="+repo, "repo=REPO")
+		}
+		if strings.Contains(narrowed, "cmd/other/main.go") || same(narrowed, "hidden") != same(missing, "nothere") {
+			t.Errorf("%s: ?repo=hidden is answered differently from ?repo=nothere", name)
+		}
+	}
+	// The owner sees the month's spending, the others do not: it adds up every repository.
+	if !strings.Contains(owner, "1.92 $") {
+		t.Errorf("the owner does not see the spending of the month:\n%s", owner)
+	}
+	// A member without the right to review and a guest get no tab at all.
+	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
+		status, page := fetchPage(t, c, e.Base+"/ui/alpha/gardener")
+		if status != http.StatusNotFound || strings.Contains(page, "cmd/other/main.go") || strings.Contains(page, "internal/store/a.go") {
+			t.Errorf("%s: tab = %d, want 404 without proposals", name, status)
+		}
 	}
 }

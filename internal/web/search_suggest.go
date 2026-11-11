@@ -11,6 +11,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/query"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // Suggestions under the search fields (REQ-599 AC-10, REQ-628 AC-1). The field
@@ -87,6 +88,11 @@ func (a *app) searchSuggest(w http.ResponseWriter, r *http.Request) {
 	if project != "" && pa.Role(project).Role == "" {
 		project = ""
 	}
+	// The same rule as parseSearchLine: with a repository on the page a guest is
+	// who does not see all its branches there, whatever the roles elsewhere are.
+	if project != "" {
+		guest = !pa.SeesAllBranches(project)
+	}
 	var rows []suggestRow
 	if trimmed := strings.TrimSpace(line); trimmed != "" {
 		if term, ok := links.ParseNumber(trimmed); ok {
@@ -101,7 +107,7 @@ func (a *app) searchSuggest(w http.ResponseWriter, r *http.Request) {
 				rows = append(rows, suggestRow{Kind: "hit", Href: h.Href, Title: h.Title, Lead: h.Lead, Mark: h.Mark, RefKind: h.RefKind, RefN: h.RefN, PRState: h.PRState})
 			}
 		}
-		rows = append(rows, a.suggestQualifiers(r, l, guest, project, line)...)
+		rows = append(rows, a.suggestQualifiers(r, pa, l, guest, project, line)...)
 		if utf8.RuneCountInString(trimmed) >= minSearchRunes {
 			rows = append(rows, suggestRow{Kind: "all", Href: "/ui/search?q=" + url.QueryEscape(trimmed), Mark: "search", Title: l.msg("search.suggest_for", trimmed)})
 		}
@@ -119,8 +125,12 @@ func (a *app) searchSuggest(w http.ResponseWriter, r *http.Request) {
 
 // suggestQualifiers completes the word at the end of the line: a key while it is
 // still being typed, a value once the colon is there. A word with a quote in it
-// is text and gets nothing.
-func (a *app) suggestQualifiers(r *http.Request, l lang, guest bool, project, line string) []suggestRow {
+// is text, and so is everything after an opening quote that is not closed yet:
+// the words inside a phrase are not qualifiers.
+func (a *app) suggestQualifiers(r *http.Request, pa *store.ProjectAccess, l lang, guest bool, project, line string) []suggestRow {
+	if strings.Count(line, `"`)%2 == 1 {
+		return nil
+	}
 	token := line[strings.LastIndexAny(line, " \t")+1:]
 	if strings.Contains(token, `"`) {
 		return nil
@@ -147,11 +157,12 @@ func (a *app) suggestQualifiers(r *http.Request, l lang, guest bool, project, li
 		return nil
 	}
 	var rows []suggestRow
-	for _, c := range a.suggestValues(r, l, guest, project, key) {
+	for _, c := range a.suggestValues(r, pa, l, guest, project, key) {
 		if !strings.HasPrefix(strings.ToLower(c.value), val) || strings.EqualFold(c.value, val) {
 			continue
 		}
-		rows = append(rows, suggestRow{Kind: "qual", Insert: neg + key + ":" + c.value, Title: key + ":" + c.value, Lead: c.lead})
+		word := key + ":" + quoteValue(c.value)
+		rows = append(rows, suggestRow{Kind: "qual", Insert: neg + word, Title: word, Lead: c.lead})
 		if len(rows) == suggestValuesMax {
 			break
 		}
@@ -161,10 +172,19 @@ func (a *app) suggestQualifiers(r *http.Request, l lang, guest bool, project, li
 
 type suggestValue struct{ value, lead string }
 
+// quoteValue writes a value so that the search reads it as one: a comma would
+// split it into alternatives, so such a value goes in quotes.
+func quoteValue(v string) string {
+	if strings.Contains(v, ",") {
+		return `"` + v + `"`
+	}
+	return v
+}
+
 // suggestValues are the values the key can be completed with. The ones that name
 // something of a repository (branch, package, label) need the repository of the
 // page and are read through the rights of the viewer.
-func (a *app) suggestValues(r *http.Request, l lang, guest bool, project, key string) []suggestValue {
+func (a *app) suggestValues(r *http.Request, pa *store.ProjectAccess, l lang, guest bool, project, key string) []suggestValue {
 	plain := func(list ...string) []suggestValue {
 		out := make([]suggestValue, 0, len(list))
 		for _, v := range list {
@@ -172,7 +192,6 @@ func (a *app) suggestValues(r *http.Request, l lang, guest bool, project, key st
 		}
 		return out
 	}
-	pa := a.access(r)
 	switch key {
 	case query.KeyIs:
 		return plain(suggestStates...)
@@ -191,9 +210,12 @@ func (a *app) suggestValues(r *http.Request, l lang, guest bool, project, key st
 	case query.KeyCreated, query.KeyUpdated:
 		return plain(suggestSpans...)
 	case query.KeyRepo:
+		// owner/name is what repo: reads (repoRemoteOf adds github.com); a project of
+		// another host keeps its host. The last segment alone would name a project
+		// that does not exist.
 		var out []suggestValue
-		for _, p := range visibleProjects(pa, "") {
-			out = append(out, suggestValue{value: lastSegment(p)})
+		for _, p := range slices.Compact(visibleProjects(pa, "")) {
+			out = append(out, suggestValue{value: strings.TrimPrefix(p, "github.com/")})
 		}
 		return out
 	case query.KeyBranch:
@@ -219,7 +241,7 @@ func (a *app) suggestValues(r *http.Request, l lang, guest bool, project, key st
 		}
 		var out []suggestValue
 		for _, p := range packageChoices(pa, project) {
-			out = append(out, suggestValue{value: strconv.FormatInt(p.ID, 10), lead: packageName(l, p.Package)})
+			out = append(out, suggestValue{value: strconv.FormatInt(p.ID, 10), lead: packageName(l, p)})
 		}
 		return out
 	case query.KeyLabel:

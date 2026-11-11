@@ -11,8 +11,15 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
-const ENTITIES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'", "&nbsp;": " " };
-const decode = (s) => s.replace(/&(?:amp|lt|gt|quot|#39|nbsp);/g, (m) => ENTITIES[m]);
+// The names the Go templates write (html/template escapes " as &#34;, ' as &#39;
+// and + as &#43;), and any other number.
+const ENTITIES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#34;": '"', "&#39;": "'", "&nbsp;": "\u00a0" };
+const decode = (s) =>
+  s.replace(/&(?:amp|lt|gt|quot|nbsp|#\d+|#x[0-9a-f]+);/gi, (m) => {
+    if (ENTITIES[m]) return ENTITIES[m];
+    const num = /^&#x/i.test(m) ? parseInt(m.slice(3, -1), 16) : parseInt(m.slice(2, -1), 10);
+    return Number.isNaN(num) ? m : String.fromCodePoint(num);
+  });
 const encodeText = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const encodeAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 const camel = (name) => name.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -43,7 +50,17 @@ class Fragment extends Node {
   get innerHTML() { return this.childNodes.map(serialize).join(""); }
 }
 
+// Every insertion counts. A script that keeps changing the page it watches (an
+// observer that rewrites what it observes) would never end under node:test; it
+// ends with this error instead. loadPage starts the count again.
+const MUTATION_LIMIT = 20000;
+let mutations = 0;
+function tally() {
+  if (++mutations > MUTATION_LIMIT) throw new Error(`endless mutation: more than ${MUTATION_LIMIT} changes of the page; a script keeps rewriting what it reacts to`);
+}
+
 function insert(parent, nodes, index) {
+  tally();
   const list = nodes.flatMap((n) => (typeof n === "string" ? [new Text(n)] : n instanceof Fragment ? n.childNodes.splice(0) : [n]));
   for (const n of list) n.remove();
   for (const n of list) n.parentNode = parent;
@@ -123,6 +140,7 @@ export class Element extends Node {
   set textContent(v) { this.childNodes.forEach((n) => { n.parentNode = null; }); this.childNodes = []; if (v !== "") insert(this, [String(v)], 0); }
   get innerHTML() { return (this.content ? this.content.childNodes : this.childNodes).map(serialize).join(""); }
   set innerHTML(html) {
+    tally();
     const target = this.content || this;
     target.childNodes.forEach((n) => { n.parentNode = null; });
     target.childNodes = [];
@@ -138,11 +156,36 @@ export class Element extends Node {
   querySelectorAll(sel) { return queryAll(this, sel); }
   querySelector(sel) { return queryAll(this, sel)[0] || null; }
   addEventListener(type, fn) { (this.listeners.get(type) || this.listeners.set(type, []).get(type)).push(fn); }
-  removeEventListener(type, fn) { const l = this.listeners.get(type) || []; l.splice(l.indexOf(fn), 1); }
+  removeEventListener(type, fn) {
+    const l = this.listeners.get(type) || [];
+    const at = l.indexOf(fn);
+    if (at >= 0) l.splice(at, 1);
+  }
   dispatchEvent(ev) { return this.ownerDocument.dispatch(this, ev); }
   click(init = {}) { return this.dispatchEvent(new Event("click", { bubbles: true, cancelable: true, button: 0, ...init })); }
-  focus() { this.ownerDocument.activeElement = this; }
-  blur() { if (this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = this.ownerDocument.body; }
+  // focus and blur fire what a browser fires: blur on the element that gives the
+  // focus up, then focus on the one that gets it; neither bubbles, focusin and
+  // focusout do.
+  focus() {
+    const doc = this.ownerDocument;
+    const before = doc.activeElement;
+    if (before === this) return;
+    if (before && before !== doc.body) {
+      doc.activeElement = doc.body;
+      before.dispatchEvent(new Event("blur"));
+      before.dispatchEvent(new Event("focusout", { bubbles: true }));
+    }
+    doc.activeElement = this;
+    this.dispatchEvent(new Event("focus"));
+    this.dispatchEvent(new Event("focusin", { bubbles: true }));
+  }
+  blur() {
+    const doc = this.ownerDocument;
+    if (doc.activeElement !== this) return;
+    doc.activeElement = doc.body;
+    this.dispatchEvent(new Event("blur"));
+    this.dispatchEvent(new Event("focusout", { bubbles: true }));
+  }
   select() { this.selected = true; }
   setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; }
   requestSubmit() { return this.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); }
@@ -160,7 +203,7 @@ export class HTMLInputElement extends Element {
 export class Event {
   constructor(type, init = {}) {
     this.type = type;
-    Object.assign(this, { bubbles: false, cancelable: false, button: 0, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, key: "" }, init);
+    Object.assign(this, { bubbles: false, cancelable: false, button: 0, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, isComposing: false, key: "" }, init);
     this.defaultPrevented = false;
   }
   preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
@@ -283,14 +326,18 @@ class Document extends Node {
   querySelectorAll(sel) { return queryAll(this.html, sel); }
   querySelector(sel) { return queryAll(this.html, sel)[0] || null; }
   addEventListener(type, fn, capture) { (this.listeners.get(type) || this.listeners.set(type, []).get(type)).push({ fn, capture: !!capture }); }
-  removeEventListener() {}
+  removeEventListener(type, fn, capture) {
+    const l = this.listeners.get(type) || [];
+    const at = l.findIndex((x) => x.fn === fn && x.capture === !!capture);
+    if (at >= 0) l.splice(at, 1);
+  }
   // dispatch runs the listeners the way a browser does: capture on document,
   // target, bubbling up to the document and the window.
   dispatch(target, ev) {
     ev.target = target;
     const path = [];
     for (let n = target; n; n = n.parentNode) path.push(n);
-    const run = (list, node) => { for (const l of list) { if (ev.stopped) return; ev.currentTarget = node; (l.fn || l)(ev); } };
+    const run = (list, node) => { for (const l of [...list]) { if (ev.stopped) return; ev.currentTarget = node; (l.fn || l)(ev); } };
     run((this.listeners.get(ev.type) || []).filter((l) => l.capture), this);
     for (const n of path) {
       if (n === this.html && !ev.bubbles) break;
@@ -305,6 +352,43 @@ class Document extends Node {
   }
 }
 
+// manualTimers is a clock the test turns: setTimeout and clearTimeout that run
+// nothing until advance(ms) has passed their time, in the order of their time.
+export function manualTimers() {
+  let now = 0;
+  let nextId = 1;
+  const queue = new Map();
+  return {
+    setTimeout(fn, ms = 0) { const id = nextId++; queue.set(id, { fn, at: now + ms }); return id; },
+    clearTimeout(id) { queue.delete(id); },
+    advance(ms) {
+      const until = now + ms;
+      for (;;) {
+        const due = [...queue].filter(([, t]) => t.at <= until).sort((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+        if (!due) break;
+        queue.delete(due[0]);
+        now = Math.max(now, due[1].at);
+        due[1].fn();
+      }
+      now = until;
+    },
+    pending: () => queue.size,
+  };
+}
+
+// What a script may use of the browser and this DOM does not have: using it
+// fails at once, naming the gap, instead of a test that passes on a missing
+// feature. They are constructors that throw (an accessor would not do: the vm
+// answers a bare name with "is not defined" and typeof with "undefined", and the
+// script would go on without it). A test that needs one passes its own in hooks.
+function missing(win, names) {
+  for (const name of names) {
+    win[name] = class {
+      constructor() { throw new Error(`${name} is not in the test DOM (jstest/dom.mjs): build it there or pass one in hooks`); }
+    };
+  }
+}
+
 class FakeEventSource {
   static instances = [];
   constructor(url) { this.url = url; this.closed = false; this.handlers = new Map(); this.constructor.instances.push(this); }
@@ -316,12 +400,22 @@ class FakeEventSource {
 // loadPage makes a window for the HTML, in which scripts can be run. The
 // location is where the page was "opened"; history and popstate follow it.
 export function loadPage(html, { url = "http://localhost/ui/", scripts = [], body = html, hooks = {} } = {}) {
+  mutations = 0;
   const doc = new Document();
   // Each page has its own list of the streams it opened.
   const PageEventSource = class extends FakeEventSource { static instances = []; };
   const win = { document: doc, EventSource: PageEventSource, URL, URLSearchParams, setTimeout, clearTimeout, console, Event, KeyboardEvent: Event, MouseEvent: Event };
   win.window = win;
   win.globalThis = win;
+  // The page's own animation frames: queued, and run when the test says so (frame()).
+  const frames = new Map();
+  let frameId = 0;
+  win.requestAnimationFrame = (fn) => { frames.set(++frameId, fn); return frameId; };
+  win.cancelAnimationFrame = (id) => { frames.delete(id); };
+  // Present in node itself, so the page gets the real one.
+  win.AbortController = AbortController;
+  win.AbortSignal = AbortSignal;
+  missing(win, ["MutationObserver", "IntersectionObserver", "ResizeObserver"]);
   let current = new URL(url);
   const entries = [{ url: current.href }];
   let at = 0;
@@ -339,7 +433,11 @@ export function loadPage(html, { url = "http://localhost/ui/", scripts = [], bod
     get length() { return entries.length; },
   };
   win.addEventListener = (type, fn) => { (doc.windowListeners.get(type) || doc.windowListeners.set(type, []).get(type)).push(fn); };
-  win.removeEventListener = () => {};
+  win.removeEventListener = (type, fn) => {
+    const l = doc.windowListeners.get(type) || [];
+    const at = l.indexOf(fn);
+    if (at >= 0) l.splice(at, 1);
+  };
   win.matchMedia = () => ({ matches: false });
   win.navigator = {};
   const store = new Map();
@@ -352,8 +450,12 @@ export function loadPage(html, { url = "http://localhost/ui/", scripts = [], bod
   for (const file of scripts) run(file);
   return {
     window: win, document: doc, run,
+    // eval runs source text as a script of the page.
+    eval: (code) => vm.runInContext(code, ctx),
     EventSource: PageEventSource,
     path: () => current.pathname + current.search,
+    // frame runs the animation frames that were asked for; the ones they ask for in turn wait for the next call.
+    frame() { const due = [...frames]; frames.clear(); for (const [, fn] of due) fn(0); },
     key(key, init = {}, target = doc.activeElement) { const ev = new Event("keydown", { bubbles: true, cancelable: true, key, ...init }); target.dispatchEvent(ev); return ev; },
   };
 }

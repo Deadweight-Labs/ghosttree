@@ -1,6 +1,7 @@
 package web
 
 import (
+	"html"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/query"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // REQ-599 AC-10 and REQ-628 AC-1: the list under the search field (/ui/search/suggest).
@@ -43,7 +45,7 @@ func suggestHits(body string) []string {
 func suggestInserts(body string) []string {
 	var out []string
 	for _, m := range suggestQualRE.FindAllStringSubmatch(body, -1) {
-		out = append(out, m[1])
+		out = append(out, html.UnescapeString(m[1]))
 	}
 	return out
 }
@@ -227,5 +229,114 @@ func TestSearchFieldsAskForSuggestions(t *testing.T) {
 	_, repo := fetchPage(t, x.Owner, x.Base+"/ui/x/shell")
 	if !strings.Contains(repo, `data-suggest-project="`+shellProject+`"`) {
 		t.Errorf("the header on a repository page does not name the repository")
+	}
+}
+
+// repo: is offered as owner/name, the form the search reads; the last segment
+// alone would name a repository that does not exist. Taken into the search it
+// finds the repository's rows.
+func TestSuggestRepoValuesAreOwnerSlashNameAndFindRows(t *testing.T) {
+	x := seedExact(t)
+	got := suggestInserts(suggestFor(t, x, x.Owner, "repo:"))
+	if !slices.Contains(got, "repo:x/shell") || !slices.Contains(got, "repo:x/hidden") || slices.Contains(got, "repo:shell") {
+		t.Fatalf("repo: offers %v, want owner/name", got)
+	}
+	seen := map[string]bool{}
+	for _, v := range got {
+		if seen[v] {
+			t.Errorf("repo: offers %s twice", v)
+		}
+		seen[v] = true
+	}
+	if got := suggestInserts(suggestFor(t, x, x.Member, "repo:")); slices.Contains(got, "repo:x/hidden") {
+		t.Errorf("the member is offered a repository they cannot read: %v", got)
+	}
+	// What is offered, taken over into the search, finds rows of that repository.
+	for repo, term := range map[string]string{"repo:x/shell": "exactfind", "repo:x/hidden": "SECRET"} {
+		_, page := fetchPage(t, x.Owner, x.Base+"/ui/search?q="+url.QueryEscape(repo+" "+term))
+		if !strings.Contains(page, term) || strings.Contains(page, "No matches.") {
+			t.Errorf("%s %s finds nothing:\n%.600s", repo, term, page)
+		}
+	}
+	_, page := fetchPage(t, x.Owner, x.Base+"/ui/search?q="+url.QueryEscape("repo:shell exactfind"))
+	if strings.Contains(page, requestURL(x.N)) {
+		t.Error("the last segment alone is read as a repository that holds the rows")
+	}
+	_, page = fetchPage(t, x.Owner, x.Base+"/ui/search?q="+url.QueryEscape("repo:x/shell exactfind"))
+	if !strings.Contains(page, requestURL(x.N)) {
+		t.Errorf("repo:x/shell exactfind lacks the request:\n%.600s", page)
+	}
+}
+
+// With a repository on the page a guest is who does not see all its branches
+// there, as in the search line: a member of one repository who is a guest in the
+// other is offered no branch: in the other.
+func TestSuggestGuestRuleFollowsTheRepositoryOfThePage(t *testing.T) {
+	x := seedExact(t)
+	if err := x.St.SetProjectRole("person:1", shellHiddenProject, "person:2", store.RoleGuest, false, store.RoleViaCLI); err != nil {
+		t.Fatal(err)
+	}
+	if got := suggestInserts(suggestFor(t, x, x.Member, "br", "project="+url.QueryEscape(shellProject))); !slices.Equal(got, []string{"branch:"}) {
+		t.Errorf("a member on the repository they work in: %v", got)
+	}
+	for _, q := range []string{"br", "pack", "branch:"} {
+		if got := suggestInserts(suggestFor(t, x, x.Member, q, "project="+url.QueryEscape(shellHiddenProject))); len(got) != 0 {
+			t.Errorf("%q: a guest of the page's repository is offered %v", q, got)
+		}
+	}
+	// Without a repository the highest role counts: a member.
+	if got := suggestInserts(suggestFor(t, x, x.Member, "br")); !slices.Equal(got, []string{"branch:"}) {
+		t.Errorf("without a repository: %v", got)
+	}
+}
+
+// Words inside a phrase that is still open are text, a value with a comma is
+// written in quotes so that the search reads it as one value, and the package
+// values come from the lean list.
+func TestSuggestOpenPhraseCommaValuesAndPackages(t *testing.T) {
+	x := seedExact(t)
+	for _, q := range []string{`"hello is:`, `deploy "the is:o`, `"a b" "c kind:`} {
+		if got := suggestInserts(suggestFor(t, x, x.Owner, q)); len(got) != 0 {
+			t.Errorf("%q inside an open phrase offers %v", q, got)
+		}
+	}
+	if got := suggestInserts(suggestFor(t, x, x.Owner, `"hello" is:o`)); !slices.Equal(got, []string{"is:open"}) {
+		t.Errorf("after a closed phrase: %v", got)
+	}
+	res, err := x.St.RecordPullRequest(store.PullRequestChange{InstallationID: 77, Remote: shellProject, HeadRemote: shellProject, Number: x.N + 500, Action: "opened",
+		Title: "comma branch", Head: "feat/a,b", Base: "main", State: "open", Author: "alice-gh"})
+	if err != nil || !res.Applied {
+		t.Fatalf("record pull: %+v %v", res, err)
+	}
+	got := suggestInserts(suggestFor(t, x, x.Owner, "branch:", "project="+url.QueryEscape(shellProject)))
+	if !slices.Contains(got, `branch:"feat/a,b"`) {
+		t.Errorf("a branch with a comma is not quoted: %v", got)
+	}
+	q, err := query.Parse(`branch:"feat/a,b"`, overviewNow())
+	if err != nil || len(q.Values("branch")) != 1 {
+		t.Errorf("the search reads the quoted value as %v, %v", q.Values("branch"), err)
+	}
+}
+
+// A number that names something hidden is answered byte for byte as a number that
+// names nothing: only the typed text itself may differ.
+func TestSuggestHiddenAndMissingAreByteEqual(t *testing.T) {
+	x := seedExact(t)
+	norm := func(body, q string) string {
+		body = strings.ReplaceAll(body, html.EscapeString(q), "Q")
+		return strings.ReplaceAll(body, url.QueryEscape(q), "Q")
+	}
+	for _, tc := range []struct{ hidden, missing string }{
+		{"REQ-" + itoa(x.HiddenReq), "REQ-900001"},
+		{"#" + itoa(x.HiddenReq), "#900001"},
+		{"IDEA-" + itoa(x.HiddenIdea), "IDEA-900001"},
+		{"pr:99", "pr:900001"},
+	} {
+		for name, c := range map[string]*http.Client{"member": x.Member, "guest": x.Guest} {
+			h, m := norm(suggestFor(t, x, c, tc.hidden), tc.hidden), norm(suggestFor(t, x, c, tc.missing), tc.missing)
+			if h != m {
+				t.Errorf("%s: %q (hidden) and %q (missing) are answered differently:\n%s\n---\n%s", name, tc.hidden, tc.missing, h, m)
+			}
+		}
 	}
 }

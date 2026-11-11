@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -224,5 +225,62 @@ func TestInboxHasOnlyWhatWaitsAndWhatWasSaidAndOldSayingsFallOut(t *testing.T) {
 	_, late := fetchPage(t, e.Member, e.Base+"/ui/inbox")
 	if strings.Contains(late, "A note from the past") {
 		t.Error("a message nobody read for more than two weeks is still in the inbox")
+	}
+}
+
+// What fell out of the two weeks is gone before the inbox counts or decides that
+// it is empty: with nothing else waiting the page says so in one line (and not
+// "nothing matches this filter" without a filter), and the chips count only the
+// rows that are still there.
+func TestInboxDropsOldSayingsBeforeEmptyAndCounts(t *testing.T) {
+	e := ovEnv(t)
+	room, alice := inboxDM(t, e)
+	if _, err := alice.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "dm-old", Body: "Long forgotten note"}); err != nil {
+		t.Fatal(err)
+	}
+	atNow(t, time.Now().Add((inboxMentionDays+2)*24*time.Hour))
+	for _, path := range []string{"/ui/inbox", "/ui/inbox?f=direkt"} {
+		_, page := fetchPage(t, e.Member, e.Base+path)
+		if !strings.Contains(page, `class="box-empty"`) || !strings.Contains(page, "Nothing is waiting for you.") {
+			t.Errorf("%s: everything is older than two weeks, the page does not say that nothing waits:\n%s", path, page)
+		}
+		if strings.Contains(page, "Nothing matches this filter.") || strings.Contains(page, "Long forgotten note") {
+			t.Errorf("%s: dead end or old row on the page", path)
+		}
+	}
+
+	req := rqMake(t, e.St, rqSpec{Title: "Ship it"})
+	tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "Something waits"})
+	_, page := fetchPage(t, e.Member, e.Base+"/ui/inbox")
+	for key, n := range map[string]string{"alle": "1", "direkt": "0", "aufgaben": "1"} {
+		if !regexp.MustCompile(`data-f="` + key + `"[^>]*>[^<]*<span class="counter">` + n + `</span>`).MatchString(page) {
+			t.Errorf("the chip %q does not count %s row(s) after the old message fell out:\n%s", key, n, page)
+		}
+	}
+	if strings.Contains(page, "Nothing is waiting for you.") || strings.Contains(page, `id="mentioned"`) {
+		t.Error("the page still has the section of old sayings or says nothing waits")
+	}
+}
+
+// A question that waits for an answer stays however old it is, and the section
+// of what was said to the person carries the matching name.
+func TestInboxKeepsOldQuestionsAndNamesTheSection(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-(inboxMentionDays + 5) * 24 * time.Hour)
+	rows := inboxRecent([]inboxRow{
+		{Title: "old chat", at: old, Cats: []string{"direkt"}},
+		{Title: "old question", at: old, Cats: []string{"fragen"}},
+		{Title: "fresh chat", at: now, Cats: []string{"direkt"}},
+		{Title: "no time"},
+	}, now)
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.Title)
+	}
+	if strings.Join(got, ",") != "old question,fresh chat,no time" {
+		t.Errorf("inboxRecent keeps %v", got)
+	}
+	if messagesDE["inbox.mentioned"] != "An dich gerichtet" || messages["inbox.mentioned"] != "Said to you" {
+		t.Errorf("section names: %q / %q", messagesDE["inbox.mentioned"], messages["inbox.mentioned"])
 	}
 }

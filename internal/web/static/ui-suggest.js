@@ -47,6 +47,12 @@
     let seq = 0;
     let timer = 0;
     let active = -1;
+    // The request that is on its way; a newer one (or leaving the field) cancels it.
+    let pending = null;
+    const cancel = () => {
+      if (pending) pending.abort();
+      pending = null;
+    };
     const rows = () => Array.from(list.querySelectorAll("li.sg"));
     const close = () => {
       list.hidden = true;
@@ -71,6 +77,7 @@
     };
     const ask = () => {
       const mine = ++seq;
+      cancel();
       if (!input.value.trim()) {
         close();
         return;
@@ -78,10 +85,16 @@
       const u = new URL(input.dataset.suggest, location.href);
       u.searchParams.set("q", input.value);
       if (input.dataset.suggestProject) u.searchParams.set("project", input.dataset.suggestProject);
-      fetch(u.pathname + u.search, { credentials: "same-origin", headers: { Accept: "text/html" } })
-        .then((res) => (res.ok ? res.text() : ""))
+      const ctl = window.AbortController ? new AbortController() : null;
+      pending = ctl;
+      const init = { credentials: "same-origin", headers: { Accept: "text/html" } };
+      if (ctl) init.signal = ctl.signal;
+      fetch(u.pathname + u.search, init)
+        // A redirect (to the login page) or a whole page is not a list of rows.
+        .then((res) => (res.ok && !res.redirected ? res.text() : ""))
+        .then((html) => (/<(?:!doctype|html|body)\b/i.test(html) ? "" : html))
         .then((html) => { if (mine === seq && document.activeElement === input) show(html); })
-        .catch(() => { if (mine === seq) close(); });
+        .catch((err) => { if (mine === seq && !(err && err.name === "AbortError")) close(); });
     };
     // A qualifier row replaces the word at the end of the line; a key leaves the
     // colon open for its value, a value ends the word.
@@ -105,8 +118,10 @@
       clearTimeout(timer);
       timer = setTimeout(ask, 120);
     });
-    input.addEventListener("blur", () => { seq++; close(); });
+    input.addEventListener("blur", () => { seq++; cancel(); clearTimeout(timer); close(); });
     input.addEventListener("keydown", (event) => {
+      // Enter and Tab that confirm a composition (an input method) are not ours.
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         if (list.hidden) {

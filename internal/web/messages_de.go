@@ -1120,7 +1120,7 @@ var messagesDE = map[string]string{
 	"shell.theme":                   "Hell oder Dunkel",
 	"inbox.title":                   "Posteingang",
 	"inbox.waiting":                 "Wartet auf dich",
-	"inbox.mentioned":               "Erwähnt",
+	"inbox.mentioned":               "An dich gerichtet",
 	"inbox.none":                    "Nichts offen.",
 	"inbox.empty":                   "Nichts wartet auf dich.",
 	"inbox.act.done":                "Erledigt: verschwindet aus dem Posteingang",

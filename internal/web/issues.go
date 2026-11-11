@@ -412,7 +412,7 @@ func (a *app) issueMenus(l lang, pa *store.ProjectAccess, project, q string, iq 
 				menus = append(menus, m)
 			}
 		}
-		if m, ok := packageMenu(l, q, iq.Package, packageChoices(pa, project), func(p requestdomain.PackageSummary) bool { return p.State == requestdomain.PackageOpen }, href); ok {
+		if m, ok := packageMenu(l, q, iq.Package, packageChoices(pa, project), func(p requestdomain.Package) bool { return p.State == requestdomain.PackageOpen }, href); ok {
 			menus = append(menus, m)
 		}
 	case segPain:

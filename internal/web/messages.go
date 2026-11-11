@@ -1119,7 +1119,7 @@ var messages = map[string]string{
 	"shell.theme":                   "Light or dark",
 	"inbox.title":                   "Inbox",
 	"inbox.waiting":                 "Waiting for you",
-	"inbox.mentioned":               "Mentioned",
+	"inbox.mentioned":               "Said to you",
 	"inbox.none":                    "Nothing here.",
 	"inbox.empty":                   "Nothing is waiting for you.",
 	"inbox.act.done":                "Done: leaves the inbox",

@@ -370,7 +370,7 @@ func (a *app) pullsPage(w http.ResponseWriter, r *http.Request) {
 	tab("merge", "pulls.tab.merged", counts.Merged, store.PullMerged, true)
 	tab("drop", "pulls.tab.closed", counts.Closed, store.PullClosed, counts.Closed > 0 || pq.State == store.PullClosed)
 	v.Menus = a.pullMenus(l, pa, project, shown, pq, href, visible)
-	if m, ok := packageMenu(l, shown, pq.Package, packages, func(p requestdomain.PackageSummary) bool { return p.PR > 0 }, href); ok {
+	if m, ok := packageMenu(l, shown, pq.Package, packages, func(p requestdomain.Package) bool { return p.PR > 0 }, href); ok {
 		v.Menus = append(v.Menus, m)
 	}
 	filtered := q != "" && q != pullDefaultQuery

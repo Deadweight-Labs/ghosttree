@@ -77,7 +77,23 @@ func TestBlockerIsNotShownWhereNothingWaitsOrTheViewerMayNotSee(t *testing.T) {
 		t.Error("a stack of nobody")
 	}
 	e = blockedEnv(t)
-	if _, page := fetchPage(t, e.Guest, e.Base+"/ui/x/shell"); strings.Contains(page, "anna") {
-		t.Error("a guest is told who is waited for")
+	// The task is assigned to anna: a guest may not list it, so on no page of the
+	// repository the guest is told who waits, neither as a picture nor by name nor
+	// by the title of the task, and the band has no link to the tasks.
+	for _, path := range []string{"", "/issues", "/pulls", "/branches", "/tasks"} {
+		_, page := fetchPage(t, e.Guest, e.Base+"/ui/x/shell"+path)
+		for _, leak := range []string{"band-wait", `class="waits`, "aria-label=\"anna", "Approve the plan"} {
+			if strings.Contains(page, leak) {
+				t.Errorf("%q: a guest is told who is waited for (%s)", path, leak)
+			}
+		}
+		if waitsForAnna.MatchString(page) {
+			t.Errorf("%q: a guest sees the stack of anna", path)
+		}
+	}
+	// A member who is not the one waited for sees the stack, so the guest's page is
+	// empty because of the rights and not because nothing is drawn at all.
+	if _, page := fetchPage(t, e.Member, e.Base+"/ui/x/shell"); !waitsForAnna.MatchString(page) {
+		t.Error("the member does not see who is waited for either; the guest check proves nothing")
 	}
 }

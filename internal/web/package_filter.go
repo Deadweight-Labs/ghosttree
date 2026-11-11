@@ -12,7 +12,7 @@ import (
 // package:PKG-7) in the search text narrows the issue list to the members of
 // package 7 and the pull request list to its pull request; the "Package"
 // dropdown of both lists writes that word into the same text. Which packages
-// there are is what ProjectAccess.PackagesOfProject lets the viewer list, so a
+// there are is what ProjectAccess.PackageChoices lets the viewer list, so a
 // number of another project or of a package the viewer may not see is as
 // unknown as one that does not exist, and a name hidden from a guest stays
 // hidden (packageName).
@@ -30,9 +30,10 @@ func parsePackageTerm(val string) (int64, bool) {
 	return n, err == nil && n > 0
 }
 
-// packageChoices are the packages of the project the viewer may list.
-func packageChoices(pa *store.ProjectAccess, project string) []requestdomain.PackageSummary {
-	list, err := pa.PackagesOfProject(project, "")
+// packageChoices are the packages of the project the viewer may list: the lean
+// list (number, name, state, pull request), not the one with counts.
+func packageChoices(pa *store.ProjectAccess, project string) []requestdomain.Package {
+	list, err := pa.PackageChoices(project, "")
 	if err != nil {
 		return nil
 	}
@@ -40,13 +41,13 @@ func packageChoices(pa *store.ProjectAccess, project string) []requestdomain.Pac
 }
 
 // packageNumbered finds a package by its number among the ones the viewer may list.
-func packageNumbered(list []requestdomain.PackageSummary, n int64) (requestdomain.PackageSummary, bool) {
+func packageNumbered(list []requestdomain.Package, n int64) (requestdomain.Package, bool) {
 	for _, p := range list {
 		if p.ID == n {
 			return p, true
 		}
 	}
-	return requestdomain.PackageSummary{}, false
+	return requestdomain.Package{}, false
 }
 
 // packageMembers are the requests of the package the viewer may list; none when
@@ -67,13 +68,13 @@ func (a *app) packageMembers(pa *store.ProjectAccess, project string, n int64) m
 // packageMenu is the dropdown "Package" of a list: every package that keep
 // admits, the newest first, and the one the list is narrowed to even when keep
 // does not admit it. The entries are links that write package:N into the text.
-func packageMenu(l lang, q string, current int64, list []requestdomain.PackageSummary, keep func(requestdomain.PackageSummary) bool, href func(string) string) (issueMenu, bool) {
+func packageMenu(l lang, q string, current int64, list []requestdomain.Package, keep func(requestdomain.Package) bool, href func(string) string) (issueMenu, bool) {
 	var items []issueMenuItem
 	for _, p := range list {
 		if p.ID != current && (len(items) >= packageMenuMax || !keep(p)) {
 			continue
 		}
-		items = append(items, issueMenuItem{Label: "#" + strconv.FormatInt(p.ID, 10) + " " + packageName(l, p.Package),
+		items = append(items, issueMenuItem{Label: "#" + strconv.FormatInt(p.ID, 10) + " " + packageName(l, p),
 			Href: href(withQualifier(q, dropKey("package"), "package:"+strconv.FormatInt(p.ID, 10))), Current: p.ID == current})
 	}
 	if len(items) == 0 {
