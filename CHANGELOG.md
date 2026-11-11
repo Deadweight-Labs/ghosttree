@@ -516,7 +516,9 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - `ctx knowledge triage` lists machine and global entries for review without
   changing them: those that arose in exactly one project (probably project
   knowledge about a host, to be filed with `ctx knowledge move`), and those
-  nobody picked up on a prompt word or a search for 90 days. `ctx knowledge
+  nobody picked up on a prompt word or a search for 90 days. The second list
+  rests on the delivery log and is left out, with a note, until the log reaches
+  back 90 days; binding instructions are never on it. `ctx knowledge
   everywhere <id>` flags an entry as holding in every project
   (`PUT /api/knowledge/{id}/everywhere`, `GET /api/knowledge-triage`).
 
@@ -898,11 +900,19 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   a tie, and the closing line counts what was left out. A word in a prompt still
   delivers it and the search finds it. A search in a project returns at most a
   quarter of its hits (5 of 20) from machine and global knowledge while there
-  are enough project hits; across projects (`all_projects`) and with qualifiers
-  the search is unchanged. Binding instructions are not affected.
+  are enough project hits, also with qualifiers; across projects
+  (`all_projects`) the search is unchanged. Binding instructions are not
+  affected. After the rollout run `ctx knowledge triage` and flag machine and
+  safety rules with `ctx knowledge everywhere <id>` (see the deploy guide).
 
 ### Fixed
 
+- Uploading a session a second time failed with a UNIQUE violation as soon as a
+  machine or global entry was tied to its project (the triggers of the project
+  tie used `INSERT OR IGNORE`, which the `ON CONFLICT DO UPDATE` of the session
+  upsert overrules). The triggers now use `ON CONFLICT DO NOTHING`, fire on a
+  session only when its project changes, and cost about 45 µs instead of 2.6 ms
+  per session write on an archive of 20,000 sessions.
 - `ctx coord peers`, `inbox` and `rooms` only read: in a repository whose
   remote the server does not know as a project they no longer join its room
   (which bound the `cli:<machine>` identity to that room and made every other

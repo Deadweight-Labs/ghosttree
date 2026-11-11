@@ -600,6 +600,30 @@ Do not recreate or rehash historical snapshots to make them appear to carry
 the newer guarantee. Unsupported future schemas and actual corruption remain
 errors, rather than being silently omitted from listings.
 
+### Project tie of broad knowledge (REQ-641): step after the rollout
+
+The first start of a binary with the project tie creates
+`knowledge_project_affinity`, the column `knowledge.everywhere` and the triggers,
+and builds the table from the stock in the same transaction (an aborted build
+leaves no table, the next start builds again). `ctx upgrade-schema` carries the
+column through its table rebuilds.
+
+After the rollout one step is manual, once per installation:
+
+1. Run `ctx knowledge triage`. It changes nothing. The list "move" names machine
+   entries that arose in exactly one project. The list "unused" appears only
+   once the delivery log reaches back 90 days; before that the command says how
+   many days the log covers.
+2. Flag machine and safety rules that hold in every project, for example the
+   Nightwatch and research rules, with `ctx knowledge everywhere <id>`. Without
+   the flag the start-up briefing carries a machine or global entry only when it
+   arose or was evidenced in the project of the session. Binding instructions
+   need no flag. `ctx knowledge everywhere <id> --off` takes it back.
+
+Until then nothing is lost: the entries are still found by the search and
+delivered on a word of a prompt. They only stay out of the briefing of a project
+they have no tie to.
+
 ## Session distillation
 
 Distillation is a separate timer because it calls a model provider and may cost

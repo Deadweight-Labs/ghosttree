@@ -523,6 +523,7 @@ var writerMethodClasses = map[string]string{
 	"RebuildProjectAffinity":        "write",
 	"TiedBroadKnowledge":            "read",
 	"BroadTriage":                   "read",
+	"TriageLogDays":                 "read",
 	"GardenerAccountID":             "read",
 	"GardenerAccount":               "read",
 	"SetGardenerAccount":            "write",

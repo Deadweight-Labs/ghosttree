@@ -1,6 +1,8 @@
 package store
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -207,6 +209,8 @@ func TestBroadTriage(t *testing.T) {
 		affHere, deliverylog.ViaRelevance, deliverylog.KindKnowledge, picked, recent); err != nil {
 		t.Fatal(err)
 	}
+	// The log reaches back further than the period, so the list can be judged.
+	logSince(t, s, 100)
 
 	items, err := s.BroadTriage("", time.Now(), 50, nil)
 	if err != nil {
@@ -240,5 +244,222 @@ func TestBroadTriage(t *testing.T) {
 		if it.Kind == TriageMove {
 			t.Errorf("entry %d proposed for a move to %s, but arose in one other project", it.Knowledge.ID, affOther)
 		}
+	}
+}
+
+// REQ-641 review, blocker: the collector calls UpsertSession on every upload. The
+// triggers on sessions write with INSERT OR IGNORE, but the DO UPDATE branch of
+// the upsert runs with ABORT and overrules it, so the second upload of a session
+// that already had a row failed with a UNIQUE violation, for good.
+func TestUpsertSessionTwiceAfterABroadEntryTiedIt(t *testing.T) {
+	s := affinityStore(t)
+	affSession(t, s, "s-here", affHere)
+	id := affEntry(t, s, "arose here", "s-here")
+	if !tied(t, s, affHere)[id] {
+		t.Fatal("test setup: the entry has no tie yet")
+	}
+	// The same upload again, as the collector does it, several times.
+	for i := 0; i < 3; i++ {
+		if _, err := s.UpsertSession(Session{Harness: "claude", ExternalID: "s-here", Scope: scope.Axes{Project: affHere, Machine: "m1"}}); err != nil {
+			t.Fatalf("upload %d of a session with a tie: %v", i+2, err)
+		}
+	}
+	// And a session that moves to another project and back lands on the row it
+	// already has.
+	for _, p := range []string{affOther, affHere} {
+		if _, err := s.UpsertSession(Session{Harness: "claude", ExternalID: "s-here", Scope: scope.Axes{Project: p, Machine: "m1"}}); err != nil {
+			t.Fatalf("move to %s: %v", p, err)
+		}
+	}
+	if got := tied(t, s, affHere); !got[id] {
+		t.Errorf("the tie to here is gone: %v", got)
+	}
+	if got := tied(t, s, affOther); !got[id] {
+		t.Errorf("the session was in other for a while and tied the entry there: %v", got)
+	}
+}
+
+// The same cause on evidence. A plain INSERT lets the OR IGNORE of the trigger
+// stand (measured), but a statement with its own conflict clause (OR ABORT, OR
+// FAIL) overrules it and fails on the second chunk of a session that already
+// backs the entry. Plain inserts, the idempotent form of AddEvidence and the
+// explicit forms must all work.
+func TestEvidenceInsertedRepeatedlyForOneSession(t *testing.T) {
+	forms := map[string]string{
+		"plain":      `INSERT INTO knowledge_evidence(knowledge_id,session_id,chunk_seq,quote) VALUES(?,?,?,'q')`,
+		"or ignore":  `INSERT OR IGNORE INTO knowledge_evidence(knowledge_id,session_id,chunk_seq,quote) VALUES(?,?,?,'q')`,
+		"do nothing": `INSERT INTO knowledge_evidence(knowledge_id,session_id,chunk_seq,quote) VALUES(?,?,?,'q') ON CONFLICT DO NOTHING`,
+		"or abort":   `INSERT OR ABORT INTO knowledge_evidence(knowledge_id,session_id,chunk_seq,quote) VALUES(?,?,?,'q')`,
+		"or fail":    `INSERT OR FAIL INTO knowledge_evidence(knowledge_id,session_id,chunk_seq,quote) VALUES(?,?,?,'q')`,
+	}
+	for name, q := range forms {
+		t.Run(name, func(t *testing.T) {
+			s := affinityStore(t)
+			sess := affSession(t, s, "s-ev", affHere)
+			id := affEntry(t, s, "distilled", "")
+			for seq := 1; seq <= 3; seq++ {
+				if _, err := s.db.Exec(q, id, sess, seq); err != nil {
+					t.Fatalf("chunk %d: %v", seq, err)
+				}
+			}
+			if !tied(t, s, affHere)[id] {
+				t.Error("evidence did not tie the entry")
+			}
+			if n := logCount(t, s, `SELECT COUNT(*) FROM knowledge_project_affinity WHERE knowledge_id=`+strconv.FormatInt(id, 10)); n != 1 {
+				t.Errorf("%d affinity rows for the entry, want 1", n)
+			}
+		})
+	}
+	// The public path.
+	s := affinityStore(t)
+	sess := affSession(t, s, "s-ev", affHere)
+	id := affEntry(t, s, "distilled", "")
+	for i := 0; i < 2; i++ {
+		if err := s.AddEvidence(id, []Evidence{{SessionID: sess, ChunkSeq: 1, Quote: "q"}, {SessionID: sess, ChunkSeq: 2, Quote: "q"}}); err != nil {
+			t.Fatalf("AddEvidence %d: %v", i, err)
+		}
+	}
+}
+
+// logSince writes a delivery of an unrelated object that many days ago, so the
+// log reaches back that far.
+func logSince(t *testing.T, s *Store, days int) {
+	t.Helper()
+	at := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
+	if _, err := s.db.Exec(`INSERT INTO context_delivery_log(session_key,project,via,kind,object_id,delivered_at) VALUES('old',?,?,?,?,?)`,
+		affHere, deliverylog.ViaBootstrap, deliverylog.KindKnowledge, 999999, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func unusedIDs(t *testing.T, s *Store) map[int64]bool {
+	t.Helper()
+	items, err := s.BroadTriage("", time.Now(), 50, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[int64]bool{}
+	for _, it := range items {
+		if it.Kind == TriageUnused {
+			out[it.Knowledge.ID] = true
+		}
+	}
+	return out
+}
+
+// REQ-641 review, major 2: the delivery log exists only for a short time, so an
+// entry it has never been able to show is not "unused for 90 days". While the log
+// is younger than the period the list is left out; binding instructions are never
+// on it.
+func TestTriageUnusedWaitsForTheDeliveryLog(t *testing.T) {
+	s := affinityStore(t)
+	stale := affEntry(t, s, "never picked up", "")
+	instr, err := s.InsertKnowledge(Knowledge{Type: "instruction", Title: "binding rule", Body: "b", Scope: scope.Axes{Machine: "m1"}, Person: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().AddDate(0, 0, -200).Format(time.RFC3339)
+	for _, id := range []int64{stale, instr} {
+		if _, err := s.db.Exec(`UPDATE knowledge SET created_at=? WHERE id=?`, old, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// No log at all, then a log of three days: nothing can be judged.
+	if got := unusedIDs(t, s); len(got) != 0 {
+		t.Fatalf("empty log: unused list %v, want none", got)
+	}
+	if d, err := s.TriageLogDays(time.Now()); err != nil || d != 0 {
+		t.Fatalf("empty log reaches back %d days (%v), want 0", d, err)
+	}
+	logSince(t, s, 3)
+	if got := unusedIDs(t, s); len(got) != 0 {
+		t.Fatalf("log of 3 days: unused list %v, want none", got)
+	}
+	if d, _ := s.TriageLogDays(time.Now()); d != 3 {
+		t.Errorf("log reaches back %d days, want 3", d)
+	}
+
+	// A log that covers the period: the entry is listed, the instruction is not.
+	logSince(t, s, TriageUnusedDays+1)
+	got := unusedIDs(t, s)
+	if !got[stale] {
+		t.Errorf("entry %d not listed although the log covers %d days: %v", stale, TriageUnusedDays, got)
+	}
+	if got[instr] {
+		t.Errorf("binding instruction %d is on the unused list", instr)
+	}
+	// The move proposals do not depend on the log.
+	if _, err := s.db.Exec(`DELETE FROM context_delivery_log`); err != nil {
+		t.Fatal(err)
+	}
+	affSession(t, s, "s-here", affHere)
+	one := affEntry(t, s, "one project of origin", "s-here")
+	items, err := s.BroadTriage("", time.Now(), 50, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, it := range items {
+		found = found || (it.Kind == TriageMove && it.Knowledge.ID == one)
+	}
+	if !found {
+		t.Errorf("the move proposal for %d vanished with the log", one)
+	}
+}
+
+// REQ-641 review, minor 3: schema and first build are one transaction. A build
+// that breaks leaves no table behind, so the next start builds again instead of
+// trusting an empty table.
+func TestAffinityFirstBuildIsAtomic(t *testing.T) {
+	s := affinityStore(t)
+	affSession(t, s, "s-here", affHere)
+	id := affEntry(t, s, "arose here", "s-here")
+	for _, q := range []string{`DROP TABLE knowledge_project_affinity`, `DROP TABLE knowledge_evidence`} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ensureProjectAffinity(s.db); err == nil {
+		t.Fatal("the build ran although a table it reads is gone")
+	}
+	if n := logCount(t, s, `SELECT COUNT(*) FROM sqlite_master WHERE name='knowledge_project_affinity'`); n != 0 {
+		t.Fatalf("a failed first build left the table behind (%d), the next start would take it for built", n)
+	}
+	if _, err := s.db.Exec(`CREATE TABLE knowledge_evidence(
+		id INTEGER PRIMARY KEY,
+		knowledge_id INTEGER NOT NULL REFERENCES knowledge(id),
+		session_id INTEGER NOT NULL REFERENCES sessions(id),
+		chunk_seq INTEGER NOT NULL,
+		quote TEXT NOT NULL DEFAULT '',
+		UNIQUE(knowledge_id, session_id, chunk_seq))`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureProjectAffinity(s.db); err != nil {
+		t.Fatal(err)
+	}
+	if !tied(t, s, affHere)[id] {
+		t.Error("the second start did not build the ties from the stock")
+	}
+}
+
+// A database that already ran the first version of the triggers (INSERT OR
+// IGNORE) gets the fixed ones on the next start.
+func TestAffinityTriggersAreReplacedOnStart(t *testing.T) {
+	s := affinityStore(t)
+	if _, err := s.db.Exec(`DROP TRIGGER knowledge_affinity_session_update;
+		CREATE TRIGGER knowledge_affinity_session_update AFTER UPDATE OF project ON sessions WHEN NEW.project != ''
+		BEGIN INSERT OR IGNORE INTO knowledge_project_affinity(knowledge_id, project, source) SELECT 1, 'x', 'origin'; END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureProjectAffinity(s.db); err != nil {
+		t.Fatal(err)
+	}
+	var sqlText string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name='knowledge_affinity_session_update'`).Scan(&sqlText); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(sqlText, "OR IGNORE") || !strings.Contains(sqlText, "ON CONFLICT DO NOTHING") {
+		t.Errorf("the old trigger stayed: %s", sqlText)
 	}
 }

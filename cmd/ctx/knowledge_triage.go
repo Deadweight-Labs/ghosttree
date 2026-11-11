@@ -22,6 +22,9 @@ decides what to do with each line.
           machine with 'ctx knowledge add --machine' next time).
   unused  not delivered on a word of a prompt for 90 days and never found by a
           search: keep it, retire it, or flag it with 'ctx knowledge everywhere'.
+          Binding instructions are not listed. The list rests on the delivery
+          log; until the log reaches back 90 days it is left out and the
+          command says so.
 
   --project P  only the entries that arose in this project (default: all)
   --limit N    at most N lines (default 50)`
@@ -48,16 +51,17 @@ func cmdKnowledgeTriage(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "no config (%s) - run 'ctx setup'\n", config.Path())
 		return 1
 	}
-	items, err := client.New(cfg).KnowledgeTriage(scope.NormalizeRemote(*project), *limit)
+	report, err := client.New(cfg).KnowledgeTriage(scope.NormalizeRemote(*project), *limit)
 	if err != nil {
 		fmt.Fprintf(stdout, "triage: %v\n", err)
 		return 1
 	}
-	printTriage(stdout, items)
+	printTriage(stdout, report)
 	return 0
 }
 
-func printTriage(stdout io.Writer, items []client.TriageEntry) {
+func printTriage(stdout io.Writer, report client.TriageReport) {
+	items := report.Items
 	groups := []struct {
 		kind  store.TriageKind
 		title string
@@ -89,7 +93,10 @@ func printTriage(stdout io.Writer, items []client.TriageEntry) {
 			fmt.Fprintln(stdout)
 		}
 	}
-	if len(items) == 0 {
+	if report.UnusedSkipped {
+		fmt.Fprintf(stdout, "not picked up for %d days: not judged yet, the delivery log reaches back only %d days\n", store.TriageUnusedDays, report.LogDays)
+	}
+	if len(items) == 0 && !report.UnusedSkipped {
 		fmt.Fprintln(stdout, "nothing to review")
 	}
 }

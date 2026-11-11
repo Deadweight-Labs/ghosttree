@@ -659,10 +659,19 @@ type TriageEntry struct {
 	Deliveries int              `json:"deliveries,omitempty"`
 }
 
+// TriageReport is the answer of the review. UnusedSkipped is set when the list
+// of entries nobody picked up is missing because the delivery log reaches back
+// only LogDays days (an older server leaves both fields out).
+type TriageReport struct {
+	Items         []TriageEntry `json:"items"`
+	UnusedSkipped bool          `json:"unused_skipped,omitempty"`
+	LogDays       int           `json:"log_days,omitempty"`
+}
+
 // KnowledgeTriage lists machine and global entries for review: those that arose
 // in exactly one project, and those nobody has picked up for 90 days. It changes
 // nothing.
-func (c *Client) KnowledgeTriage(project string, limit int) ([]TriageEntry, error) {
+func (c *Client) KnowledgeTriage(project string, limit int) (TriageReport, error) {
 	q := url.Values{}
 	if project != "" {
 		q.Set("project", project)
@@ -670,11 +679,9 @@ func (c *Client) KnowledgeTriage(project string, limit int) ([]TriageEntry, erro
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
 	}
-	var out struct {
-		Items []TriageEntry `json:"items"`
-	}
+	var out TriageReport
 	err := c.do("GET", "/api/knowledge-triage", q, nil, &out)
-	return out.Items, err
+	return out, err
 }
 
 // KnowledgeByID fetches one entry with its body intact, for the case where

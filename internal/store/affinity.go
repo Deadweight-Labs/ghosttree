@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sort"
@@ -44,55 +45,68 @@ CREATE TABLE IF NOT EXISTS knowledge_project_affinity(
 CREATE INDEX IF NOT EXISTS knowledge_project_affinity_project ON knowledge_project_affinity(project, knowledge_id);
 CREATE INDEX IF NOT EXISTS origin_contexts_session ON origin_contexts(session_ref) WHERE session_ref != '';
 CREATE INDEX IF NOT EXISTS knowledge_broad_session ON knowledge(session_ref) WHERE project = '' AND session_ref != '';
+CREATE INDEX IF NOT EXISTS knowledge_evidence_session ON knowledge_evidence(session_id);
 
-CREATE TRIGGER IF NOT EXISTS knowledge_affinity_evidence AFTER INSERT ON knowledge_evidence
+CREATE TRIGGER knowledge_affinity_evidence AFTER INSERT ON knowledge_evidence
 BEGIN
-  INSERT OR IGNORE INTO knowledge_project_affinity(knowledge_id, project, source)
+  INSERT INTO knowledge_project_affinity(knowledge_id, project, source)
   SELECT NEW.knowledge_id, s.project, 'evidence' FROM sessions s
    WHERE s.id = NEW.session_id AND s.project != ''
-     AND EXISTS(SELECT 1 FROM knowledge k WHERE k.id = NEW.knowledge_id AND k.project = '');
+     AND EXISTS(SELECT 1 FROM knowledge k WHERE k.id = NEW.knowledge_id AND k.project = '')
+  ON CONFLICT DO NOTHING;
 END;
 
-CREATE TRIGGER IF NOT EXISTS knowledge_affinity_insert AFTER INSERT ON knowledge WHEN NEW.project = ''
+CREATE TRIGGER knowledge_affinity_insert AFTER INSERT ON knowledge WHEN NEW.project = ''
 BEGIN
-  INSERT OR IGNORE INTO knowledge_project_affinity(knowledge_id, project, source)
+  INSERT INTO knowledge_project_affinity(knowledge_id, project, source)
   SELECT NEW.id, s.project, 'origin' FROM sessions s
    WHERE s.project != '' AND s.external_id != ''
      AND (s.external_id = NEW.session_ref
-          OR s.external_id = (SELECT oc.session_ref FROM origin_contexts oc WHERE oc.id = NEW.origin_id));
+          OR s.external_id = (SELECT oc.session_ref FROM origin_contexts oc WHERE oc.id = NEW.origin_id))
+  ON CONFLICT DO NOTHING;
 END;
 
-CREATE TRIGGER IF NOT EXISTS knowledge_affinity_update AFTER UPDATE OF origin_id, session_ref, project ON knowledge WHEN NEW.project = ''
+CREATE TRIGGER knowledge_affinity_update AFTER UPDATE OF origin_id, session_ref, project ON knowledge WHEN NEW.project = ''
 BEGIN
-  INSERT OR IGNORE INTO knowledge_project_affinity(knowledge_id, project, source)
+  INSERT INTO knowledge_project_affinity(knowledge_id, project, source)
   SELECT NEW.id, s.project, 'origin' FROM sessions s
    WHERE s.project != '' AND s.external_id != ''
      AND (s.external_id = NEW.session_ref
-          OR s.external_id = (SELECT oc.session_ref FROM origin_contexts oc WHERE oc.id = NEW.origin_id));
+          OR s.external_id = (SELECT oc.session_ref FROM origin_contexts oc WHERE oc.id = NEW.origin_id))
+  ON CONFLICT DO NOTHING;
 END;
 
-CREATE TRIGGER IF NOT EXISTS knowledge_affinity_session_insert AFTER INSERT ON sessions WHEN NEW.project != ''
+-- A new session has no evidence yet (the rows point at its id, which did not
+-- exist), so only the entries that name its external id are looked up. Every
+-- predicate repeats "!= ''" so that the partial indexes above apply; the join
+-- starts at origin_contexts (a few rows per session) and reaches the entries
+-- through knowledge_origin.
+CREATE TRIGGER knowledge_affinity_session_insert AFTER INSERT ON sessions WHEN NEW.project != '' AND NEW.external_id != ''
 BEGIN
-  INSERT OR IGNORE INTO knowledge_project_affinity(knowledge_id, project, source)
-  SELECT k.id, NEW.project, 'origin' FROM knowledge k WHERE k.project = '' AND k.session_ref = NEW.external_id
+  INSERT INTO knowledge_project_affinity(knowledge_id, project, source)
+  SELECT k.id, NEW.project, 'origin' FROM knowledge k
+   WHERE k.project = '' AND k.session_ref != '' AND k.session_ref = NEW.external_id
   UNION
-  SELECT k.id, NEW.project, 'origin' FROM origin_contexts oc JOIN knowledge k ON k.origin_id = oc.id
-   WHERE oc.session_ref = NEW.external_id AND k.project = ''
-  UNION
-  SELECT e.knowledge_id, NEW.project, 'evidence' FROM knowledge_evidence e JOIN knowledge k ON k.id = e.knowledge_id
-   WHERE e.session_id = NEW.id AND k.project = '';
+  SELECT k.id, NEW.project, 'origin' FROM origin_contexts oc CROSS JOIN knowledge k ON k.origin_id = oc.id
+   WHERE oc.session_ref != '' AND oc.session_ref = NEW.external_id AND k.project = ''
+  ON CONFLICT DO NOTHING;
 END;
 
-CREATE TRIGGER IF NOT EXISTS knowledge_affinity_session_update AFTER UPDATE OF project ON sessions WHEN NEW.project != ''
+-- Only a change of the project can tie something new. The collector writes the
+-- session on every upload with the project it already has.
+CREATE TRIGGER knowledge_affinity_session_update AFTER UPDATE OF project ON sessions
+  WHEN NEW.project != '' AND NEW.project IS NOT OLD.project
 BEGIN
-  INSERT OR IGNORE INTO knowledge_project_affinity(knowledge_id, project, source)
-  SELECT k.id, NEW.project, 'origin' FROM knowledge k WHERE k.project = '' AND k.session_ref = NEW.external_id
+  INSERT INTO knowledge_project_affinity(knowledge_id, project, source)
+  SELECT k.id, NEW.project, 'origin' FROM knowledge k
+   WHERE k.project = '' AND k.session_ref != '' AND k.session_ref = NEW.external_id
   UNION
-  SELECT k.id, NEW.project, 'origin' FROM origin_contexts oc JOIN knowledge k ON k.origin_id = oc.id
-   WHERE oc.session_ref = NEW.external_id AND k.project = ''
+  SELECT k.id, NEW.project, 'origin' FROM origin_contexts oc CROSS JOIN knowledge k ON k.origin_id = oc.id
+   WHERE oc.session_ref != '' AND oc.session_ref = NEW.external_id AND k.project = ''
   UNION
   SELECT e.knowledge_id, NEW.project, 'evidence' FROM knowledge_evidence e JOIN knowledge k ON k.id = e.knowledge_id
-   WHERE e.session_id = NEW.id AND k.project = '';
+   WHERE e.session_id = NEW.id AND k.project = ''
+  ON CONFLICT DO NOTHING;
 END;
 `
 
@@ -112,26 +126,64 @@ SELECT e.knowledge_id, s.project, 'evidence' FROM knowledge_evidence e
   JOIN knowledge k ON k.id = e.knowledge_id JOIN sessions s ON s.id = e.session_id
  WHERE k.project = '' AND s.project != ''`
 
+// affinityTriggers sind die Trigger des Bezugs. ensureProjectAffinity legt sie
+// bei jedem Start neu an, damit eine ältere Fassung (INSERT OR IGNORE) nicht
+// stehen bleibt; die Umbauschritte in upgrade.go lassen die drei auf fremden
+// Tabellen fallen, bevor sie knowledge ersetzen.
+var affinityTriggers = []string{
+	"knowledge_affinity_evidence", "knowledge_affinity_insert", "knowledge_affinity_update",
+	"knowledge_affinity_session_insert", "knowledge_affinity_session_update",
+}
+
 // ensureProjectAffinity legt Tabelle, Spalte und Trigger additiv an, beliebig oft
 // aufrufbar. Beim ersten Mal baut es die Tabelle aus dem Bestand. Der Aufbau
 // läuft nur dann, wenn die Tabelle neu ist: später halten die Trigger sie
 // aktuell, und ein erneuter Aufbau (RebuildProjectAffinity) ist ein Befehl.
+//
+// Schema und Erstaufbau stehen in einer Transaktion: bricht der Aufbau ab, ist
+// auch die Tabelle weg, und der nächste Start baut neu. Ohne das bliebe eine
+// leere Tabelle zurück, die der nächste Start für fertig hielte, und jeder
+// breite Eintrag wäre ohne Bezug.
 func ensureProjectAffinity(db *sql.DB) error {
-	var existed int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='knowledge_project_affinity'`).Scan(&existed); err != nil {
-		return err
-	}
 	if err := ensureColumn(db, "knowledge", "everywhere", `INTEGER NOT NULL DEFAULT 0 CHECK(everywhere IN (0,1))`); err != nil {
 		return fmt.Errorf("knowledge.everywhere: %w", err)
 	}
-	if _, err := db.Exec(affinitySchema); err != nil {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+	var existed int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='knowledge_project_affinity'`).Scan(&existed); err != nil {
+		return err
+	}
+	for _, name := range affinityTriggers {
+		if _, err := conn.ExecContext(ctx, `DROP TRIGGER IF EXISTS `+name); err != nil {
+			return err
+		}
+	}
+	if _, err := conn.ExecContext(ctx, affinitySchema); err != nil {
 		return err
 	}
 	if existed == 0 {
-		if _, err := db.Exec(affinityBuild); err != nil {
+		if _, err := conn.ExecContext(ctx, affinityBuild); err != nil {
 			return fmt.Errorf("build knowledge_project_affinity: %w", err)
 		}
 	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return err
+	}
+	committed = true
 	return nil
 }
 
@@ -220,6 +272,30 @@ const (
 // TriageUnusedDays ist die Frist des Konzepts.
 const TriageUnusedDays = 90
 
+// TriageLogDays sagt, wie weit das Zustellprotokoll zurückreicht: volle Tage seit
+// seinem ältesten Eintrag, 0 bei leerem Protokoll. Die Liste "ungenutzt" beruht
+// auf diesem Protokoll. Reicht es weniger als TriageUnusedDays zurück, sagt das
+// Fehlen einer Zustellung nichts über 90 Tage, und BroadTriage lässt den Zweig
+// aus.
+func (s *Store) TriageLogDays(now time.Time) (int, error) {
+	if s.reader != nil {
+		return s.reader.TriageLogDays(now)
+	}
+	var first sql.NullString
+	if err := s.db.QueryRow(`SELECT MIN(delivered_at) FROM context_delivery_log`).Scan(&first); err != nil {
+		return 0, err
+	}
+	if !first.Valid || first.String == "" {
+		return 0, nil
+	}
+	t, err := time.Parse(time.RFC3339, first.String)
+	if err != nil {
+		return 0, nil
+	}
+	d := int(now.Sub(t) / (24 * time.Hour))
+	return max(d, 0), nil
+}
+
 // TriageItem ist ein Vorschlag der Durchsicht. Der Eintrag wird nicht verändert;
 // ein Mensch entscheidet: behalten, zurückziehen, verschieben, "gilt überall".
 type TriageItem struct {
@@ -237,15 +313,20 @@ type TriageItem struct {
 // TriageMove: Maschineneinträge, deren Entstehung genau ein Projekt nennt. Mit
 // project nur die, deren Projekt dieses ist.
 //
-// TriageUnused: breite Einträge, die älter als TriageUnusedDays sind, in dieser
-// Zeit über kein Wort im Prompt und keinen Hinweis zugestellt wurden
+// TriageUnused: breite Einträge, die älter als TriageUnusedDays sind (ohne
+// verbindliche Anweisungen, die binden, ob sie jemand aufgreift oder nicht), in
+// dieser Zeit über kein Wort im Prompt und keinen Hinweis zugestellt wurden
 // (context_delivery_log, Weg relevance und hint) und nie als Suchtreffer
 // gezählt wurden (knowledge.search_hits; einen Zeitpunkt der Suche gibt es
 // nicht, ein Eintrag, der je gesucht wurde, bleibt daher draußen). "Aufgegriffen"
 // im Sinn des Konzepts, also das Urteil über die Folgehandlung, kommt mit P3;
 // bis dahin ist die Zustellung auf Zuruf der Ersatz. Wer das Kennzeichen
 // "gilt überall" trägt, steht nie in dieser Liste. Das Protokoll hält 180 Tage,
-// die Frist von 90 liegt darin.
+// die Frist von 90 liegt darin, aber nur, wenn es so weit zurückreicht: das
+// Zustellprotokoll gibt es erst seit kurzem, und ein Eintrag, den es noch nie
+// hätte zeigen können, gälte sonst als "seit 90 Tagen ungenutzt". Reicht das
+// Protokoll weniger als TriageUnusedDays zurück (TriageLogDays), entfällt der
+// Zweig ganz; der Aufrufer sagt das dem Leser.
 //
 // Die Sichtbarkeit prüft der Aufrufer (keep); die Zahl der Treffer wird erst
 // danach begrenzt.
@@ -305,10 +386,17 @@ func (s *Store) BroadTriage(project string, now time.Time, limit int, keep func(
 		push(TriageItem{Knowledge: k, Kind: TriageMove, Project: moveProject[k.ID]})
 	}
 
-	// Ungenutzt.
+	// Ungenutzt: nur, wenn das Protokoll die ganze Frist abdeckt.
+	logDays, err := s.TriageLogDays(now)
+	if err != nil {
+		return nil, err
+	}
+	if logDays < TriageUnusedDays {
+		return out, nil
+	}
 	cutoff := now.UTC().Add(-TriageUnusedDays * 24 * time.Hour).Format(time.RFC3339)
 	rows, err = s.db.Query(`SELECT k.id FROM knowledge k
-		WHERE k.project = '' AND k.status = 'active' AND k.everywhere = 0
+		WHERE k.project = '' AND k.status = 'active' AND k.everywhere = 0 AND k.type != 'instruction'
 		  AND k.search_hits = 0 AND k.created_at < ?
 		  AND NOT EXISTS(SELECT 1 FROM context_delivery_log l
 		        WHERE l.kind = 'knowledge' AND l.object_id = k.id AND l.via IN ('relevance','hint') AND l.delivered_at >= ?)

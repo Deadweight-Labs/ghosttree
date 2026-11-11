@@ -40,7 +40,7 @@ func (a *api) withoutUntiedBroad(entries []store.Knowledge, project string) ([]s
 	}
 	hasBroad := false
 	for _, k := range entries {
-		if k.Scope.Project == "" && k.Type != "instruction" {
+		if isBroad(k) {
 			hasBroad = true
 			break
 		}
@@ -55,7 +55,7 @@ func (a *api) withoutUntiedBroad(entries []store.Knowledge, project string) ([]s
 	kept := make([]store.Knowledge, 0, len(entries))
 	withheld := 0
 	for _, k := range entries {
-		if k.Scope.Project == "" && k.Type != "instruction" && !tied[k.ID] {
+		if isBroad(k) && !tied[k.ID] {
 			withheld++
 			continue
 		}
@@ -64,10 +64,18 @@ func (a *api) withoutUntiedBroad(entries []store.Knowledge, project string) ([]s
 	return kept, withheld
 }
 
+// isBroad sagt, ob ein Eintrag für Startkontext und Suchquote als breit zählt:
+// Maschine oder global, aber keine verbindliche Anweisung. Eine Anweisung bindet,
+// ob jemand sie liest oder nicht, und ist von beidem ausgenommen.
+func isBroad(k store.Knowledge) bool {
+	return k.Scope.Project == "" && k.Type != "instruction"
+}
+
 // capBroadHits begrenzt die breiten Treffer einer Suche im Projekt auf einen
 // Anteil von limit und schneidet auf limit zu, in der Rangfolge der Suche. Gibt
 // es zu wenige Projekttreffer, füllen die übersprungenen breiten Treffer den Rest
 // auf: die Quote schützt das Projekt vor Verdrängung und lässt keine Seite leer.
+// Breite Anweisungen zählen nicht mit und werden nicht gekappt, wie beim Start.
 func capBroadHits(ks []store.Knowledge, limit int) []store.Knowledge {
 	if limit <= 0 || len(ks) == 0 {
 		return ks
@@ -79,7 +87,7 @@ func capBroadHits(ks []store.Knowledge, limit int) []store.Knowledge {
 		if n >= limit {
 			break
 		}
-		if k.Scope.Project == "" {
+		if isBroad(k) {
 			if broad >= maxBroad {
 				continue
 			}
@@ -135,6 +143,11 @@ func (a *api) setKnowledgeEverywhere(w http.ResponseWriter, r *http.Request) {
 // triageResult ist die Antwort der Durchsicht.
 type triageResult struct {
 	Items []triageEntry `json:"items"`
+	// UnusedSkipped says that the list "unused" is not part of the answer: the
+	// delivery log it rests on reaches back only LogDays days, less than the
+	// period of TriageUnusedDays.
+	UnusedSkipped bool `json:"unused_skipped,omitempty"`
+	LogDays       int  `json:"log_days"`
 }
 
 type triageEntry struct {
@@ -159,7 +172,12 @@ func (a *api) knowledgeTriage(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	out := triageResult{Items: make([]triageEntry, 0, len(items))}
+	logDays, err := a.st.TriageLogDays(time.Now())
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := triageResult{Items: make([]triageEntry, 0, len(items)), LogDays: logDays, UnusedSkipped: logDays < store.TriageUnusedDays}
 	for _, it := range items {
 		// The proposal names the project the entry arose in. A reader who may not
 		// open that project must not learn its name from the review: the proposal

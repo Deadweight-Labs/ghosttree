@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -203,6 +204,59 @@ func TestCapBroadHits(t *testing.T) {
 	}
 }
 
+// REQ-641 review, minor 4: a binding instruction is exempt at the start and so it
+// is in the quota. A broad instruction neither uses up the broad share nor is cut
+// by it.
+func TestCapBroadHitsDoesNotCountInstructions(t *testing.T) {
+	instr := func(id int64) store.Knowledge {
+		return store.Knowledge{ID: id, Type: "instruction", Scope: scope.Axes{Machine: "m"}}
+	}
+	// Limit 8 allows two broad hits. The instructions 10 and 11 stand in front of
+	// them and are not counted: -1 and -2 are still two broad hits and stay.
+	in := []store.Knowledge{instr(10), instr(11)}
+	in = append(in, hits(-1, -2, -3, 4, 5, 6, 7, 8, 9)...)
+	got := ids(capBroadHits(in, 8))
+	if fmt.Sprint(got) != "[10 11 1 2 4 5 6 7]" {
+		t.Errorf("instructions in the quota: %v, want [10 11 1 2 4 5 6 7]", got)
+	}
+}
+
+// The quota applies to the qualified search as well: a qualifier narrows the
+// hits, it does not hand the page back to the machine.
+func TestQualifiedSearchInProjectCapsBroadHits(t *testing.T) {
+	f := newAffinityFixture(t)
+	for i := range 16 {
+		if _, err := f.st.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: fmt.Sprintf("quotaword project %02d", i), Body: "quotaword",
+			Scope: scope.Axes{Project: accProject}, Person: "mia"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 10 {
+		if _, err := f.st.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: fmt.Sprintf("quotaword machine %02d", i), Body: "quotaword quotaword quotaword",
+			Scope: scope.Axes{Machine: "mia-box"}, Person: "mia"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var res struct {
+		Knowledge []store.Knowledge `json:"knowledge"`
+	}
+	out := f.expect(t, "mia", 200, "GET", "/api/search?kind=knowledge&limit=20&scope=union&project="+accProject+"&machine=mia-box&q="+url.QueryEscape("quotaword type:pitfall"), nil)
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	project, broad := 0, 0
+	for _, k := range res.Knowledge {
+		if k.Scope.Project != "" {
+			project++
+		} else {
+			broad++
+		}
+	}
+	if broad > 5 || project+broad != 20 || broad == 0 {
+		t.Errorf("qualified search in the project: %d project and %d broad hits, want 20 with 1 to 5 broad", project, broad)
+	}
+}
+
 // The flag and the review: a person marks an entry "applies everywhere" and the
 // review lists what arose in exactly one project.
 func TestEverywhereAndTriageEndpoints(t *testing.T) {
@@ -221,6 +275,16 @@ func TestEverywhereAndTriageEndpoints(t *testing.T) {
 	out := f.expect(t, "mia", 200, "GET", "/api/knowledge-triage?project="+accProject, nil)
 	if err := json.Unmarshal([]byte(out), &res); err != nil {
 		t.Fatal(err)
+	}
+	// The fixture has no delivery log, so the list of unused entries is not
+	// judged and the answer says so.
+	if !res.UnusedSkipped || res.LogDays != 0 {
+		t.Errorf("an empty delivery log: unused_skipped=%v log_days=%d, want true and 0", res.UnusedSkipped, res.LogDays)
+	}
+	for _, it := range res.Items {
+		if it.Kind == store.TriageUnused {
+			t.Errorf("entry %d listed as unused without a delivery log to judge by", it.Knowledge.ID)
+		}
 	}
 	var moves []int64
 	for _, it := range res.Items {
