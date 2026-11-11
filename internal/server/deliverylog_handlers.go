@@ -118,7 +118,7 @@ func (a *api) usageDeliveries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, deliverylog.DeliveryUsage{
 		Since: rep.Since, Sessions: rep.Sessions, Chars: rep.Chars,
 		SubagentChars: rep.SubagentChars, SubagentSessions: rep.SubagentSessions,
-		Lines: lines(rep.Lines), Folded: lines(rep.Folded),
+		Lines: lines(rep.Lines), Folded: lines(rep.Folded), FoldedFrom: rep.FoldedFrom,
 	})
 }
 

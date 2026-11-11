@@ -23,6 +23,10 @@ type DeliveryUsage struct {
 	SubagentSessions int            `json:"subagent_sessions"`
 	Lines            []DeliveryLine `json:"lines"`
 	Folded           []DeliveryLine `json:"folded"`
+	// FoldedFrom (YYYY-MM) is the first month of Folded: only whole months that
+	// lie inside the window are summed, so a window that starts inside a month
+	// leaves that month out.
+	FoldedFrom string `json:"folded_from,omitempty"`
 }
 
 // SignalLine is one value of one session signal. Measured sessions are those

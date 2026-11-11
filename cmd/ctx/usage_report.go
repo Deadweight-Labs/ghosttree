@@ -30,7 +30,9 @@ tools       calls of the ghosttree tools per tool, from tool_call_counts: in how
             tool is in the denominator.
 deliveries  what the hooks put in front of agents, per route and kind: parts,
             characters, sessions. Characters add up to what the session budget
-            counted. Months older than the retention appear folded.
+            counted. Months older than the retention appear folded, as whole
+            months that start inside the window (a month the window cuts into
+            is left out).
 signals     the environment variables of the process a session ran in, per value:
             how many sessions, and what share of the finished ones had at most
             three prompts.`
@@ -180,7 +182,7 @@ func printDeliveryReport(w io.Writer, rep deliverylog.DeliveryUsage) {
 		_ = tw.Flush()
 	}
 	print("by route and kind", rep.Lines, true)
-	print("folded months (older than the retention; no session counts)", rep.Folded, false)
+	print(fmt.Sprintf("folded months from %s (whole months inside the window, older than the retention; no session counts)", rep.FoldedFrom), rep.Folded, false)
 	if len(rep.Lines) == 0 && len(rep.Folded) == 0 {
 		fmt.Fprintln(w, "nothing logged")
 	}

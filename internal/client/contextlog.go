@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"net/url"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/deliverylog"
@@ -24,7 +25,13 @@ func (c *Client) TriggeredRunbooksDelivered(t RunbookTrigger) (Delivered, error)
 
 // RecordContextLog reports the deliveries and signals of one session (REQ-636).
 func (c *Client) RecordContextLog(b store.ContextLogBatch) error {
-	return c.do("POST", "/api/context-log", nil, b, nil)
+	return c.RecordContextLogContext(context.Background(), b)
+}
+
+// RecordContextLogContext is RecordContextLog under a context, so that a caller
+// that sends several reports can give all of them one deadline.
+func (c *Client) RecordContextLogContext(ctx context.Context, b store.ContextLogBatch) error {
+	return c.doContext(ctx, "POST", "/api/context-log", nil, b, nil)
 }
 
 func usageQuery(project, since string) url.Values {

@@ -65,19 +65,34 @@ subagent's, though it passes no budget.
 
 The hook appends one line to the session's log directory and sends it with the tool
 counts at the end of a turn (Claude Code: `Stop`; Codex: its stop hook), so the
-hooks make no extra request. A report the server cannot take stays and is sent
-with the next one; a repeated report is stored once. A session logs at most 5,000
+hooks make no extra request. All reports of a flush share one deadline of 1.5
+seconds; the first report the server cannot take (no answer in time, a connection
+error, 5xx, 401, 408, 429) ends the sending, and that report and every one behind
+it stay in the spool for the next flush. A report the server refuses for good (other
+4xx) is dropped. A repeated report is stored once. A session logs at most 5,000
 rows, and only for a project (the server takes nothing without one).
+
+What one account can have stored for one project in one UTC day is bounded as well,
+because `session_ref` and object numbers are free to choose: 20,000 delivery rows
+and 900 signal rows (a session writes a few dozen and three). Beyond that nothing is
+stored and the report is still answered as accepted; a new day starts a new
+allowance. The counts live in `context_log_quota`, and rows of days before
+yesterday are removed by the write that finds them.
 
 Rows are kept 180 days. When a row is older, the write that finds it folds it into
 the monthly sum of its project, route, kind and object (how often, how many
-characters), at most 2,000 rows per write, and drops the path and the session.
-Signals are kept a year.
+characters), at most 2,000 rows per write, and drops the path and the session. A
+month of a project has at most 2,000 different objects in the sums; objects beyond
+that are counted under object 0 of their route and kind, so the totals stay right
+and the table grows with months and projects, not with what a caller sends.
+Signals are kept a year. No maintenance job is needed.
 
 Each session also records the names and values of `CLAUDE_CODE_ENTRYPOINT`,
 `CLAUDE_CODE_SESSION_ATTENDED` and `CLAUDE_CODE_CHILD_SESSION` as the hook process
 sees them (an unset variable is recorded as empty), so that it can be seen which
-of them separates short runs from working sessions.
+of them separates short runs from working sessions. A value is kept only when it is
+a token of at most 32 letters, digits, `_`, `.` and `-`; anything else is recorded as
+`(invalid)`. The hook applies this and so does the server.
 
 Reports, from the server, over the projects whose statistics you may see (the same
 rule as the tool statistics) or one `--project`; they show sums and no path, object
@@ -86,7 +101,9 @@ number or session:
 - `ctx usage tools --since 2026-11-10` per tool: sessions, share of the sessions
   of the window, calls (`--actions` per action, `--json`).
 - `ctx usage deliveries --since DAY` per route and kind: parts, characters,
-  sessions.
+  sessions. Months older than the retention are listed as folded sums, only the
+  whole months that start inside the window; a month the window cuts into is left
+  out, because its sum cannot be split.
 - `ctx usage signals --since DAY` per signal value: sessions, and of the finished
   sessions with a stored transcript the share with at most three prompts.
 

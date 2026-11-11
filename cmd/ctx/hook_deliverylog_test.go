@@ -3,12 +3,17 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/deliverylog"
 	"github.com/Deadweight-Labs/ghosttree/internal/hookbudget"
@@ -268,5 +273,275 @@ func TestNothingIsLoggedOutsideARepository(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "deliveries")); err == nil {
 		t.Error("a spool exists for a session without a project")
+	}
+}
+
+// spoolBatches makes n reports (one per project) the way the spool holds them.
+func spoolBatches(n int) []sentBatch {
+	var out []sentBatch
+	for i := range n {
+		project := fmt.Sprintf("github.com/test/p%d", i)
+		line := []byte(fmt.Sprintf(`{"project":%q,"event":{"call":"c%d","parts":[{"via":"bootstrap","kind":"frame","chars":1}]}}`, project, i))
+		out = append(out, sentBatch{
+			batch: store.ContextLogBatch{Project: project, SessionRef: "s", Harness: "claude",
+				Events: []store.DeliveryEvent{{Call: fmt.Sprintf("c%d", i), Parts: logPartsOf(1)}}},
+			lines: [][]byte{line},
+		})
+	}
+	return out
+}
+
+func logPartsOf(chars int) []deliverylog.Part {
+	return []deliverylog.Part{{Via: deliverylog.ViaBootstrap, Kind: deliverylog.KindFrame, Chars: chars}}
+}
+
+// A server that does not answer costs a hook one deadline, not one per report:
+// the first report that gets no answer ends the sending, and it and every report
+// after it go back into the spool.
+func TestFlushContextLogToAHangingServerCostsOneDeadline(t *testing.T) {
+	release := make(chan struct{})
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	wait := 300 * time.Millisecond
+	c := client.NewWithTimeout(config.Config{ServerURL: srv.URL, Token: "t"}, wait)
+	batches := spoolBatches(5)
+	start := time.Now()
+	back := sendContextLogBatches(c.RecordContextLogContext, batches, wait)
+	took := time.Since(start)
+	if took > 2*wait {
+		t.Errorf("flush took %v against a hanging server, want about one deadline (%v), not one per report", took, wait)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("%d reports were sent to a server that did not answer the first, want 1", n)
+	}
+	if len(back) != len(batches) {
+		t.Fatalf("%d lines went back, want all %d (the first and those not sent)", len(back), len(batches))
+	}
+	for i, l := range back {
+		if !bytes.Equal(l, batches[i].lines[0]) {
+			t.Errorf("line %d changed on its way back", i)
+		}
+	}
+}
+
+// The deadline is shared: reports that are answered slowly use it up together,
+// and what is left unsent goes back.
+func TestFlushContextLogShareOneDeadlineAcrossReports(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		time.Sleep(120 * time.Millisecond)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	wait := 300 * time.Millisecond
+	c := client.NewWithTimeout(config.Config{ServerURL: srv.URL, Token: "t"}, wait)
+	batches := spoolBatches(10)
+	start := time.Now()
+	back := sendContextLogBatches(c.RecordContextLogContext, batches, wait)
+	if took := time.Since(start); took > wait+200*time.Millisecond {
+		t.Errorf("flush took %v, the deadline of all reports together is %v", took, wait)
+	}
+	sent := int(hits.Load())
+	if sent < 1 || sent >= len(batches) {
+		t.Fatalf("%d of %d reports were sent in one deadline", sent, len(batches))
+	}
+	if len(back) < len(batches)-sent || len(back) > len(batches)-sent+1 {
+		t.Errorf("%d lines went back after %d reports were sent of %d", len(back), sent, len(batches))
+	}
+}
+
+// A refusal for good drops the report and goes on; a server that cannot be
+// reached, fails (5xx) or does not know the token (401) keeps it, and so does
+// everything behind it.
+func TestFlushContextLogKeepsWhatTheServerMayTakeLater(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status int
+		kept   int
+		hits   int32
+	}{
+		{"ok", http.StatusNoContent, 0, 3},
+		{"bad request is dropped", http.StatusBadRequest, 0, 3},
+		{"forbidden is dropped", http.StatusForbidden, 0, 3},
+		{"unauthorized is kept", http.StatusUnauthorized, 3, 1},
+		{"server error is kept", http.StatusInternalServerError, 3, 1},
+		{"bad gateway is kept", http.StatusBadGateway, 3, 1},
+		{"too many requests is kept", http.StatusTooManyRequests, 3, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var hits atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				if c.status >= 400 {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(c.status)
+					_, _ = w.Write([]byte(`{"code":"x","message":"no"}`))
+					return
+				}
+				w.WriteHeader(c.status)
+			}))
+			defer srv.Close()
+			cl := client.NewWithTimeout(config.Config{ServerURL: srv.URL, Token: "t"}, time.Second)
+			back := sendContextLogBatches(cl.RecordContextLogContext, spoolBatches(3), time.Second)
+			if len(back) != c.kept || hits.Load() != c.hits {
+				t.Errorf("status %d: %d lines kept (want %d), %d reports sent (want %d)", c.status, len(back), c.kept, hits.Load(), c.hits)
+			}
+		})
+	}
+}
+
+// The whole flush, as the Stop hook runs it, against a server that hangs: it
+// ends within about a deadline and the lines stay for the next report.
+func TestStopHookIsNotBlockedByAHangingServer(t *testing.T) {
+	f := newLogFixture(t)
+	const session = "sess-hang"
+	f.hook(t, "session-start", map[string]any{"session_id": session})
+	release := make(chan struct{})
+	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer hang.Close()
+	defer close(release)
+	if err := config.Save(config.Config{ServerURL: hang.URL, Token: f.cfg.Token, Machine: "testbox"}); err != nil {
+		t.Fatal(err)
+	}
+	old := contextLogReportWait
+	contextLogReportWait = 300 * time.Millisecond
+	defer func() { contextLogReportWait = old }()
+	start := time.Now()
+	raw, _ := json.Marshal(map[string]any{"session_id": session, "cwd": f.repo})
+	flushContextLog(raw, "claude", true)
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("the flush took %v against a hanging server", took)
+	}
+	dir, _ := sessionLogDir(session)
+	if info, err := os.Stat(filepath.Join(dir, "deliveries")); err != nil || info.Size() == 0 {
+		t.Errorf("the lines did not stay in the spool: %v", err)
+	}
+}
+
+// A 401 keeps the report; once the token is right it is delivered.
+func TestUnauthorizedReportIsKeptAndSentLater(t *testing.T) {
+	f := newLogFixture(t)
+	const session = "sess-401"
+	first := f.hook(t, "session-start", map[string]any{"session_id": session})
+	bad := f.cfg
+	bad.Token = "not-a-token"
+	if err := config.Save(bad); err != nil {
+		t.Fatal(err)
+	}
+	f.hook(t, "turn-end", map[string]any{"session_id": session, "hook_event_name": "Stop"})
+	if n := f.count(t, `SELECT COUNT(*) FROM context_delivery_log`); n != 0 {
+		t.Fatalf("rows stored with a bad token: %d", n)
+	}
+	dir, _ := sessionLogDir(session)
+	if info, err := os.Stat(filepath.Join(dir, "deliveries")); err != nil || info.Size() == 0 {
+		t.Fatalf("a 401 dropped the report: %v", err)
+	}
+	if err := config.Save(f.cfg); err != nil {
+		t.Fatal(err)
+	}
+	f.hook(t, "turn-end", map[string]any{"session_id": session, "hook_event_name": "Stop"})
+	if got := f.count(t, `SELECT COALESCE(SUM(chars),0) FROM context_delivery_log WHERE session_key=?`, session); got != deliverylog.Runes(first) {
+		t.Errorf("after the token was right the log holds %d of %d characters", got, deliverylog.Runes(first))
+	}
+}
+
+// Values of the variables that are not short tokens are reported as "(invalid)".
+func TestSessionSignalsAreShortTokensOrInvalid(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "/home/someone/very/private/path")
+	t.Setenv("CLAUDE_CODE_SESSION_ATTENDED", strings.Repeat("a", 33))
+	t.Setenv("CLAUDE_CODE_CHILD_SESSION", "sdk_cli-1.2")
+	f := newLogFixture(t)
+	f.hook(t, "session-start", map[string]any{"session_id": "sess-sig"})
+	f.hook(t, "turn-end", map[string]any{"session_id": "sess-sig", "hook_event_name": "Stop"})
+	got := map[string]string{}
+	rows, err := f.st.DB().Query(`SELECT name, value FROM session_signals WHERE session_ref='sess-sig'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n, v string
+		rows.Scan(&n, &v)
+		got[n] = v
+	}
+	if got["CLAUDE_CODE_ENTRYPOINT"] != "(invalid)" || got["CLAUDE_CODE_SESSION_ATTENDED"] != "(invalid)" || got["CLAUDE_CODE_CHILD_SESSION"] != "sdk_cli-1.2" {
+		t.Errorf("signals %v", got)
+	}
+}
+
+// The marker that says the signals are done is written after the lines are in
+// the spool: a spool that cannot take them leaves it out, so the next hook tries.
+func TestSignalMarkerIsWrittenAfterTheLines(t *testing.T) {
+	f := newLogFixture(t)
+	dir, err := sessionLogDir("sess-marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A spool that is already full takes no line.
+	if err := os.WriteFile(filepath.Join(dir, "deliveries"), bytes.Repeat([]byte("x"), contextLogMaxSpool), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = f
+	noteSessionSignals("sess-marker", "claude", "github.com/test/repo")
+	if _, err := os.Stat(filepath.Join(dir, "signals")); err == nil {
+		t.Fatal("the marker was written although no line could be appended")
+	}
+	if err := os.Remove(filepath.Join(dir, "deliveries")); err != nil {
+		t.Fatal(err)
+	}
+	noteSessionSignals("sess-marker", "claude", "github.com/test/repo")
+	if _, err := os.Stat(filepath.Join(dir, "signals")); err != nil {
+		t.Fatalf("no marker after the lines were appended: %v", err)
+	}
+	spool, _ := os.ReadFile(filepath.Join(dir, "deliveries"))
+	if n := bytes.Count(spool, []byte(`"signal"`)); n != len(contextLogSignals) {
+		t.Errorf("%d signal lines in the spool, want %d", n, len(contextLogSignals))
+	}
+	noteSessionSignals("sess-marker", "claude", "github.com/test/repo")
+	again, _ := os.ReadFile(filepath.Join(dir, "deliveries"))
+	if len(again) != len(spool) {
+		t.Error("the signals were written a second time")
+	}
+}
+
+// The Stop hook of Codex removes the logs of old sessions like Claude's does.
+func TestCodexStopHookPrunesOldSessionLogs(t *testing.T) {
+	f := newLogFixture(t)
+	oldDir, err := sessionLogDir("sess-codex-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(oldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	longAgo := time.Now().Add(-sessionLogMaxAge - time.Hour)
+	if err := os.Chtimes(oldDir, longAgo, longAgo); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"session_id": "sess-codex-new", "cwd": f.repo, "hook_event_name": "Stop"})
+	var out bytes.Buffer
+	if code := cmdHookWith(bytes.NewReader(raw), []string{"turn-end", "--harness", "codex"}, &out); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if _, err := os.Stat(oldDir); err == nil {
+		t.Error("the log of a session older than a week is still there after a Codex Stop")
 	}
 }

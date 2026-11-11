@@ -626,7 +626,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   about preloading tools asks for), `ctx usage deliveries` the characters
   delivered per route and kind, and `ctx usage signals` per signal value the
   share of finished sessions with at most three prompts. The reports show sums
-  only, to whoever may see the project's statistics. The server answers the
+  only, to whoever may see the project's statistics. Signal values other than a
+  short token are recorded as `(invalid)`; the log is bounded per account,
+  project and day, and a hook that cannot reach the server waits one deadline
+  for all its reports together. The server answers the
   context routes with a new header `X-Ghosttree-Delivered`; an older server
   without it is logged as one part per delivery.
 

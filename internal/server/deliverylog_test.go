@@ -127,3 +127,33 @@ func TestContextLogNeedsTheRightToWriteAndReportsAreSums(t *testing.T) {
 	}
 	f.expect(t, "mia", 200, "GET", "/api/usage/tools?since=2026-11-10", nil)
 }
+
+// The server does not trust the client to have cleaned a signal value: what is
+// not a short token is stored as "(invalid)", and the report lists it so.
+func TestContextLogStoresOnlyShortTokensAsSignalValues(t *testing.T) {
+	f := accessAPI(t, true)
+	post := func(ref, value string) {
+		t.Helper()
+		f.expect(t, "mia", 200, "POST", "/api/context-log", map[string]any{"project": accProject, "session_ref": ref, "harness": "claude",
+			"signals": []map[string]string{{"name": "CLAUDE_CODE_ENTRYPOINT", "value": value}}})
+	}
+	post("s-ok", "sdk-cli")
+	post("s-path", "/home/robin/.ssh/id_ed25519")
+	post("s-long", strings.Repeat("a", 33))
+	post("s-ctl", "a\u0000b")
+	var sig deliverylog.SignalUsage
+	body := f.expect(t, "mia", 200, "GET", "/api/usage/signals?since=2020-01-01&project="+accProject, nil)
+	if err := json.Unmarshal([]byte(body), &sig); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, l := range sig.Lines {
+		got[l.Value] = l.Sessions
+	}
+	if got["sdk-cli"] != 1 || got["(invalid)"] != 3 || len(got) != 2 {
+		t.Errorf("signal values in the report: %v", got)
+	}
+	if strings.Contains(body, "ssh") || strings.Contains(body, "robin") {
+		t.Errorf("a value that is not a token reached the report:\n%s", body)
+	}
+}

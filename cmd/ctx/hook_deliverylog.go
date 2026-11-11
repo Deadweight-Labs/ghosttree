@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -29,12 +30,16 @@ import (
 //
 //	deliveries: one JSON line per hook call that delivered something, and one per
 //	            batch of session signals; sent by flushContextLog
-//	signals:    exists once the session's signals were written
+//	signals:    exists once the session's signals were appended to deliveries
 const (
-	contextLogMaxSpool   = 256 << 10 // a server that stays away does not make this grow
-	contextLogBatchSize  = 100       // deliveries per report
-	contextLogReportWait = 1500 * time.Millisecond
+	contextLogMaxSpool  = 256 << 10 // a server that stays away does not make this grow
+	contextLogBatchSize = 100       // deliveries per report
 )
+
+// contextLogReportWait is the one deadline of a flush, for all its reports
+// together: a hook waits at most this long for the server, however many reports
+// there are. It is a variable so that a test can shorten it.
+var contextLogReportWait = 1500 * time.Millisecond
 
 // deliveryTrace collects the parts of what one hook call delivers while the
 // functions that build the text run. The text is built from several sources
@@ -81,8 +86,9 @@ type spoolLine struct {
 }
 
 // contextLogSignals are the environment variables the session reports: the
-// names are the ones the concept lists, and the values are whatever the harness
-// sets, cut short.
+// names are the ones the concept lists. A value that is not a short token of
+// letters, digits, '_', '.' and '-' is reported as "(invalid)" (the server
+// applies the same rule), so the value of a variable is never copied beyond that.
 var contextLogSignals = store.SessionSignalNames
 
 // logDelivery writes down one delivery. emitted is the text the budget let
@@ -114,25 +120,34 @@ func callID() string {
 	return hex.EncodeToString(b[:])
 }
 
-func appendSpool(sessionID string, line spoolLine) {
+// appendSpool adds a line to the session's deliveries file and says whether it
+// is there now: not when the session is unusable, the directory cannot be made
+// or the spool is full.
+func appendSpool(sessionID string, line spoolLine) bool {
 	if !store.ValidExternalID(sessionID) {
-		return
+		return false
 	}
 	dir, err := sessionLogDir(sessionID)
 	if err != nil || os.MkdirAll(dir, 0o700) != nil {
-		return
+		return false
 	}
 	raw, err := json.Marshal(line)
 	if err != nil {
-		return
+		return false
 	}
-	appendLine(filepath.Join(dir, "deliveries"), string(raw), contextLogMaxSpool)
+	return appendLine(filepath.Join(dir, "deliveries"), string(raw), contextLogMaxSpool)
 }
 
 // noteSessionSignals writes the signals of the session once: the names and
 // values of the environment variables of the process that started the hook. A
 // variable that is not set is written with an empty value; that it is absent
 // tells apart the kinds of start as much as a value does.
+//
+// The marker that says "done" is written last, after every line is in the
+// spool: when a line could not be appended (full spool, no write access) the
+// next hook tries again. Lines that were appended before such a failure, or by
+// a hook that ran at the same moment, are sent twice; the server stores a
+// signal of a session once.
 func noteSessionSignals(sessionID, harness, project string) {
 	if harness != "claude" || project == "" || !store.ValidExternalID(sessionID) {
 		return
@@ -145,24 +160,24 @@ func noteSessionSignals(sessionID, harness, project string) {
 	if _, err := os.Stat(marker); err == nil {
 		return
 	}
-	if os.MkdirAll(dir, 0o700) != nil || os.WriteFile(marker, nil, 0o600) != nil {
+	if os.MkdirAll(dir, 0o700) != nil {
 		return
 	}
 	for _, name := range contextLogSignals {
-		value := os.Getenv(name)
-		sig := store.SessionSignal{Name: name, Value: value}
-		if sig.Valid() != nil {
-			sig.Value = "(invalid)"
+		sig := store.SessionSignal{Name: name, Value: os.Getenv(name)}.Clean()
+		if !appendSpool(sessionID, spoolLine{Project: project, Signal: &sig}) {
+			return
 		}
-		appendSpool(sessionID, spoolLine{Project: project, Signal: &sig})
 	}
+	_ = os.WriteFile(marker, nil, 0o600)
 }
 
 // flushContextLog sends the written-down deliveries and signals of a session to
 // the server, like flushSessionUses: the sender claims the file by renaming it,
 // so two hooks never send the same lines; without force it sends only when the
 // last report is older than usesFlushInterval; a report the server could not
-// take goes back for the next attempt, one it refused for good is dropped.
+// take (and every one after it) goes back for the next attempt, one it refused
+// for good is dropped. All reports share the deadline contextLogReportWait.
 func flushContextLog(raw []byte, harness string, force bool) {
 	var in hookToolCall
 	if json.Unmarshal(raw, &in) != nil || !store.ValidExternalID(trimmed(in.SessionID)) {
@@ -202,12 +217,7 @@ func flushContextLog(raw []byte, harness string, force bool) {
 		return
 	}
 	c := client.NewWithTimeout(cfg, contextLogReportWait)
-	var back [][]byte
-	for _, b := range batches {
-		if err := c.RecordContextLog(b.batch); err != nil && !permanentRefusal(err) {
-			back = append(back, b.lines...)
-		}
-	}
+	back := sendContextLogBatches(c.RecordContextLogContext, batches, contextLogReportWait)
 	if len(back) == 0 {
 		return
 	}
@@ -219,6 +229,32 @@ func flushContextLog(raw []byte, harness string, force bool) {
 	for _, l := range back {
 		_, _ = f.Write(append(l, '\n'))
 	}
+}
+
+// sendContextLogBatches sends the reports in order under one deadline and returns
+// the lines that must go back into the spool. The first report the server could
+// not take (no answer in time, a connection error, 5xx, 401) ends the sending:
+// the next ones would meet the same server, and every one of them would cost a
+// hook another wait. That report and all that were not sent are returned whole.
+// A report the server refused for good is dropped and the sending goes on.
+func sendContextLogBatches(send func(context.Context, store.ContextLogBatch) error, batches []sentBatch, wait time.Duration) [][]byte {
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	var back [][]byte
+	for i, b := range batches {
+		err := ctx.Err()
+		if err == nil {
+			err = send(ctx, b.batch)
+		}
+		if err == nil || permanentRefusal(err) {
+			continue
+		}
+		for _, rest := range batches[i:] {
+			back = append(back, rest.lines...)
+		}
+		break
+	}
+	return back
 }
 
 // flushSessionReports sends the tool counts and the delivery log of a session
@@ -271,15 +307,20 @@ func contextLogBatches(content []byte, session, harness string) []sentBatch {
 }
 
 // permanentRefusal says the server understood the report and will never take
-// it: sending it again would only repeat the refusal.
+// it: sending it again would only repeat the refusal. 401 is not one: the
+// token is missing or expired, which a person can put right, and the report is
+// kept until then (408 and 429 say "not now").
 func permanentRefusal(err error) bool {
+	refused := func(status int) bool {
+		return status >= 400 && status < 500 && status != 401 && status != 408 && status != 429
+	}
 	var api *client.APIError
 	if errors.As(err, &api) {
-		return api.Status >= 400 && api.Status < 500 && api.Status != 408 && api.Status != 429
+		return refused(api.Status)
 	}
 	var st *client.StatusError
 	if errors.As(err, &st) {
-		return st.Status >= 400 && st.Status < 500 && st.Status != 408 && st.Status != 429
+		return refused(st.Status)
 	}
 	return false
 }

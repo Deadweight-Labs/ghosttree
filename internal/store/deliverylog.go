@@ -2,13 +2,12 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/deliverylog"
 )
@@ -30,6 +29,17 @@ import (
 // delivered but drop the path and the session. Folding happens where rows are
 // written, so no maintenance job has to exist for the table to stay bounded.
 //
+// kind has no CHECK on purpose: deliverylog.ValidKind is the one list of kinds,
+// and a CHECK in the table would make every new kind (the later packages of the
+// concept add some) a rebuild of a table of millions of rows. The index on
+// (kind, object_id) is not here either: no reader in P0 asks per object, and P3,
+// which does, brings its own index with its query. (project, delivered_at)
+// serves the reports, (delivered_at) the folding of old rows.
+//
+// context_log_quota counts what one account stored for one project on one UTC
+// day, so that session_ref and object numbers, which a hook picks freely, cannot
+// make the tables grow without bound.
+//
 // used, judged_at and held_out are not written yet. They are the columns the
 // later packages of the concept fill (the judgement from the transcript, the
 // hold-back sample), laid down now so those do not need a migration.
@@ -45,7 +55,7 @@ CREATE TABLE IF NOT EXISTS context_delivery_log(
   profile TEXT NOT NULL DEFAULT 'full',
   subagent INTEGER NOT NULL DEFAULT 0 CHECK(subagent IN (0,1)),
   via TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK(kind IN ('knowledge','ghost','runbook','ledger','feature','hint','frame')),
+  kind TEXT NOT NULL,
   object_id INTEGER NOT NULL DEFAULT 0,
   path TEXT NOT NULL DEFAULT '',
   chars INTEGER NOT NULL DEFAULT 0,
@@ -55,7 +65,7 @@ CREATE TABLE IF NOT EXISTS context_delivery_log(
   judged_at TEXT NOT NULL DEFAULT '');
 CREATE UNIQUE INDEX IF NOT EXISTS context_delivery_log_call ON context_delivery_log(account_id, session_key, call, ord) WHERE call != '';
 CREATE INDEX IF NOT EXISTS context_delivery_log_session ON context_delivery_log(account_id, session_key);
-CREATE INDEX IF NOT EXISTS context_delivery_log_object ON context_delivery_log(kind, object_id);
+CREATE INDEX IF NOT EXISTS context_delivery_log_project_age ON context_delivery_log(project, delivered_at);
 CREATE INDEX IF NOT EXISTS context_delivery_log_age ON context_delivery_log(delivered_at);
 CREATE TABLE IF NOT EXISTS context_delivery_rollup(
   month TEXT NOT NULL,
@@ -76,6 +86,13 @@ CREATE TABLE IF NOT EXISTS session_signals(
   first_at TEXT NOT NULL,
   PRIMARY KEY(project, session_ref, account_id, harness, name)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS session_signals_age ON session_signals(first_at);
+CREATE TABLE IF NOT EXISTS context_log_quota(
+  account_id INTEGER NOT NULL,
+  project TEXT NOT NULL,
+  day TEXT NOT NULL,
+  delivery_rows INTEGER NOT NULL DEFAULT 0,
+  signal_rows INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(account_id, project, day)) WITHOUT ROWID;
 `
 
 func ensureDeliveryLog(db *sql.DB) error {
@@ -100,8 +117,21 @@ const (
 	maxContextLogEvents     = 200
 	maxDeliveryRowsPerSess  = 5000
 	maxSessionSignalsPerReq = 8
-	maxSignalValueRunes     = 64
 	maxCallRunes            = 32
+	// maxDeliveryRowsPerDay and maxSignalRowsPerDay bound what one account can
+	// have stored for one project in one UTC day. A session writes a few dozen
+	// delivery rows (and three signal rows), so these are far above any real use
+	// (hundreds of sessions a day) and far below what a script that varies
+	// session_ref could write. What is over the limit is not stored; the report
+	// is answered as accepted, because sending it again would not change that.
+	maxDeliveryRowsPerDay = 20000
+	maxSignalRowsPerDay   = 900
+	// maxRollupObjectsPerMonth bounds the monthly sums per project: the number of
+	// different (route, kind, object) rows of one month. Real objects are the
+	// entries of the project; beyond the limit an unseen object is counted
+	// under object 0 of its route and kind, so the table grows with the
+	// number of months and projects, not with what a caller sends.
+	maxRollupObjectsPerMonth = 2000
 	// deliveryClockSkew is how far into the future a hook's clock may be before
 	// its time is replaced by the server's.
 	deliveryClockSkew = 5 * time.Minute
@@ -196,21 +226,40 @@ func (b ContextLogBatch) Validate() error {
 	return nil
 }
 
-// Valid says whether the signal may be stored: a listed name and a short
-// printable value.
+// SignalInvalid is what a value is recorded as when it is not a short token.
+const SignalInvalid = "(invalid)"
+
+// signalValue is what a value of a signal may look like: a short token. The
+// variables are mode names and flags ("sdk-cli", "1"); anything else is more
+// than the report needs, and a value picked freely would turn the report into
+// a place where text of any kind is stored and listed.
+var signalValue = regexp.MustCompile(`^[A-Za-z0-9_.-]{0,32}$`)
+
+// CleanSignalValue returns the value as it is stored: itself when it is a token
+// of letters, digits, '_', '.' and '-' of at most 32 characters (empty is the
+// variable not being set), otherwise SignalInvalid. The hook and the server
+// both apply it, so a client that does not is not trusted either.
+func CleanSignalValue(v string) string {
+	if signalValue.MatchString(v) {
+		return v
+	}
+	return SignalInvalid
+}
+
+// Valid says whether the signal may be stored: a listed name. The value is not
+// a reason to refuse a report (Clean turns an unusable one into "(invalid)"),
+// since one odd variable must not cost the session its other signals.
 func (s SessionSignal) Valid() error {
 	if !knownSignal(s.Name) {
 		return fmt.Errorf("unknown signal %q", s.Name)
 	}
-	if utf8.RuneCountInString(s.Value) > maxSignalValueRunes || !utf8.ValidString(s.Value) {
-		return fmt.Errorf("signal value too long")
-	}
-	for _, r := range s.Value {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("signal value must be printable")
-		}
-	}
 	return nil
+}
+
+// Clean returns the signal in the form it is stored.
+func (s SessionSignal) Clean() SessionSignal {
+	s.Value = CleanSignalValue(s.Value)
+	return s
 }
 
 func knownSignal(name string) bool {
@@ -224,9 +273,10 @@ func knownSignal(name string) bool {
 
 // RecordContextLog stores a batch. The caller checked the right to write for the
 // batch's project. A delivery the log has already seen (same account, session
-// and call) is ignored, and a session stops being logged at
-// maxDeliveryRowsPerSess rows: both bound what one authenticated caller can
-// make the table store.
+// and call) is ignored. Three limits bound what one authenticated caller can
+// make the tables store: rows per session (maxDeliveryRowsPerSess), rows per
+// account, project and day (maxDeliveryRowsPerDay, maxSignalRowsPerDay) and,
+// when folding, the objects per month of the sums (maxRollupObjectsPerMonth).
 func (s *Store) RecordContextLog(b ContextLogBatch, account int64) error {
 	if s.writer != nil {
 		return queueWrite(s, []any{b, account}, func(d *Store, p []any) error {
@@ -243,6 +293,15 @@ func (s *Store) RecordContextLog(b ContextLogBatch, account int64) error {
 	defer tx.Rollback()
 	t := time.Now().UTC()
 	at := t.Format(time.RFC3339)
+	day := t.Format("2006-01-02")
+	var usedRows, usedSignals int
+	switch err := tx.QueryRow(`SELECT delivery_rows, signal_rows FROM context_log_quota WHERE account_id=? AND project=? AND day=?`,
+		account, b.Project, day).Scan(&usedRows, &usedSignals); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return err
+	}
+	rows0, signals0 := usedRows, usedSignals
 	if len(b.Events) > 0 {
 		var have int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM context_delivery_log WHERE account_id=? AND session_key=?`,
@@ -266,7 +325,7 @@ func (s *Store) RecordContextLog(b ContextLogBatch, account int64) error {
 				profile = "full"
 			}
 			for i, p := range e.Parts {
-				if have >= maxDeliveryRowsPerSess {
+				if have >= maxDeliveryRowsPerSess || usedRows >= maxDeliveryRowsPerDay {
 					break
 				}
 				p, _ = p.Clean()
@@ -276,6 +335,7 @@ func (s *Store) RecordContextLog(b ContextLogBatch, account int64) error {
 				}
 				if n, err := res.RowsAffected(); err == nil && n == 1 {
 					have++
+					usedRows++
 				}
 			}
 		}
@@ -285,13 +345,31 @@ func (s *Store) RecordContextLog(b ContextLogBatch, account int64) error {
 	}
 	if len(b.Signals) > 0 {
 		for _, sg := range b.Signals {
-			if _, err := tx.Exec(`INSERT OR IGNORE INTO session_signals(project, session_ref, account_id, harness, name, value, first_at)
-				VALUES(?,?,?,?,?,?,?)`, b.Project, b.SessionRef, account, b.Harness, sg.Name, sg.Value, at); err != nil {
+			if usedSignals >= maxSignalRowsPerDay {
+				break
+			}
+			sg = sg.Clean()
+			res, err := tx.Exec(`INSERT OR IGNORE INTO session_signals(project, session_ref, account_id, harness, name, value, first_at)
+				VALUES(?,?,?,?,?,?,?)`, b.Project, b.SessionRef, account, b.Harness, sg.Name, sg.Value, at)
+			if err != nil {
 				return err
+			}
+			if n, err := res.RowsAffected(); err == nil && n == 1 {
+				usedSignals++
 			}
 		}
 		if _, err := tx.Exec(`DELETE FROM session_signals WHERE first_at < ?`,
 			t.Add(-sessionSignalRetention).Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	if usedRows != rows0 || usedSignals != signals0 {
+		if _, err := tx.Exec(`INSERT INTO context_log_quota(account_id, project, day, delivery_rows, signal_rows) VALUES(?,?,?,?,?)
+			ON CONFLICT(account_id, project, day) DO UPDATE SET delivery_rows=excluded.delivery_rows, signal_rows=excluded.signal_rows`,
+			account, b.Project, day, usedRows, usedSignals); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM context_log_quota WHERE day < ?`, t.AddDate(0, 0, -2).Format("2006-01-02")); err != nil {
 			return err
 		}
 	}
@@ -312,6 +390,61 @@ func deliveredTime(claimed string, now time.Time) string {
 	return now.Format(time.RFC3339)
 }
 
+type rollupKey struct {
+	month, project, via, kind string
+	object                    int64
+}
+
+type rollupSum struct{ n, chars int64 }
+
+// capRollupObjects keeps the monthly sums bounded: a key whose object the month
+// of its project does not have a row for yet, and which would be the
+// maxRollupObjectsPerMonth+1st, is counted under object 0 of the same route and
+// kind instead. Objects are taken in order of their number so the result does
+// not depend on map order.
+func capRollupObjects(tx *sql.Tx, sums map[rollupKey]*rollupSum) error {
+	keys := make([]rollupKey, 0, len(sums))
+	for k := range sums {
+		if k.object != 0 {
+			keys = append(keys, k)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].object < keys[j].object })
+	type mp struct{ month, project string }
+	counts := map[mp]int{}
+	for _, k := range keys {
+		var have int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM context_delivery_rollup WHERE month=? AND project=? AND via=? AND kind=? AND object_id=?`,
+			k.month, k.project, k.via, k.kind, k.object).Scan(&have); err != nil {
+			return err
+		}
+		if have > 0 {
+			continue
+		}
+		g := mp{k.month, k.project}
+		n, ok := counts[g]
+		if !ok {
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM context_delivery_rollup WHERE month=? AND project=?`, k.month, k.project).Scan(&n); err != nil {
+				return err
+			}
+		}
+		if n < maxRollupObjectsPerMonth {
+			counts[g] = n + 1
+			continue
+		}
+		counts[g] = n
+		to := k
+		to.object = 0
+		if sums[to] == nil {
+			sums[to] = &rollupSum{}
+		}
+		sums[to].n += sums[k].n
+		sums[to].chars += sums[k].chars
+		delete(sums, k)
+	}
+	return nil
+}
+
 // foldDeliveryLog moves rows older than cutoff into the monthly sums, at most
 // maxFoldPerWrite of them, oldest first. The sums keep how often and how much
 // was delivered per month, project, route, kind and object; the path and the
@@ -322,23 +455,18 @@ func foldDeliveryLog(tx *sql.Tx, cutoff string) error {
 	if err != nil {
 		return err
 	}
-	type key struct {
-		month, project, via, kind string
-		object                    int64
-	}
-	type sum struct{ n, chars int64 }
-	sums := map[key]*sum{}
+	sums := map[rollupKey]*rollupSum{}
 	var ids []int64
 	for rows.Next() {
 		var id, object, chars int64
-		var k key
+		var k rollupKey
 		if err := rows.Scan(&id, &k.month, &k.project, &k.via, &k.kind, &object, &chars); err != nil {
 			rows.Close()
 			return err
 		}
 		k.object = object
 		if sums[k] == nil {
-			sums[k] = &sum{}
+			sums[k] = &rollupSum{}
 		}
 		sums[k].n++
 		sums[k].chars += chars
@@ -346,6 +474,9 @@ func foldDeliveryLog(tx *sql.Tx, cutoff string) error {
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil || len(ids) == 0 {
+		return err
+	}
+	if err := capRollupObjects(tx, sums); err != nil {
 		return err
 	}
 	up, err := tx.Prepare(`INSERT INTO context_delivery_rollup(month, project, via, kind, object_id, deliveries, chars)
@@ -391,9 +522,12 @@ type DeliveryReport struct {
 	// subagent, and SubagentSessions the sessions that had any.
 	SubagentChars, SubagentSessions int
 	Lines                           []DeliveryLine
-	// Folded are the monthly sums from before the retention, for months that
-	// start in the window; they carry no session counts.
-	Folded []DeliveryLine
+	// Folded are the monthly sums from before the retention, for the whole months
+	// that lie inside the window (FoldedFrom, YYYY-MM, is the first of them); a
+	// month the window cuts into is left out, because its sum could not be split.
+	// They carry no session counts.
+	Folded     []DeliveryLine
+	FoldedFrom string
 }
 
 // DeliveryReport reads the log of these projects since the given day
@@ -435,10 +569,8 @@ func (s *Store) DeliveryReport(projects []string, since string) (DeliveryReport,
 		return rep, err
 	}
 	sortDeliveryLines(rep.Lines)
-	month := since
-	if len(month) > 7 {
-		month = month[:7]
-	}
+	month := firstWholeMonth(since)
+	rep.FoldedFrom = month
 	fq := append(append([]any{}, args...), month)
 	frows, err := s.db.Query(`SELECT via, kind, SUM(deliveries), SUM(chars) FROM context_delivery_rollup
 		WHERE project IN (`+in+`) AND month >= ? GROUP BY via, kind`, fq...)
@@ -455,6 +587,25 @@ func (s *Store) DeliveryReport(projects []string, since string) (DeliveryReport,
 	}
 	sortDeliveryLines(rep.Folded)
 	return rep, frows.Err()
+}
+
+// firstWholeMonth is the first month (YYYY-MM) that lies wholly inside a window
+// that starts at since (a day or an RFC 3339 time): the month of since when
+// the window starts at its very beginning, otherwise the next one.
+func firstWholeMonth(since string) string {
+	day := since
+	if len(day) > 10 {
+		day = day[:10]
+	}
+	d, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return "9999-99" // not a date: no month is inside it
+	}
+	whole := d.Day() == 1 && (len(since) <= 10 || strings.HasPrefix(since[10:], "T00:00:00"))
+	if !whole {
+		d = time.Date(d.Year(), d.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+	}
+	return d.Format("2006-01")
 }
 
 func sortDeliveryLines(ls []DeliveryLine) {
@@ -500,6 +651,35 @@ type SignalReport struct {
 	Lines []SignalLine
 }
 
+// signalReportSQL is the query of SignalReport. It works in three steps, so
+// that the stored transcript is read once per session and not once per signal
+// row: the signals of the window joined to their sessions, then the sessions
+// that are over (each once, however many signals they have), then the prompts
+// of each of those, counted up to one more than "short" needs. The last step
+// is MATERIALIZED so that it is evaluated once per session and is not folded
+// back into the join, where it would run per signal row again.
+//
+// Parameters in order: the projects, since, settled (a session is over when
+// its last activity is before it), the prompt limit, shortSessionPrompts, settled.
+func signalReportSQL(in string) string {
+	return `WITH sig AS (
+		SELECT g.name AS name, g.value AS value, se.id AS sid, se.last_seen_at AS seen
+		FROM session_signals g
+		LEFT JOIN sessions se ON se.external_id=g.session_ref AND se.project=g.project AND (se.account_id=0 OR se.account_id=g.account_id)
+		WHERE g.project IN (` + in + `) AND g.first_at >= ?),
+	over_sessions AS MATERIALIZED (
+		SELECT DISTINCT sid FROM sig WHERE sid IS NOT NULL AND seen < ?),
+	prompts AS MATERIALIZED (
+		SELECT o.sid AS sid,
+			(SELECT COUNT(*) FROM (SELECT 1 FROM chunk_index ci WHERE ci.session_id=o.sid AND ci.is_prompt=1 LIMIT ?)) AS n
+		FROM over_sessions o)
+	SELECT sig.name, sig.value, COUNT(*),
+		SUM(CASE WHEN p.sid IS NOT NULL THEN 1 ELSE 0 END),
+		SUM(CASE WHEN p.sid IS NOT NULL AND p.n <= ? THEN 1 ELSE 0 END)
+	FROM sig LEFT JOIN prompts p ON p.sid=sig.sid AND sig.seen < ?
+	GROUP BY sig.name, sig.value`
+}
+
 // SignalReport reads the signals of these projects since a day, held against
 // the number of prompts of the stored transcript (counted when the report is
 // made, so it is the length the session ended with, not the one it had at
@@ -514,16 +694,8 @@ func (s *Store) SignalReport(projects []string, since string) (SignalReport, err
 	}
 	in, args := inList(projects)
 	settled := time.Now().UTC().Add(-signalSettleTime).Format(time.RFC3339)
-	q := append(append([]any{}, args...), since)
-	rows, err := s.db.Query(`SELECT g.name, g.value, COUNT(*),
-		SUM(CASE WHEN se.id IS NOT NULL AND se.last_seen_at < ? THEN 1 ELSE 0 END),
-		SUM(CASE WHEN se.id IS NOT NULL AND se.last_seen_at < ? AND
-			(SELECT COUNT(*) FROM (SELECT 1 FROM chunk_index ci WHERE ci.session_id=se.id AND ci.is_prompt=1 LIMIT ?)) <= ? THEN 1 ELSE 0 END)
-		FROM session_signals g
-		LEFT JOIN sessions se ON se.external_id=g.session_ref AND se.project=g.project AND (se.account_id=0 OR se.account_id=g.account_id)
-		WHERE g.project IN (`+in+`) AND g.first_at >= ?
-		GROUP BY g.name, g.value`,
-		append([]any{settled, settled, shortSessionPrompts + 1, shortSessionPrompts}, q...)...)
+	rows, err := s.db.Query(signalReportSQL(in),
+		append(append([]any{}, args...), since, settled, shortSessionPrompts+1, shortSessionPrompts, settled)...)
 	if err != nil {
 		return rep, err
 	}

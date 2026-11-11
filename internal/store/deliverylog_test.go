@@ -72,16 +72,14 @@ func TestRecordContextLogRefusesWhatItShouldNotStore(t *testing.T) {
 	defer s.Close()
 	ok := DeliveryEvent{Call: "aaaa", Parts: logParts(5)}
 	for name, b := range map[string]ContextLogBatch{
-		"no project":       {SessionRef: "s", Events: []DeliveryEvent{ok}},
-		"no session":       {Project: logProject, Events: []DeliveryEvent{ok}},
-		"nothing":          {Project: logProject, SessionRef: "s"},
-		"no call":          {Project: logProject, SessionRef: "s", Events: []DeliveryEvent{{Parts: logParts(5)}}},
-		"no parts":         {Project: logProject, SessionRef: "s", Events: []DeliveryEvent{{Call: "a"}}},
-		"bad part":         {Project: logProject, SessionRef: "s", Events: []DeliveryEvent{{Call: "a", Parts: []deliverylog.Part{{Via: "x", Kind: "knowledge"}}}}},
-		"bad time":         {Project: logProject, SessionRef: "s", Events: []DeliveryEvent{{Call: "a", At: "yesterday", Parts: logParts(5)}}},
-		"unknown signal":   {Project: logProject, SessionRef: "s", Signals: []SessionSignal{{Name: "HOME", Value: "/home/x"}}},
-		"control in value": {Project: logProject, SessionRef: "s", Signals: []SessionSignal{{Name: "CLAUDE_CODE_ENTRYPOINT", Value: "a\x00b"}}},
-		"long value":       {Project: logProject, SessionRef: "s", Signals: []SessionSignal{{Name: "CLAUDE_CODE_ENTRYPOINT", Value: strings.Repeat("x", 65)}}},
+		"no project":     {SessionRef: "s", Events: []DeliveryEvent{ok}},
+		"no session":     {Project: logProject, Events: []DeliveryEvent{ok}},
+		"nothing":        {Project: logProject, SessionRef: "s"},
+		"no call":        {Project: logProject, SessionRef: "s", Events: []DeliveryEvent{{Parts: logParts(5)}}},
+		"no parts":       {Project: logProject, SessionRef: "s", Events: []DeliveryEvent{{Call: "a"}}},
+		"bad part":       {Project: logProject, SessionRef: "s", Events: []DeliveryEvent{{Call: "a", Parts: []deliverylog.Part{{Via: "x", Kind: "knowledge"}}}}},
+		"bad time":       {Project: logProject, SessionRef: "s", Events: []DeliveryEvent{{Call: "a", At: "yesterday", Parts: logParts(5)}}},
+		"unknown signal": {Project: logProject, SessionRef: "s", Signals: []SessionSignal{{Name: "HOME", Value: "/home/x"}}},
 	} {
 		if err := s.RecordContextLog(b, 1); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -171,17 +169,51 @@ func TestContextLogFoldsRowsOlderThanTheRetention(t *testing.T) {
 			t.Errorf("the rollup keeps %q", name)
 		}
 	}
-	// The report names the folded months when its window reaches back to them.
-	rep, err := s.DeliveryReport([]string{logProject}, old[:10])
-	if err != nil {
-		t.Fatal(err)
+	// The report names a folded month only when the whole month lies in its
+	// window: a window that starts inside the month cannot tell which part of
+	// the sum falls in it, so it leaves the month out and says where it starts.
+	foldedParts := func(since string) (int, string) {
+		t.Helper()
+		rep, err := s.DeliveryReport([]string{logProject}, since)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, l := range rep.Folded {
+			n += l.Parts
+		}
+		return n, rep.FoldedFrom
 	}
-	folded := 0
-	for _, l := range rep.Folded {
-		folded += l.Parts
+	month := old[:7]
+	if n, from := foldedParts(month + "-01"); n != 6 || from != month {
+		t.Errorf("window from the first of the month: %d folded parts from %q, want 6 from %q", n, from, month)
 	}
-	if folded != 6 {
-		t.Errorf("folded parts in the report: %d", folded)
+	if n, from := foldedParts(month + "-01T00:00:00Z"); n != 6 || from != month {
+		t.Errorf("window from midnight of the first: %d from %q", n, from)
+	}
+	if n, from := foldedParts(month + "-01T06:00:00Z"); n != 0 || from == month {
+		t.Errorf("window that starts after midnight of the first: %d folded parts from %q, want the month left out", n, from)
+	}
+	oldDay, _ := time.Parse(time.RFC3339, old)
+	if oldDay.Day() > 1 {
+		if n, from := foldedParts(old[:10]); n != 0 || from == month {
+			t.Errorf("window that starts inside the month: %d folded parts from %q, want the month left out", n, from)
+		}
+	}
+}
+
+func TestFirstWholeMonth(t *testing.T) {
+	for since, want := range map[string]string{
+		"2026-03-01":           "2026-03",
+		"2026-03-01T00:00:00Z": "2026-03",
+		"2026-03-01T00:00:01Z": "2026-04",
+		"2026-03-02":           "2026-04",
+		"2026-12-15":           "2027-01",
+		"2026-12-31T23:00:00Z": "2027-01",
+	} {
+		if got := firstWholeMonth(since); got != want {
+			t.Errorf("firstWholeMonth(%q) = %q, want %q", since, got, want)
+		}
 	}
 }
 
@@ -376,5 +408,155 @@ func TestToolReportSinceCountsSessionsPerToolOverAllActions(t *testing.T) {
 	future, err := s.ToolReportSince([]string{logProject}, "2999-01-01")
 	if err != nil || len(future.Tools) != 0 || future.Counted != 0 {
 		t.Errorf("a window in the future is empty: %+v %v", future, err)
+	}
+}
+
+// A signal value is a short token or it is "(invalid)": a value is never a
+// reason to lose the session's other signals, and never text that is listed.
+func TestSignalValuesAreShortTokensOrInvalid(t *testing.T) {
+	s, _ := Open(":memory:")
+	defer s.Close()
+	for i, c := range []struct{ value, want string }{
+		{"sdk-cli", "sdk-cli"}, {"", ""}, {"1", "1"}, {"a_b.c-D9", "a_b.c-D9"},
+		{strings.Repeat("x", 32), strings.Repeat("x", 32)},
+		{strings.Repeat("x", 33), SignalInvalid}, {"a b", SignalInvalid}, {"a\x00b", SignalInvalid},
+		{"/home/robin/secret", SignalInvalid}, {"süß", SignalInvalid}, {"a\nb", SignalInvalid}, {"\xff", SignalInvalid},
+		{SignalInvalid, SignalInvalid},
+	} {
+		ref := fmt.Sprintf("sig-%d", i)
+		err := s.RecordContextLog(ContextLogBatch{Project: logProject, SessionRef: ref, Harness: "claude", Signals: []SessionSignal{
+			{Name: "CLAUDE_CODE_ENTRYPOINT", Value: c.value}, {Name: "CLAUDE_CODE_CHILD_SESSION", Value: "1"}}}, 1)
+		if err != nil {
+			t.Fatalf("%q: a value must not refuse the report: %v", c.value, err)
+		}
+		var got string
+		if err := s.db.QueryRow(`SELECT value FROM session_signals WHERE session_ref=? AND name='CLAUDE_CODE_ENTRYPOINT'`, ref).Scan(&got); err != nil || got != c.want {
+			t.Errorf("value %q stored as %q (%v), want %q", c.value, got, err, c.want)
+		}
+		if n := logCount(t, s, `SELECT COUNT(*) FROM session_signals WHERE session_ref=? AND name='CLAUDE_CODE_CHILD_SESSION' AND value='1'`, ref); n != 1 {
+			t.Errorf("%q: the other signal of the report was lost", c.value)
+		}
+	}
+	if err := s.RecordContextLog(ContextLogBatch{Project: logProject, SessionRef: "s", Signals: []SessionSignal{{Name: "HOME", Value: "x"}}}, 1); err == nil {
+		t.Error("an unlisted name was accepted")
+	}
+}
+
+// What one account stores for one project in one day is bounded, whatever
+// session_ref and object numbers it picks; another account or project has its
+// own allowance.
+func TestRecordContextLogBoundsAnAccountsDay(t *testing.T) {
+	s, _ := Open(":memory:")
+	defer s.Close()
+	const other = "github.com/dw/other"
+	write := func(project string, account int64, n int, tag string) {
+		t.Helper()
+		var events []DeliveryEvent
+		for i := range n {
+			events = append(events, DeliveryEvent{Call: fmt.Sprintf("%s%d", tag, i), Parts: logParts(1)})
+		}
+		for len(events) > 0 {
+			k := min(len(events), maxContextLogEvents)
+			if err := s.RecordContextLog(ContextLogBatch{Project: project, SessionRef: fmt.Sprintf("%s-%d", tag, len(events)), Events: events[:k]}, account); err != nil {
+				t.Fatal(err)
+			}
+			events = events[k:]
+		}
+	}
+	// A new session each batch, so that the per-session limit does not apply.
+	write(logProject, 1, maxDeliveryRowsPerDay+500, "a")
+	if n := logCount(t, s, `SELECT COUNT(*) FROM context_delivery_log WHERE account_id=1 AND project=?`, logProject); n != maxDeliveryRowsPerDay {
+		t.Errorf("a day stored %d delivery rows, cap %d", n, maxDeliveryRowsPerDay)
+	}
+	write(logProject, 2, 10, "b")
+	write(other, 1, 10, "c")
+	if n := logCount(t, s, `SELECT COUNT(*) FROM context_delivery_log WHERE account_id=2 OR project=?`, other); n != 20 {
+		t.Errorf("another account or project got %d rows, want its own 20", n)
+	}
+	// A new day is a new allowance: only the day's count is kept, and old days go.
+	if _, err := s.db.Exec(`UPDATE context_log_quota SET day='2020-01-01'`); err != nil {
+		t.Fatal(err)
+	}
+	write(logProject, 1, 10, "d")
+	if n := logCount(t, s, `SELECT COUNT(*) FROM context_log_quota WHERE day='2020-01-01'`); n != 0 {
+		t.Errorf("%d quota rows of old days stayed", n)
+	}
+	if n := logCount(t, s, `SELECT COUNT(*) FROM context_delivery_log WHERE account_id=1 AND project=?`, logProject); n != maxDeliveryRowsPerDay+10 {
+		t.Errorf("after a day change the account stored %d rows in all", n)
+	}
+
+	// Signals: three rows per session, the same bound per day.
+	for i := 0; i < maxSignalRowsPerDay/2+50; i++ {
+		if err := s.RecordContextLog(ContextLogBatch{Project: logProject, SessionRef: fmt.Sprintf("sg%d", i), Harness: "claude",
+			Signals: []SessionSignal{{Name: "CLAUDE_CODE_ENTRYPOINT", Value: "cli"}, {Name: "CLAUDE_CODE_CHILD_SESSION", Value: "1"}}}, 3); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := logCount(t, s, `SELECT COUNT(*) FROM session_signals WHERE account_id=3`); n != maxSignalRowsPerDay {
+		t.Errorf("a day stored %d signal rows, cap %d", n, maxSignalRowsPerDay)
+	}
+	if err := s.RecordContextLog(ContextLogBatch{Project: logProject, SessionRef: "sg-other", Harness: "claude",
+		Signals: []SessionSignal{{Name: "CLAUDE_CODE_ENTRYPOINT", Value: "cli"}}}, 4); err != nil {
+		t.Fatal(err)
+	}
+	if n := logCount(t, s, `SELECT COUNT(*) FROM session_signals WHERE account_id=4`); n != 1 {
+		t.Errorf("another account's signal rows: %d", n)
+	}
+}
+
+// The monthly sums do not grow with the object numbers a caller picks: beyond
+// maxRollupObjectsPerMonth objects in a month of a project, further objects are
+// counted under object 0 of their route and kind, and nothing is lost from the
+// totals.
+func TestRollupObjectsPerMonthAreBounded(t *testing.T) {
+	s, _ := Open(":memory:")
+	defer s.Close()
+	old := time.Now().UTC().Add(-deliveryLogRetention - 40*24*time.Hour).Format(time.RFC3339)
+	total := maxRollupObjectsPerMonth + 150
+	tx, _ := s.db.Begin()
+	for i := 1; i <= total; i++ {
+		if _, err := tx.Exec(`INSERT INTO context_delivery_log(account_id, session_key, call, ord, project, via, kind, object_id, chars, delivered_at)
+			VALUES(1,?,?,0,?,?,?,?,2,?)`, fmt.Sprintf("s%d", i), fmt.Sprintf("c%d", i), logProject, deliverylog.ViaRelevance, deliverylog.KindKnowledge, i, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tx.Commit()
+	for i := range 3 { // the backlog is folded 2,000 rows per write
+		if err := s.RecordContextLog(ContextLogBatch{Project: logProject, SessionRef: fmt.Sprintf("now%d", i), Events: []DeliveryEvent{{Call: "n", Parts: logParts(1)}}}, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := logCount(t, s, `SELECT COUNT(*) FROM context_delivery_log WHERE delivered_at=?`, old); n != 0 {
+		t.Fatalf("%d old rows left unfolded", n)
+	}
+	if n := logCount(t, s, `SELECT COUNT(*) FROM context_delivery_rollup WHERE project=?`, logProject); n != maxRollupObjectsPerMonth+1 {
+		t.Errorf("rollup rows = %d, want %d objects and one for the rest", n, maxRollupObjectsPerMonth)
+	}
+	var deliveries, chars int
+	if err := s.db.QueryRow(`SELECT SUM(deliveries), SUM(chars) FROM context_delivery_rollup`).Scan(&deliveries, &chars); err != nil || deliveries != total || chars != 2*total {
+		t.Errorf("rollup totals %d deliveries, %d chars (%v), want %d and %d", deliveries, chars, err, total, 2*total)
+	}
+	if n := logCount(t, s, `SELECT deliveries FROM context_delivery_rollup WHERE object_id=0`); n != 150 {
+		t.Errorf("the rest holds %d deliveries, want 150", n)
+	}
+}
+
+// The tables carry a project column, so a rename of the project takes them
+// along without being told (renameProjectTx reads the schema).
+func TestDeliveryTablesFollowAProjectRename(t *testing.T) {
+	s, _ := Open(":memory:")
+	defer s.Close()
+	tables, err := projectTextTables(s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, n := range tables {
+		have[n] = true
+	}
+	for _, n := range []string{"context_delivery_log", "context_delivery_rollup", "session_signals", "context_log_quota"} {
+		if !have[n] {
+			t.Errorf("%s is not renamed with its project", n)
+		}
 	}
 }
