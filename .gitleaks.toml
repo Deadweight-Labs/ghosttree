@@ -1,0 +1,10 @@
+# Default rules of gitleaks, plus one exception: third-party bundles that are
+# vendored unchanged (internal/web/static/vendor/, versions and hashes in
+# THIRD_PARTY_NOTICES.md). Minified code there trips the generic-api-key rule on
+# identifiers such as keyCount; it holds no credentials of this project.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "vendored third-party bundles"
+paths = ['''^internal/web/static/vendor/''']
