@@ -234,6 +234,10 @@ type coordRequestActions struct {
 	RoomKey, CSRFToken string
 	// Note is set for an approval: it only keeps the answer in the room.
 	Note bool
+	// Quick are the proposed answers of the question; QuickID is its attention number.
+	Quick     []inboxOption
+	QuickID   int64
+	QuickKind string
 }
 
 // Merged joins the actions of all items of the card, each action once. The first
@@ -257,6 +261,9 @@ func (r coordRequestView) Merged() *coordRequestActions {
 	for _, item := range r.Items {
 		if item.CoordinationOnlyApproval && item.Incoming {
 			out.Note = true
+		}
+		if len(item.Options) > 0 && out.QuickID == 0 {
+			out.Quick, out.QuickID, out.QuickKind = item.Options, item.ID, store.AnswerOnAttention
 		}
 		if item.Primary != nil {
 			add(item.ID, *item.Primary)

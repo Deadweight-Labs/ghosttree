@@ -1092,6 +1092,11 @@ func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 	if err := insertRawMentionsTx(tx, id, rawMentions); err != nil {
 		return 0, false, err
 	}
+	if created {
+		if err := answerOpenQuestionsTx(tx, actor, message, id); err != nil {
+			return 0, false, err
+		}
+	}
 	if err := recordSenderRoleTx(tx, message, id); err != nil {
 		return 0, false, err
 	}

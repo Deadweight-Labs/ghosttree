@@ -79,7 +79,7 @@ func TestTaskReportIsTheComposerAndARefusalGoesBackToTheTask(t *testing.T) {
 	e, task, _ := taskFixture(t)
 	path := "/ui/x/shell/tasks/" + itoa(task.ID)
 	_, page := fetchPage(t, e.Member, e.Base+path)
-	mustContain(t, "task page", page, `class="cmt cx-cmt"`, `name="note"`, `data-wtab="p"`, `data-submit>Mark as done</button>`, `name="back" value="task"`, "A note for the agent")
+	mustContain(t, "task page", page, `class="cmt cx-cmt"`, `name="note"`, `data-wtab="p"`, `data-submit>Send note</button>`, `action="/ui/tasks/`+itoa(task.ID)+`/note"`, `name="back" value="task"`, "A note for the agent")
 	if strings.Contains(page, `tdone`) {
 		t.Error("the one-line form is still there")
 	}
@@ -88,7 +88,7 @@ func TestTaskReportIsTheComposerAndARefusalGoesBackToTheTask(t *testing.T) {
 	navPost := func(back string) *http.Response {
 		form := url.Values{"id": {itoa(task.ID)}, "back": {back}, "note": {"token ghp_" + strings.Repeat("Ab1", 5)}}
 		form.Set("csrf_token", renderedCSRFToken(t, e.Member, e.Base+"/ui/overview"))
-		req, err := http.NewRequest(http.MethodPost, e.Base+"/ui/tasks/done", strings.NewReader(form.Encode()))
+		req, err := http.NewRequest(http.MethodPost, e.Base+"/ui/tasks/"+itoa(task.ID)+"/note", strings.NewReader(form.Encode()))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -52,6 +52,9 @@ func (s *Store) TaskByID(id int64) (humantask.Task, error) {
 	if len(list) == 0 {
 		return humantask.Task{}, sql.ErrNoRows
 	}
+	if err := s.attachTaskNotes(list[:1]); err != nil {
+		return humantask.Task{}, err
+	}
 	return list[0], nil
 }
 
@@ -480,6 +483,9 @@ func (s *Store) ListHumanTasks(pa *ProjectAccess, f TaskFilter) ([]humantask.Tas
 				break
 			}
 		}
+	}
+	if err := s.attachTaskNotes(out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

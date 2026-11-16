@@ -260,6 +260,66 @@ func (a CoordAccess) ResolveAttention(id int64, action string) error {
 	return tx.Commit()
 }
 
+// answerOpenQuestionsTx closes the open questions the sender was asked when the
+// message they just wrote answers them (REQ-679): a reply to the question itself,
+// or a post in the thread the question lives in or is anchored to. A plain room
+// message does not count: nothing says which question it meets, so the card keeps
+// its own "mark as answered". Only the recipient's own entries close, and only
+// questions; an approval or a blocker has its own verdict.
+func answerOpenQuestionsTx(tx *sql.Tx, actor string, m CoordMessage, newID int64) error {
+	if newID == 0 || (m.ReplyTo == 0 && m.DestinationKind != DestinationDiscussion) {
+		return nil
+	}
+	// A counter-question, approval request, blocker or handoff is not an answer:
+	// two agents that ask each other still wait for each other (wait cycles).
+	if _, asks := attentionReasonForIntent(m.Intent); asks {
+		return nil
+	}
+	var anchor int64
+	if m.DestinationKind == DestinationDiscussion {
+		if threadID, err := parseThreadDestination(m.DestinationID); err == nil {
+			if home, found, err := threadHomeTx(tx, threadID); err != nil {
+				return err
+			} else if found {
+				anchor = home.AnchorMessageID
+			}
+		}
+	}
+	rows, err := tx.Query(`SELECT attention.id
+		FROM coord_attention attention JOIN coord_messages m ON m.id=attention.message_id
+		WHERE attention.recipient_principal_id=? AND attention.reason=? AND attention.state=?
+		AND m.id<>? AND (m.id=? OR m.id=? OR (m.destination_kind=? AND m.destination_id=?))`,
+		actor, AttentionQuestion, AttentionOpen, newID, nullableCoordID(m.ReplyTo), nullableCoordID(anchor), m.DestinationKind, m.DestinationID)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.Exec(`UPDATE coord_attention SET state=?,resolved_at=? WHERE id=? AND state=?`, AttentionResolved, now(), id, AttentionOpen); err != nil {
+			return err
+		}
+	}
+	if len(ids) > 0 {
+		return reconcileWaitCyclesSafeTx(tx, messageRoomKeyTx(tx, m.DestinationKind, m.DestinationID), time.Now().UTC())
+	}
+	return nil
+}
+
 func validAttentionAction(action string) bool {
 	switch action {
 	case AttentionActionAnswer, AttentionActionApprove, AttentionActionReject,
