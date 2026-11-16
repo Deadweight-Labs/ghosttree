@@ -61,11 +61,14 @@ and a pasted token, and says where a login link comes from: an owner of the
 organization makes one for a member on the Members page (one use, ten minutes),
 and `ctx web` on a connected machine signs the browser in (one use, two minutes,
 tied to that device token). Both are limits on purpose: an owner gets a link only
-for a member who belongs to no other organization and has no repositories in an
-own namespace (everyone else signs in by mail or with `ctx web`); `ctx web` works
+for a member who holds nothing outside that organization (no other seat, guest
+seat or project role, no repositories in an own namespace; everyone else signs in
+by mail or with `ctx web`); `ctx web` works
 with a device token (`ctx login`), not with a pasted or provisioned token, which
 keeps its read-only web session; and a session that started from such a link
-cannot change the address or the password of the account.
+cannot change the address or the password of the account and cannot pair or
+approve a device (a link made by the host with `ctx account login-link` is the
+operator's own onboarding and is not limited this way).
 
 ### Mail sending
 

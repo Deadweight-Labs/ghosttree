@@ -180,6 +180,20 @@ func (a *app) notInteractive(w http.ResponseWriter, r *http.Request) {
 	a.renderBrowser(w, r, "interactive", pageData{Title: l.msg("adm.login.title"), OIDC: a.oidc != nil})
 }
 
+// requireCredentialSession refuses a session that started from a one-time login
+// link (an owner's, or ctx web) on every route that hands out or approves a
+// credential: pairing and approving a device. Such a session would otherwise turn
+// a link of minutes into a token that lasts.
+func (a *app) requireCredentialSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.linkSession(r) {
+			http.Error(w, a.langFor(r).msg("mail.error_link_session"), http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (a *app) requireCSRF(next http.Handler) http.Handler { return a.csrfGate(next, false) }
 
 // requireCSRFMultipart is requireCSRF for the one kind of form that carries a
@@ -534,6 +548,9 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	var account store.Account
 	var err error
+	// restrictedLink: an owner or a device made this login link. Its session may not
+	// change how the account signs in or hand out credentials.
+	restrictedLink := false
 	kind := a.store.CodeKindFor(code)
 	switch kind {
 	case store.CodeBootstrap:
@@ -549,6 +566,7 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	case store.CodeLogin:
+		restrictedLink = a.store.LoginLinkRestricted(code)
 		account, err = a.store.RedeemLoginLink(code)
 	case store.CodeClaim:
 		// Ein Claim-Code gehört zum Anbieter-Ablauf; ohne OIDC gibt es ihn nicht.
@@ -618,7 +636,7 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		a.finishLoginTo(w, r, account, "/ui/overview")
 		return
 	}
-	if kind == store.CodeLogin {
+	if kind == store.CodeLogin && restrictedLink {
 		a.startSessionLink(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, a.takeNext(w, r, "/ui/inbox"), true)
 		return
 	}

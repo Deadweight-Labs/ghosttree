@@ -644,18 +644,33 @@ func (s *Store) PasswordLogin(email string) (account Account, hash string, ok bo
 // than this organization: membership of another organization, or repositories in
 // the person's own namespace. Such a member signs in by mail, or with ctx web.
 func loginLinkScopeTx(q queryer, orgID, target int64) error {
-	var elsewhere int
-	if err := q.QueryRow(`SELECT COUNT(*) FROM org_members m JOIN orgs o ON o.id=m.org_id
-		WHERE m.account_id=? AND m.org_id<>? AND o.kind<>?`, target, orgID, OrgKindUser).Scan(&elsewhere); err != nil {
-		return err
+	// Deny by default: everything the person holds must belong to this organization.
+	// Their own namespace counts only while it is empty.
+	count := func(query string, args ...any) (int, error) {
+		var n int
+		err := q.QueryRow(query, args...).Scan(&n)
+		return n, err
 	}
-	var own int
-	if err := q.QueryRow(`SELECT COUNT(*) FROM projects p JOIN orgs o ON o.id=p.org_id WHERE o.kind=? AND o.account_id=?`,
-		OrgKindUser, target).Scan(&own); err != nil {
-		return err
-	}
-	if elsewhere > 0 || own > 0 {
-		return ErrLoginLinkScope
+	for _, check := range []struct {
+		query string
+		args  []any
+	}{
+		// a seat (member, owner or guest) in any other organization
+		{`SELECT COUNT(*) FROM org_members m JOIN orgs o ON o.id=m.org_id
+			WHERE m.account_id=? AND m.org_id<>? AND NOT (o.kind=? AND o.account_id=m.account_id)`, []any{target, orgID, OrgKindUser}},
+		{`SELECT COUNT(*) FROM org_guests WHERE account_id=? AND org_id<>?`, []any{target, orgID}},
+		// a role in a project of another organization
+		{`SELECT COUNT(*) FROM project_members pm JOIN projects p ON p.id=pm.project_id WHERE pm.account_id=? AND p.org_id<>?`, []any{target, orgID}},
+		// repositories in their own namespace
+		{`SELECT COUNT(*) FROM projects p JOIN orgs o ON o.id=p.org_id WHERE o.kind=? AND o.account_id=?`, []any{OrgKindUser, target}},
+	} {
+		n, err := count(check.query, check.args...)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return ErrLoginLinkScope
+		}
 	}
 	return nil
 }
@@ -797,6 +812,23 @@ func insertLoginCodeTx(tx execQueryer, account int64, ttl time.Duration, issuer,
 		return "", err
 	}
 	return code, nil
+}
+
+// LoginLinkRestricted says whether a login link was made by someone other than
+// the host: an owner for a member, or a device (ctx web). A session that starts
+// from such a link may not change how the account signs in or hand out
+// credentials. A link from the host (ctx account login-link) is the operator's
+// own way of onboarding a person and is not restricted. Looking does not use the
+// link up.
+func (s *Store) LoginLinkRestricted(code string) bool {
+	if s.reader != nil {
+		return s.reader.LoginLinkRestricted(code)
+	}
+	var issuer, token int64
+	if s.db.QueryRow(`SELECT issued_by, token_id FROM account_codes WHERE code_hash=? AND kind='login'`, hashToken(code)).Scan(&issuer, &token) != nil {
+		return false
+	}
+	return issuer != 0 || token != 0
 }
 
 // loginCodeTokenValidTx prüft bei einem an ein Gerät gebundenen Login-Link, ob

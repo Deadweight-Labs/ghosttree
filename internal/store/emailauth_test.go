@@ -452,3 +452,38 @@ func TestWebLoginLinkNeedsADeviceToken(t *testing.T) {
 		t.Fatalf("a token of another account: %v", err)
 	}
 }
+
+func TestLoginLinkScopeDeniesAnyHoldingOutsideTheOrganization(t *testing.T) {
+	s, owner, org := emailFixture(t)
+	mara := memberWithEmail(t, s, owner, org, "mara", "")
+	if !s.LoginLinkAllowed(org.ID, mara.ID) {
+		t.Fatal("a plain member is refused")
+	}
+	other, _ := s.AddAccount("other", "", false)
+	second, _ := s.CreateOrg(other.ID, "Second", "second")
+	id := mustID(t, mara.ID)
+	// A guest seat of another organization.
+	if _, err := s.db.Exec(`INSERT INTO org_guests(org_id, account_id) VALUES(?,?)`, second.ID, id); err != nil {
+		t.Fatal(err)
+	}
+	if s.LoginLinkAllowed(org.ID, mara.ID) {
+		t.Fatal("a guest elsewhere is offered a login link")
+	}
+	s.db.Exec(`DELETE FROM org_guests WHERE account_id=?`, id)
+	// A role in a project of another organization, without a seat there.
+	res, err := s.db.Exec(`INSERT INTO projects(remote, org_id, name, created_at) VALUES('github.com/other/app',?,'app',?)`, second.ID, now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prID, _ := res.LastInsertId()
+	if _, err := s.db.Exec(`INSERT INTO project_members(project_id, account_id, role, can_review, granted_by, granted_at) VALUES(?,?,?,0,?,?)`,
+		prID, id, RoleMember, mustID(t, other.ID), now()); err != nil {
+		t.Fatal(err)
+	}
+	if s.LoginLinkAllowed(org.ID, mara.ID) {
+		t.Fatal("a project role elsewhere is offered a login link")
+	}
+	if _, _, err := s.IssueMemberLoginLink(owner.ID, org.ID, mara.ID); !errors.Is(err, ErrLoginLinkScope) {
+		t.Fatalf("err = %v", err)
+	}
+}

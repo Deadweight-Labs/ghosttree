@@ -263,6 +263,7 @@ var writerMethodClasses = map[string]string{
 	"CodeKindFor":                   "read",
 	"PreviewJoin":                   "read",
 	"LoginLinkAllowed":              "read",
+	"LoginLinkRestricted":           "read",
 	"PasswordHash":                  "read",
 	"PasswordLogin":                 "read",
 	"WelcomeCards":                  "read",

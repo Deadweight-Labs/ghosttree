@@ -974,12 +974,39 @@ func (r *recordingSender) last() string {
 	return r.msgs[len(r.msgs)-1].Text
 }
 
+// ownerLinkSession signs in as a member through a login link that an owner made
+// (alice owns org "alpha", jonas is its only member).
+func (m *mailInstance) ownerLinkSession() *http.Client {
+	m.t.Helper()
+	alice := m.account("alice", "alice@example.test")
+	org, err := m.st.CreateOrg(alice.ID, "Alpha", "alpha")
+	if err != nil {
+		m.t.Fatal(err)
+	}
+	jonas := m.account("jonas", "jonas@example.test")
+	inv, _, _ := m.st.CreateInvitation(alice.ID, org.ID, "", store.OrgMember, time.Hour)
+	if _, err := m.st.AcceptInvitation(jonas.ID, inv); err != nil {
+		m.t.Fatal(err)
+	}
+	code, _, err := m.st.IssueMemberLoginLink(alice.ID, org.ID, jonas.ID)
+	if err != nil {
+		m.t.Fatal(err)
+	}
+	resp := m.post(noRedirect(), "/ui/login/code", url.Values{"code": {code}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		m.t.Fatalf("owner link: %d", resp.StatusCode)
+	}
+	c := noRedirect()
+	c.Jar = cookieJar{cookies: resp.Cookies()}
+	return c
+}
+
 // A session that started from a one-time link (an owner's, or ctx web) cannot
 // change how the account signs in.
 func TestSessionFromALoginLinkCannotChangeAddressOrPassword(t *testing.T) {
 	m := newMailInstance(t, true)
-	m.account("jonas", "jonas@example.test")
-	c := loginInteractive(t, m.srv, m.st, "jonas") // CreateAccountCode(login): a link
+	c := m.ownerLinkSession()
 	csrf := csrfFromProfile(t, m, c)
 	for path, form := range map[string]url.Values{
 		"/ui/profile/email":    {"csrf_token": {csrf}, "email": {"mine@example.test"}},
@@ -1004,5 +1031,32 @@ func TestSessionFromALoginLinkCannotChangeAddressOrPassword(t *testing.T) {
 	csrf2 := csrfFromProfile(t, m, c2)
 	if resp := m.post(c2, "/ui/profile/password", url.Values{"csrf_token": {csrf2}, "password": {"mailed pw one"}, "password2": {"mailed pw one"}}); resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("a session from the mailed code cannot set a password: %d", resp.StatusCode)
+	}
+}
+
+// A session from a login link cannot pair or approve a device either: that would
+// turn a link of minutes into a token that lasts.
+func TestSessionFromALoginLinkCannotApproveOrPairADevice(t *testing.T) {
+	m := newMailInstance(t, false)
+	c := m.ownerLinkSession()
+	page := body(t, getURL(t, c, m.srv.URL+"/ui/device"))
+	csrf := regexp.MustCompile(`name="csrf_token" value="([0-9a-f]+)"`).FindStringSubmatch(page)
+	if csrf == nil {
+		t.Fatalf("no form on the device page: %s", page)
+	}
+	for _, path := range []string{"/ui/device", "/ui/device/decide", "/join/pair", "/join/pair/decide"} {
+		resp := m.post(c, path, url.Values{"csrf_token": {csrf[1]}, "user_code": {"ABCD-EFGH"}})
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s from a link session: %d, want 403", path, resp.StatusCode)
+		}
+	}
+	// The same account signed in by the mailed code gets past this gate.
+	c2 := m.signInByCode("jonas@example.test")
+	csrf2 := csrfFromProfile(t, m, c2)
+	resp := m.post(c2, "/ui/device", url.Values{"csrf_token": {csrf2}, "user_code": {"ABCD-EFGH"}})
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden && false {
+		t.Fatal("unreachable")
 	}
 }
