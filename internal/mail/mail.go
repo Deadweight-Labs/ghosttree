@@ -164,10 +164,13 @@ func build(from string, m Message, at time.Time) ([]byte, error) {
 			domain = f.Address[i+1:]
 		}
 	}
+	// A header value never carries a line break (safeHeader refused one above);
+	// the values are cleaned once more where they enter the text.
+	clean := strings.NewReplacer("\r", "", "\n", "", "\x00", "").Replace
 	var b strings.Builder
-	b.WriteString("From: " + from + "\r\n")
-	b.WriteString("To: " + to.Address + "\r\n")
-	b.WriteString("Subject: " + mime.QEncoding.Encode("utf-8", m.Subject) + "\r\n")
+	b.WriteString("From: " + clean(from) + "\r\n")
+	b.WriteString("To: " + clean(to.Address) + "\r\n")
+	b.WriteString("Subject: " + clean(mime.QEncoding.Encode("utf-8", m.Subject)) + "\r\n")
 	b.WriteString("Date: " + at.Format(time.RFC1123Z) + "\r\n")
 	b.WriteString("Message-ID: <" + hex.EncodeToString(id[:]) + "@" + domain + ">\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")

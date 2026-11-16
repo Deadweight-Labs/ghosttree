@@ -81,9 +81,11 @@ func (a *app) welcomeDismiss(w http.ResponseWriter, r *http.Request) {
 	if id, err := strconv.ParseInt(r.FormValue("org"), 10, 64); err == nil {
 		_ = a.store.DismissWelcome(browserPrincipal(r).ID, id)
 	}
+	// Back to one of the two pages that show the card; a value from the form never
+	// becomes the address itself.
 	back := "/ui/inbox"
-	if b := r.FormValue("back"); strings.HasPrefix(b, "/ui/") && !strings.HasPrefix(b, "//") {
-		back = b
+	if r.FormValue("back") == "/ui/overview" {
+		back = "/ui/overview"
 	}
 	http.Redirect(w, r, back, http.StatusSeeOther)
 }
