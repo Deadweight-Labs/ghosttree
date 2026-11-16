@@ -132,7 +132,7 @@ func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
 		repo = rv.Href
 	} else {
 		for _, p := range base.projects {
-			if repo == "" || p.Selected {
+			if (repo == "" || p.Selected) && repoAddressable(p.Remote) {
 				repo = repoHref(p.Remote)
 			}
 		}

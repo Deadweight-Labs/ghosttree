@@ -462,3 +462,46 @@ func mustStore(t *testing.T) *store.Store {
 	t.Cleanup(func() { st.Close() })
 	return st
 }
+
+// PAIN-83: on a page without a project (the inbox) the "+" menu took the first
+// project in alphabetical order. A remote the repository pages cannot address
+// (ai//opt/assistant sorts before github.com) made every entry a 404.
+func TestTheNewMenuOutsideARepositoryLeadsToAFormThatExists(t *testing.T) {
+	e := ovEnv(t)
+	for _, odd := range []string{"ai//opt/assistant", "nurrobin/infra"} {
+		if _, err := e.St.ClaimProject("person:1", odd, "alpha"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/inbox?project=")
+	for _, kind := range []string{"idea", "issue", "pain"} {
+		_, after, ok := strings.Cut(page, `data-new="`+kind+`" href="`)
+		if !ok {
+			t.Fatalf("no %s entry in the + menu", kind)
+		}
+		href, _, _ := strings.Cut(after, `"`)
+		href = strings.ReplaceAll(href, "&amp;", "&")
+		resp, err := e.Owner.Get(e.Base + href)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s: %s answers %d", kind, href, resp.StatusCode)
+		}
+	}
+}
+
+func TestRepoAddressable(t *testing.T) {
+	for remote, want := range map[string]bool{
+		"github.com/x/shell":          true,
+		"gitlab.winehq.org/wine/wine": true,
+		"github.com/inbox/thing":      true,
+		"nurrobin/infra":              false,
+		"ai//opt/assistant":           false,
+	} {
+		if got := repoAddressable(remote); got != want {
+			t.Errorf("%s: %v, want %v", remote, got, want)
+		}
+	}
+}
