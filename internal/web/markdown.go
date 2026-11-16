@@ -52,6 +52,11 @@ var (
 	mdQuote = regexp.MustCompile(`^ {0,3}>`)
 	mdItem  = regexp.MustCompile(`^( *)([-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$`)
 	mdSep   = regexp.MustCompile(`^ {0,3}\|? *:?-+:? *(?:\| *:?-+:? *)*\|? *$`)
+	// The lines of a section that opens and closes, as ui-md.js reads them: <details> (with its
+	// <summary> on the same line or the next), and </details>.
+	mdDetails    = regexp.MustCompile(`(?i)^ {0,3}<details( +open)?>[ \t]*(?:<summary>(.*?)</summary>[ \t]*)?$`)
+	mdSummary    = regexp.MustCompile(`(?i)^ {0,3}<summary>(.*?)</summary>[ \t]*$`)
+	mdDetailsEnd = regexp.MustCompile(`(?i)^ {0,3}</details>[ \t]*$`)
 )
 
 // mdRule is a line of three or more of one of - * _ (spaces between are fine).
@@ -98,7 +103,7 @@ func mdCells(l string) []string {
 
 // mdInterrupts is true for a line that ends a paragraph.
 func mdInterrupts(l string) bool {
-	if mdFence.MatchString(l) || mdHead.MatchString(l) || mdQuote.MatchString(l) || mdRule(l) {
+	if mdFence.MatchString(l) || mdHead.MatchString(l) || mdQuote.MatchString(l) || mdRule(l) || mdDetails.MatchString(l) || mdDetailsEnd.MatchString(l) {
 		return true
 	}
 	m := mdItem.FindStringSubmatch(l)
@@ -111,6 +116,8 @@ func mdIndent(l string) int { return len(l) - len(strings.TrimLeft(l, " ")) }
 func mdSplit(s string) []bodyBlock {
 	lines := strings.Split(strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n"), "\n")
 	var out []bodyBlock
+	// open counts the sections that are open: a </details> with none open is just text.
+	open := 0
 	for i := 0; i < len(lines); {
 		ln := lines[i]
 		if strings.TrimSpace(ln) == "" {
@@ -136,6 +143,29 @@ func mdSplit(s string) []bodyBlock {
 				src += "\n" + m[1]
 			}
 			out = append(out, bodyBlock{Kind: "code", Code: true, Text: strings.Trim(strings.Join(code, "\n"), "\n"), Src: src})
+			continue
+		}
+		if m := mdDetails.FindStringSubmatchIndex(ln); m != nil {
+			// The lines that open and close a section are blocks of their own, so the source the
+			// script renders keeps them; a page without the script shows the summary as a paragraph.
+			summary, src := "", ln
+			if m[4] >= 0 {
+				summary = ln[m[4]:m[5]]
+			} else if i+1 < len(lines) {
+				if s := mdSummary.FindStringSubmatch(lines[i+1]); s != nil {
+					summary, src = s[1], ln+"\n"+lines[i+1]
+					i++
+				}
+			}
+			out = append(out, bodyBlock{Kind: "details", Text: strings.TrimSpace(summary), Src: src})
+			open++
+			i++
+			continue
+		}
+		if open > 0 && mdDetailsEnd.MatchString(ln) {
+			out = append(out, bodyBlock{Kind: "details-end", Src: ln})
+			open--
+			i++
 			continue
 		}
 		if m := mdHead.FindStringSubmatch(ln); m != nil {
@@ -212,7 +242,9 @@ func bodyBlocks(s string, limit int) []bodyBlock {
 	var out []bodyBlock
 	budget := limit
 	for _, b := range mdSplit(s) {
-		if strings.TrimSpace(b.Text) == "" && b.Kind != "hr" {
+		// A rule and the lines of a section have no text and stay: they are part of the source.
+		structure := b.Kind == "hr" || b.Kind == "details" || b.Kind == "details-end"
+		if strings.TrimSpace(b.Text) == "" && !structure {
 			continue
 		}
 		if limit > 0 && b.Kind != "hr" {
@@ -231,7 +263,7 @@ func bodyBlocks(s string, limit int) []bodyBlock {
 			}
 			budget -= n
 		}
-		if b.Kind == "" || b.Kind == "h" || b.Kind == "quote" {
+		if b.Kind == "" || b.Kind == "h" || b.Kind == "quote" || b.Kind == "details" {
 			b.Parts = inlineParts(b.Text)
 		}
 		out = append(out, b)
@@ -282,6 +314,11 @@ func mdBlocksOpt(blocks []bodyBlock, o mdOptions) template.HTML {
 			b.WriteString(">" + partsHTML(bl.Parts) + "</" + tag + ">")
 		case "hr":
 			b.WriteString("<hr>")
+		case "details":
+			if bl.Text != "" {
+				b.WriteString("<p><strong>" + partsHTML(bl.Parts) + "</strong></p>")
+			}
+		case "details-end":
 		case "quote":
 			b.WriteString("<blockquote><p>" + partsHTML(inlineParts(quoteText(bl.Text))) + "</p></blockquote>")
 		case "list":

@@ -160,9 +160,11 @@ func (h *appHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // uiHeaders: Skripte, Stile, Schriften und Bilder nur von dieser Herkunft,
 // keine fremden Ressourcen, nicht einbettbar. form-action bleibt offen, weil der
-// Weg zum Identitätsanbieter eine Weiterleitung ist.
+// Weg zum Identitätsanbieter eine Weiterleitung ist. frame-src 'self' erlaubt
+// den einen unsichtbaren Rahmen, in dem Mermaid zeichnet (mermaid_frame.go);
+// sonst bliebe die Richtlinie wie sie war, ohne 'unsafe-inline' und ohne fremden Host.
 func uiHeaders(h http.Header) {
-	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'self'; base-uri 'none'; frame-ancestors 'none'")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "strict-origin")
 	h.Set("Cache-Control", "no-store")
@@ -178,6 +180,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	serverVersionText.Store(version.Label(a.buildVersion))
 	mux := http.NewServeMux()
 	a.handle(mux, "GET /static/", a.staticFiles())
+	a.handle(mux, "GET /ui/mermaid-frame", a.mermaidFrame)
 	a.handle(mux, "GET /{$}", a.rootRedirect)
 	a.handle(mux, "GET /", a.unknownAddress)
 	a.handle(mux, "GET /favicon.ico", a.favicon)
