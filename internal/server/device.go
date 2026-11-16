@@ -210,6 +210,9 @@ func (a *api) webLoginLink(w http.ResponseWriter, r *http.Request) {
 	}
 	code, ttl, err := a.st.IssueWebLoginLink(p.ID, p.TokenID, p.Machine)
 	switch {
+	case errors.Is(err, store.ErrDeviceTokenRequired):
+		writeCoded(w, http.StatusForbidden, "device_token_required", "a sign-in link is made with a device token (ctx login), not with a pasted or provisioned token")
+		return
 	case errors.Is(err, store.ErrAccountDisabled):
 		writeErr(w, http.StatusForbidden, "forbidden")
 		return

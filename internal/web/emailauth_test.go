@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -105,6 +106,22 @@ func (m *mailInstance) account(name, email string) store.Account {
 		m.t.Fatal(err)
 	}
 	return a
+}
+
+// signInByCode signs an account in the way a person does: address, mail, code. A
+// session from a login link may not change credentials, one from the mail may.
+func (m *mailInstance) signInByCode(email string) *http.Client {
+	m.t.Helper()
+	m.post(noRedirect(), "/ui/mail/login/request", url.Values{"email": {email}}).Body.Close()
+	code, _, _ := m.lastMail(email)
+	resp := m.post(noRedirect(), "/ui/mail/login/code", url.Values{"email": {email}, "code": {code}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		m.t.Fatalf("sign in by code: %d", resp.StatusCode)
+	}
+	c := noRedirect()
+	c.Jar = cookieJar{cookies: resp.Cookies()}
+	return c
 }
 
 // signedIn reports whether a response started a session that reaches the inbox.
@@ -361,7 +378,7 @@ func TestPasswordSetChangeSignInAndNoLeakOfAccounts(t *testing.T) {
 	m := newMailInstance(t, true)
 	jonas := m.account("jonas", "jonas@example.test")
 	m.account("pia", "pia@example.test")
-	c := loginInteractive(t, m.srv, m.st, "jonas")
+	c := m.signInByCode("jonas@example.test")
 
 	// The profile sets a password; a short one and two different ones are refused.
 	set := func(form url.Values) *http.Response {
@@ -600,7 +617,7 @@ func TestInvitationBoundToAnAddressNeedsThatAddressBeforeAnythingExists(t *testi
 func TestProfileChangesTheAddressOnlyAfterConfirmation(t *testing.T) {
 	m := newMailInstance(t, false)
 	m.account("jonas", "alt@example.test")
-	c := loginInteractive(t, m.srv, m.st, "jonas")
+	c := m.signInByCode("alt@example.test")
 	csrf := csrfFromProfile(t, m, c)
 	page := body(t, getURL(t, c, m.srv.URL+"/ui/profile"))
 	if !strings.Contains(page, "alt@example.test") || !strings.Contains(page, "/ui/profile/email") {
@@ -618,8 +635,9 @@ func TestProfileChangesTheAddressOnlyAfterConfirmation(t *testing.T) {
 		t.Fatalf("the address changed before the confirmation: %q", a.Email)
 	}
 	// The old address still signs in meanwhile.
+	before := len(m.mails("alt@example.test"))
 	m.post(noRedirect(), "/ui/mail/login/request", url.Values{"email": {"alt@example.test"}}).Body.Close()
-	if len(m.mails("alt@example.test")) != 1 {
+	if len(m.mails("alt@example.test")) != before+1 {
 		t.Fatal("the old address does not get its sign-in mail")
 	}
 	code, _, _ := m.lastMail("neu@example.test")
@@ -878,5 +896,113 @@ func TestFirstAccountOfAnInstanceWithMailGivesAnAddressAndGetsAConfirmation(t *t
 	}
 	if a, _ := st.AccountByName("robin"); a.Email != "" || st.PendingEmail(a.ID) != "robin@example.test" {
 		t.Fatalf("account %+v pending %q", a, st.PendingEmail(a.ID))
+	}
+}
+
+// The link in a mail is built from the configured public address, never from the
+// Host header of whoever asked for the mail (REQ-676 security review).
+func TestMailLinkUsesThePublicAddressNotTheHostHeader(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.AddAccount("jonas", "jonas@example.test", false)
+	rec := &recordingSender{}
+	h := New(st, WithMail(rec), WithPublicURL("https://gt.example.test"))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	req, _ := http.NewRequest("POST", srv.URL+"/ui/mail/login/request", strings.NewReader("email=jonas%40example.test"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://evil.example")
+	req.Host = "evil.example"
+	resp, err := noRedirect().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	h.(*appHandler).app.mailWG.Wait()
+	text := rec.last()
+	if !strings.Contains(text, "https://gt.example.test/ui/mail/login/link?t=") || strings.Contains(text, "evil.example") {
+		t.Fatalf("mail:\n%s", text)
+	}
+}
+
+func TestMailWithoutAPublicAddressCarriesTheCodeOnly(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.AddAccount("jonas", "jonas@example.test", false)
+	rec := &recordingSender{}
+	h := New(st, WithMail(rec))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	req, _ := http.NewRequest("POST", srv.URL+"/ui/mail/login/request", strings.NewReader("email=jonas%40example.test"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://evil.example")
+	req.Host = "evil.example"
+	resp, _ := noRedirect().Do(req)
+	resp.Body.Close()
+	h.(*appHandler).app.mailWG.Wait()
+	text := rec.last()
+	if !codeInMail.MatchString(text) || strings.Contains(text, "http") || strings.Contains(text, "evil.example") || strings.Contains(text, "\x00") || strings.Contains(text, "open this link") {
+		t.Fatalf("mail:\n%s", text)
+	}
+}
+
+type recordingSender struct {
+	mu   sync.Mutex
+	msgs []mail.Message
+}
+
+func (r *recordingSender) Mode() string { return "recording" }
+func (r *recordingSender) Send(m mail.Message) error {
+	r.mu.Lock()
+	r.msgs = append(r.msgs, m)
+	r.mu.Unlock()
+	return nil
+}
+func (r *recordingSender) last() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.msgs) == 0 {
+		return ""
+	}
+	return r.msgs[len(r.msgs)-1].Text
+}
+
+// A session that started from a one-time link (an owner's, or ctx web) cannot
+// change how the account signs in.
+func TestSessionFromALoginLinkCannotChangeAddressOrPassword(t *testing.T) {
+	m := newMailInstance(t, true)
+	m.account("jonas", "jonas@example.test")
+	c := loginInteractive(t, m.srv, m.st, "jonas") // CreateAccountCode(login): a link
+	csrf := csrfFromProfile(t, m, c)
+	for path, form := range map[string]url.Values{
+		"/ui/profile/email":    {"csrf_token": {csrf}, "email": {"mine@example.test"}},
+		"/ui/profile/password": {"csrf_token": {csrf}, "password": {"takeover pw 1"}, "password2": {"takeover pw 1"}},
+	} {
+		resp := m.post(c, path, form)
+		page := body(t, resp)
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(page, "one-time link") {
+			t.Errorf("%s from a link session: %d", path, resp.StatusCode)
+		}
+	}
+	if a, _ := m.st.AccountByName("jonas"); a.Email != "jonas@example.test" || m.st.PendingEmail(a.ID) != "" || m.st.PasswordHash(a.ID) != "" {
+		t.Fatal("a link session changed how the account signs in")
+	}
+	// A session from the mailed code may.
+	m.post(noRedirect(), "/ui/mail/login/request", url.Values{"email": {"jonas@example.test"}}).Body.Close()
+	code, _, _ := m.lastMail("jonas@example.test")
+	resp := m.post(noRedirect(), "/ui/mail/login/code", url.Values{"email": {"jonas@example.test"}, "code": {code}})
+	c2 := noRedirect()
+	c2.Jar = cookieJar{cookies: resp.Cookies()}
+	resp.Body.Close()
+	csrf2 := csrfFromProfile(t, m, c2)
+	if resp := m.post(c2, "/ui/profile/password", url.Values{"csrf_token": {csrf2}, "password": {"mailed pw one"}, "password2": {"mailed pw one"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("a session from the mailed code cannot set a password: %d", resp.StatusCode)
 	}
 }

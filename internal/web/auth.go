@@ -29,6 +29,10 @@ type browserSession struct {
 	principal store.Principal
 	csrf      string
 	expires   time.Time
+	// link: the session came from a one-time login link (an owner's, or ctx web).
+	// Whoever holds such a link must not be able to change how the account signs
+	// in, so the profile refuses address and password changes in it.
+	link bool
 }
 type sessions struct {
 	mu     sync.Mutex
@@ -50,6 +54,26 @@ func (s *sessions) create(principal store.Principal) (string, error) {
 	s.mu.Unlock()
 	return id, nil
 }
+func (s *sessions) markLink(id string) {
+	s.mu.Lock()
+	if v, ok := s.values[id]; ok {
+		v.link = true
+		s.values[id] = v
+	}
+	s.mu.Unlock()
+}
+
+// linkSession says whether the request's session started from a login link.
+func (a *app) linkSession(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return false
+	}
+	a.sessions.mu.Lock()
+	defer a.sessions.mu.Unlock()
+	return a.sessions.values[c.Value].link
+}
+
 func (s *sessions) get(id string) (browserSession, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -393,6 +417,10 @@ func (a *app) startSession(w http.ResponseWriter, r *http.Request, principal sto
 }
 
 func (a *app) startSessionAt(w http.ResponseWriter, r *http.Request, principal store.Principal, next string) {
+	a.startSessionLink(w, r, principal, next, false)
+}
+
+func (a *app) startSessionLink(w http.ResponseWriter, r *http.Request, principal store.Principal, next string, link bool) {
 	if old, err := r.Cookie(sessionCookie); err == nil {
 		a.sessions.remove(old.Value)
 	}
@@ -400,6 +428,9 @@ func (a *app) startSessionAt(w http.ResponseWriter, r *http.Request, principal s
 	if err != nil {
 		http.Error(w, "could not create secure session", http.StatusInternalServerError)
 		return
+	}
+	if link {
+		a.sessions.markLink(id)
 	}
 	http.SetCookie(w, a.sessionCookieFor(r, id, 30*24*60*60))
 	http.Redirect(w, r, next, http.StatusSeeOther)
@@ -585,6 +616,10 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		// Die erste Anmeldung einer neuen Instanz führt in die Einrichtung, nicht in
 		// einen leeren Posteingang.
 		a.finishLoginTo(w, r, account, "/ui/overview")
+		return
+	}
+	if kind == store.CodeLogin {
+		a.startSessionLink(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, a.takeNext(w, r, "/ui/inbox"), true)
 		return
 	}
 	a.finishLogin(w, r, account)

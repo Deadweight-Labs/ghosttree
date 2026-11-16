@@ -134,17 +134,29 @@ func (a *app) sendChallengeMail(r *http.Request, l lang, ch store.Challenge) {
 	if a.mailer == nil {
 		return
 	}
-	link := a.joinBase(r) + "/ui/mail/" + ch.Purpose + "/link?t=" + url.QueryEscape(ch.Link)
+	// The link in a mail to a third party is built from the configured public
+	// address only. An address taken from the Host header of the request would let
+	// anyone who asks for a mail for someone else's address point the link, and
+	// with it the token, at a server of their own. Only a file mailbox, which nobody
+	// but the operator reads, may fall back to the address of the request.
+	base := a.publicOrigin
+	if l, ok := a.mailer.(interface{ Local() bool }); base == "" && ok && l.Local() {
+		base = a.joinBase(r)
+	}
+	link := "\x00"
+	if base != "" {
+		link = base + "/ui/mail/" + ch.Purpose + "/link?t=" + url.QueryEscape(ch.Link)
+	}
 	minutes := int(time.Until(ch.ExpiresAt).Round(time.Minute) / time.Minute)
 	if minutes < 1 {
 		minutes = 1
 	}
 	k := mailKeys[ch.Purpose]
-	msg := mail.Message{
-		To:      ch.Email,
-		Subject: l.msg(k.subject),
-		Text:    l.msg(k.body, store.FormatCode(ch.Code), link, minutes),
+	text := l.msg(k.body, store.FormatCode(ch.Code), link, minutes)
+	if base == "" {
+		text = withoutLink(text)
 	}
+	msg := mail.Message{To: ch.Email, Subject: l.msg(k.subject), Text: text}
 	a.mailWG.Add(1)
 	go func() {
 		defer a.mailWG.Done()
@@ -158,6 +170,21 @@ func (a *app) sendChallengeMail(r *http.Request, l lang, ch store.Challenge) {
 			logger.Error("mail_send_failed", "purpose", ch.Purpose, "error", text)
 		}
 	}()
+}
+
+// withoutLink drops the paragraph with the link and the one that introduces it,
+// for an instance that has no public address to build a link from: the mail then
+// carries the code only.
+func withoutLink(text string) string {
+	paras := strings.Split(text, "\n\n")
+	var out []string
+	for i, p := range paras {
+		if strings.Contains(p, "\x00") || (i+1 < len(paras) && strings.Contains(paras[i+1], "\x00")) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return strings.Join(out, "\n\n")
 }
 
 // ---------------------------------------------------------------- Seiten
@@ -495,6 +522,10 @@ func (a *app) profileEmail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if a.linkSession(r) {
+		a.renderProfile(w, r, http.StatusForbidden, "", l.msg("mail.error_link_session"))
+		return
+	}
 	me := browserPrincipal(r)
 	email, err := store.NormalizeEmail(r.FormValue("email"))
 	if err != nil || len(r.FormValue("email")) > 320 {
@@ -556,6 +587,10 @@ func (a *app) profilePassword(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	if !a.passwordsOn() {
 		http.NotFound(w, r)
+		return
+	}
+	if a.linkSession(r) {
+		a.renderProfile(w, r, http.StatusForbidden, "", l.msg("mail.error_link_session"))
 		return
 	}
 	me := browserPrincipal(r)

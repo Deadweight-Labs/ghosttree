@@ -203,7 +203,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				SoleOwner: m.Role == store.OrgOwner && owners == 1, Service: m.Kind == store.AccountKindService}
 			// An owner can hand a member a one-time sign-in link: the way back in
 			// when the instance cannot send mail. Not for owners, services or oneself.
-			if v.Owner && interactive(r) && m.Role == store.OrgMember && row.Service == false && m.AccountID != me {
+			if v.Owner && interactive(r) && m.Role == store.OrgMember && !row.Service && m.AccountID != me && a.store.LoginLinkAllowed(v.Selected.ID, m.AccountID) {
 				row.CanLoginLink = true
 				row.LoginLink = a.loginLinkFor(r, me, m.AccountID)
 			}
@@ -287,6 +287,8 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 // orgError übersetzt Store-Fehler in eine Meldung und einen Statuscode.
 func orgError(l lang, err error) (int, string) {
 	switch {
+	case errors.Is(err, store.ErrLoginLinkScope):
+		return http.StatusForbidden, l.msg("adm.err.login_scope")
 	case errors.Is(err, store.ErrNotOrgOwner):
 		return http.StatusForbidden, l.msg("adm.err.owner_only")
 	case errors.Is(err, store.ErrOrgNotFound), errors.Is(err, store.ErrNotOrgMember):

@@ -105,6 +105,8 @@ var messagesEmail = map[string]string{
 	"auth.invitation_email.bound": "This invitation is for %[1]s, and you are signed in with another address. Sign in with that address, or ask %[2]s for a new link.",
 
 	"adm.invite.no_bind":         "This server cannot confirm email addresses, so a link cannot be bound to one: it works for whoever opens it.",
+	"adm.err.login_scope":        "This member belongs to more than this organization, so a login link is not offered. They sign in by email, or with ctx web.",
+	"mail.error_link_session":    "You signed in with a one-time link. Sign in with your email or password to change this.",
 	"adm.member.login_link":      "Login link",
 	"adm.member.login_link_note": "One use, valid for 10 minutes. Send it to the member yourself.",
 }
@@ -209,6 +211,8 @@ var messagesEmailDE = map[string]string{
 	"auth.invitation_email.bound": "Diese Einladung gilt für %[1]s, und du bist mit einer anderen Adresse angemeldet. Melde dich mit dieser Adresse an oder bitte %[2]s um einen neuen Link.",
 
 	"adm.invite.no_bind":         "Dieser Server kann E-Mail-Adressen nicht bestätigen, darum lässt sich ein Link nicht an eine binden: er gilt für jeden, der ihn öffnet.",
+	"adm.err.login_scope":        "Dieses Mitglied gehört nicht nur zu dieser Organisation, darum gibt es keinen Login-Link. Es meldet sich per E-Mail an oder mit ctx web.",
+	"mail.error_link_session":    "Du hast dich mit einem Einmal-Link angemeldet. Melde dich mit E-Mail oder Passwort an, um das zu ändern.",
 	"adm.member.login_link":      "Login-Link",
 	"adm.member.login_link_note": "Einmal benutzbar, 10 Minuten gültig. Schick ihn dem Mitglied selbst.",
 }

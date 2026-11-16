@@ -235,3 +235,32 @@ func TestWebLoginLinkNeedsABearerTokenAndIsShort(t *testing.T) {
 		t.Fatalf("a second link is refused: %d", code)
 	}
 }
+
+// A pasted or provisioned token keeps its read-only web session: only a token a
+// person approved in the browser (device) may ask for a sign-in link.
+func TestWebLoginLinkRefusesTokensThatAreNotDeviceTokens(t *testing.T) {
+	srv, st := deviceFixture(t)
+	cli, _, err := st.CreateToken("alice", store.TokenSpec{Label: "pasted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tok := range map[string]string{"cli token": cli} {
+		req, _ := http.NewRequest("POST", srv.URL+"/api/auth/web-login", strings.NewReader("{}"))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden || out["code"] != "device_token_required" {
+			t.Errorf("%s: %d %v", name, resp.StatusCode, out)
+		}
+	}
+	var n int
+	st.DB().QueryRow(`SELECT COUNT(*) FROM account_codes WHERE kind='login'`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("%d login codes were made for refused tokens", n)
+	}
+}

@@ -166,7 +166,8 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   once, within ten minutes. The page answers the same for an unknown address,
   asks are rate limited per address and per sender, and a link opens only a page
   with a button, so a mail preview cannot use it up. New to `ctx serve`: mail
-  through SMTP (`--smtp-host`, `--smtp-port`, `--smtp-security`, `--smtp-from`,
+  through SMTP (needs `--public-url`, the links in mails are built from it;
+  `--smtp-host`, `--smtp-port`, `--smtp-security`, `--smtp-from`,
   `--smtp-user`, `--smtp-password-file`; the password comes from a file, never
   from a flag) or a file mailbox (`--mail-dir`, every mail as an `.eml` file) for
   tests and local instances; the start line says which. Without mail nothing
@@ -185,10 +186,12 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   mail; a reset ends every session of the account. Wrong password and unknown
   address give the same answer, at the same cost, and tries are limited.
 - Ways back in without mail: an organization owner makes a one-time login link
-  for a member on the Members page (ten minutes, once), and `ctx web` signs in
-  the web interface from a connected machine (two minutes, once, tied to the
-  account and the device token that asked; a revoked token voids it). It is the
-  core of REQ-609 AC-1.
+  for a member who belongs to no other organization (Members page, ten minutes,
+  once), and `ctx web` signs in the web interface from a connected machine (two
+  minutes, once, tied to the account and the device token that asked; a revoked
+  token voids it, and only a device token may ask). A session that started from
+  such a link cannot change the address or password. It is the core of REQ-609
+  AC-1.
 - A welcome card after the first account and after joining an organization:
   the organization's name and the next steps (confirm the address, invite people,
   connect a device, open a repo). It goes away when the steps are done or when

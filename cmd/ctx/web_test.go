@@ -212,6 +212,7 @@ func TestServeStartLineNamesTheMailMode(t *testing.T) {
 	t.Setenv(envSMTPPasswordFile, pw)
 	t.Setenv(envSMTPPort, "465")
 	t.Setenv(envSMTPSecurity, "tls")
+	t.Setenv(envPublicURL, "https://gt.example.test")
 	cfg, err = parseServeConfig(nil, io.Discard)
 	if err != nil || cfg.Mailer == nil {
 		t.Fatalf("smtp from the environment: %v", err)
@@ -224,12 +225,13 @@ func TestServeStartLineNamesTheMailMode(t *testing.T) {
 func TestServeRefusesBrokenMailSetupAtStart(t *testing.T) {
 	clearMailEnv(t)
 	for name, args := range map[string][]string{
-		"password login without mail":  {"--password-login"},
-		"smtp host without sender":     {"--smtp-host", "mail.example.test"},
-		"missing password file":        {"--smtp-host", "mail.example.test", "--smtp-from", "a@example.test", "--smtp-user", "u", "--smtp-password-file", "/nonexistent/pw"},
-		"password flag does not exist": {"--smtp-password", "x"},
-		"host and directory":           {"--smtp-host", "mail.example.test", "--mail-dir", t.TempDir(), "--smtp-from", "a@example.test"},
-		"clear password to a remote":   {"--smtp-host", "mail.example.test", "--smtp-from", "a@example.test", "--smtp-security", "none", "--smtp-user", "u", "--smtp-password-file", "x"},
+		"password login without mail":   {"--password-login"},
+		"smtp host without sender":      {"--smtp-host", "mail.example.test"},
+		"missing password file":         {"--smtp-host", "mail.example.test", "--smtp-from", "a@example.test", "--smtp-user", "u", "--smtp-password-file", "/nonexistent/pw"},
+		"password flag does not exist":  {"--smtp-password", "x"},
+		"smtp without a public address": {"--smtp-host", "mail.example.test", "--smtp-from", "a@example.test"},
+		"host and directory":            {"--smtp-host", "mail.example.test", "--mail-dir", t.TempDir(), "--smtp-from", "a@example.test"},
+		"clear password to a remote":    {"--smtp-host", "mail.example.test", "--smtp-from", "a@example.test", "--smtp-security", "none", "--smtp-user", "u", "--smtp-password-file", "x"},
 	} {
 		if _, err := parseServeConfig(args, io.Discard); err == nil {
 			t.Errorf("%s: accepted", name)

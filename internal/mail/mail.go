@@ -194,6 +194,10 @@ type fileSender struct {
 
 func (f *fileSender) Mode() string { return "file mailbox " + f.dir }
 
+// Local says that the mails stay on this machine: nobody but the operator reads
+// them, so a link in them may be built from the address the request came in on.
+func (f *fileSender) Local() bool { return true }
+
 // recipientName turns an address into something fit for a file name.
 func recipientName(addr string) string {
 	var b strings.Builder

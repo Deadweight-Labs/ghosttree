@@ -60,13 +60,18 @@ Without OIDC and without mail the sign-in page offers the setup code, a login li
 and a pasted token, and says where a login link comes from: an owner of the
 organization makes one for a member on the Members page (one use, ten minutes),
 and `ctx web` on a connected machine signs the browser in (one use, two minutes,
-tied to that device token).
+tied to that device token). Both are limits on purpose: an owner gets a link only
+for a member who belongs to no other organization and has no repositories in an
+own namespace (everyone else signs in by mail or with `ctx web`); `ctx web` works
+with a device token (`ctx login`), not with a pasted or provisioned token, which
+keeps its read-only web session; and a session that started from such a link
+cannot change the address or the password of the account.
 
 ### Mail sending
 
 | Flag | Environment | Meaning |
 | --- | --- | --- |
-| `--smtp-host` | `GHOSTTREE_SMTP_HOST` | SMTP server; empty sends no mail |
+| `--smtp-host` | `GHOSTTREE_SMTP_HOST` | SMTP server; empty sends no mail; needs `--public-url` |
 | `--smtp-port` | `GHOSTTREE_SMTP_PORT` | default 587 (starttls), 465 (tls), 25 (none) |
 | `--smtp-security` | `GHOSTTREE_SMTP_SECURITY` | `starttls` (default), `tls` or `none`; `none` with credentials only for a host on this machine |
 | `--smtp-from` | `GHOSTTREE_SMTP_FROM` | sender address, e.g. `ghosttree <noreply@example.com>` |
@@ -82,9 +87,12 @@ file, a host and a directory together, `--password-login` without mail) stops th
 start. Mails are plain text in the language of the server (`--language`), carry no
 images or links but the one to this server, and go out in the background; a
 failed send is logged as `mail_send_failed` with the kind of mail and the error
-text without the address. The links in the mails use `--public-url` when set,
-otherwise the address the request came in on (behind a proxy, see
-[Running behind TLS or a reverse proxy](#running-behind-tls-or-a-reverse-proxy)).
+text without the address. The links in the mails are built from `--public-url`
+only, never from the Host header of whoever asked for the mail (that would let
+anyone point the link, and the token in it, at their own server); SMTP therefore
+needs `--public-url` and `ctx serve` refuses to start without it. The file mailbox
+may fall back to the address of the request, because only the operator reads it.
+See also [Running behind TLS or a reverse proxy](#running-behind-tls-or-a-reverse-proxy).
 
 Operating at deadweight (orax): set `GHOSTTREE_SMTP_HOST`, `GHOSTTREE_SMTP_FROM`,
 `GHOSTTREE_SMTP_USER` and `GHOSTTREE_SMTP_PASSWORD_FILE` in the service

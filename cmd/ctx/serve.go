@@ -215,6 +215,11 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	if cfg.Mailer, mailErr = mail.New(cfg.Mail); mailErr != nil {
 		return serveConfig{}, fmt.Errorf("mail: %w", mailErr)
 	}
+	// A link in a mail to someone else's address is built from the configured public
+	// address, never from the Host header of whoever asked for the mail.
+	if cfg.Mail.Host != "" && cfg.PublicURL == "" {
+		return serveConfig{}, fmt.Errorf("--smtp-host needs --public-url (%s): the links in the mails are built from it", envPublicURL)
+	}
 	if cfg.PasswordLogin && cfg.Mailer == nil {
 		return serveConfig{}, fmt.Errorf("--password-login needs mail (--smtp-host or --mail-dir): a password is set and reset through a confirmed address")
 	}

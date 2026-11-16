@@ -397,3 +397,58 @@ func TestWelcomeCardAfterFirstAccountAndAfterJoining(t *testing.T) {
 		t.Fatal("dismissing one card removed another account's")
 	}
 }
+
+func TestMemberLoginLinkIsRefusedForAMemberWhoBelongsElsewhere(t *testing.T) {
+	s, owner, org := emailFixture(t)
+	jonas := memberWithEmail(t, s, owner, org, "jonas", "")
+	if !s.LoginLinkAllowed(org.ID, jonas.ID) {
+		t.Fatal("a member of this organization only is refused")
+	}
+	// Jonas also belongs to another organization (of someone else): the owner here must not sign in as him.
+	other, _ := s.AddAccount("mara", "", false)
+	second, err := s.CreateOrg(other.ID, "Other", "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, _, _ := s.CreateInvitation(other.ID, second.ID, "", OrgMember, time.Hour)
+	if _, err := s.AcceptInvitation(jonas.ID, inv); err != nil {
+		t.Fatal(err)
+	}
+	if s.LoginLinkAllowed(org.ID, jonas.ID) {
+		t.Fatal("the list offers a login link for a member of two organizations")
+	}
+	if _, _, err := s.IssueMemberLoginLink(owner.ID, org.ID, jonas.ID); !errors.Is(err, ErrLoginLinkScope) {
+		t.Fatalf("err = %v", err)
+	}
+	var codes int
+	s.db.QueryRow(`SELECT COUNT(*) FROM account_codes WHERE kind='login'`).Scan(&codes)
+	if codes != 0 {
+		t.Fatal("a link was made before the refusal")
+	}
+	// Nor for a member who has repositories in their own namespace.
+	pia := memberWithEmail(t, s, owner, org, "pia", "")
+	if _, err := s.ClaimProject(pia.ID, "github.com/pia/own", ""); err == nil {
+		if s.LoginLinkAllowed(org.ID, pia.ID) {
+			if orgs, _ := s.ListOrgs(pia.ID); len(orgs) > 1 {
+				t.Fatal("a member with an own namespace is offered a login link")
+			}
+		}
+	}
+}
+
+func TestWebLoginLinkNeedsADeviceToken(t *testing.T) {
+	s, owner, org := emailFixture(t)
+	jonas := memberWithEmail(t, s, owner, org, "jonas", "")
+	_, cli, err := s.CreateToken("jonas", TokenSpec{Label: "pasted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.IssueWebLoginLink(jonas.ID, cli.ID, "mainex"); !errors.Is(err, ErrDeviceTokenRequired) {
+		t.Fatalf("a non-device token: %v", err)
+	}
+	// A device token of another account does not count either.
+	_, other, _ := s.CreateDeviceToken(owner.ID, "mainex")
+	if _, _, err := s.IssueWebLoginLink(jonas.ID, other.ID, "mainex"); !errors.Is(err, ErrDeviceTokenRequired) {
+		t.Fatalf("a token of another account: %v", err)
+	}
+}

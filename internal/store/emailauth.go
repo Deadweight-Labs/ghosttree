@@ -54,6 +54,9 @@ const (
 var (
 	// ErrEmailTaken: eine andere Person hat diese Adresse schon bestätigt.
 	ErrEmailTaken = errors.New("email address belongs to another account")
+	// ErrLoginLinkScope: the member has a footing outside this organization, so
+	// the owner of this organization may not sign in as them.
+	ErrLoginLinkScope = errors.New("this member belongs to more than this organization")
 	// ErrNameTaken: der Name ist inzwischen vergeben.
 	ErrNameTaken = errors.New("account name is taken")
 )
@@ -636,6 +639,44 @@ func (s *Store) PasswordLogin(email string) (account Account, hash string, ok bo
 
 // ---------------------------------------------------------------- Login-Link
 
+// loginLinkScopeTx says whether an owner of org may sign in as target. An owner
+// of one organization must not be able to take over an account that has more
+// than this organization: membership of another organization, or repositories in
+// the person's own namespace. Such a member signs in by mail, or with ctx web.
+func loginLinkScopeTx(q queryer, orgID, target int64) error {
+	var elsewhere int
+	if err := q.QueryRow(`SELECT COUNT(*) FROM org_members m JOIN orgs o ON o.id=m.org_id
+		WHERE m.account_id=? AND m.org_id<>? AND o.kind<>?`, target, orgID, OrgKindUser).Scan(&elsewhere); err != nil {
+		return err
+	}
+	var own int
+	if err := q.QueryRow(`SELECT COUNT(*) FROM projects p JOIN orgs o ON o.id=p.org_id WHERE o.kind=? AND o.account_id=?`,
+		OrgKindUser, target).Scan(&own); err != nil {
+		return err
+	}
+	if elsewhere > 0 || own > 0 {
+		return ErrLoginLinkScope
+	}
+	return nil
+}
+
+// LoginLinkAllowed says whether the member list may offer a login link for the
+// member (the same rules as IssueMemberLoginLink, without issuing one).
+func (s *Store) LoginLinkAllowed(orgID int64, targetPrincipal string) bool {
+	if s.reader != nil {
+		return s.reader.LoginLinkAllowed(orgID, targetPrincipal)
+	}
+	target, err := parsePersonPrincipalID(targetPrincipal)
+	if err != nil || orgRoleTx(s.db, orgID, target) != OrgMember {
+		return false
+	}
+	a, err := scanAccount(s.db.QueryRow(accountSelect+` WHERE id=?`, target))
+	if err != nil || a.State != "active" || a.Kind == "service" || a.Admin {
+		return false
+	}
+	return loginLinkScopeTx(s.db, orgID, target) == nil
+}
+
 // IssueMemberLoginLink gibt einem Owner der Organisation einen Login-Link für ein
 // Mitglied, damit sich jemand ohne Mailversand wieder anmelden kann. Nur für ein
 // aktives Personenkonto mit der Rolle member: ein Owner bekommt keinen Link für
@@ -678,6 +719,9 @@ func (s *Store) IssueMemberLoginLink(actorPrincipal string, orgID int64, targetP
 	if a.State != "active" || a.Kind == "service" || a.Admin || target == actor {
 		return "", 0, ErrInvalidInput
 	}
+	if err := loginLinkScopeTx(tx, orgID, target); err != nil {
+		return "", 0, err
+	}
 	code, err := insertLoginCodeTx(tx, target, LoginLinkTTL, actor, 0, "")
 	if err != nil {
 		return "", 0, err
@@ -687,6 +731,11 @@ func (s *Store) IssueMemberLoginLink(actorPrincipal string, orgID int64, targetP
 	}
 	return code, LoginLinkTTL, tx.Commit()
 }
+
+// ErrDeviceTokenRequired: only a token that a person approved in the browser
+// (kind device) may ask for a web sign-in; a pasted or provisioned token keeps
+// its read-only web session.
+var ErrDeviceTokenRequired = errors.New("a sign-in link needs a device token")
 
 // IssueWebLoginLink gibt dem Konto eines Geräts einen Login-Link für die
 // Weboberfläche (ctx web): kurz gültig, einmal einlösbar, an das Token und die
@@ -722,6 +771,10 @@ func (s *Store) IssueWebLoginLink(account string, tokenID int64, machine string)
 	}
 	if a.State != "active" || a.Kind == "service" {
 		return "", 0, ErrAccountDisabled
+	}
+	var kind string
+	if tx.QueryRow(`SELECT kind FROM api_tokens WHERE id=? AND account_id=?`, tokenID, id).Scan(&kind) != nil || kind != "device" {
+		return "", 0, ErrDeviceTokenRequired
 	}
 	code, err := insertLoginCodeTx(tx, id, WebLoginLinkTTL, 0, tokenID, machine)
 	if err != nil {
