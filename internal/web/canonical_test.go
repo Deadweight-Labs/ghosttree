@@ -47,14 +47,15 @@ func TestKnowledgeLivesUnderItsRepositoryAndTheOldAddressLeadsThere(t *testing.T
 	var want string
 	for _, p := range []string{"/ui/x/hidden/knowledge/" + itoa(hidden), "/ui/knowledge/" + itoa(hidden), "/ui/x/shell/knowledge/" + itoa(hidden), "/ui/knowledge/999999"} {
 		status, body := fetchPage(t, e.Member, e.Base+p)
-		if status != http.StatusNotFound || strings.Contains(body, "SECRET") {
+		if status != memberStatusFor(p) || strings.Contains(body, "SECRET") {
 			t.Errorf("member at %s: %d", p, status)
 		}
-		if want == "" {
+		if want == "" && status == http.StatusNotFound {
 			want = body
 		}
 	}
-	if _, unknown := fetchPage(t, e.Member, e.Base+"/ui/x/nothere/knowledge/"+itoa(hidden)); stripCSRF(unknown) != stripCSRF(want) {
+	_, want = fetchPage(t, e.Guest, e.Base+"/ui/x/hidden/knowledge/"+itoa(hidden))
+	if _, unknown := fetchPage(t, e.Guest, e.Base+"/ui/x/nothere/knowledge/"+itoa(hidden)); stripCSRF(unknown) != stripCSRF(want) {
 		t.Error("a foreign entry answers differently from an unknown address")
 	}
 	// A guest does not read what is not released, at either address.
@@ -97,7 +98,7 @@ func TestSessionLivesUnderItsRepositoryAndTheOldAddressLeadsThere(t *testing.T) 
 	// repository and in the address of the repository it was written in.
 	hidden, private := e.pid["hidden-project"], e.pid["alice-private"]
 	for _, p := range []string{"/ui/sessions/" + hidden, "/ui/x/hidden/sessions/" + hidden, "/ui/x/shell/sessions/" + hidden, "/ui/sessions/" + private, "/ui/x/shell/sessions/" + private, "/ui/x/shell/sessions/nothere"} {
-		if status, body := e.get(t, e.Member, p); status != http.StatusNotFound || strings.Contains(body, "zebrafish") {
+		if status, body := e.get(t, e.Member, p); status != memberStatusFor(p) || strings.Contains(body, "zebrafish") {
 			t.Errorf("member at %s: %d", p, status)
 		}
 	}

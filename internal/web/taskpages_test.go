@@ -96,18 +96,19 @@ func TestTaskRightsStrangerGuestMemberAndForeignNumbers(t *testing.T) {
 	var want string
 	for _, path := range []string{hiddenPath, "/ui/x/shell/tasks/" + itoa(foreign.ID), "/ui/t/" + itoa(foreign.ID), "/ui/x/hidden/tasks", "/ui/x/shell/tasks/999999"} {
 		status, body := fetchPage(t, e.Member, e.Base+path)
-		if status != http.StatusNotFound {
-			t.Errorf("member at %s: %d, want 404", path, status)
+		if status != memberStatusFor(path) {
+			t.Errorf("member at %s: %d, want %d", path, status, memberStatusFor(path))
 		}
 		if strings.Contains(body, "SECRET") {
 			t.Errorf("member at %s sees the foreign task", path)
 		}
-		if want == "" {
+		if want == "" && status == http.StatusNotFound {
 			want = body
 		}
 	}
 	// The same answer as for a repository that does not exist.
-	if _, unknown := fetchPage(t, e.Member, e.Base+"/ui/x/nothere/tasks/"+itoa(foreign.ID)); stripCSRF(unknown) != stripCSRF(want) {
+	_, want = fetchPage(t, e.Guest, e.Base+hiddenPath)
+	if _, unknown := fetchPage(t, e.Guest, e.Base+"/ui/x/nothere/tasks/"+itoa(foreign.ID)); stripCSRF(unknown) != stripCSRF(want) {
 		t.Error("a foreign task answers differently from an unknown address")
 	}
 

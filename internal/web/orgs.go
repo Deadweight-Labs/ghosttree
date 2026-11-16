@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -321,6 +322,16 @@ func orgError(l lang, err error) (int, string) {
 		return http.StatusNotFound, l.msg("adm.err.source_missing")
 	case sourceError(err):
 		return http.StatusConflict, l.msg("adm.err.source_off")
+	case errors.Is(err, store.ErrNotGitHubOwner):
+		return http.StatusForbidden, l.msg("adm.err.github_owner")
+	case errors.Is(err, store.ErrProjectClaimed):
+		return http.StatusConflict, l.msg("adm.err.repo_claimed")
+	case errors.Is(err, store.ErrInvalidRemote):
+		return http.StatusBadRequest, l.msg("adm.err.remote")
+	}
+	var contested *store.ContestedError
+	if errors.As(err, &contested) {
+		return http.StatusConflict, l.msg("adm.err.contested")
 	}
 	return http.StatusInternalServerError, l.msg("adm.err.generic")
 }
@@ -581,6 +592,11 @@ func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case !known || p.OrgID != o.ID:
 			err = store.ErrProjectNotFound
+		case r.FormValue("role") == "" && a.store.ProjectRole(p.Remote, r.FormValue("account")).Inherited:
+			// The choice "Default (Member)" is the role the person has without any row:
+			// setting it changes nothing.
+			orgRedirect(w, r, o.Slug, "")
+			return
 		case r.FormValue("role") == "none":
 			err = a.store.RemoveProjectRole(browserPrincipal(r).ID, p.Remote, r.FormValue("account"), store.RoleViaWeb)
 		default:
@@ -660,20 +676,56 @@ func (a *app) orgAssign(w http.ResponseWriter, r *http.Request) {
 	orgRedirect(w, r, p.Org, "assigned")
 }
 
-// orgProjectCreate legt ein Projekt ohne Git an. Das darf jedes Mitglied der
-// Organisation; wer es anlegt, wird sein Owner.
+// orgProjectCreate legt ein Projekt der Organisation an. Das darf jedes Mitglied;
+// wer es anlegt, wird sein Owner. Das Feld nimmt einen Namen (ein Projekt ohne
+// Git) oder die Adresse eines Repos (https, ssh, github.com/owner/repo): dann
+// ist die Remote die ID des Projekts, und jeder Agent in einem Klon mit dieser
+// Remote arbeitet in genau diesem Projekt, ohne dass ein zweites entsteht.
 func (a *app) orgProjectCreate(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
-	name := strings.ToLower(strings.TrimSpace(r.FormValue("name")))
-	if _, err := a.store.CreateNamedProject(browserPrincipal(r).ID, name, o.Slug); err != nil {
+	input := strings.TrimSpace(r.FormValue("name"))
+	me := browserPrincipal(r).ID
+	switch remote, isRemote := projectInputRemote(input, o.Slug); {
+	case isRemote:
+		// Claiming a repository the organization already has is a no-op for the
+		// store; here it is a project that exists, and one of another organization
+		// is not this one's to make.
+		if known, ok := a.store.ProjectByRemote(remote); ok {
+			if known.OrgID != o.ID {
+				err = store.ErrProjectClaimed
+			} else {
+				err = store.ErrProjectNameTaken
+			}
+			break
+		}
+		_, err = a.store.ClaimProject(me, remote, o.Slug)
+	default:
+		_, err = a.store.CreateNamedProject(me, strings.ToLower(remote), o.Slug)
+	}
+	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
 	orgRedirect(w, r, o.Slug, "project_created")
+}
+
+// projectInputRemote reads what was typed into the project field: a repository
+// address (isRemote) or a name. A name that carries the slug of the organization
+// ("alpha/infra" in "alpha") is that name; anything else with a slash, a colon or
+// an at sign is an address.
+func projectInputRemote(input, orgSlug string) (value string, isRemote bool) {
+	if !strings.ContainsAny(input, "/:@") {
+		return input, false
+	}
+	remote := scope.NormalizeRemote(input)
+	if rest, ok := strings.CutPrefix(remote, strings.ToLower(orgSlug)+"/"); ok && scope.IsProjectName(rest) {
+		return rest, false
+	}
+	return remote, true
 }
 
 // orgRename benennt eine Organisation um. Das dürfen ihre Owner und ein

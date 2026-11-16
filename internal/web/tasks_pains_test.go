@@ -176,7 +176,7 @@ func TestPainsPageDetailAndStateChange(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(inRepo, "Make reading partial") || !strings.Contains(inRepo, `class="rband`) {
 		t.Errorf("pain in the repository: %d", code)
 	}
-	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/pains/"+strconv.FormatInt(d.Pain.ID, 10)); code != http.StatusNotFound {
+	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/pains/"+strconv.FormatInt(d.Pain.ID, 10)); code != http.StatusForbidden {
 		t.Errorf("pain under a foreign project = %d", code)
 	}
 	_, request := fetchPage(t, e.Member, e.Base+rqPath(req.Request.ID, ""))

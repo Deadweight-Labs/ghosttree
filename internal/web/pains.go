@@ -98,7 +98,7 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 		http.NotFound(w, r)
 		return
 	}
-	v := &painView{ID: p.ID, Human: p.HumanID(), Title: p.Title, Project: lastSegment(p.Project), Person: p.Person,
+	v := &painView{ID: p.ID, Human: p.HumanID(), Title: p.Title, Project: a.projectShort(r, p.Project), Person: p.Person,
 		State: p.State, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining, Accepted: p.AcceptedReason, Age: shortAgo(l, overviewNow().UTC(), parseTime(p.CreatedAt)),
 		Blocks: bodyBlocks(p.Body, 0), Token: csrfOf(r), Back: "/ui/pains?project=" + url.QueryEscape(p.Project)}
 	v.Actor = a.actorViewOf(l, pa, actor.Pain, p.ID, p.Person, true)

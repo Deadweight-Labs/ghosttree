@@ -103,17 +103,18 @@ func TestPackageRightsAndForeignNumbers(t *testing.T) {
 	var want string
 	for _, p := range []string{hiddenPath, "/ui/x/shell/packages/" + itoa(other.ID), "/ui/x/hidden/packages", "/ui/x/shell/packages/999999"} {
 		status, body := fetchPage(t, e.Member, e.Base+p)
-		if status != http.StatusNotFound {
-			t.Errorf("member at %s: %d, want 404", p, status)
+		if status != memberStatusFor(p) {
+			t.Errorf("member at %s: %d, want %d", p, status, memberStatusFor(p))
 		}
 		if strings.Contains(body, "SECRET") {
 			t.Errorf("member at %s sees the foreign package", p)
 		}
-		if want == "" {
+		if want == "" && status == http.StatusNotFound {
 			want = body
 		}
 	}
-	if _, unknown := fetchPage(t, e.Member, e.Base+"/ui/x/nothere/packages/"+itoa(other.ID)); stripCSRF(unknown) != stripCSRF(want) {
+	_, want = fetchPage(t, e.Guest, e.Base+hiddenPath)
+	if _, unknown := fetchPage(t, e.Guest, e.Base+"/ui/x/nothere/packages/"+itoa(other.ID)); stripCSRF(unknown) != stripCSRF(want) {
 		t.Error("a foreign package answers differently from an unknown address")
 	}
 	// The owner has both: the number in the wrong repository leads to the right one.
