@@ -190,3 +190,48 @@ func TestOtherAPIRoutesStillNeedAToken(t *testing.T) {
 		t.Fatal("GET on device start answered 200")
 	}
 }
+
+// REQ-676: the sign-in link for the web interface (ctx web) is made with a bearer
+// token, is short-lived, and carries only the code.
+func TestWebLoginLinkNeedsABearerTokenAndIsShort(t *testing.T) {
+	srv, st := deviceFixture(t)
+	token, info, err := st.CreateDeviceToken("person:1", "mainex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(auth string) (int, map[string]any) {
+		req, _ := http.NewRequest("POST", srv.URL+"/api/auth/web-login", strings.NewReader("{}"))
+		if auth != "" {
+			req.Header.Set("Authorization", "Bearer "+auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	if code, _ := post(""); code != http.StatusUnauthorized {
+		t.Fatalf("without a token: %d", code)
+	}
+	code, out := post(token)
+	if code != http.StatusOK {
+		t.Fatalf("with a token: %d %v", code, out)
+	}
+	link, _ := out["code"].(string)
+	if len(link) != 64 || out["expires_in"].(float64) > 120 || out["expires_in"].(float64) <= 0 {
+		t.Fatalf("answer %v", out)
+	}
+	var tokenID int64
+	if err := st.DB().QueryRow(`SELECT token_id FROM account_codes WHERE kind='login'`).Scan(&tokenID); err != nil || tokenID != info.ID {
+		t.Fatalf("bound to token %d (err %v), want %d", tokenID, err, info.ID)
+	}
+	if a, err := st.RedeemLoginLink(link); err != nil || a.Name != "alice" {
+		t.Fatalf("redeem: %+v %v", a, err)
+	}
+	if code, _ := post(token); code != http.StatusOK {
+		t.Fatalf("a second link is refused: %d", code)
+	}
+}

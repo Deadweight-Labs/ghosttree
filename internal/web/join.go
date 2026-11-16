@@ -205,6 +205,13 @@ type joinView struct {
 	// des Projekts darin.
 	Guest   bool
 	Project string
+	// Mail: the instance sends mail, so the page asks for an address (REQ-676).
+	// Bound is the masked address an invitation is bound to; the address is then
+	// not asked for but mailed. Blocked: the invitation is bound and this
+	// instance cannot confirm an address, so it cannot be accepted here.
+	Mail, Blocked          bool
+	Bound                  string
+	EmailValue, EmailError string
 }
 
 // shortName ist das letzte Segment eines Pfads: aus "github.com/acme/app" wird "app".
@@ -264,7 +271,8 @@ func (a *app) joinViewFor(r *http.Request, l lang, code string, preview store.In
 	view := joinView{Inviter: preview.Inviter, Target: preview.Project, Org: preview.Org, RoleText: roleLabel(l, preview.Role),
 		ExpiresAt: preview.ExpiresAt, ExpiresIn: expiresIn(l, preview.ExpiresAt), Short: shortName(preview.Project),
 		Guest: preview.Role == store.RoleGuest, Project: firstNonEmpty(shortName(preview.Project), l.msg("join.shares.project")),
-		Code: code, OIDC: a.oidc != nil, Provider: a.oidcName, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context())}
+		Code: code, OIDC: a.oidc != nil, Provider: a.oidcName, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context()),
+		Mail: a.oidc == nil && a.mailAvailable()}
 	view.OrgMark = initialOf(firstNonEmpty(preview.Org, view.Short))
 	view.Tab = l.msg("join.invite_tab")
 	if session, ok := a.joinSession(r); ok {
@@ -369,6 +377,8 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrAlreadyMember):
 		preview, _ := a.joinPreview(code)
 		a.joinAlreadyMember(l, w, preview)
+	case errors.Is(err, store.ErrInvitationEmail):
+		a.invitationEmailRejected(l, w, code)
 	case errors.Is(err, store.ErrTooManyAttempts):
 		a.joinAcceptMessage(l, w, code, http.StatusTooManyRequests, l.msg("join.msg_many_t"), l.msg("join.msg_many"))
 	case errors.Is(err, store.ErrAccountDisabled):

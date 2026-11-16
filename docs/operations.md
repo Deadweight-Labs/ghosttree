@@ -44,6 +44,61 @@ request; today it comes from this server setting. Text that people or agents
 wrote is shown as written, and the texts meant for agents (bootstrap, MCP
 descriptions, rules) stay English.
 
+## Signing in: mail, passwords and the ways back in
+
+An instance signs people in in three ways, and any of them can be missing.
+
+- **An identity provider (OIDC)**, where one is set up (`GHOSTTREE_OIDC_*`).
+- **Email.** The sign-in page takes an address and mails an eight-character code
+  and a magic link; either signs in once, within ten minutes. This needs mail
+  sending (below).
+- **Email and password**, off by default; `--password-login` (or
+  `GHOSTTREE_PASSWORD_LOGIN=1`) switches it on and needs mail sending, because a
+  password is set against a confirmed address and reset by mail.
+
+Without OIDC and without mail the sign-in page offers the setup code, a login link
+and a pasted token, and says where a login link comes from: an owner of the
+organization makes one for a member on the Members page (one use, ten minutes),
+and `ctx web` on a connected machine signs the browser in (one use, two minutes,
+tied to that device token).
+
+### Mail sending
+
+| Flag | Environment | Meaning |
+| --- | --- | --- |
+| `--smtp-host` | `GHOSTTREE_SMTP_HOST` | SMTP server; empty sends no mail |
+| `--smtp-port` | `GHOSTTREE_SMTP_PORT` | default 587 (starttls), 465 (tls), 25 (none) |
+| `--smtp-security` | `GHOSTTREE_SMTP_SECURITY` | `starttls` (default), `tls` or `none`; `none` with credentials only for a host on this machine |
+| `--smtp-from` | `GHOSTTREE_SMTP_FROM` | sender address, e.g. `ghosttree <noreply@example.com>` |
+| `--smtp-user` | `GHOSTTREE_SMTP_USER` | SMTP user |
+| `--smtp-password-file` | `GHOSTTREE_SMTP_PASSWORD_FILE` | file with the password on one line; there is deliberately no flag or variable for the password itself |
+| `--mail-dir` | `GHOSTTREE_MAIL_DIR` | file mailbox: every mail becomes `<time>-<n>-<recipient>.eml` (mode 0600) in this directory instead of being sent; needs `--smtp-from`; for tests and local instances |
+| `--password-login` | `GHOSTTREE_PASSWORD_LOGIN=1` | email and password sign-in |
+
+`ctx serve` checks the setup before it listens and says at the start which way
+mail takes: `mail: SMTP mail.example.com:587 (starttls), from …`, `mail: file
+mailbox /path, from …`, or `mail: off (…)`. A wrong setup (a missing password
+file, a host and a directory together, `--password-login` without mail) stops the
+start. Mails are plain text in the language of the server (`--language`), carry no
+images or links but the one to this server, and go out in the background; a
+failed send is logged as `mail_send_failed` with the kind of mail and the error
+text without the address. The links in the mails use `--public-url` when set,
+otherwise the address the request came in on (behind a proxy, see
+[Running behind TLS or a reverse proxy](#running-behind-tls-or-a-reverse-proxy)).
+
+Operating at deadweight (orax): set `GHOSTTREE_SMTP_HOST`, `GHOSTTREE_SMTP_FROM`,
+`GHOSTTREE_SMTP_USER` and `GHOSTTREE_SMTP_PASSWORD_FILE` in the service
+environment file and keep the password file readable by the service user only.
+
+### What is stored and how it is guarded
+
+Codes and links are stored as hashes; the code has 40 bits and is guarded by its
+short life, five wrong tries per mail, and limits per address and per sender (fifteen
+minutes: five mails and ten tries per address, twenty mails and forty tries per
+sender). Passwords are argon2id (64 MiB, three passes). An address is on the
+account only once confirmed (`persons.email`); an unconfirmed one waits in the
+mail itself. Nothing on a sign-in page tells whether an address has an account.
+
 ## Privacy and security
 
 Ghosttree may hold source paths, prompts, command output, and operational

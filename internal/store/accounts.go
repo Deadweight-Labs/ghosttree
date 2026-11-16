@@ -624,7 +624,11 @@ func createBootstrapAccount(tx *sql.Tx, name, email, source string) (int64, erro
 		return 0, err
 	}
 	// Eine leere Instanz bekommt mit ihrem ersten Konto die Default-Organisation.
-	if _, err := createOrgTx(tx, "Default", "default", id); err != nil {
+	org, err := createOrgTx(tx, "Default", "default", id)
+	if err != nil {
+		return 0, err
+	}
+	if err := startWelcomeTx(tx, id, org.ID); err != nil {
 		return 0, err
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO account_migrations(version, migrated_at) VALUES(1,?)`, now()); err != nil {
@@ -812,6 +816,11 @@ func (s *Store) RedeemLoginLink(code string) (Account, error) {
 	id, err := consumeCode(tx, code, CodeLogin)
 	if err != nil {
 		return Account{}, err
+	}
+	// Ein Link, den ein Gerät für sein Konto ausgestellt hat (ctx web), gilt nur,
+	// solange das Token dieses Geräts gilt.
+	if !loginCodeTokenValidTx(tx, hashToken(code)) {
+		return Account{}, ErrCodeInvalid
 	}
 	a, err := accountState(tx, id)
 	if err != nil {

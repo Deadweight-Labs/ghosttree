@@ -75,6 +75,20 @@ func (s *sessions) relabel(accountID, label string) {
 	}
 }
 func (s *sessions) remove(id string) { s.mu.Lock(); delete(s.values, id); s.mu.Unlock() }
+
+// dropAccount ends every session of an account (a new password, a reset).
+func (s *sessions) dropAccount(accountID string) { s.dropAccountExcept(accountID, "") }
+
+// dropAccountExcept ends every session of an account but the one named keep.
+func (s *sessions) dropAccountExcept(accountID, keep string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, v := range s.values {
+		if v.principal.ID == accountID && id != keep {
+			delete(s.values, id)
+		}
+	}
+}
 func browserPrincipal(r *http.Request) store.Principal {
 	v, _ := r.Context().Value(personKey{}).(store.Principal)
 	return v
@@ -247,10 +261,15 @@ func (a *app) pasteLoginAllowed() bool {
 }
 
 func (a *app) loginData(title, errMsg string) pageData {
-	return pageData{
+	d := pageData{
 		Title: title, Error: errMsg, OIDC: a.oidc != nil, Paste: a.pasteLoginAllowed(),
 		ProviderName: a.oidcName, Bootstrap: a.oidc == nil && a.bootstrapPending(),
+		Mail: a.mailAvailable(), PasswordLogin: a.passwordsOn(),
 	}
+	// Without a mail setup (and without an identity provider) the page names the
+	// ways back in that exist: a login link from an owner, or ctx web.
+	d.NoMailHint = !d.Mail && !d.OIDC && !d.Bootstrap
+	return d
 }
 
 // bootstrapPending sagt, ob die Instanz noch auf ihren ersten Anmeldecode
@@ -419,10 +438,13 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 }
 
 // orgInviteView ist die Vorschau einer Einladung in eine Organisation, oder nil,
-// wenn sie sich nicht zeigen lässt.
+// wenn sie sich nicht zeigen lässt. Eine an eine Adresse gebundene Einladung
+// zeigt sich auch dann, wenn diese Instanz keine Adresse bestätigen kann: dann
+// mit Blocked und der maskierten Adresse, damit die Seite den Weg nennt statt
+// eines Kreislaufs (P05).
 func (a *app) orgInviteView(r *http.Request, l lang, code string) *joinView {
-	p, err := a.store.PreviewOrgInvitation(code, a.store.AccessEnforced(), a.oidc != nil)
-	if err != nil {
+	p, err := a.store.PreviewJoin(code, a.store.AccessEnforced(), a.oidc != nil || a.mailAvailable())
+	if err != nil && !errors.Is(err, store.ErrInvitationEmail) {
 		return nil
 	}
 	target := p.Project
@@ -431,11 +453,25 @@ func (a *app) orgInviteView(r *http.Request, l lang, code string) *joinView {
 	}
 	v := &joinView{Inviter: p.Inviter, Target: target, Short: shortName(target), Org: p.Org, ExpiresAt: p.ExpiresAt,
 		ExpiresIn: expiresIn(l, p.ExpiresAt), Code: code, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context()),
-		Provider: a.oidcName, OIDC: a.oidc != nil, OrgMark: initialOf(firstNonEmpty(p.Org, shortName(target)))}
+		Provider: a.oidcName, OIDC: a.oidc != nil, OrgMark: initialOf(firstNonEmpty(p.Org, shortName(target))),
+		Mail: a.oidc == nil && a.mailAvailable(), Bound: store.MaskEmail(p.BoundEmail), Blocked: err != nil}
 	if p.Project == "" {
 		v.Org = ""
 	}
 	return v
+}
+
+// invitationEmailRejected is the page for an invitation that is bound to an
+// address the person cannot show: it names the masked address and the way on.
+func (a *app) invitationEmailRejected(l lang, w http.ResponseWriter, code string) {
+	p, _ := a.store.PreviewJoin(code, a.store.AccessEnforced(), true)
+	masked := store.MaskEmail(p.BoundEmail)
+	inviter := firstNonEmpty(p.Inviter, l.msg("join.the_inviter"))
+	if masked == "" {
+		a.loginMessage(l, w, http.StatusForbidden, "auth.invitation_email.title", "auth.invitation_email.text")
+		return
+	}
+	a.loginMessage(l, w, http.StatusForbidden, "auth.invitation_email.title", "auth.invitation_email.bound", masked, inviter)
 }
 
 func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
@@ -476,6 +512,10 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 		if account, err = a.store.BootstrapLocal(code, r.FormValue("name")); err == nil {
 			a.dropBootstrapFile()
+			// The first account also gets an address to sign in with, confirmed by mail.
+			if a.mailAvailable() {
+				a.confirmFirstAddress(r, l, account)
+			}
 		}
 	case store.CodeLogin:
 		account, err = a.store.RedeemLoginLink(code)
@@ -490,6 +530,16 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	case store.CodeInvitation:
 		if a.oidc != nil {
 			a.beginOIDC(w, r, code)
+			return
+		}
+		if a.mailAvailable() {
+			a.joinByMail(w, r, l, code, r.FormValue("join") == "1")
+			return
+		}
+		// Eine an eine Adresse gebundene Einladung geht ohne Mail nicht: die
+		// Seite sagt, an welche Adresse sie gebunden ist und was zu tun ist.
+		if _, perr := a.store.PreviewJoin(code, a.store.AccessEnforced(), false); errors.Is(perr, store.ErrInvitationEmail) {
+			a.invitationEmailRejected(l, w, code)
 			return
 		}
 		// Die Namensprüfung verrät, welche Konten es gibt. Darum zählt jeder Aufruf
@@ -594,4 +644,17 @@ func codeFromInput(raw string) (code, joinCode string) {
 		return c, ""
 	}
 	return raw, ""
+}
+
+// confirmFirstAddress sends the confirmation of the address the first account
+// typed on the setup page; a missing or broken address leaves the account as is
+// (it can add one on its profile).
+func (a *app) confirmFirstAddress(r *http.Request, l lang, account store.Account) {
+	typed := strings.TrimSpace(r.FormValue("email"))
+	if typed == "" || len(typed) > 320 {
+		return
+	}
+	if ch, err := a.store.IssueConfirmChallenge(account.ID, typed); err == nil {
+		a.sendChallengeMail(r, l, ch)
+	}
 }

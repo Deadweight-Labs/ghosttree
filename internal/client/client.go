@@ -289,6 +289,19 @@ func (c *Client) WhoAmI() (store.Principal, error) {
 	return principal, err
 }
 
+// WebLogin asks the server for a one-time sign-in code for the web interface,
+// for the account and machine of this client's token (ctx web).
+func (c *Client) WebLogin() (code string, expiresIn int, err error) {
+	var out struct {
+		Code      string `json:"code"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	if err := c.do("POST", "/api/auth/web-login", nil, struct{}{}, &out); err != nil {
+		return "", 0, err
+	}
+	return out.Code, out.ExpiresIn, nil
+}
+
 // do performs a request; out may be a *string to capture a raw text body.
 func (c *Client) do(method, path string, query url.Values, in, out any) error {
 	return c.doContext(context.Background(), method, path, query, in, out)

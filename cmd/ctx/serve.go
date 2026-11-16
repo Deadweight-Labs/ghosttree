@@ -12,12 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/forge"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
+	"github.com/Deadweight-Labs/ghosttree/internal/mail"
 	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -51,6 +53,12 @@ type serveConfig struct {
 	GardenLimits llmusage.Limits
 	// Embed configures hybrid search; without a URL it is off.
 	Embed embedSettings
+	// Mail is how the server sends mail (SMTP or a file mailbox); empty means no
+	// mail. Mailer is the sender built from it. PasswordLogin switches on e-mail +
+	// password sign-in (it needs mail). REQ-676.
+	Mail          mail.Config
+	Mailer        mail.Sender
+	PasswordLogin bool
 }
 
 const (
@@ -71,6 +79,17 @@ const (
 	// envDistDir names a directory with the ctx release archives and
 	// checksums.txt; the server then serves /install.sh and /dist/.
 	envDistDir = "GHOSTTREE_DIST_DIR"
+	// Mail and password sign-in (REQ-676). The SMTP password is read from a file,
+	// never from a flag or the environment: both show in the process list or in
+	// /proc.
+	envSMTPHost         = "GHOSTTREE_SMTP_HOST"
+	envSMTPPort         = "GHOSTTREE_SMTP_PORT"
+	envSMTPSecurity     = "GHOSTTREE_SMTP_SECURITY"
+	envSMTPFrom         = "GHOSTTREE_SMTP_FROM"
+	envSMTPUser         = "GHOSTTREE_SMTP_USER"
+	envSMTPPasswordFile = "GHOSTTREE_SMTP_PASSWORD_FILE"
+	envMailDir          = "GHOSTTREE_MAIL_DIR"
+	envPasswordLogin    = "GHOSTTREE_PASSWORD_LOGIN"
 	// envLanguage picks the language of the web interface: en (default) or de.
 	envLanguage = "GHOSTTREE_LANGUAGE"
 
@@ -153,6 +172,22 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
 	fs.StringVar(&cfg.CheckPublicURL, "check-public-url", os.Getenv(envCheckPublicURL), "base URL for the links in the GitHub check run of a pull request; empty writes no links, because the check run is readable by everyone who reads the pull request (env "+envCheckPublicURL+")")
 	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
+	smtpPort := 0
+	if v := os.Getenv(envSMTPPort); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return serveConfig{}, fmt.Errorf("%s: %q is not a port number", envSMTPPort, v)
+		}
+		smtpPort = n
+	}
+	fs.StringVar(&cfg.Mail.Host, "smtp-host", os.Getenv(envSMTPHost), "SMTP server for sign-in codes and confirmations; empty sends no mail (env "+envSMTPHost+")")
+	fs.IntVar(&cfg.Mail.Port, "smtp-port", smtpPort, "SMTP port; default 587 (starttls), 465 (tls) or 25 (none) (env "+envSMTPPort+")")
+	fs.StringVar(&cfg.Mail.Security, "smtp-security", os.Getenv(envSMTPSecurity), "starttls (default), tls or none; none only for a relay on this host (env "+envSMTPSecurity+")")
+	fs.StringVar(&cfg.Mail.From, "smtp-from", os.Getenv(envSMTPFrom), "sender address of the mails, e.g. ghosttree <noreply@example.com> (env "+envSMTPFrom+")")
+	fs.StringVar(&cfg.Mail.User, "smtp-user", os.Getenv(envSMTPUser), "SMTP user (env "+envSMTPUser+")")
+	fs.StringVar(&cfg.Mail.PasswordFile, "smtp-password-file", os.Getenv(envSMTPPasswordFile), "file with the SMTP password, one line; there is no flag for the password itself (env "+envSMTPPasswordFile+")")
+	fs.StringVar(&cfg.Mail.Dir, "mail-dir", os.Getenv(envMailDir), "write every mail as an .eml file into this directory instead of sending it, for tests and local instances; needs --smtp-from (env "+envMailDir+")")
+	fs.BoolVar(&cfg.PasswordLogin, "password-login", os.Getenv(envPasswordLogin) == "1", "offer sign-in with e-mail and password besides the mail code; needs mail (env "+envPasswordLogin+"=1)")
 	sessionText := fs.String("session-text", os.Getenv(envSessionText), "text of transcript chunks: stored (default) writes it next to the line, derived leaves it out and reads derive it from the line; see ctx db slim-text (env "+envSessionText+")")
 	fs.StringVar(&cfg.Language, "language", os.Getenv(envLanguage), "language of the web interface: en (default) or de (env "+envLanguage+")")
 	explainMode := os.Getenv(envExplain)
@@ -175,6 +210,13 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	}
 	if err := cfg.OIDC.Validate(); err != nil {
 		return serveConfig{}, err
+	}
+	var mailErr error
+	if cfg.Mailer, mailErr = mail.New(cfg.Mail); mailErr != nil {
+		return serveConfig{}, fmt.Errorf("mail: %w", mailErr)
+	}
+	if cfg.PasswordLogin && cfg.Mailer == nil {
+		return serveConfig{}, fmt.Errorf("--password-login needs mail (--smtp-host or --mail-dir): a password is set and reset through a confirmed address")
 	}
 	lang, err := web.ParseLanguage(cfg.Language)
 	if err != nil {
@@ -327,6 +369,7 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		return 0
 	}
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
+	fmt.Fprintln(stdout, mailStartLine(cfg))
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", accessEnforcedByEnv(), "env", envEnforceAccess,
 		"note", "without enforcement only 'access: would deny' is logged, nothing is refused")
 	if note := proxyConfigWarning(cfg); note != "" {
@@ -430,6 +473,19 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	return 0
 }
 
+// mailStartLine tells the operator which way mail takes at this start, and what
+// is switched off when there is none.
+func mailStartLine(cfg serveConfig) string {
+	if cfg.Mailer == nil {
+		return "mail: off (no sign-in by email, no confirmation of addresses; ways back in: login link from an owner, ctx web; set --smtp-host or --mail-dir)"
+	}
+	line := "mail: " + cfg.Mailer.Mode() + ", from " + cfg.Mail.From
+	if cfg.PasswordLogin {
+		line += "; sign-in with email and password: on"
+	}
+	return line
+}
+
 func accessEnforcedByEnv() bool { return os.Getenv(envEnforceAccess) == "1" }
 
 func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http.Handler {
@@ -463,6 +519,9 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	}
 	if cfg.OIDC.Enabled() {
 		webOptions = append(webOptions, web.WithOIDC(cfg.OIDC))
+	}
+	if cfg.Mailer != nil {
+		webOptions = append(webOptions, web.WithMail(cfg.Mailer), web.WithPasswordLogin(cfg.PasswordLogin))
 	}
 	webOptions = append(webOptions, web.WithLanguage(cfg.Language), web.WithAvatarCache(filepath.Join(filepath.Dir(cfg.DB), "avatars")), web.WithBuildVersion(version))
 	explainCfg := cfg.Explain

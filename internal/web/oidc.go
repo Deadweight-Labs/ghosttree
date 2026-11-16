@@ -565,6 +565,10 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		Name: claims.displayName(), Code: flow.Code,
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrInvitationEmail) && flow.Code != "" {
+			a.invitationEmailRejected(l, w, flow.Code)
+			return
+		}
 		a.identityRejected(l, w, err)
 		return
 	}

@@ -208,7 +208,7 @@ func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/inbox", http.StatusFound)
 		return
 	}
-	data := pageData{Title: l.msg("overview.title")}
+	data := pageData{Title: l.msg("overview.title"), Welcome: a.welcomeCards(r, l)}
 	if r.URL.Query().Get("connect") == "" {
 		data.Refresh = setupRefreshSeconds
 	}

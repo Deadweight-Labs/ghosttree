@@ -161,6 +161,40 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- Signing in by email (REQ-676, v0.1 work package 3). The sign-in page takes an
+  address and mails an eight-character code and a magic link; either signs in,
+  once, within ten minutes. The page answers the same for an unknown address,
+  asks are rate limited per address and per sender, and a link opens only a page
+  with a button, so a mail preview cannot use it up. New to `ctx serve`: mail
+  through SMTP (`--smtp-host`, `--smtp-port`, `--smtp-security`, `--smtp-from`,
+  `--smtp-user`, `--smtp-password-file`; the password comes from a file, never
+  from a flag) or a file mailbox (`--mail-dir`, every mail as an `.eml` file) for
+  tests and local instances; the start line says which. Without mail nothing
+  changes for the instance, and the sign-in page names the ways back in.
+  Everything is also available as `GHOSTTREE_SMTP_*`, `GHOSTTREE_MAIL_DIR` and
+  `GHOSTTREE_PASSWORD_LOGIN`; see `docs/operations.md`.
+- An address on the account, confirmed by mail: the first account, a joiner and
+  the profile name one, and it signs in only once confirmed. An invitation bound
+  to an address now works on an instance with mail (the confirmation of that
+  address is what joins); on an instance without mail the invitation page and
+  the refused-invitation page name the masked address and say to ask the inviter
+  for a new link, instead of leading in a circle, and the invitation form offers
+  no address binding there.
+- Optional per instance, `--password-login`: email and password. A password is
+  set in the profile (argon2id), changed with the current one, and reset by
+  mail; a reset ends every session of the account. Wrong password and unknown
+  address give the same answer, at the same cost, and tries are limited.
+- Ways back in without mail: an organization owner makes a one-time login link
+  for a member on the Members page (ten minutes, once), and `ctx web` signs in
+  the web interface from a connected machine (two minutes, once, tied to the
+  account and the device token that asked; a revoked token voids it). It is the
+  core of REQ-609 AC-1.
+- A welcome card after the first account and after joining an organization:
+  the organization's name and the next steps (confirm the address, invite people,
+  connect a device, open a repo). It goes away when the steps are done or when
+  clicked away. The setup page of an empty instance labels its button "Create
+  account".
+
 - The `http_request` log line of `/api/context/relevant` and
   `/api/context/bootstrap` carries the group `phases`: the milliseconds spent
   in each step (`pool_wait`, `access`, `knowledge`, `rights`, `claim`,

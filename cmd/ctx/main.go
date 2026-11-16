@@ -152,6 +152,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdTask(rest, stdout)
 	case "open":
 		return cmdOpen(rest, stdout)
+	case "web":
+		return cmdWeb(rest, stdout)
 	case "help", "--help", "-h":
 		fmt.Fprintln(stdout, usage)
 		return 0
@@ -211,6 +213,7 @@ const usage = `usage: ctx <command>
   label    labels for requests, pains, ideas and knowledge, per project or org
   topic    named areas of the repository (several path prefixes under one name)
   task     ask the human for a key, file, decision or action, and check it afterwards
+  web      sign in to the web interface from this machine with a one-time link (no password, no mail)
   open     open an object (REQ-n, TASK-n, PAIN-n, KN-n, pr:n, preset:..., a path) in the browser, or print its link and card
   knowledge  add, show, supersede, retire or move a knowledge entry
   ghost    read description history or archive confirmed-deleted paths

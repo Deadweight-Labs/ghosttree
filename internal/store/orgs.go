@@ -1232,6 +1232,11 @@ func invitationExists(q rowQuerier, code string) bool {
 	return q.QueryRow(`SELECT 1 FROM invitations WHERE code_hash=?`, hashToken(code)).Scan(&one) == nil
 }
 
+func invitationHashExists(q rowQuerier, codeHash string) bool {
+	var one int
+	return q.QueryRow(`SELECT 1 FROM invitations WHERE code_hash=?`, codeHash).Scan(&one) == nil
+}
+
 // invitationCoverage sagt, ob ein Konto durch eine Einladung nichts bekäme:
 // eine Org-Einladung bringt einem Mitglied nichts, ein Org-Owner hat schon alles,
 // und ein Konto, das die Organisation schon hat, kann über eine Projekt-Einladung
@@ -1280,10 +1285,16 @@ func (s *Store) InvitationCovered(accountPrincipal, code string) bool {
 // oder leer; eine an eine Adresse gebundene Einladung verlangt Gleichheit.
 // Gültigkeit, Zustand und Einlösbarkeit melden einheitlich ErrCodeInvalid.
 func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmail string, enforced bool) (Org, error) {
+	return acceptInvitationHashTx(tx, hashToken(code), account, verifiedEmail, enforced)
+}
+
+// acceptInvitationHashTx is acceptInvitationTx for a caller that holds only the
+// hash of the code (a join waiting for the confirmation of an address).
+func acceptInvitationHashTx(tx execQueryer, codeHash string, account int64, verifiedEmail string, enforced bool) (Org, error) {
 	var id, orgID, inviter, projectID int64
 	var role, projectRole, email, expires, accepted, revoked string
 	err := tx.QueryRow(`SELECT id, org_id, role, project_id, project_role, email, invited_by, expires_at, accepted_at, revoked_at FROM invitations WHERE code_hash=?`,
-		hashToken(code)).Scan(&id, &orgID, &role, &projectID, &projectRole, &email, &inviter, &expires, &accepted, &revoked)
+		codeHash).Scan(&id, &orgID, &role, &projectID, &projectRole, &email, &inviter, &expires, &accepted, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Org{}, ErrCodeInvalid
 	}
@@ -1335,6 +1346,9 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 	}
 	if orgRole == "" {
 		if _, err := tx.Exec(`INSERT INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,?,?)`, orgID, account, role, now()); err != nil {
+			return Org{}, err
+		}
+		if err := startWelcomeTx(tx, account, orgID); err != nil {
 			return Org{}, err
 		}
 		// Wer nur für ein Projekt eingeladen wird, bleibt Gast der Organisation,
@@ -1439,7 +1453,11 @@ func inviteName(tx queryer, wanted string, self int64) (string, error) {
 // createInvitedAccountTx legt das Konto zu einer Einladung an und löst sie ein;
 // scheitert die Einlösung, bleibt auch das Konto aus (Rollback des Aufrufers).
 func createInvitedAccountTx(tx execQueryer, name, email, code, source string, enforced bool) (int64, error) {
-	if !invitationExists(tx, code) {
+	return createInvitedAccountHashTx(tx, name, email, hashToken(code), source, enforced)
+}
+
+func createInvitedAccountHashTx(tx execQueryer, name, email, codeHash, source string, enforced bool) (int64, error) {
+	if !invitationHashExists(tx, codeHash) {
 		return 0, ErrCodeInvalid
 	}
 	if n := NormalizeAccountName(name); n == "" || MixedScriptName(n) {
@@ -1454,7 +1472,7 @@ func createInvitedAccountTx(tx execQueryer, name, email, code, source string, en
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
-	if _, err := acceptInvitationTx(tx, code, id, email, enforced); err != nil {
+	if _, err := acceptInvitationHashTx(tx, codeHash, id, email, enforced); err != nil {
 		return 0, err
 	}
 	return id, nil

@@ -195,3 +195,31 @@ func (a *api) revokeOwnToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// webLoginLink gives the account of a device a one-time sign-in link for the web
+// interface (ctx web, REQ-676, the core of REQ-609 AC-1). The code is random, valid
+// for two minutes, usable once, and tied to the account and to the token and
+// machine that asked: a revoked token makes it worthless. The answer carries the
+// code only; the client builds the address from the server it talks to, so no
+// server setting decides where the link points.
+func (a *api) webLoginLink(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	if p.TokenKind == store.WebSessionKind || p.TokenID == 0 {
+		writeCoded(w, http.StatusForbidden, "bearer_token_required", "a sign-in link is made with a device token, not from a browser session")
+		return
+	}
+	code, ttl, err := a.st.IssueWebLoginLink(p.ID, p.TokenID, p.Machine)
+	switch {
+	case errors.Is(err, store.ErrAccountDisabled):
+		writeErr(w, http.StatusForbidden, "forbidden")
+		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "server_error")
+		return
+	}
+	if a.logger != nil {
+		a.logger.Info("web_login_link", "account", p.ID, "machine", p.Machine, "token_id", p.TokenID)
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"code": code, "expires_in": int(ttl.Seconds())})
+}
