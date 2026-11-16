@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -95,6 +96,7 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 		current = append(current, rowLabel{Text: lb.Name, Class: labelClass(lb.Color), Href: base + "?q=" + url.QueryEscape("label:"+lb.Name)})
 	}
 	v.LabelBox = a.labelBox(r, pa, remote, store.CommentOnRequest, req.ID, current)
+	v.Attach = a.attachBoxFor(r, l, pa, idea.SubjectRequest, req.ID, requestURL(req.ID)+"/attach")
 	v.Back = v.Base
 	v.Panel = r.URL.Query().Get("panel")
 	if r.URL.Query().Get("edit") == "1" {

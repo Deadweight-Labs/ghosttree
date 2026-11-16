@@ -34,6 +34,30 @@ type attachImage struct {
 	W, H          int
 }
 
+// attachBox is the box of the pictures on an idea, an issue or a pain: the pictures,
+// and the form that adds one for whoever may work on the object (CanAttach).
+type attachBox struct {
+	Images    []attachImage
+	CanAttach bool
+	// Action is where the form posts, Owner what the picture belongs to (the object
+	// itself: idea, request or pain).
+	Action, Owner, Token string
+}
+
+// MaxBytes is the size a picture may have, for the script that checks it before the upload.
+func (attachBox) MaxBytes() int { return idea.MaxAttachmentBytes }
+
+// attachBoxFor builds the box of an object: its pictures that belong to the object itself,
+// and the form when the viewer may work on it and the page is an interactive one.
+func (a *app) attachBoxFor(r *http.Request, l lang, pa *store.ProjectAccess, subject string, id int64, action string) *attachBox {
+	box := &attachBox{Action: action, Owner: subject, Token: csrfOf(r)}
+	if metas, err := pa.AttachmentsOf(subject, id); err == nil {
+		box.Images = attachImages(l, metas, func(m idea.AttachmentMeta) bool { return m.Owner == subject })
+	}
+	box.CanAttach = interactive(r) && pa.CanAttach(subject, id)
+	return box
+}
+
 // attachImages macht aus den Anhängen die Bilder, die zu einem Eigentümer gehören.
 func attachImages(l lang, metas []idea.AttachmentMeta, keepOwner func(idea.AttachmentMeta) bool) []attachImage {
 	var out []attachImage
@@ -127,6 +151,51 @@ func (a *app) ideaAttach(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
+	a.attachUpload(w, r, pa, store.AttachInput{Subject: idea.SubjectIdea, SubjectID: id, Owner: owner, VariantID: variantID}, back)
+}
+
+// requestAttach ist POST /ui/requests/{id}/attach (file, alt): hängt ein Bild an das
+// Issue selbst (REQ-671). Wer daran mitarbeiten darf, darf es; ein Gast bekommt 403,
+// ein Issue, das er nicht lesen darf, ist 404.
+func (a *app) requestAttach(w http.ResponseWriter, r *http.Request) {
+	detail, ok := a.lookupRequest(w, r, store.ActWork)
+	if !ok {
+		return
+	}
+	back := requestURL(detail.Request.ID)
+	if detail.Request.Scope.Project != "" {
+		back = repoHref(detail.Request.Scope.Project) + "/issues/" + strconv.FormatInt(detail.Request.ID, 10)
+	}
+	a.attachUpload(w, r, a.access(r), store.AttachInput{Subject: idea.SubjectRequest, SubjectID: detail.Request.ID, Owner: idea.OwnerRequest}, back)
+}
+
+// painAttach ist POST /ui/pains/{id}/attach (file, alt): hängt ein Bild an den Pain
+// (REQ-671). Wie beim Issue: Mitarbeit nötig, ein verborgener Pain ist 404.
+func (a *app) painAttach(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	pa := a.access(r)
+	p, err := a.store.PainByID(id)
+	if err != nil {
+		pa.Filtered()
+		http.NotFound(w, r)
+		return
+	}
+	if err := pa.CheckPain(p, store.ActRead); err != nil {
+		a.painFail(w, r, err)
+		return
+	}
+	a.attachUpload(w, r, pa, store.AttachInput{Subject: idea.SubjectPain, SubjectID: id, Owner: idea.OwnerPain}, repoHref(p.Project)+"/pains/"+strconv.FormatInt(id, 10))
+}
+
+// attachUpload reads the file of the form, hands it to Attach (which checks the right
+// to work on the object and the image itself) and goes back to the page: with done=image
+// when it worked, with fail=img_* when the picture was refused. The type is the one the
+// bytes show, never the one the browser names.
+func (a *app) attachUpload(w http.ResponseWriter, r *http.Request, pa *store.ProjectAccess, in store.AttachInput, back string) {
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		http.Redirect(w, r, back+"?fail=img_none#images", http.StatusSeeOther)
@@ -140,8 +209,8 @@ func (a *app) ideaAttach(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// DeclaredType stays empty on purpose: what the browser says the file is does not count.
-	_, err = pa.Attach(store.AttachInput{Subject: idea.SubjectIdea, SubjectID: id, Owner: owner, VariantID: variantID, Data: data,
-		Alt: r.FormValue("alt"), Actor: store.IdeaActorFor(browserPrincipal(r), "")})
+	in.Data, in.Alt, in.Actor = data, r.FormValue("alt"), store.IdeaActorFor(browserPrincipal(r), "")
+	_, err = pa.Attach(in)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrAccessForbidden):
@@ -152,6 +221,10 @@ func (a *app) ideaAttach(w http.ResponseWriter, r *http.Request) {
 			code := requestdomain.Code(err)
 			if short, ok := attachFailCodes[code]; ok {
 				http.Redirect(w, r, back+"?fail="+url.QueryEscape(short)+"#images", http.StatusSeeOther)
+				return
+			}
+			if code == "pain_not_found" || code == "request_not_found" {
+				http.NotFound(w, r)
 				return
 			}
 			if code != "" {

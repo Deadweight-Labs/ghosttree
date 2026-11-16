@@ -73,4 +73,12 @@ func TestJSFixturesAreWhatTheTemplatesRender(t *testing.T) {
 		}
 		goldenFixture(t, "suggest-list-"+list+".html", []byte(bar+"\n"))
 	}
+
+	// The form that takes a picture on the idea, issue and pain pages (REQ-671): the script
+	// ui-attach.js finds it by data-attach and sends a pasted or dropped picture through it.
+	var attach bytes.Buffer
+	if err := langEN.page().ExecuteTemplate(&attach, "attachbox", &attachBox{CanAttach: true, Action: "/ui/pains/7/attach", Owner: "pain", Token: "tok-1"}); err != nil {
+		t.Fatal(err)
+	}
+	goldenFixture(t, "attach-box.html", attach.Bytes())
 }

@@ -30,8 +30,9 @@ type AttachmentMeta struct {
 	ID        int64  `json:"id"`
 	Subject   string `json:"subject"`
 	SubjectID int64  `json:"subject_id"`
-	// Owner ist idea, reply oder variant; OwnerRef die Nummer der Variante,
-	// bzw. der Diskussion bei einer Antwort.
+	// Owner ist idea, reply, variant, request oder pain; OwnerRef die Nummer der
+	// Variante, bzw. der Diskussion bei einer Antwort. Bei request und pain gehört
+	// das Bild dem Gegenstand selbst, OwnerRef bleibt leer.
 	Owner     string `json:"owner"`
 	OwnerRef  string `json:"owner_ref,omitempty"`
 	Mime      string `json:"mime"`
@@ -51,6 +52,10 @@ const (
 	OwnerIdea    = "idea"
 	OwnerReply   = "reply"
 	OwnerVariant = "variant"
+	// OwnerRequest und OwnerPain: das Bild gehört direkt zum Issue bzw. zum Pain
+	// (REQ-671), nicht zu einer Variante.
+	OwnerRequest = "request"
+	OwnerPain    = "pain"
 )
 
 // Image ist ein geprüftes Bild.

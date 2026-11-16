@@ -14,6 +14,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -67,6 +68,8 @@ type painView struct {
 	// viewer may not open one).
 	Edit      *editPanel
 	IssueHref string
+	// Attach is the box of the pictures on the pain and the form that adds one.
+	Attach *attachBox
 }
 
 func painURL(id int64) string { return "/ui/pains/" + strconv.FormatInt(id, 10) }
@@ -105,6 +108,7 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 	v.CanWork = pa.CheckPain(p, store.ActWork) == nil
 	v.CanIdea = v.CanWork && interactive(r) && pa.Allow(p.Project, store.ResIdea, store.ActCreate, store.Object{Own: true})
 	v.Explain = a.explainFor(l, explain.KindPain, p.ID)
+	v.Attach = a.attachBoxFor(r, l, pa, idea.SubjectPain, p.ID, painURL(p.ID)+"/attach")
 	if interactive(r) && pa.CheckPain(p, store.ActEdit) == nil {
 		v.Edit = &editPanel{Open: r.URL.Query().Get("panel") == "edit", Close: repoHref(p.Project) + "/pains/" + strconv.FormatInt(p.ID, 10),
 			Action: painURL(p.ID) + "/correct", Token: csrfOf(r), Title: p.Title, Body: p.Body}
@@ -180,6 +184,8 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 		v.Result = &requestResult{Text: l.msg("pains.result.state"), Kind: "done"}
 	case r.URL.Query().Get("done") == "corrected":
 		v.Result = &requestResult{Text: l.msg("pains.result.corrected"), Kind: "done"}
+	case r.URL.Query().Get("done") == "image":
+		v.Result = &requestResult{Text: l.msg("ideas.result.image"), Kind: "done"}
 	case r.URL.Query().Get("done") == "idea":
 		v.Result = &requestResult{Text: l.msg("pains.result.idea_made"), Kind: "done"}
 	}
@@ -352,6 +358,8 @@ func painFailKey(code string) string {
 		return "pains.result.title_required"
 	case "nothing_to_change":
 		return "pains.result.nothing_to_change"
+	case "img_none", "img_type", "img_size", "img_bad", "img_other":
+		return ideaFailKey(code)
 	}
 	return "pains.result.failed"
 }

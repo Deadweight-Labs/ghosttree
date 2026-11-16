@@ -31,6 +31,8 @@ const (
 const (
 	SubjectIdea    = "idea"
 	SubjectRequest = "request"
+	// SubjectPain trägt nur Bild-Anhänge, keine Entscheidungen (REQ-671).
+	SubjectPain = "pain"
 )
 
 // Maße.

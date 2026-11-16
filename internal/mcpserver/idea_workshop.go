@@ -446,9 +446,11 @@ func (s *Server) handleDecisionUpdate(_ context.Context, _ *mcp.CallToolRequest,
 // ---- Anhänge
 
 type IdeaAttachInput struct {
-	Idea       int64  `json:"idea,omitempty" jsonschema:"the idea the image belongs to"`
-	RequestID  int64  `json:"request_id,omitempty" jsonschema:"the issue, when the image belongs to a variant of one of its decisions"`
-	Owner      string `json:"owner,omitempty" jsonschema:"idea (default for an idea), variant (needs decision and variant) or reply (needs thread: the discussion of the idea)"`
+	Idea      int64 `json:"idea,omitempty" jsonschema:"the idea the image belongs to"`
+	RequestID int64 `json:"request_id,omitempty" jsonschema:"the issue the image belongs to (or whose decision variant it belongs to)"`
+	// Pain is set by pain_attach (the pain tool names it id); it is not a field of this tool.
+	Pain       int64  `json:"-"`
+	Owner      string `json:"owner,omitempty" jsonschema:"idea or request (default: the object itself), variant (needs decision and variant) or reply (needs thread: the discussion of the idea)"`
 	DecisionID int64  `json:"decision,omitempty" jsonschema:"with owner variant: the decision, DEC-n"`
 	Variant    string `json:"variant,omitempty" jsonschema:"with owner variant: the letter"`
 	ThreadID   int64  `json:"thread,omitempty" jsonschema:"with owner reply: the thread number"`
@@ -495,6 +497,21 @@ func readImageFile(path string) ([]byte, error) {
 	return data, nil
 }
 
+// PainAttachInput is the image on a pain: the pain is named as id, like in the other pain actions.
+type PainAttachInput struct {
+	ID   int64  `json:"id" jsonschema:"the pain number, PAIN-n"`
+	Path string `json:"path,omitempty" jsonschema:"a PNG, JPEG or WebP file on this machine, up to 5 MB"`
+	Data string `json:"data_base64,omitempty" jsonschema:"the image as base64, instead of path"`
+	Alt  string `json:"alt,omitempty" jsonschema:"what the image shows, one line"`
+}
+
+func (s *Server) handlePainAttach(ctx context.Context, req *mcp.CallToolRequest, in PainAttachInput) (*mcp.CallToolResult, IdeaAttachOutput, error) {
+	if in.ID <= 0 {
+		return nil, IdeaAttachOutput{}, fmt.Errorf("name the pain as id")
+	}
+	return s.handleIdeaAttach(ctx, req, IdeaAttachInput{Pain: in.ID, Path: in.Path, Data: in.Data, Alt: in.Alt})
+}
+
 func (s *Server) handleIdeaAttach(_ context.Context, _ *mcp.CallToolRequest, in IdeaAttachInput) (*mcp.CallToolResult, IdeaAttachOutput, error) {
 	var data []byte
 	switch {
@@ -528,10 +545,19 @@ func (s *Server) handleIdeaAttach(_ context.Context, _ *mcp.CallToolRequest, in 
 	case in.RequestID != 0:
 		req.Subject, req.ID = idea.SubjectRequest, in.RequestID
 		if req.Owner == "" {
-			req.Owner = idea.OwnerVariant
+			// A variant when one is named, else the issue itself.
+			req.Owner = idea.OwnerRequest
+			if in.DecisionID != 0 || in.Variant != "" {
+				req.Owner = idea.OwnerVariant
+			}
+		}
+	case in.Pain != 0:
+		req.Subject, req.ID = idea.SubjectPain, in.Pain
+		if req.Owner == "" {
+			req.Owner = idea.OwnerPain
 		}
 	default:
-		return nil, IdeaAttachOutput{}, fmt.Errorf("name idea or request_id")
+		return nil, IdeaAttachOutput{}, fmt.Errorf("name idea, request_id or pain")
 	}
 	m, err := s.client.Attach(req)
 	if err != nil {
@@ -610,5 +636,6 @@ func (s *Server) registerIdeaWorkshopTools(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "decision_open", Description: "Put a question on an idea or an issue as an open decision instead of asking in chat. Optional variants A, B, C with text, pro and contra; a person deciding gets them as quick answers. You close it if it is reversible, local and within the conventions (say why; recorded as from the agent, a person can overturn it); a person closes it if it touches security, permissions, cost, anything outside, the data model, product direction, or people disagree (name those in aspects). A question from building an issue: via_request. Nothing blocks: carry on with what does not depend on it.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleDecisionOpen)
 	mcp.AddTool(srv, &mcp.Tool{Name: "decision_list", Description: "Read decisions: one by id, those of an idea or an issue, or the project's (open ones by default; waiting_for_a_person is the inbox). Shows variants with their images, the votes per person and, when closed, the reason.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleDecisionList)
 	mcp.AddTool(srv, &mcp.Tool{Name: "decision_update", Description: "Work on a decision: vote (which variant you would take and why, anyone who works on the idea), variant (add an option), close, reopen, way. close needs the right to edit the idea or issue: decided (a variant or an answer, plus the reason; it becomes knowledge and goes into the concept), deferred (with a trigger: it comes back in the briefing when the trigger matches), dropped (with a reason). A decision that waits for a person is closed by a person, not by an agent. reopen takes a closed decision back (a person only, except a deferred one).", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleDecisionUpdate)
-	mcp.AddTool(srv, &mcp.Tool{Name: "idea_attach", Description: "Attach an image (PNG, JPEG or WebP, up to 5 MB) to an idea, to a variant of a decision, or to a reply in the discussion of an idea: screenshot, mock, sketch. SVG is refused. The image is checked by its bytes and has the rights of the idea.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleIdeaAttach)
+	mcp.AddTool(srv, &mcp.Tool{Name: "pain_attach", Description: "Attach an image (PNG, JPEG or WebP, up to 5 MB) to a pain: a screenshot of what goes wrong. SVG is refused. The image is checked by its bytes and has the rights of the pain.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handlePainAttach)
+	mcp.AddTool(srv, &mcp.Tool{Name: "idea_attach", Description: "Attach an image (PNG, JPEG or WebP, up to 5 MB) to an idea, an issue, to a variant of a decision, or to a reply in the discussion of an idea: screenshot, mock, sketch. SVG is refused. The image is checked by its bytes and has the rights of the idea.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleIdeaAttach)
 }

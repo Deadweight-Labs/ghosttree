@@ -101,6 +101,9 @@
   & .ws-up { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 16px; }
   & .ws-up .gfield { flex: 1 1 160px; min-width: 0; font-size: 13px; }
   & .ws-up select.gfield { flex: 0 1 220px; }
+  & .ws-up-note { margin: 12px 16px 0; }
+  /* A file is dragged over the page: the box that takes the picture says where it goes. */
+  body.ws-dropping & .ws-imgbox { outline: 2px dashed var(--accent-fg); outline-offset: 2px; }
   & .ws-dec > .ws-up { margin: 12px 0 0; }
   & .ws-lb { max-width: min(96vw, 1200px); max-height: 94vh; padding: 12px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--canvas-default); color: var(--fg-default); }
   & .ws-lb::backdrop { background: rgb(0 0 0 / .6); }

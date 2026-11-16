@@ -161,6 +161,15 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- Pains and issues carry images, like ideas: the page shows them and has a
+  button for whoever may work on the object, Ctrl+V with a screenshot on the
+  clipboard adds one, and so does dropping an image file on the page (also on
+  an idea). Agents attach one with `ctx pain attach <id> <file>`,
+  `ctx request attach <id> <file>` or the actions `attach` of the `pain` and
+  `request` tools. An image on a pain or an issue has the rights of the pain or
+  issue; whoever may not read it gets the answer of a number that does not
+  exist. The table `attachments` is rebuilt once on start to take the new
+  subject (all rows stay).
 - The `http_request` log line of `/api/context/relevant` and
   `/api/context/bootstrap` carries the group `phases`: the milliseconds spent
   in each step (`pool_wait`, `access`, `knowledge`, `rights`, `claim`,

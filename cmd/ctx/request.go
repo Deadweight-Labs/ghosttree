@@ -10,6 +10,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -27,7 +28,9 @@ const requestUsage = `usage: ctx request <command>
   pause|complete-work|abandon <work-id> --summary S [--json]
   ac add <id> <criterion> [--json]
   ac met|waive <id> <criterion-id> --evidence-kind K --evidence-ref R [--json]
-  done <id> --evidence-kind K --evidence-ref R [--json]`
+  done <id> --evidence-kind K --evidence-ref R [--json]
+  attach <id> <image-file> [--alt TEXT] [--json]
+                                   attach a screenshot to the request (PNG, JPEG or WebP, up to 5 MB)`
 
 type requestEnvelope struct {
 	OK   bool `json:"ok"`
@@ -52,7 +55,7 @@ func cmdRequest(args []string, stdout io.Writer) int {
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
-	case "list", "search", "show", "create", "move", "start", "pause", "complete-work", "abandon", "ac", "done":
+	case "list", "search", "show", "create", "move", "start", "pause", "complete-work", "abandon", "ac", "done", "attach":
 	default:
 		return requestCLIUsage(stdout)
 	}
@@ -164,6 +167,11 @@ func cmdRequest(args []string, stdout io.Writer) int {
 		state := map[string]string{"pause": "paused", "complete-work": "completed", "abandon": "abandoned"}[sub]
 		work, err := c.FinishRequestWork(workID, state, *summary)
 		return writeRequestCLIResultCard(stdout, jsonMode, work, requestCardOf(c, cfg, work.RequestID, err), err)
+	case "attach":
+		if code, ok := attachToObject(c, cfg, stdout, jsonMode, idea.SubjectRequest, "REQ-", rest); ok {
+			return code
+		}
+		return requestCLIUsage(stdout)
 	case "ac":
 		return cmdRequestAC(c, cfg, rest, stdout, jsonMode)
 	case "done":

@@ -12,6 +12,7 @@
 {{if .Blocks}}<div class="cb prose">{{template "knbody" .Blocks}}</div>{{end}}
 {{template "explain" .Explain}}{{template "firstclose"}}{{end}}
 {{template "uitlitems" .Items}}</div>{{end}}
+{{template "attachbox" .Attach}}{{if .Attach}}{{if .Attach.Images}}{{template "attachlb"}}{{end}}{{end}}
 {{with .Composer}}{{template "uicomposer" .}}{{end}}
 </div>
 <aside class="side" aria-label="{{t "pains.side.facts"}}">
