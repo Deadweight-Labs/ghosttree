@@ -373,11 +373,13 @@ func TestRevokedLoanAndUnreleasedServerStopTheNextCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := e.conn(t, 0, "standard", store.AIFormatAnthropic, "sk-ant-SERVER-key-9999", "claude-opus-5-5")
-	_ = srv
+	if _, err := e.st.SetAIAlias("person:1", store.AIAlias{Level: store.AILevelOwner, OrgID: e.org.ID, Alias: "privat", ConnectionID: mine.ID, Model: "gpt-own"}); err != nil {
+		t.Fatal(err)
+	}
+	e.conn(t, 0, "standard", store.AIFormatAnthropic, "sk-ant-SERVER-key-9999", "claude-opus-5-5")
 	var statuses []int
 	e.blocks["test/loan"] = workflow.BlockFunc(func(ctx context.Context, in workflow.Input) (store.WorkflowRunOutcome, error) {
-		body := `{"model":"gpt-own","max_tokens":10,"messages":[]}`
+		body := `{"model":"privat","max_tokens":10,"messages":[]}`
 		s, _ := post(t, in.AI.BaseURL, in.AI.Token, PathOpenAI, body)
 		statuses = append(statuses, s)
 		if err := e.st.RevokeAILoan("person:1", loan.ID); err != nil {
@@ -449,6 +451,38 @@ func TestOwnerConnectionsReachOnlyPublicAddressesOverHTTPS(t *testing.T) {
 		if got := PublicAddress(netip.MustParseAddr(ip)); got != want {
 			t.Errorf("%s public: %v", ip, got)
 		}
+	}
+}
+
+// A provider that answers with a redirect does not get the key carried to
+// the address it names.
+func TestRedirectOfTheProviderIsNotFollowed(t *testing.T) {
+	var leaked []string
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked = append(leaked, r.Header.Get("x-api-key")+r.Header.Get("Authorization"))
+	}))
+	defer elsewhere.Close()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/v1/messages", http.StatusTemporaryRedirect)
+	}))
+	defer provider.Close()
+	u, _ := url.Parse(provider.URL + "/v1/messages")
+	c, err := UpstreamClient(store.AIConnection{Name: "standard"}, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodPost, u.String(), strings.NewReader("{}"))
+	req.Header.Set("x-api-key", anthropicKey)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect || len(leaked) != 0 {
+		t.Fatalf("redirect followed: %d, %d requests elsewhere", resp.StatusCode, len(leaked))
+	}
+	if owner, _ := UpstreamClient(store.AIConnection{OrgID: 7, Name: "x"}, &url.URL{Scheme: "https", Host: "api.example.com"}); owner.CheckRedirect == nil {
+		t.Fatal("an owner's connection follows redirects")
 	}
 }
 

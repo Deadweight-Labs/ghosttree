@@ -566,6 +566,9 @@ func (s *Store) SaveAIConnection(actorPrincipal string, in AIConnectionInput) (A
 			in.Format, in.BaseURL, in.KeySealed, name = old.Format, old.BaseURL, nil, old.Name
 		} else if !checkAIBaseURL(in.BaseURL, old.OrgID == 0) {
 			return AIConnection{}, ErrAIConnection
+		} else if (in.BaseURL != old.BaseURL || in.Format != old.Format) && len(in.KeySealed) == 0 {
+			// The stored key never goes to an address it was not entered for.
+			return AIConnection{}, ErrAIKeyMissing
 		}
 		q := `UPDATE ai_connections SET name=?, format=?, base_url=?, monthly_cap_usd=?, updated_at=?`
 		args := []any{name, in.Format, in.BaseURL, in.MonthlyCapUSD, ts}
@@ -1281,7 +1284,8 @@ func (s *Store) AIRunOfToken(token string) (WorkflowRun, error) {
 
 // AIRouteFor resolves what a running run asks for: an alias (repository, then
 // owner, then server), "connection/model", or a model by its name on a
-// connection the owner may use (own, then lent, then the server's). It
+// connection of the owner or the server. A lent connection is reached through
+// an alias only (aiCandidates). It
 // refuses when the run reached a cap already, and says how much the tightest
 // cap still allows.
 func (s *Store) AIRouteFor(run WorkflowRun, requested string) (AIRoute, error) {
@@ -1343,13 +1347,15 @@ func (s *Store) AIRouteFor(run WorkflowRun, requested string) (AIRoute, error) {
 	return route, nil
 }
 
-// aiCandidates are the connections a namespace may use, in the order a bare
-// model name is looked up: own, lent, server.
+// aiCandidates are the connections a bare model name or "connection/model"
+// is looked up on: the owner's own, then the server's. A lent connection is
+// never among them: its lender chose its name and models, and could otherwise
+// draw an organization's calls to itself by naming them like the owner's. It
+// is reached only through an alias an owner of the organization set on it.
 func (s *Store) aiCandidates(orgID int64) []AIConnection {
 	own, _ := aiConnectionsTx(s.db, `WHERE org_id=? AND org_id>0 ORDER BY id`, orgID)
-	lent, _ := aiConnectionsTx(s.db, `WHERE id IN (SELECT connection_id FROM ai_loans WHERE org_id=? AND revoked_at='') ORDER BY id`, orgID)
 	server, _ := aiConnectionsTx(s.db, `WHERE org_id=0 ORDER BY id`)
-	return slices.Concat(own, lent, server)
+	return slices.Concat(own, server)
 }
 
 func (s *Store) aiAliasOf(run WorkflowRun, alias string) (AIAlias, bool) {

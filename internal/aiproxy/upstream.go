@@ -31,13 +31,15 @@ func UpstreamClient(c store.AIConnection, u *url.URL) (*http.Client, error) {
 		if err := llm.CheckBaseURL("connection "+c.Name, u.Scheme+"://"+u.Host); err != nil {
 			return nil, err
 		}
-		return llm.NewHTTPClient(u, 0), nil
+		c := llm.NewHTTPClient(u, 0)
+		c.CheckRedirect = noRedirect
+		return c, nil
 	}
 	if u.Scheme != "https" {
 		return nil, fmt.Errorf("connection %s must use https", c.Name)
 	}
 	d := &net.Dialer{Timeout: 30 * time.Second}
-	return &http.Client{Transport: &http.Transport{
+	return &http.Client{CheckRedirect: noRedirect, Transport: &http.Transport{
 		Proxy:                 nil,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout:   15 * time.Second,
@@ -71,6 +73,10 @@ func UpstreamClient(c store.AIConnection, u *url.URL) (*http.Client, error) {
 		},
 	}}, nil
 }
+
+// noRedirect hands a redirect of the provider back as it is: following it
+// would send the key to an address nobody entered.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // internalPrefixes are ranges that are not loopback or private by the
 // standard library's reckoning but still internal: shared address space

@@ -115,6 +115,23 @@ func TestOwnerKeepsThreeConnectionsAndNoListingCarriesTheKey(t *testing.T) {
 	if sealed, _, _ := st.AIConnectionKey(c.ID); string(sealed) != "sealed-"+c.Name {
 		t.Fatalf("key after a change: %q", sealed)
 	}
+	// The stored key never follows a new address or format.
+	otherFormat := AIFormatOpenAI
+	if c.Format == AIFormatOpenAI {
+		otherFormat = AIFormatAnthropic
+	}
+	for _, in := range []AIConnectionInput{
+		{ID: c.ID, Name: c.Name, Format: c.Format, BaseURL: "https://elsewhere.example", Models: c.Models},
+		{ID: c.ID, Name: c.Name, Format: otherFormat, BaseURL: c.BaseURL, Models: c.Models},
+	} {
+		if _, err := st.SaveAIConnection("person:1", in); !errors.Is(err, ErrAIKeyMissing) {
+			t.Fatalf("change of address or format without a key: %v", err)
+		}
+	}
+	in := AIConnectionInput{ID: c.ID, Name: c.Name, Format: c.Format, BaseURL: "https://elsewhere.example", Models: c.Models, KeySealed: []byte("sealed-new"), KeyLast4: "NEW4"}
+	if got, err := st.SaveAIConnection("person:1", in); err != nil || got.BaseURL != "https://elsewhere.example" || got.KeyLast4 != "NEW4" {
+		t.Fatalf("new address with a new key: %+v %v", got, err)
+	}
 }
 
 // AC-694.2: the admin releases the server's connections to all, selected or
@@ -205,12 +222,23 @@ func TestLoanShowsOnlyTheNameAndRevokingStopsTheNextCall(t *testing.T) {
 		t.Fatalf("the org sees more than the name: %+v", list)
 	}
 	run := aiRun(t, st, aiProject, "wf/a")
-	route, err := st.AIRouteFor(run, "gpt-x")
-	if err != nil || route.Via != AIViaLoan || route.LoanID != loan.ID || route.TightestCap != AICapLoan {
-		t.Fatalf("route over the loan: %+v %v", route, err)
+	// The lender named the connection and its models; by those names alone it
+	// draws no call of the org to itself, even one named like the org's own.
+	own := aiConn(t, st, "person:1", o.ID, "team", AIFormatOpenAI, "gpt-x")
+	for _, model := range []string{"gpt-x", "anna-key/gpt-x"} {
+		if r, err := st.AIRouteFor(run, model); err == nil && r.Via == AIViaLoan {
+			t.Fatalf("%s reaches the loan without an alias of the org", model)
+		}
+	}
+	if r, _ := st.AIRouteFor(run, "gpt-x"); r.Connection.ID != own.ID {
+		t.Fatalf("a bare model name stays on the org's own connection: %+v", r)
 	}
 	if _, err := st.SetAIAlias("person:1", AIAlias{Level: AILevelOwner, OrgID: o.ID, Alias: "klein", ConnectionID: mine.ID, Model: "gpt-x"}); err != nil {
 		t.Fatal(err)
+	}
+	route, err := st.AIRouteFor(run, "klein")
+	if err != nil || route.Via != AIViaLoan || route.LoanID != loan.ID || route.TightestCap != AICapLoan {
+		t.Fatalf("route over the loan: %+v %v", route, err)
 	}
 	if err := st.RevokeAILoan("person:1", loan.ID); !errors.Is(err, ErrNotOrgOwner) {
 		t.Fatalf("the org owner takes the loan back: %v", err)
@@ -218,12 +246,10 @@ func TestLoanShowsOnlyTheNameAndRevokingStopsTheNextCall(t *testing.T) {
 	if err := st.RevokeAILoan("person:2", loan.ID); err != nil {
 		t.Fatal(err)
 	}
-	for _, model := range []string{"gpt-x", "klein", "anna-key/gpt-x"} {
-		if _, err := st.AIRouteFor(run, model); !errors.Is(err, ErrAIUnavailable) {
-			t.Fatalf("after the revocation %s still routes: %v", model, err)
-		}
+	if r, err := st.AIRouteFor(run, "klein"); !errors.Is(err, ErrAIUnavailable) {
+		t.Fatalf("after the revocation the alias still routes: %+v %v", r, err)
 	}
-	if list, _ := st.AIConnectionsFor(o.ID); len(list) != 0 {
+	if list, _ := st.AIConnectionsFor(o.ID); len(list) != 1 || list[0].Name != "team" {
 		t.Fatalf("after the revocation: %+v", list)
 	}
 }
