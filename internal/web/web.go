@@ -292,6 +292,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/runbooks/write", a.requirePerson(a.requireInteractive(limitBodyN(maxRunbookForm, a.requireCSRF(http.HandlerFunc(a.runbookWrite))))))
 	a.handle(mux, "POST /ui/workflows/save", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowSave))))))
 	a.handle(mux, "POST /ui/workflows/enabled", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowEnable))))))
+	a.handle(mux, "POST /ui/workflows/undo", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowUndo))))))
 	a.handle(mux, "POST /ui/labels/assign", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.labelAssign))))))
 	a.registerPainTaskPages(mux)
 	a.handle(mux, "GET /ui/search", a.requirePerson(http.HandlerFunc(a.searchPage)))
@@ -359,7 +360,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		"/ui/orgs/source/connect": a.orgSourceConnect, "/ui/orgs/source/add": a.orgSourceAdd,
 		"/ui/orgs/source/remove": a.orgSourceRemove, "/ui/orgs/source/import": a.orgSourceImport,
 		"/ui/orgs/prefix/visibility": a.orgPrefixVisibility, "/ui/orgs/follow": a.orgFollowGitHub,
-		"/ui/orgs/garden": a.orgGardenSave, "/ui/orgs/workflows": a.orgWorkflowsSave, "/ui/gardener/undo": a.gardenAutoUndo,
+		"/ui/orgs/garden": a.orgGardenSave, "/ui/orgs/workflows": a.orgWorkflowsSave, "/ui/orgs/workflow-policy": a.orgWorkflowPolicySave, "/ui/gardener/undo": a.gardenAutoUndo,
 		"/ui/handover": a.handoverConsent, "/ui/orgs/takeover": a.handoverTakeOver,
 		"/ui/orgs/assign": a.orgAssign, "/ui/orgs/member/login-link": a.orgMemberLoginLink,
 	} {
@@ -743,6 +744,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/assign":                  webAdmin,
 	"POST /ui/orgs/garden":                  webAdmin,
 	"POST /ui/orgs/workflows":               webAdmin,
+	"POST /ui/orgs/workflow-policy":         webAdmin,
 	"POST /ui/orgs/ai/connection":           webAdmin,
 	"POST /ui/orgs/ai/connection/delete":    webAdmin,
 	"POST /ui/orgs/ai/alias":                webAdmin,
@@ -777,6 +779,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/runbooks/write":     webAdmin,
 	"POST /ui/workflows/save":     webAdmin,
 	"POST /ui/workflows/enabled":  webAdmin,
+	"POST /ui/workflows/undo":     webAdmin,
 }
 
 // handle registriert eine Route und bricht ab, wenn sie nicht klassifiziert ist.

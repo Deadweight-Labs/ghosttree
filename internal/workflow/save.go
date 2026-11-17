@@ -21,6 +21,7 @@ func EnvFor(st *store.Store, project string) Env {
 	}
 	env.Alias = func(name string) bool { return slices.Contains(aliases, name) }
 	env.OwnerRunUSD = run
+	env.Policy = PolicyOf(st.WorkflowPolicyOfProject(project))
 	return env
 }
 

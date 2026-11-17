@@ -56,6 +56,19 @@ type workflowRunView struct {
 	// VersionHref leads to the version of a stored workflow the run ran with.
 	VersionHref  string
 	WorkflowHref string
+	// Results are what the run created or was refused (REQ-695).
+	Results []wfResultRow
+	Token   string
+}
+
+// wfResultRow is one result of a run: its kind, how it stands, why it was
+// refused, what it created, and the undo of an automatic approval.
+type wfResultRow struct {
+	ID                int64
+	KindKey, StateKey string
+	Tone, ReasonKey   string
+	Ref, RefHref      string
+	CanUndo           bool
 }
 
 var wfStateLook = map[string]struct{ icon, tone, key string }{
@@ -82,6 +95,10 @@ var wfReasonKeys = map[string]string{
 	"unknown_workflow":    "wf.reason.unknown_workflow",
 	"disabled":            "wf.reason.disabled",
 	"invalid":             "wf.reason.invalid",
+	"external":            "wf.reason.external",
+	"policy.instruction":  "wf.reason.policy.instruction",
+	"policy.prompt":       "wf.reason.policy.prompt",
+	"policy.research":     "wf.reason.policy.research",
 	"interrupted":         "wf.reason.interrupted",
 	"timeout":             "wf.reason.timeout",
 	store.SkipRate:        "wf.reason.rate_limit",
@@ -124,6 +141,8 @@ func (a *app) wfRow(l lang, base string, run store.WorkflowRun) wfRunRow {
 	row.Reason = run.Reason
 	if key, ok := wfReasonKeys[run.Reason]; ok {
 		row.Reason = l.msg(key)
+	} else if kind, ok := strings.CutPrefix(run.Reason, "policy.kind:"); ok {
+		row.Reason = l.msg("wf.reason.policy.kind", kind)
 	}
 	if t := parseTime(run.CreatedAt); !t.IsZero() {
 		row.Age = shortAgo(l, overviewNow().UTC(), t)
@@ -199,6 +218,7 @@ func (a *app) workflowRunPage(w http.ResponseWriter, r *http.Request, remote, id
 		}
 		v.WorkflowHref = workflowHref(remote, run.Workflow)
 	}
+	v.Results, v.Token = a.wfResultRows(r, pa, remote, run.ID), csrfOf(r)
 	switch {
 	case text != nil:
 		v.Inputs, v.Output = text.Inputs, text.Output

@@ -809,6 +809,40 @@ may also use plain http to this machine, as `llm.json` always could.
 **Release.** The server's connections serve no organization until the admin
 releases them: to all, to selected ones with a monthly cap each, or to none.
 
+## Workflows (REQ-695)
+
+Workflows are files kept on the server, one set per repository, edited in the
+tab "Workflows", over MCP or the API (`ctx workflow check <file>` checks one
+without a model call). Every saved change is a version; the next run takes it.
+Leads and owners of a project create and change them, members read them.
+
+**What the operator has to do: nothing.** The tables are added at start. The
+gardener's unit, its timer and `ctx garden run-due` are unchanged: the gardener
+keeps running exactly as before, with its schedule, repositories, budgets,
+rules and undo log from the settings. What changes is that every run it
+reports is also a run of the block `ghosttree/garden-ghosts`: the tab
+Workflows of the repository lists it and the gardener's tab links it. The sweep
+of interrupted workflow runs leaves these runs alone (they may take hours);
+they end with the gardener's own report.
+
+The model alias an owner picks for the gardener is stored and handed to the
+runner in its due jobs (`model_alias`). The sandboxed runner still calls the
+model with the gardener's entry of `llm.json`; it goes through the model proxy
+with the chosen alias once the runner has a way to receive a run token out of
+its unit (open, see REQ-695).
+
+**Results and proposals.** What a workflow creates (knowledge, issues,
+criteria, relations) is a staged entry on the review page until a person
+accepts it, unless the owner switched on the automatic approval for exactly
+that kind (Settings, Workflows). Every result, refused or not, stands on the
+run page; an automatic approval can be undone there. The owner's policy can
+forbid instructions (stage 2), own prompts (stage 3), research on the net and
+single kinds; a workflow against it does not run and is listed as skipped.
+
+**The token of a run** names the account the run acts for (the author of the
+version it runs) and the run, at `GET /api/whoami`, and reaches nothing else
+of the API; what a run creates goes through the check of its results.
+
 ## Gardener in the sandbox
 
 `ghosttree-garden.service` runs the gardener (`ctx garden check-knowledge`) as a

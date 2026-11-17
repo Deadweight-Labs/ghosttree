@@ -63,6 +63,8 @@
 <div class="dgrid"><div class="dmain">
 {{if .Result}}<div class="sec"><h2>{{t "wf.result"}}</h2></div><div class="box"><div class="box-r">{{.Result}}</div></div>{{end}}
 {{if .Reason}}<div class="sec"><h2>{{t "wf.reason"}}</h2></div><div class="box"><div class="box-r">{{.Reason}}</div></div>{{end}}
+{{if .Results}}<div class="sec" id="results"><h2>{{t "wf.results"}}</h2><span class="counter">{{len .Results}}</span></div>
+<div class="box">{{$tok := .Token}}{{range .Results}}<div class="row wfresrow"><span class="lb {{.Tone}}">{{t .StateKey}}</span><span class="wfreskind">{{t .KindKey}}</span>{{if .RefHref}}<a class="mono" href="{{.RefHref}}">{{.Ref}}</a>{{else if .Ref}}<span class="mono">{{.Ref}}</span>{{end}}{{if .ReasonKey}}<span class="muted wfreswhy">{{t .ReasonKey}}</span>{{end}}<span class="sp"></span>{{if .CanUndo}}<form method="post" action="/ui/workflows/undo"><input type="hidden" name="csrf_token" value="{{$tok}}"><input type="hidden" name="id" value="{{.ID}}"><button class="gbtn sm">{{t "wf.result.undo"}}</button></form>{{end}}</div>{{end}}</div>{{end}}
 {{if .Purged}}<div class="box"><div class="box-empty">{{t "wf.purged" .Purged}}</div></div>
 {{else if not .NoText}}<div class="sec"><h2>{{t "wf.inputs"}}</h2></div><div class="box"><pre class="wftext">{{.Inputs}}</pre></div>
 <div class="sec"><h2>{{t "wf.output"}}</h2></div><div class="box"><pre class="wftext">{{.Output}}</pre></div>{{end}}

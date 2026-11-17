@@ -277,3 +277,78 @@ func TestRunbooksAreCalledRunbooksAndTheOldAddressLeadsThere(t *testing.T) {
 		}
 	}
 }
+
+// AC-695.4, 695.5 and 695.7 in the browser: the run page lists what a run
+// proposed and what it was refused, with the reason; a reviewer accepts the
+// proposed issue on the review page and the issue exists after it; the owner
+// forbids a kind and switches on the automatic approval in the settings; an
+// automatic approval stands on the run page with an undo.
+func TestRunPageShowsResultsAndTheReviewPageAcceptsAProposal(t *testing.T) {
+	e, _ := workflowEnv(t)
+	text := "---\non: pr.merged\ninputs: [pr.title]\nuses: ghosttree/echo\nresults:\n  issue: 2\n---\n"
+	cat := workflow.DefaultCatalog()
+	spec := cat[workflow.EchoName]
+	spec.Results = workflow.ResultKinds
+	spec.Run = workflow.BlockFunc(func(_ context.Context, in workflow.Input) (store.WorkflowRunOutcome, error) {
+		in.Propose(workflow.Result{Kind: workflow.ResultIssue, Title: "Zweiten Weg prüfen", Evidence: []string{"feat: second path"}})
+		in.Propose(workflow.Result{Kind: workflow.ResultIssue, Title: "Erfunden", Evidence: []string{"steht nirgends im Titel"}})
+		return store.WorkflowRunOutcome{State: store.RunDone, Result: "echo"}, nil
+	})
+	cat[workflow.EchoName] = spec
+	d, _ := workflow.Parse(text)
+	if _, err := e.St.SaveWorkflowDef("person:1", store.WorkflowDefSave{Project: shellProject, Name: "melden", Text: text, Event: d.On, Uses: d.Uses}); err != nil {
+		t.Fatal(err)
+	}
+	merge := func(n int64, title string) store.WorkflowRun {
+		t.Helper()
+		for _, state := range []string{"open", "merged"} {
+			if _, err := e.St.RecordPullRequest(store.PullRequestChange{InstallationID: 77, Remote: shellProject, HeadRemote: shellProject, Number: n, Action: "closed",
+				Title: title, Head: "feat/" + itoa(n), Base: "main", DefaultBranch: "main", State: state}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		eng := &workflow.Engine{Store: e.St, Resolver: workflow.DefResolver{Store: e.St, Catalog: cat}}
+		if _, err := eng.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		runs, _ := e.St.WorkflowRunsIn(shellProject, store.WorkflowRunFilter{Workflow: "melden", Limit: 1})
+		return runs[0]
+	}
+	run := merge(20, "feat: second path")
+	runHref := "/ui/x/shell/workflows/runs/" + itoa(run.ID)
+	_, page := fetchPage(t, e.Member, e.Base+runHref)
+	mustContain(t, "run page", page, "Results", "Proposed", "Refused", "No evidence found in the inputs", "1 proposed, 0 applied, 1 refused")
+	results, _ := e.St.WorkflowResultsOf(run.ID)
+	if r := postForm(t, e, e.Lead, "/ui/review/"+itoa(results[0].NoteID)+"/approve", url.Values{}); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("approve: %d", r.StatusCode)
+	}
+	got, _ := e.St.WorkflowResultByID(results[0].ID)
+	if got.State != store.ResultAccepted || !strings.HasPrefix(got.Ref, "REQ-") {
+		t.Fatalf("result after acceptance: %+v", got)
+	}
+	_, page = fetchPage(t, e.Member, e.Base+runHref)
+	mustContain(t, "run page after acceptance", page, "Accepted", `href="/ui/x/shell/issues/`)
+	// The owner's settings: issues apply without acceptance, relations are forbidden.
+	if r := postForm(t, e, e.Owner, "/ui/orgs/workflow-policy", url.Values{"org": {"alpha"}, "auto_kind": {"issue"}, "deny_kind": {"relation"}}); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("policy: %d", r.StatusCode)
+	}
+	p := e.St.WorkflowPolicyOfProject(shellProject)
+	if !p.Auto("issue") || len(p.DenyKinds) != 1 || p.DenyKinds[0] != "relation" {
+		t.Fatalf("policy: %+v", p)
+	}
+	if r := postForm(t, e, e.Member, "/ui/orgs/workflow-policy", url.Values{"org": {"alpha"}}); r.StatusCode == http.StatusSeeOther && len(e.St.WorkflowPolicyOfProject(shellProject).AutoKinds) == 0 {
+		t.Fatal("a member changed the policy")
+	}
+	run = merge(21, "feat: second path again")
+	runHref = "/ui/x/shell/workflows/runs/" + itoa(run.ID)
+	_, page = fetchPage(t, e.Lead, e.Base+runHref)
+	mustContain(t, "auto run page", page, "Applied automatically", `action="/ui/workflows/undo"`)
+	_, member := fetchPage(t, e.Member, e.Base+runHref)
+	mustNotContain(t, "member run page", member, `action="/ui/workflows/undo"`)
+	results, _ = e.St.WorkflowResultsOf(run.ID)
+	if r := postForm(t, e, e.Lead, "/ui/workflows/undo", url.Values{"id": {itoa(results[0].ID)}}); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("undo: %d", r.StatusCode)
+	}
+	_, page = fetchPage(t, e.Lead, e.Base+runHref)
+	mustContain(t, "after undo", page, "Undone")
+}

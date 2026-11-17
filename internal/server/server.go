@@ -348,8 +348,22 @@ func (a *api) auth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		principal, ok := a.st.AuthenticatePrincipal(strings.TrimSpace(token))
+		token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		var principal store.Principal
+		var ok bool
+		if strings.HasPrefix(token, store.AIRunTokenPrefix) {
+			// The token of a running workflow run (REQ-695): it names the
+			// account the run acts for and the run, and reaches nothing else
+			// through the API. What a run creates goes through the engine's
+			// check of its results; what it may read comes as its declared
+			// inputs (read tools of its own arrive with stage E5).
+			if principal, ok = a.st.PrincipalOfRunToken(token); ok && !(r.Method == http.MethodGet && r.URL.Path == "/api/whoami") {
+				writeCoded(w, http.StatusForbidden, "forbidden", "a workflow run reaches the API only to say who it is")
+				return
+			}
+		} else {
+			principal, ok = a.st.AuthenticatePrincipal(token)
+		}
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
