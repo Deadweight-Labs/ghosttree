@@ -883,6 +883,8 @@ same machine (plain http only to this machine, else https). Without it no
 workflow searches and `ctx workflow check` says so for a file with
 `research: true`. Pages are read as text only, from public addresses only
 (also after a redirect), and only addresses a search of the same run returned.
+A query may only use words of the declared inputs, of the prompt and of earlier
+search hits, so that nothing a read tool returned leaves the server in it.
 
 ### The gardener over the proxy
 

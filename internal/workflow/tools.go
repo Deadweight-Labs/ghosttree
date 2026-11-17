@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
@@ -124,12 +125,18 @@ type Toolbox struct {
 	// texts are the tool results as the model got them; quotes may come from them.
 	texts []string
 	total int
+	// searchable are the words a web.search may use: those of the declared
+	// inputs, of the team's prompt and of earlier search hits, never those a
+	// read tool returned, so that nothing read from the project leaves the
+	// server in a query.
+	searchable map[string]bool
 }
 
 // newToolbox prepares the tools of a definition. The research tools come
 // with research: true and only when the server has a search service.
 func newToolbox(asm *assembler, d *Def, web *WebResearch) *Toolbox {
-	tb := &Toolbox{asm: asm, web: web, found: map[string]bool{}}
+	tb := &Toolbox{asm: asm, web: web, found: map[string]bool{}, searchable: map[string]bool{}}
+	tb.allowSearchWords(d.TaskPrompt())
 	for _, n := range d.Tools {
 		if t, ok := ToolByName(n); ok && !t.Research {
 			tb.declared = append(tb.declared, t)
@@ -211,12 +218,39 @@ func (tb *Toolbox) call(ctx context.Context, t ToolSpec, raw json.RawMessage) (s
 
 func (tb *Toolbox) project() string { return tb.asm.run.Project }
 
+// minQueryWord is the length from which a word of a query has to come from
+// the searchable words; shorter ones carry next to nothing.
+const minQueryWord = 3
+
+func queryWords(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+}
+
+// allowSearchWords adds the words of a text a web.search may use.
+func (tb *Toolbox) allowSearchWords(text string) {
+	for _, w := range queryWords(text) {
+		tb.searchable[w] = true
+	}
+}
+
+// foreignQueryWords are the words of a query that come from nowhere a search
+// may take them from.
+func (tb *Toolbox) foreignQueryWords(q string) []string {
+	var out []string
+	for _, w := range queryWords(q) {
+		if utf8.RuneCountInString(w) >= minQueryWord && !tb.searchable[w] && !slices.Contains(out, w) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 // readableKnowledge: an active, confirmed entry of the project, not bound to a
-// machine, that the run's account may read.
+// machine and not held from its members, that the run's account may read.
 func (tb *Toolbox) readableKnowledge(k store.Knowledge) bool {
 	pa := tb.asm.pa
 	return pa != nil && k.Scope.Project == tb.project() && k.Scope.Machine == "" && k.Status == "active" &&
-		k.Confidence != "staged" && k.Confidence != "quarantined" && pa.CanSeeKnowledge(k)
+		k.Confidence != "staged" && k.Confidence != "quarantined" && pa.CanSeeKnowledge(k) && !tb.asm.st.HeldFromMembers(store.HeldKnowledge, k.ID)
 }
 
 func toolKnowledgeSearch(_ context.Context, tb *Toolbox, in toolArgs) (string, error) {
@@ -254,11 +288,14 @@ func toolKnowledgeRead(_ context.Context, tb *Toolbox, in toolArgs) (string, err
 
 func toolIssueRead(_ context.Context, tb *Toolbox, in toolArgs) (string, error) {
 	pa := tb.asm.pa
-	d, err := tb.asm.st.RequestByID(int64(in.ID))
-	if err != nil || pa == nil || d.Request.Scope.Project != tb.project() || !pa.CanSeeProject(tb.project(), store.ResRequest) {
+	if pa == nil || tb.asm.st.HeldFromMembers(store.HeldRequest, int64(in.ID)) {
 		return "", errNotReadable
 	}
-	d = pa.RequestDetailView(d)
+	// RequestRead checks the issue itself, as GET /api/requests/{id} does.
+	d, err := pa.RequestRead(int64(in.ID))
+	if err != nil || d.Request.Scope.Project != tb.project() {
+		return "", errNotReadable
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "REQ-%d [%s, %s] %s\n\n%s\n", d.Request.ID, d.Request.Type, d.Request.State, d.Request.Title, cut(d.Request.Description, 6000))
 	if len(d.Criteria) > 0 {
@@ -273,6 +310,9 @@ func toolIssueRead(_ context.Context, tb *Toolbox, in toolArgs) (string, error) 
 func toolIdeaRead(_ context.Context, tb *Toolbox, in toolArgs) (string, error) {
 	pa := tb.asm.pa
 	if pa == nil {
+		return "", errNotReadable
+	}
+	if tb.asm.st.HeldFromMembers(store.HeldIdea, int64(in.ID)) {
 		return "", errNotReadable
 	}
 	ws, err := pa.IdeaWorkshop(int64(in.ID))
@@ -295,7 +335,7 @@ func toolIdeaRead(_ context.Context, tb *Toolbox, in toolArgs) (string, error) {
 func toolPainRead(_ context.Context, tb *Toolbox, in toolArgs) (string, error) {
 	pa := tb.asm.pa
 	p, err := tb.asm.st.PainByID(int64(in.ID))
-	if err != nil || pa == nil || p.Project != tb.project() || !pa.CanSeePain(p) {
+	if err != nil || pa == nil || p.Project != tb.project() || !pa.CanSeePain(p) || tb.asm.st.HeldFromMembers(store.HeldPain, p.ID) {
 		return "", errNotReadable
 	}
 	t := fmt.Sprintf("PAIN-%d [%s] %s\n\n%s", p.ID, p.State, p.Title, cut(p.Body, 6000))
@@ -419,6 +459,9 @@ func toolWebSearch(ctx context.Context, tb *Toolbox, in toolArgs) (string, error
 	if q == "" {
 		return "", errors.New("query is empty")
 	}
+	if foreign := tb.foreignQueryWords(q); len(foreign) > 0 {
+		return "", fmt.Errorf("a query may use only words of the inputs, of the task and of earlier search results; not: %s", strings.Join(foreign, ", "))
+	}
 	hits, err := tb.web.Search(ctx, q, 8)
 	if err != nil {
 		return "", err
@@ -429,6 +472,7 @@ func toolWebSearch(ctx context.Context, tb *Toolbox, in toolArgs) (string, error
 	var b strings.Builder
 	for _, h := range hits {
 		tb.found[h.URL] = true
+		tb.allowSearchWords(h.Title + " " + h.Content)
 		fmt.Fprintf(&b, "%s\n%s\n%s\n\n", oneLine(h.Title), h.URL, cut(oneLine(h.Content), 400))
 	}
 	return b.String(), nil

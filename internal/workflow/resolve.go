@@ -126,6 +126,7 @@ func (r DefResolver) Resolve(ctx context.Context, run store.WorkflowRun) (Block,
 		in.Data = &asm.data
 		if d.Stage() == StagePrompt {
 			in.Tools = newToolbox(asm, &d, r.Web)
+			in.Tools.allowSearchWords(inputsText(&d, in.Values))
 		}
 		var results []Result
 		in.Propose = func(r Result) { results = append(results, r) }

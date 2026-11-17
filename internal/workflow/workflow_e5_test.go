@@ -120,12 +120,21 @@ func TestResearchFetchesOnlyFoundPublicPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tb := &Toolbox{web: web, found: map[string]bool{}}
+	tb := &Toolbox{web: web, found: map[string]bool{}, searchable: map[string]bool{}}
+	tb.allowSearchWords("Doppelte Webhooks abfangen")
 	if _, err := toolWebFetch(context.Background(), tb, toolArgs{URL: page.URL + "/doc"}); err == nil || !strings.Contains(err.Error(), "only an address a web.search") {
 		t.Fatalf("fetch before a search: %v", err)
 	}
-	if out, err := toolWebSearch(context.Background(), tb, toolArgs{Query: strings.Repeat("x", 500)}); err != nil || !strings.Contains(out, page.URL+"/doc") {
+	// What a read tool returned may not leave in a query: only words of the
+	// inputs, the task and earlier hits.
+	if _, err := toolWebSearch(context.Background(), tb, toolArgs{Query: "webhooks Kundenliste-Passwort"}); err == nil || !strings.Contains(err.Error(), "kundenliste, passwort") {
+		t.Fatalf("a query with foreign words: %v", err)
+	}
+	if out, err := toolWebSearch(context.Background(), tb, toolArgs{Query: strings.Repeat("webhooks ", 60)}); err != nil || !strings.Contains(out, page.URL+"/doc") {
 		t.Fatalf("search: %q %v", out, err)
+	}
+	if _, err := toolWebSearch(context.Background(), tb, toolArgs{Query: "Doppelte Seite Meta"}); err != nil {
+		t.Fatalf("words of earlier hits: %v", err)
 	}
 	// The default client for pages: the test page on loopback is refused.
 	if _, err := toolWebFetch(context.Background(), tb, toolArgs{URL: page.URL + "/doc"}); err == nil || !strings.Contains(err.Error(), "not public") {
