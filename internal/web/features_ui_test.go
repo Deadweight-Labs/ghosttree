@@ -8,7 +8,9 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -106,6 +108,43 @@ func TestFeaturePageShowsDescriptionVersionsIdeasAndPullRequests(t *testing.T) {
 	// The same page reads for a guest, without anything to change.
 	if code, guest := fetchPage(t, e.Guest, e.Base+path); code != http.StatusOK || strings.Contains(guest, "<form") && strings.Contains(guest, "/features/") && strings.Contains(guest, "method=\"post\"") {
 		t.Errorf("guest feature page = %d", code)
+	}
+}
+
+// PAIN-88: the page lists the knowledge entries and pains tied to the feature,
+// each with its number, title and what it is, linking to its own page.
+func TestFeaturePageShowsKnowledgeAndPainsTiedToIt(t *testing.T) {
+	e, pa := listEnv(t)
+	f, _ := featureFixture(t, e, pa, shellProject)
+	kid, err := e.St.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "The bell counts twice", Body: "b", Scope: scope.Axes{Project: shellProject}, Person: "alice", Confidence: "trusted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pn, err := pa.CreatePain(store.CreatePainInput{Project: shellProject, Title: "Nobody sees a muted question", Actor: pain.Actor{AccountID: 1, Person: "alice"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pa.LinkFeature(f.ID, feature.KindKnowledge, kid, "", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pa.LinkFeature(f.ID, feature.KindPain, pn.Pain.ID, "", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/features/"+strconv.FormatInt(f.ID, 10))
+	for _, want := range []string{"<h3>Knowledge</h3>", "KN-" + strconv.FormatInt(kid, 10), "The bell counts twice", "Pitfall", `href="/ui/x/shell/knowledge/` + strconv.FormatInt(kid, 10) + `"`,
+		"<h3>Pains</h3>", "PAIN-" + strconv.FormatInt(pn.Pain.ID, 10), "Nobody sees a muted question", `href="/ui/x/shell/pains/` + strconv.FormatInt(pn.Pain.ID, 10) + `"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("feature page lacks %q", want)
+		}
+	}
+	// A feature without them shows neither block.
+	g, err := pa.CreateFeature(store.CreateFeatureInput{Project: shellProject, Actor: feature.Actor{AccountID: 1, Person: "alice"}, Content: feature.Patch{Name: nStr("Bare"), Summary: nStr("Nothing tied.")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, bare := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/features/"+strconv.FormatInt(g.ID, 10))
+	if strings.Contains(bare, "<h3>Knowledge</h3>") || strings.Contains(bare, "<h3>Pains</h3>") {
+		t.Error("an empty block is shown")
 	}
 }
 
