@@ -288,6 +288,10 @@ func TestScheduleWritesOneEventPerPeriod(t *testing.T) {
 	if _, err := st.SetWorkflowTriggerAsOperator(WorkflowTrigger{Project: prProject, Workflow: "ghosttree/echo", EventKind: EventSchedule, EveryMinutes: 1, Enabled: true}); !errors.Is(err, ErrWorkflowTrigger) {
 		t.Fatalf("a schedule every minute: %v", err)
 	}
+	// The trigger exists since before the first period below begins.
+	if _, err := st.db.Exec(`UPDATE workflow_triggers SET created_at='2026-11-17T09:00:00Z'`); err != nil {
+		t.Fatal(err)
+	}
 	at := time.Date(2026, 11, 17, 10, 5, 0, 0, time.UTC)
 	for _, step := range []struct {
 		at   time.Time

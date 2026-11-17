@@ -17,6 +17,9 @@ type Principal struct {
 	TokenID   int64  `json:"token_id,omitempty"`
 	TokenKind string `json:"token_kind,omitempty"`
 	Machine   string `json:"machine,omitempty"`
+	// RunID is the run a token of TokenKind WorkflowRunKind belongs to; zero for
+	// everyone else. Only the server sets it.
+	RunID int64 `json:"run_id,omitempty"`
 }
 
 // WebSessionKind kennzeichnet einen Principal einer Websitzung, die aus einem

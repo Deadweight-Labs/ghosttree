@@ -60,6 +60,10 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 	if body.Origin == "human" && principalOf(r).TokenKind != store.WebSessionKind {
 		body.Origin = "agent"
 	}
+	if !a.gateWorkflowRunRef(w, r, body.SessionRef) {
+		return
+	}
+	body.SessionRef = runRefOf(r, body.SessionRef)
 	links, err := a.access(r).ResolveRequestLinks(scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project, body.Parent, body.DerivedFrom)
 	if err != nil {
 		if denyAccess(w, err) {

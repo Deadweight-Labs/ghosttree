@@ -98,15 +98,6 @@ type aiServerView struct {
 	ModelNames []string
 }
 
-// aiUSD shows an amount; below a cent it keeps four places, so a cheap call
-// does not read as free.
-func aiUSD(usd float64) string {
-	if usd > 0 && usd < 0.01 {
-		return fmt.Sprintf("%.4f $", usd)
-	}
-	return fmt.Sprintf("%.2f $", usd)
-}
-
 func aiCapText(usd float64) string {
 	if usd <= 0 {
 		return ""
@@ -116,9 +107,9 @@ func aiCapText(usd float64) string {
 
 func aiSpentLine(l lang, spent, capUSD float64) string {
 	if capUSD > 0 {
-		return l.msg("ai.spent", aiUSD(spent), aiUSD(capUSD))
+		return l.msg("ai.spent", wfCost(l, spent), wfCost(l, capUSD))
 	}
-	return l.msg("ai.spent_nocap", aiUSD(spent))
+	return l.msg("ai.spent_nocap", wfCost(l, spent))
 }
 
 func aiModelsText(ms []store.AIModel) string {
@@ -224,12 +215,12 @@ func (a *app) aiViewFor(r *http.Request, org store.Org) *aiView {
 		v.WorkflowCaps = append(v.WorkflowCaps, aiCapRow{Workflow: c.Workflow, Month: aiCapText(c.MonthUSD), Run: aiCapText(c.RunUSD)})
 	}
 	if rep, err := a.store.AICostReportOf(org.ID, store.AIMonthStart()); err == nil && rep.Calls > 0 {
-		v.CostTotal = l.msg("ai.costs.total", aiUSD(rep.TotalUSD), rep.Calls)
+		v.CostTotal = l.msg("ai.costs.total", wfCost(l, rep.TotalUSD), rep.Calls)
 		if rep.Calls == 1 {
-			v.CostTotal = l.msg("ai.costs.total_one", aiUSD(rep.TotalUSD))
+			v.CostTotal = l.msg("ai.costs.total_one", wfCost(l, rep.TotalUSD))
 		}
 		line := func(row store.AICostRow) aiCostLine {
-			return aiCostLine{Key: row.Key, Calls: row.Calls, Tokens: row.Tokens, Cost: aiUSD(row.CostUSD)}
+			return aiCostLine{Key: row.Key, Calls: row.Calls, Tokens: row.Tokens, Cost: wfCost(l, row.CostUSD)}
 		}
 		var runs []aiCostLine
 		for _, row := range rep.ByRun {

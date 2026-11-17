@@ -33,6 +33,11 @@ const (
 // WorkflowEventKinds lists every kind of event the log accepts.
 var WorkflowEventKinds = []string{EventPRMerged, EventIdeaCreated, EventIdeaDiscussionClosed, EventSchedule}
 
+// WorkflowTriggerKinds lists the kinds of event a trigger may be set on. It
+// leaves out idea.discussion_closed: nothing writes that event before stage E3,
+// so a trigger on it would look switched on and never fire.
+var WorkflowTriggerKinds = []string{EventPRMerged, EventIdeaCreated, EventSchedule}
+
 // Where an event came from.
 const (
 	OriginHuman  = "human"
@@ -55,7 +60,16 @@ const (
 const (
 	SkipChain      = "chain"
 	SkipChainDepth = "chain_depth"
+	// SkipRate: the trigger already started WorkflowTriggerHourlyCap runs in the
+	// last hour.
+	SkipRate = "rate_limit"
 )
+
+// WorkflowTriggerHourlyCap is how many runs one trigger may start per hour,
+// the second line of defense against chains and floods after the chain guard.
+// Runs over the cap are written as skipped with the reason SkipRate. A variable
+// so that tests can lower it.
+var WorkflowTriggerHourlyCap = 30
 
 const (
 	// WorkflowMaxChainDepth is how many runs a chain may hold: a run started by
@@ -65,8 +79,13 @@ const (
 	WorkflowMaxChainDepth = 2
 	// WorkflowRunRefPrefix marks the session reference of everything a run
 	// writes ("workflow-run:42"). An event whose actor carries it has the run
-	// as its origin and falls under the chain guard.
+	// as its origin and falls under the chain guard. The prefix is reserved:
+	// the API refuses it from everyone but the run itself (a Principal with
+	// RunID, see ReservedForWorkflowRun).
 	WorkflowRunRefPrefix = "workflow-run:"
+	// WorkflowRunKind is the Principal.TokenKind of a run's own token. It arises
+	// only on the server, bound to one run (Principal.RunID), never from a request.
+	WorkflowRunKind = "workflow-run"
 	// WorkflowRetentionDefault is how many days the full text of a run is kept
 	// when the owner set nothing.
 	WorkflowRetentionDefault = 90
@@ -101,6 +120,23 @@ func OriginOfActor(person, sessionRef string, agent bool) EventOrigin {
 		return EventOrigin{Kind: OriginAgent, Person: person}
 	}
 	return EventOrigin{Kind: OriginHuman, Person: person}
+}
+
+// ReservedForWorkflowRun says whether a session reference claims to come from
+// a run: the prefix "workflow-run:" in any spelling of case or surrounding
+// space. Like ReservedForGardener, the API refuses such a reference from
+// everyone but the run's own principal.
+func ReservedForWorkflowRun(ref string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), WorkflowRunRefPrefix)
+}
+
+// RunRef is the session reference everything this principal writes carries:
+// "workflow-run:<id>" for the token of a run, empty for everyone else.
+func (p Principal) RunRef() string {
+	if p.TokenKind != WorkflowRunKind || p.RunID <= 0 {
+		return ""
+	}
+	return WorkflowRunRefPrefix + strconv.FormatInt(p.RunID, 10)
 }
 
 // WorkflowRunOfRef reads the run number from a session reference
@@ -166,7 +202,10 @@ type WorkflowTrigger struct {
 // WorkflowRun is one run of a workflow for one event. Cost, result and version
 // stay for good; the full text is in WorkflowRunText until the retention ends.
 type WorkflowRun struct {
-	ID              int64   `json:"id"`
+	ID int64 `json:"id"`
+	// OrgID is the namespace of the project when the run was created. It does
+	// not follow a project that moves: retention and cost sums go by the
+	// project's current org (PurgeWorkflowRunTexts, WorkflowCostSince).
 	OrgID           int64   `json:"org_id"`
 	Project         string  `json:"project"`
 	Workflow        string  `json:"workflow"`
@@ -467,7 +506,13 @@ func (s *Store) SetWorkflowTriggerAsOperator(t WorkflowTrigger) (WorkflowTrigger
 
 func setWorkflowTriggerTx(tx *sql.Tx, t WorkflowTrigger, by string) (WorkflowTrigger, error) {
 	name, ok := cleanWorkflowName(t.Workflow)
-	if !ok || !slices.Contains(WorkflowEventKinds, t.EventKind) {
+	if !ok {
+		return WorkflowTrigger{}, ErrWorkflowTrigger
+	}
+	if t.EventKind == EventIdeaDiscussionClosed {
+		return WorkflowTrigger{}, fmt.Errorf("%w: %s fires from stage E3 on, nothing writes that event yet", ErrWorkflowTrigger, EventIdeaDiscussionClosed)
+	}
+	if !slices.Contains(WorkflowTriggerKinds, t.EventKind) {
 		return WorkflowTrigger{}, ErrWorkflowTrigger
 	}
 	t.Workflow = name
@@ -611,6 +656,7 @@ func (s *Store) DispatchWorkflowEvents(limit int) (WorkflowDispatchReport, error
 	}
 	var rep WorkflowDispatchReport
 	ts := now()
+	hourAgo := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
 	for _, ev := range events {
 		triggers, err := workflowTriggersTx(tx, `project=? AND event_kind=? AND enabled=1 ORDER BY id`, ev.Project, ev.Kind)
 		if err != nil {
@@ -621,6 +667,17 @@ func (s *Store) DispatchWorkflowEvents(limit int) (WorkflowDispatchReport, error
 				continue
 			}
 			depth, skip := chainVerdict(t, ev)
+			if skip == "" {
+				// Runs the guards stopped did not run; only the others count.
+				var started int
+				if err := tx.QueryRow(`SELECT COUNT(*) FROM workflow_runs WHERE trigger_id=? AND created_at>? AND reason NOT IN (?,?,?)`,
+					t.ID, hourAgo, SkipChain, SkipChainDepth, SkipRate).Scan(&started); err != nil {
+					return rep, err
+				}
+				if started >= WorkflowTriggerHourlyCap {
+					skip = SkipRate
+				}
+			}
 			state, finished := RunQueued, ""
 			if skip != "" {
 				state, finished = RunSkipped, ts
@@ -647,29 +704,80 @@ func (s *Store) DispatchWorkflowEvents(limit int) (WorkflowDispatchReport, error
 	return rep, tx.Commit()
 }
 
+// scheduleSlot is the period of a schedule trigger that holds at, as its start
+// and the dedupe key of its event. ok is false while that period began before
+// the trigger existed: a trigger fires from the first period boundary after it
+// was switched on, never at once for the period it was created in.
+func scheduleSlot(t WorkflowTrigger, at time.Time) (slot, key string, ok bool) {
+	period := time.Duration(t.EveryMinutes) * time.Minute
+	start := at.UTC().Truncate(period)
+	if created, err := time.Parse(time.RFC3339, t.CreatedAt); err == nil && !start.After(created) {
+		return "", "", false
+	}
+	slot = start.Format(time.RFC3339)
+	return slot, "schedule:" + strconv.FormatInt(t.ID, 10) + ":" + slot, true
+}
+
+// schedulesDue lists the schedule triggers whose current period has no event
+// yet. It only reads, so an idle tick need not go through the writer.
+func schedulesDue(db interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}, at time.Time) ([]WorkflowTrigger, error) {
+	triggers, err := workflowTriggersTx(db, `event_kind='schedule' AND enabled=1 AND every_minutes>0 ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	var due []WorkflowTrigger
+	for _, t := range triggers {
+		_, key, ok := scheduleSlot(t, at)
+		if !ok {
+			continue
+		}
+		var one int
+		if err := db.QueryRow(`SELECT 1 FROM workflow_events WHERE dedupe_key=?`, key).Scan(&one); errors.Is(err, sql.ErrNoRows) {
+			due = append(due, t)
+		} else if err != nil {
+			return nil, err
+		}
+	}
+	return due, nil
+}
+
+// WorkflowSchedulesDue says whether a schedule trigger has a period at that
+// has no event yet. It only reads, so that an idle tick can skip
+// EmitWorkflowSchedules and with it the writer.
+func (s *Store) WorkflowSchedulesDue(at time.Time) bool {
+	if s.reader != nil {
+		return s.reader.WorkflowSchedulesDue(at)
+	}
+	due, err := schedulesDue(s.db, at)
+	return err == nil && len(due) > 0
+}
+
 // EmitWorkflowSchedules writes one schedule event per enabled schedule trigger
-// and period that has begun by at. The period start is the dedupe key, so a
-// second pass within the same period writes nothing.
+// and period that has begun by at (and after the trigger was created). The
+// period start is the dedupe key, so a second pass within the same period
+// writes nothing.
 func (s *Store) EmitWorkflowSchedules(at time.Time) (int, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{at.UTC()}, func(d *Store, p []any) (int, error) { return d.EmitWorkflowSchedules(p[0].(time.Time)) })
+	}
+	due, err := schedulesDue(s.db, at)
+	if err != nil || len(due) == 0 {
+		return 0, err
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	triggers, err := workflowTriggersTx(tx, `event_kind='schedule' AND enabled=1 AND every_minutes>0 ORDER BY id`)
-	if err != nil {
-		return 0, err
-	}
 	n := 0
-	for _, t := range triggers {
-		period := time.Duration(t.EveryMinutes) * time.Minute
-		slot := at.UTC().Truncate(period).Format(time.RFC3339)
+	for _, t := range due {
+		slot, key, _ := scheduleSlot(t, at)
 		_, created, err := recordWorkflowEventTx(tx, WorkflowEventInput{Kind: EventSchedule, Project: t.Project, SubjectKind: "schedule",
 			SubjectID: strconv.FormatInt(t.ID, 10), Data: map[string]string{"slot": slot}, Origin: EventOrigin{Kind: OriginSystem, Person: "clock"},
-			DedupeKey: "schedule:" + strconv.FormatInt(t.ID, 10) + ":" + slot})
+			DedupeKey: key})
 		if err != nil {
 			return n, err
 		}
@@ -719,8 +827,14 @@ func (s *Store) ClaimWorkflowRun() (WorkflowRun, WorkflowEvent, bool, error) {
 		}
 		return WorkflowRun{}, WorkflowEvent{}, false, err
 	}
-	if _, err := tx.Exec(`UPDATE workflow_runs SET state='running', started_at=? WHERE id=? AND state='queued'`, now(), id); err != nil {
+	res, err := tx.Exec(`UPDATE workflow_runs SET state='running', started_at=? WHERE id=? AND state='queued'`, now(), id)
+	if err != nil {
 		return WorkflowRun{}, WorkflowEvent{}, false, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		// Somebody else took the run between the read and the update: nothing is
+		// claimed, the caller asks again.
+		return WorkflowRun{}, WorkflowEvent{}, false, nil
 	}
 	run, err := scanWorkflowRun(tx.QueryRow(`SELECT `+workflowRunCols+workflowRunFrom+` WHERE r.id=?`, id))
 	if err != nil {
@@ -800,6 +914,35 @@ func (s *Store) AbandonWorkflowRuns() (int, error) {
 	return int(n), tx.Commit()
 }
 
+// AbandonStaleWorkflowRuns is AbandonWorkflowRuns for the runs that started
+// before the given time: a run that began after it may belong to another
+// process on the same database (a second server, an executor that is alive)
+// and stays. The engine passes "now minus the run timeout", so a run cut off
+// by a restart is ended once it could not be running any more.
+func (s *Store) AbandonStaleWorkflowRuns(before time.Time) (int, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{before.UTC()}, func(d *Store, p []any) (int, error) { return d.AbandonStaleWorkflowRuns(p[0].(time.Time)) })
+	}
+	res, err := s.db.Exec(`UPDATE workflow_runs SET state='failed', reason='interrupted', finished_at=? WHERE state='running' AND started_at<=?`,
+		now(), before.UTC().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// StaleWorkflowRuns counts the runs AbandonStaleWorkflowRuns(before) would
+// end. It only reads, so that an idle sweep can skip the writer.
+func (s *Store) StaleWorkflowRuns(before time.Time) int {
+	if s.reader != nil {
+		return s.reader.StaleWorkflowRuns(before)
+	}
+	var n int
+	_ = s.db.QueryRowContext(s.ctx(), `SELECT COUNT(*) FROM workflow_runs WHERE state='running' AND started_at<=?`, before.UTC().Format(time.RFC3339)).Scan(&n)
+	return n
+}
+
 func cutRunes(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -820,6 +963,13 @@ type WorkflowRunFilter struct {
 	Limit       int
 }
 
+// workflowRunsOfSubject lists the runs of one subject of a project from its
+// events (index workflow_events_subject), then reaches their runs by
+// (event_id, workflow). A run has the project of its event, so the event
+// filter is the project filter.
+const workflowRunsOfSubject = `SELECT ` + workflowRunCols + ` FROM workflow_events e JOIN workflow_runs r ON r.event_id=e.id
+	WHERE e.project=? AND e.subject_kind=? AND e.subject_id=?`
+
 // WorkflowRunsIn lists the runs of a project, newest first. Access is checked
 // by ProjectAccess.WorkflowRuns.
 func (s *Store) WorkflowRunsIn(project string, f WorkflowRunFilter) ([]WorkflowRun, error) {
@@ -832,8 +982,12 @@ func (s *Store) WorkflowRunsIn(project string, f WorkflowRunFilter) ([]WorkflowR
 	q := `SELECT ` + workflowRunCols + workflowRunFrom + ` WHERE r.project=?`
 	args := []any{project}
 	if f.SubjectKind != "" {
-		q += ` AND e.subject_kind=? AND e.subject_id=?`
-		args = append(args, f.SubjectKind, f.SubjectID)
+		// Start from the events of the subject (index workflow_events_subject),
+		// then reach their runs by (event_id, workflow): the list of one pull
+		// request does not read every run of the project. A run has the project
+		// of its event, so the event filter is the project filter.
+		q = workflowRunsOfSubject
+		args = []any{project, f.SubjectKind, f.SubjectID}
 	}
 	if f.State != "" {
 		q += ` AND r.state=?`
@@ -926,6 +1080,14 @@ func (s *Store) SetWorkflowSettings(actorPrincipal string, in WorkflowSettings) 
 // PurgeWorkflowRunTexts deletes the full text of every run older than the
 // retention of its namespace at the time at, and notes on the run when that
 // happened. Cost, result and version stay. It returns how many texts went.
+//
+// The namespace is the one the project belongs to now (projects.org_id), not
+// the org_id the run was created with: a project that moved to another org
+// takes the retention of the new owner with it. What stays for good is
+// reason, result (2000 characters), the cost and workflow_events.data; a block
+// must keep model excerpts out of those and put them into Inputs and Output.
+// The cut-off is computed in SQL; a run whose created_at cannot be read counts
+// as past its retention, so that a damaged row never keeps text for good.
 func (s *Store) PurgeWorkflowRunTexts(at time.Time) (int, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{at.UTC()}, func(d *Store, p []any) (int, error) { return d.PurgeWorkflowRunTexts(p[0].(time.Time)) })
@@ -935,42 +1097,38 @@ func (s *Store) PurgeWorkflowRunTexts(at time.Time) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT r.id, r.created_at, COALESCE(ws.retention_days, ?) FROM workflow_run_texts t
-		JOIN workflow_runs r ON r.id=t.run_id LEFT JOIN workflow_settings ws ON ws.org_id=r.org_id`, WorkflowRetentionDefault)
+	ts := at.UTC().Format(time.RFC3339)
+	res, err := tx.Exec(`UPDATE workflow_runs SET text_purged_at=? WHERE id IN (
+		SELECT r.id FROM workflow_run_texts t
+		JOIN workflow_runs r ON r.id=t.run_id
+		LEFT JOIN projects p ON p.remote=r.project
+		LEFT JOIN workflow_settings ws ON ws.org_id=p.org_id
+		WHERE COALESCE(datetime(r.created_at, '+' || COALESCE(ws.retention_days, ?) || ' days') <= datetime(?), 1))`,
+		ts, WorkflowRetentionDefault, ts)
 	if err != nil {
 		return 0, err
 	}
-	var gone []int64
-	for rows.Next() {
-		var id int64
-		var created string
-		var days int
-		if err := rows.Scan(&id, &created, &days); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		t, err := time.Parse(time.RFC3339, created)
-		if err != nil {
-			continue
-		}
-		if !t.AddDate(0, 0, days).After(at) {
-			gone = append(gone, id)
-		}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return 0, nil
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	if _, err := tx.Exec(`DELETE FROM workflow_run_texts WHERE run_id IN (SELECT id FROM workflow_runs WHERE text_purged_at<>'')`); err != nil {
 		return 0, err
 	}
-	ts := at.UTC().Format(time.RFC3339)
-	for _, id := range gone {
-		if _, err := tx.Exec(`DELETE FROM workflow_run_texts WHERE run_id=?`, id); err != nil {
-			return 0, err
-		}
-		if _, err := tx.Exec(`UPDATE workflow_runs SET text_purged_at=? WHERE id=?`, ts, id); err != nil {
-			return 0, err
-		}
+	return int(n), tx.Commit()
+}
+
+// WorkflowCostSince is what the runs of the projects of a namespace cost since
+// the given time, counted by the namespace the projects belong to now: a run
+// of a project that moved counts for the new owner.
+func (s *Store) WorkflowCostSince(orgID int64, since time.Time) (float64, error) {
+	if s.reader != nil {
+		return s.reader.WorkflowCostSince(orgID, since)
 	}
-	return len(gone), tx.Commit()
+	var usd float64
+	err := s.db.QueryRowContext(s.ctx(), `SELECT COALESCE(SUM(r.cost_usd), 0) FROM workflow_runs r JOIN projects p ON p.remote=r.project
+		WHERE p.org_id=? AND r.created_at>=?`, orgID, since.UTC().Format(time.RFC3339)).Scan(&usd)
+	return usd, err
 }
 
 // -------- access

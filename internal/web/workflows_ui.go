@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -69,6 +70,8 @@ var wfReasonKeys = map[string]string{
 	store.SkipChainDepth:  "wf.reason.chain_depth",
 	"unknown_workflow":    "wf.reason.unknown_workflow",
 	"interrupted":         "wf.reason.interrupted",
+	"timeout":             "wf.reason.timeout",
+	store.SkipRate:        "wf.reason.rate_limit",
 	store.AICapRun:        "wf.reason.cap.run",
 	store.AICapWorkflow:   "wf.reason.cap.workflow",
 	store.AICapOwner:      "wf.reason.cap.owner",
@@ -81,12 +84,30 @@ func workflowRunHref(base string, id int64) string {
 	return base + "/workflows/runs/" + strconv.FormatInt(id, 10)
 }
 
-func wfCost(usd float64) string { return aiUSD(usd) }
+// wfCost words a cost in US dollars: two decimals from a cent up, so that a
+// run that cost 0.004 $ does not read as free, and the decimal comma in German.
+func wfCost(l lang, usd float64) string {
+	var s string
+	switch {
+	case usd <= 0:
+		s = "0.00"
+	case usd >= 0.01:
+		s = fmt.Sprintf("%.2f", usd)
+	case usd < 0.0001:
+		s = "<0.0001"
+	default:
+		s = strings.TrimRight(fmt.Sprintf("%.4f", usd), "0")
+	}
+	if l == langDE {
+		s = strings.Replace(s, ".", ",", 1)
+	}
+	return s + " $"
+}
 
 func (a *app) wfRow(l lang, base string, run store.WorkflowRun) wfRunRow {
 	look := wfStateLook[run.State]
 	row := wfRunRow{ID: run.ID, Href: workflowRunHref(base, run.ID), Workflow: run.Workflow, StateKey: look.key, Icon: look.icon, Tone: look.tone,
-		Result: run.Result, Cost: wfCost(run.CostUSD), Trigger: wfTriggerOf(base, run)}
+		Result: run.Result, Cost: wfCost(l, run.CostUSD), Trigger: wfTriggerOf(base, run)}
 	row.Reason = run.Reason
 	if key, ok := wfReasonKeys[run.Reason]; ok {
 		row.Reason = l.msg(key)

@@ -13,7 +13,7 @@ const workflowUsage = `usage: ctx workflow trigger --db <path> --project <remote
 
 Switches a workflow on (or with --off off) for a kind of event in a project,
 directly on the database of the server; only someone with the host can do it.
-Events: pr.merged, idea.created, idea.discussion_closed, schedule.
+Events: pr.merged, idea.created, schedule (idea.discussion_closed follows with stage E3).
 --branch narrows pr.merged (empty: the default branch, *: every branch),
 --every is the period of a schedule in minutes, --chain lets events that a
 run of this workflow causes start it again (two stages at most).
