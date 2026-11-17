@@ -21,9 +21,10 @@
   & .coord-shell:has(.coord-thread-detail) #coord-context { grid-column: 2; }
   & .coord-shell:has(.coord-thread-detail) #coord-rooms { display: none; }
   & .coord-live-status { font-size: 12px; color: var(--fg-muted); }
-  /* A short message about what just happened, over the lower edge of the chat: nothing moves. */
-  & .coord-action-status { position: absolute; z-index: 6; left: 16px; right: 16px; bottom: 12px; margin: 0; background: var(--canvas-default); border-color: var(--border-default); box-shadow: var(--shadow-pop); }
+  /* What went wrong with a send: a line in the composer, under the text field, in flow. Nothing lies over the messages. */
+  & .coord-action-status { margin: 8px 12px 0; background: var(--canvas-default); border-color: var(--border-default); }
   & .coord-action-status[data-error="true"] { background: linear-gradient(var(--danger-subtle), var(--danger-subtle)), var(--canvas-default); border-color: var(--danger-muted); color: var(--danger-fg); }
+  & .rbody > .coord-action-status { position: absolute; z-index: 6; left: 16px; right: 16px; bottom: 12px; margin: 0; box-shadow: var(--shadow-pop); }
   & .coord-backdrop { display: none; }
   & .coord-nojs-status { margin-top: 16px; font-size: 12px; color: var(--fg-muted); }
 
@@ -128,7 +129,9 @@
      branch of an agent are the tooltip of the name. */
   & .rm-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0 8px; min-height: 38px; padding: 8px 12px; line-height: 20px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); }
   & .is-own .rm-head { background: var(--accent-subtle); border-bottom-color: var(--accent-muted); }
-  & .rm-head .cm-time { order: 3; margin-left: auto; }
+  /* The time stands next to the name; the tools of a message lie over the right end of the head, so
+     where there is a pointer the head leaves that room free (the tools are about 215 px wide). */
+  @media (hover: hover) and (min-width: 768px) { & .rm-head { padding-right: 232px; } }
   & .rm-name { font-size: 14px; font-weight: 600; }
   & .rm-head .coord-mention-you { align-self: center; }
   & .cm-time { font-size: 12px; color: var(--fg-muted); }
@@ -222,6 +225,9 @@
   & .cx-state { padding: 8px 12px; border-top: 1px solid var(--border-muted); }
   /* A chat input starts small; the area above it keeps the room. */
   & .coord-composer .cx textarea, & .coord-thread-composer .cx textarea { min-height: 56px; }
+  /* The chat has a height of its own and the composer stays below the messages: its preview grows with the
+     text like everywhere, but up to two fifths of the window, so the history stays in sight. */
+  & .coord-composer .cx-pv, & .coord-thread-composer .cx-pv { max-height: max(200px, 40dvh); }
   & .coord-readonly { padding: 12px 16px; border-top: 1px solid var(--border-default); }
   & .coord-composer .cx, & .coord-thread-composer .cx { border-color: var(--border-default); }
   & .coord-option-panel { min-width: 300px; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
@@ -274,6 +280,9 @@
   & .coord-threads h3 .counter { margin-left: 6px; }
   & .coord-new-thread > summary, & .coord-manage > summary { display: inline-flex; list-style: none; cursor: pointer; }
   & .coord-new-thread > summary::-webkit-details-marker, & .coord-manage > summary::-webkit-details-marker { display: none; }
+  /* The form of a new thread opens in the column and moves what follows down, so the scrolling column never cuts it off. */
+  & .coord-new-thread { display: block; }
+  & .coord-new-thread > .pop.pform { position: static; width: 100%; max-width: none; max-height: none; margin-top: 8px; box-shadow: none; }
   & .rctx .sblk + .sblk, & .rctx > div + .sblk, & .rctx > .sblk + .sblk { border-top: 1px solid var(--border-muted); }
   & .rctx .coord-manage form { margin-top: 8px; }
   & .coord-welcome { flex-direction: column; }

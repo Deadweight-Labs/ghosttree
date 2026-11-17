@@ -850,6 +850,8 @@ var messages = map[string]string{
 	"requests.toolarge.title":         "The text is too long",
 	"requests.toolarge.back":          "Back to requests",
 	"requests.fail.open_criteria":     "Resolve the open criteria first.",
+	"newissue.fail.labels":            "The issue was created, but its labels could not be set. Set them under “Labels” on the right.",
+	"newissue.fail.package":           "The issue was created, but its work package could not be set. Set it from the work package page.",
 	"requests.act.created":            "Created",
 	"requests.act.corrected":          "Corrected",
 	"requests.act.moved":              "Moved",

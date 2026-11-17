@@ -25,10 +25,13 @@
   & .lbmenu > summary { width: 100%; justify-content: space-between; font-weight: 400; }
   /* The menu opens in the column and moves what follows down, so it never lies over the fields below; the tick sits after the label, so no empty column indents the labels. */
   & .lbmenu > .pop { position: static; width: 100%; min-width: 0; max-height: 240px; margin-top: 4px; box-shadow: none; }
-  & .lbmenu .opt .chk { order: 1; margin-left: auto; }
-  & .lbmenu .opt { cursor: pointer; }
+  & .lbmenu .opt .chk { order: 1; margin-left: auto; align-items: center; justify-content: center; height: 16px; border: 1px solid var(--border-default); border-radius: 4px; }
+  /* The checkbox lies over the whole row, invisible but real: a click anywhere on the row, the pill or the box, and the keyboard all reach it. */
+  & .lbmenu .opt { position: relative; cursor: pointer; }
+  & .lbmenu .opt input { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
   & .lbmenu .opt:has(input:focus-visible) { outline: 2px solid var(--accent-emphasis); outline-offset: -2px; }
-  & .lbmenu .opt input:not(:checked) + .chk { visibility: hidden; }
+  & .lbmenu .opt input:checked + .chk { background: var(--accent-emphasis); border-color: var(--accent-emphasis); color: #fff; }
+  & .lbmenu .opt input:not(:checked) + .chk .i { visibility: hidden; }
   & .side .pfield { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
   & .side .pfield > span { color: var(--fg-muted); }
   & .sblk .pfield + .pfield { margin-top: 12px; }

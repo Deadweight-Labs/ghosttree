@@ -381,6 +381,8 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 // or the rule that refused the form).
 func ideaFailKey(code string) string {
 	switch code {
+	case "labels":
+		return "newissue.fail.labels"
 	case "reason_required":
 		return "ideas.result.reason_required"
 	case "pain_link":

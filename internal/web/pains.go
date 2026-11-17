@@ -338,6 +338,8 @@ func painFailField(code string) string {
 // read as a plain failure.
 func painFailKey(code string) string {
 	switch code {
+	case "labels":
+		return "newissue.fail.labels"
 	case "remaining_required":
 		return "pains.result.remaining_required"
 	case "evidence_required":

@@ -739,6 +739,11 @@ func (a *app) requestResult(r *http.Request, d requestdomain.Detail) *requestRes
 		if key := ideaFailKey(fail); key != "ideas.result.failed" {
 			return &requestResult{Text: l.msg(key), Kind: "failed", Fail: true}
 		}
+	} else if fail == "labels" {
+		// The new issue exists; the step after creating it failed (new_issue.go).
+		return &requestResult{Text: l.msg("newissue.fail.labels"), Kind: "failed", Fail: true}
+	} else if fail == "package" {
+		return &requestResult{Text: l.msg("newissue.fail.package"), Kind: "failed", Fail: true}
 	}
 	kind := q.Get("done")
 	key, ok := requestDoneMsg[kind]
