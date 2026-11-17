@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,18 +147,15 @@ func TestPurgeIsOneBatchAndDropsTextOfDamagedRows(t *testing.T) {
 	}
 }
 
-// Finding 3: idea.discussion_closed has no trigger yet, so a trigger on it is
-// refused with the reason instead of looking switched on.
-func TestNoTriggerOnADiscussionThatNothingCloses(t *testing.T) {
+// Stage E3 writes idea.discussion_closed (DEC-46), so a trigger on it is
+// accepted and listed among the kinds (it was refused while nothing wrote it).
+func TestATriggerOnAClosedDiscussionIsAcceptedSinceE3(t *testing.T) {
 	st := prFixture(t)
-	_, err := st.SetWorkflowTriggerAsOperator(WorkflowTrigger{Project: prProject, Workflow: "ghosttree/echo", EventKind: EventIdeaDiscussionClosed, Enabled: true})
-	if !errors.Is(err, ErrWorkflowTrigger) || !strings.Contains(err.Error(), "E3") {
-		t.Fatalf("trigger on a discussion that closes: %v", err)
+	if _, err := st.SetWorkflowTriggerAsOperator(WorkflowTrigger{Project: prProject, Workflow: "ghosttree/echo", EventKind: EventIdeaDiscussionClosed, Enabled: true}); err != nil {
+		t.Fatalf("trigger on a closed discussion: %v", err)
 	}
-	for _, k := range WorkflowTriggerKinds {
-		if k == EventIdeaDiscussionClosed {
-			t.Fatal("the trigger kinds list a kind nothing writes")
-		}
+	if !slices.Contains(WorkflowTriggerKinds, EventIdeaDiscussionClosed) {
+		t.Fatal("the trigger kinds leave out idea.discussion_closed")
 	}
 }
 

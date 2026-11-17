@@ -1,0 +1,11 @@
+Task: the discussion of an idea was closed. From its concept and the decisions
+taken, write the requirements it lacks: observable acceptance criteria, each
+saying how one sees from outside that it is met.
+
+Do not repeat a requirement the concept has. Do not invent scope the concept and
+the decisions do not carry. Each requirement names where it comes from: a
+section of the concept or a decision (DEC-n).
+
+Answer:
+{"requirements": [{"text": "one requirement, one sentence", "from": "DEC-46 or
+  the section", "evidence": ["exact quote from the concept or the decision"]}]}

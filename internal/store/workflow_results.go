@@ -35,6 +35,9 @@ const (
 	ResultPolicy      = "policy"
 	ResultBadTarget   = "bad_target"
 	ResultInvalid     = "invalid"
+	// ResultExists: the result is already there (a wish that an open issue
+	// carries); the record points to it in ref instead of proposing it again.
+	ResultExists = "exists"
 )
 
 // WorkflowAutoKinds are the kinds of result an owner may let apply without a

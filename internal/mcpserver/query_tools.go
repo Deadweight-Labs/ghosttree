@@ -51,17 +51,18 @@ type IdeaSearchInput struct {
 type IdeaUpdateInput struct {
 	ID          int64            `json:"id" jsonschema:"the idea number, IDEA-n"`
 	Action      string           `json:"action" jsonschema:"promote, link_request (needs request_id), dismiss (needs reason), reopen, phase (needs phase), discuss, issues, requirement_waive (needs requirement and reason; a person only)"`
-	RequestID   int64            `json:"request_id,omitempty" jsonschema:"with link_request: the request that came out of the idea"`
+	RequestID   int64            `json:"request_id,omitempty" jsonschema:"with link_request: the request it became"`
 	Reason      string           `json:"reason,omitempty" jsonschema:"required for dismiss"`
 	Title       string           `json:"title,omitempty" jsonschema:"with promote: the request title; default is the idea title"`
 	Description string           `json:"description,omitempty" jsonschema:"with promote: the request description; default is the idea text"`
 	Type        string           `json:"type,omitempty" jsonschema:"with promote: feature (default), change, bug or investigation"`
 	Criteria    []string         `json:"criteria,omitempty" jsonschema:"with promote: observable acceptance criteria of the new request"`
-	Phase       string           `json:"phase,omitempty" jsonschema:"with phase: concept, discussion or done (issues done, every requirement met or waived). Approving is for a person in the web interface; propose it as a decision"`
-	Issues      []IdeaIssueInput `json:"issues,omitempty" jsonschema:"with issues: the issues to create from the approved idea; none means one issue with all requirements as criteria"`
-	Revision    int              `json:"revision,omitempty" jsonschema:"with phase approved (a person, in the web interface): the version of the concept that was seen"`
-	Requirement int              `json:"requirement,omitempty" jsonschema:"with requirement_waive: the number (from 1) of the requirement of the concept"`
-	Branch      string           `json:"branch,omitempty" jsonschema:"with issues: put them in the work package of this branch (new or existing)"`
+	Phase       string           `json:"phase,omitempty" jsonschema:"with phase: concept, discussion, discussed (needs human_said) or done (issues done, requirements met or waived); approving is a person's, in the web"`
+	HumanSaid   string           `json:"human_said,omitempty" jsonschema:"with discussed: your person's words"`
+	Issues      []IdeaIssueInput `json:"issues,omitempty" jsonschema:"with issues: the issues to create; none means one issue with all requirements as criteria"`
+	Revision    int              `json:"revision,omitempty" jsonschema:"with phase approved: the concept version that was seen"`
+	Requirement int              `json:"requirement,omitempty" jsonschema:"with requirement_waive: the requirement's number (from 1)"`
+	Branch      string           `json:"branch,omitempty" jsonschema:"with issues: the work package of this branch (new or existing)"`
 	PackageName string           `json:"package_name,omitempty" jsonschema:"with issues: the name of a new work package"`
 }
 

@@ -66,3 +66,20 @@
   & .wfresrow form { margin: 0; }
   & .wfreskind { font-weight: 600; }
 }
+
+/* One click from a template (REQ-696): the choice and its button beside the
+   button for a new workflow; on a phone they wrap below the title. */
+:is(.g2.wf) {
+  & .wfnew { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+  & .wftpl { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+  & .wftpl select.gfield { height: 28px; padding-block: 0; font-size: 12px; }
+}
+@media (max-width: 767px) {
+  :is(.g2.wf) {
+    & .wfdefs > .box-h { flex-wrap: wrap; row-gap: 8px; }
+    & .wfnew { justify-content: flex-start; width: 100%; }
+    & .wftpl { width: 100%; }
+    & .wftpl > .selx { flex: 1 1 auto; min-width: 0; }
+    & .wftpl > button { flex: none; }
+  }
+}

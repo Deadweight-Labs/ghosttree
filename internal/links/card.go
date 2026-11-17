@@ -244,6 +244,8 @@ func (b Builder) IdeaCard(i idea.Idea) Card {
 		c.Next = "none"
 	case i.Phase == idea.PhaseConcept || i.Phase == idea.PhaseDiscussion:
 		c.Next, c.Who = "discuss it; its owner or a maintainer approves", "human"
+	case i.Phase == idea.PhaseDiscussed:
+		c.Next, c.Who = "the discussion is closed; its owner or a maintainer approves", "human"
 	case i.Phase == idea.PhaseApproved:
 		c.Next, c.Who = "create the issues from it", "human"
 	case i.Phase == idea.PhaseBuilding:

@@ -76,8 +76,8 @@ func TestWorkflowTriggerSwitchesAWorkflowOnAndOff(t *testing.T) {
 	}
 
 	// What is refused says why and exits 1; what is missing prints the usage and exits 2.
-	if out := do(1, "--project", project, "--workflow", "ghosttree/echo", "--on", "idea.discussion_closed"); !strings.Contains(out, "E3") {
-		t.Fatalf("a trigger on a discussion that closes: %s", out)
+	if out := do(0, "--project", project, "--workflow", "ghosttree/echo", "--on", "idea.discussion_closed"); strings.Contains(out, "E3") {
+		t.Fatalf("a trigger on a closed discussion (stage E3 writes the event): %s", out)
 	}
 	if out := do(1, "--project", project, "--workflow", "ghosttree/echo", "--on", "schedule", "--every", "1"); !strings.Contains(out, "5 minutes") {
 		t.Fatalf("a schedule every minute: %s", out)

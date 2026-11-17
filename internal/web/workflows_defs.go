@@ -297,6 +297,48 @@ func (a *app) workflowSave(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, workflowHref(project, saved.Def.Name)+"?done="+done, http.StatusSeeOther)
 }
 
+// workflowFromTemplate is POST /ui/workflows/template: one click creates a
+// workflow from a template (REQ-696), named like the template, with a number
+// when that name is taken. When the text does not pass the check here (the
+// alias "mittel" is not set up, the owner forbids a kind), the form opens with
+// the text and the problems, so the person fixes it there.
+func (a *app) workflowFromTemplate(w http.ResponseWriter, r *http.Request) {
+	pa := a.access(r)
+	project := strings.TrimSpace(r.FormValue("project"))
+	if project == "" || !a.projectVisible(r, pa, project) || !pa.CanSeeWorkflows(project) {
+		http.NotFound(w, r)
+		return
+	}
+	if a.accessDenied(w, r, pa.Check(project, store.ResWorkflow, store.ActEdit, store.Object{})) {
+		return
+	}
+	tpl, ok := workflow.TemplateByName(r.FormValue("template"))
+	if !ok {
+		http.Error(w, "unknown template", http.StatusBadRequest)
+		return
+	}
+	name := tpl.Name
+	for n := 2; n < 100; n++ {
+		if _, err := a.store.WorkflowDefByName(project, name); errors.Is(err, store.ErrWorkflowDefMissing) {
+			break
+		}
+		name = fmt.Sprintf("%s-%d", tpl.Name, n)
+	}
+	saved, rep, err := workflow.SaveDef(a.store, browserPrincipal(r).ID, project, name, tpl.Text, "", store.WorkflowViaWeb, 0)
+	switch {
+	case errors.Is(err, workflow.ErrCheck):
+		a.renderWorkflowForm(w, r, &workflowFormView{New: true, Project: project, Name: name, Text: tpl.Text, Errors: rep.Errors, Warnings: rep.Warnings}, http.StatusUnprocessableEntity)
+		return
+	case errors.Is(err, store.ErrAccessForbidden):
+		a.accessDenied(w, r, err)
+		return
+	case err != nil:
+		a.renderWorkflowForm(w, r, &workflowFormView{New: true, Project: project, Name: name, Text: tpl.Text, ErrorKey: "wf.def.err.failed"}, http.StatusConflict)
+		return
+	}
+	http.Redirect(w, r, workflowHref(project, saved.Def.Name)+"?done=created", http.StatusSeeOther)
+}
+
 // workflowEnable is POST /ui/workflows/enabled: switch a workflow on or off.
 func (a *app) workflowEnable(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
@@ -361,6 +403,7 @@ var wfResultReasons = map[string]string{
 	store.ResultPolicy:      "wf.result.why.policy",
 	store.ResultBadTarget:   "wf.result.why.bad_target",
 	store.ResultInvalid:     "wf.result.why.invalid",
+	store.ResultExists:      "wf.result.why.exists",
 	"":                      "wf.result.why.declined",
 }
 
@@ -378,6 +421,10 @@ func (a *app) wfResultRows(r *http.Request, pa *store.ProjectAccess, remote stri
 		if row.KindKey == "" {
 			row.KindKey = "wf.kind.other"
 		}
+		if res.State == store.ResultRejected && res.Reason == store.ResultExists {
+			// Not refused: the wish points to the issue that carries it.
+			row.StateKey, row.Tone = "wf.result.linked", "ok"
+		}
 		if res.State == store.ResultRejected {
 			row.ReasonKey = wfResultReasons[res.Reason]
 			if row.ReasonKey == "" {
@@ -390,6 +437,10 @@ func (a *app) wfResultRows(r *http.Request, pa *store.ProjectAccess, remote stri
 		case strings.HasPrefix(res.Ref, "REQ-"):
 			n, _, _ := strings.Cut(strings.TrimPrefix(res.Ref, "REQ-"), "#")
 			row.RefHref = repoHref(remote) + "/issues/" + n
+		case strings.HasPrefix(res.Ref, "IDEA-"):
+			row.RefHref = repoHref(remote) + "/ideas/" + strings.TrimPrefix(res.Ref, "IDEA-")
+		case strings.HasPrefix(res.Ref, "FEAT-"):
+			row.RefHref = repoHref(remote) + "/features/" + strings.TrimPrefix(res.Ref, "FEAT-")
 		}
 		if strings.HasPrefix(res.Ref, "relation:") {
 			row.Ref = ""
@@ -403,6 +454,7 @@ func (a *app) wfResultRows(r *http.Request, pa *store.ProjectAccess, remote stri
 var wfKindKeys = map[string]string{
 	workflow.ResultKnowledge: "wf.kind.knowledge", workflow.ResultIssue: "wf.kind.issue", workflow.ResultCriterion: "wf.kind.criterion",
 	workflow.ResultRelation: "wf.kind.relation", workflow.ResultDescription: "wf.kind.description",
+	workflow.ResultRequirement: "wf.kind.requirement", workflow.ResultComment: "wf.kind.comment",
 }
 
 // workflowUndo is POST /ui/workflows/undo: take back an automatic approval of

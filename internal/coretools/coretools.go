@@ -149,7 +149,7 @@ var table = []Core{
 			{Name: "link_request", Tool: "idea_update", Inner: "link_request", Line: "tie an existing request to it (id, request_id)"},
 			{Name: "dismiss", Tool: "idea_update", Inner: "dismiss", Line: "put it aside (id, reason)"},
 			{Name: "reopen", Tool: "idea_update", Inner: "reopen", Line: "take it up again (id)"},
-			{Name: "phase", Rare: true, Tool: "idea_update", Inner: "phase", Line: "move a worked-out idea (id, phase concept|discussion|done)"},
+			{Name: "phase", Rare: true, Tool: "idea_update", Inner: "phase", Line: "move a worked-out idea (id, phase concept|discussion|discussed|done; human_said)"},
 			{Name: "discuss", Tool: "idea_update", Inner: "discuss", Line: "mark it as under discussion (id)"},
 			{Name: "issues", Rare: true, Tool: "idea_update", Inner: "issues", Line: "create the issues of an approved idea (id; issues, branch, package_name)"},
 			{Name: "requirement_waive", Rare: true, Tool: "idea_update", Inner: "requirement_waive", Line: "waive a concept requirement, a person only (id, requirement, reason)"},

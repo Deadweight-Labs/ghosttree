@@ -586,6 +586,55 @@ func (g *GitHubApp) PullRequestCommits(ctx context.Context, installationID int64
 	return out, nil
 }
 
+// maxPullFilePages bounds the pages of a pull request's files (100 each);
+// GitHub lists at most 3000 files.
+const maxPullFilePages = 3
+
+// PullRequestDiff is the diff of a pull request, put together from its files
+// and their patches (GET /repos/{owner}/{repo}/pulls/{n}/files), through an
+// installation token limited to "Pull requests: read". It stops at maxBytes; a
+// file without a patch (binary, too large for GitHub) is named with its counts.
+// Without the right it returns ErrPermissionMissing, and the token never
+// reaches an error or a log.
+func (g *GitHubApp) PullRequestDiff(ctx context.Context, installationID int64, repo string, number int64, maxBytes int) (string, error) {
+	parts, ok := repoParts(repo)
+	if !ok || number <= 0 {
+		return "", fmt.Errorf("pull request diff: repo must look like github.com/owner/repo and the number must be positive")
+	}
+	tok, err := g.installationToken(ctx, installationID, map[string]string{"pull_requests": "read"})
+	if err != nil {
+		return "", tokenRefusal(err)
+	}
+	var b strings.Builder
+	for page := 1; page <= maxPullFilePages; page++ {
+		var raw []struct {
+			Filename  string `json:"filename"`
+			Status    string `json:"status"`
+			Additions int    `json:"additions"`
+			Deletions int    `json:"deletions"`
+			Patch     string `json:"patch"`
+		}
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/files?per_page=100&page=%d", url.PathEscape(parts[1]), url.PathEscape(parts[2]), number, page)
+		if err := g.getAs(ctx, tok, path, &raw); err != nil {
+			return "", commitRefusal(err)
+		}
+		for _, f := range raw {
+			fmt.Fprintf(&b, "--- %s (%s, +%d -%d)\n", f.Filename, f.Status, f.Additions, f.Deletions)
+			if f.Patch != "" {
+				b.WriteString(f.Patch)
+				b.WriteString("\n")
+			}
+			if maxBytes > 0 && b.Len() >= maxBytes {
+				return b.String(), nil
+			}
+		}
+		if len(raw) < 100 {
+			break
+		}
+	}
+	return b.String(), nil
+}
+
 func firstLine(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {

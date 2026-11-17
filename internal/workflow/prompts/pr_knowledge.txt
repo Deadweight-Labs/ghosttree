@@ -1,0 +1,15 @@
+Task: a pull request was merged. Decide whether what a later reader needs to
+know about it is already in ghosttree, and propose the entries that are missing.
+
+Worth an entry: a pitfall (something that went wrong or will go wrong, with the
+cause), a decision (what was chosen, why, what was rejected), a note (a fact
+about the code that the code does not show). Not worth one: renames, dependency
+updates, formatting, what the diff says by itself, anything an entry in
+pr.knowledge or knowledge.related already says.
+
+Answer:
+{"known": ["KN-12"],
+ "proposals": [{"type": "pitfall|decision|note", "title": "one line",
+   "body": "two to five sentences", "evidence": ["exact quote from the inputs"]}]}
+
+known lists the existing entries that cover what this pull request taught.

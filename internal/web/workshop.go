@@ -27,17 +27,17 @@ import (
 // workshopPhaseKeys sind die Texte der Phasen.
 var workshopPhaseKeys = map[string]string{
 	idea.PhaseRaw: "workshop.phase.raw", idea.PhaseConcept: "workshop.phase.concept", idea.PhaseDiscussion: "workshop.phase.discussion",
-	idea.PhaseApproved: "workshop.phase.approved", idea.PhaseBuilding: "workshop.phase.building", idea.PhaseDone: "workshop.phase.done",
+	idea.PhaseDiscussed: "workshop.phase.discussed", idea.PhaseApproved: "workshop.phase.approved", idea.PhaseBuilding: "workshop.phase.building", idea.PhaseDone: "workshop.phase.done",
 	idea.PhaseDismissed: "workshop.phase.dismissed",
 }
 
 var workshopPhaseTone = map[string]string{
-	idea.PhaseRaw: "p-mute", idea.PhaseConcept: "p-warn", idea.PhaseDiscussion: "p-warn", idea.PhaseApproved: "p-ok",
+	idea.PhaseRaw: "p-mute", idea.PhaseConcept: "p-warn", idea.PhaseDiscussion: "p-warn", idea.PhaseDiscussed: "p-ok", idea.PhaseApproved: "p-ok",
 	idea.PhaseBuilding: "p-ok", idea.PhaseDone: "p-done", idea.PhaseDismissed: "p-mute",
 }
 
 // workshopSteps ist der Weg der Ausarbeitung, wie ihn die Leiste zeigt.
-var workshopSteps = []string{idea.PhaseRaw, idea.PhaseConcept, idea.PhaseDiscussion, idea.PhaseApproved, idea.PhaseBuilding, idea.PhaseDone}
+var workshopSteps = []string{idea.PhaseRaw, idea.PhaseConcept, idea.PhaseDiscussion, idea.PhaseDiscussed, idea.PhaseApproved, idea.PhaseBuilding, idea.PhaseDone}
 
 var workshopDecisionKeys = map[string]string{
 	idea.DecisionOpen: "workshop.dec.open", idea.DecisionDecided: "workshop.dec.decided", idea.DecisionDeferred: "workshop.dec.deferred", idea.DecisionDropped: "workshop.dec.dropped",
@@ -76,6 +76,7 @@ var workshopSectionKeys = map[string]string{
 var workshopDoneKeys = map[string]string{
 	"vote": "workshop.done.vote", "decided": "workshop.done.decided", "reopen": "workshop.done.reopen", "approve": "workshop.done.approve",
 	"discuss": "workshop.done.discuss", "withdraw": "workshop.done.withdraw",
+	"close": "workshop.done.close", "reopen_discussion": "workshop.done.reopen_discussion",
 }
 
 type workshopStep struct{ Label, State string }
@@ -136,7 +137,11 @@ type workshopDecision struct {
 const workshopStackFrom = 4
 
 // workshopNext is what comes next on an idea: the first open decision (with its anchor) or the next step of the way.
-type workshopNext struct{ Text, Href string }
+// Close puts the button that closes the discussion there (DEC-46): the workshop proposes it once the last decision is closed.
+type workshopNext struct {
+	Text, Href string
+	Close      bool
+}
 
 type workshopView struct {
 	// ResultDecision is the decision the result of the last step is about; its card shows the
@@ -160,8 +165,12 @@ type workshopView struct {
 	CanDiscuss  bool
 	CanApprove  bool
 	CanWithdraw bool
-	Revision    int
-	Result      *requestResult
+	// CanClose closes the discussion (DEC-46), CanReopen opens a closed one again.
+	CanClose, CanReopen bool
+	// ClosedBy names who closed the discussion: a person, or an agent and the person whose word it acted on (Said).
+	ClosedBy, ClosedSaid, ClosedAge string
+	Revision                        int
+	Result                          *requestResult
 }
 
 func (a *app) registerWorkshopPages(mux *http.ServeMux) {
@@ -269,12 +278,20 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		wd.CanAttach = canWork && wd.Open && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
 		w.Decisions = append(w.Decisions, wd)
 	}
-	w.standAndNext(l, phase, cur, ws.Concept != nil)
-	// Die Wege der Phase: Diskussion anstoßen kann, wer mitarbeitet; freigeben und die Freigabe
-	// zurücknehmen nur, wer die Idee bearbeiten darf.
+	// Die Wege der Phase: Diskussion anstoßen kann, wer mitarbeitet; sie beenden, wieder öffnen,
+	// freigeben und die Freigabe zurücknehmen nur, wer die Idee bearbeiten darf.
 	w.CanDiscuss = canWork && (phase == idea.PhaseRaw || phase == idea.PhaseConcept) && ws.Concept != nil
-	w.CanApprove = canEdit && ws.Concept != nil && (phase == idea.PhaseConcept || phase == idea.PhaseDiscussion)
+	w.CanClose = canEdit && ws.Concept != nil && (phase == idea.PhaseConcept || phase == idea.PhaseDiscussion)
+	w.CanReopen = canEdit && phase == idea.PhaseDiscussed
+	w.CanApprove = canEdit && ws.Concept != nil && (phase == idea.PhaseConcept || phase == idea.PhaseDiscussion || phase == idea.PhaseDiscussed)
 	w.CanWithdraw = canEdit && phase == idea.PhaseApproved
+	w.standAndNext(l, phase, cur, ws.Concept != nil)
+	if c := ws.Closed; c != nil {
+		w.ClosedBy, w.ClosedAge = c.Person, age(c.At)
+		if c.ByAgent {
+			w.ClosedBy, w.ClosedSaid = l.msg("workshop.closed_agent", c.Person), c.Said
+		}
+	}
 	q := r.URL.Query()
 	switch {
 	case q.Get("wfail") != "":
@@ -316,7 +333,10 @@ func (w *workshopView) standAndNext(l lang, phase string, cur int, hasConcept bo
 	}
 	switch {
 	case phase == idea.PhaseDismissed || cur < 0 || cur+1 >= len(workshopSteps):
-	case hasConcept && w.Revision > 0 && (phase == idea.PhaseConcept || phase == idea.PhaseDiscussion):
+	case hasConcept && phase == idea.PhaseDiscussion:
+		// No decision is open (any open one returned above): the workshop proposes closing the discussion.
+		w.Next = &workshopNext{Text: l.msg("workshop.close"), Close: w.CanClose}
+	case hasConcept && w.Revision > 0 && (phase == idea.PhaseConcept || phase == idea.PhaseDiscussed):
 		w.Next = &workshopNext{Text: l.msg("workshop.approve", w.Revision)}
 	default:
 		w.Next = &workshopNext{Text: label(l, workshopPhaseKeys, workshopSteps[cur+1])}
@@ -504,8 +524,9 @@ func formLine(r *http.Request, name string, max int) (string, bool) {
 	return v, !tooLong(v, max)
 }
 
-// workshopPhase: POST /ui/ideas/{id}/phase. mode ist discuss (Diskussion beginnen), approve (Konzept
-// freigeben, mit der gesehenen Fassung) oder withdraw (Freigabe zurücknehmen).
+// workshopPhase: POST /ui/ideas/{id}/phase. mode ist discuss (Diskussion beginnen), close (Diskussion
+// beenden, DEC-46), reopen_discussion (wieder öffnen), approve (Konzept freigeben, mit der gesehenen
+// Fassung) oder withdraw (Freigabe zurücknehmen).
 func (a *app) workshopPhase(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -530,6 +551,10 @@ func (a *app) workshopPhase(w http.ResponseWriter, r *http.Request) {
 		}
 		_, err = pa.SetIdeaPhase(id, idea.PhaseApproved, actor, rev)
 	case "withdraw":
+		_, err = pa.SetIdeaPhase(id, idea.PhaseDiscussion, actor, 0)
+	case "close":
+		_, err = pa.SetIdeaPhase(id, idea.PhaseDiscussed, actor, 0)
+	case "reopen_discussion":
 		_, err = pa.SetIdeaPhase(id, idea.PhaseDiscussion, actor, 0)
 	default:
 		http.Error(w, "invalid input", http.StatusBadRequest)
