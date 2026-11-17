@@ -45,13 +45,25 @@
   & .ws .ws-dh h3 { margin: 0; min-width: 0; flex: 1 1 16rem; font-size: 14px; font-weight: 600; line-height: 20px; overflow-wrap: anywhere; }
   & .ws .ws-dd { margin-top: 8px; color: var(--fg-muted); }
   & .ws .ws-vars { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; align-items: stretch; }
-  & .ws .ws-var { position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; font-size: 14px; }
-  & .ws label.ws-var { cursor: pointer; }
-  & .ws label.ws-var:hover { background: var(--row-hover); }
-  & .ws label.ws-var:has(input:checked) { border-color: var(--accent-fg); box-shadow: 0 0 0 1px var(--accent-fg); background: var(--accent-subtle); }
-  & .ws label.ws-var:has(input:focus-visible) { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
-  & .ws .ws-var input[type=radio] { position: absolute; top: 14px; right: 12px; margin: 0; accent-color: var(--accent-fg); }
+  /* Four or more variants stand one below the other; the pros and cons then sit side by side. */
+  & .ws .ws-vars.stack { grid-template-columns: minmax(0, 1fr); }
+  & .ws .ws-var { position: relative; display: flex; flex-direction: column; min-width: 0; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; font-size: 14px; }
+  /* The label is the card: a click anywhere on it picks the variant. */
+  & .ws .ws-pick { display: flex; flex-direction: column; flex: 1 1 auto; gap: 8px; min-width: 0; padding: 12px; }
+  & .ws label.ws-pick { cursor: pointer; }
+  & .ws .ws-var:has(label.ws-pick:hover) { background: var(--row-hover); }
+  & .ws .ws-var:has(input:checked) { border-color: var(--accent-fg); box-shadow: 0 0 0 2px var(--accent-fg); background: var(--accent-subtle); }
+  & .ws .ws-var:has(input:checked) .ws-vl { background: var(--accent-emphasis); color: #fff; }
+  & .ws .ws-var:has(input:focus-visible) { outline: 2px solid var(--accent-fg); outline-offset: 3px; }
+  & .ws .ws-var input[type=radio] { position: absolute; top: 14px; right: 12px; width: 18px; height: 18px; margin: 0; accent-color: var(--accent-fg); }
   & .ws .ws-var.chosen { border-color: var(--success-emphasis); box-shadow: 0 0 0 1px var(--success-emphasis); }
+  /* Attaching a picture belongs to the card it is for. */
+  & .ws .ws-add { padding: 8px 12px; border-top: 1px solid var(--border-muted); font-size: 13px; }
+  & .ws .ws-add > summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--fg-muted); }
+  & .ws .ws-add > summary:hover { color: var(--accent-fg); }
+  & .ws .ws-add .ws-up { margin: 8px 0 0; }
+  /* Why, own answer, vote and decide belong to the choice above: one panel under the cards. */
+  & .ws .ws-choose { margin-top: 12px; padding: 12px; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; }
   & .ws .ws-vh { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding-right: 24px; }
   & .ws .ws-vl { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none; border-radius: 50%; background: var(--neutral-muted); font-size: 12px; font-weight: 600; align-self: center; }
   & .ws .ws-vt { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
@@ -69,7 +81,7 @@
   & .ws .ws-votes { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: auto; padding-top: 4px; font-size: 12px; }
   & .ws .ws-vote { display: inline-flex; }
   & .ws .ws-vote .gav { width: 20px; height: 20px; font-size: 10px; }
-  & .ws .ws-form { display: flex; flex-direction: column; gap: 8px; }
+  & .ws .ws-form { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
   & .ws .ws-row .gfield { width: 100%; }
   & .ws .ws-row textarea.gfield { min-height: 4.5rem; padding: 8px 12px; font: 400 14px/1.5 var(--ui-font); }
   & .ws .ws-own > summary { display: inline-flex; cursor: pointer; font-size: 13px; color: var(--accent-fg); }
@@ -82,7 +94,17 @@
   & .ws .ws-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-default); background: var(--canvas-subtle); }
   & .ws .ws-foot form { margin: 0; }
   & .ws .ws-foot .gbtn .i { margin-right: 4px; }
+  /* the top of the workshop: the short version and where things stand */
+  & .ws .ws-stand { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 8px 0 0; font-size: 14px; }
+  & .ws .ws-stand > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  & .ws .ws-stand dt { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .ws .ws-stand dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
   & .ws .ws-dec.is-open { background: linear-gradient(var(--attention-subtle), var(--attention-subtle)) left / 3px 100% no-repeat; }
+}
+
+@media (min-width: 768px) {
+  :is(.g2) .ws .ws-vars.stack .ws-pick { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 12px; align-items: start; }
+  :is(.g2) .ws .ws-vars.stack .ws-pick > :not(.ws-pc) { grid-column: 1 / -1; }
 }
 
 @media (max-width: 767px) {
@@ -112,7 +134,6 @@
   & .ws-up-note { margin: 12px 16px 0; }
   /* A file is dragged over the page: the box that takes the picture says where it goes. */
   body.ws-dropping & .ws-imgbox { outline: 2px dashed var(--accent-fg); outline-offset: 2px; }
-  & .ws-dec > .ws-up { margin: 12px 0 0; }
   & .ws-lb { max-width: min(96vw, 1200px); max-height: 94vh; padding: 12px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--canvas-default); color: var(--fg-default); }
   & .ws-lb::backdrop { background: rgb(0 0 0 / .6); }
   & .ws-lb img { display: block; max-width: 100%; max-height: 78vh; margin: 0 auto; object-fit: contain; }

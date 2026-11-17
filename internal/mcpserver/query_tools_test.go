@@ -308,6 +308,19 @@ func TestIdeaWorkshopToolsOverTheWire(t *testing.T) {
 	if got, _ := callTool(t, session, "decision_list", map[string]any{"waiting_for_a_person": true}); strings.Contains(got, "DEC-2") {
 		t.Errorf("a deferred decision is in the inbox: %s", got)
 	}
+	// state=open of an idea lists no decision that is decided or deferred (DEC-1 is decided, DEC-2 deferred).
+	if got, failed := callTool(t, session, "decision_list", map[string]any{"idea": 1, "state": "open"}); failed || strings.Contains(got, "DEC-1") || strings.Contains(got, "DEC-2") {
+		t.Errorf("state open lists closed decisions of the idea: %v %s", failed, got)
+	}
+	if got, failed := callTool(t, session, "decision_list", map[string]any{"idea": 1, "state": "decided"}); failed || !strings.Contains(got, "DEC-1") || strings.Contains(got, "DEC-2") {
+		t.Errorf("state decided of the idea: %v %s", failed, got)
+	}
+	if got, failed := callTool(t, session, "decision_list", map[string]any{"idea": 1, "state": "all"}); failed || !strings.Contains(got, "DEC-1") || !strings.Contains(got, "DEC-2") {
+		t.Errorf("state all of the idea: %v %s", failed, got)
+	}
+	if got, failed := callTool(t, session, "decision_list", map[string]any{"idea": 1, "state": "bogus"}); !failed {
+		t.Errorf("an unknown state is refused: %s", got)
+	}
 	// Freigabe und Issues.
 	if got, failed := callTool(t, session, "idea_update", map[string]any{"id": 1, "action": "issues"}); !failed || !strings.Contains(got, "approved") {
 		t.Errorf("issues before approval: %v %s", failed, got)

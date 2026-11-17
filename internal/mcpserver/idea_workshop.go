@@ -363,7 +363,7 @@ type DecisionListInput struct {
 	ID        int64  `json:"id,omitempty" jsonschema:"read one decision, DEC-n"`
 	Idea      int64  `json:"idea,omitempty" jsonschema:"the decisions of this idea"`
 	RequestID int64  `json:"request_id,omitempty" jsonschema:"the decisions of this issue"`
-	State     string `json:"state,omitempty" jsonschema:"in the project list: open (default), decided, deferred, dropped or all"`
+	State     string `json:"state,omitempty" jsonschema:"only decisions in this state: open, decided, deferred, dropped or all. Default: open in the project list, all for an idea or an issue"`
 	Waiting   bool   `json:"waiting_for_a_person,omitempty" jsonschema:"only open decisions that wait for a person (the inbox)"`
 	Limit     int    `json:"limit,omitempty"`
 }
@@ -396,11 +396,37 @@ func (s *Server) handleDecisionList(_ context.Context, _ *mcp.CallToolRequest, i
 			return nil, DecisionListOutput{}, err
 		}
 	}
+	// The lists of an idea and of an issue come unfiltered from the server: a state the caller
+	// named narrows them here, the project list has applied it already.
+	if in.ID == 0 && (in.Idea != 0 || in.RequestID != 0) {
+		var err error
+		if list, err = decisionsInState(list, in.State); err != nil {
+			return nil, DecisionListOutput{}, err
+		}
+	}
 	out := DecisionListOutput{Decisions: []DecisionOutput{}}
 	for _, d := range list {
 		out.Decisions = append(out.Decisions, decisionOutput(d))
 	}
 	return requestResult(out), out, nil
+}
+
+// decisionsInState keeps the decisions in the named state; "" and "all" keep every one.
+func decisionsInState(list []idea.Decision, state string) ([]idea.Decision, error) {
+	switch state {
+	case "", "all":
+		return list, nil
+	case idea.DecisionOpen, idea.DecisionDecided, idea.DecisionDeferred, idea.DecisionDropped:
+	default:
+		return nil, fmt.Errorf("state is open, decided, deferred, dropped or all")
+	}
+	kept := make([]idea.Decision, 0, len(list))
+	for _, d := range list {
+		if d.State == state {
+			kept = append(kept, d)
+		}
+	}
+	return kept, nil
 }
 
 type DecisionUpdateInput struct {

@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -313,5 +314,118 @@ func TestDecideAnswersAtTheDecisionAndSaysWhoDecided(t *testing.T) {
 	}
 	if !strings.Contains(card, "Voting ended with the decision") {
 		t.Errorf("a member who can no longer vote is not told why")
+	}
+}
+
+// The vote an agent casts for a person is that person's vote: the card opens with it picked, and a vote
+// the person casts themselves wins over it (REQ-700).
+func TestWorkshopPreselectsTheVoteOfThePersonOrOfTheirAgent(t *testing.T) {
+	e, pa := listEnv(t)
+	i, d := workedIdea(t, pa, shellProject)
+	checked := func() string {
+		_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+		start := strings.Index(page, `class="ws-vars`)
+		cards := page[start : start+strings.Index(page[start:], `id="ws-f-`)]
+		var got []string
+		for _, m := range regexp.MustCompile(`value="([A-Z])" checked`).FindAllStringSubmatch(cards, -1) {
+			got = append(got, m[1])
+		}
+		return strings.Join(got, ",")
+	}
+	if got := checked(); got != "" {
+		t.Fatalf("without a vote %q is picked", got)
+	}
+	if _, err := pa.VoteDecision(d.ID, "B", "Same quality everywhere", idea.Actor{AccountID: 1, Person: "alice", Agent: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := checked(); got != "B" {
+		t.Errorf("the vote of the person's agent picks %q, want B", got)
+	}
+	if _, err := pa.VoteDecision(d.ID, "A", "Nothing leaves the machine", humanActor); err != nil {
+		t.Fatal(err)
+	}
+	if got := checked(); got != "A" {
+		t.Errorf("the person's own vote picks %q, want A", got)
+	}
+	// Somebody else's vote picks nothing for the owner.
+	if _, err := pa.VoteDecision(d.ID, "B", "Cheaper", idea.Actor{AccountID: 2, Person: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := checked(); got != "A" {
+		t.Errorf("a vote of another person changes the pick to %q", got)
+	}
+}
+
+// Four variants stand one below the other, three side by side; the picture of a variant is attached in its
+// card; the anchor of the decision stays once on the page (REQ-700).
+func TestWorkshopStacksFourVariantsAndAttachesPicturesInTheCard(t *testing.T) {
+	e, pa := listEnv(t)
+	i, d := workedIdea(t, pa, shellProject)
+	id := strconv.FormatInt(d.ID, 10)
+	_, three := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+	if !strings.Contains(three, `class="ws-vars"`) || strings.Contains(three, "ws-vars stack") {
+		t.Error("two variants must stay side by side")
+	}
+	for _, title := range []string{"Hybrid", "Ask each time"} {
+		if _, err := pa.AddVariant(d.ID, idea.VariantInput{Title: title, Text: "Another way.", Pro: "Fast.", Contra: "Costly."}, humanActor); err != nil {
+			t.Fatal(err)
+		}
+		_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+		if title == "Hybrid" && strings.Contains(page, "ws-vars stack") {
+			t.Error("three variants must stay side by side")
+		}
+		if title == "Ask each time" && !strings.Contains(page, `class="ws-vars stack"`) {
+			t.Error("four variants must stand one below the other")
+		}
+	}
+	_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+	cards := page[strings.Index(page, `class="ws-vars stack"`):]
+	cards = cards[:strings.Index(cards, `id="ws-f-`+id+`"`)]
+	if n := strings.Count(cards, `class="ws-up"`); n != 4 {
+		t.Errorf("%d forms that attach a picture inside the cards, want one per variant (4)", n)
+	}
+	if n := strings.Count(cards, `<label class="ws-pick">`); n != 4 {
+		t.Errorf("%d clickable cards, want 4", n)
+	}
+	// Under the cards: why, own answer, vote and decide, without a picker for a picture.
+	panel := page[strings.Index(page, `id="ws-f-`+id+`"`):]
+	panel = panel[:strings.Index(panel, "</form>")]
+	for _, want := range []string{"Why this one?", "Or give your own answer", ">Vote<", ">Decide<"} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("the choice panel lacks %q", want)
+		}
+	}
+	if strings.Contains(panel, "<select") || strings.Contains(panel, `type="file"`) {
+		t.Error("the choice panel carries the picture picker")
+	}
+	if n := strings.Count(page, `id="decision-`+id+`"`); n != 1 {
+		t.Errorf("%d anchors for the decision, want 1", n)
+	}
+}
+
+// The top of the workshop says what the idea brings (the summary) and where things stand (REQ-700).
+func TestWorkshopTopShowsSummaryAndStand(t *testing.T) {
+	e, pa := listEnv(t)
+	i, d := workedIdea(t, pa, shellProject)
+	_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+	top := page[strings.Index(page, `class="box-r ws-sec ws-tldr"`):]
+	top = top[:strings.Index(top, "</dl>")]
+	for _, want := range []string{"Answer questions by speaking", "1 of 1 decisions open", `href="#decision-` + strconv.FormatInt(d.ID, 10) + `"`, "Where does the speech turn into text?"} {
+		if !strings.Contains(top, want) {
+			t.Errorf("the top of the workshop lacks %q: %s", want, top)
+		}
+	}
+	// Nothing made up: no summary, no text of it; the stand stays.
+	j, err := pa.CreateIdea(store.CreateIdeaInput{Project: shellProject, Title: "No summary yet", Actor: humanActor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pa.OpenDecision(store.OpenDecisionInput{Subject: idea.SubjectIdea, SubjectID: j.ID, Question: "Which one?", Aspects: []string{idea.AspectProduct}, Actor: agentActor,
+		Variants: []idea.VariantInput{{Title: "One"}, {Title: "Two"}}}); err != nil {
+		t.Fatal(err)
+	}
+	_, bare := fetchPage(t, e.Owner, e.Base+ideaPath(j))
+	if !strings.Contains(bare, "1 of 1 decisions open") || strings.Contains(bare, ">Summary<") {
+		t.Errorf("an idea without a summary shows a summary or lacks the stand")
 	}
 }
