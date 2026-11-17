@@ -26,6 +26,9 @@
   & .auth-error { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 16px; padding: 12px 16px; font-size: 14px; color: var(--fg-default); background: var(--danger-subtle); border: 1px solid var(--danger-muted); border-radius: 6px; }
   & .auth-error .i { flex: none; margin-top: 2px; color: var(--danger-fg); }
   & .auth-card .auth-error { margin: 0; }
+  /* A confirmation above the card ("signed out"): the icon is green, the text stays white */
+  & .auth-note { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 16px; padding: 12px 16px; font-size: 14px; color: var(--fg-default); background: var(--success-subtle); border: 1px solid var(--success-muted); border-radius: 6px; }
+  & .auth-note .i { flex: none; margin-top: 2px; color: var(--success-fg); }
 
   /* The card */
   & .auth-card { padding: 16px; background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; display: flex; flex-direction: column; gap: 16px; }

@@ -58,12 +58,21 @@
   }
   const themeButton = document.querySelector("[data-theme-toggle]");
   if (themeButton) {
-    themeButton.addEventListener("click", () => {
+    const isDark = () => {
       const root = document.documentElement;
-      const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-      const next = dark ? "light" : "dark";
-      root.dataset.theme = next;
+      return root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    };
+    // The entry names the theme that is on ("Theme: Dark"); a click switches it.
+    const showTheme = () => {
+      const now = isDark() ? "dark" : "light";
+      for (const label of themeButton.querySelectorAll("[data-theme-is]")) label.hidden = label.dataset.themeIs !== now;
+    };
+    showTheme();
+    themeButton.addEventListener("click", () => {
+      const next = isDark() ? "light" : "dark";
+      document.documentElement.dataset.theme = next;
       try { localStorage.setItem("gt-theme", next); } catch (_) {}
+      showTheme();
     });
   }
   // The greeting follows the visitor's clock, so the server renders a neutral

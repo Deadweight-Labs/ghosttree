@@ -74,32 +74,38 @@ type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
 	OIDC, Paste, NeedsName                                     bool
 	Admin, Approved, Interactive                               bool
-	DeviceMachine, DeviceRemote, DeviceStarted                 string
-	Tokens                                                     []tokenRow
-	UnusedTokens                                               int
-	UnusedForeign                                              bool
-	TokenResult                                                string
-	PullsV                                                     *pullsView
-	PullV                                                      *pullView
-	CommitsV                                                   *commitsView
-	BranchesV                                                  *branchesView
-	CommitV                                                    *commitView
-	IssuesV                                                    *issuesView
-	IssueV                                                     *requestView
-	SearchV                                                    *searchView
-	PainV                                                      *painView
-	KnowledgeV                                                 *knowledgeView
-	KnowledgeItemV                                             *knowledgeItemView
-	AgentModels                                                *agentModelsView
-	ReviewV                                                    *reviewView
-	HeldV                                                      *heldRow
-	ContextV                                                   *contextView
-	Sessions                                                   []store.Session
-	Chunks                                                     []store.Chunk
-	SessionID                                                  int64
-	SessionsV                                                  *sessionsView
-	SessionV                                                   *sessionView
-	Project, Preview                                           string
+	// Notice is a note over the card of a page without a shell (the sign-in page).
+	Notice string
+	// DeviceSession: the session belongs to a device (ctx web or a pasted token),
+	// not to a person who signed in; DeviceName is its machine, when it has one.
+	DeviceSession                              bool
+	DeviceName                                 string
+	DeviceMachine, DeviceRemote, DeviceStarted string
+	Tokens                                     []tokenRow
+	UnusedTokens                               int
+	UnusedForeign                              bool
+	TokenResult                                string
+	PullsV                                     *pullsView
+	PullV                                      *pullView
+	CommitsV                                   *commitsView
+	BranchesV                                  *branchesView
+	CommitV                                    *commitView
+	IssuesV                                    *issuesView
+	IssueV                                     *requestView
+	SearchV                                    *searchView
+	PainV                                      *painView
+	KnowledgeV                                 *knowledgeView
+	KnowledgeItemV                             *knowledgeItemView
+	AgentModels                                *agentModelsView
+	ReviewV                                    *reviewView
+	HeldV                                      *heldRow
+	ContextV                                   *contextView
+	Sessions                                   []store.Session
+	Chunks                                     []store.Chunk
+	SessionID                                  int64
+	SessionsV                                  *sessionsView
+	SessionV                                   *sessionView
+	Project, Preview                           string
 	// MentionRepo is the project an @name in a text of this page is read in (ui-mentions.js).
 	MentionRepo string
 	// HashStrict: a #n in a text of this page is the issue or pull request of its repository, never a
@@ -393,6 +399,9 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	a.rememberRepoOrg(w, r)
 	data.CSRFToken = csrfOf(r)
 	data.Interactive = interactive(r)
+	if !data.Interactive && principal.TokenID != 0 {
+		data.DeviceSession, data.DeviceName = true, principal.Machine
+	}
 	data.ServerVersion = version.Label(a.buildVersion)
 	data.Shell = a.shellFor(r, name)
 	data.Repo = repoFrom(r)

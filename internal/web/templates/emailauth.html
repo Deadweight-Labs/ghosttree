@@ -1,4 +1,4 @@
-{{define "authcode"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox">{{template "loginbrand"}}
+{{define "authcode"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox{{if eq .EmailV.Purpose "join"}} wide{{end}}">{{template "loginbrand"}}
 {{with .EmailV}}<h1>{{.Title}}</h1>
 {{if .Error}}{{template "autherr" .Error}}{{end}}
 <section class="auth-card"><p class="lead">{{.Sent}}</p>
@@ -12,7 +12,7 @@
 
 {{define "newpassword"}}<label class="pfield"><span>{{t "mail.new_password"}}</span><span class="gfield"><input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></span><small class="muted">{{t "mail.password_hint"}}</small></label><label class="pfield"><span>{{t "mail.new_password_again"}}</span><span class="gfield"><input name="password2" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></span></label>{{end}}
 
-{{define "authlink"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox">{{template "loginbrand"}}
+{{define "authlink"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox{{if eq .EmailV.Purpose "join"}} wide{{end}}">{{template "loginbrand"}}
 {{with .EmailV}}<h1>{{.LinkTitle}}</h1>
 {{if .Error}}{{template "autherr" .Error}}{{end}}
 <section class="auth-card"><p class="lead">{{.LinkText}}</p>
@@ -22,8 +22,8 @@
 {{template "authfoot"}}</div>{{template "foot" .}}{{end}}
 
 {{define "authdone"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox">{{template "loginbrand"}}
-{{with .EmailV}}<div class="ico ok">{{mi "check"}}</div><h1>{{t "mail.confirm.done_title"}}</h1>
-<section class="auth-card center"><p class="lead">{{t "mail.confirm.done_text" .Masked}}</p><a class="gbtn pri blk" href="{{.Next}}">{{t "mail.confirm.done_go"}}</a></section>{{end}}
+{{with .EmailV}}<div class="ico ok">{{mi "check"}}</div><h1>{{.Heading}}</h1>
+<section class="auth-card center"><p class="lead">{{.Body}}</p><a class="gbtn pri blk" href="{{.Next}}">{{t "mail.confirm.done_go"}}</a></section>{{end}}
 {{template "authfoot"}}</div>{{template "foot" .}}{{end}}
 
 {{define "forgot"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox">{{template "loginbrand"}}

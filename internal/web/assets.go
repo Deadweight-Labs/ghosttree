@@ -29,7 +29,7 @@ import (
 // stay single files because they are not deferred.
 var assetBundles = map[string][]string{
 	"bundle-base.css": {"ui-tokens.css", "ui-explain.css", "ui-base.css", "ui-shell.css", "ui-parts.css", "ui-pages.css", "ui-refs.css", "ui-rows.css"},
-	"bundle-base.js":  {"live.js", "ui-tabs.js", "ui-pill.js", "ui-md.js", "ui-parts.js", "ui-select.js", "ui-refs.js", "ui-search.js", "ui-suggest.js", "ui-flash.js", "ui-mentions.js"},
+	"bundle-base.js":  {"live.js", "ui-tabs.js", "ui-pill.js", "ui-md.js", "ui-parts.js", "ui-select.js", "ui-refs.js", "ui-search.js", "ui-suggest.js", "ui-flash.js", "ui-toast.js", "ui-mentions.js"},
 }
 
 // vendorDir holds the third-party files (static/vendor/, see

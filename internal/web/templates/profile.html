@@ -1,20 +1,22 @@
 {{define "profile"}}{{template "head" .}}{{template "nav" .}}<main class="g2 set ag pf"><div class="wrap"><div class="pgrid">
 <aside class="pfside"><div class="pav">{{avatarX "xl" "human" .Profile.Name "" false}}</div>
 <h1 class="pn">{{.Profile.Name}}</h1>
-{{if and .Interactive (not .Profile.Locked)}}<details class="pedit"{{if or .Error .Profile.Notice}} open{{end}}><summary class="gbtn blk">{{t "profile.edit"}}</summary><form class="dform" method="post" action="/ui/profile"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><label class="fl"><span>{{t "profile.name"}}</span><span class="gfield"><input name="name" value="{{.Profile.Name}}" maxlength="64" autocomplete="name" required></span></label><div><button class="gbtn pri">{{t "profile.save"}}</button></div></form></details>{{end}}
-{{if .Error}}<div class="flash err" role="alert">{{mi "tri"}}<div>{{.Error}}</div></div>{{end}}{{if .Profile.Notice}}<div class="flash" role="status">{{mi "check"}}<div>{{.Profile.Notice}}</div></div>{{end}}
+{{if and .Interactive (not .Profile.Locked)}}<details class="pedit"{{if .Profile.At "name"}} open{{end}}><summary class="gbtn blk">{{t "profile.edit"}}</summary><form class="dform" method="post" action="/ui/profile"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><label class="fl"><span>{{t "profile.name"}}</span><span class="gfield"><input name="name" value="{{.Profile.Name}}" maxlength="64" autocomplete="name" required></span></label><div><button class="gbtn pri">{{t "profile.save"}}</button></div></form></details>{{end}}
+{{with .Profile.At "name"}}{{template "pfnote" .}}{{end}}
 {{if and .Interactive .Profile.Locked}}<div class="flash info" role="status">{{mi "lock"}}<div>{{t "profile.err.locked"}}</div></div>{{end}}
-{{if not .Interactive}}<div class="flash info" role="status">{{mi "lock"}}<div>{{t "adm.readonly"}}</div></div>{{end}}
+{{template "devbanner" .}}
+{{with .Profile.At "github"}}{{template "pfnote" .}}{{end}}
 {{with .Profile.GitHub}}<h2 class="ph3">{{t "profile.gh"}}</h2>{{if .Linked}}<div class="pgh"><a class="pghl" href="{{.Href}}" rel="noopener noreferrer">{{avatarX "" "human" $.Profile.Name "" false}}<span>@{{.Login}}</span></a>{{if .CanUnlink}}<form method="post" action="/ui/profile/github/unlink"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="gbtn sm">{{t "profile.gh.unlink"}}</button></form>{{end}}</div>{{else if .CanLink}}<form method="post" action="/ui/profile/github/link"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="gbtn blk">{{t "profile.gh.link"}}</button></form>{{end}}{{end}}
 {{with .Shell.Orgs}}<h2 class="ph3">{{t "adm.account.orgs"}}</h2><ul class="porgs">{{range .Items}}<li><a href="{{.Href}}"><span class="gav org" aria-hidden="true">{{mi "people"}}</span><span>{{.Label}}</span></a></li>{{end}}</ul>{{end}}
 </aside>
 <div class="pmain">
 {{with .ProfileMail}}<div class="sh2" id="anmeldung"><h2>{{t "mail.profile.title"}}</h2></div>
-<div class="box">
-<div class="row prow"><span>{{t "mail.email_label"}}</span><b>{{if .Email}}{{.Email}}{{else}}<span class="muted">{{t "mail.profile.none"}}</span>{{end}}</b></div>
-{{if .Pending}}<div class="row prow"><span class="muted">{{t "mail.profile.pending" .Pending}}</span><a class="gbtn sm" href="/ui/email/confirm">{{t "mail.profile.enter_code"}}</a></div>{{end}}
+<div class="box pfmail">
+<div class="row prow"><span>{{t "mail.email_label"}}</span><b>{{if .Email}}{{.Email}}{{else}}<span class="muted">{{t "mail.profile.none"}}</span>{{end}}</b>{{if .Email}}<span class="lb ok">{{mi "check"}}{{t "mail.profile.status_ok"}}</span>{{end}}</div>
+{{if .Pending}}<div class="row prow pend"><span class="muted">{{t "mail.profile.pending" .Pending}}</span><a class="gbtn sm" href="/ui/email/confirm">{{t "mail.profile.enter_code"}}</a></div>{{end}}
+{{with $.Profile.At "mail"}}<div class="pfnote">{{template "pfnote" .}}</div>{{end}}
 {{if $.Interactive}}<form class="row prow inline-form" method="post" action="/ui/profile/email"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><label class="gfield grow"><input name="email" type="email" maxlength="320" required autocomplete="email" spellcheck="false" placeholder="{{t "mail.email_placeholder"}}" aria-label="{{t "mail.profile.new_email"}}"></label><button class="gbtn sm">{{if .Email}}{{t "mail.profile.change"}}{{else}}{{t "mail.profile.add"}}{{end}}</button></form>
-{{if .Passwords}}<form class="dform prow" method="post" action="/ui/profile/password"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><h3 class="ph3">{{if .HasPassword}}{{t "mail.profile.password_change"}}{{else}}{{t "mail.profile.password_set"}}{{end}}</h3>
+{{if .Passwords}}<form class="dform pwform" id="password" method="post" action="/ui/profile/password">{{with $.Profile.At "password"}}{{template "pfnote" .}}{{end}}<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><h3 class="ph3">{{if .HasPassword}}{{t "mail.profile.password_change"}}{{else}}{{t "mail.profile.password_set"}}{{end}}</h3>
 {{if .HasPassword}}<label class="fl"><span>{{t "mail.profile.password_current"}}</span><span class="gfield"><input name="current" type="password" autocomplete="current-password" required></span></label>{{end}}
 <label class="fl"><span>{{t "mail.new_password"}}</span><span class="gfield"><input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></span></label>
 <label class="fl"><span>{{t "mail.new_password_again"}}</span><span class="gfield"><input name="password2" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></span></label>
@@ -24,6 +26,8 @@
 <div class="sh2"><h2>{{t "adm.tokens.title"}}</h2>{{if .Profile.Devices}}<span class="sp"></span><a class="gbtn sm" href="/ui/account/tokens">{{mi "term"}}{{t "profile.manage"}}</a>{{end}}</div>
 <div class="box">{{range .Profile.Devices}}<div class="row devrow"><span class="gav lg org" aria-hidden="true">{{mi "term"}}</span><div><b>{{if .Href}}<a href="{{.Href}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</b><div class="muted">{{.Seen}}</div></div></div>{{else}}<div class="box-empty"><span>{{t "adm.tokens.empty"}}</span></div>{{end}}</div>
 <div class="sh2" id="benachrichtigungen"><h2>{{t "notify.title"}}</h2></div>
-<div class="box">{{range .Profile.Notify}}<div class="row trow"><span>{{.Label}}</span><form method="post" action="/ui/profile/notifications"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="kind" value="{{.Kind}}"><input type="hidden" name="on" value="{{.Next}}"><button class="tog" role="switch" aria-checked="{{.On}}" aria-label="{{.Aria}}"{{if not $.Interactive}} disabled{{end}}><span class="tr"></span>{{t "notify.channel"}}</button></form></div>
+<div class="box">{{range .Profile.Notify}}<div class="row trow"><span>{{.Label}}</span><form method="post" action="/ui/profile/notifications"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="kind" value="{{.Kind}}"><input type="hidden" name="on" value="{{.Next}}"><button class="tog" role="switch" aria-checked="{{.On}}" aria-label="{{.Aria}}"{{if not $.Interactive}} disabled title="{{t "adm.device.locked"}}"{{end}}><span class="tr"></span>{{t "notify.channel"}}</button></form></div>
 {{end}}</div>
 </div></div></div>{{template "foot" .}}{{end}}
+
+{{define "pfnote"}}<div class="flash{{if .Bad}} err{{end}}" role="{{if .Bad}}alert{{else}}status{{end}}">{{if .Bad}}{{mi "tri"}}{{else}}{{mi "check"}}{{end}}<div>{{.Text}}</div></div>{{end}}

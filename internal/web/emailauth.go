@@ -220,6 +220,40 @@ type emailAuthView struct {
 	Next string
 	// The texts of the page, in the language of the server.
 	Title, Sent, Button, LinkTitle, LinkText string
+	// Heading and Body are what the "done" page says: the address was confirmed
+	// just now, or it was confirmed before.
+	Heading, Body string
+}
+
+// confirmDonePage is the answer to a confirmation: the address is confirmed.
+// already is for a link whose address was confirmed before (with the code of the
+// same mail), so the page says so instead of calling the link broken.
+func (a *app) confirmDonePage(l lang, w http.ResponseWriter, email, next string, already bool) {
+	title, text := "mail.confirm.done_title", "mail.confirm.done_text"
+	if already {
+		title, text = "mail.confirm.already_title", "mail.confirm.already_text"
+	}
+	masked := maskedOr(email)
+	a.renderEmailAuth(l, w, http.StatusOK, "authdone", emailAuthView{Purpose: store.ChallengeConfirm, Masked: masked, Next: next,
+		Heading: l.msg(title), Body: l.msg(text, masked)})
+}
+
+// deadLink answers a link that redeems nothing. For the link of a confirmation
+// mail whose address is already the confirmed one of its account, the answer is
+// that the address is confirmed; any other dead link says it has expired or was
+// used, and where to ask for a new mail.
+func (a *app) deadLink(l lang, w http.ResponseWriter, r *http.Request, purpose, token string) {
+	if purpose == store.ChallengeConfirm && hasText(token, 128) {
+		if email, ok := a.store.SpentConfirmLink(token); ok {
+			next := "/ui/login"
+			if _, in := a.joinSession(r); in {
+				next = "/ui/profile"
+			}
+			a.confirmDonePage(l, w, email, next, true)
+			return
+		}
+	}
+	a.loginMessage(l, w, http.StatusGone, "mail.link_dead.title", "mail.link_dead.text")
 }
 
 func maskedOr(email string) string {
@@ -361,7 +395,7 @@ func (a *app) mailLinkPage(w http.ResponseWriter, r *http.Request) {
 		email, valid = a.store.PeekChallenge(purpose, token)
 	}
 	if !valid {
-		a.loginMessage(l, w, http.StatusGone, "mail.link_dead.title", "mail.link_dead.text")
+		a.deadLink(l, w, r, purpose, token)
 		return
 	}
 	a.renderEmailAuth(l, w, http.StatusOK, "authlink", emailAuthView{
@@ -384,7 +418,7 @@ func (a *app) mailLinkSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !hasText(token, 128) {
-		a.loginMessage(l, w, http.StatusGone, "mail.link_dead.title", "mail.link_dead.text")
+		a.deadLink(l, w, r, purpose, token)
 		return
 	}
 	email, _ := a.store.PeekChallenge(purpose, token)
@@ -427,7 +461,7 @@ func (a *app) redeemMail(w http.ResponseWriter, r *http.Request, l lang, in stor
 	case errors.Is(err, store.ErrCodeInvalid), errors.Is(err, store.ErrAccountDisabled):
 		view.Error = l.msg("mail.error_code")
 		if page == "authlink" {
-			a.loginMessage(l, w, http.StatusGone, "mail.link_dead.title", "mail.link_dead.text")
+			a.deadLink(l, w, r, in.Purpose, in.Link)
 			return
 		}
 		a.renderEmailAuth(l, w, http.StatusUnprocessableEntity, page, view)
@@ -442,11 +476,14 @@ func (a *app) redeemMail(w http.ResponseWriter, r *http.Request, l lang, in stor
 		if s, ok := a.joinSession(r); ok && s.principal.ID == account.ID {
 			next = "/ui/profile?notice=email_confirmed"
 		}
-		a.renderEmailAuth(l, w, http.StatusOK, "authdone", emailAuthView{Purpose: store.ChallengeConfirm, Masked: maskedOr(account.Email), Next: next})
+		a.confirmDonePage(l, w, account.Email, next, false)
 	case store.ChallengeReset:
 		// Ein neues Passwort beendet alle Sitzungen des Kontos, auch gestohlene.
+		// Die Person landet dort, wo sie es geändert sieht: am Passwortformular
+		// ihres Profils, mit der Bestätigung.
 		a.sessions.dropAccount(account.ID)
-		a.finishLogin(w, r, account)
+		a.takeNext(w, r, "")
+		a.startSessionAt(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, "/ui/profile?notice=password_reset#"+profilePasswordSection)
 	default:
 		a.finishLogin(w, r, account)
 	}
@@ -529,20 +566,20 @@ func (a *app) profileEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.linkSession(r) {
-		a.renderProfile(w, r, http.StatusForbidden, "", l.msg("mail.error_link_session"))
+		a.renderProfile(w, r, http.StatusForbidden, "", profileMailSection, l.msg("mail.error_link_session"))
 		return
 	}
 	me := browserPrincipal(r)
 	email, err := store.NormalizeEmail(r.FormValue("email"))
 	if err != nil || len(r.FormValue("email")) > 320 {
-		a.renderProfile(w, r, http.StatusUnprocessableEntity, "", l.msg("mail.error_address"))
+		a.renderProfile(w, r, http.StatusUnprocessableEntity, "", profileMailSection, l.msg("mail.error_address"))
 		return
 	}
 	if !a.askAllowedIP(w, r, l) {
 		return
 	}
 	if !a.guards.askAddr.allow(store.ChallengeConfirm + "|" + email) {
-		a.renderProfile(w, r, http.StatusTooManyRequests, "", l.msg("mail.too_many.text"))
+		a.renderProfile(w, r, http.StatusTooManyRequests, "", profileMailSection, l.msg("mail.too_many.text"))
 		return
 	}
 	ch, err := a.store.IssueConfirmChallenge(me.ID, email)
@@ -596,16 +633,16 @@ func (a *app) profilePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.linkSession(r) {
-		a.renderProfile(w, r, http.StatusForbidden, "", l.msg("mail.error_link_session"))
+		a.renderProfile(w, r, http.StatusForbidden, "", profilePasswordSection, l.msg("mail.error_link_session"))
 		return
 	}
 	me := browserPrincipal(r)
 	if !a.guards.tryAddr.allow("pwset|" + me.ID) {
-		a.renderProfile(w, r, http.StatusTooManyRequests, "", l.msg("mail.too_many.text"))
+		a.renderProfile(w, r, http.StatusTooManyRequests, "", profilePasswordSection, l.msg("mail.too_many.text"))
 		return
 	}
 	fail := func(key string, args ...any) {
-		a.renderProfile(w, r, http.StatusUnprocessableEntity, "", l.msg(key, args...))
+		a.renderProfile(w, r, http.StatusUnprocessableEntity, "", profilePasswordSection, l.msg(key, args...))
 	}
 	pw, again := r.FormValue("password"), r.FormValue("password2")
 	if old := a.store.PasswordHash(me.ID); old != "" && !passhash.Verify(r.FormValue("current"), old) {

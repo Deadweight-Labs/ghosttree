@@ -271,6 +271,8 @@ var writerMethodClasses = map[string]string{
 	"PasswordLogin":                 "read",
 	"WelcomeCards":                  "read",
 	"PeekChallenge":                 "read",
+	"SpentConfirmLink":              "read",
+	"LoginLinkPreview":              "read",
 	"PendingEmail":                  "read",
 	"IssueLoginChallenge":           "write",
 	"IssueConfirmChallenge":         "write",

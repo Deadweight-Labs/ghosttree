@@ -882,6 +882,23 @@ func (s *Store) CodeKindFor(code string) string {
 	return kind
 }
 
+// LoginLinkPreview says, without using it up, whose account an open login link
+// opens and whether a device asked for it (ctx web): the page that waits for the
+// click names the person and, for a device, the machine and what the session may do.
+func (s *Store) LoginLinkPreview(code string) (name, machine string, device, ok bool) {
+	if s.reader != nil {
+		return s.reader.LoginLinkPreview(code)
+	}
+	var token int64
+	err := s.db.QueryRow(`SELECT p.name, c.token_id, COALESCE(t.machine, '') FROM account_codes c
+		JOIN persons p ON p.id = c.account_id LEFT JOIN api_tokens t ON t.id = c.token_id
+		WHERE c.code_hash=? AND c.kind=? AND c.used_at='' AND c.expires_at>?`, hashToken(code), CodeLogin, now()).Scan(&name, &token, &machine)
+	if err != nil {
+		return "", "", false, false
+	}
+	return name, machine, token != 0, true
+}
+
 // HasIdentities sagt, ob irgendein Konto schon eine IdP-Identität hat. Solange
 // nicht, bleibt der Token-Login der Weboberfläche der einzige Weg in eine
 // bestehende Instanz.

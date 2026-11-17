@@ -68,6 +68,8 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .gh-header .account-menu .opt span { flex: 1; min-width: 0; }
 .gh-header .account-menu .ph { border-bottom: 0; padding-bottom: 4px; }
 .gh-header .account-menu form { margin: 0; }
+.gh-header .account-menu .opt span.ck { flex: none; display: inline-flex; margin-left: auto; }
+.gh-header .account-menu .opt span.ck svg.i { color: var(--success-fg); }
 .gh-header .account-menu .shell-badge { display: inline-block; min-width: 20px; margin-left: auto; padding: 0 6px; border-radius: 2em; background: var(--neutral-muted); color: var(--fg-default); font-size: 12px; font-weight: 500; line-height: 18px; text-align: center; }
 .gh-header .account-menu .who .shell-host { display: block; margin: 0; color: var(--fg-subtle); }
 .gh-header .account-menu .who .account-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }

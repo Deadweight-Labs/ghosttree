@@ -333,6 +333,11 @@ type authView struct {
 	// Linked: der Code stammt aus der Adresse (Login-Link); das Feld bleibt dann
 	// verborgen, die Person bestätigt nur noch.
 	Linked bool
+	// Who is the person a login link opens; Device says a device asked for it
+	// (ctx web) and Machine names that device.
+	Who     string
+	Device  bool
+	Machine string
 }
 
 // loginRejected zeigt die Anmeldeseite mit dem Fehler über der Karte. Ein
@@ -381,7 +386,12 @@ func (a *app) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, a.takeNext(w, r, "/ui/inbox"), http.StatusSeeOther)
 		return
 	}
-	a.render(l, w, "login", a.loginData(l.msg("login.tab"), ""))
+	data := a.loginData(l.msg("login.tab"), "")
+	// After signing out the page says so; the note leaves the address with the first view.
+	if r.URL.Query().Get("notice") == "signed_out" {
+		data.Notice = l.msg("login.signed_out")
+	}
+	a.render(l, w, "login", data)
 }
 func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
@@ -477,6 +487,10 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 			data.Error = l.msg("login.error_link")
 		} else {
 			data.Auth.Linked = true
+			if name, machine, device, ok := a.store.LoginLinkPreview(code); ok {
+				data.Auth.Who, data.Auth.Device = name, device
+				data.Auth.Machine = firstNonEmpty(machine, l.msg("adm.this_device"))
+			}
 		}
 	}
 	if data.Invite {
@@ -685,7 +699,7 @@ func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, a.sessionCookieFor(r, "", -1))
 	http.SetCookie(w, a.projectCookieFor(r, "", -1))
-	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/login?notice=signed_out", http.StatusSeeOther)
 }
 
 // codeFromInput nimmt den Code aus dem Feld "Code or login link": der Code

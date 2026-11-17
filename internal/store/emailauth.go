@@ -574,6 +574,27 @@ func (s *Store) PeekChallenge(purpose, link string) (email string, ok bool) {
 	return email, err == nil
 }
 
+// SpentConfirmLink says, for the link of a confirmation mail that redeems nothing
+// any more, whether its address is the confirmed one of the account it was meant
+// for: then the person already did the step (with the code of the same mail) and
+// the page can say so instead of calling the link broken. Only whoever holds the
+// link token learns this, and only about the address of that very mail.
+func (s *Store) SpentConfirmLink(link string) (email string, confirmed bool) {
+	if s.reader != nil {
+		return s.reader.SpentConfirmLink(link)
+	}
+	var account int64
+	if s.db.QueryRow(`SELECT email, account_id FROM email_challenges WHERE link_hash=? AND purpose='confirm'`,
+		hashToken(link)).Scan(&email, &account) != nil {
+		return "", false
+	}
+	var current string
+	if s.db.QueryRow(`SELECT email FROM persons WHERE id=?`, account).Scan(&current) != nil {
+		return "", false
+	}
+	return email, current != "" && strings.EqualFold(current, email)
+}
+
 // ---------------------------------------------------------------- Passwort
 
 func setPasswordTx(tx execQueryer, account int64, hash string) error {

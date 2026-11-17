@@ -34,7 +34,7 @@
   & .flash.info { border-color: var(--accent-muted); background: var(--accent-subtle); }
   & .flash.info > .i { color: var(--accent-fg); }
   /* The outcome of an action floats over the page, so the page does not move; it leaves by itself. */
-  & .flash.fly { position: fixed; z-index: 60; left: 50%; bottom: 24px; width: max-content; max-width: min(560px, calc(100vw - 32px)); margin: 0; background: var(--canvas-default); border-color: var(--success-muted); box-shadow: var(--shadow-pop); transform: translateX(-50%); animation: toast-out .4s ease 10s forwards; }
+  & .flash.fly { position: fixed; z-index: 60; left: 50%; top: 68px; width: max-content; max-width: min(560px, calc(100vw - 32px)); margin: 0; background: var(--canvas-default); border-color: var(--success-muted); box-shadow: var(--shadow-pop); transform: translateX(-50%); animation: toast-out .4s ease 10s forwards; }
   & .flash.fly:hover, & .flash.fly:focus-within { animation-play-state: paused; }
   /* The row an action changed. */
   & .wrap > .box:has(+ .setlayout) { margin-bottom: 16px; }
@@ -256,6 +256,23 @@
 
 /* Profile as in the mock: a card at the left, agents and devices at the right */
 :is(.g2.pf) {
+  /* the answer to an action stands at its form; inside a box it keeps the box's margins */
+  & .pfnote { padding: 12px 16px 0; }
+  & .pfnote .flash, & .pwform > .flash { margin-bottom: 0; }
+  /* the password form is one left-aligned column under the address, not a row of the grid */
+  & .pfmail > * { box-sizing: border-box; width: 100%; max-width: none; }
+  & .pfmail > .row + .row, & .pfmail > .pfnote + .row, & .pfmail > .row + .pwform { border-top: 1px solid var(--border-muted); }
+  & .pfmail > .pend { grid-template-columns: minmax(0, 1fr) auto; }
+  & .pfmail > .inline-form { grid-template-columns: minmax(0, 28rem) auto; justify-content: start; }
+  & .pfmail > .pwform { gap: 12px; padding: 16px; border-top: 1px solid var(--border-muted); }
+  & .pfmail > .pwform > * { max-width: 28rem; }
+  & .pwform .ph3 { margin: 0; }
+  & .pwform .fl > span:first-child { display: block; margin-bottom: 4px; font-weight: 600; font-size: 14px; }
+  & .devnote > div { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  & .devnote p { margin: 0; }
+  & .devnote form { margin: 0; }
+  & .prow .lb.ok { display: inline-flex; align-items: center; gap: 4px; }
+  & .prow .lb.ok .i { width: 12px; height: 12px; }
   & .pgrid { display: grid; grid-template-columns: 296px minmax(0, 1fr); gap: 32px; align-items: start; }
   & .pav .gav { width: 296px; height: 296px; font-size: 104px; border-radius: 50%; }
   & .pn { margin: 16px 0; font-size: 24px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; }
@@ -276,7 +293,12 @@
   & .trow form { margin: 0; }
   /* the switch is a button, so it works without scripts: a click posts the other state */
   & button.tog { padding: 0; border: 0; background: none; color: var(--fg-default); font: inherit; font-size: 14px; font-weight: 500; }
-  & button.tog:disabled { cursor: default; opacity: .6; }
+  /* a switch a device session cannot move looks switched off, whatever its state */
+  & button.tog:disabled { cursor: not-allowed; opacity: 1; color: var(--fg-muted); }
+  & button.tog:disabled .tr { background: var(--canvas-subtle); border-color: var(--border-default); }
+  & button.tog:disabled .tr::after { background: var(--fg-subtle); }
+  & button.tog:disabled[aria-checked="true"] .tr { background: var(--canvas-subtle); border-color: var(--border-default); }
+  & button.tog:disabled[aria-checked="true"] .tr::after { background: var(--fg-subtle); transform: translateX(16px); }
   & button.tog[aria-checked="true"] .tr { background: var(--accent-emphasis); border-color: var(--accent-emphasis); }
   & button.tog[aria-checked="true"] .tr::after { transform: translateX(16px); background: #fff; }
   & button.tog:focus-visible .tr { outline: 2px solid var(--accent-emphasis); outline-offset: 2px; }
