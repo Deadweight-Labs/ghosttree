@@ -82,7 +82,7 @@ var Ask = BlockFunc(func(ctx context.Context, in Input) (store.WorkflowRunOutcom
 	}
 	event, _ := json.MarshalIndent(in.Event, "", "  ")
 	prompt := "Describe this ghosttree event in one short sentence.\n\n" + string(event)
-	client, _, err := in.AI.Client(ctx, model)
+	client, resolved, err := in.AI.Client(ctx, model)
 	if err != nil {
 		return store.WorkflowRunOutcome{}, err
 	}
@@ -90,5 +90,8 @@ var Ask = BlockFunc(func(ctx context.Context, in Input) (store.WorkflowRunOutcom
 	if err != nil {
 		return store.WorkflowRunOutcome{Inputs: prompt}, err
 	}
-	return store.WorkflowRunOutcome{State: store.RunDone, Result: strings.TrimSpace(answer), Inputs: prompt, Output: answer}, nil
+	// The answer is model text: it goes into Output, which the retention
+	// deletes, never into Result, which stays for good (KN-4795).
+	return store.WorkflowRunOutcome{State: store.RunDone, Result: fmt.Sprintf("%s answered (%d characters)", resolved.Model, len([]rune(strings.TrimSpace(answer)))),
+		Inputs: prompt, Output: answer}, nil
 })

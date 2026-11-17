@@ -223,8 +223,9 @@ func TestRunCallsAModelOnlyWithItsTokenAndTheTokenEndsWithTheRun(t *testing.T) {
 	if run.State != store.RunDone || run.Connection != "anthropic-team" || run.Model != "claude-haiku-5-5" || run.CostUSD != 0.002 {
 		t.Fatalf("run: %+v", run)
 	}
-	if !strings.Contains(run.Result, "claude-haiku-5-5") {
-		t.Fatalf("the proxy put in the real model: %q", run.Result)
+	_, text, _ := e.st.WorkflowRunByID(run.ID)
+	if !strings.Contains(text.Output, "claude-haiku-5-5") || strings.Contains(run.Result, "gemergt") {
+		t.Fatalf("the proxy put in the real model, and the answer stays out of the result: %q / %q", text.Output, run.Result)
 	}
 	if e.provider.keys[0] != anthropicKey {
 		t.Fatalf("the provider did not get the key of the connection")
@@ -247,7 +248,6 @@ func TestRunCallsAModelOnlyWithItsTokenAndTheTokenEndsWithTheRun(t *testing.T) {
 	if e.provider.calls != 1 {
 		t.Fatalf("calls that reached the provider: %d", e.provider.calls)
 	}
-	_, text, _ := e.st.WorkflowRunByID(run.ID)
 	e.mustNotLeak(t, "the run's text", text.Inputs+text.Output, seen.Token)
 	e.mustNotLeak(t, "the proxy's log", e.logs.String(), seen.Token)
 	if !strings.Contains(e.logs.String(), `"connection":"anthropic-team"`) {
