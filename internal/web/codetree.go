@@ -317,8 +317,26 @@ func (c codeKnow) under(p string) bool {
 	return false
 }
 
-// aboutFile: the entry names this file (or triggers on it) or lies in an area
-// that contains it.
+// ancestor is the folder, named by the entry or an area of its origin, that contains p (the deepest one); "" when
+// the entry names no folder above p. What is written about a folder belongs to the files in it (REQ-687): a pitfall
+// of internal/spool shows at internal/spool/spool.go.
+func (c codeKnow) ancestor(p string) string {
+	best := ""
+	for _, list := range [][]string{c.Named, c.Areas} {
+		for _, d := range list {
+			if d != "" && strings.HasPrefix(p, d+"/") && len(d) > len(best) {
+				best = d
+			}
+		}
+	}
+	return best
+}
+
+// about: the entry is about p itself, something below it, or a folder that contains it.
+func (c codeKnow) about(p string) bool { return c.under(p) || c.ancestor(p) != "" }
+
+// aboutFile: the entry names this file (or triggers on it), or names or lies in a
+// folder that contains it.
 func (c codeKnow) aboutFile(p string) (direct, area bool) {
 	if slices.Contains(c.Named, p) {
 		direct = true
@@ -326,12 +344,7 @@ func (c codeKnow) aboutFile(p string) (direct, area bool) {
 	if len(c.K.Activation.Paths) > 0 && activation.Matches(c.K.Activation, activation.Context{RepoPath: p}) {
 		direct = true
 	}
-	for _, d := range c.Areas {
-		if strings.HasPrefix(p, d+"/") {
-			area = true
-		}
-	}
-	return direct, area
+	return direct, c.ancestor(p) != ""
 }
 
 // Views ------------------------------------------------------------------------
@@ -571,7 +584,7 @@ func (a *app) codeFolderPage(r *http.Request, pa *store.ProjectAccess, view *rep
 		}
 		row.Missing = row.Desc == ""
 		for _, k := range kn {
-			if k.under(c.Path) {
+			if k.about(c.Path) {
 				row.Knowledge++
 				if k.K.Type == "pitfall" {
 					row.Pitfalls++
@@ -714,12 +727,7 @@ func (a *app) codeBlobPage(r *http.Request, pa *store.ProjectAccess, view *repoV
 		row := codeKnowRow{Type: k.K.Type, TypeKey: knowTypeKey(k.K.Type), Title: k.K.Title, Href: knowledgeHref(k.K.Scope.Project, k.K.ID),
 			Updated: k.K.CreatedAt, Trigger: len(k.K.Activation.Paths) > 0 && d}
 		if !d {
-			row.Area = k.Areas[0]
-			for _, x := range k.Areas {
-				if strings.HasPrefix(cp.Path, x+"/") {
-					row.Area = x
-				}
-			}
+			row.Area = k.ancestor(cp.Path)
 			areas = append(areas, row)
 			continue
 		}

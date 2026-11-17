@@ -40,6 +40,23 @@ func writableOptions(pa *store.ProjectAccess, current string) []filterOption {
 	return out
 }
 
+// otherProjectOptions are the projects an issue can be moved to: the ones the viewer may write to, without the
+// one it lies in (moving it there changes nothing, the server answers 409). Empty means there is no target, and the
+// page offers no move at all.
+func otherProjectOptions(pa *store.ProjectAccess, current string) []filterOption {
+	var out []filterOption
+	for _, o := range writableOptions(pa, current) {
+		if o.Value != current {
+			o.Selected = false
+			out = append(out, o)
+		}
+	}
+	if len(out) > 0 {
+		out[0].Selected = true
+	}
+	return out
+}
+
 func (a *app) knowledgeMoveView(r *http.Request, pa *store.ProjectAccess, k store.Knowledge) *moveView {
 	return &moveView{Projects: writableOptions(pa, k.Scope.Project), GlobalSelected: k.Scope.Project == "", Machine: k.Scope.Machine, Token: csrfOf(r)}
 }

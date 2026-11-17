@@ -77,6 +77,10 @@
   & .invite select.gfield { width: auto; }
   & .lnew { display: flex; gap: 8px; align-items: center; padding: 12px 16px; background: var(--canvas-subtle); }
   & .lnew .gfield:first-child, & .lnew .grow { flex: 1; }
+  /* The field to make a project has its label above it, the button stands on the line of the field. */
+  & .lnew.pnew { align-items: flex-end; }
+  /* .lnew stretches its fields along the row; inside the label column the field keeps its own height. */
+  & .lnew.pnew .fl .gfield { flex: none; }
   & .prow { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 8px 16px; }
   & .prow code, & .prow .mono { font: 12px var(--ui-mono); }
   & .trow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 24px; align-items: center; padding: 12px 16px; }
@@ -88,7 +92,7 @@
   & .chk-l input { width: 16px; height: 16px; accent-color: var(--accent-emphasis); }
   & .qs .chk-l { font-size: 14px; color: var(--fg-default); }
   & .fl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-  & .fl > span:first-child { font-size: 14px; font-weight: 600; color: var(--fg-default); }
+  & .fl > span:first-child, & .fl > label:first-child { font-size: 14px; font-weight: 600; color: var(--fg-default); }
   & .fl small { font-size: 12px; color: var(--fg-muted); }
   & .fl .gfield, & .fl select.gfield { width: 100%; background: var(--canvas-default); }
   & .box-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
@@ -237,6 +241,8 @@
     & .lrow .mono { display: none; }
     & .trow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
     & .invite, & .lnew { flex-wrap: wrap; }
+    & .lnew.pnew .fl { flex: 1 1 100%; }
+    & .lnew.pnew .gbtn { flex: 1 1 100%; min-height: 44px; }
     & .snav a { min-height: 44px; }
     & .mrow, & .ghrow { grid-template-columns: 32px minmax(0, 1fr); }
     & .mrow .acts, & .ghrow .acts { grid-column: 2; justify-content: flex-start; }

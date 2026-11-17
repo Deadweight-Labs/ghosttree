@@ -317,6 +317,8 @@
   & .cx-m { padding: 12px 12px 0; }
   & .cx-st { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
   & .cx-sl { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  /* Why an entry of the status row cannot be chosen, in words beside it. */
+  & .cx-note { flex: 1 1 220px; min-width: 0; font-size: 12px; line-height: 16px; color: var(--fg-muted); }
   & .cx-seg { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
   & .cx-opt { position: relative; display: inline-flex; cursor: pointer; }
   & .cx-opt.off { cursor: default; }

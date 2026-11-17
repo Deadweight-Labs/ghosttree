@@ -1002,7 +1002,7 @@ var messagesDE = map[string]string{
 	"adm.err.repo_claimed":       "Dieses Repo gehört schon einer anderen Organisation.",
 	"adm.err.remote":             "Das ist keine Repo-Adresse. Nimm github.com/owner/repo, oder nur einen Namen für ein Projekt ohne Git.",
 	"adm.err.contested":          "Unter diesem Repo hat schon jemand anders Einträge. Ein Instanz-Admin entscheidet, wem es gehört.",
-	"adm.project.name_or_repo":   "Name oder Repo-Adresse (github.com/owner/repo)",
+	"adm.project.name_or_repo":   "Repo-Adresse oder Name",
 	"adm.project.create":         "Projekt erstellen",
 	"adm.err.project_taken":      "Ein Projekt mit diesem Namen gibt es schon. Wähl einen anderen Namen.",
 	"adm.org.new":                "Neue Organisation",
@@ -1409,7 +1409,6 @@ var messagesDE = map[string]string{
 	"newissue.err.failed":       "Konnte nicht angelegt werden.",
 	// Issue-Seite: Composer zum Schließen, Sprunglinks (REQ-599, Teil A)
 	"issue.cx.status":           "Status",
-	"issue.cx.complete_blocked": "Erst möglich, wenn alle Anforderungen erfüllt sind",
 	"issue.cx.complete_btn":     "Issue erledigen",
 	"issue.cx.complete_text":    "Mit Kommentar erledigen",
 	"issue.cx.drop_btn":         "Issue verwerfen",

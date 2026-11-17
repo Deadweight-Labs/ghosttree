@@ -283,7 +283,9 @@ func (a *app) issueComposer(r *http.Request, l lang, pa *store.ProjectAccess, v 
 				composerField{Name: "evidence_kind", Label: l.msg("requests.field_evidence_kind"), Kind: "select", Show: "complete", Options: kinds},
 				composerField{Name: "evidence_ref", Label: l.msg("requests.field_evidence"), Kind: "text", Show: "complete", Wide: true})
 		} else {
-			done.Disabled, done.Hint = true, l.msg("issue.cx.complete_blocked")
+			// The reason stands beside the row, in words (a tip on a greyed-out entry is not seen, and not on a phone).
+			note := l.msg("issue.cx.complete_open", v.Total-v.Done, v.Total)
+			done.Disabled, done.Hint, cv.ModeNote = true, note, note
 		}
 		drop := composerMode{Value: "drop", Label: l.msg("requests.state.dropped"), Submit: l.msg("issue.cx.drop_btn"), SubmitText: l.msg("issue.cx.drop_text"), Class: "dangerf",
 			Placeholder: l.msg("issue.cx.drop_placeholder"), NeedsText: true}

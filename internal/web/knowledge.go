@@ -416,7 +416,7 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 		level = ""
 	}
 	project := a.projectParam(r)
-	r = a.repoScoped(r, project, "knowledge")
+	r = a.repoScopedChosen(r, project, "knowledge")
 	pa := a.access(r)
 	hidden, stop := a.gateList(w, r, pa, project, store.ResKnowledge)
 	if stop {
@@ -742,7 +742,7 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	pa := a.access(r)
 	project := a.projectParam(r)
-	r = a.repoScoped(r, project, "knowledge")
+	r = a.repoScopedChosen(r, project, "knowledge")
 	hidden, stop := a.gateList(w, r, pa, project, store.ResKnowledge)
 	if stop {
 		return

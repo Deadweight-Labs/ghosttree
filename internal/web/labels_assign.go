@@ -23,6 +23,8 @@ type labelBoxView struct {
 	// Options sind die Labels des Projekts, die das Objekt noch nicht trägt.
 	Options []string
 	CanEdit bool
+	// NewHref is the page where a label is made (the labels of the project); set for whoever may make one.
+	NewHref string
 }
 
 // labelKinds sind die Objekte, an denen die Seiten Labels bedienen.
@@ -38,6 +40,7 @@ func (a *app) labelBox(r *http.Request, pa *store.ProjectAccess, project, kind s
 		}
 	}
 	if v.CanEdit {
+		v.NewHref = newLabelHref(pa, project)
 		have := map[string]bool{}
 		for _, l := range current {
 			have[l.Text] = true
@@ -54,6 +57,14 @@ func (a *app) labelBox(r *http.Request, pa *store.ProjectAccess, project, kind s
 		return nil
 	}
 	return v
+}
+
+// newLabelHref is the address of the page where labels are made, for whoever may make one ("" for the others).
+func newLabelHref(pa *store.ProjectAccess, project string) string {
+	if project == "" || !pa.Allow(project, store.ResLabel, store.ActCreate, store.Object{Own: true}) {
+		return ""
+	}
+	return repoHref(project) + "/settings#labels"
 }
 
 // labelAssign ist POST /ui/labels/assign (kind, id, add, remove): setzt Labels

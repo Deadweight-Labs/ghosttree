@@ -35,6 +35,8 @@ type repoSettingsView struct {
 	Notice      string
 	Error       string
 	CanCreate   bool
+	// CanEdit is the right to change and delete labels and to see the access section.
+	CanEdit bool
 	// NewColor is the colour a new label starts with.
 	NewColor string
 	// HitRow is the id of the label row the last action changed.
@@ -51,7 +53,11 @@ func (a *app) repoSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := view.Project
-	if pa.Check(project, store.ResLabel, store.ActEdit, store.Object{}) != nil {
+	// Whoever may make a label sees the labels (the way from "Add a label" on an issue leads here); changing and deleting
+	// them, and the access section, stay with those who may edit.
+	canEdit := pa.Check(project, store.ResLabel, store.ActEdit, store.Object{}) == nil
+	canCreate := pa.Allow(project, store.ResLabel, store.ActCreate, store.Object{Own: true})
+	if !canEdit && !canCreate {
 		http.NotFound(w, r)
 		return
 	}
@@ -60,11 +66,11 @@ func (a *app) repoSettings(w http.ResponseWriter, r *http.Request) {
 		a.accessDenied(w, r, err)
 		return
 	}
-	v := &repoSettingsView{Project: project, Token: csrfOf(r), Back: repoHref(project) + "/settings", CanCreate: true, NewColor: "#0969da"}
+	v := &repoSettingsView{Project: project, Token: csrfOf(r), Back: repoHref(project) + "/settings", CanCreate: canCreate, CanEdit: canEdit, NewColor: "#0969da"}
 	v.OrgSettings = view.OrgHref + "/settings"
 	for _, lb := range labels {
 		v.Labels = append(v.Labels, labelRow{ID: lb.ID, Name: lb.Name, Color: "#" + strings.TrimPrefix(lb.Color, "#"), Description: lb.Description, Class: labelClass(lb.Color),
-			Org: lb.Scope == "org", CanEdit: lb.Scope != "org"})
+			Org: lb.Scope == "org", CanEdit: canEdit && lb.Scope != "org"})
 	}
 	q := r.URL.Query()
 	switch {

@@ -40,5 +40,9 @@
   & .lbbox .lbrm:hover, & .lbbox .lbrm:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor 18%, transparent); }
   & .lbbox .lbrm .i { width: 10px; height: 10px; }
   & .lbbox .lbadd { display: flex; gap: 6px; width: 100%; margin: 0; }
+  /* The way to a new label: a quiet link under the labels, for whoever may make one. */
+  & .lbnew { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--fg-muted); text-decoration: none; }
+  & .lbnew:hover, & .lbnew:focus-visible { color: var(--accent-fg); text-decoration: underline; }
+  & .lbnew .i { width: 12px; height: 12px; }
   & .lbbox .lbadd .gfield { flex: 1; min-width: 0; height: 28px; font-size: 13px; padding: 0 6px; }
 }

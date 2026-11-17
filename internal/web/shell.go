@@ -94,6 +94,9 @@ type shellView struct {
 	// Search | Review | Agent context, Team | Devices. TabsLabel names them.
 	Tabs      []navItem
 	TabsLabel string
+	// KeepTabs shows the tabs also under the band of a repository (Agents | Sessions | Models, which the band does not
+	// carry); the other pages of a repository have their own segments or tabs.
+	KeepTabs bool
 	// Team is the account menu entry "Team & devices"; empty for a guest.
 	Team string
 	// Inbox is the number of rows waiting for the viewer, 0 shows nothing.
@@ -325,8 +328,14 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 	switch name {
 	case "agents", "sessions", "agentmodels":
 		if kind != viewerGuest {
-			v.Tabs = []navItem{tab("agents", "nav.tab_agents", "/ui/agents", name == "agents"), tab("sessions", "nav.sessions", "/ui/sessions", name == "sessions"),
-				tab("models", "nav.tab_models", "/ui/agents/models", name == "agentmodels")}
+			// Under the band of a repository the tabs keep that repository.
+			to := func(href string) string { return href }
+			if rv := repoFrom(r); rv != nil && rv.Project != "" {
+				v.KeepTabs = true
+				to = func(href string) string { return pathWith(href, "project", rv.Project) }
+			}
+			v.Tabs = []navItem{tab("agents", "nav.tab_agents", to("/ui/agents"), name == "agents"), tab("sessions", "nav.sessions", to("/ui/sessions"), name == "sessions"),
+				tab("models", "nav.tab_models", to("/ui/agents/models"), name == "agentmodels")}
 			v.TabsLabel = "nav.agents"
 		}
 	case "knowledge", "review", "context":

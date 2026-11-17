@@ -85,6 +85,8 @@
 {{if .Lines}}<div class="box ctx4"><div class="box-h">{{mi "ghost"}}<span class="t">{{t "context.session_start"}}</span><span class="muted fw4 hide-m">{{.Size}}</span><span class="sp"></span>{{if .Waiting}}<a class="gbtn sm" href="{{.ReviewHref}}">{{mi "check"}}{{t "context.review_n" .Waiting}}</a>{{end}}{{template "uicopy" (copyFromIcon "#ctx-raw")}}</div>
 <pre id="ctx-raw" hidden>{{.Output}}</pre><div class="cout" id="ctx-out">{{range .Lines}}<div class="cl{{if .Head}} h{{end}}{{if .Added}} a{{end}}"><span class="ln">{{.N}}</span><span class="sg">{{if .Added}}{{"+"}}{{end}}</span><code>{{if .Text}}{{.Text}}{{else}}{{"\u200b"}}{{end}}</code></div>{{end}}</div></div>
 {{else}}<div class="box">{{if .Preview}}{{template "emptyact" (dict "Text" (t "context.empty_staged") "Action" (t "context.delivered") "Href" .DeliveredHref)}}{{else}}{{with .Segs}}{{template "emptyact" (dict "Text" (t "context.empty") "Action" (t "repo.code.open_knowledge") "Href" (index . 0).Href)}}{{else}}<div class="box-empty">{{t "context.empty"}}</div>{{end}}{{end}}</div>{{end}}
+{{if .Described}}<div class="box cdesc"><div class="box-h">{{mi "file"}}<span class="t">{{t "context.described"}}</span><span class="counter">{{.DescribedN}}</span><span class="sp"></span><a class="gbtn sm" href="{{.CodeHref}}">{{mi "code"}}{{t "repo.tab.code"}}</a></div>
+{{range .Described}}<a class="row cd-row" href="{{.Href}}"><code class="cd-path">{{.Path}}</code><span class="cd-text">{{.Text}}</span></a>{{end}}</div>{{end}}
 {{else}}<div class="box"><div class="box-h"><span class="t">{{t "context.pick"}}</span></div>{{range .Choices}}<a class="row opt-row" href="?project={{.Remote}}" title="{{.Remote}}">{{mi "repo"}}{{.Label}}</a>{{end}}</div>{{end}}
 {{end}}</div>{{template "foot" .}}{{end}}
 

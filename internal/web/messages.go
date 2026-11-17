@@ -1001,7 +1001,7 @@ var messages = map[string]string{
 	"adm.err.repo_claimed":       "That repository already belongs to another organization.",
 	"adm.err.remote":             "That is not an address of a repository. Use github.com/owner/repo, or just a name for a project without git.",
 	"adm.err.contested":          "Somebody else already has entries under that repository. An instance admin decides who owns it.",
-	"adm.project.name_or_repo":   "Name, or repository address (github.com/owner/repo)",
+	"adm.project.name_or_repo":   "Repository address or name",
 	"adm.project.create":         "Create project",
 	"adm.err.project_taken":      "A project with that name already exists. Choose another name.",
 	"adm.org.new":                "New organization",
@@ -1408,7 +1408,6 @@ var messages = map[string]string{
 	"newissue.err.failed":       "Could not create it.",
 	// Issue-Seite: Composer zum Schließen, Sprunglinks (REQ-599, Teil A)
 	"issue.cx.status":           "Status",
-	"issue.cx.complete_blocked": "Possible once every requirement is met",
 	"issue.cx.complete_btn":     "Close issue",
 	"issue.cx.complete_text":    "Close with comment",
 	"issue.cx.drop_btn":         "Drop issue",

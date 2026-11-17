@@ -125,3 +125,15 @@
   }
 }
 .heldtext{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;font:inherit}
+
+/* The context page names the described files and folders under what an agent is given at the start. */
+:is(.g2) {
+  & .cdesc { margin-top: 16px; }
+  & .cdesc .cd-row { padding: 8px 16px; display: grid; grid-template-columns: minmax(0, 18rem) minmax(0, 1fr); gap: 4px 16px; align-items: baseline; text-decoration: none; color: inherit; }
+  & .cdesc .cd-path { font-size: 12px; overflow-wrap: anywhere; }
+  & .cdesc .cd-text { color: var(--fg-muted); font-size: 13px; overflow-wrap: anywhere; }
+  & .cdesc .counter { margin-left: 4px; }
+}
+@media (max-width: 767px) {
+  :is(.g2) .cdesc .cd-row { grid-template-columns: minmax(0, 1fr); }
+}

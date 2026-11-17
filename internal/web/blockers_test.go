@@ -50,7 +50,8 @@ func TestBlockerShowsOnTheBranchTheRepositoryTheIssueAndThePullRequest(t *testin
 	_, code := fetchPage(t, e.Owner, e.Base+"/ui/x/shell")
 	band := code[strings.Index(code, `class="rband`):]
 	band = band[:strings.Index(band, "<main")]
-	if !strings.Contains(band, `class="band-wait" href="/ui/x/shell/tasks"`) || !waitsForAnna.MatchString(band) {
+	// The stack stands in the Tasks tab, behind its number, and not loose at the end of the row (REQ-687).
+	if tab := regexp.MustCompile(`(?s)<li data-tab="tasks".*?</li>`).FindString(band); !strings.Contains(tab, `class="band-wait"`) || !waitsForAnna.MatchString(tab) {
 		t.Errorf("the repository band does not show who is waited for:\n%s", band)
 	}
 	// The same on every page of the repository, not only on the code page.
