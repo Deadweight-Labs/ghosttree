@@ -66,11 +66,13 @@ func TestKnowledgeEntryOfAnAgentIsNamedTheSameInTheTimeline(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := fetchBody(t, e.Owner, e.Base+"/ui/x/shell/knowledge/"+itoa(kid))
-	if n := strings.Count(page, "alice’s Claude"); n < 2 {
-		t.Errorf("the head and the timeline both name the agent, found %d times", n)
+	at := strings.Index(page, "created the entry")
+	if at < 0 {
+		t.Fatalf("no timeline entry: %.500s", page)
 	}
-	if strings.Contains(page, "<b>alice</b> <span") && strings.Contains(page, "created the entry") && !strings.Contains(page, "alice’s Claude") {
-		t.Error("the timeline names the person for the agent's entry")
+	line := page[max(0, at-400):at]
+	if !strings.Contains(line, "alice’s Claude") {
+		t.Errorf("the line of the history names the person for the agent's entry: %s", line)
 	}
 }
 
