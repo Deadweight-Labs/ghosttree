@@ -1,0 +1,3 @@
+{{/* An empty list says in one sentence what shows up here and offers the next step: a link or a command to copy.
+     Fields: Text; Action and Href for a link, Cmd (Icon, Text) for a command; Class "empty" inside a box under a head. */}}
+{{define "emptyact"}}<div class="{{or .Class "box-empty"}} empty-act"><span>{{.Text}}</span>{{if .Href}}<a class="gbtn{{if .Primary}} pri{{end}}" href="{{.Href}}">{{.Action}}</a>{{end}}{{with .Cmd}}{{template "gcmd" .}}{{end}}</div>{{end}}

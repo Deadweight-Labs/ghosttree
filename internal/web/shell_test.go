@@ -311,12 +311,12 @@ func TestShellFooterShowsThePublicHostNotTheRequestHost(t *testing.T) {
 	defer srv.Close()
 	c := loginInteractive(t, srv, st, "alice")
 	_, page := fetchPage(t, c, srv.URL+"/ui/knowledge")
-	if !strings.Contains(page, `<p class="shell-host">gt.example.test</p>`) {
+	if !strings.Contains(page, `<span class="shell-host">gt.example.test</span>`) {
 		t.Errorf("footer does not show the public host: %s", page)
 	}
 	srv2, _, tok := testWeb(t)
 	_, page = fetchPage(t, login(t, srv2, tok), srv2.URL+"/ui/knowledge")
-	if !strings.Contains(page, `<p class="shell-host">`+strings.TrimPrefix(srv2.URL, "http://")+`</p>`) {
+	if !strings.Contains(page, `<span class="shell-host">`+strings.TrimPrefix(srv2.URL, "http://")+`</span>`) {
 		t.Error("without a public URL the footer shows the request host")
 	}
 }

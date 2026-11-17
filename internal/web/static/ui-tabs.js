@@ -1,10 +1,8 @@
-// Tab bands (variant C, in place). What does not fit in the row shrinks to an
-// icon with its number (li.ico), the name as tooltip; the order never changes
-// and the open tab keeps its name. If even that does not fit, the row scrolls:
-// a fade shows the end, a "+n" mark counts the tabs out of sight and moves on
-// when pressed. Nothing goes into a menu.
-// The server already puts "active" and "mention" tabs of the secondary group
-// behind the separator (li.aux) and the rest of that group as icons (li.icx).
+// Tab bands. Every tab carries its name and keeps its place on every page; the
+// open one is only marked. A row that is wider than its room scrolls: a fade shows
+// the end and an arrow moves on when pressed. Nothing is shrunk to an icon and
+// nothing goes into a menu.
+// The server puts the second group of tabs behind a separator (li.tsep).
 (() => {
   const PAD = 12; // room at both ends for the folder card of the open tab (ui-shell.css)
   const SNAP = 24; // where a tab stands after the row scrolled to it (scroll-padding-inline in ui-shell.css)
@@ -31,46 +29,6 @@
 
   const moreLabel = (n) => (document.body.getAttribute("data-more") || "+{n}").replace("{n}", n);
 
-  // One tooltip for all icon tabs. It stands in the body and is placed with
-  // position: fixed, so no scrolling row can cut it off.
-  let tip = null;
-  let tipFor = null;
-  const hideTip = () => {
-    if (tip) tip.hidden = true;
-    tipFor = null;
-  };
-  const showTip = (a) => {
-    const li = a.closest("li");
-    if (!li || !(li.classList.contains("ico") || li.classList.contains("icx"))) return;
-    if (tipFor === a) return;
-    if (!tip) {
-      tip = document.createElement("div");
-      tip.className = "utip";
-      tip.setAttribute("aria-hidden", "true");
-      document.body.appendChild(tip);
-    }
-    tipFor = a;
-    tip.textContent = a.getAttribute("data-tip");
-    tip.hidden = false;
-    tip.style.visibility = "hidden";
-    tip.style.left = "0px";
-    tip.style.top = "0px";
-    const r = a.getBoundingClientRect();
-    const w = tip.offsetWidth;
-    const vw = document.documentElement.clientWidth;
-    const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, vw - w - 8));
-    tip.style.left = Math.round(left) + "px";
-    tip.style.top = Math.round(r.bottom + 4) + "px";
-    tip.style.visibility = "";
-  };
-  const tipLink = (e) => (e.target.closest ? e.target.closest(".utabs a[data-tip]") : null);
-  document.addEventListener("mouseover", (e) => { const a = tipLink(e); if (a) showTip(a); });
-  document.addEventListener("mouseout", (e) => { if (tipLink(e)) hideTip(); });
-  document.addEventListener("focusin", (e) => { const a = tipLink(e); if (a) showTip(a); });
-  document.addEventListener("focusout", (e) => { if (tipLink(e)) hideTip(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTip(); });
-  addEventListener("scroll", hideTip, true);
-
   for (const nav of document.querySelectorAll(".utabs-nav[data-fit]")) {
     const ul = nav.querySelector(".utabs");
     if (!ul) continue;
@@ -78,7 +36,6 @@
     const fadeL = box.querySelector(".utabs-fade.l");
     const fadeR = box.querySelector(".utabs-fade.r");
     const more = box.querySelector("[data-more]");
-    const items = [...ul.querySelectorAll(":scope > li[data-tab]")].filter((li) => !li.classList.contains("aux"));
     const tabs = [...ul.querySelectorAll(":scope > li:not(.tsep)")];
     const overflows = () => ul.scrollWidth > ul.clientWidth;
 
@@ -92,8 +49,6 @@
       if (scrolls && !atEnd && more) {
         const edge = more.getBoundingClientRect().left - 4;
         for (const li of tabs) if (li.getBoundingClientRect().right > edge) hidden++;
-        more.querySelector(".mn").textContent = "+" + hidden;
-        more.setAttribute("aria-label", moreLabel(hidden));
         if (fadeR) fadeR.hidden = hidden === 0;
       }
       if (fadeL) {
@@ -103,31 +58,23 @@
       }
     };
 
+    // The open tab is brought into view with as little movement as possible, so that a
+    // band that fits stays where it is and one that scrolls starts the same on every page.
     const showActive = () => {
       const sel = ul.querySelector(":scope > li.sel");
       if (!sel) return;
       const room = nav.getBoundingClientRect();
       const r = sel.getBoundingClientRect();
-      // The row stops at whole tabs (scroll-snap, ui-shell.css): the open tab goes to the snap
-      // point, 24 px from the left edge, clear of the fade; the tabs before it are out of sight.
-      if (r.left < room.left + SNAP + 4 || r.right > room.right - PAD - 60) nav.scrollLeft += r.left - room.left - SNAP;
+      // The right fade and its arrow (96 px) lie over the end of the row: the tab stands clear of them.
+      if (r.right > room.right - PAD - 84) nav.scrollLeft += r.right - (room.right - PAD - 84);
+      else if (r.left < room.left + SNAP) nav.scrollLeft += r.left - room.left - SNAP;
     };
 
     const fit = () => {
-      for (const li of items) li.classList.remove("ico");
       nav.classList.remove("scroll");
       if (overflows()) {
-        for (const evenMention of [false, true]) {
-          for (let k = items.length - 1; k >= 0 && overflows(); k--) {
-            const c = items[k].classList;
-            if (c.contains("sel") || (c.contains("att") && !evenMention)) continue;
-            c.add("ico");
-          }
-        }
-        if (overflows()) {
-          nav.classList.add("scroll");
-          showActive();
-        }
+        nav.classList.add("scroll");
+        showActive();
       }
       edges();
     };

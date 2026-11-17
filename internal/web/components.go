@@ -38,9 +38,10 @@ type bandTab struct {
 }
 
 // bandView is the band under the header: Tabs are the row, Extras the second
-// group behind a thin separator. An extra that is open or has a mention moves
-// to the front of that group, the others show as icon with number. Label is the
-// catalog key of the aria-label. External is a link "on the host" for the band.
+// group behind a thin separator. Every tab carries its name and keeps its place
+// on every page; a band that is wider than its room scrolls (ui-tabs.js). Label
+// is the catalog key of the aria-label. External is a link "on the host" for the
+// band.
 type bandView struct {
 	Label    string
 	Tabs     []bandTab
@@ -60,28 +61,6 @@ type bandHead struct {
 	Name, Handle string
 	Avatar       string // address of the picture, empty: initials
 	GitHub       string // the GitHub page, empty when not connected
-}
-
-// Promoted are the extras that show with their name: the open one and those with a mention.
-func (b *bandView) Promoted() []bandTab {
-	var out []bandTab
-	for _, t := range b.Extras {
-		if t.Current || t.Mentions > 0 {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-// Icons are the other extras: icon, number, name as tooltip.
-func (b *bandView) Icons() []bandTab {
-	var out []bandTab
-	for _, t := range b.Extras {
-		if !t.Current && t.Mentions == 0 {
-			out = append(out, t)
-		}
-	}
-	return out
 }
 
 // Separator is true when the second group has any tab.

@@ -78,7 +78,9 @@ func TestWaitStackHasOneOutlineAndTheDotAtTheLastAvatar(t *testing.T) {
 	}
 }
 
-func TestBandPutsActiveAndMentionedTabsBehindTheSeparatorAndTheRestAsIcons(t *testing.T) {
+// Every tab of the band carries its name, the second group stands behind the separator in
+// the order the server gave it, and the open tab or a mention does not move anything.
+func TestBandShowsEveryTabWithItsNameInTheGivenOrder(t *testing.T) {
 	b := &bandView{Label: "repo.tabs", Tabs: []bandTab{
 		{Key: "code", Label: "repo.tab.code", Href: "/c", Icon: "code", Current: true},
 		{Key: "issues", Label: "repo.tab.issues", Href: "/i", Icon: "issue", Count: "9"},
@@ -87,24 +89,42 @@ func TestBandPutsActiveAndMentionedTabsBehindTheSeparatorAndTheRestAsIcons(t *te
 		{Key: "sessions", Label: "repo.tab.sessions", Href: "/s", Icon: "term", Count: "2"},
 		{Key: "commits", Label: "repo.tab.commits", Href: "/m", Icon: "commit"},
 	}}
+	order := func(page string) []string {
+		var keys []string
+		for _, m := range regexp.MustCompile(`<li data-tab="([a-z]+)"`).FindAllStringSubmatch(page, -1) {
+			keys = append(keys, m[1])
+		}
+		return keys
+	}
+	want := "code,issues,rooms,sessions,commits"
 	page := renderPart(t, langDE, "uiband", b)
+	if got := strings.Join(order(page), ","); got != want {
+		t.Errorf("order = %s, want %s", got, want)
+	}
 	sep := strings.Index(page, `class="tsep"`)
-	if sep < 0 || strings.Index(page, `data-tab="issues"`) > sep {
-		t.Fatalf("the row stands before the separator: %s", page)
+	if sep < 0 || strings.Index(page, `data-tab="issues"`) > sep || strings.Index(page, `data-tab="rooms"`) < sep {
+		t.Fatalf("the row stands before the separator and the second group behind it: %s", page)
 	}
 	behind := page[sep:]
 	if !strings.Contains(behind, `data-tab="rooms" class="att aux"`) || !strings.Contains(behind, `<span class="counter att" title="2 Erwähnungen für dich">@2</span>`) {
-		t.Errorf("a tab with mentions moves behind the separator with a blue @n: %s", behind)
+		t.Errorf("a tab with mentions keeps its place and shows a blue @n: %s", behind)
 	}
-	if !strings.Contains(behind, `class="icx" data-ic="sessions"`) || !strings.Contains(behind, `data-tip="Sessions"`) || !strings.Contains(behind, `aria-label="Sessions, 2"`) {
-		t.Errorf("the others show as icon with number and tooltip: %s", behind)
+	for _, label := range []string{">Räume</span>", ">Sessions</span>", ">Commits</span>", ">Issues</span>"} {
+		if !strings.Contains(page, label) {
+			t.Errorf("a tab lacks its name %q: %s", label, page)
+		}
 	}
-	if strings.Contains(page, `data-tab="sessions"`) {
-		t.Errorf("an extra without a mention has no text tab: %s", page)
+	if strings.Contains(page, `data-ic=`) || strings.Contains(page, `data-tip=`) || strings.Contains(page, `class="icx"`) {
+		t.Errorf("no tab shrinks to an icon: %s", page)
 	}
+	// Opening a tab changes only the mark, never the order.
 	b.Extras[2].Current = true
-	if page := renderPart(t, langDE, "uiband", b); !strings.Contains(page[strings.Index(page, `class="tsep"`):], `data-tab="commits" class="sel aux"`) {
-		t.Error("the open extra shows with its name")
+	open := renderPart(t, langDE, "uiband", b)
+	if got := strings.Join(order(open), ","); got != want {
+		t.Errorf("order with an open extra = %s, want %s", got, want)
+	}
+	if !strings.Contains(open[strings.Index(open, `class="tsep"`):], `data-tab="commits" class="sel aux"`) {
+		t.Error("the open extra is marked in place")
 	}
 	one := &bandView{Label: "repo.tabs", Tabs: []bandTab{{Key: "code", Label: "repo.tab.code", Href: "/c", Icon: "code"}}}
 	if page := renderPart(t, langDE, "uiband", one); strings.Contains(page, `class="tsep"`) {
@@ -112,22 +132,24 @@ func TestBandPutsActiveAndMentionedTabsBehindTheSeparatorAndTheRestAsIcons(t *te
 	}
 }
 
-// A band can scroll: the row stands in a box with the fades and the "+n" mark at its
-// ends (ui-tabs.js fills them), and every tab carries its name for the tooltip it
-// gets when it shrinks to an icon.
-func TestBandHasABoxWithFadesAndAMoreMarkAndEveryTabNamesItself(t *testing.T) {
+// A band can scroll: the row stands in a box with the fades and a named arrow at its ends
+// (ui-tabs.js shows them), and every tab carries its name.
+func TestBandHasABoxWithFadesAndANamedMoreArrow(t *testing.T) {
 	b := &bandView{Label: "repo.tabs", Tabs: []bandTab{
 		{Key: "code", Label: "repo.tab.code", Href: "/c", Icon: "code", Current: true},
 		{Key: "issues", Label: "repo.tab.issues", Href: "/i", Icon: "issue", Count: "9"},
 	}}
 	page := renderPart(t, langDE, "uiband", b)
-	for _, want := range []string{`<div class="utabs-box"><nav class="utabs-nav" data-fit`, `class="utabs-fade l" aria-hidden="true" hidden`, `class="utabs-fade r" hidden><button type="button" class="utabs-more" data-more>`, `href="/i" data-tip="Issues"`} {
+	for _, want := range []string{`<div class="utabs-box"><nav class="utabs-nav" data-fit`, `class="utabs-fade l" aria-hidden="true" hidden`, `class="utabs-fade r" hidden><button type="button" class="utabs-more" data-more aria-label="Weitere Reiter"`, `href="/i"><svg`, `<span>Issues</span>`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("band lacks %q: %s", want, page)
 		}
 	}
 	if strings.Index(page, `</nav>`) > strings.Index(page, `utabs-fade r`) || strings.Index(page, `utabs-fade r`) > strings.Index(page, `</div></div>`) {
 		t.Errorf("the fades stand behind the nav and inside the box: %s", page)
+	}
+	if strings.Contains(page, `class="mn"`) {
+		t.Errorf("the arrow carries no bare number: %s", page)
 	}
 }
 

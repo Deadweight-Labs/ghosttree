@@ -44,8 +44,8 @@ func TestSearchCountOfAQualifiedSearchSaysPlusWhenTheReadWasCut(t *testing.T) {
 	needles(t, e, 100, 3, 102)
 	for _, target := range []string{"/ui/search?q=Needle+type:bug", "/ui/search?q=Needle+type:bug&kind=requests"} {
 		_, page := fetchPage(t, e.Member, e.Base+target)
-		if got := counterOf(page, "Requests"); got != "3+" {
-			t.Errorf("%s: the Requests facet reads %q, want 3+", target, got)
+		if got := counterOf(page, "Issues"); got != "3+" {
+			t.Errorf("%s: the Issues facet reads %q, want 3+", target, got)
 		}
 		if got := counterOf(page, "All"); got != "3+" {
 			t.Errorf("%s: the All facet reads %q, want 3+", target, got)
@@ -61,7 +61,7 @@ func TestSearchCountOfAQualifiedSearchReadInFullHasNoPlus(t *testing.T) {
 	e := ovEnv(t)
 	needles(t, e, 3, 2, 1)
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/search?q=Needle+type:bug&kind=requests")
-	if got := counterOf(page, "Requests"); got != "2" || !strings.Contains(page, "2 hits") || strings.Contains(page, "More than") {
+	if got := counterOf(page, "Issues"); got != "2" || !strings.Contains(page, "2 hits") || strings.Contains(page, "More than") {
 		t.Errorf("a search that read everything reads %q:\n%s", got, page)
 	}
 }
@@ -82,7 +82,7 @@ func TestSearchCountOfAQuickFilterWithSeveralLinesIsTheUnion(t *testing.T) {
 	}
 	base := e.Base + "/ui/search?preset=both&project=" + url.QueryEscape(shellProject)
 	_, page := fetchPage(t, e.Owner, base)
-	if got := counterOf(page, "Requests"); got != "21" || counterOf(page, "All") != "21" {
+	if got := counterOf(page, "Issues"); got != "21" || counterOf(page, "All") != "21" {
 		t.Errorf("the two lines have 21 hits together, the page reads %q (All %q)", got, counterOf(page, "All"))
 	}
 	if !strings.Contains(page, "21 hits") || strings.Count(page, `class="hit"`) != searchPerGroup || !strings.Contains(page, "morelink") {
@@ -102,7 +102,7 @@ func TestSearchCountOfAQuickFilterWithACutLineSaysPlus(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/search?preset=cut&project="+url.QueryEscape(shellProject))
-	if got := counterOf(page, "Requests"); got != "100+" {
+	if got := counterOf(page, "Issues"); got != "100+" {
 		t.Errorf("the first line has 205 hits, the page reads %q, want 100+", got)
 	}
 }

@@ -36,7 +36,7 @@
   // there is one, stays above it). Typing hides the entries that do not contain the text.
   const filterable = (dd) => {
     const pop = $(":scope > .pop", dd);
-    if (!pop || $(".pf", pop)) return;
+    if (!pop || pop.hasAttribute("data-nofilter") || $(".pf", pop)) return;
     const opts = $$(".opt", pop);
     if (opts.length <= 10) return;
     const find = document.createElement("input");
