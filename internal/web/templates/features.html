@@ -4,7 +4,7 @@
 <div class="box"><div class="box-h lh">{{range .Tabs}}<a class="tab{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Icon}}<span><span class="n">{{.Count}}</span> {{t .Label}}</span></a>{{end}}</div>
 {{if .Rows}}{{range .Rows}}{{template "uirow" .}}
 {{end}}{{else if .NoMatch}}<div class="empty"><span>{{t "features.no_matches"}}</span><a class="gbtn sm" href="{{.ClearHref}}">{{t "requests.clear"}}</a></div>
-{{else if eq .EmptyKey "features.empty"}}{{template "emptyact" (dict "Class" "empty" "Text" (t "features.empty") "Cmd" (dict "Icon" "file" "Text" "ctx feature add NAME"))}}
+{{else if eq .EmptyKey "features.empty"}}{{template "emptyact" (dict "Class" "empty" "Text" (t "features.empty") "Cmd" (and (not $.Shell.Guest) (dict "Icon" "file" "Text" "ctx feature add NAME")))}}
 {{else}}{{template "emptyact" (dict "Class" "empty" "Text" (t .EmptyKey) "Action" (t "features.show_active") "Href" (index .Tabs 0).Href)}}{{end}}</div>
 </div></div>
 {{end}}</div>{{template "foot" .}}{{end}}

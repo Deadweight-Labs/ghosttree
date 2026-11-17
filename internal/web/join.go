@@ -360,6 +360,8 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 		a.joinNotFound(l, w)
 		return
 	}
+	// Where the person lands is read before the invitation is used up.
+	land := a.joinLanding(code)
 	// Wer hier als fremdes Konto angemeldet ist (etwa durch einen untergeschobenen
 	// Login), muss den Kontonamen ausdrücklich bestätigen. Ein Sitzungsalter
 	// ließe sich nicht prüfen, ohne die Sitzungen zu ändern, und die Bestätigung
@@ -368,10 +370,14 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 		a.joinAcceptMessage(l, w, code, http.StatusBadRequest, l.msg("join.msg_confirm_t"), l.msg("join.msg_confirm_j"))
 		return
 	}
-	_, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
+	org, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
 	switch {
 	case err == nil:
-		a.joinAccepted(w, r)
+		// The organization joined is the one the person works in from now on.
+		if org.Slug != "" {
+			http.SetCookie(w, a.orgCookieFor(r, org.Slug, 90*24*60*60))
+		}
+		a.joinAccepted(w, r, land)
 	case errors.Is(err, store.ErrCodeInvalid):
 		a.joinNotFound(l, w)
 	case errors.Is(err, store.ErrAlreadyMember):
@@ -401,9 +407,59 @@ func (a *app) joinSignOut(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, back, http.StatusSeeOther)
 }
 
+// joinLanding is where a person lands after accepting the invitation of code when
+// that is not the pairing page: a guest goes into the project that was shared with
+// them. Empty for everyone else. It has to be read before the invitation is used
+// up, as a used one has no preview any more.
+func (a *app) joinLanding(code string) string {
+	if p, ok := a.joinPreview(code); ok && p.Role == store.RoleGuest && p.Remote != "" {
+		return repoHref(p.Remote)
+	}
+	return ""
+}
+
+// guestLanding is the project a guest lands in: the account is a guest in every
+// organization it is in (a personal namespace aside) and sees exactly one project.
+// Empty for anyone else, who pairs a computer.
+func (a *app) guestLanding(account string) string {
+	orgs, err := a.store.ListOrgs(account)
+	if err != nil {
+		return ""
+	}
+	var remotes []string
+	for _, o := range orgs {
+		if o.IsUser() {
+			continue
+		}
+		if !o.Guest {
+			return ""
+		}
+		ps, _ := a.store.ListProjects(account, o.ID)
+		for _, p := range ps {
+			switch role := a.store.ProjectRole(p.Remote, account).Role; {
+			case role == "":
+			case role != store.RoleGuest:
+				// Invited to one project as a member: a person who works there pairs a computer.
+				return ""
+			default:
+				remotes = append(remotes, p.Remote)
+			}
+		}
+	}
+	if len(remotes) != 1 {
+		return ""
+	}
+	return repoHref(remotes[0])
+}
+
 // joinAccepted ist der Ort, an dem der Beitritt endet: für das Konto entsteht
 // eine Join-Sitzung, und die Paarungsseite zeigt den Code.
-func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request) {
+func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request, land string) {
+	// A guest has no computer to pair: they go to the project shared with them.
+	if land != "" {
+		http.Redirect(w, r, land, http.StatusSeeOther)
+		return
+	}
 	account := browserPrincipal(r).ID
 	if _, err := a.store.Join().Create(account); err != nil {
 		http.Redirect(w, r, "/ui/inbox", http.StatusSeeOther)

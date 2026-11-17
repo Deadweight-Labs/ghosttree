@@ -310,7 +310,7 @@ func TestInvitationListStatesAndSeparatedDetails(t *testing.T) {
 		t.Errorf("expired: %s", r)
 	}
 	// The link just made: every detail stands in a span of its own.
-	if !strings.Contains(page, `</span><span>Works once</span><span>The link stays on this page until it is used or expires</span>`) {
+	if !strings.Contains(page, `</span><span>Works once</span></div>`) {
 		t.Errorf("details run together: %s", pageSpan(t, page, "Invitation ready", "</div></div>"))
 	}
 }

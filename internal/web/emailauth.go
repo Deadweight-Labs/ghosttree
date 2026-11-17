@@ -128,21 +128,27 @@ func (a *app) tryAllowedIP(w http.ResponseWriter, r *http.Request, l lang) bool 
 
 // ---------------------------------------------------------------- Versand
 
+// mailBase is the address the links in a mail are built from. It is the configured
+// public address only. An address taken from the Host header of the request would
+// let anyone who asks for a mail for someone else's address point the link, and
+// with it the token, at a server of their own. Only a file mailbox, which nobody
+// but the operator reads, may fall back to the address of the request. Empty: no
+// link can be made.
+func (a *app) mailBase(r *http.Request) string {
+	base := a.publicOrigin
+	if l, ok := a.mailer.(interface{ Local() bool }); base == "" && ok && l.Local() {
+		base = a.joinBase(r)
+	}
+	return base
+}
+
 // sendChallengeMail schreibt die Mail zu einer Herausforderung und schickt sie im
 // Hintergrund. Fehler stehen im Log, ohne die Adresse.
 func (a *app) sendChallengeMail(r *http.Request, l lang, ch store.Challenge) {
 	if a.mailer == nil {
 		return
 	}
-	// The link in a mail to a third party is built from the configured public
-	// address only. An address taken from the Host header of the request would let
-	// anyone who asks for a mail for someone else's address point the link, and
-	// with it the token, at a server of their own. Only a file mailbox, which nobody
-	// but the operator reads, may fall back to the address of the request.
-	base := a.publicOrigin
-	if l, ok := a.mailer.(interface{ Local() bool }); base == "" && ok && l.Local() {
-		base = a.joinBase(r)
-	}
+	base := a.mailBase(r)
 	link := "\x00"
 	if base != "" {
 		link = base + "/ui/mail/" + ch.Purpose + "/link?t=" + url.QueryEscape(ch.Link)

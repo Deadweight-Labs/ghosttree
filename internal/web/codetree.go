@@ -401,6 +401,9 @@ type codeDesc struct {
 	Cmd                                    cmdLine // what to tell the agent; the page has no editor
 	HTML                                   template.HTML
 	Empty                                  bool
+	// Guest: the viewer is a guest of the project and writes nothing, so the page
+	// shows no command for an agent.
+	Guest bool
 }
 
 type codeBlob struct {
@@ -597,17 +600,23 @@ func (a *app) codeFolderPage(r *http.Request, pa *store.ProjectAccess, view *rep
 		}
 		v.Last.Commits, v.Last.CommitsHref = list.Total, view.Href+"/commits"
 	}
-	v.Readme = a.codeDescription(l, ix, cp.Path)
+	v.Readme = a.codeDescription(l, ix, cp.Path, guestOf(pa, view.Project))
 	v.Readme.Page = true
 	if cp.Path == "" {
 		v.Readme.Label = view.Name + "/"
 	}
 }
 
+// guestOf says whether the viewer is only a guest of the project: they read what
+// was shared and tell no agent anything, so empty states show them no command.
+func guestOf(pa *store.ProjectAccess, remote string) bool {
+	return store.RoleRank(pa.Role(remote).Role) == store.RoleRank(store.RoleGuest)
+}
+
 // codeDescription is the box with the description of a path. Without one it
 // stays a single action: write it.
-func (a *app) codeDescription(l lang, ix *codeIndex, p string) *codeDesc {
-	d := &codeDesc{Path: p, Label: p, Cmd: cmdLine{Icon: "file", Text: `context_remember action=describe_file path="` + p + `"`}}
+func (a *app) codeDescription(l lang, ix *codeIndex, p string, guest bool) *codeDesc {
+	d := &codeDesc{Path: p, Label: p, Guest: guest, Cmd: cmdLine{Icon: "file", Text: `context_remember action=describe_file path="` + p + `"`}}
 	switch {
 	case p == "":
 		d.Label = "/"
@@ -631,7 +640,7 @@ func (a *app) codeDescription(l lang, ix *codeIndex, p string) *codeDesc {
 
 func (a *app) codeBlobPage(r *http.Request, pa *store.ProjectAccess, view *repoView, v *repoCodeView, ix *codeIndex, links codeLinks, cp *codePath) {
 	l := a.langFor(r)
-	b := &codeBlob{Desc: a.codeDescription(l, ix, cp.Path)}
+	b := &codeBlob{Desc: a.codeDescription(l, ix, cp.Path, guestOf(pa, view.Project))}
 	v.Blob = b
 	v.Nav = codeNav(ix, links, cp)
 	if view.External != "" {

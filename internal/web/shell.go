@@ -87,7 +87,9 @@ type shellView struct {
 	ProjectAction string
 	Initial       string
 	RoleKey       string
-	Host          string
+	// Guest: the viewer is a guest; empty states show them no agent command.
+	Guest bool
+	Host  string
 	// Tabs sit under the page title: Requests | Tasks | Pains, Agents | Sessions,
 	// Search | Review | Agent context, Team | Devices. TabsLabel names them.
 	Tabs      []navItem
@@ -210,7 +212,7 @@ func (a *app) viewerOf(r *http.Request, pa *store.ProjectAccess) viewer {
 	reviewer := flag || rank >= store.RoleRank(store.RoleLead) || pa.IsAdmin() || orgOwner
 	switch {
 	case orgOwner || rank >= store.RoleRank(store.RoleOwner):
-		return viewer{viewerOwner, "role.owner", true}
+		return viewer{viewerOwner, a.activeRoleKey(r, pa, "role.owner"), true}
 	case pa.IsAdmin():
 		return viewer{viewerOwner, "role.admin", true}
 	case rank == store.RoleRank(store.RoleLead):
@@ -219,6 +221,39 @@ func (a *app) viewerOf(r *http.Request, pa *store.ProjectAccess) viewer {
 		return viewer{viewerGuest, "role.guest", false}
 	}
 	return viewer{viewerMember, "role.member", reviewer}
+}
+
+// activeRoleKey is the role the account menu names: the one in the organization
+// the viewer works in, not the highest anywhere. Someone who owns a side project
+// in a namespace of their own is still a member of the organization they work
+// in (REQ-683). fallback is the broad role; it stays when the viewer works in no
+// organization.
+func (a *app) activeRoleKey(r *http.Request, pa *store.ProjectAccess, fallback string) string {
+	orgs := a.orgsOf(r)
+	work := a.pickOrg(r, orgs)
+	if work.ID == 0 {
+		return fallback
+	}
+	if work.Role == store.OrgOwner {
+		return "role.owner"
+	}
+	rank := 0
+	for _, remote := range pa.Projects() {
+		if p, ok := a.store.ProjectByRemote(remote); ok && p.OrgID == work.ID {
+			rank = max(rank, store.RoleRank(pa.Role(remote).Role))
+		}
+	}
+	switch {
+	case rank >= store.RoleRank(store.RoleOwner):
+		return "role.owner"
+	case rank == store.RoleRank(store.RoleLead):
+		return "role.lead"
+	case rank == store.RoleRank(store.RoleGuest):
+		return "role.guest"
+	case pa.IsAdmin():
+		return "role.admin"
+	}
+	return "role.member"
 }
 
 // projectAware sind die Seiten, die ?project= auswerten.
@@ -258,7 +293,7 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 	item := func(key, label, href string) navItem {
 		return navItem{Key: key, Label: label, Href: href, Current: key == current}
 	}
-	v := shellView{On: true, RoleKey: who.roleKey, Host: a.publicHost(r), CanAll: kind == viewerOwner || len(base.projects) > 1}
+	v := shellView{On: true, RoleKey: who.roleKey, Guest: kind == viewerGuest, Host: a.publicHost(r), CanAll: kind == viewerOwner || len(base.projects) > 1}
 	if label := strings.TrimSpace(browserPrincipal(r).Label); label != "" {
 		v.Initial = strings.ToUpper(string([]rune(label)[:1]))
 	}

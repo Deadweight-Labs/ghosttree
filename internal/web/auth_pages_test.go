@@ -178,7 +178,7 @@ func TestInvitationNameTakenIsAnErrorAtTheField(t *testing.T) {
 	}
 	resp = sameOriginPostForm(t, c, srv.URL+"/ui/login/code", url.Values{"code": {code}, "join": {"1"}, "name": {"Neu Person"}})
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != repoHref(joinProject) {
 		t.Errorf("a free name: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 }

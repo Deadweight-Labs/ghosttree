@@ -34,7 +34,22 @@ type orgMemberRow struct {
 type inviteRow struct {
 	store.Invitation
 	URL string
+	// Mail is what became of the mail of an invitation whose link is still held;
+	// Subject is whom it is for (address, project or "single-use link").
+	Mail    inviteMail
+	Subject string
+	// Named: the row names the person who accepted, not the target.
+	Named string
 }
+
+// guestOrgRow is an organization the viewer is a guest of, with the projects
+// shared with them.
+type guestOrgRow struct {
+	Name     string
+	Projects []guestProjectRow
+}
+
+type guestProjectRow struct{ Remote, Href string }
 
 // projectRoleRow ist ein Organisationsmitglied mit seiner Rolle in einem Projekt.
 // Grantable sind die Rollen, die der Betrachter ihm geben darf; leer heißt,
@@ -76,6 +91,14 @@ type orgsView struct {
 	// confirm one (mail or an identity provider). Without it the form says so.
 	CanBind bool
 	NewURL  string // Link der eben erstellten Einladung (?new=), nur für ihren Ersteller
+	// NewMail is what became of its mail; NewNotice the sentence about it, empty
+	// when the mail went out.
+	NewMail   inviteMail
+	NewNotice string
+	// Open names the section that opens when the address names none ("members").
+	Open string
+	// GuestOf are the organizations the viewer is a guest of.
+	GuestOf []guestOrgRow
 	// InviteProjects are the projects an invitation can be for (those of the
 	// organization plus the owner's unclaimed ones); DefaultProject is the
 	// one preselected: the last one invited to, else the first.
@@ -165,7 +188,16 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	for _, o := range orgs {
 		if !o.Guest {
 			v.Orgs = append(v.Orgs, o)
+			continue
 		}
+		// The page says what a guest is in: the organization and the projects shared
+		// with them, each a way in.
+		g := guestOrgRow{Name: o.Name}
+		ps, _ := a.store.ListProjects(me, o.ID)
+		for _, p := range a.access(r).VisibleProjects(ps) {
+			g.Projects = append(g.Projects, guestProjectRow{Remote: p.Remote, Href: repoHref(p.Remote)})
+		}
+		v.GuestOf = append(v.GuestOf, g)
 	}
 	orgs = v.Orgs
 	v.Explain = a.explainAdminFor(r)
@@ -485,15 +517,24 @@ func (a *app) fillInvites(r *http.Request, v *orgsView, me string) {
 	v.CanBind = a.oidc != nil || a.mailAvailable()
 	invs, _ := a.store.ListInvitations(me, v.Selected.ID)
 	newID, _ := strconv.ParseInt(r.URL.Query().Get("new"), 10, 64)
+	l := a.langFor(r)
 	for _, inv := range invs {
 		inv.AcceptedBy = store.NormalizeAccountName(inv.AcceptedBy)
-		row := inviteRow{Invitation: inv}
+		row := inviteRow{Invitation: inv, Subject: inviteSubject(l, inv)}
+		// An accepted invitation is the person who joined, with the role they got.
+		if inv.Status == "accepted" && inv.AcceptedBy != "" {
+			row.Named = inv.AcceptedBy
+		}
 		if inv.Status != "pending" {
 			a.inviteLinks.drop(inv.ID)
 		} else if link, ok := a.inviteLinks.get(inv.ID, me); ok {
-			row.URL = a.inviteURL(r, link.code, link.project)
+			row.URL, row.Mail = a.inviteURL(r, link.code, link.project), link.mail
+			if link.mail.To != "" {
+				row.Subject = link.mail.To
+			}
 			if inv.ID == newID {
-				v.NewURL, v.NewExpiry, v.NewFor = row.URL, inv.ExpiresAt, inviteSubject(a.langFor(r), inv)
+				v.NewURL, v.NewExpiry, v.NewFor = row.URL, inv.ExpiresAt, row.Subject
+				v.NewMail, v.NewNotice = link.mail, inviteNotice(l, link.mail)
 			}
 		}
 		v.Invites = append(v.Invites, row)
@@ -533,10 +574,24 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
+	// A refusal shows the members again: that is where the person was.
+	refuse := func(err error) {
+		status, msg := orgError(a.langFor(r), err)
+		a.renderOrgs(w, r, status, orgsView{Open: "members"}, o.Slug, msg)
+	}
 	days, _ := strconv.Atoi(r.FormValue("days"))
 	if days < 0 || days > int(store.MaxInvitationTTL/(24*time.Hour)) {
-		a.orgFailure(w, r, store.ErrInvalidInput)
+		refuse(store.ErrInvalidInput)
 		return
+	}
+	// The address is for the mail (and, for a member, binds the invitation): one
+	// that is no address is refused before anything is made, guests included.
+	email := strings.TrimSpace(r.FormValue("email"))
+	if email != "" {
+		if _, err := store.NormalizeEmail(email); err != nil {
+			refuse(store.ErrInvalidInput)
+			return
+		}
 	}
 	ttl := time.Duration(days) * 24 * time.Hour
 	me := browserPrincipal(r).ID
@@ -548,7 +603,7 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 		// A project link is for guests only: people who work with the
 		// organization are invited into it as members.
 		if project == "" {
-			a.orgFailure(w, r, store.ErrInvalidInput)
+			refuse(store.ErrInvalidInput)
 			return
 		}
 		link = true
@@ -560,10 +615,10 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 			code, inv, err = a.store.ClaimAndInviteProject(me, o.ID, project, store.RoleGuest, ttl)
 		}
 	} else {
-		code, inv, err = a.store.CreateInvitation(me, o.ID, r.FormValue("email"), r.FormValue("role"), ttl)
+		code, inv, err = a.store.CreateInvitation(me, o.ID, email, r.FormValue("role"), ttl)
 	}
 	if err != nil {
-		a.orgFailure(w, r, err)
+		refuse(err)
 		return
 	}
 	until, perr := time.Parse(time.RFC3339, inv.ExpiresAt)
@@ -571,8 +626,15 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 		until = time.Now().Add(store.MaxInvitationTTL)
 	}
 	a.inviteLinks.put(inv.ID, me, code, link, until)
+	l := a.langFor(r)
+	target, role := o.Name, roleLabel(l, store.RoleMember)
+	if link {
+		target, role = shortName(inv.ProjectRemote), roleLabel(l, inv.ProjectRole)
+	}
+	a.inviteLinks.setMail(inv.ID, a.sendInviteMail(r, l, email, target, role, code, link, until))
 	// The slug is [a-z0-9-], so it needs no escaping, and the order stays fixed.
-	http.Redirect(w, r, "/ui/orgs?org="+o.Slug+"&new="+strconv.FormatInt(inv.ID, 10), http.StatusSeeOther)
+	// The fragment opens the members: without it the page opens at "General".
+	http.Redirect(w, r, "/ui/orgs?org="+o.Slug+"&new="+strconv.FormatInt(inv.ID, 10)+"#members", http.StatusSeeOther)
 }
 
 func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {

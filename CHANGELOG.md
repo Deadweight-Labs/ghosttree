@@ -1180,6 +1180,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- Invitations are honest and complete, and the right organization is active
+  (REQ-683). An invitation with an address sends a mail with the link (guest
+  links too); without an address, without mail on the server, or when sending
+  fails, the page says that no mail went out and that the link has to be passed
+  on. After inviting you stay at the members, every open invitation stays in the
+  list with link, role, expiry and whether a mail went out, and an accepted one
+  names the person who joined with their role. A guest lands in the shared
+  project after joining, the organization page names the guest membership, and
+  empty states show a guest no agent command. After signing in or joining, an
+  organization you made or joined is active instead of the empty standard
+  organization; the welcome card names it and lists only the steps still to do,
+  and the account menu names your role in the active organization.
 - One project per repository, and a missing right is said instead of hidden
   (REQ-675). The project form (Organization, Projects) takes the address of a
   repository in any form git knows (`https://…`, `git@host:owner/repo.git`,

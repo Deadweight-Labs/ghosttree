@@ -418,7 +418,10 @@ func (a *app) finishLoginTo(w http.ResponseWriter, r *http.Request, account stor
 // Seite danach zeigt den Paarungscode und später die Freigabe des Geräts.
 func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account store.Account) {
 	next := "/ui/inbox"
-	if _, err := a.store.Join().Create(account.ID); err == nil {
+	if land := a.guestLanding(account.ID); land != "" {
+		// A guest has no computer to pair: they go to the project shared with them.
+		next = land
+	} else if _, err := a.store.Join().Create(account.ID); err == nil {
 		next = "/join/pair"
 	}
 	a.startSessionAt(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, next)

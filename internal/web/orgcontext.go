@@ -86,9 +86,30 @@ func (a *app) orgsOf(r *http.Request) []store.Org {
 	return orgs
 }
 
+// defaultOrgSlug is the slug of the organization the first account of an instance
+// is given. Not every account has it as its standard organization (Org.Default),
+// so the slug counts, too.
+const defaultOrgSlug = "default"
+
+// placeholderOrg is the standard organization an account was given that still
+// holds nothing: no project and nobody else. It is no place to work in once the
+// person has an organization of their own.
+func (a *app) placeholderOrg(me string, o store.Org) bool {
+	if !(o.Default || o.Slug == defaultOrgSlug) || o.IsUser() {
+		return false
+	}
+	if ps, _ := a.store.ListProjects(me, o.ID); len(ps) > 0 {
+		return false
+	}
+	members, _ := a.store.ListOrgMembers(o.ID)
+	return len(members) <= 1
+}
+
 // pickOrg is the organization the viewer works in on a page that names none: the
 // one of this request or the last one used, else the first that holds a project
-// (the standard organization of a fresh instance is empty and no place to land),
+// (the standard organization first), else one that is really theirs: an empty
+// organization they made or joined wins over the empty standard organization
+// their account was given (REQ-683, "You are in Default" after every sign-in),
 // else the standard one.
 func (a *app) pickOrg(r *http.Request, orgs []store.Org) store.Org {
 	if len(orgs) == 0 {
@@ -114,6 +135,11 @@ func (a *app) pickOrg(r *http.Request, orgs []store.Org) store.Org {
 			continue
 		}
 		if ps, _ := a.store.ListProjects(me, o.ID); len(ps) > 0 {
+			return o
+		}
+	}
+	for _, o := range orgs {
+		if !o.IsUser() && !a.placeholderOrg(me, o) {
 			return o
 		}
 	}

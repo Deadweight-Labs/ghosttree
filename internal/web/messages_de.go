@@ -952,7 +952,6 @@ var messagesDE = map[string]string{
 	"adm.invite.dn_one":          "1 Tag",
 	"adm.member.no_project":      "Noch kein Projekt",
 	"adm.member.add_project":     "Zum Projekt hinzufügen",
-	"adm.invite.ready":           "Einladung bereit",
 	"adm.invite.link_label":      "Einladungslink",
 	"adm.invite.expires":         "Läuft ab %s",
 	"adm.invite.accepted_by":     "Angenommen von %s",

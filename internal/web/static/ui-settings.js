@@ -58,7 +58,10 @@
     const fromHash = () => {
       const target = location.hash.length > 1 ? document.getElementById(decodeURIComponent(location.hash.slice(1))) : null;
       const owner = target && target.closest("[data-sec]");
-      const id = owner ? owner.dataset.sec : (links[0] ? links[0].getAttribute("href").slice(1) : "");
+      // Without an address the page names its own start (data-open): after a refused
+      // invitation that is the members, where the person was, not "General".
+      const start = pane.dataset.open && links.some((a) => a.getAttribute("href") === "#" + pane.dataset.open) ? pane.dataset.open : "";
+      const id = owner ? owner.dataset.sec : (start || (links[0] ? links[0].getAttribute("href").slice(1) : ""));
       show(id);
       if (target && owner && target !== owner) target.scrollIntoView();
     };

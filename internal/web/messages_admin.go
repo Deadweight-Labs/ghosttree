@@ -38,7 +38,6 @@ var messagesAdmin = map[string]string{
 	// Invitation list
 	"adm.invite.for":        "For %s",
 	"adm.invite.once":       "Works once",
-	"adm.invite.kept_here":  "The link stays on this page until it is used or expires",
 	"adm.invite.list":       "Invitations",
 	"adm.invite.state_open": "Open",
 	"adm.invite.ended":      "Expired %s",
@@ -76,7 +75,6 @@ var messagesAdminDE = map[string]string{
 	"adm.invite.guest_for":        "Projekt",
 	"adm.invite.for":              "Für %s",
 	"adm.invite.once":             "Gilt einmal",
-	"adm.invite.kept_here":        "Der Link bleibt auf dieser Seite, bis er benutzt wird oder abläuft",
 	"adm.invite.list":             "Einladungen",
 	"adm.invite.state_open":       "Offen",
 	"adm.invite.ended":            "Abgelaufen %s",

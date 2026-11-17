@@ -42,35 +42,50 @@ func (a *app) welcomeCards(r *http.Request, l lang) []welcomeView {
 	}
 	devices, _ := a.deviceTokens(r)
 	pending := a.store.PendingEmail(me.ID)
+	orgs := a.orgsOf(r)
+	work := a.pickOrg(r, orgs)
 	var out []welcomeView
+	shown := map[int64]bool{}
 	for _, c := range cards {
-		owner := a.store.OrgRole(c.OrgID, me.ID) == store.OrgOwner
-		v := welcomeView{OrgID: c.OrgID, OrgName: c.OrgName}
+		// The card of an empty standard organization nobody uses names the one the
+		// person works in (REQ-683): "You are in Default" after creating an own
+		// organization is wrong. The stored card is still the one that is dismissed.
+		org := store.Org{ID: c.OrgID, Name: c.OrgName, Slug: c.OrgSlug}
+		for _, o := range orgs {
+			if o.ID == c.OrgID && a.placeholderOrg(me.ID, o) && work.ID != 0 && work.ID != o.ID && !work.IsUser() && !work.Guest {
+				org = work
+			}
+		}
+		if shown[org.ID] {
+			continue
+		}
+		owner := a.store.OrgRole(org.ID, me.ID) == store.OrgOwner
+		v := welcomeView{OrgID: c.OrgID, OrgName: org.Name}
 		open := 0 // Schritte, die noch zu tun sind und die Karte halten
 		if pending != "" {
 			v.Pending = store.MaskEmail(pending)
 			open++
 		}
+		// A step that is done is not shown again: the card lists what is left.
 		if owner {
-			invites, _ := a.store.ListInvitations(me.ID, c.OrgID)
-			members, _ := a.store.ListOrgMembers(c.OrgID)
-			done := len(invites) > 0 || len(members) > 1
-			v.Steps = append(v.Steps, welcomeStep{Label: l.msg("welcome.invite"), Href: "/ui/orgs?org=" + c.OrgSlug + "#invitations", Done: done})
-			if !done {
+			invites, _ := a.store.ListInvitations(me.ID, org.ID)
+			members, _ := a.store.ListOrgMembers(org.ID)
+			if done := len(invites) > 0 || len(members) > 1; !done {
+				v.Steps = append(v.Steps, welcomeStep{Label: l.msg("welcome.invite"), Href: "/ui/orgs?org=" + org.Slug + "#invitations"})
 				open++
 			}
 		}
-		connected := len(devices) > 0
-		v.Steps = append(v.Steps, welcomeStep{Label: l.msg("welcome.device"), Href: "/join/pair", Done: connected})
-		if !connected {
+		if len(devices) == 0 {
+			v.Steps = append(v.Steps, welcomeStep{Label: l.msg("welcome.device"), Href: "/join/pair"})
 			open++
 		}
-		// Das Repo zu öffnen ist ein Weg, kein Zustand: der Schritt hält die Karte nicht.
-		v.Steps = append(v.Steps, welcomeStep{Label: l.msg("welcome.repo"), Href: "/ui/orgs?org=" + c.OrgSlug + "#projects"})
 		if open == 0 {
 			_ = a.store.DismissWelcome(me.ID, c.OrgID)
 			continue
 		}
+		// Das Repo zu öffnen ist ein Weg, kein Zustand: der Schritt hält die Karte nicht.
+		v.Steps = append(v.Steps, welcomeStep{Label: l.msg("welcome.repo"), Href: "/ui/orgs?org=" + org.Slug + "#projects"})
+		shown[org.ID] = true
 		out = append(out, v)
 	}
 	return out

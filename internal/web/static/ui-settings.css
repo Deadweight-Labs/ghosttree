@@ -55,7 +55,6 @@
   & .invite .irc .muted { font-size: 12px; }
   & .invite .irproj { display: none; align-items: center; gap: 8px; }
   & .invite:has(input[value="guest"]:checked) .irproj { display: flex; }
-  & .invite:has(input[value="guest"]:checked) label:has(input[name="email"]) { display: none; }
   & .flash.att { border-color: var(--attention-muted); background: var(--attention-subtle); }
   & .flash.att > .i { color: var(--attention-fg); }
   & .flash code, & .callout code { font: 12px var(--ui-mono); padding: 1px 4px; background: var(--neutral-muted); border-radius: 4px; }
