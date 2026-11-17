@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -80,6 +81,7 @@ type api struct {
 	proxies              proxytrust.Set
 	publicURL            string
 	st                   *store.Store
+	machineSeen          sync.Map
 	snapshotLimits       snapshot.Limits
 	snapshotMirror       SnapshotMirror
 	operationIDGenerator OperationIDGenerator
@@ -322,6 +324,23 @@ func fallbackOperationID() string {
 	return fmt.Sprintf("fallback-%x-%x", time.Now().UnixNano(), fallbackOperationIDCounter.Add(1))
 }
 
+// machineSeenEvery is how often the traffic of one device writes its machine's
+// last_seen.
+const machineSeenEvery = 30 * time.Second
+
+type machineSeenKey struct{ machine, principal string }
+
+// machineSeenDue says whether the device of principal is due to record a sign
+// of life of its machine, and counts it as done.
+func (a *api) machineSeenDue(p store.Principal) bool {
+	key := machineSeenKey{strings.ToLower(p.Machine), p.ID}
+	if last, ok := a.machineSeen.Load(key); ok && time.Since(last.(time.Time)) < machineSeenEvery {
+		return false
+	}
+	a.machineSeen.Store(key, time.Now())
+	return true
+}
+
 func (a *api) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/health" || r.URL.Path == "/api/version" || r.URL.Path == "/metrics" || (r.Method == http.MethodPost && isDevicePath(r.URL.Path)) {
@@ -335,6 +354,11 @@ func (a *api) auth(next http.Handler) http.Handler {
 			return
 		}
 		a.st.TouchToken(principal.TokenID)
+		if principal.Machine != "" && a.machineSeenDue(principal) {
+			// A device that talks is a machine that was just seen: without it the
+			// machine page reads "last seen 20 min ago" next to an agent at work.
+			_ = a.st.NoteMachineSeen(principal.Machine, principal.ID)
+		}
 		if record := requestRecordFromContext(r.Context()); record != nil {
 			record.actor = principal.Label
 		}

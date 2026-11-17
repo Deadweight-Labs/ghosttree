@@ -74,6 +74,9 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 	if eventArg == "turn-end" {
 		return turnEnd(stdin, *harness, stdout)
 	}
+	if eventArg == "session-end" {
+		return sessionEnd(stdin, *harness, stdout)
+	}
 	if eventArg == "subagent-start" {
 		return subagentStart(stdin, *harness, stdout)
 	}
@@ -197,6 +200,7 @@ const hookUsage = `usage: ctx hook session-start [--harness claude|codex]
        ctx hook pre-tool-use [--harness claude|codex]
        ctx hook post-tool-use [--harness claude|codex]
        ctx hook turn-end [--harness claude]
+       ctx hook session-end [--harness claude]
        ctx hook subagent-start [--harness claude]
        ctx hook pause-gate [--harness claude]
        ctx hook refresh-files <repo>`

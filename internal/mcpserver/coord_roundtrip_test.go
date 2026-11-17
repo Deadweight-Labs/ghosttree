@@ -818,7 +818,7 @@ func TestPeersPrintReachabilityAndWorkSeparatelyWithOrigin(t *testing.T) {
 			t.Fatalf("silence printed as %q: %s", bad, got)
 		}
 	}
-	if !strings.Contains(got, "Gaps:") || !strings.Contains(got, "ended is never produced") {
+	if !strings.Contains(got, "Gaps:") || !strings.Contains(got, "ended needs the SessionEnd hook") {
 		t.Fatalf("the missing end signal is not named: %s", got)
 	}
 	if err := b.client.CoordHeartbeat(b.sessionRef); err != nil {

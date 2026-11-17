@@ -24,7 +24,9 @@ type profileView struct {
 	Notify []profileNotify
 }
 
-type profileDevice struct{ Name, Seen string }
+// profileDevice is a machine the account signed in on: the name of ctx login
+// --machine, the same one the agents, the sessions and the machine page carry.
+type profileDevice struct{ Name, Href, Seen string }
 
 // profilePage shows the account's display name and, in an interactive session,
 // the form to change it.
@@ -53,15 +55,20 @@ func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, 
 		if tokens, err := a.deviceTokens(r); err == nil {
 			now := overviewNow().UTC()
 			for _, t := range tokens {
-				name := t.Label
-				if name == "" {
-					name = t.Machine
+				// The machine, as ctx login --machine named it, the same name the
+				// agents, sessions and the machine page carry; the label of the
+				// token ("ctx login on <machine>") only for a device without one.
+				name, href := strings.TrimSpace(t.Machine), ""
+				if name != "" {
+					href = machineHrefOf(name)
+				} else {
+					name = t.Label
 				}
 				at := parseTime(t.LastUsedAt)
 				if at.IsZero() {
 					at = parseTime(t.CreatedAt)
 				}
-				v.Devices = append(v.Devices, profileDevice{Name: name, Seen: shortAgo(l, now, at)})
+				v.Devices = append(v.Devices, profileDevice{Name: name, Href: href, Seen: shortAgo(l, now, at)})
 			}
 		}
 	}
@@ -142,5 +149,9 @@ func (a *app) ownAgentGroups(r *http.Request, name string) []agentGroup {
 	if err != nil {
 		return nil
 	}
-	return groupAgents(cards, nil)
+	var machines []machineRow
+	if tokens, err := a.deviceTokens(r); err == nil {
+		machines = ownMachines(a.langFor(r), tokens, now)
+	}
+	return groupAgents(cards, machines)
 }

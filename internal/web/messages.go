@@ -631,7 +631,7 @@ var messages = map[string]string{
 	"sessions.more_in_session":     "%d more in this session",
 	"sessions.no_results":          "No results for “%s”.",
 	"sessions.show_older":          "Show older",
-	"sessions.empty":               "No sessions yet.",
+	"sessions.empty":               "Sessions of your agents appear here.",
 	"sessions.empty_guest":         "Nothing here yet.",
 	"sessions.connect":             "Connect an agent",
 	"sessions.no_match":            "No sessions match.",

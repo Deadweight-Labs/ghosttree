@@ -93,8 +93,8 @@ func runHookCommandProbe(command, event string) error {
 		}
 		return fmt.Errorf("%s failed: %v: %s", command, err, bounded(stderr.String(), 512))
 	}
-	if event == "Stop" || event == "StopFailure" {
-		// A Stop hook has no hookSpecificOutput; a JSON object is the contract.
+	if event == "Stop" || event == "StopFailure" || event == "SessionEnd" {
+		// A Stop or SessionEnd hook has no hookSpecificOutput; a JSON object is the contract.
 		var object map[string]any
 		if err := json.Unmarshal(stdout.Bytes(), &object); err != nil {
 			return fmt.Errorf("%s returned invalid JSON: %v", command, err)

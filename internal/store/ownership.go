@@ -447,3 +447,23 @@ func (s *Store) TransferMachine(name, account string) error {
 	}
 	return tx.Commit()
 }
+
+// NoteMachineSeen records that the device of an account just talked: the last
+// sign of life of its machine. It only ever updates a row that exists and
+// belongs to that account, never creates one: a machine that was released (its
+// name is free again, or someone else's by now) is not brought back, and not
+// kept alive, by a token that outlived it. The caller throttles it.
+func (s *Store) NoteMachineSeen(name, principalID string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{name, principalID}, func(d *Store, p []any) error {
+			return d.NoteMachineSeen(p[0].(string), p[1].(string))
+		})
+	}
+	account, ok := accountNumericID(principalID)
+	host := canonicalMachine(name)
+	if !ok || host == "" {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE machines SET last_seen=? WHERE hostname=? AND account_id=?`, now(), host, account)
+	return err
+}

@@ -46,6 +46,10 @@ const (
 	// when a turn ends on an API or rate-limit error. It reports the same thing
 	// as Stop: the turn is over, so the agent is not stuck.
 	ChannelTurnFail Channel = "turn-fail"
+	// ChannelSessionEnd is SessionEnd: the session is over, which separates a
+	// finished run from an agent that waits for its next prompt. It delivers
+	// nothing to the model. Claude Code only.
+	ChannelSessionEnd Channel = "session-end"
 	// ChannelSubagentStart is SubagentStart: a subagent starts with only the
 	// prompt its parent wrote, and this hook puts a short ghosttree briefing in
 	// front of it (REQ-436). Claude Code only.
@@ -96,7 +100,7 @@ func Harnesses() []Harness {
 		{
 			Name:       "claude",
 			Components: append([]Component(nil), componentOrder...),
-			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelCoordInbox, ChannelTurnEnd, ChannelTurnFail, ChannelSubagentStart, ChannelMCP},
+			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelCoordInbox, ChannelTurnEnd, ChannelTurnFail, ChannelSessionEnd, ChannelSubagentStart, ChannelMCP},
 			// SubagentStart measured 2026-11-10 on Claude Code 2.1.319: the
 			// briefing stands in the subagent's transcript as context.
 			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelSubagentStart, ChannelMCP},
@@ -225,6 +229,8 @@ func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok b
 		return "Stop", withCtx(turnEndHookCommand) + " --harness " + h.Name, "", true
 	case ChannelTurnFail:
 		return "StopFailure", withCtx(turnEndHookCommand) + " --harness " + h.Name, "", true
+	case ChannelSessionEnd:
+		return "SessionEnd", withCtx(sessionEndHookCommand) + " --harness " + h.Name, "", true
 	case ChannelSubagentStart:
 		return "SubagentStart", withCtx(subagentHookCommand) + " --harness " + h.Name, "", true
 	}
