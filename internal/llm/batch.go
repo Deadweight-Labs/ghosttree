@@ -129,7 +129,7 @@ func (c *httpClient) uploadBatchFile(ctx context.Context, jsonl []byte) (string,
 		return "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(c.cfg.BaseURL, "/")+"/v1/files", &body)
+		Endpoint(c.cfg.BaseURL, "/v1/files"), &body)
 	if err != nil {
 		return "", err
 	}
@@ -186,7 +186,7 @@ func (c *httpClient) CollectBatch(ctx context.Context, batchID string) (map[stri
 		return nil, fmt.Errorf("batch %s has no output file (status %s)", batchID, batch.Status)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		strings.TrimRight(c.cfg.BaseURL, "/")+"/v1/files/"+batch.OutputFileID+"/content", nil)
+		Endpoint(c.cfg.BaseURL, "/v1/files/")+batch.OutputFileID+"/content", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +267,7 @@ type batchEnvelope struct {
 
 func (c *httpClient) fetchBatch(ctx context.Context, batchID string) (batchEnvelope, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		strings.TrimRight(c.cfg.BaseURL, "/")+"/v1/batches/"+batchID, nil)
+		Endpoint(c.cfg.BaseURL, "/v1/batches/")+batchID, nil)
 	if err != nil {
 		return batchEnvelope{}, err
 	}

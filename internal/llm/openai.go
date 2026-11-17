@@ -70,7 +70,7 @@ func (c *httpClient) post(ctx context.Context, path string, payload, out any) er
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.cfg.BaseURL, "/")+path, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, Endpoint(c.cfg.BaseURL, path), bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}

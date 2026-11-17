@@ -72,7 +72,7 @@ func (c *httpClient) anthropicDo(ctx context.Context, method, path string, body 
 	}
 	var req *http.Request
 	var err error
-	url := strings.TrimRight(c.cfg.BaseURL, "/") + path
+	url := Endpoint(c.cfg.BaseURL, path)
 	if rd != nil {
 		req, err = http.NewRequestWithContext(ctx, method, url, rd)
 	} else {
