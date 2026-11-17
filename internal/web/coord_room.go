@@ -139,6 +139,9 @@ type coordHereView struct {
 	Count       int
 	AskURL      string
 	Key         string
+	// Tip is what a list of a thread keeps quiet: machine, branch and the number
+	// of sessions of an agent, as a tooltip.
+	Tip string
 }
 
 // coordAgentKey says which sessions are one agent: same owner, same tool, same
@@ -170,6 +173,25 @@ var coordDotRank = map[string]int{"wait": 0, "bad": 1, "active": 2, "quiet": 3, 
 // groupParticipantsHere turns the ordered participants into the lines of the
 // list. The order of the input is kept: the group stands where its first member stood.
 func groupParticipantsHere(l lang, parts []coordParticipantView) []coordHereView {
+	return groupParticipants(l, parts, coordAgentKey)
+}
+
+// hereTitle is what an agent is called in a list: the harness ("Claude",
+// "Codex"), else the first part of its label, else the tool.
+func hereTitle(l lang, p coordParticipantView) string {
+	title := p.Provider
+	if kind := harnessKind(p.Provider); kind == avClaude || kind == avCodex {
+		title = l.msg(avatarKeys[kind])
+	} else if first, _, _ := strings.Cut(p.Label, " · "); first != "" {
+		title = first
+	}
+	return title
+}
+
+// groupParticipants is groupParticipantsHere with the choice of what makes
+// sessions one agent: the list of the room keeps the machine apart, the list of a
+// thread does not.
+func groupParticipants(l lang, parts []coordParticipantView, agentKey func(coordParticipantView) string) []coordHereView {
 	var out []coordHereView
 	at := map[string]int{}
 	for _, p := range parts {
@@ -177,16 +199,11 @@ func groupParticipantsHere(l lang, parts []coordParticipantView) []coordHereView
 			out = append(out, coordHereView{Human: true, Person: p, Key: p.ID})
 			continue
 		}
-		key := coordAgentKey(p)
+		key := agentKey(p)
 		i, ok := at[key]
 		if !ok {
 			owner, machine := p.agentOwnerMachine()
-			title := p.Provider
-			if kind := harnessKind(p.Provider); kind == avClaude || kind == avCodex {
-				title = l.msg(avatarKeys[kind])
-			} else if first, _, _ := strings.Cut(p.Label, " · "); first != "" {
-				title = first
-			}
+			title := hereTitle(l, p)
 			sub := owner
 			if machine != "" {
 				if sub != "" {

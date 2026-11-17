@@ -361,6 +361,8 @@ var messages = map[string]string{
 	"coord.work_state":                 "Work state: %s",
 	"coord.worktree":                   "Worktree: %s",
 	"coord.wait_cycles":                "Waiting on each other",
+	"coord.wait_pair":                  "%[1]s are waiting on each other · since %[2]s",
+	"coord.compose_options":            "Recipient, kind and status",
 	"coord.from":                       "from %s",
 	"coord.to":                         "to %s",
 	"coord.goto":                       "Go to post",
