@@ -551,6 +551,8 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	// restrictedLink: an owner or a device made this login link. Its session may not
 	// change how the account signs in or hand out credentials.
 	restrictedLink := false
+	// device: the device token that asked for this link (ctx web), if any.
+	var device store.Principal
 	kind := a.store.CodeKindFor(code)
 	switch kind {
 	case store.CodeBootstrap:
@@ -567,7 +569,7 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 	case store.CodeLogin:
 		restrictedLink = a.store.LoginLinkRestricted(code)
-		account, err = a.store.RedeemLoginLink(code)
+		account, device, err = a.store.RedeemLoginLinkDevice(code)
 	case store.CodeClaim:
 		// Ein Claim-Code gehört zum Anbieter-Ablauf; ohne OIDC gibt es ihn nicht.
 		if a.oidc == nil {
@@ -634,6 +636,12 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		// Die erste Anmeldung einer neuen Instanz führt in die Einrichtung, nicht in
 		// einen leeren Posteingang.
 		a.finishLoginTo(w, r, account, "/ui/overview")
+		return
+	}
+	if kind == store.CodeLogin && device.TokenID != 0 {
+		// ctx web: the session has the rights of the device token that asked for
+		// the link (reading and ordinary work), never those of a person signing in.
+		a.startSessionLink(w, r, device, a.takeNext(w, r, "/ui/inbox"), true)
 		return
 	}
 	if kind == store.CodeLogin && restrictedLink {

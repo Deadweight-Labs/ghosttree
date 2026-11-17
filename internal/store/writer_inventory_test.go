@@ -260,6 +260,7 @@ var writerMethodClasses = map[string]string{
 	"LoginIdentity":                 "write",
 	"BootstrapLocal":                "write",
 	"RedeemLoginLink":               "write",
+	"RedeemLoginLinkDevice":         "write",
 	"CodeKindFor":                   "read",
 	"PreviewJoin":                   "read",
 	"LoginLinkAllowed":              "read",

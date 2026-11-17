@@ -808,28 +808,58 @@ func (s *Store) RedeemLoginLink(code string) (Account, error) {
 			return d.RedeemLoginLink(p[0].(string))
 		})
 	}
+	a, _, err := s.RedeemLoginLinkDevice(code)
+	return a, err
+}
+
+// RedeemLoginLinkDevice ist RedeemLoginLink und nennt zusätzlich das Gerät, das
+// den Link ausgestellt hat (ctx web). Für einen Link ohne Gerät ist device leer.
+// Eine Sitzung aus einem Geräte-Link hat die Rechte des Gerätetokens, nicht die
+// eines Menschen: das Token liegt auf jedem Rechner, auf dem ein Agent läuft.
+func (s *Store) RedeemLoginLinkDevice(code string) (Account, Principal, error) {
+	type out struct {
+		a Account
+		p Principal
+	}
+	if s.writer != nil {
+		o, err := queueValue(s, []any{code}, func(d *Store, p []any) (out, error) {
+			a, dev, err := d.RedeemLoginLinkDevice(p[0].(string))
+			return out{a, dev}, err
+		})
+		return o.a, o.p, err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return Account{}, err
+		return Account{}, Principal{}, err
 	}
 	defer tx.Rollback()
 	id, err := consumeCode(tx, code, CodeLogin)
 	if err != nil {
-		return Account{}, err
+		return Account{}, Principal{}, err
 	}
 	// Ein Link, den ein Gerät für sein Konto ausgestellt hat (ctx web), gilt nur,
 	// solange das Token dieses Geräts gilt.
 	if !loginCodeTokenValidTx(tx, hashToken(code)) {
-		return Account{}, ErrCodeInvalid
+		return Account{}, Principal{}, ErrCodeInvalid
 	}
 	a, err := accountState(tx, id)
 	if err != nil {
-		return Account{}, err
+		return Account{}, Principal{}, err
 	}
 	if a.State != "active" {
-		return Account{}, ErrAccountDisabled
+		return Account{}, Principal{}, ErrAccountDisabled
 	}
-	return a, tx.Commit()
+	var dev Principal
+	err = tx.QueryRow(`SELECT t.id, t.kind, t.machine FROM account_codes c JOIN api_tokens t ON t.id = c.token_id
+		WHERE c.code_hash = ? AND c.token_id <> 0`, hashToken(code)).Scan(&dev.TokenID, &dev.TokenKind, &dev.Machine)
+	switch {
+	case err == nil:
+		dev.ID, dev.Label = a.ID, a.Name
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return Account{}, Principal{}, err
+	}
+	return a, dev, tx.Commit()
 }
 
 // CodeKindFor sagt, welche Art ein noch gültiger Code hat, ohne ihn zu

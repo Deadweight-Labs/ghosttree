@@ -238,3 +238,48 @@ func TestServeRefusesBrokenMailSetupAtStart(t *testing.T) {
 		}
 	}
 }
+
+// A link from ctx web is asked for with the device token, and that token sits on
+// every machine an agent runs on. The session it opens therefore has the rights of
+// the token (reading, ordinary work), not those of a person signing in: no
+// administrative forms, and it ends when the device is revoked.
+func TestCtxWebSessionHasTheRightsOfTheDeviceNotOfAPerson(t *testing.T) {
+	srv, st, info := webFixture(t)
+	var out bytes.Buffer
+	if code := cmdWeb([]string{"--print", "--json"}, &out); code != 0 {
+		t.Fatal(out.String())
+	}
+	var res struct{ URL string }
+	json.Unmarshal(out.Bytes(), &res)
+	resp, _ := signInWithLink(t, srv, res.URL)
+	if resp.StatusCode != http.StatusSeeOther || len(resp.Cookies()) == 0 {
+		t.Fatalf("signing in: %d", resp.StatusCode)
+	}
+	cookie := resp.Cookies()[0]
+	get := func(path string) (int, string) {
+		c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		req, _ := http.NewRequest("GET", srv.URL+path, nil)
+		req.AddCookie(cookie)
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		return r.StatusCode, string(b)
+	}
+	code, page := get("/ui/inbox")
+	if code != http.StatusOK {
+		t.Fatalf("inbox: %d", code)
+	}
+	// An interactive session is offered "New organization"; a device session is not.
+	if strings.Contains(page, `data-new="org"`) {
+		t.Fatal("a session from ctx web is offered administrative actions of a person")
+	}
+	if err := st.RevokeToken(info.ID); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := get("/ui/profile"); code == http.StatusOK {
+		t.Fatal("the session from ctx web outlived the revoked device")
+	}
+}
