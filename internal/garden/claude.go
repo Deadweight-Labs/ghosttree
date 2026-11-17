@@ -289,6 +289,10 @@ type ClaudeConfig struct {
 	BaseURL, Token string
 	// APIKey is a real API key for api.anthropic.com.
 	APIKey string
+	// SmallModel is the model Claude Code uses for its own small calls; set
+	// when the sessions go through the model proxy, where a model name of
+	// Claude Code's choosing need not be served.
+	SmallModel string
 	// ParentEnv is the environment to take the few pass-through variables from.
 	ParentEnv []string
 }
@@ -435,6 +439,8 @@ func (c ClaudeConfig) Environ(runDir string) []string {
 	add("ANTHROPIC_BASE_URL", c.BaseURL)
 	add("ANTHROPIC_AUTH_TOKEN", c.Token)
 	add("ANTHROPIC_API_KEY", c.APIKey)
+	add("ANTHROPIC_SMALL_FAST_MODEL", c.SmallModel)
+	add("ANTHROPIC_DEFAULT_HAIKU_MODEL", c.SmallModel)
 	// Nothing but the model traffic: no telemetry, no update check, no feedback.
 	env = append(env, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "DISABLE_AUTOUPDATER=1", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1")
 	return env

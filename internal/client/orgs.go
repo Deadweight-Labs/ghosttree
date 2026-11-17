@@ -167,13 +167,12 @@ func (c *Client) GardenDue() ([]store.GardenJob, error) {
 	return out, err
 }
 
-// StartGardenRun reports the start of a run in one repository.
-func (c *Client) StartGardenRun(orgID int64, project string) (int64, error) {
-	var out struct {
-		ID int64 `json:"id"`
-	}
+// StartGardenRun reports the start of a run in one repository; the answer
+// may carry the run's way to its model through the server's model proxy.
+func (c *Client) StartGardenRun(orgID int64, project string) (store.GardenRunStart, error) {
+	var out store.GardenRunStart
 	err := c.do("POST", "/api/garden/runs", nil, map[string]any{"org_id": orgID, "project": project}, &out)
-	return out.ID, err
+	return out, err
 }
 
 // FinishGardenRun reports how a run ended.

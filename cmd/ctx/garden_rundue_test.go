@@ -19,12 +19,12 @@ type fakeDue struct {
 }
 
 func (f *fakeDue) GardenDue() ([]store.GardenJob, error) { return f.jobs, nil }
-func (f *fakeDue) StartGardenRun(org int64, project string) (int64, error) {
+func (f *fakeDue) StartGardenRun(org int64, project string) (store.GardenRunStart, error) {
 	if project == "github.com/acme/refused" {
-		return 0, errors.New("refused")
+		return store.GardenRunStart{}, errors.New("refused")
 	}
 	f.started = append(f.started, project)
-	return int64(len(f.started)), nil
+	return store.GardenRunStart{ID: int64(len(f.started))}, nil
 }
 func (f *fakeDue) FinishGardenRun(id int64, state string, cost float64, note string) error {
 	f.finished[id], f.costs[id] = state, cost
@@ -40,7 +40,7 @@ func TestRunDueRunsEachDueRepositoryWithTheServersBudget(t *testing.T) {
 		jobs: []store.GardenJob{{OrgID: 1, Slug: "acme", Projects: []string{"github.com/acme/app", "github.com/acme/missing", "github.com/acme/refused"}, BudgetRun: 3, BudgetMon: 90}}}
 	var calls [][]string
 	spent := int64(0)
-	run := func(args []string) int {
+	run := func(args []string, _ *store.GardenAI) int {
 		calls = append(calls, args)
 		spent += 1_250_000
 		return 0
@@ -90,7 +90,7 @@ func TestRunDueKeepsTheMonthOfEachNamespace(t *testing.T) {
 	}}
 	var calls [][]string
 	spent := int64(0)
-	run := func(args []string) int {
+	run := func(args []string, _ *store.GardenAI) int {
 		calls = append(calls, args)
 		spent += 3_000_000 // every run spends 3 USD
 		return 0
@@ -117,7 +117,7 @@ func TestRunDueStopsOnAnUnreadableStateFile(t *testing.T) {
 	f := &fakeDue{finished: map[int64]string{}, costs: map[int64]float64{},
 		jobs: []store.GardenJob{{OrgID: 1, Slug: "acme", Projects: []string{"github.com/acme/app"}, BudgetRun: 3, BudgetMon: 90}}}
 	ran := false
-	code := runGardenDue(f, t.TempDir(), "", func() (int64, error) { return 0, errors.New("broken") }, func([]string) int { ran = true; return 0 }, io.Discard)
+	code := runGardenDue(f, t.TempDir(), "", func() (int64, error) { return 0, errors.New("broken") }, func([]string, *store.GardenAI) int { ran = true; return 0 }, io.Discard)
 	if code != 1 || ran || len(f.started) != 0 {
 		t.Fatalf("exit %d ran %v started %v", code, ran, f.started)
 	}

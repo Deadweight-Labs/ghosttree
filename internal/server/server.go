@@ -53,6 +53,11 @@ func WithLogger(logger *slog.Logger) Option {
 // (loopback is always included).
 func WithTrustedProxies(s proxytrust.Set) Option { return func(a *api) { a.proxies = s } }
 
+// WithAIProxy names the address of the model proxy on this machine
+// (REQ-694); the gardener's runs get it with their token. Empty: the proxy is
+// off and the gardener keeps its llm.json.
+func WithAIProxy(baseURL string) Option { return func(a *api) { a.aiProxyURL = baseURL } }
+
 // WithPublicURL fixes the externally visible base URL (scheme://host, no path).
 func WithPublicURL(raw string) Option {
 	return func(a *api) { a.publicURL = strings.TrimRight(raw, "/") }
@@ -80,6 +85,7 @@ func withSnapshotErrorLogger(logger snapshotErrorLogger) Option {
 type api struct {
 	proxies              proxytrust.Set
 	publicURL            string
+	aiProxyURL           string
 	st                   *store.Store
 	machineSeen          sync.Map
 	snapshotLimits       snapshot.Limits

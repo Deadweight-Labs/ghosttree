@@ -61,7 +61,46 @@ func (a *api) gardenRunStart(w http.ResponseWriter, r *http.Request) {
 		writeGardenError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
+	out := store.GardenRunStart{ID: id}
+	out.AI, out.Fallback = a.gardenModel(principalOf(r).ID, id)
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// gardenModel gives a gardener run its way to the model through the proxy:
+// the alias its owner chose, resolved like for any workflow run, on a
+// connection in the Anthropic format (Claude Code speaks it) with prices (the
+// runner enforces its budget with them), and a token that holds while the
+// run is running. Anything short of that is a fallback: the runner keeps its
+// llm.json, as before the proxy.
+func (a *api) gardenModel(principal string, gardenRunID int64) (*store.GardenAI, string) {
+	if a.aiProxyURL == "" {
+		return nil, store.GardenAIProxyOff
+	}
+	run, alias, err := a.st.GardenRunModel(principal, gardenRunID)
+	if err != nil {
+		return nil, store.GardenAIUnavailable
+	}
+	if alias == "" {
+		return nil, store.GardenAINoAlias
+	}
+	route, err := a.st.AIRouteFor(run, alias)
+	var be *store.AIBudgetError
+	switch {
+	case errors.As(err, &be):
+		return nil, store.GardenAIBudget
+	case err != nil:
+		return nil, store.GardenAIUnavailable
+	case route.Connection.Format != store.AIFormatAnthropic:
+		return nil, store.GardenAIFormat
+	case route.Model.InUSD <= 0 || route.Model.OutUSD <= 0:
+		return nil, store.GardenAINoPrice
+	}
+	token, err := a.st.IssueAIRunToken(run.ID)
+	if err != nil {
+		return nil, store.GardenAIUnavailable
+	}
+	return &store.GardenAI{BaseURL: a.aiProxyURL, Token: token, Model: alias, Connection: route.Connection.Name,
+		InUSD: route.Model.InUSD, OutUSD: route.Model.OutUSD}, ""
 }
 
 // gardenRunFinish answers POST /api/garden/runs/{id}/finish {state, cost_usd, note}.

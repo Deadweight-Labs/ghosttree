@@ -199,7 +199,21 @@ type gardenOpts struct {
 	afterGhosts            func(written []garden.GhostProposalData, all bool)
 }
 
-func cmdGarden(args []string, stdout io.Writer) int {
+func cmdGarden(args []string, stdout io.Writer) int { return cmdGardenWith(args, stdout, nil) }
+
+// gardenProxyConfig is the gardener's model config for a run that reaches its
+// model through the server's model proxy (REQ-695): the proxy's address, the
+// run's token in place of a key, the owner's alias as the model and the
+// prices of the connection behind it, which the budget is enforced with.
+// Cache reads and writes are priced as the proxy books them.
+func gardenProxyConfig(ai *store.GardenAI) llm.GardenConfig {
+	return llm.GardenConfig{Config: llm.Config{Format: store.AIFormatAnthropic, BaseURL: ai.BaseURL, APIKey: ai.Token, Model: ai.Model,
+		InputUSDPerMTok: ai.InUSD, OutputUSDPerMTok: ai.OutUSD}}
+}
+
+// cmdGardenWith is cmdGarden for a run that run-due started: ai, when the
+// server gave one, replaces the model of llm.json for this run.
+func cmdGardenWith(args []string, stdout io.Writer, ai *store.GardenAI) int {
 	if len(args) > 0 && args[0] == "git-mcp" {
 		return cmdGardenGitMCP(args[1:], stdout)
 	}
@@ -253,6 +267,11 @@ func cmdGarden(args []string, stdout io.Writer) int {
 
 	// Opt-in first: nothing below runs without a key, except counting.
 	cfg, err := llm.LoadGardenConfig()
+	if ai != nil {
+		// The descriptions run on the same alias: a model by its own name
+		// is not necessarily one the owner's connections serve.
+		cfg, err, *ghostModel = gardenProxyConfig(ai), nil, ""
+	}
 	switch {
 	case errors.Is(err, llm.ErrGardenDisabled) && *mode == "agent":
 		// The sessions are paid for through the settings.json of the claude
@@ -363,6 +382,10 @@ func cmdGarden(args []string, stdout io.Writer) int {
 			if cc.CtxBin, err = os.Executable(); err != nil {
 				fmt.Fprintf(stdout, "cannot find the ctx binary for the git tools: %v\n", err)
 				return 1
+			}
+			if ai != nil {
+				// Claude Code's own helper calls go to the same alias.
+				cc.SmallModel = ai.Model
 			}
 			if cfg.APIKey != "" {
 				if u, perr := url.Parse(cfg.BaseURL); perr == nil && u.Host == "api.anthropic.com" {

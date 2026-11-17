@@ -52,6 +52,8 @@ type serveConfig struct {
 	Explain        ExplainConfig
 	// AIBox seals the keys of AI connections; nil when the server has no key.
 	AIBox *secretbox.Box
+	// AIProxyURL is the model proxy on loopback; the gardener's runs get it.
+	AIProxyURL string
 	// GardenLimits are shown to administrators; the gardener itself runs as a command.
 	GardenLimits llmusage.Limits
 	// Embed configures hybrid search; without a URL it is off.
@@ -385,7 +387,7 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		fmt.Fprintf(stdout, "ai connections: %v\n", err)
 		return 1
 	}
-	cfg.AIBox = ai.Box
+	cfg.AIBox, cfg.AIProxyURL = ai.Box, ai.BaseURL
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
 	fmt.Fprintln(stdout, mailStartLine(cfg))
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", accessEnforcedByEnv(), "env", envEnforceAccess,
@@ -520,6 +522,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 		server.WithLogger(logger),
 		server.WithBuildVersion(version),
 		server.WithTrustedProxies(cfg.TrustedProxies),
+		server.WithAIProxy(cfg.AIProxyURL),
 	}
 	if forge.NewGitHubApp(forge.AppConfigFromOS()).Configured() {
 		options = append(options, server.WithCapabilities("github_app"))
