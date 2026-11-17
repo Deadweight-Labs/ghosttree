@@ -72,7 +72,7 @@ func TestProjectVisibilityIsASwitchOnTheOrgPage(t *testing.T) {
 		t.Fatalf("anna must work in the shared project: %+v", got)
 	}
 	page = getOrgs(t, alice, base, "?org=alpha")
-	if !strings.Contains(page, "Shared with the org") || !strings.Contains(page, "Make private") || !strings.Contains(page, "Default role") {
+	if !strings.Contains(page, "Shared with the org") || !strings.Contains(page, "Make private") || !strings.Contains(page, "organization default") {
 		t.Fatalf("shared state not shown: %s", page)
 	}
 	// Anna sees the shared project and cannot switch it.

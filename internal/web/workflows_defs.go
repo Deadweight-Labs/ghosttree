@@ -62,6 +62,8 @@ type workflowDefView struct {
 	Result                    *requestResult
 	CmpFrom, CmpTo            int
 	Visual                    *wfVisualView
+	// Need: see workflowsView.Need.
+	Need string
 }
 
 type workflowFormView struct {
@@ -146,6 +148,8 @@ func (a *app) workflowDefPage(w http.ResponseWriter, r *http.Request, remote, na
 		Enabled: def.Enabled, CanEdit: interactive(r) && pa.CanEditWorkflows(remote), Token: csrfOf(r), CmpFrom: max(1, def.Version-1), CmpTo: def.Version}
 	if v.CanEdit {
 		v.EditHref = href + "?edit=1"
+	} else if interactive(r) {
+		v.Need = roleNeededShort(l, roleNeededOf(pa.Check(remote, store.ResWorkflow, store.ActEdit, store.Object{})))
 	}
 	byN := map[int]store.WorkflowDefVersion{}
 	for _, ver := range versions {

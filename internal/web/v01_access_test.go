@@ -238,7 +238,7 @@ func TestProjectFormTakesARepositoryAddressAndTheAgentLandsInThatProject(t *test
 }
 
 // AC-675.3 (the choice): a person who has the role of a shared project only by
-// default is shown as "Default (Member)", never with Owner preselected, so that
+// default is shown as "Member (organization default)", never with Owner preselected, so that
 // pressing Set cannot make them an owner.
 func TestRoleChoiceShowsTheRealDefaultAndNeverPreselectsOwner(t *testing.T) {
 	e := ovEnv(t)
@@ -247,12 +247,12 @@ func TestRoleChoiceShowsTheRealDefaultAndNeverPreselectsOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/orgs?org=alpha")
-	if !strings.Contains(page, `<option value="" selected>Default (Member)</option>`) {
+	if !strings.Contains(page, `<option value="" selected>Member (organization default)</option>`) {
 		t.Errorf("the role choice of a member with the default role does not say so")
 	}
 	// Whatever select is rendered for a default role, owner is not the selected one.
 	for _, sel := range regexp.MustCompile(`(?s)<select class="gfield" name="role".*?</select>`).FindAllString(page, -1) {
-		if strings.Contains(sel, "Default (Member)") && regexp.MustCompile(`<option value="owner"[^>]*selected`).MatchString(sel) {
+		if strings.Contains(sel, "Member (organization default)") && regexp.MustCompile(`<option value="owner"[^>]*selected`).MatchString(sel) {
 			t.Errorf("owner is preselected: %s", sel)
 		}
 	}

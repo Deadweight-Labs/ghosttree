@@ -28,6 +28,16 @@ type orgMemberRow struct {
 	// Service: an account that is no person (a background account set up
 	// for the organization); the list says so.
 	Service bool
+	// Projects are the person's roles in the projects of the organization the
+	// viewer sees, each with the form to change it where the viewer may
+	// (REQ-704): the member list is the one place for every role of a person.
+	Projects []memberProjectRole
+}
+
+// memberProjectRole is one project role in a member's row.
+type memberProjectRole struct {
+	projectRoleRow
+	Remote, Short string
 }
 
 // inviteRow is an invitation with, for its creator while it is open, the link.
@@ -144,6 +154,27 @@ type orgsView struct {
 	// project is reassigned, an unknown remote decided (contested). Only here,
 	// from an interactive session; the API refuses both.
 	Assign []store.Org
+}
+
+// OpenInvites are the invitations still waiting; PastInvites the accepted,
+// revoked and expired ones, folded away: who accepted stands in the member
+// list already (REQ-704, P27).
+func (v orgsView) OpenInvites() []inviteRow {
+	return keep(v.Invites, 0, func(i inviteRow) bool { return i.Status == "pending" })
+}
+func (v orgsView) PastInvites() []inviteRow {
+	return keep(v.Invites, 0, func(i inviteRow) bool { return i.Status != "pending" })
+}
+
+// PastOpen: the last action changed a past invitation (a revoke), so the
+// folded list opens on it.
+func (v orgsView) PastOpen() bool {
+	for _, i := range v.PastInvites() {
+		if "invite-"+strconv.FormatInt(i.ID, 10) == v.HitRow {
+			return true
+		}
+	}
+	return false
 }
 
 // People are the members that are no guests, Guests the others.
@@ -314,6 +345,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			}
 			v.Roles = append(v.Roles, rv)
 		}
+		v.Members = attachProjectRoles(v.Members, v.Roles, orgAll, gardener)
 		a.fillSources(r, &v, me)
 		if v.Owner {
 			v.Claimable, _ = a.store.ListClaimableProjects(me, v.Selected.ID)
@@ -341,6 +373,47 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		data.OrgBand, data.OrgName = a.orgBandFor(r, v.Selected, "settings"), v.Selected.Name
 	}
 	a.renderBrowser(w, r, "orgs", data)
+}
+
+// attachProjectRoles puts every project role of a person into their row of the
+// member list (REQ-704). A row of another person whose account the list hides
+// (a viewer without the owner role) is found by name. A person the viewer may
+// give a role to but does not find in the list (a lead and an organization
+// member without any role yet) gets a row of their own, from the organization's
+// list the project roles were built from.
+func attachProjectRoles(members []orgMemberRow, roles []projectRolesView, orgAll []store.OrgMemberInfo, gardener string) []orgMemberRow {
+	find := func(row projectRoleRow) int {
+		for i, m := range members {
+			if m.AccountID != "" && m.AccountID == row.AccountID {
+				return i
+			}
+		}
+		for i, m := range members {
+			if m.AccountID == "" && !m.Self && m.Account == row.Account {
+				return i
+			}
+		}
+		return -1
+	}
+	for _, rv := range roles {
+		for _, row := range rv.Rows {
+			i := find(row)
+			if i < 0 && len(row.Grantable) > 0 && row.AccountID != gardener {
+				for _, m := range orgAll {
+					if m.AccountID == row.AccountID && !m.Guest {
+						m.Account = store.NormalizeAccountName(m.Account)
+						members = append(members, orgMemberRow{OrgMemberInfo: m, Initial: initialOf(m.Account), Service: m.Kind == store.AccountKindService})
+						i = len(members) - 1
+						break
+					}
+				}
+			}
+			if i >= 0 {
+				members[i].Projects = append(members[i].Projects, memberProjectRole{projectRoleRow: row, Remote: rv.Remote, Short: shortName(rv.Remote)})
+			}
+		}
+	}
+	return members
 }
 
 // orgError übersetzt Store-Fehler in eine Meldung und einen Statuscode.
@@ -780,7 +853,7 @@ func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
 		case !known || p.OrgID != o.ID:
 			err = store.ErrProjectNotFound
 		case r.FormValue("role") == "" && a.store.ProjectRole(p.Remote, r.FormValue("account")).Inherited:
-			// The choice "Default (Member)" is the role the person has without any row:
+			// The choice "Member (organization default)" is the role the person has without any row:
 			// setting it changes nothing.
 			orgRedirect(w, r, o.Slug, "")
 			return
@@ -804,7 +877,7 @@ func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
 	case r.FormValue("review") == "1":
 		text = l.msg("adm.done.prole_review", name, adminLabel(l, "prole", role), remote)
 	}
-	a.orgDone(w, r, o.Slug, "project", doneNote{Text: text, Row: rowAnchor("pr", remote+"-"+account), Open: remote})
+	a.orgDone(w, r, o.Slug, "role", doneNote{Text: text, Row: rowAnchor("pr", remote+"-"+account)})
 }
 
 // grantable nennt die wählbaren Rollen, aber nur in einer interaktiven Sitzung:

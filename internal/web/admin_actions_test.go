@@ -126,8 +126,11 @@ func TestMemberActionsAskBeforeTheyAct(t *testing.T) {
 func TestInviteAsksForTheRoleAndSaysWhatItAllows(t *testing.T) {
 	base, st, alice, _, org := adminOrg(t)
 	page := getOrgs(t, alice, base, "?org=alpha")
-	if roles := pageSpan(t, page, `<fieldset class="irole">`, "</fieldset>"); !strings.Contains(roles, "Works in the shared projects of the organization") || strings.Contains(roles, `value="guest"`) {
-		t.Errorf("without enforced visibility only the member role is offered: %s", pageSpan(t, page, `<fieldset class="irole">`, "</fieldset>"))
+	// Without enforced visibility the guest stays in the choice, switched off
+	// and with the reason (REQ-704, R12): a person sees that guests exist.
+	if roles := pageSpan(t, page, `<fieldset class="irole">`, "</fieldset>"); !strings.Contains(roles, "Works in the shared projects of the organization") ||
+		!strings.Contains(roles, `value="guest" data-role disabled`) || !strings.Contains(roles, "GHOSTTREE_ENFORCE_ACCESS=1") || strings.Contains(roles, `name="project"`) {
+		t.Errorf("without enforced visibility the guest is offered switched off, with the reason: %s", roles)
 	}
 
 	st.SetAccessMode(store.AccessMode{Enforce: true})
@@ -198,19 +201,18 @@ func TestOutcomesNamePersonAndObjectAndKeepTheSectionOpen(t *testing.T) {
 		t.Errorf("member note: %s", pageSpan(t, page, `class="flash`, "</div>"))
 	}
 
-	// A project role: the roles of that project stay open, the other stays shut.
+	// A project role is changed in the person's row of the member list
+	// (REQ-704): the address leads there and marks the line of that project.
 	loc = postOrgLoc(t, alice, base, "/ui/orgs/project/role", url.Values{"org": {"alpha"}, "remote": {"github.com/x/two"}, "account": {"person:2"}, "role": {"lead"}})
+	if !strings.HasSuffix(loc, "#pr-github_com_x_two-person_2") {
+		t.Errorf("the answer does not lead to the changed role: %s", loc)
+	}
 	page = pageAt(t, alice, base, loc)
 	if !strings.Contains(page, "anna is now Lead in github.com/x/two.") {
 		t.Errorf("project role note: %s", pageSpan(t, page, `class="flash`, "</div>"))
 	}
-	two := pageSpan(t, page, `id="p-github_com_x_two"`, `class="box" id="p-`)
-	one := pageSpan(t, page, `id="p-github_com_x_one"`, `class="box" id="p-`)
-	if !strings.Contains(two, "<details open>") || strings.Contains(one, "<details open>") {
-		t.Errorf("the roles of the project worked on do not stay open (two open: %v, one open: %v)", strings.Contains(two, "<details open>"), strings.Contains(one, "<details open>"))
-	}
-	if !strings.Contains(two, `class="row mrow hit" id="pr-github_com_x_two-person_2"`) {
-		t.Error("the changed role row is not marked")
+	if row := pageSpan(t, page, `id="m-person_2"`, `id="m-person_`); !strings.Contains(row, `class="mproj hit" id="pr-github_com_x_two-person_2"`) {
+		t.Errorf("the changed role is not marked in the member's row: %s", row)
 	}
 
 	loc = postOrgLoc(t, alice, base, "/ui/orgs/project/visibility", url.Values{"org": {"alpha"}, "remote": {"github.com/x/one"}, "shared": {"0"}})
@@ -290,8 +292,20 @@ func TestInvitationListStatesAndSeparatedDetails(t *testing.T) {
 	page := pageAt(t, alice, base, loc)
 
 	all, _ := st.ListInvitations("person:1", org.ID)
-	if !strings.Contains(page, `<span class="t">Invitations</span><span class="counter">`+strconv.Itoa(len(all))+`</span>`) || len(all) < 5 {
-		t.Error("the list has no heading with its count")
+	open := 0
+	for _, inv := range all {
+		if inv.Status == "pending" {
+			open++
+		}
+	}
+	// The count is of the open invitations; the others are folded below
+	// (REQ-704, P27: who accepted stands in the member list already).
+	if !strings.Contains(page, `<span class="t">Invitations</span><span class="counter">`+strconv.Itoa(open)+`</span>`) || len(all) < 5 || open == len(all) {
+		t.Error("the list has no heading with the count of open invitations")
+	}
+	past := pageSpan(t, page, `<details class="ipast">`, "</details>")
+	if !strings.Contains(past, "Earlier invitations ("+strconv.Itoa(len(all)-open)+")") || !strings.Contains(past, `id="invite-`+strconv.FormatInt(accepted.ID, 10)+`"`) || strings.Contains(past, `id="invite-`+strconv.FormatInt(pending.ID, 10)+`"`) {
+		t.Errorf("accepted, revoked and expired invitations are not folded away: %s", past)
 	}
 	row := func(id int64) string {
 		return pageSpan(t, page, `id="invite-`+strconv.FormatInt(id, 10)+`"`, `class="row mrow" id="invite-`)

@@ -50,6 +50,9 @@ type workflowsView struct {
 	// Waiting counts the proposals of runs that wait on the review page (S12).
 	Waiting    int
 	ReviewHref string
+	// Need is, for a reader without the right, the role it takes and whom to
+	// ask (REQ-704); the button stays visible but disabled.
+	Need string
 }
 
 // wfTemplateKeys word the templates of workflow.TemplateNames.
@@ -271,6 +274,9 @@ func (a *app) workflowsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	v := &workflowsView{Defs: a.workflowDefRows(l, pa, rv.Href, rv.Project), CanEdit: interactive(r) && pa.CanEditWorkflows(rv.Project),
 		NewHref: rv.Href + "/workflows/" + workflowNew, Token: csrfOf(r), Project: rv.Project}
+	if !v.CanEdit && interactive(r) {
+		v.Need = roleNeededShort(l, roleNeededOf(pa.Check(rv.Project, store.ResWorkflow, store.ActEdit, store.Object{})))
+	}
 	if v.CanEdit {
 		for _, t := range workflow.TemplateNames {
 			if key, ok := wfTemplateKeys[t]; ok {

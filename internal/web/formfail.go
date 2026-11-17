@@ -381,6 +381,9 @@ type formKept struct{ Name, Text string }
 // Klartext-Fehler eines Handlers bedeutet. reject ist der Grund, den die Handler
 // selbst setzen (csrf).
 func formFailText(l lang, code int, body, reject string) string {
+	if text := strings.TrimSpace(body); reject == rejectRole && text != "" {
+		return text
+	}
 	body = strings.ToLower(strings.TrimSpace(body))
 	switch {
 	case reject == "csrf":
