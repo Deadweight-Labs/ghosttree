@@ -226,6 +226,7 @@ func index(in Input, knowledgeCount int) string {
 	fmt.Fprintf(&b, "- `knowledge/` — %d entries: pitfalls, decisions and notes. Exactly what a session in this repository is given.\n", knowledgeCount)
 	fmt.Fprintf(&b, "- `docs/` — %d %s, in full. This is a generated projection; local edits are overwritten.\n", len(in.Documents), plural(len(in.Documents), "document", "documents"))
 	b.WriteString("- `edit/` — local document worktree. Edit these files and publish them with `ctx doc push`; the mirror never writes here.\n")
+	b.WriteString("- `workflows/` — local worktree of the workflows of this repository, one `<name>.md` each (the truth is on the server). Pull them with `ctx workflow pull`, edit, publish with `ctx workflow push <name> -m \"...\"`; the mirror never writes here.\n")
 	fmt.Fprintf(&b, "- `requests/open/` and `requests/done/` — the work ledger; %d of %d finished ones are kept here.\n", in.DoneShown, in.DoneTotal)
 	if len(in.Threads) > 0 {
 		open := 0

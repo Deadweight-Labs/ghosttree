@@ -225,7 +225,7 @@ const usage = `usage: ctx <command>
   mirror   write .ghosttree/ for a repository (harnesses without hooks)
   snapshot create, inspect, export, verify, and mirror immutable context marks
   garden   check knowledge against the code (opt-in, needs an API key)
-  workflow switch a workflow on for an event in a project (on the server's database)
+  workflow pull and push workflow files (.ghosttree/workflows/), check one, switch one on
   explain  write the "In short" notes that are missing (needs a model)
   distill-sessions  extract quarantined knowledge from idle sessions
                     (--submit/--collect for the half-price batch path,

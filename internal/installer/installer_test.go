@@ -70,6 +70,16 @@ func TestInstalledRulesKeepPlansAndSpecsOutOfGit(t *testing.T) {
 	}
 }
 
+// The way to edit a workflow as a file is in the rule text of both harnesses,
+// next to the document worktree (REQ-699).
+func TestInstalledRulesNameTheWorkflowWorktree(t *testing.T) {
+	for _, want := range []string{".ghosttree/workflows/", "ctx workflow pull", "ctx workflow push <name>", "ctx workflow new <name>", "refused"} {
+		if !strings.Contains(ruleText, want) {
+			t.Errorf("ruleText missing %q", want)
+		}
+	}
+}
+
 func TestInstallClaudePreservesSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", "")

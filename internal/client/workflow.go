@@ -53,6 +53,12 @@ func (c *Client) CheckWorkflow(project, text string) (workflow.CheckReport, erro
 // save. base is the version the text was written on (0: a new workflow, -1:
 // over whatever is there).
 func (c *Client) SaveWorkflow(project, name, text, note string, base int) (WorkflowSaved, error) {
+	return c.SaveWorkflowVia(project, name, text, note, base, store.WorkflowViaMCP)
+}
+
+// SaveWorkflowVia is SaveWorkflow for a way that is not the MCP tool: ctx
+// workflow push saves as "api". The text is the same and so is the version.
+func (c *Client) SaveWorkflowVia(project, name, text, note string, base int, via string) (WorkflowSaved, error) {
 	rep, err := c.CheckWorkflow(project, text)
 	if err != nil {
 		return WorkflowSaved{}, err
@@ -61,6 +67,6 @@ func (c *Client) SaveWorkflow(project, name, text, note string, base int) (Workf
 		return WorkflowSaved{Check: rep}, nil
 	}
 	var out WorkflowSaved
-	err = c.do("PUT", workflowPath(name), nil, map[string]any{"project": project, "text": text, "note": note, "base": base, "via": store.WorkflowViaMCP}, &out)
+	err = c.do("PUT", workflowPath(name), nil, map[string]any{"project": project, "text": text, "note": note, "base": base, "via": via}, &out)
 	return out, err
 }
