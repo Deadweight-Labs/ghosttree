@@ -194,6 +194,7 @@ var writerMethodClasses = map[string]string{
 	"SessionHits":                   "read",
 	"SessionOutline":                "read",
 	"AgentWorkFor":                  "read",
+	"SessionRunStates":              "read",
 	"SessionLinks":                  "read",
 	"SessionByPublicID":             "read",
 	"AccountRoles":                  "read",

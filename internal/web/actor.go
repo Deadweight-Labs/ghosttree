@@ -91,6 +91,15 @@ func authorAgentName(l lang, person, harness string) string {
 	return possessive(l, person) + " " + family
 }
 
+// byAgentActor is the view of an entry that says by itself (not through a stamp) that an agent wrote it, as the
+// text of an idea does: the agent of the person, without a harness the page does not know.
+func byAgentActor(l lang, person string, agent bool) actorView {
+	if !agent || person == "" {
+		return actorView{Person: person, Label: person, Kind: avHuman}
+	}
+	return actorView{Person: person, Agent: true, Kind: harnessKind(""), Label: authorAgentName(l, person, "")}
+}
+
 // actorViewOf builds the view of one entry for the person the page shows.
 // Without a stamp the entry shows its person as before (unknown is never
 // guessed into an agent). detail asks for model, machine and session, which

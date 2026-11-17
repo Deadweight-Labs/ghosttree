@@ -111,7 +111,8 @@ func pageSlice(s, from, to string) string {
 
 // AC-678.4: every mention of a machine is a link to its page; the page offers
 // "Share with org", and the number on the organisation counts the machines the
-// tab lists.
+// tab lists. AC-685.4 (usability run 2, mara/013): the tab lists the viewer's own machine that waits to be
+// shared too, so the number counts it: "Machines 0" over a list with a machine in it read as wrong.
 func TestEveryMachineMentionLinksToItsPageAndTheOrgCountsTheSameMachines(t *testing.T) {
 	e := machineEnv(t)
 	hookRegister(t, e, "sess-machine-link", "mainex", store.HookTool)
@@ -135,10 +136,13 @@ func TestEveryMachineMentionLinksToItsPageAndTheOrgCountsTheSameMachines(t *test
 		t.Fatalf("the machine page has no way to share it with an org: %d", code)
 	}
 
-	// Not shared yet: the tab says 0 and points at the machine instead of ending there.
+	// Not shared yet: the tab lists the machine under "Your machines" and points at it, and the number counts that row.
 	_, tab := fetchPage(t, e.Owner, e.Base+"/ui/alpha/machines")
-	if !strings.Contains(tab, `<span>Machines</span><span class="counter">0</span>`) {
-		t.Error("an unshared machine must not be counted by the organisation")
+	if !strings.Contains(tab, `<span>Machines</span><span class="counter">1</span>`) {
+		t.Errorf("the number on the tab is not the number of rows the tab lists: %s", pageSlice(tab, "Machines", "</a>"))
+	}
+	if _, band := fetchPage(t, e.Owner, e.Base+"/ui/alpha"); !strings.Contains(band, `<span>Machines</span><span class="counter">1</span>`) {
+		t.Error("the band of the other pages of the organisation counts the machines differently from the tab")
 	}
 	if !strings.Contains(tab, `href="/ui/m/mainex#shares"`) || !strings.Contains(tab, "Share with the org") {
 		t.Errorf("the empty tab does not lead to sharing the machine: %s", pageSlice(tab, "Machines of the organization", "</main>"))

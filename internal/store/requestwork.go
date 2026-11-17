@@ -32,6 +32,7 @@ func (s *Store) ActiveWorkOnRequests(pa *ProjectAccess, ids []int64) (map[int64]
 	owner := instanceOwnerID(s.db)
 	rows, err := s.db.Query(`SELECT `+prefixCols("s.", sessionCols)+`, w.request_id
 		FROM request_work w JOIN sessions s ON s.id=w.session_id
+		JOIN requests r ON r.id=w.request_id AND r.state='open'
 		WHERE w.state='active' AND w.request_id IN (`+placeholders(len(ids))+`) ORDER BY w.id`, args...)
 	if err != nil {
 		return nil, err

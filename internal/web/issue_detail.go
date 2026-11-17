@@ -224,7 +224,10 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 		v.Reactions = a.reactionsFor(r, l, store.ReactOnRequest, req.ID, s)
 	}
 	v.Composer = a.issueComposer(r, l, pa, v)
-	v.Live = a.liveAgents(pa, v.Work, now, l)
+	// A request that is done or dropped has no one working on it right now, whatever the work lines still say.
+	if req.State == "open" {
+		v.Live = a.liveAgents(pa, v.Work, now, l)
+	}
 	for i := range v.Work {
 		for _, la := range v.Live {
 			if la.Live && la.External == v.Work[i].External && v.Work[i].External != "" {
@@ -369,6 +372,21 @@ func (a *app) stampEvents(l lang, events []issueEvent, requestID int64) {
 	}
 	for i := range events {
 		events[i].StampKind, events[i].StampID = stampOf(events[i], requestID)
+	}
+	// Reopening the last open requirement of a done issue reopens the issue in the same step: that entry has
+	// the maker of the requirement's, whoever the stamps say.
+	for i := range events {
+		if events[i].Act != "request.reopened" {
+			continue
+		}
+		for _, o := range events {
+			if o.Act == "criterion.reopened" && o.StampID > 0 && o.By == events[i].By && o.At == events[i].At {
+				events[i].StampKind, events[i].StampID = o.StampKind, o.StampID
+				break
+			}
+		}
+	}
+	for i := range events {
 		add(events[i].StampKind, events[i].StampID, events[i].By)
 	}
 	views := map[string]map[int64]actorView{}
@@ -390,7 +408,7 @@ func stampOf(e issueEvent, requestID int64) (kind string, id int64) {
 		return actor.Request, requestID
 	case "request.done":
 		return actor.RequestDone, requestID
-	case "criterion.met", "criterion.waived":
+	case "criterion.met", "criterion.waived", "criterion.reopened":
 		return actor.Criterion, e.CriterionID
 	case "task.created":
 		return actor.Task, e.TaskID

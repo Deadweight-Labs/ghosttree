@@ -12,7 +12,7 @@
 
 {{define "agentsections"}}{{with .Waiting}}<section class="box agroup asec awaits" data-list-group aria-labelledby="ag-wait"><div class="box-h"><h2 class="t" id="ag-wait">{{t "ov.work.waiting_user"}}</h2><span class="counter" data-list-count>{{len .}}</span></div>{{range .}}{{template "agentrow" .}}{{end}}</section>{{end}}
 {{with .Active}}<section class="box agroup asec" data-list-group aria-labelledby="ag-act"><div class="box-h"><h2 class="t" id="ag-act">{{t "agents.section.active"}}</h2><span class="counter" data-list-count>{{len .}}</span></div>{{range .}}{{template "agentrow" .}}{{end}}</section>{{end}}
-{{with .Inactive}}<details class="box agroup asec ainact" data-list-group><summary class="box-h"><span class="chv">{{mi "chev"}}</span><h2 class="t">{{t "agents.section.inactive"}}</h2><span class="counter" data-list-count>{{len .}}</span></summary>{{range .}}{{template "agentrow" .}}{{end}}</details>{{end}}{{template "listnone"}}{{end}}
+{{with .Inactive}}<details class="box agroup asec ainact" data-list-group{{if not $.Active}} open{{end}}><summary class="box-h"><span class="chv">{{mi "chev"}}</span><h2 class="t">{{t "agents.section.inactive"}}</h2><span class="counter" data-list-count>{{len .}}</span></summary>{{range .}}{{template "agentrow" .}}{{end}}</details>{{end}}{{template "listnone"}}{{end}}
 
 {{define "agents"}}{{template "head" .}}{{template "nav" .}}<main class="g2 ag"><link rel="stylesheet" href="{{asset "ui-agents.css"}}"><div class="wrap">
 {{with .Agents}}{{with $.Shell.Tabs}}{{if not $.Repo}}<div class="segrow"><nav class="gseg seg" aria-label="{{t $.Shell.TabsLabel}}">{{range .}}<a data-tab="{{.Key}}" href="{{.Href}}"{{if .Current}} class="on" aria-current="page"{{end}}>{{t .Label}}</a>{{end}}</nav></div>{{end}}{{end}}

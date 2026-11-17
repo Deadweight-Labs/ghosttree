@@ -69,3 +69,40 @@ test("the preview is rendered again each time the tab is chosen", () => {
   p.tab("p").click();
   assert.equal(p.pv.children[0].children.length, 2, "the preview shows the text as it is now, not as it was");
 });
+
+// REQ-685 AC-3: a ```mermaid block in the text is drawn in the preview too. The preview is rendered by the one
+// renderer (ui-md.js), which asks for the frame of ui-mermaid.js for every box it wrote; the box in the preview
+// is a box like any other, and it is the one that gets drawn, in the box that is shown.
+test("the diagram of a text is drawn in the preview, in the box the preview shows", () => {
+  let p;
+  const hooks = {
+    GTPill: { icon: () => p.document.createElement("span"), ref: () => p.document.createElement("span") },
+    MutationObserver: class { observe() {} },
+  };
+  p = loadPage(frame, { scripts: [], hooks });
+  p.run("ui-md.js");
+  const drawn = [];
+  p.window.GTMermaid = { draw: (box) => { drawn.push(box); box.setAttribute("data-state", "ok"); } };
+  p.run("ui-parts.js");
+  p.frame();
+  const ta = p.document.querySelector("textarea");
+  const pv = p.document.querySelector(".cx-pv");
+  ta.value = "Order of the hook:\n\n```mermaid\nsequenceDiagram\n  G->>H: POST\n```\n\nafter";
+  p.document.querySelector('[data-wtab="p"]').click();
+  assert.equal(pv.hidden, false);
+  const box = pv.querySelector(".mmd");
+  assert.ok(box, "the preview holds the box of the diagram, not the source as plain text");
+  assert.equal(box.querySelector("code").textContent, "sequenceDiagram\n  G->>H: POST");
+  p.frame();
+  assert.deepEqual(drawn, [box], "the box of the preview is drawn, once");
+  assert.equal(box.getAttribute("data-state"), "ok");
+  assert.ok(pv.contains(box) && box.isConnected, "and it is on the page");
+  // Typing over the preview and previewing again draws the new box, not the old one.
+  p.document.querySelector('[data-wtab="w"]').click();
+  ta.value = "```mermaid\ngraph TD\n A-->B\n```";
+  p.document.querySelector('[data-wtab="p"]').click();
+  p.frame();
+  assert.equal(drawn.length, 2);
+  assert.notEqual(drawn[1], box);
+  assert.ok(drawn[1].isConnected);
+});

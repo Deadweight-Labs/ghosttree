@@ -680,8 +680,13 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 		areas := a.store.SessionAreas(readable, listAreas)
 		machineLink := a.machineLinker(r)
 		var lastDay string
+		rowIDs := make([]int64, len(page.Rows))
+		for i, row := range page.Rows {
+			rowIDs[i] = row.Session.ID
+		}
+		ended := a.endedSessions(rowIDs)
 		for _, row := range page.Rows {
-			lr := a.listRow(l, row, links[row.Session.ID], now)
+			lr := a.listRow(l, row, links[row.Session.ID], now, ended)
 			lr.Areas = areas[row.Session.ID]
 			lr.MachineHref = machineLink(lr.Machine)
 			v.HasLinked = v.HasLinked || len(lr.Linked) > 0
@@ -741,7 +746,23 @@ func foundText(l lang, matches, sessions int) string {
 	return m + " " + s
 }
 
-func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, now time.Time) listRow {
+// endedSessions names the sessions among ids that an agent closed (the SessionEnd hook): the transcript of such a
+// run keeps arriving for a minute or two, which the age of the last upload alone would read as "running".
+func (a *app) endedSessions(ids []int64) map[int64]bool {
+	out := map[int64]bool{}
+	states, err := a.store.SessionRunStates(ids)
+	if err != nil {
+		return out
+	}
+	for id, st := range states {
+		if st.Ended {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, now time.Time, ended map[int64]bool) listRow {
 	s := row.Session
 	lr := listRow{
 		Meta:     sessionMeta(s),
@@ -752,7 +773,7 @@ func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, n
 		Kind:     harnessKind(s.Harness), Machine: s.Scope.Machine, Branch: s.Scope.Branch, Project: projectName(s.Scope.Project),
 		Owner: s.Owner,
 	}
-	if t := parseStamp(s.LastSeenAt); !t.IsZero() && now.Sub(t) < liveWindow {
+	if t := parseStamp(s.LastSeenAt); !t.IsZero() && now.Sub(t) < liveWindow && !ended[s.ID] {
 		lr.Live = true
 		lr.Time = l.msg("sessions.live")
 	}
@@ -936,7 +957,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	v.Owner = view.Owner
 	v.Duration, v.Messages = formatDuration(l, sess.StartedAt, sess.LastSeenAt), sess.Messages
 	v.MachineHref = a.machineLinker(r)(v.Machine)
-	if t := parseStamp(sess.LastSeenAt); !t.IsZero() && time.Since(t) < liveWindow {
+	if t := parseStamp(sess.LastSeenAt); !t.IsZero() && time.Since(t) < liveWindow && !a.endedSessions([]int64{sess.ID})[sess.ID] {
 		v.Live = true
 	}
 	v.Meta = detailMeta(l, view)
