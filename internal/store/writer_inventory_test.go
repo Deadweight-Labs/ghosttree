@@ -58,6 +58,7 @@ var writerMethodClasses = map[string]string{
 	"ReleaseAICall":                 "write",
 	"ResealAIKeys":                  "write",
 	"AIReleaseDefaultCap":           "read",
+	"GardenRunModel":                "read",
 	"AIRunUsageOf":                  "read",
 	"AICostReportOf":                "read",
 	"RecordWorkflowEvent":           "write",

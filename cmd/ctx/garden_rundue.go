@@ -44,7 +44,7 @@ const gardenUSDEpsilon = 0.005
 // gardenDueClient is what run-due needs of the server.
 type gardenDueClient interface {
 	GardenDue() ([]store.GardenJob, error)
-	StartGardenRun(orgID int64, project string) (int64, error)
+	StartGardenRun(orgID int64, project string) (store.GardenRunStart, error)
 	FinishGardenRun(id int64, state string, costUSD float64, note string) error
 }
 
@@ -92,16 +92,18 @@ func cmdGardenRunDue(args []string, stdout io.Writer) int {
 		u, err := fst.LLMUsageMonth(llmusage.JobGarden, time.Now().UTC().Format("2006-01"))
 		return u.CostMicroUSD, err
 	}
-	run := func(extra []string) int {
+	run := func(extra []string, ai *store.GardenAI) int {
 		full := append([]string{"check-knowledge"}, extra...)
 		full = append(full, "--state-file", path)
-		return cmdGarden(append(full, pass...), stdout)
+		return cmdGardenWith(append(full, pass...), stdout, ai)
 	}
 	return runGardenDue(client.New(sc), *reposDir, *outDir, spend, run, stdout)
 }
 
 // runGardenDue is run-due without flags and config, so a test can drive it.
-func runGardenDue(c gardenDueClient, reposDir, outDir string, spend gardenSpend, run func([]string) int, stdout io.Writer) int {
+// run gets the way to the model through the server's proxy when the server
+// gave one with the start of the run (REQ-695); nil keeps llm.json.
+func runGardenDue(c gardenDueClient, reposDir, outDir string, spend gardenSpend, run func([]string, *store.GardenAI) int, stdout io.Writer) int {
 	if _, err := spend(); err != nil {
 		fmt.Fprintf(stdout, "read the state file: %v\n", err)
 		return 1
@@ -129,11 +131,17 @@ func runGardenDue(c gardenDueClient, reposDir, outDir string, spend gardenSpend,
 				fmt.Fprintf(stdout, "%s: budget of %s spent, skipped\n", project, job.Slug)
 				continue
 			}
-			id, err := c.StartGardenRun(job.OrgID, project)
+			start, err := c.StartGardenRun(job.OrgID, project)
 			if err != nil {
 				fmt.Fprintf(stdout, "%s: %v\n", project, err)
 				failed++
 				continue
+			}
+			id := start.ID
+			if start.AI != nil {
+				fmt.Fprintf(stdout, "%s: model %s over the server's model proxy (connection %s)\n", project, start.AI.Model, start.AI.Connection)
+			} else if job.ModelAlias != "" {
+				fmt.Fprintf(stdout, "%s: model alias %s not usable over the proxy (%s), llm.json instead\n", project, job.ModelAlias, start.Fallback)
 			}
 			dir, ok := gardenCheckout(reposDir, project)
 			if !ok {
@@ -153,7 +161,7 @@ func runGardenDue(c gardenDueClient, reposDir, outDir string, spend gardenSpend,
 				fmt.Fprintf(stdout, "read the state file: %v\n", err)
 				return 1
 			}
-			code := run(args)
+			code := run(args, start.AI)
 			after, err := spend()
 			if err != nil {
 				_ = c.FinishGardenRun(id, "failed", 0, "state file unreadable after the run; cost unknown")

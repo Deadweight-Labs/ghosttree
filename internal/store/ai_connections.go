@@ -1425,7 +1425,7 @@ func (s *Store) IssueAIRunToken(runID int64) (string, error) {
 		return "", err
 	}
 	token := AIRunTokenPrefix + base64.RawURLEncoding.EncodeToString(raw)
-	res, err := s.db.Exec(`INSERT INTO ai_run_tokens(token_hash, run_id, created_at) SELECT ?, id, ? FROM workflow_runs WHERE id=? AND state='running'`, hashRunToken(token), now(), runID)
+	res, err := s.db.Exec(`INSERT INTO ai_run_tokens(token_hash, run_id, created_at) SELECT ?, id, ? FROM workflow_runs WHERE id=? AND state='running'`, hashRunToken(token), aiNow().Format(time.RFC3339), runID)
 	if err != nil {
 		return "", err
 	}
@@ -1434,6 +1434,10 @@ func (s *Store) IssueAIRunToken(runID int64) (string, error) {
 	}
 	return token, nil
 }
+
+// aiExternalTokenTTL is how long the token of a run outside the engine holds
+// at most: longer than the gardener's unit may run (TimeoutStartSec=3h).
+const aiExternalTokenTTL = 4 * time.Hour
 
 // RevokeAIRunTokens ends the tokens of a run.
 func (s *Store) RevokeAIRunTokens(runID int64) error {
@@ -1457,8 +1461,11 @@ func (s *Store) AIRunOfToken(token string) (WorkflowRun, error) {
 	if !strings.HasPrefix(token, AIRunTokenPrefix) || len(token) > 200 {
 		return WorkflowRun{}, ErrAIToken
 	}
+	// A run outside the engine (the gardener's unit, trigger -1) is not
+	// ended by the sweep; its token ends after aiExternalTokenTTL all the same.
+	oldest := aiNow().Add(-aiExternalTokenTTL).Format(time.RFC3339)
 	run, err := scanWorkflowRun(s.db.QueryRow(`SELECT `+workflowRunCols+workflowRunFrom+` JOIN ai_run_tokens t ON t.run_id=r.id
-		WHERE t.token_hash=? AND r.state='running'`, hashRunToken(token)))
+		WHERE t.token_hash=? AND r.state='running' AND (r.trigger_id>=0 OR t.created_at>=?)`, hashRunToken(token), oldest))
 	if err != nil {
 		return WorkflowRun{}, ErrAIToken
 	}

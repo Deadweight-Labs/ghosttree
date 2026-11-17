@@ -107,6 +107,39 @@ type GardenJob struct {
 	ModelAlias string `json:"model_alias,omitempty"`
 }
 
+// GardenAI is how a run of the gardener reaches its model through the model
+// proxy (REQ-695): the proxy's address on this machine, a token that holds
+// only while the run is running, the alias the owner chose, and the prices of
+// the model the alias stands for (USD per million tokens), which the runner
+// enforces its budget with.
+type GardenAI struct {
+	BaseURL    string  `json:"base_url"`
+	Token      string  `json:"token"`
+	Model      string  `json:"model"`
+	Connection string  `json:"connection"`
+	InUSD      float64 `json:"in_usd_per_mtok"`
+	OutUSD     float64 `json:"out_usd_per_mtok"`
+}
+
+// GardenRunStart is the answer to the start of a gardener run: its id and,
+// when the namespace has a model for the gardener behind the proxy, the way to
+// it. Without one Fallback says why, and the runner uses its llm.json.
+type GardenRunStart struct {
+	ID       int64     `json:"id"`
+	AI       *GardenAI `json:"ai,omitempty"`
+	Fallback string    `json:"ai_fallback,omitempty"`
+}
+
+// The reasons a gardener run falls back to llm.json.
+const (
+	GardenAIProxyOff    = "proxy_off"
+	GardenAINoAlias     = "no_alias"
+	GardenAIUnavailable = "unavailable"
+	GardenAIBudget      = "budget"
+	GardenAIFormat      = "format"
+	GardenAINoPrice     = "no_price"
+)
+
 // GardenAuto is one automatic approval: which rule, which proposal, what it
 // changed (before and after), on whose authority, and whether it was undone.
 type GardenAuto struct {
@@ -560,6 +593,28 @@ func (s *Store) StartGardenRun(accountPrincipal string, orgID int64, project str
 	return id, tx.Commit()
 }
 
+// GardenRunModel is what a running gardener run needs to reach a model
+// through the proxy: the workflow run it is, and the alias its owner chose
+// for the gardener ("" when none). Only the gardener's account asks.
+func (s *Store) GardenRunModel(accountPrincipal string, gardenRunID int64) (WorkflowRun, string, error) {
+	if s.reader != nil {
+		return s.reader.GardenRunModel(accountPrincipal, gardenRunID)
+	}
+	if err := s.requireGardener(accountPrincipal); err != nil {
+		return WorkflowRun{}, "", err
+	}
+	var orgID, wrID int64
+	if err := s.db.QueryRow(`SELECT org_id, workflow_run_id FROM garden_runs WHERE id=? AND state='running'`, gardenRunID).Scan(&orgID, &wrID); err != nil || wrID == 0 {
+		return WorkflowRun{}, "", ErrGardenAutoGone
+	}
+	run, err := scanWorkflowRun(s.db.QueryRow(`SELECT `+workflowRunCols+workflowRunFrom+` WHERE r.id=? AND r.state='running'`, wrID))
+	if err != nil {
+		return WorkflowRun{}, "", ErrGardenAutoGone
+	}
+	g, _ := gardenSettingsTx(s.db, orgID)
+	return run, g.ModelAlias, nil
+}
+
 // GardenBlock is the block of the gardener's descriptions in the catalogue of
 // workflows; its runs are the gardener's runs.
 const GardenBlock = "ghosttree/garden-ghosts"
@@ -605,6 +660,10 @@ func (s *Store) FinishGardenRun(accountPrincipal string, runID int64, state stri
 	}
 	if _, err := tx.Exec(`UPDATE workflow_runs SET state=?, reason=?, cost_usd=?, result=?, finished_at=? WHERE state='running' AND id=(SELECT workflow_run_id FROM garden_runs WHERE id=?)`,
 		state, reason, costUSD, fmt.Sprintf("%d proposals", proposals), ts, runID); err != nil {
+		return err
+	}
+	// Its token for the model proxy ends with it.
+	if err := revokeRunTokensTx(tx, `id=(SELECT workflow_run_id FROM garden_runs WHERE id=?)`, runID); err != nil {
 		return err
 	}
 	return tx.Commit()
