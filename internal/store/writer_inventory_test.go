@@ -240,6 +240,7 @@ var writerMethodClasses = map[string]string{
 	"ListOrgMembersFor":             "read",
 	"ClaimMachine":                  "write",
 	"ReleaseMachine":                "write",
+	"NoteMachineSeen":               "write",
 	"TransferMachine":               "write",
 	"MachineClaimable":              "read",
 	"ResolveMachineName":            "read",
