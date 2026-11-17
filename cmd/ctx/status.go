@@ -54,7 +54,7 @@ func cmdStatus(args []string, stdout io.Writer) int {
 
 	claudeCfg := installer.ClaudeUserConfigPath(home)
 	claudeOK := fileContains(claudeCfg, `"ghosttree"`) &&
-		fileContains(filepath.Join(home, ".claude", "settings.json"), "hook session-start")
+		fileContains(installer.ClaudeSettingsPath(home), "hook session-start")
 	fmt.Fprintf(stdout, "claude      %s\n", installedLabel(claudeOK))
 	codexOK := fileContains(filepath.Join(home, ".codex", "config.toml"), "[mcp_servers.ghosttree]") &&
 		installer.HasMarker(filepath.Join(home, ".codex", "AGENTS.md"))

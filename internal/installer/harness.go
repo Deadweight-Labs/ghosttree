@@ -100,9 +100,9 @@ func Harnesses() []Harness {
 			// SubagentStart measured 2026-11-10 on Claude Code 2.1.319: the
 			// briefing stands in the subagent's transcript as context.
 			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelSubagentStart, ChannelMCP},
-			HooksPath:  func(home string) string { return filepath.Join(home, ".claude", "settings.json") },
-			RulePath:   func(home string) string { return filepath.Join(home, ".claude", "CLAUDE.md") },
-			SkillsRoot: func(home string) string { return filepath.Join(home, ".claude", "skills") },
+			HooksPath:  func(home string) string { return filepath.Join(claudeDir(home), "settings.json") },
+			RulePath:   func(home string) string { return filepath.Join(claudeDir(home), "CLAUDE.md") },
+			SkillsRoot: func(home string) string { return filepath.Join(claudeDir(home), "skills") },
 		},
 		{
 			// The payload formats match. Checked against the JSON schemas

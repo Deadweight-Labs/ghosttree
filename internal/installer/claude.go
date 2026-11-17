@@ -30,6 +30,20 @@ func ClaudeConfigDir(home string) string {
 	return home
 }
 
+// claudeDir is the directory Claude Code reads settings.json, CLAUDE.md and
+// skills from: CLAUDE_CONFIG_DIR when it is set, else ~/.claude. The hooks, the
+// rule and the skills follow it, like the MCP entry does (ClaudeUserConfigPath);
+// otherwise one install would land half in one configuration and half in another.
+func claudeDir(home string) string {
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(home, ".claude")
+}
+
+// ClaudeSettingsPath is the settings.json Claude Code reads the hooks from.
+func ClaudeSettingsPath(home string) string { return filepath.Join(claudeDir(home), "settings.json") }
+
 func ClaudeUserConfigPath(home string) string {
 	return filepath.Join(ClaudeConfigDir(home), ".claude.json")
 }
