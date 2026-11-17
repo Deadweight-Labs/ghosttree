@@ -21,8 +21,10 @@ type inboxAction struct {
 	TaskID      int64
 	// AttentionID closes an open question, approval or blocker as seen.
 	AttentionID int64
-	ReadRoom    string
-	ReadSeq     int64
+	// MentionID marks a mention in a text (comment, issue, pain) as read.
+	MentionID int64
+	ReadRoom  string
+	ReadSeq   int64
 	// Token is the CSRF token of the form behind a POST action.
 	Token string
 }
@@ -540,7 +542,7 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 	now := overviewNow().UTC()
 	// What was said to the person, in a room or directly: one list, and what fell
 	// out of the two weeks is gone before anything is counted or tested for empty.
-	said := inboxRecent(append(slices.Clone(mentioned), direct...), now)
+	said := inboxRecent(append(append(slices.Clone(mentioned), direct...), a.inboxTextMentions(r, project)...), now)
 	v := &inboxView{Waiting: a.inboxRows(r, waiting), Mentioned: said}
 	token, forms := csrfOf(r), interactive(r)
 	if forms {

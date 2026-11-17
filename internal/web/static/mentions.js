@@ -1,14 +1,15 @@
 // Completes @names in the message boxes of a room. The list of names is in the
 // page next to each box (.comp-suggest); the server decides what is in it.
 (() => {
+  if (window.__gtMentionsLoaded) return;
+  window.__gtMentionsLoaded = true;
   const trigger = /(^|[^\p{L}\p{N}_.@:-])@([\p{L}\p{N}._:-]*)$/u;
   const limit = 6;
   let current = null;
 
   const fold = (value) => value.toLowerCase().replace(/\s+/g, "-");
-  const listOf = (area) => area.closest("form")?.querySelector(".comp-suggest");
-  const areaOf = (target) =>
-    target instanceof HTMLTextAreaElement && target.name === "body" && listOf(target) ? target : null;
+  const listOf = (area) => (area.closest(".cx-w") || area.closest("form"))?.querySelector(".comp-suggest");
+  const areaOf = (target) => (target instanceof HTMLTextAreaElement && listOf(target) ? target : null);
 
   const state = (area) => {
     const before = area.value.slice(0, area.selectionStart);

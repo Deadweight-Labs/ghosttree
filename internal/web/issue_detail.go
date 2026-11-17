@@ -295,7 +295,7 @@ func (a *app) requestClose(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.stampActor(r, actor.Comment, c.ID)
-		http.Redirect(w, r, commentPage(c)+"?comment=added#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
+		http.Redirect(w, r, commentAddedURL(pa, c), http.StatusSeeOther)
 	case "complete":
 		if strings.TrimSpace(r.Form.Get("evidence_ref")) == "" {
 			r.Form.Set("evidence_ref", r.Form.Get("reason"))

@@ -39,6 +39,9 @@ class Node {
 class Text extends Node {
   constructor(data) { super(); this.data = data; }
   get textContent() { return this.data; }
+  get nodeType() { return 3; }
+  get nodeValue() { return this.data; }
+  set nodeValue(v) { this.data = String(v); }
 }
 
 class Fragment extends Node {

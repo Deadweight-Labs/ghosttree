@@ -576,6 +576,7 @@
     if (!done) return;
     if (window.GTCards) window.GTCards.scan(root || document);
     if (window.GTRefs) window.GTRefs.resolve(root || document);
+    if (window.GTMentions) window.GTMentions.resolve(root || document);
   }
 
   // A text the page keeps as it is (the transcript of a session, with the hits of
