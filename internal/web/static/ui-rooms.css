@@ -15,11 +15,11 @@
   & #coord-context:not(:has(*)) { display: none; }
   /* The threads and directives of a room stand beside the conversation. */
   & .coord-shell:has(#coord-context > *) { grid-template-columns: 240px minmax(0, 1fr) 296px; }
-  /* The thread is a view of its own: no room list, the main column wide. */
-  & .coord-shell:has(#coord-context):has(.coord-thread-detail) { grid-template-columns: minmax(0, 1fr) 296px; }
-  & .coord-shell:has(.coord-thread-detail) .coord-conversation { grid-column: 1; }
-  & .coord-shell:has(.coord-thread-detail) #coord-context { grid-column: 2; }
-  & .coord-shell:has(.coord-thread-detail) #coord-rooms { display: none; }
+  /* The thread is a view of its own: no room list and no column beside it. It is one column that the page
+     scrolls (REQ-701): the bar stays at the top, the composer at the bottom, the messages are the page. */
+  & .coord-shell:has(.coord-thread-detail) { display: block; height: auto; min-height: 0; max-width: 780px; margin: 0 auto; }
+  & .coord-shell:has(.coord-thread-detail) #coord-rooms, & .coord-shell:has(.coord-thread-detail) #coord-context { display: none; }
+  & .coord-shell:has(.coord-thread-detail) .coord-conversation { height: auto; min-height: 0; overflow: visible; background: none; border: 0; border-radius: 0; box-shadow: none; }
   & .coord-live-status { font-size: 12px; color: var(--fg-muted); }
   /* What went wrong with a send: a line in the composer, under the text field, in flow. Nothing lies over the messages. */
   & .coord-action-status { margin: 8px 12px 0; background: var(--canvas-default); border-color: var(--border-default); }
@@ -250,26 +250,85 @@
   & .cx-h .dd > .pop { top: calc(100% + 4px); }
   & .cx-f .dd > .gbtn { white-space: nowrap; }
 
-  /* Thread */
-  & .rthread { display: flex; flex: 1 1 0; flex-direction: column; min-height: 0; min-width: 0; }
-  & .rthead { flex: none; padding: 12px 16px 0; }
+  /* Thread (REQ-701). The bar: back, title, status, who wrote, menu. */
+  & .rthread { display: block; min-width: 0; }
+  & .rthread > .rbody { display: block; min-height: 0; border-top: 0; }
+  & .rthead { display: contents; }
+  & .rtbar { position: sticky; top: 0; z-index: 8; display: flex; align-items: center; gap: 8px; min-height: 56px; margin: 0 -8px; padding: 6px 8px; background: var(--canvas-default); border-bottom: 1px solid var(--border-muted); }
+  & .rtbar h3 { flex: 1 1 0; min-width: 0; margin: 0; overflow: hidden; font-size: 17px; font-weight: 600; line-height: 22px; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  & .rback { flex: none; }
   & .rback .i { transform: rotate(90deg); }
-  & .rback { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; color: var(--fg-muted); }
-  & .rttl { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 4px; }
-  & .rttl h3 { font-size: 20px; font-weight: 600; overflow-wrap: anywhere; }
-  & .rtmeta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0 0; color: var(--fg-muted); }
-  & .rtanchor { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
-  /* The guiding question is a box like a message: head bar, text below. */
-  & .rlead { margin: 12px 0 8px; overflow: hidden; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; }
-  & .rlead b { display: block; padding: 6px 12px; font-size: 12px; color: var(--fg-muted); background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); }
-  & .rlead p { margin: 0; padding: 8px 12px; }
-  & .rthread > .rbody { border-top: 1px solid var(--border-default); }
-  & .rside, & .rtside { min-width: 0; }
-  & .rtside .coord-participant { padding: 8px 0; }
-  & .rtside .coord-participant + .coord-participant { border-top: 1px solid var(--border-muted); }
-  & .rtside .coord-participants { max-height: 460px; overflow-y: auto; }
-  & .rtside .rwho-find { position: static; margin: 0 0 8px; padding: 0; }
-  & .rtside .sblk h3 { font-weight: 600; }
+  & .rtstate, & .rtwho, & .rtmenu { flex: none; }
+  & .rtstate > summary, & .rtwho > summary, & .rtmenu > summary { list-style: none; cursor: pointer; }
+  & .rtstate > summary::-webkit-details-marker, & .rtwho > summary::-webkit-details-marker, & .rtmenu > summary::-webkit-details-marker { display: none; }
+  & .rtstate > summary .i:last-child { width: 12px; height: 12px; opacity: .8; }
+  & .rtstate-pop { width: 200px; padding: 4px; }
+  & .rtstate-pop .opt, & .rtmenu-pop .opt { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: 6px; background: none; color: var(--fg-default); font: inherit; text-align: left; cursor: pointer; }
+  & .rtstate-pop .opt:hover, & .rtmenu-pop .opt:hover { background: var(--neutral-muted); text-decoration: none; }
+  & .rtstate-pop .opt .chk { margin-left: auto; color: var(--fg-muted); }
+  & .rtstate-pop .opt .i:first-child { color: var(--success-fg); }
+  & .rtstate-pop .opt[value="resolved"] .i:first-child { color: var(--done-fg); }
+  & .rtstate-pop .opt[value="deferred"] .i:first-child { color: var(--fg-muted); }
+  & .rtwho .stackav .gav { width: 28px; height: 28px; margin-left: -6px; font-size: 11px; border: 2px solid var(--canvas-default); box-sizing: content-box; }
+  & .rtwho .stackav .gav:first-child { margin-left: 0; }
+  & .rtwho .stackav .gav .i, & .rtwho .pp-av .gav .i { width: 16px; height: 16px; }
+  & .rtwho .gav .own { display: none; }
+  & .rtwho .pp-sub, & .rtwho .pp-title { line-height: 18px; }
+  & .rtmenu-pop { width: 300px; padding: 8px; }
+  & .rtmenu-pop .rsearch { width: auto; margin: 0 0 6px; }
+  & .rtmenu-sec { margin-top: 6px; padding: 8px 4px 0; border-top: 1px solid var(--border-muted); }
+  & .rtmenu-sec h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .rtanchor { display: flex; align-items: center; gap: 8px; }
+  /* Under the bar: the request the thread belongs to, and the guiding question, two lines until it is opened. */
+  & .rtmeta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 12px 0 0; color: var(--fg-muted); }
+  & .rlead { margin: 0; border-bottom: 1px solid var(--border-muted); }
+  & .rlead > summary { display: flex; align-items: flex-start; gap: 12px; padding: 14px 0; list-style: none; cursor: pointer; }
+  & .rlead > summary::-webkit-details-marker { display: none; }
+  & .rlead b { flex: none; padding-top: 3px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .rlead p { flex: 1; min-width: 0; margin: 0; font-size: 15px; line-height: 22px; color: var(--fg-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  & .rlead[open] p { display: block; -webkit-line-clamp: unset; color: var(--fg-default); }
+  & .rlead-c { flex: none; padding-top: 2px; color: var(--fg-muted); transition: transform .12s; }
+  & .rlead[open] .rlead-c { transform: rotate(180deg); }
+  /* The messages are text on the page, not boxes: the avatar, name and time, the text below. */
+  & .coord-thread-messages { overflow: visible; padding: 8px 0; }
+  & .coord-thread-messages > li { scroll-margin-top: 72px; }
+  & .coord-thread-messages .coord-message-group-start:not(:first-child) { margin-top: 26px; }
+  & .coord-thread-messages .coord-message-continuation { margin-top: 8px; }
+  & .coord-thread-messages .rm-msg { grid-template-columns: 36px minmax(0, 1fr); gap: 14px; }
+  & .coord-thread-messages .rm-msg > .gav { width: 36px; height: 36px; margin-top: 0; font-size: 13px; }
+  & .coord-thread-messages .gav.agent .own { right: -5px; bottom: -5px; width: 16px; height: 16px; font-size: 8px; }
+  & .coord-thread-messages .rm-main, & .coord-thread-messages .coord-message-mentioned .rm-main, & .coord-thread-messages .is-own .rm-main { overflow: visible; background: none; border: 0; border-radius: 0; box-shadow: none; }
+  & .coord-thread-messages .rm-head, & .coord-thread-messages .is-own .rm-head { min-height: 0; padding: 0 0 3px; line-height: 20px; background: none; border: 0; }
+  & .coord-thread-messages .is-own .rm-name { color: var(--accent-fg); }
+  & .coord-thread-messages .cm-bubble { padding: 0; font-size: 15px; line-height: 24px; }
+  & .coord-thread-messages .cm-gutter { padding-top: 2px; }
+  & .coord-thread-messages > .coord-thread-wait { display: flex; align-items: center; gap: 8px; margin: 22px 0 0 50px; font-size: 13px; color: var(--fg-muted); }
+  & .coord-thread-wait .i { flex: none; color: var(--attention-fg); }
+  & .rthread .rnew { position: fixed; bottom: 96px; }
+  /* The composer floats at the bottom: the text field and the send button. The button on the left holds what
+     is rarely needed: writing aids, status, to whom and what kind. */
+  & .coord-thread-composer { position: sticky; bottom: 0; z-index: 6; padding: 14px 0 20px; border-top: 0; background: linear-gradient(to bottom, transparent, var(--canvas-default) 20px); }
+  & .cx-slim { position: relative; padding: 6px 8px; border: 1px solid var(--border-default); border-radius: 20px; background: var(--canvas-default); box-shadow: var(--shadow-pop); }
+  & .cx-slim:focus-within { border-color: var(--accent-emphasis); }
+  & .cx-line { display: flex; align-items: center; gap: 6px; }
+  & .cx-opts { flex: none; position: static; }
+  & .cx-opts > summary { display: inline-flex; align-items: center; justify-content: center; list-style: none; width: 36px; height: 36px; padding: 0; border-radius: 50%; }
+  & .cx-opts > summary::-webkit-details-marker { display: none; }
+  & .cx-opts[open] > summary { background: var(--neutral-muted); }
+  & .cx-slim .cx-b { flex: 1; min-width: 0; margin: 0; padding: 0; }
+  & .cx-slim .cx-b textarea { display: block; width: 100%; height: 40px; min-height: 40px; max-height: 160px; padding: 9px 4px; border: 0; background: transparent; box-shadow: none; resize: none; }
+  & .cx-slim .cx-b textarea:focus { outline: 0; box-shadow: none; }
+  & .cx-slim .comp-send { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: 36px; height: 36px; padding: 0; border-radius: 50%; }
+  & .comp-send-t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  & .cx-slim .comp-send.has-label { width: auto; padding: 0 14px; border-radius: 18px; }
+  & .cx-slim .comp-send.has-label .comp-send-t { position: static; width: auto; height: auto; overflow: visible; clip-path: none; }
+  & .cx-optpop { top: auto; bottom: calc(100% + 8px); left: 0; right: 0; max-width: none; max-height: none; overflow: visible; padding: 8px 12px 12px; }
+  & .cx-optpop .cx-h { display: flex; align-items: center; padding: 0 0 8px; background: none; border: 0; }
+  & .cx-optpop .cx-st { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 0; margin: 0; background: none; border: 0; }
+  & .cx-optpop .cx-f { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 0 0; margin: 0; background: none; border: 0; }
+  & .cx-optpop .cx-f .rm-ask { margin-left: auto; }
+  & .cx-optpop .cx-f .sp { display: none; }
+  & .cx-optpop .pop { top: auto; bottom: calc(100% + 4px); }
   & .sblk { padding: 12px 16px; }
   & .coord-standing { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
   & .coord-standing p { margin: 0; }
@@ -306,7 +365,6 @@
     & .coord-shell, & .coord-shell:has(#coord-context > *), & .coord-shell:has(#coord-context):has(.coord-thread-detail) { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; height: auto; min-height: 0; gap: 12px; }
     & #coord-rooms, & .coord-conversation, & #coord-context, & .coord-shell:has(.coord-thread-detail) .coord-conversation, & .coord-shell:has(.coord-thread-detail) #coord-context { grid-column: 1; grid-row: auto; }
     & .coord-conversation { height: calc(100dvh - var(--coord-top, 190px) - 16px); min-height: 440px; }
-    & .coord-shell:has(.coord-thread-detail) .coord-conversation { height: calc(100dvh - var(--coord-top, 190px)); }
     & .coord-shell:has(.coord-thread-detail) #coord-rooms { display: none; }
     & #coord-context { overflow-y: visible; }
     & #coord-rooms { flex-direction: row-reverse; align-items: center; align-self: stretch; }
@@ -329,16 +387,24 @@
     & .rhead .rsearch { flex: 1 1 0; width: auto; min-width: 0; }
     & .coord-composer .cx textarea, & .coord-thread-composer .cx textarea { min-height: 44px; }
     & .cx-f { padding: 8px; }
-    & .rttl .rsearch { display: none; }
-    & .rlead { margin: 8px 0; }
-    & .rlead p { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
     /* The footer of the composer in two rows: the two pickers side by side, the buttons beneath. */
     & .cx-f { gap: 6px; }
     & .cx-f > .dd { flex: 1 1 45%; min-width: 0; }
     & .cx-f > .dd > .gbtn { width: 100%; justify-content: space-between; }
     & .cx-f > .sp { flex: 1 0 100%; height: 0; }
     & .cx-f > .rm-ask { margin-left: auto; }
-    & .rttl { flex-direction: column; align-items: stretch; }
+    & .rtbar { gap: 6px; }
+    & .rtbar h3 { font-size: 15px; line-height: 20px; }
+    & .rtstate > summary > span { display: none; }
+    & .rtwho .stackav .gav:nth-child(n+3), & .rtwho .stackmore { display: none; }
+    & .rtmenu-pop { width: min(300px, calc(100vw - 32px)); }
+    & .rlead > summary { gap: 8px; padding: 10px 0; }
+    & .rlead b { display: none; }
+    & .rlead p { font-size: 14px; line-height: 20px; }
+    & .coord-thread-messages .rm-msg { grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
+    & .coord-thread-messages .rm-msg > .gav { width: 28px; height: 28px; font-size: 11px; }
+    & .coord-thread-messages > .coord-thread-wait { margin-left: 38px; }
+    & .coord-thread-composer { padding: 10px 0 14px; }
     & .coord-messages { padding: 12px 12px 16px; }
     & .rm-msg { grid-template-columns: 28px minmax(0, 1fr); gap: 8px; }
     & .rm-msg > .gav { width: 28px; height: 28px; }
@@ -347,7 +413,7 @@
     & .rq4-f { flex-wrap: wrap; }
     & .rq4-n { flex: 1 0 100%; white-space: normal; }
     & .rq4-f .sp { flex: 1 0 0; }
-    & .coord-composer, & .coord-thread-composer { padding: 8px 12px 12px; }
+    & .coord-composer { padding: 8px 12px 12px; }
     & .rwho-pop { width: calc(100vw - 32px); }
     & .rstart-pop { width: calc(100% - 16px); }
   }

@@ -216,6 +216,16 @@ type coordThreadDetailView struct {
 	// CanSetState: the store would accept the state change: the viewer is the
 	// thread's author, a room manager, or (project room) a lead or owner.
 	CanSetState bool
+	// States are the three states of a thread for the menu in the head, the
+	// current one marked; set with CanSetState.
+	States []coordStateOption
+	// Who are the ones who wrote in the thread (see coord_thread_who.go).
+	Who []coordHereView
+	// WaitLines say in a sentence each who waits on each other in this thread.
+	WaitLines []string
+	// Addressees are the people and agents the composer offers, the ones of the
+	// thread first; an agent once.
+	Addressees []coordParticipantView
 }
 
 // coordThreadEventView is one line "Jonas marked this thread resolved".

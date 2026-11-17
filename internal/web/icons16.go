@@ -45,6 +45,8 @@ var mockIcons = map[string]string{
 	"idea":      `<path d="M6.2 12.4h3.6M6.6 14.2h2.8"/><path d="M8 1.8a4.2 4.2 0 0 0-2.5 7.6c.5.4.8.9.8 1.5v.5h3.4v-.5c0-.6.3-1.1.8-1.5A4.2 4.2 0 0 0 8 1.8z"/>`,
 	"inbox":     `<path d="M2 9.5l1.6-6h8.8l1.6 6v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1zM2 9.5h3.2l.8 1.7h4l.8-1.7H14"/>`,
 	"issue":     `<circle cx="8" cy="8" r="6.25"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/>`,
+	"send":      `<path d="M2.2 8 13.8 2.6 10.6 13.4 8 9 2.2 8Z"/><path d="M8 9 13.8 2.6"/>`,
+	"sliders":   `<path d="M2.5 5h6M11.5 5h2M2.5 11h2M7.5 11h6"/><circle cx="10" cy="5" r="1.5"/><circle cx="6" cy="11" r="1.5"/>`,
 	"kebab":     `<circle cx="3.5" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="8" r="1" fill="currentColor" stroke="none"/>`,
 	"link":      `<path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2.2-2.2a2.6 2.6 0 0 0-3.7-3.7l-.7.7M9.2 6.8a2.6 2.6 0 0 0-3.7 0L3.3 9a2.6 2.6 0 0 0 3.7 3.7l.7-.7"/>`,
 	"list":      `<path d="M5.6 4h8M5.6 8h8M5.6 12h8M2.4 4h.01M2.4 8h.01M2.4 12h.01"/>`,

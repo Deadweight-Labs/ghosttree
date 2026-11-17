@@ -486,6 +486,20 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			ClearReplyURL: coordThreadComposerURL(room, selectedID),
 		}
 		threadDetail.Events = a.threadStateEvents(l, selectedID)
+		// Who is in the thread is who wrote in it, not who is in the room.
+		authors, loadErr := access.ThreadAuthors(selectedID)
+		if loadErr != nil {
+			coordHTTPError(l, w, loadErr)
+			return
+		}
+		threadDetail.Who = buildThreadWho(l, authors, detail.Participants, labels)
+		cycles, loadErr := access.ThreadWaitCycles(selectedID)
+		if loadErr != nil {
+			coordHTTPError(l, w, loadErr)
+			return
+		}
+		threadDetail.WaitLines = buildThreadWaitLines(l, cycles, detail.Participants, labels)
+		threadDetail.Addressees = threadAddressees(l, threadDetail.Who, detail.Participants, detail.ToDefault)
 		markViewerMentions(threadDetail.Messages, presentations, current.ID)
 		applyMessageRoles(l, a.store, activeRoom.Key, current.ID, threadDetail.Messages, presentations)
 		allAttention := append(append([]coordAttentionView{}, incomingAttention...), outgoingAttention...)
@@ -542,6 +556,9 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		for _, item := range roomThreads {
 			if item.Thread.ID == detail.Thread.ID {
 				detail.Thread.CanSetState = a.browserCoord(r).CanSetThreadState(item.Thread.ID)
+				if detail.Thread.CanSetState {
+					detail.Thread.States = coordStateOptions(l, detail.Thread.State)
+				}
 			}
 		}
 	}
