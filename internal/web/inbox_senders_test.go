@@ -97,6 +97,9 @@ func TestAnswerToAQuestionWithAThreadLandsInTheThread(t *testing.T) {
 	if resp.StatusCode != 303 {
 		t.Fatalf("reply -> %d", resp.StatusCode)
 	}
+	if _, inbox := fetchPage(t, e.Member, e.Base+"/ui/inbox"); strings.Contains(inbox, "Soll das Timeout") {
+		t.Errorf("the answered question comes back under \"Said to you\":\n%s", inboxBody(inbox))
+	}
 	threadURL := e.Base + "/ui/coord?room=" + url.QueryEscape(room) + "&thread=" + itoa(thread)
 	page := fetchBody(t, e.Owner, threadURL)
 	if !strings.Contains(page, "Nimm 60 Sekunden.") {

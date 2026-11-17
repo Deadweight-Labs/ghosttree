@@ -41,8 +41,10 @@ func (a *app) inboxReply(w http.ResponseWriter, r *http.Request) {
 	thread, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("thread")), 10, 64)
 	// The answer to a message somebody started a thread on is a post in that thread:
 	// where the asker follows the question, not a loose line in the room (REQ-689).
+	answeredInThread := false
 	if thread == 0 && replyTo > 0 {
 		if thread = threadAnchoredAt(access, room, replyTo); thread > 0 {
+			answeredInThread = true
 			// The question stands in the room, the answer in the thread: nothing to quote there.
 			message.ReplyTo = 0
 		}
@@ -75,7 +77,7 @@ func (a *app) inboxReply(w http.ResponseWriter, r *http.Request) {
 	}
 	if summaries, err := access.RoomSummaries(); err == nil {
 		for _, s := range summaries {
-			if s.Room.Key == room && thread == 0 {
+			if s.Room.Key == room && (thread == 0 || answeredInThread) {
 				_ = access.MarkRead(store.DestinationRoom, room, s.LastSequence)
 			}
 		}
