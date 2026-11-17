@@ -69,6 +69,29 @@ func TestAStreamThatBreaksOffIsBookedAtTheEstimate(t *testing.T) {
 	}
 }
 
+// A call the client gives up on after it was sent, before any answer, is
+// booked at the estimate: the provider bills it all the same.
+func TestACallGivenUpBeforeTheAnswerIsBookedAtTheEstimate(t *testing.T) {
+	e := newEnv(t)
+	e.provider.mode = "hang"
+	e.provider.hung = make(chan struct{})
+	e.blocks["test/giveup"] = workflow.BlockFunc(func(ctx context.Context, in workflow.Input) (store.WorkflowRunOutcome, error) {
+		cctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(cctx, http.MethodPost, in.AI.BaseURL+PathAnthropic,
+			strings.NewReader(`{"model":"klein","max_tokens":100000,"messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("x-api-key", in.AI.Token)
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			resp.Body.Close()
+		}
+		return store.WorkflowRunOutcome{State: store.RunDone}, nil
+	})
+	run := e.run(t, "test/giveup", nil)
+	if run.CostUSD < 0.5 {
+		t.Fatalf("a call given up after it was sent costs %v USD", run.CostUSD)
+	}
+}
+
 // m1: an answer without usage is booked at the estimate, so the caps hold.
 func TestAnAnswerWithoutUsageIsBookedAtTheEstimate(t *testing.T) {
 	e := newEnv(t)

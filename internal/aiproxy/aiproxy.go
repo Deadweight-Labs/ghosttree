@@ -17,10 +17,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
@@ -204,10 +206,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.settle(run, route, callID, b, price, est)
 }
 
+// statusNoAnswer is booked for a call that was sent and got no answer.
+const statusNoAnswer = 499
+
 // booking is what came back from the provider for one call.
 type booking struct {
-	// called: the provider answered with success; otherwise the reservation
-	// is dropped (nothing was billed).
+	// called: the provider answered with success, or the request was sent and
+	// no answer came back; otherwise the reservation is dropped (nothing was
+	// billed: the request never left, or the provider refused it).
 	called bool
 	status int
 	usage  llm.Usage
@@ -392,7 +398,11 @@ func (p *Proxy) forward(ctx context.Context, w http.ResponseWriter, r *http.Requ
 		p.fail(w, apiError{http.StatusBadGateway, "api_error", "connection address is not allowed"})
 		return booking{}
 	}
-	up, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(body))
+	// Once the request is out, the provider may bill it, whatever happens to
+	// the answer; only a request that never left is free.
+	var sent atomic.Bool
+	trace := &httptrace.ClientTrace{WroteRequest: func(info httptrace.WroteRequestInfo) { sent.Store(info.Err == nil) }}
+	up, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, target.String(), bytes.NewReader(body))
 	if err != nil {
 		p.fail(w, apiError{http.StatusBadGateway, "api_error", "request cannot be made"})
 		return booking{}
@@ -420,6 +430,11 @@ func (p *Proxy) forward(ctx context.Context, w http.ResponseWriter, r *http.Requ
 		// scrubbed all the same.
 		p.logf(slog.LevelWarn, "ai_upstream", run.ID, route, "error", scrub(err.Error(), key))
 		p.fail(w, apiError{http.StatusBadGateway, "api_error", "provider did not answer"})
+		if sent.Load() {
+			// Sent, but no answer came back (the run or the client gave up, or
+			// the connection broke): booked at the estimate.
+			return booking{called: true, status: statusNoAnswer}
+		}
 		return booking{}
 	}
 	defer resp.Body.Close()

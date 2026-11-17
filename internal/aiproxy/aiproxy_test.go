@@ -91,6 +91,11 @@ func (f *fakeProvider) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		if mode == "hang" {
+			<-r.Context().Done()
+			close(f.hung)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if mode == "nousage" {
 			fmt.Fprint(w, `{"type":"message","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`)
