@@ -497,8 +497,10 @@ func TestRepoAddressable(t *testing.T) {
 		"github.com/x/shell":          true,
 		"gitlab.winehq.org/wine/wine": true,
 		"github.com/inbox/thing":      true,
-		"nurrobin/infra":              false,
-		"ai//opt/assistant":           false,
+		// A project without a host has its own repository page since REQ-675:
+		// /ui/-/nurrobin/infra.
+		"nurrobin/infra":    true,
+		"ai//opt/assistant": false,
 	} {
 		if got := repoAddressable(remote); got != want {
 			t.Errorf("%s: %v, want %v", remote, got, want)
