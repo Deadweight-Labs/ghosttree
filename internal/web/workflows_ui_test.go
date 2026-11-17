@@ -136,3 +136,26 @@ func TestOwnerSetsTheRetentionOfAnOrganization(t *testing.T) {
 		t.Fatal("section anchor")
 	}
 }
+
+// Review of E0, finding 8: a run that cost less than a cent is not free, and
+// German reads a decimal comma.
+func TestCostOfARunKeepsSmallAmountsAndTheLanguagesDecimalMark(t *testing.T) {
+	for _, c := range []struct {
+		l    lang
+		usd  float64
+		want string
+	}{
+		{langEN, 0, "0.00 $"},
+		{langEN, 0.004, "0.004 $"},
+		{langDE, 0.004, "0,004 $"},
+		{langDE, 0.00042, "0,0004 $"},
+		{langEN, 0.00001, "<0.0001 $"},
+		{langEN, 0.01, "0.01 $"},
+		{langDE, 0.042, "0,04 $"},
+		{langDE, 12.5, "12,50 $"},
+	} {
+		if got := wfCost(c.l, c.usd); got != c.want {
+			t.Errorf("wfCost(%s, %v) = %q, want %q", c.l, c.usd, got, c.want)
+		}
+	}
+}

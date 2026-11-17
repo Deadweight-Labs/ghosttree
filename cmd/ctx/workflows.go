@@ -14,7 +14,9 @@ import (
 const workflowTick = 15 * time.Second
 
 // startWorkflows runs the dispatcher and executor of workflows in the
-// background of the server. An idle tick only reads.
+// background of the server, each in a goroutine of its own. A round without
+// due schedules, new events or queued runs only reads. The returned function
+// waits for them to stop, for a bounded time.
 func startWorkflows(ctx context.Context, st *store.Store, logger *slog.Logger) func() {
 	done := make(chan struct{})
 	go func() {

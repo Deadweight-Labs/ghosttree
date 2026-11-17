@@ -66,6 +66,9 @@ func sessionHeader(r *http.Request) string {
 	if !originctx.ValidSession(v) {
 		return ""
 	}
+	if store.ReservedForWorkflowRun(v) && !strings.EqualFold(v, principalOf(r).RunRef()) {
+		return ""
+	}
 	return v
 }
 
