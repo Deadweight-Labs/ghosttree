@@ -22,5 +22,10 @@ func TestMain(m *testing.M) {
 	// What hooks remember between calls follows the HOME a test sets, never the
 	// state directory of the developer who runs the tests.
 	_ = os.Unsetenv("XDG_STATE_HOME")
+	// Claude Code's own directory follows CLAUDE_CONFIG_DIR, which a session that
+	// runs the tests may have set to the real configuration (PAIN-86, KN-4752).
+	// Tests that need it set it themselves.
+	_ = os.Unsetenv("CLAUDE_CONFIG_DIR")
+	_ = os.Unsetenv("CODEX_HOME")
 	os.Exit(testtmp.Run(m))
 }
