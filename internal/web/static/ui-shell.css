@@ -60,6 +60,11 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .gh-header .account-menu .shell-nav { display: grid; grid-template-columns: 1fr 1fr; }
 .gh-header .account-menu .shell-nav .opt { width: auto; margin: 0 4px; padding-inline: 8px; }
 .gh-header .account-menu .org-list { max-height: 104px; overflow-y: auto; }
+.gh-header .account-menu .theme-pick { display: flex; gap: 2px; margin: 4px 8px; padding: 2px; background: var(--neutral-muted); border-radius: 8px; }
+.gh-header .account-menu .theme-pick .opt { flex: 1 1 0; width: auto; min-width: 0; margin: 0; padding: 4px 6px; justify-content: center; gap: 4px; font-size: 13px; }
+.gh-header .account-menu .theme-pick .opt span { flex: 0 1 auto; }
+.gh-header .account-menu .theme-pick .opt[aria-checked="true"] { background: var(--canvas-default); box-shadow: 0 0 0 1px var(--border-default); font-weight: 600; }
+.gh-header .account-menu .theme-pick .opt[aria-checked="true"] svg.i { color: var(--fg-default); }
 .gh-header .account-menu .account-foot { display: flex; margin: 0 8px; }
 .gh-header .account-menu .account-foot > .opt, .gh-header .account-menu .account-foot > form { flex: 1 1 0; min-width: 0; margin: 0; }
 .gh-header .account-menu .account-foot .opt { width: 100%; margin: 0; }
@@ -172,7 +177,9 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
   .gh-header .hsf.sg-host { position: static; }
   .gh-header .sg-list { position: fixed; top: 64px; left: 16px; right: 16px; width: auto; min-width: 0; max-width: none; }
   .gh-header .hcrumb { flex: 1 1 0; }
-  .gh-header .hplus { display: none; }
+  /* "New …" stays: on a phone it is the only way to start an issue, an idea or a repository. Icon only, without the chevron. */
+  .gh-header .hplus > summary.iconbtn { width: 44px; padding: 0; justify-content: center; }
+  .gh-header .hplus > summary.iconbtn svg:nth-child(2) { display: none; }
   .gh-header .hcrumb .org, .gh-header .hcrumb .org + .sl { display: none; }
   .gh-header .sp { display: none; }
   .gh-header .shell-brand { min-width: 44px; min-height: 44px; align-items: center; justify-content: center; }

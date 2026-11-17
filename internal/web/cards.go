@@ -1,7 +1,6 @@
 package web
 
 import (
-	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -24,7 +23,7 @@ func leadSentence(s string, limit int) string {
 		}
 	}
 	if utf8.RuneCountInString(s) > limit {
-		s = strings.TrimRight(string([]rune(s)[:limit]), " ,;:") + "…"
+		s = ellipsizeWords(s, limit)
 	}
 	return s
 }

@@ -396,9 +396,9 @@ type codeCommit struct {
 }
 
 type codeRow struct {
-	Name, Href, Desc, Updated string
-	Dir, Missing              bool
-	Pitfalls, Knowledge       int
+	Name, Href, Desc, Full, Updated string
+	Dir, Missing                    bool
+	Pitfalls, Knowledge             int
 }
 
 type codeNavNode struct {
@@ -581,6 +581,8 @@ func (a *app) codeFolderPage(r *http.Request, pa *store.ProjectAccess, view *rep
 		}
 		if g, ok := ix.byPath[c.Path]; ok && strings.TrimSpace(g.Description) != "" {
 			row.Desc = plainLine(g.Description, 160)
+			// The whole first sentence as the tooltip of the shortened cell.
+			row.Full = plainLine(g.Description, 600)
 		}
 		row.Missing = row.Desc == ""
 		for _, k := range kn {

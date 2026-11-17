@@ -224,7 +224,9 @@ func TestGermanInboxAndSearchSpeakGerman(t *testing.T) {
 	if !strings.Contains(search, "Keine Treffer") || !strings.Contains(search, "Alles durchsuchen") {
 		t.Error("search page is not German")
 	}
-	if !strings.Contains(search, "Team-Einstellungen") || !strings.Contains(search, "Darstellung: Dunkel") {
-		t.Error("the account menu lacks Team-Einstellungen or the named theme")
+	for _, want := range []string{"Team-Einstellungen", "<span>Hell</span>", "<span>Dunkel</span>", "<span>System</span>"} {
+		if !strings.Contains(search, want) {
+			t.Errorf("the German account menu lacks %q", want)
+		}
 	}
 }

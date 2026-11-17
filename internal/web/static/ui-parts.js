@@ -125,6 +125,50 @@
     if (t) t.focus();
   });
 
+  // Menus by keyboard (R04): on the closed button the arrow keys open the menu and
+  // put the focus on the chosen entry (or the first); in the open menu the arrows, Home
+  // and End move between the entries (the filter field of a long menu is the first stop),
+  // and the page does not scroll along. Enter chooses, since an entry is a button or a
+  // link; Escape and Tab are handled above and by the browser.
+  const stops = (dd) => {
+    const find = $(".pop .pf", dd);
+    return [...(find ? [find] : []), ...$$(".pop .opt", dd).filter((o) => !o.hidden && !o.disabled)];
+  };
+  document.addEventListener("keydown", (event) => {
+    const key = event.key;
+    if (key !== "ArrowDown" && key !== "ArrowUp" && key !== "Home" && key !== "End") return;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const dd = event.target.closest && event.target.closest(".dd");
+    if (!dd) return;
+    const t = event.target;
+    const onButton = t.matches("[data-dd]") || (t.tagName === "SUMMARY" && t.parentNode === dd);
+    if (!onButton && !t.closest(".pop")) return;
+    // Home and End belong to the text of the filter field.
+    if ((key === "Home" || key === "End") && event.target.classList && event.target.classList.contains("pf")) return;
+    const isOpen = dd.classList.contains("open") || (dd.tagName === "DETAILS" && dd.open);
+    if (onButton && !isOpen) {
+      if (key === "Home" || key === "End") return;
+      event.preventDefault();
+      t.click();
+      const list = stops(dd).filter((s) => !s.classList.contains("pf"));
+      const chosen = list.find((o) => o.getAttribute("aria-selected") === "true" && o.dataset.val) || list[0];
+      const first = stops(dd)[0];
+      // A long menu starts in its filter field (the click handler focused it); a short one on an entry.
+      if (first && first.classList.contains("pf")) first.focus(); else if (chosen) chosen.focus();
+      return;
+    }
+    const list = stops(dd);
+    if (!list.length) return;
+    event.preventDefault();
+    const at = list.indexOf(event.target);
+    let next;
+    if (key === "Home") next = 0;
+    else if (key === "End") next = list.length - 1;
+    else if (key === "ArrowDown") next = at < 0 ? 0 : Math.min(at + 1, list.length - 1);
+    else next = at <= 0 ? 0 : at - 1;
+    list[next].focus();
+  });
+
   // Composer: write/preview. The preview renders the Markdown (ui-md.js) into nodes. It is at
   // least as tall as the text field it replaces, so the box does not jump, and it grows with its
   // content up to the height of the window (CSS: .cx-pv), then scrolls inside itself: a table or

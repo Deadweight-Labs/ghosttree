@@ -51,6 +51,13 @@ func cmdStatus(args []string, stdout io.Writer) int {
 	if err == nil {
 		fmt.Fprintf(stdout, "transcripts %d tracked\n", len(st.Files))
 	}
+	// Was der Sammler nicht hochladen konnte, steht sonst nur im Journal (REQ-690).
+	if h, fresh := collector.ReadHealth(collector.DefaultStatePath()); fresh {
+		fmt.Fprintf(stdout, "uploads     %s\n", h.Describe())
+		if len(h.Failing) > 0 {
+			ok = false
+		}
+	}
 
 	claudeCfg := installer.ClaudeUserConfigPath(home)
 	claudeOK := fileContains(claudeCfg, `"ghosttree"`) &&

@@ -1180,6 +1180,23 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- A `claude -p` run is bound to its session, quick fixes of the usability run 3
+  (REQ-690). `start_work` knows the session of its Claude Code process by the
+  harness id and registers it on the server when the collector has not uploaded
+  it yet (it sweeps every 30 seconds, an agent calls `start_work` in its first
+  seconds); the collector then fills the same row. Without a harness id the work
+  goes to the newest session of the machine and the answer says so, otherwise
+  the failure says what to do. Setting a criterion twice with the same evidence
+  is a repetition, and the MCP tool repeats it after a timeout and checks the
+  state. The collector repeats an upload that timed out and writes a report that
+  `ctx status` shows. The ghosttree view of a session shows the closing answer of
+  the agent. Menus work by keyboard (arrows, Home, End), a label picked is set
+  at once and the page says whether it worked. Descriptions in the code tree
+  lose the "Synopsis:" and "Context:" labels and are shortened at a word. The
+  theme is a choice of light, dark and system, "New …" is in the header on a
+  phone, an organization's header does not carry a repository of another page,
+  and the toast floats under the tabs.
+
 - Agent tools without detours, readable sessions, answers where the question
   was asked (REQ-688). `human_task` needs no request any more: without one it
   hangs on the session's request, else on a standing "Agent tasks" request per

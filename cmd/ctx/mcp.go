@@ -38,6 +38,20 @@ func currentSessionRef() string {
 	return ""
 }
 
+// currentSessionHarness is the harness that goes with currentSessionRef, named as
+// the collector names it in the session row.
+func currentSessionHarness() string {
+	for _, h := range []struct{ key, harness string }{
+		{"CODEX_SESSION_ID", "codex"}, {"CODEX_THREAD_ID", "codex"},
+		{"CLAUDE_CODE_SESSION_ID", "claude-code"}, {"OPENCODE_SESSION_ID", "opencode"},
+	} {
+		if os.Getenv(h.key) != "" {
+			return h.harness
+		}
+	}
+	return ""
+}
+
 // mcpUsageHarness is the harness whose ghosttree tool calls ctx mcp counts
 // itself. Claude Code's are counted by its PostToolUse hook, which also knows
 // whether a subagent made the call.
@@ -241,6 +255,7 @@ func cmdMCP(args []string, stdout io.Writer) int {
 		return mcpserver.Live{Branch: g.Branch, Lineage: g.Lineage, CWD: cwd, Trunk: collector.IsDefaultBranch(ctx, cwd, g.Branch)}
 	})
 	srv.SetSessionRef(currentSessionRef())
+	srv.SetSessionHarness(currentSessionHarness())
 	srv.SetUsageHarness(mcpUsageHarness())
 	srv.SetProfile(profile.FromEnv())
 	srv.SetCoordRef(coordAgentOverride())

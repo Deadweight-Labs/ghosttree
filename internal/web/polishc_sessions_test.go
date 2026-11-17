@@ -80,3 +80,31 @@ func TestSharingAsksBeforeMorePeopleMayRead(t *testing.T) {
 		t.Errorf("narrowing asked a question: %q", resp.Header.Get("Location"))
 	}
 }
+
+// REQ-690 AC-2 (N10): the ghosttree view shows what the agent said at the end of its
+// run where its text was captured. Before, a run of ten tool calls showed only
+// "made 10 tool calls".
+func TestSessionViewShowsTheClosingAnswerOfTheAgent(t *testing.T) {
+	e := seedSessions(t)
+	pid := openRun(t, e, "answering-run",
+		uLine("Prüfe den Spool"),
+		aLine(bash("a", "go test ./...")),
+		rLine("a", "ok", false),
+		aLine(tb("Die Tests laufen grün.\nIch habe nichts geändert <b>und</b> 5 Tests ergänzt.")),
+	)
+	code, page := e.get(t, e.Member, "/ui/sessions/"+pid)
+	if code != 200 {
+		t.Fatalf("session page = %d", code)
+	}
+	for _, want := range []string{"answered", "Die Tests laufen grün.<br>Ich habe nichts geändert &lt;b&gt;und&lt;/b&gt; 5 Tests ergänzt."} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the ghosttree view lacks %q:\n%.1500s", want, page)
+		}
+	}
+	// A run without any text of the agent shows no empty "answered".
+	pid = openRun(t, e, "silent-run", uLine("Nur ein Auftrag"), aLine(bash("a", "ls")), rLine("a", "x", false))
+	_, page = e.get(t, e.Member, "/ui/sessions/"+pid)
+	if strings.Contains(page, `class="answer"`) {
+		t.Errorf("a run without text shows an answer")
+	}
+}

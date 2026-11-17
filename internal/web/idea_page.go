@@ -145,6 +145,8 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 	switch {
 	case commentResult(r, l) != nil:
 		v.Result = commentResult(r, l)
+	case labelAssignResult(r, l) != nil:
+		v.Result = labelAssignResult(r, l)
 	case r.URL.Query().Get("fail") != "":
 		v.Result = &requestResult{Text: l.msg(ideaFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
 	case r.URL.Query().Get("done") == "corrected":

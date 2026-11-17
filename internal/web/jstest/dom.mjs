@@ -225,6 +225,7 @@ export class Event {
   }
   preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
   stopPropagation() { this.stopped = true; }
+  stopImmediatePropagation() { this.stopped = true; }
 }
 
 // ---------------------------------------------------------------- HTML
@@ -278,17 +279,21 @@ function compounds(sel) {
   });
 }
 
+// :scope is the element querySelector was called on (set for the length of one query).
+let scopeRoot = null;
+
 function simple(piece) {
   const checks = [];
   let rest = piece;
   const tag = /^[a-zA-Z][\w-]*/.exec(rest);
   if (tag) { checks.push((el) => el.localName === tag[0].toLowerCase()); rest = rest.slice(tag[0].length); }
-  const re = /^(?:\.([\w-]+)|\[([\w-]+)(?:=(?:"([^"]*)"|([\w-]+)))?\]|:not\(([^)]*)\))/;
+  const re = /^(?:\.([\w-]+)|\[([\w-]+)(?:=(?:"([^"]*)"|([\w-]+)))?\]|:not\(([^)]*)\)|(:scope))/;
   while (rest) {
     const m = re.exec(rest);
     if (!m) throw new Error("selector not supported by the test DOM: " + piece);
     if (m[1]) checks.push((el) => el.classList.contains(m[1]));
     else if (m[2]) checks.push((el) => el.hasAttribute(m[2]) && ((m[3] ?? m[4]) === undefined || el.getAttribute(m[2]) === (m[3] ?? m[4])));
+    else if (m[6]) checks.push((el) => el === scopeRoot);
     else { const inner = simple(m[5]); checks.push((el) => !inner(el)); }
     rest = rest.slice(m[0].length);
   }
@@ -308,6 +313,7 @@ const matchesAny = (el, sel) => compounds(sel).some((tokens) => matchChain(el, t
 function queryAll(root, sel) {
   const list = compounds(sel);
   const out = [];
+  scopeRoot = root;
   const walk = (n) => {
     for (const c of n.childNodes) {
       if (!(c instanceof Element)) continue;

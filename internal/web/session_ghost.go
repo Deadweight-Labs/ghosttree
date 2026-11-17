@@ -199,6 +199,16 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 			items = append(items, entry(at, "code", "", template.HTML(html.EscapeString(l.msg("sessions.ev.tools", act.Total))), toolsBody(l, act)))
 		}
 	}
+	// The closing message of the agent, where its text was captured: the run that
+	// only used tools and then reported back is not just "10 tool calls" (N10).
+	if view.ExternalID != "" {
+		if answer, at := a.store.SessionAnswer(sess); answer != "" {
+			if at == "" {
+				at = sess.LastSeenAt
+			}
+			items = append(items, entry(at, "chat", "", template.HTML(html.EscapeString(l.msg("sessions.ev.answer"))), `<div class="answer">`+textParagraphs(answer, 900)+`</div>`))
+		}
+	}
 	g.Quiet = len(items) == 0
 
 	items = append(items, entry(sess.StartedAt, "play", "acc", template.HTML(html.EscapeString(l.msg("sessions.ev.started"))), ""))

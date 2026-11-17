@@ -56,24 +56,33 @@
       for (const menu of menus) if (menu.open && !menu.contains(event.target)) menu.open = false;
     });
   }
-  const themeButton = document.querySelector("[data-theme-toggle]");
-  if (themeButton) {
-    const isDark = () => {
-      const root = document.documentElement;
-      return root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  // The theme is a choice of three: light, dark, or what the system says (no stored value).
+  const themeSet = [...document.querySelectorAll("[data-theme-set]")];
+  if (themeSet.length) {
+    const chosen = () => {
+      try {
+        const t = localStorage.getItem("gt-theme");
+        return t === "light" || t === "dark" ? t : "system";
+      } catch (_) { return "system"; }
     };
-    // The entry names the theme that is on ("Theme: Dark"); a click switches it.
     const showTheme = () => {
-      const now = isDark() ? "dark" : "light";
-      for (const label of themeButton.querySelectorAll("[data-theme-is]")) label.hidden = label.dataset.themeIs !== now;
+      const now = chosen();
+      for (const b of themeSet) b.setAttribute("aria-checked", String(b.dataset.themeSet === now));
     };
     showTheme();
-    themeButton.addEventListener("click", () => {
-      const next = isDark() ? "light" : "dark";
-      document.documentElement.dataset.theme = next;
-      try { localStorage.setItem("gt-theme", next); } catch (_) {}
-      showTheme();
-    });
+    for (const b of themeSet) {
+      b.addEventListener("click", () => {
+        const next = b.dataset.themeSet;
+        if (next === "system") {
+          delete document.documentElement.dataset.theme;
+          try { localStorage.removeItem("gt-theme"); } catch (_) {}
+        } else {
+          document.documentElement.dataset.theme = next;
+          try { localStorage.setItem("gt-theme", next); } catch (_) {}
+        }
+        showTheme();
+      });
+    }
   }
   // The greeting follows the visitor's clock, so the server renders a neutral
   // text and the browser picks the time of day and the date.

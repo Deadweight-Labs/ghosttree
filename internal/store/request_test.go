@@ -346,3 +346,36 @@ func TestSearchPageCarriesASnippetNotTheWholeDescription(t *testing.T) {
 		t.Errorf("detail description = %d chars, want the full %d", len(detail.Request.Description), len(long))
 	}
 }
+
+// REQ-690: after a timeout the caller repeats criterion_met without knowing whether
+// the first attempt arrived. The same transition with the same evidence is a
+// repetition and leaves exactly one piece of evidence; another evidence or the
+// other state stays refused.
+func TestCriterionMetRepeatedWithTheSameEvidenceIsNotAnError(t *testing.T) {
+	s := openTest(t)
+	detail, err := s.CreateRequest(requestdomain.CreateInput{
+		Request: requestdomain.Request{Type: "feature", Title: "ledger"}, Criteria: []string{"works"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := detail.Criteria[0].ID
+	proof := requestdomain.Evidence{Kind: "test", Ref: "go test ./...", Person: "alice"}
+	if err := s.SetCriterionState(id, "met", proof); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetCriterionState(id, "met", proof); err != nil {
+		t.Fatalf("the same transition twice: %v", err)
+	}
+	got, err := s.RequestByID(detail.Request.ID)
+	if err != nil || len(got.Criteria[0].Evidence) != 1 {
+		t.Fatalf("evidence after the repetition: %+v %v", got.Criteria[0].Evidence, err)
+	}
+	other := requestdomain.Evidence{Kind: "test", Ref: "something else", Person: "alice"}
+	if err := s.SetCriterionState(id, "met", other); requestdomain.Code(err) != "criterion_terminal" {
+		t.Fatalf("other evidence: %v", err)
+	}
+	if err := s.SetCriterionState(id, "waived", proof); requestdomain.Code(err) != "criterion_terminal" {
+		t.Fatalf("other state: %v", err)
+	}
+}
