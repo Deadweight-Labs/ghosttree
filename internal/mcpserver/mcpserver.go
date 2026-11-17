@@ -314,6 +314,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	s.registerPackageTools(srv)
 	s.registerQueryTools(srv)
 	s.registerRunbookTools(srv)
+	s.registerWorkflowTools(srv)
 	s.registerLinkTools(srv)
 	s.registerFeatureTools(srv)
 	s.registerMachineTools(srv)

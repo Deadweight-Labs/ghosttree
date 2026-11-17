@@ -27,6 +27,10 @@ type Input struct {
 	Run   store.WorkflowRun
 	Event store.WorkflowEvent
 	AI    *ModelAccess
+	// Def is the definition of a stored workflow (REQ-695), nil for a block
+	// that a trigger names directly; Values are its declared inputs.
+	Def    *Def
+	Values map[string]string
 }
 
 // Block is one thing a workflow can do. It reports how the run ended; the
@@ -301,6 +305,10 @@ func (e *Engine) execute(ctx context.Context, run store.WorkflowRun, ev store.Wo
 	block, version, err := e.Resolver.Resolve(ctx, run)
 	if errors.Is(err, ErrUnknownWorkflow) {
 		return store.WorkflowRunOutcome{State: store.RunSkipped, Reason: "unknown_workflow"}
+	}
+	var skip skipError
+	if errors.As(err, &skip) {
+		return store.WorkflowRunOutcome{State: store.RunSkipped, Reason: skip.reason, WorkflowVersion: version}
 	}
 	if err != nil {
 		return store.WorkflowRunOutcome{State: store.RunFailed, Reason: err.Error()}

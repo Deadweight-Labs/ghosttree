@@ -70,18 +70,31 @@ func (m *ModelAccess) Client(ctx context.Context, model string) (llm.Client, Res
 }
 
 // AskName is the built-in test block of stage E1: one model call through the
-// proxy. The event's data may name the model ("model"); the default is the
+// proxy. As a block of a workflow (REQ-695) it takes the model alias, the
+// declared inputs and the instruction of the definition; named directly by a
+// trigger, the event's data may name the model ("model"), the default is the
 // alias "klein".
 const AskName = "ghosttree/ask"
 
 // Ask is the block behind AskName.
 var Ask = BlockFunc(func(ctx context.Context, in Input) (store.WorkflowRunOutcome, error) {
 	model := in.Event.Data["model"]
+	if in.Def != nil && in.Def.Model != "" {
+		model = in.Def.Model
+	}
 	if model == "" {
 		model = "klein"
 	}
 	event, _ := json.MarshalIndent(in.Event, "", "  ")
 	prompt := "Describe this ghosttree event in one short sentence.\n\n" + string(event)
+	if in.Def != nil {
+		if inputs := renderInputs(in.Def, in.Values); inputs != "" {
+			prompt += "\n\n" + inputs
+		}
+		if in.Def.Instruction != "" {
+			prompt += "\n\nInstruction of the team:\n" + in.Def.Instruction
+		}
+	}
 	client, resolved, err := in.AI.Client(ctx, model)
 	if err != nil {
 		return store.WorkflowRunOutcome{}, err

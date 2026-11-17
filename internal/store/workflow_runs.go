@@ -187,11 +187,14 @@ type WorkflowEvent struct {
 // narrows pr.merged: empty means the default branch, "*" every branch.
 // EveryMinutes is the period of a schedule.
 type WorkflowTrigger struct {
-	ID           int64  `json:"id"`
-	Project      string `json:"project"`
-	Workflow     string `json:"workflow"`
-	EventKind    string `json:"event_kind"`
-	Branch       string `json:"branch,omitempty"`
+	ID        int64  `json:"id"`
+	Project   string `json:"project"`
+	Workflow  string `json:"workflow"`
+	EventKind string `json:"event_kind"`
+	Branch    string `json:"branch,omitempty"`
+	// BranchGlobs are the branch patterns of a workflow definition (one per
+	// line, release/*); when set they replace Branch.
+	BranchGlobs  string `json:"branch_globs,omitempty"`
 	EveryMinutes int    `json:"every_minutes,omitempty"`
 	AllowChain   bool   `json:"allow_chain"`
 	Enabled      bool   `json:"enabled"`
@@ -533,7 +536,7 @@ func setWorkflowTriggerTx(tx *sql.Tx, t WorkflowTrigger, by string) (WorkflowTri
 	}
 	ts := now()
 	if _, err := tx.Exec(`INSERT INTO workflow_triggers(project,workflow,event_kind,branch,every_minutes,allow_chain,enabled,created_by,created_at)
-		VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(project,workflow,event_kind) DO UPDATE SET branch=excluded.branch,
+		VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(project,workflow,event_kind) DO UPDATE SET branch=excluded.branch, branch_globs='',
 		every_minutes=excluded.every_minutes, allow_chain=excluded.allow_chain, enabled=excluded.enabled`,
 		t.Project, t.Workflow, t.EventKind, t.Branch, t.EveryMinutes, boolInt(t.AllowChain), boolInt(t.Enabled), by, ts); err != nil {
 		return WorkflowTrigger{}, err
@@ -541,12 +544,12 @@ func setWorkflowTriggerTx(tx *sql.Tx, t WorkflowTrigger, by string) (WorkflowTri
 	return scanWorkflowTrigger(tx.QueryRow(`SELECT `+workflowTriggerCols+` FROM workflow_triggers WHERE project=? AND workflow=? AND event_kind=?`, t.Project, t.Workflow, t.EventKind))
 }
 
-const workflowTriggerCols = `id, project, workflow, event_kind, branch, every_minutes, allow_chain, enabled, created_by, created_at`
+const workflowTriggerCols = `id, project, workflow, event_kind, branch, branch_globs, every_minutes, allow_chain, enabled, created_by, created_at`
 
 func scanWorkflowTrigger(r rowScanner) (WorkflowTrigger, error) {
 	var t WorkflowTrigger
 	var chain, enabled int
-	if err := r.Scan(&t.ID, &t.Project, &t.Workflow, &t.EventKind, &t.Branch, &t.EveryMinutes, &chain, &enabled, &t.CreatedBy, &t.CreatedAt); err != nil {
+	if err := r.Scan(&t.ID, &t.Project, &t.Workflow, &t.EventKind, &t.Branch, &t.BranchGlobs, &t.EveryMinutes, &chain, &enabled, &t.CreatedBy, &t.CreatedAt); err != nil {
 		return WorkflowTrigger{}, err
 	}
 	t.AllowChain, t.Enabled = chain == 1, enabled == 1
@@ -590,6 +593,9 @@ func triggerMatches(t WorkflowTrigger, ev WorkflowEvent) bool {
 	}
 	switch ev.Kind {
 	case EventPRMerged:
+		if t.BranchGlobs != "" {
+			return branchGlobsMatch(t.BranchGlobs, ev.Data["base"])
+		}
 		switch t.Branch {
 		case "*":
 			return true
@@ -960,7 +966,9 @@ type WorkflowRunFilter struct {
 	SubjectKind string
 	SubjectID   string
 	State       string
-	Limit       int
+	// Workflow narrows the list to the runs of one workflow.
+	Workflow string
+	Limit    int
 }
 
 // workflowRunsOfSubject lists the runs of one subject of a project from its
@@ -992,6 +1000,10 @@ func (s *Store) WorkflowRunsIn(project string, f WorkflowRunFilter) ([]WorkflowR
 	if f.State != "" {
 		q += ` AND r.state=?`
 		args = append(args, f.State)
+	}
+	if f.Workflow != "" {
+		q += ` AND r.workflow=?`
+		args = append(args, f.Workflow)
 	}
 	q += ` ORDER BY r.id DESC LIMIT ?`
 	args = append(args, f.Limit)

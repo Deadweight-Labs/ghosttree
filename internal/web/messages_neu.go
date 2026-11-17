@@ -241,7 +241,7 @@ var messagesNeuDE = map[string]string{
 	"machine.role.write":         "Schreiben",
 	"machine.of_org":             "Maschine der Organisation",
 	"machine.shared_with_org":    "Geteilt, %s",
-	"machine.runbook":            "Ablauf",
+	"machine.runbook":            "Runbook",
 	"machine.entries":            "Wissen",
 	"machine.agents":             "Agenten",
 	"machine.sessions":           "Sessions",

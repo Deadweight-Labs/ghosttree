@@ -138,6 +138,8 @@ type pageData struct {
 	RunbookV             *runbookPageView
 	WorkflowsV           *workflowsView
 	WorkflowRunV         *workflowRunView
+	WorkflowDefV         *workflowDefView
+	WorkflowFormV        *workflowFormView
 	DocsV                *docsView
 	DocV                 *docPageView
 	RunbookFormV         *runbookFormView
@@ -288,6 +290,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		a.handle(mux, "POST /ui/labels/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
 	a.handle(mux, "POST /ui/runbooks/write", a.requirePerson(a.requireInteractive(limitBodyN(maxRunbookForm, a.requireCSRF(http.HandlerFunc(a.runbookWrite))))))
+	a.handle(mux, "POST /ui/workflows/save", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowSave))))))
+	a.handle(mux, "POST /ui/workflows/enabled", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowEnable))))))
 	a.handle(mux, "POST /ui/labels/assign", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.labelAssign))))))
 	a.registerPainTaskPages(mux)
 	a.handle(mux, "GET /ui/search", a.requirePerson(http.HandlerFunc(a.searchPage)))
@@ -771,6 +775,8 @@ var webRoutes = map[string]webClass{
 	"POST /ui/labels/{id}/delete": webAdmin,
 	"POST /ui/labels/assign":      webAdmin,
 	"POST /ui/runbooks/write":     webAdmin,
+	"POST /ui/workflows/save":     webAdmin,
+	"POST /ui/workflows/enabled":  webAdmin,
 }
 
 // handle registriert eine Route und bricht ab, wenn sie nicht klassifiziert ist.

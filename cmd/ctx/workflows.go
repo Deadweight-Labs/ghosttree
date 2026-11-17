@@ -21,7 +21,7 @@ func startWorkflows(ctx context.Context, st *store.Store, logger *slog.Logger, a
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		e := &workflow.Engine{Store: st, Resolver: workflow.DefaultBuiltins(), Log: logger, AIBaseURL: aiBaseURL}
+		e := &workflow.Engine{Store: st, Resolver: workflow.NewDefResolver(st), Log: logger, AIBaseURL: aiBaseURL}
 		e.Run(ctx, workflowTick)
 	}()
 	return func() { <-done }

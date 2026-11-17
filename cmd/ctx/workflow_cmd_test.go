@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,5 +94,38 @@ func TestWorkflowTriggerSwitchesAWorkflowOnAndOff(t *testing.T) {
 	var out bytes.Buffer
 	if code := run([]string{"workflow"}, &out); code != 2 || !strings.Contains(out.String(), "usage:") {
 		t.Fatalf("without a subcommand: %d %s", code, out.String())
+	}
+}
+
+// AC-695.6: ctx workflow check names unknown keys, kinds and blocks as errors
+// with their line, says what the file would read, write and cost, exits 1 on
+// errors and 0 on a good file; --offline calls no server and no model.
+func TestWorkflowCheckReportsErrorsAndWhatAWorkflowMayDo(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad.md")
+	if err := os.WriteFile(bad, []byte("---\non: pr.merged\nuses: ghosttree/echo\nretries: 2\nresults:\n  poems: 1\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if code := run([]string{"workflow", "check", bad, "--offline"}, &out); code != 1 {
+		t.Fatalf("bad file: exit %d\n%s", code, out.String())
+	}
+	for _, want := range []string{"error: line 4: unknown key retries", "unknown kind of result poems", "aliases: not checked"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s", want, out.String())
+		}
+	}
+	good := filepath.Join(dir, "good.md")
+	if err := os.WriteFile(good, []byte("---\non: pr.merged\nbranches: [main]\ninputs: [pr.title]\nuses: ghosttree/echo\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"workflow", "check", "--offline", good}, &out); code != 0 {
+		t.Fatalf("good file: exit %d\n%s", code, out.String())
+	}
+	for _, want := range []string{"ok\n", "on: pr.merged on main", "reads: pr.title", "writes: nothing", "costs at most: 0 USD"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s", want, out.String())
+		}
 	}
 }

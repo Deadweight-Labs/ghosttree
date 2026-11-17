@@ -1392,6 +1392,13 @@ func aiCapsFor(q rowQuerier, r AIRoute) []struct {
 	if runCap == 0 {
 		runCap = owner.RunUSD
 	}
+	// The budget in the file of a workflow (REQ-695) only tightens: the lower
+	// of it and the caps set in the settings applies.
+	var defRun, defMonth float64
+	if r.Project != "" {
+		_ = q.QueryRow(`SELECT run_usd, month_usd FROM workflow_defs WHERE project=? AND name=?`, r.Project, r.Workflow).Scan(&defRun, &defMonth)
+	}
+	runCap, wf.MonthUSD = tighterCap(runCap, defRun), tighterCap(wf.MonthUSD, defMonth)
 	var conn float64
 	_ = q.QueryRow(`SELECT monthly_cap_usd FROM ai_connections WHERE id=?`, r.Connection.ID).Scan(&conn)
 	out := []capLine{
@@ -1557,3 +1564,14 @@ func (s *Store) AICostReportOf(orgID int64, since string) (AICostReport, error) 
 
 // AIMonthStart is the start of the month the caps count, for the views.
 func AIMonthStart() string { return aiMonthStart() }
+
+// tighterCap is the lower of two caps, where 0 means no cap.
+func tighterCap(a, b float64) float64 {
+	switch {
+	case a <= 0:
+		return b
+	case b <= 0:
+		return a
+	}
+	return math.Min(a, b)
+}

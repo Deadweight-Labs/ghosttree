@@ -1230,7 +1230,7 @@ var messagesDE = map[string]string{
 	"avatar.gardener":               "Gärtner",
 	"avatar.system":                 "ghosttree",
 	"repo.tab.pulls":                "Pull Requests",
-	"repo.tab.runbooks":             "Abläufe",
+	"repo.tab.runbooks":             "Runbooks",
 	"repo.tab.commits":              "Commits",
 	"issues.segments":               "Art der Einträge",
 	"issues.seg.issues":             "Issues",
