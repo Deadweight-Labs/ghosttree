@@ -15,6 +15,7 @@ import (
 const workflowUsage = `usage: ctx workflow trigger --db <path> --project <remote> --workflow <name> --on <event>
          [--branch <name>|*] [--every <minutes>] [--chain] [--off]
        ctx workflow check <file> [--project <remote>] [--offline]
+` + workflowWorktreeUsage + `
 
 Switches a workflow on (or with --off off) for a kind of event in a project,
 directly on the database of the server; only someone with the host can do it.
@@ -37,6 +38,9 @@ the file and the catalogue of blocks. The exit code is 1 when there are errors.`
 func cmdWorkflow(args []string, stdout io.Writer) int {
 	if len(args) > 0 && args[0] == "check" {
 		return workflowCheck(args[1:], stdout)
+	}
+	if len(args) > 0 && isWorkflowWorktreeCommand(args[0]) {
+		return cmdWorkflowWorktree(args[0], args[1:], stdout)
 	}
 	if len(args) == 0 || args[0] != "trigger" {
 		fmt.Fprintln(stdout, workflowUsage)

@@ -99,6 +99,17 @@ func TestEveryFileSaysItIsAProjection(t *testing.T) {
 	}
 }
 
+// INDEX.md nennt beide beschreibbaren Verzeichnisse und wie man sie
+// veröffentlicht: der Spiegel schreibt dort nie.
+func TestIndexNamesTheWritableWorktrees(t *testing.T) {
+	index := docsByPath(Build(sampleInput()))["INDEX.md"]
+	for _, want := range []string{"`edit/`", "ctx doc push", "`workflows/`", "ctx workflow pull", "ctx workflow push"} {
+		if !strings.Contains(index, want) {
+			t.Errorf("INDEX.md lacks %q", want)
+		}
+	}
+}
+
 // Die Scope-Vereinigung ist die Antwort auf "was weiss ein Agent hier". Jede
 // Achse muss darin vorkommen, sonst ist der Spiegel ein Ausschnitt, der sich
 // wie das Ganze liest.
