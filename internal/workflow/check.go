@@ -107,6 +107,11 @@ func Check(text string, env Env) (Def, CheckReport) {
 	errf := func(key, format string, args ...any) {
 		rep.Errors = append(rep.Errors, Problem{Line: lineOf(text, key), Key: key, Msg: fmt.Sprintf(format, args...)})
 	}
+	// itemf is an error about one item of a key (a pattern, an input, a kind
+	// of result), so that the block view puts it at that item.
+	itemf := func(key, item, format string, args ...any) {
+		rep.Errors = append(rep.Errors, Problem{Line: lineOf(text, key), Key: key, Item: item, Msg: fmt.Sprintf(format, args...)})
+	}
 	warnf := func(key, format string, args ...any) {
 		rep.Warnings = append(rep.Warnings, Problem{Line: lineOf(text, key), Key: key, Msg: fmt.Sprintf(format, args...)})
 	}
@@ -125,7 +130,7 @@ func Check(text string, env Env) (Def, CheckReport) {
 	}
 	for _, b := range d.Branches {
 		if !validBranchPattern(b) {
-			errf(KeyBranches, "branch pattern %q is not valid", b)
+			itemf(KeyBranches, b, "branch pattern %q is not valid", b)
 		}
 	}
 	switch {
@@ -171,9 +176,9 @@ func Check(text string, env Env) (Def, CheckReport) {
 		spec, ok := InputByName(in)
 		switch {
 		case !ok:
-			errf(KeyInputs, "unknown input %s", in)
+			itemf(KeyInputs, in, "unknown input %s", in)
 		case len(spec.Events) > 0 && d.On != "" && !slices.Contains(spec.Events, d.On):
-			errf(KeyInputs, "input %s is not there on %s", in, d.On)
+			itemf(KeyInputs, in, "input %s is not there on %s", in, d.On)
 		case slices.Contains(rep.Reads, in):
 		default:
 			rep.Reads = append(rep.Reads, in)
@@ -183,13 +188,13 @@ func Check(text string, env Env) (Def, CheckReport) {
 	for _, r := range d.Results {
 		switch {
 		case !slices.Contains(ResultKinds, r.Kind):
-			errf(KeyResults, "unknown kind of result %s (known: %s)", r.Kind, strings.Join(ResultKinds, ", "))
+			itemf(KeyResults, r.Kind, "unknown kind of result %s (known: %s)", r.Kind, strings.Join(ResultKinds, ", "))
 			continue
 		case known && !slices.Contains(block.Results, r.Kind):
-			errf(KeyResults, "%s cannot create %s", block.Name, r.Kind)
+			itemf(KeyResults, r.Kind, "%s cannot create %s", block.Name, r.Kind)
 			continue
 		case slices.Contains(env.Policy.DenyKinds, r.Kind):
-			errf(KeyResults, "the owner's policy forbids the kind of result %s", r.Kind)
+			itemf(KeyResults, r.Kind, "the owner's policy forbids the kind of result %s", r.Kind)
 			continue
 		}
 		rep.Writes = append(rep.Writes, r)

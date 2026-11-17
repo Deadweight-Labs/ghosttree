@@ -119,6 +119,9 @@ func (d Def) MaxOf(kind string) int {
 type Problem struct {
 	Line int    `json:"line,omitempty"`
 	Key  string `json:"key,omitempty"`
+	// Item is the item of the key the problem is about: a branch pattern, an
+	// input, a kind of result; empty when it is about the key as a whole.
+	Item string `json:"item,omitempty"`
 	Msg  string `json:"message"`
 }
 
@@ -299,11 +302,11 @@ func Parse(text string) (Def, []Problem) {
 			for _, p := range pairsOf(v, key, add) {
 				n, err := strconv.Atoi(p.value)
 				if err != nil || n < 1 {
-					add(p.line, key, "results.%s: a number of at least 1", p.key)
+					probs = append(probs, Problem{Line: p.line, Key: key, Item: p.key, Msg: fmt.Sprintf("results.%s: a number of at least 1", p.key)})
 					continue
 				}
 				if slices.ContainsFunc(d.Results, func(r ResultLimit) bool { return r.Kind == p.key }) {
-					add(p.line, key, "results.%s is set twice", p.key)
+					probs = append(probs, Problem{Line: p.line, Key: key, Item: p.key, Msg: fmt.Sprintf("results.%s is set twice", p.key)})
 					continue
 				}
 				d.Results = append(d.Results, ResultLimit{Kind: p.key, Max: n})
