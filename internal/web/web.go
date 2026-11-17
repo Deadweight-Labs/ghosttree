@@ -16,6 +16,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/mail"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/secretbox"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/Deadweight-Labs/ghosttree/internal/version"
 )
@@ -44,6 +45,7 @@ type app struct {
 	oidcName      string           // display name of the identity provider; empty = unnamed
 	language      lang             // server language (GHOSTTREE_LANGUAGE); empty = en
 	explain       *explain.Service // "Kurz erklärt"; nil = off
+	aiBox         *secretbox.Box   // seals the keys of AI connections; nil without a server key
 	gardenLimits  llmusage.Limits  // caps of the gardener, shown to administrators
 	prover        forge.Prover     // proof behind "connect GitHub"; nil = off
 	sourceFlows   *sourceFlows
@@ -357,6 +359,10 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		"/ui/handover": a.handoverConsent, "/ui/orgs/takeover": a.handoverTakeOver,
 		"/ui/orgs/assign": a.orgAssign, "/ui/orgs/member/login-link": a.orgMemberLoginLink,
 	} {
+		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+	}
+	// AI connections (REQ-694): only from an interactive session, like the rest of the settings.
+	for path, h := range a.aiPOST() {
 		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
 	for path, h := range map[string]http.HandlerFunc{
@@ -733,6 +739,15 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/assign":                  webAdmin,
 	"POST /ui/orgs/garden":                  webAdmin,
 	"POST /ui/orgs/workflows":               webAdmin,
+	"POST /ui/orgs/ai/connection":           webAdmin,
+	"POST /ui/orgs/ai/connection/delete":    webAdmin,
+	"POST /ui/orgs/ai/alias":                webAdmin,
+	"POST /ui/orgs/ai/alias/delete":         webAdmin,
+	"POST /ui/orgs/ai/cap":                  webAdmin,
+	"POST /ui/orgs/ai/lend":                 webAdmin,
+	"POST /ui/orgs/ai/loan/revoke":          webAdmin,
+	"POST /ui/orgs/ai/release":              webAdmin,
+	"POST /ui/orgs/ai/grant":                webAdmin,
 	"POST /ui/gardener/undo":                webAdmin,
 	"POST /ui/handover":                     webAdmin,
 	"POST /ui/orgs/takeover":                webAdmin,

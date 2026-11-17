@@ -17,11 +17,11 @@ const workflowTick = 15 * time.Second
 // background of the server, each in a goroutine of its own. A round without
 // due schedules, new events or queued runs only reads. The returned function
 // waits for them to stop, for a bounded time.
-func startWorkflows(ctx context.Context, st *store.Store, logger *slog.Logger) func() {
+func startWorkflows(ctx context.Context, st *store.Store, logger *slog.Logger, aiBaseURL string) func() {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		e := &workflow.Engine{Store: st, Resolver: workflow.DefaultBuiltins(), Log: logger}
+		e := &workflow.Engine{Store: st, Resolver: workflow.DefaultBuiltins(), Log: logger, AIBaseURL: aiBaseURL}
 		e.Run(ctx, workflowTick)
 	}()
 	return func() { <-done }

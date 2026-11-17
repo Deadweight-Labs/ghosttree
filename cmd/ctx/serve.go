@@ -23,6 +23,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/secretbox"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshotmirror"
@@ -49,6 +50,8 @@ type serveConfig struct {
 	DistDir        string
 	TrustedProxies proxytrust.Set
 	Explain        ExplainConfig
+	// AIBox seals the keys of AI connections; nil when the server has no key.
+	AIBox *secretbox.Box
 	// GardenLimits are shown to administrators; the gardener itself runs as a command.
 	GardenLimits llmusage.Limits
 	// Embed configures hybrid search; without a URL it is off.
@@ -373,6 +376,16 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	if ctx.Err() != nil {
 		return 0
 	}
+	// AI connections (REQ-694): the server key, llm.json as the server
+	// connection, and the model proxy on loopback for runs.
+	aiCtx, stopAI := context.WithCancel(ctx)
+	defer stopAI()
+	ai, err := startAI(aiCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)))
+	if err != nil {
+		fmt.Fprintf(stdout, "ai connections: %v\n", err)
+		return 1
+	}
+	cfg.AIBox = ai.Box
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
 	fmt.Fprintln(stdout, mailStartLine(cfg))
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", accessEnforcedByEnv(), "env", envEnforceAccess,
@@ -462,10 +475,12 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	judgeCtx, stopJudge := context.WithCancel(ctx)
 	waitJudge := startUsageJudge(judgeCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)))
 	workflowCtx, stopWorkflows := context.WithCancel(ctx)
-	waitWorkflows := startWorkflows(workflowCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)))
-	err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)))
+	waitWorkflows := startWorkflows(workflowCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)), ai.BaseURL)
+	err = serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)))
 	stopWorkflows()
 	waitWorkflows()
+	stopAI()
+	ai.Wait()
 	stopJudge()
 	waitJudge()
 	stopMirror()
@@ -537,6 +552,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	explainCfg.Language = cfg.Language
 	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))
 	webOptions = append(webOptions, web.WithGardenLimits(cfg.GardenLimits))
+	webOptions = append(webOptions, web.WithAIConnections(cfg.AIBox))
 	// Automatic approvals of the gardener (REQ-624), for the namespaces whose
 	// owners switched rules on. They run in the server because they act through
 	// the same plans as the review page; the loop lives as long as the process.

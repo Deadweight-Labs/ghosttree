@@ -70,3 +70,13 @@ func loopbackTargets(addr string) ([]net.IP, error) {
 	}
 	return ips, nil
 }
+
+// NewHTTPClient is the client the model proxy uses for a connection of the
+// server: https through the ordinary transport, plain http only to a host
+// that resolves to loopback, pinned at dial time. timeout 0 leaves the
+// duration to the request's context (streams run as long as the run may).
+func NewHTTPClient(u *url.URL, timeout time.Duration) *http.Client { return newHTTPClient(u, timeout) }
+
+// CheckBaseURL is the rule for the address of a server connection: https, or
+// plain http to a host on this machine.
+func CheckBaseURL(who, raw string) error { return checkBaseURLFor(who, raw) }

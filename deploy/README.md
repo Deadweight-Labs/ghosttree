@@ -766,6 +766,49 @@ sudo systemctl enable --now ghosttree-distill.timer
 Generated knowledge remains quarantined until review. The bill does not, so
 start with a small limit and inspect the results.
 
+## AI connections and the model proxy
+
+Workflow runs reach models through named AI connections (REQ-694): the
+server's own, kept by the instance admin under Settings, "AI connections of
+the server", and those of each organization and profile, kept by their owners.
+A key is sealed with AES-256-GCM before it reaches the database and is never
+shown again; pages show its last four characters. Runs never get a key: the
+server starts a model proxy on loopback, gives each run a token that ends with
+the run, puts the key in, passes the request on (also streaming), books tokens
+and cost on the run and stops a run at its cap.
+
+**The server key.** Keys in the database need a 32-byte server key, which never
+lives in the database. Make one and hand it to the unit as a systemd credential:
+
+    sudo install -d -m 0700 /etc/ghosttree
+    head -c 32 /dev/urandom | base64 | sudo tee /etc/ghosttree/secret-key >/dev/null
+    sudo chmod 0600 /etc/ghosttree/secret-key
+    sudo systemctl edit ghosttree.service    # add the two lines below
+    #   [Service]
+    #   LoadCredential=ghosttree-secret-key:/etc/ghosttree/secret-key
+    sudo systemctl restart ghosttree
+
+Outside systemd, `GHOSTTREE_SECRET_KEY_FILE=/path/to/secret-key` names the
+file (base64 or hex, 32 bytes). A key that is configured but cannot be read
+stops the server at start. Without any key the server runs, and the settings
+say that no key can be stored. Keep a copy of the key with the backups of the
+database: without it the stored keys are lost (owners enter them again).
+
+**llm.json.** The provider in `llm.json` (the top-level entry, else the
+gardener's) becomes the server connection `standard` at every start, with the
+aliases `klein`, `mittel` and `gründlich` on its model the first time. Its key
+stays in the file and is only held in memory. The gardener's own unit is not
+touched: it keeps reading its entry of `llm.json` and stays loopback-only.
+
+**The proxy.** `GHOSTTREE_AI_PROXY_ADDR` sets where it listens, by default
+`127.0.0.1` on a free port; only loopback addresses are accepted, `off`
+switches it off. Connections of organizations and profiles must use https to a
+public address (no loopback, private or link-local targets); the server's own
+may also use plain http to this machine, as `llm.json` always could.
+
+**Release.** The server's connections serve no organization until the admin
+releases them: to all, to selected ones with a monthly cap each, or to none.
+
 ## Gardener in the sandbox
 
 `ghosttree-garden.service` runs the gardener (`ctx garden check-knowledge`) as a

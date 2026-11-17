@@ -66,12 +66,18 @@ var wfEventKeys = map[string]string{
 // wfReasonKeys word the reasons the server gives; a block's own reason is
 // shown as it is.
 var wfReasonKeys = map[string]string{
-	store.SkipChain:      "wf.reason.chain",
-	store.SkipChainDepth: "wf.reason.chain_depth",
-	"unknown_workflow":   "wf.reason.unknown_workflow",
-	"interrupted":        "wf.reason.interrupted",
-	"timeout":            "wf.reason.timeout",
-	store.SkipRate:       "wf.reason.rate_limit",
+	store.SkipChain:       "wf.reason.chain",
+	store.SkipChainDepth:  "wf.reason.chain_depth",
+	"unknown_workflow":    "wf.reason.unknown_workflow",
+	"interrupted":         "wf.reason.interrupted",
+	"timeout":             "wf.reason.timeout",
+	store.SkipRate:        "wf.reason.rate_limit",
+	store.AICapRun:        "wf.reason.cap.run",
+	store.AICapWorkflow:   "wf.reason.cap.workflow",
+	store.AICapOwner:      "wf.reason.cap.owner",
+	store.AICapConnection: "wf.reason.cap.connection",
+	store.AICapServer:     "wf.reason.cap.server",
+	store.AICapLoan:       "wf.reason.cap.loan",
 }
 
 func workflowRunHref(base string, id int64) string {
