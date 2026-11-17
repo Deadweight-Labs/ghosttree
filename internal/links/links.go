@@ -243,6 +243,12 @@ func (b Builder) Package(branch string) string {
 // Runbook is a runbook by name.
 func (b Builder) Runbook(name string) string { return b.repo("/runbooks/" + esc(name)) }
 
+// Workflows is the tab of a project's workflows; Workflow one of them (REQ-695).
+func (b Builder) Workflows() string { return b.repo("/workflows") }
+
+// Workflow is the page of one workflow of the project.
+func (b Builder) Workflow(name string) string { return b.repo("/workflows/" + esc(name)) }
+
 // Blob is a file on a branch; Tree is a folder.
 func (b Builder) Blob(branch, path string) string {
 	return b.repo("/blob/" + escPath(branch) + "/" + escPath(path))

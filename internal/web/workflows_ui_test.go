@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -156,6 +157,123 @@ func TestCostOfARunKeepsSmallAmountsAndTheLanguagesDecimalMark(t *testing.T) {
 	} {
 		if got := wfCost(c.l, c.usd); got != c.want {
 			t.Errorf("wfCost(%s, %v) = %q, want %q", c.l, c.usd, got, c.want)
+		}
+	}
+}
+
+// AC-695.9 and AC-695.2 in the browser: a lead creates a workflow in the tab
+// and saves a new version; the same version history holds a save over the API
+// path (as MCP sends it); a member sees the file and its versions read-only and
+// may not save; the run page names the version and links it.
+func TestWorkflowTabCreatesAndChangesAWorkflowAndMembersOnlyRead(t *testing.T) {
+	e, _ := workflowEnv(t)
+	text := "---\ndescription: Merges melden\non: pr.merged\ninputs: [pr.title]\nuses: ghosttree/echo\n---\n"
+	status, list := fetchPage(t, e.Lead, e.Base+"/ui/x/shell/workflows")
+	if status != http.StatusOK {
+		t.Fatalf("list: %d", status)
+	}
+	mustContain(t, "lead list", list, `href="/ui/x/shell/workflows/new"`)
+	status, form := fetchPage(t, e.Lead, e.Base+"/ui/x/shell/workflows/new")
+	if status != http.StatusOK {
+		t.Fatalf("form: %d", status)
+	}
+	mustContain(t, "form", form, `action="/ui/workflows/save"`, `name="text"`, "ghosttree/echo")
+	// A file with an error comes back with the problem and the text as typed.
+	bad := url.Values{"project": {shellProject}, "mode": {"new"}, "name": {"melden"}, "text": {strings.Replace(text, "uses:", "retries: 2\nuses:", 1)}}
+	bad.Set("csrf_token", renderedCSRFToken(t, e.Lead, e.Base+"/ui/overview"))
+	resp := sameOriginPostForm(t, e.Lead, e.Base+"/ui/workflows/save", bad)
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	body := string(raw)
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, "unknown key retries") || !strings.Contains(body, "retries: 2") {
+		t.Fatalf("bad file: %d", resp.StatusCode)
+	}
+	if r := postForm(t, e, e.Lead, "/ui/workflows/save", url.Values{"project": {shellProject}, "mode": {"new"}, "name": {"melden"}, "text": {text}}); r.StatusCode != http.StatusSeeOther || !strings.Contains(r.Header.Get("Location"), "/ui/x/shell/workflows/melden?done=created") {
+		t.Fatalf("create: %d %s", r.StatusCode, r.Header.Get("Location"))
+	}
+	changed := strings.Replace(text, "[pr.title]", "[pr.title, pr.number]", 1)
+	if r := postForm(t, e, e.Lead, "/ui/workflows/save", url.Values{"project": {shellProject}, "mode": {"edit"}, "name": {"melden"}, "base_version": {"1"}, "text": {changed}, "note": {"Nummer"}}); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("change: %d", r.StatusCode)
+	}
+	// The API (what the MCP tool calls) writes into the same history.
+	saved, _, err := workflow.SaveDef(e.St, "person:1", shellProject, "melden", text, "zurück", store.WorkflowViaMCP, 2)
+	if err != nil || saved.Def.Version != 3 {
+		t.Fatalf("save over the API path: %+v %v", saved, err)
+	}
+	versions, _ := e.St.WorkflowDefVersions(shellProject, "melden")
+	if len(versions) != 3 || versions[0].Via != store.WorkflowViaMCP || versions[1].Via != store.WorkflowViaWeb || versions[1].Note != "Nummer" {
+		t.Fatalf("versions: %+v", versions)
+	}
+	status, page := fetchPage(t, e.Member, e.Base+"/ui/x/shell/workflows/melden")
+	if status != http.StatusOK {
+		t.Fatalf("member page: %d", status)
+	}
+	mustContain(t, "member page", page, "Merges melden", "uses: ghosttree/echo", `href="/ui/x/shell/workflows/melden?from=2&amp;to=3"`, "via MCP", "in the browser")
+	mustNotContain(t, "member page", page, "?edit=1", `action="/ui/workflows/enabled"`)
+	_, diff := fetchPage(t, e.Member, e.Base+"/ui/x/shell/workflows/melden?from=1&to=2")
+	mustContain(t, "diff", diff, `class="dl add"`, "pr.number")
+	if status, _ := fetchPage(t, e.Member, e.Base+"/ui/x/shell/workflows/melden?edit=1"); status != http.StatusForbidden {
+		t.Fatalf("member opens the form: %d", status)
+	}
+	if r := postForm(t, e, e.Member, "/ui/workflows/save", url.Values{"project": {shellProject}, "mode": {"edit"}, "name": {"melden"}, "base_version": {"3"}, "text": {changed}}); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("member saves: %d", r.StatusCode)
+	}
+	if r := postForm(t, e, e.Member, "/ui/workflows/enabled", url.Values{"project": {shellProject}, "name": {"melden"}, "enabled": {"0"}}); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("member switches off: %d", r.StatusCode)
+	}
+	_, list = fetchPage(t, e.Member, e.Base+"/ui/x/shell/workflows")
+	mustContain(t, "member list", list, `href="/ui/x/shell/workflows/melden"`, "Version 3")
+	mustNotContain(t, "member list", list, `href="/ui/x/shell/workflows/new"`)
+	// The next merge runs version 3, and its page names and links it.
+	for _, state := range []string{"open", "merged"} {
+		if _, err := e.St.RecordPullRequest(store.PullRequestChange{InstallationID: 77, Remote: shellProject, HeadRemote: shellProject, Number: 16, Action: "closed",
+			Title: "feat: two", Head: "feat/two", Base: "main", DefaultBranch: "main", State: state}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng := &workflow.Engine{Store: e.St, Resolver: workflow.NewDefResolver(e.St)}
+	if _, err := eng.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runs, _ := e.St.WorkflowRunsIn(shellProject, store.WorkflowRunFilter{Workflow: "melden"})
+	if len(runs) != 1 || runs[0].WorkflowVersion != "3" || runs[0].State != store.RunDone {
+		t.Fatalf("run of the workflow: %+v", runs)
+	}
+	_, runPage := fetchPage(t, e.Member, e.Base+"/ui/x/shell/workflows/runs/"+itoa(runs[0].ID))
+	mustContain(t, "run page", runPage, `href="/ui/x/shell/workflows/melden?v=3"`, `href="/ui/x/shell/workflows/melden"`)
+	// The lead switches it off from the list; the next merge starts nothing.
+	if r := postForm(t, e, e.Lead, "/ui/workflows/enabled", url.Values{"project": {shellProject}, "name": {"melden"}, "enabled": {"0"}, "next": {"list"}}); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("switch off: %d", r.StatusCode)
+	}
+	if d, _ := e.St.WorkflowDefByName(shellProject, "melden"); d.Enabled {
+		t.Fatal("still on")
+	}
+}
+
+// AC-695.8: the runbooks are called Runbooks in German as well, and the
+// German address of the former "Abläufe" leads to them.
+func TestRunbooksAreCalledRunbooksAndTheOldAddressLeadsThere(t *testing.T) {
+	e, _ := workflowEnv(t)
+	if messagesDE["repo.tab.runbooks"] != "Runbooks" || messagesDE["runbooks.new"] != "Neues Runbook" || messages["repo.tab.workflows"] != "Workflows" {
+		t.Fatalf("names: %q %q", messagesDE["repo.tab.runbooks"], messagesDE["runbooks.new"])
+	}
+	for k, v := range messagesDE {
+		if strings.HasPrefix(k, "runbooks.") || k == "repo.tab.runbooks" || k == "machine.runbook" || k == "err.back_runbooks" {
+			if strings.Contains(v, "Ablauf") || strings.Contains(v, "Abläuf") {
+				t.Errorf("%s still says %q", k, v)
+			}
+		}
+	}
+	noFollow := *e.Member
+	noFollow.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	for from, to := range map[string]string{"/ui/x/shell/ablaeufe": "/ui/x/shell/runbooks", "/ui/x/shell/ablaeufe/rollout": "/ui/x/shell/runbooks/rollout"} {
+		resp, err := noFollow.Get(e.Base + from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != to {
+			t.Errorf("%s: %d %s", from, resp.StatusCode, resp.Header.Get("Location"))
 		}
 	}
 }

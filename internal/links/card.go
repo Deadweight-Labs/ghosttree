@@ -426,6 +426,19 @@ func (b Builder) PackageCard(p requestdomain.PackageDetail) Card {
 }
 
 // RunbookCard describes a runbook.
+// WorkflowCard is the card of a workflow (REQ-695): its version and whether
+// it is on.
+func (b Builder) WorkflowCard(d store.WorkflowDef) Card {
+	state := "on"
+	if !d.Enabled {
+		state = "off"
+	}
+	if d.Project != "" {
+		b = b.WithProject(d.Project)
+	}
+	return Card{Kind: "Workflow", Ref: d.Name, Title: d.Summary, Status: fmt.Sprintf("version %d, %s", d.Version, state), Next: "none", URL: b.Workflow(d.Name)}
+}
+
 func (b Builder) RunbookCard(s runbook.Summary) Card {
 	c := Card{Kind: "Runbook", Ref: s.Name, Title: s.Purpose, Status: fmt.Sprintf("head v%d, approved v%d", s.Head, s.ApprovedVersion),
 		URL: b.WithProject(s.Project).Runbook(s.Name)}

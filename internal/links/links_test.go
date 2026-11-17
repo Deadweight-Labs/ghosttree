@@ -303,6 +303,10 @@ func (fakeAPI) Documents(p string, _ string, _ bool) ([]store.Document, error) {
 func (fakeAPI) ThreadByID(id int64, _ string) (store.Thread, error) {
 	return store.Thread{ID: id, Project: project, Title: "T", State: "open"}, nil
 }
+func (fakeAPI) ListWorkflows(string) ([]store.WorkflowDef, error) {
+	return []store.WorkflowDef{{Name: "melden", Version: 3, Enabled: true}}, nil
+}
+
 func (fakeAPI) ListRunbooks(scope.Axes) ([]runbook.Summary, error) {
 	return []runbook.Summary{{Name: "deploy", Project: project, Purpose: "p", Head: 1, ApprovedVersion: 1}}, nil
 }
@@ -342,6 +346,8 @@ func TestResolveEveryShortFormHasOneCanonicalURL(t *testing.T) {
 		"doc:plan":                          repo + "/docs/plan",
 		"doc:acmedev/voiceapp/voice-report": srv + "/ui/acmedev/voiceapp/docs/voice-report",
 		"runbook:deploy":                    repo + "/runbooks/deploy",
+		"ablauf:deploy":                     repo + "/runbooks/deploy",
+		"workflow:melden":                   repo + "/workflows/melden",
 		"preset:pr-ergebnis 155":            srv + "/ui/presets/repo/pr-ergebnis?pr=155&project=deadweight-labs%2Fghosttree",
 		"pr:155":                            repo + "/pulls/155",
 		"commit:2d950bf":                    repo + "/commit/2d950bf",

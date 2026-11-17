@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -33,6 +34,13 @@ type wfTrigger struct {
 type workflowsView struct {
 	Rows  []wfRunRow
 	Empty bool
+	// Defs are the workflows of the project (REQ-695); CanEdit shows the
+	// button for a new one and the switches.
+	Defs    []wfDefRow
+	CanEdit bool
+	NewHref string
+	Token   string
+	Project string
 }
 
 type workflowRunView struct {
@@ -45,6 +53,9 @@ type workflowRunView struct {
 	Purged string
 	NoText bool
 	Base   string
+	// VersionHref leads to the version of a stored workflow the run ran with.
+	VersionHref  string
+	WorkflowHref string
 }
 
 var wfStateLook = map[string]struct{ icon, tone, key string }{
@@ -69,6 +80,8 @@ var wfReasonKeys = map[string]string{
 	store.SkipChain:       "wf.reason.chain",
 	store.SkipChainDepth:  "wf.reason.chain_depth",
 	"unknown_workflow":    "wf.reason.unknown_workflow",
+	"disabled":            "wf.reason.disabled",
+	"invalid":             "wf.reason.invalid",
 	"interrupted":         "wf.reason.interrupted",
 	"timeout":             "wf.reason.timeout",
 	store.SkipRate:        "wf.reason.rate_limit",
@@ -147,11 +160,12 @@ func (a *app) workflowsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	v := &workflowsView{}
+	v := &workflowsView{Defs: a.workflowDefRows(l, pa, rv.Href, rv.Project), CanEdit: interactive(r) && pa.CanEditWorkflows(rv.Project),
+		NewHref: rv.Href + "/workflows/" + workflowNew, Token: csrfOf(r), Project: rv.Project}
 	for _, run := range runs {
 		v.Rows = append(v.Rows, a.wfRow(l, rv.Href, run))
 	}
-	v.Empty = len(v.Rows) == 0
+	v.Empty = len(v.Rows) == 0 && len(v.Defs) == 0
 	a.renderBrowser(w, r, "workflows", pageData{Title: l.msg("repo.tab.workflows"), Project: rv.Project, WorkflowsV: v})
 }
 
@@ -179,6 +193,12 @@ func (a *app) workflowRunPage(w http.ResponseWriter, r *http.Request, remote, id
 		return ""
 	}
 	v.Started, v.Finished = stamp(run.StartedAt), stamp(run.FinishedAt)
+	if !strings.Contains(run.Workflow, "/") && run.WorkflowVersion != "" {
+		if _, err := pa.WorkflowDef(remote, run.Workflow); err == nil {
+			v.VersionHref = workflowHref(remote, run.Workflow) + "?v=" + url.QueryEscape(run.WorkflowVersion)
+		}
+		v.WorkflowHref = workflowHref(remote, run.Workflow)
+	}
 	switch {
 	case text != nil:
 		v.Inputs, v.Output = text.Inputs, text.Output

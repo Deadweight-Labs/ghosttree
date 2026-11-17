@@ -230,11 +230,14 @@ var table = []Core{
 	{
 		Name: "runbook",
 		Tier: TierRare,
-		Lead: "Runbooks: named procedures that must be done the same way every time (build, roll out, check). Follow them exactly and report the run.",
+		Lead: "Runbooks: named procedures that must be done the same way every time (build, roll out, check). Follow them exactly and report the run. Workflows: what the server runs on an event.",
 		Actions: []Action{
 			{Name: "get", Tool: "runbook_get", Line: "read one with parameters filled in (name, params); without name lists those that apply"},
 			{Name: "write", Rare: true, Tool: "runbook_write", Line: "new runbook or version, a proposal until approved (name, spec)"},
 			{Name: "report", Tool: "run_report", Line: "outcome of a run (name, result ok|failed|aborted; deviations)"},
+			{Name: "workflow_get", Rare: true, Tool: "workflow_get", Line: "list workflows, or one file (name, versions)"},
+			{Name: "workflow_write", Rare: true, Tool: "workflow_write", Line: "save a workflow file, checked first (name, text, base_version, note)"},
+			{Name: "workflow_check", Rare: true, Tool: "workflow_check", Line: "check a file without saving (text)"},
 		},
 	},
 	{

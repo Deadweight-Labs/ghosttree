@@ -283,6 +283,15 @@ func (a *app) repoRoute(w http.ResponseWriter, r *http.Request) {
 	case isRun:
 		a.workflowRunPage(w, r, remote, rest[2])
 		return
+	case tab == "ablaeufe" || tab == "abläufe":
+		// The runbooks were called "Abläufe" before REQ-695; their German
+		// address leads to the runbooks.
+		target := repoHref(remote) + "/runbooks"
+		if len(rest) == 2 {
+			target += "/" + url.PathEscape(rest[1])
+		}
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+		return
 	case len(rest) == 2 && tab != "code":
 		a.repoDetail(w, r, remote, tab, rest[1])
 		return
@@ -370,6 +379,13 @@ func (a *app) repoDetail(w http.ResponseWriter, r *http.Request, remote, tab, id
 			return
 		}
 		a.issueDetail(w, r, remote, id)
+		return
+	case "workflows":
+		if id == workflowNew {
+			a.workflowNewPage(w, r, remote)
+			return
+		}
+		a.workflowDefPage(w, r, remote, id)
 		return
 	case "runbooks":
 		if id == runbookNew {
