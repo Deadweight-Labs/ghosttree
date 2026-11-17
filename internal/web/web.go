@@ -13,6 +13,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
+	"github.com/Deadweight-Labs/ghosttree/internal/mail"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -58,6 +59,12 @@ type app struct {
 	logger        *slog.Logger // http_request lines and search failures; nil = slog.Default
 	// What the stored transcript lines take, for administrators.
 	transcripts transcriptStatsCache
+	// Mail and passwords (emailauth.go): the way out of the mail sending, the
+	// switch for e-mail + password sign-in, and the rate limits of both.
+	mailer        mail.Sender
+	mailWG        sync.WaitGroup
+	passwordLogin bool
+	guards        *emailGuards
 }
 type pageData struct {
 	// Flash is the note over the form a rejected form came back to; FormFailed is
@@ -133,6 +140,15 @@ type pageData struct {
 	// Repo is set on the pages of a repository (/ui/{org}/{repo}/…): the
 	// breadcrumb and the tab row above the page.
 	Repo *repoView
+	// Sign-in by mail (emailauth.go): Mail says the instance sends mail,
+	// PasswordLogin that e-mail + password is on, NoMailHint that the page names
+	// the ways back without mail. EmailV is the page "mail is on its way", EmailValue
+	// the address typed before a refusal.
+	Mail, PasswordLogin, NoMailHint bool
+	EmailV                          *emailAuthView
+	EmailValue                      string
+	ProfileMail                     *profileMailView
+	Welcome                         []welcomeView
 	// ServerVersion: Version dieses Servers (vX.Y.Z bzw. 0.1.0-dev+sha), leer = unbekannt.
 	ServerVersion string
 	// Refresh: Sekunden bis zum automatischen Neuladen (0 = nie).
@@ -176,6 +192,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	for _, opt := range opts {
 		opt(a)
 	}
+	a.guards = newEmailGuards()
 	a.avatars = newAvatarCache(st, a.avatarClient, a.avatarDir)
 	serverVersionText.Store(version.Label(a.buildVersion))
 	mux := http.NewServeMux()
@@ -190,6 +207,17 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/login/oidc/callback", a.oidcCallback)
 	a.handle(mux, "GET /ui/register", a.registerPage)
 	a.handle(mux, "POST /ui/register", a.requireSameOrigin(http.HandlerFunc(a.registerSubmit)))
+	a.handle(mux, "POST /ui/login/password", a.requireSameOrigin(http.HandlerFunc(a.passwordLoginSubmit)))
+	a.handle(mux, "GET /ui/password/forgot", a.forgotPage)
+	a.handle(mux, "POST /ui/mail/{purpose}/request", a.requireSameOrigin(http.HandlerFunc(a.mailRequest)))
+	a.handle(mux, "POST /ui/mail/{purpose}/code", a.requireSameOrigin(http.HandlerFunc(a.mailCode)))
+	a.handle(mux, "GET /ui/mail/{purpose}/link", a.mailLinkPage)
+	a.handle(mux, "POST /ui/mail/{purpose}/link", a.requireSameOrigin(http.HandlerFunc(a.mailLinkSubmit)))
+	a.handle(mux, "GET /ui/email/confirm", a.requirePerson(http.HandlerFunc(a.confirmPending)))
+	a.handle(mux, "POST /ui/email/confirm", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.confirmResend))))))
+	a.handle(mux, "POST /ui/profile/email", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileEmail))))))
+	a.handle(mux, "POST /ui/profile/password", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profilePassword))))))
+	a.handle(mux, "POST /ui/welcome/dismiss", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.welcomeDismiss))))))
 	a.handle(mux, "GET /ui/login/code", a.codePage)
 	a.handle(mux, "POST /ui/login/code", a.requireSameOrigin(http.HandlerFunc(a.codeSubmit)))
 	a.handle(mux, "GET /install.sh", a.installSh)
@@ -203,8 +231,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	})
 	a.handle(mux, "GET /join/pair", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairPage))))
 	a.handle(mux, "GET /join/pair/state", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairState))))
-	a.handle(mux, "POST /join/pair", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairCreate))))))
-	a.handle(mux, "POST /join/pair/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairDecide))))))
+	a.handle(mux, "POST /join/pair", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairCreate)))))))
+	a.handle(mux, "POST /join/pair/decide", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairDecide)))))))
 	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
 	a.handle(mux, "POST /join/{code}/signout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.joinSignOut)))))
 	a.handle(mux, "POST /ui/logout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.logout)))))
@@ -285,8 +313,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/coord/group/leave", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordLeaveGroup)))))
 	a.handle(mux, "POST /ui/coord/agent/control", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.coordAgentControl))))))
 	a.handle(mux, "GET /ui/device", a.requirePerson(http.HandlerFunc(a.devicePage)))
-	a.handle(mux, "POST /ui/device", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceLookup))))))
-	a.handle(mux, "POST /ui/device/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceDecide))))))
+	a.handle(mux, "POST /ui/device", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceLookup)))))))
+	a.handle(mux, "POST /ui/device/decide", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceDecide)))))))
 	a.handle(mux, "GET /ui/account/tokens", a.requirePerson(http.HandlerFunc(a.tokensPage)))
 	a.handle(mux, "POST /ui/account/tokens/revoke", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokenRevoke)))))
 	a.handle(mux, "POST /ui/account/tokens/revoke-unused", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokensRevokeUnused)))))
@@ -310,7 +338,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		"/ui/orgs/prefix/visibility": a.orgPrefixVisibility, "/ui/orgs/follow": a.orgFollowGitHub,
 		"/ui/orgs/garden": a.orgGardenSave, "/ui/gardener/undo": a.gardenAutoUndo,
 		"/ui/handover": a.handoverConsent, "/ui/orgs/takeover": a.handoverTakeOver,
-		"/ui/orgs/assign": a.orgAssign,
+		"/ui/orgs/assign": a.orgAssign, "/ui/orgs/member/login-link": a.orgMemberLoginLink,
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
@@ -560,6 +588,18 @@ var webRoutes = map[string]webClass{
 	"GET /ui/register":                      webPublic,
 	"POST /ui/register":                     webPublic,
 	"POST /ui/login/code":                   webPublic,
+	"POST /ui/login/password":               webPublic,
+	"GET /ui/password/forgot":               webPublic,
+	"POST /ui/mail/{purpose}/request":       webPublic,
+	"POST /ui/mail/{purpose}/code":          webPublic,
+	"GET /ui/mail/{purpose}/link":           webPublic,
+	"POST /ui/mail/{purpose}/link":          webPublic,
+	"GET /ui/email/confirm":                 webAccount,
+	"POST /ui/email/confirm":                webAdmin,
+	"POST /ui/profile/email":                webAdmin,
+	"POST /ui/profile/password":             webAdmin,
+	"POST /ui/welcome/dismiss":              webAdmin,
+	"POST /ui/orgs/member/login-link":       webAdmin,
 	"GET /{$}":                              webPublic,
 	"GET /":                                 webPublic,
 	"GET /favicon.ico":                      webPublic,

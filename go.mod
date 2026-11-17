@@ -15,6 +15,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/lucasb-eyer/go-colorful v1.4.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	golang.org/x/crypto v0.58.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/text v0.43.0

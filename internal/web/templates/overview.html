@@ -1,4 +1,4 @@
-{{define "setup"}}{{template "head" .}}{{template "nav" .}}<main class="g2 set"><div class="wrap"><div class="narrow wide">{{with .Overview.Setup}}
+{{define "setup"}}{{template "head" .}}{{template "nav" .}}<main class="g2 set"><div class="wrap"><div class="narrow wide">{{if .Welcome}}{{template "welcome" (dict "Cards" .Welcome "CSRF" .CSRFToken)}}{{end}}{{with .Overview.Setup}}
 {{if eq .State "connected"}}<div class="done"><div class="ico ok big">{{mi "check"}}</div><h1>{{t "setup.done"}}</h1><p class="lead"><b class="mono m">{{.Machine}}</b> {{t "setup.done_lead"}}</p></div>
 <div class="box qs"><div class="box-h"><span class="agents2">{{avatar "claude" ""}}{{avatar "codex" ""}}</span><span class="t">{{t "setup.check_title"}}</span></div>
 <div class="box-r"><div class="cmdc prose"><pre class="cmd" id="ov-prompt">{{t "setup.check_prompt"}}</pre>{{template "uicopy" (copyFrom "#ov-prompt")}}</div></div></div>

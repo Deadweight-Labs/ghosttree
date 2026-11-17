@@ -72,6 +72,8 @@
   & .auth-token form { margin-top: 12px; }
 
   /* Under the card: "Schon ein Konto?", "Zurück", "Nicht du?" */
+  & .auth-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-muted); }
+  & .auth-card form.again { margin: 0; align-items: center; }
   & .auth-alt { margin: 16px 0 0; text-align: center; color: var(--fg-muted); font-size: 14px; }
   & .auth-alt.boxed { padding: 16px; color: var(--fg-default); border: 1px solid var(--border-default); border-radius: 6px; }
   & .auth-back, & .signout { margin: 16px 0 0; text-align: center; color: var(--fg-muted); font-size: 12px; }

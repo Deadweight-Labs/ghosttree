@@ -21,6 +21,10 @@ type orgMemberRow struct {
 	// down nor leave. NoProject: a member without a role in any project of the
 	// organization, shown to owners with a way to add one.
 	SoleOwner, NoProject bool
+	// LoginLink is the one-time sign-in link an owner made for this member, still
+	// to copy (REQ-676); CanLoginLink says the owner may make one.
+	LoginLink    string
+	CanLoginLink bool
 	// Service: an account that is no person (a background account set up
 	// for the organization); the list says so.
 	Service bool
@@ -67,7 +71,10 @@ type orgsView struct {
 	Claimable []string // eigene, unbeanspruchte Remotes; nur für Owner
 	Roles     []projectRolesView
 	NewExpiry string
-	NewURL    string // Link der eben erstellten Einladung (?new=), nur für ihren Ersteller
+	// CanBind: an invitation can be bound to an address, because this server can
+	// confirm one (mail or an identity provider). Without it the form says so.
+	CanBind bool
+	NewURL  string // Link der eben erstellten Einladung (?new=), nur für ihren Ersteller
 	// InviteProjects are the projects an invitation can be for (those of the
 	// organization plus the owner's unclaimed ones); DefaultProject is the
 	// one preselected: the last one invited to, else the first.
@@ -193,8 +200,15 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				continue
 			}
 			m.Account = store.NormalizeAccountName(m.Account)
-			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me, Initial: initialOf(m.Account),
-				SoleOwner: m.Role == store.OrgOwner && owners == 1, Service: m.Kind == store.AccountKindService})
+			row := orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me, Initial: initialOf(m.Account),
+				SoleOwner: m.Role == store.OrgOwner && owners == 1, Service: m.Kind == store.AccountKindService}
+			// An owner can hand a member a one-time sign-in link: the way back in
+			// when the instance cannot send mail. Not for owners, services or oneself.
+			if v.Owner && interactive(r) && m.Role == store.OrgMember && !row.Service && m.AccountID != me && a.store.LoginLinkAllowed(v.Selected.ID, m.AccountID) {
+				row.CanLoginLink = true
+				row.LoginLink = a.loginLinkFor(r, me, m.AccountID)
+			}
+			v.Members = append(v.Members, row)
 		}
 		var orgAll []store.OrgMemberInfo
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
@@ -274,6 +288,8 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 // orgError übersetzt Store-Fehler in eine Meldung und einen Statuscode.
 func orgError(l lang, err error) (int, string) {
 	switch {
+	case errors.Is(err, store.ErrLoginLinkScope):
+		return http.StatusForbidden, l.msg("adm.err.login_scope")
 	case errors.Is(err, store.ErrNotOrgOwner):
 		return http.StatusForbidden, l.msg("adm.err.owner_only")
 	case errors.Is(err, store.ErrOrgNotFound), errors.Is(err, store.ErrNotOrgMember):
@@ -420,6 +436,7 @@ var noticeSection = map[string]string{
 // creator may still copy, the projects an invitation can be for, and the
 // freshly created invitation named by ?new=.
 func (a *app) fillInvites(r *http.Request, v *orgsView, me string) {
+	v.CanBind = a.oidc != nil || a.mailAvailable()
 	invs, _ := a.store.ListInvitations(me, v.Selected.ID)
 	newID, _ := strconv.ParseInt(r.URL.Query().Get("new"), 10, 64)
 	for _, inv := range invs {
@@ -575,6 +592,16 @@ func (a *app) orgAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
+	if errors.Is(err, store.ErrInvitationEmail) {
+		// Say which address the invitation is for (masked) and who can issue a new one.
+		l := a.langFor(r)
+		msg := l.msg("adm.err.email")
+		if p, perr := a.store.PreviewJoin(code, a.store.AccessEnforced(), true); perr == nil && p.BoundEmail != "" {
+			msg = l.msg("auth.invitation_email.bound", store.MaskEmail(p.BoundEmail), firstNonEmpty(p.Inviter, l.msg("join.the_inviter")))
+		}
+		a.renderOrgs(w, r, http.StatusForbidden, orgsView{}, r.FormValue("org"), msg)
+		return
+	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return

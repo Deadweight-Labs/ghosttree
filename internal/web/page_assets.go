@@ -6,7 +6,7 @@ package web
 // writes them after ui-pages.css and after ui-parts.js.
 var pageAssets = map[string]struct{ CSS, JS []string }{
 	"reposettings": {CSS: []string{"ui-settings.css", "ui-labels.css"}, JS: []string{"ui-settings.js"}},
-	"setup":        {CSS: []string{"ui-settings.css"}},
+	"setup":        {CSS: []string{"ui-settings.css", "ui-welcome.css"}},
 	"orgs":         {CSS: []string{"ui-settings.css"}, JS: []string{"ui-settings.js"}},
 	"gardentab":    {CSS: []string{"ui-knowledge.css", "ui-org.css", "ui-garden.css"}},
 	"tokens":       {CSS: []string{"ui-settings.css"}},
@@ -15,7 +15,7 @@ var pageAssets = map[string]struct{ CSS, JS []string }{
 	"devicecheck":  {CSS: []string{"ui-settings.css"}},
 	"devicedone":   {CSS: []string{"ui-settings.css"}},
 	"interactive":  {CSS: []string{"ui-settings.css"}},
-	"inbox":        {CSS: []string{"ui-inbox.css"}, JS: []string{"ui-inbox.js"}},
+	"inbox":        {CSS: []string{"ui-inbox.css", "ui-welcome.css"}, JS: []string{"ui-inbox.js"}},
 	"issues":       {CSS: []string{"ui-labels.css", "ui-issues.css"}},
 	"issue":        {CSS: []string{"ui-labels.css", "ui-issue.css", "ui-workshop.css"}, JS: []string{"ui-workshop.js", "ui-attach.js"}},
 	"pain":         {CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css", "ui-workshop.css"}, JS: []string{"ui-workshop.js", "ui-attach.js"}},

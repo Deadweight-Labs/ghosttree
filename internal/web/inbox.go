@@ -671,7 +671,7 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 	if v.ShowDone {
 		v.DoneBox = inboxSection{ID: "done", Title: "inbox.done", None: "inbox.done_none", Rows: inboxKeep(a.inboxDoneRows(r, pa, project, now), v.Filter)}
 	}
-	a.renderBrowser(w, r, "inbox", pageData{Title: l.msg("inbox.title"), InboxV: v})
+	a.renderBrowser(w, r, "inbox", pageData{Title: l.msg("inbox.title"), InboxV: v, Welcome: a.welcomeCards(r, l)})
 }
 
 // inboxElsewhere counts the waiting rows and the mentions that the repo filter hides:

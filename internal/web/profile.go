@@ -78,6 +78,10 @@ func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, 
 		v.Notice = l.msg("profile.gh.linked")
 	case "github_unlinked":
 		v.Notice = l.msg("profile.gh.unlinked")
+	case "email_confirmed":
+		v.Notice = l.msg("mail.profile.confirmed")
+	case "password_saved":
+		v.Notice = l.msg("mail.profile.password_saved")
 	case "github_failed":
 		if errMsg == "" {
 			errMsg = l.msg("profile.gh.failed")
@@ -86,7 +90,7 @@ func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, 
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}
-	a.renderBrowser(w, r, "profile", pageData{Title: l.msg("profile.title"), Error: errMsg, Profile: v})
+	a.renderBrowser(w, r, "profile", pageData{Title: l.msg("profile.title"), Error: errMsg, Profile: v, ProfileMail: a.profileMail(r, acct)})
 }
 
 // profileSave changes the display name. The store cleans and checks it; a
