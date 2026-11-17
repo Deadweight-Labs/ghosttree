@@ -112,6 +112,52 @@ test("details: open, a summary on the same line, none at all, and a section insi
   assert.equal(all(outer, "p").some((e) => e.textContent === "last"), false);
 });
 
+test("REQ-682 AC-3: a section on one line, <details><summary>x</summary>y</details>, is a section that opens and closes", () => {
+  const p = open();
+  const host = render(p, "before\n\n<details><summary>x</summary>y</details>\n\nafter");
+  const d = host.querySelector("details");
+  assert.ok(d, "not shown as a section: " + host.textContent);
+  assert.equal(d.classList.contains("md-details"), true);
+  assert.equal(d.querySelector("summary").textContent, "x");
+  assert.deepEqual(all(d, "p").map((e) => e.textContent), ["y"]);
+  assert.equal(host.textContent.includes("<details>"), false, "the tags are not shown as text");
+  assert.deepEqual(all(host, "p").map((e) => e.textContent).filter((t) => t === "before" || t === "after"), ["before", "after"]);
+  // open, an inline summary, a summary and no text, no summary at all, upper case, spaces
+  assert.equal(render(p, "<details open><summary>S</summary>t</details>").querySelector("details").hasAttribute("open"), true);
+  assert.equal(render(p, "<details><summary>**bold** `c`</summary>t</details>").querySelector("summary").querySelector("strong").textContent, "bold");
+  assert.equal(render(p, "<details><summary>only</summary></details>").querySelector("summary").textContent, "only");
+  assert.equal(render(p, "<details>text only</details>").querySelector("summary").textContent, "Details");
+  assert.equal(render(p, "<DETAILS><SUMMARY>Up</SUMMARY>t</DETAILS>").querySelector("summary").textContent, "Up");
+  assert.equal(render(p, "<details> <summary>sp</summary> t </details>  ").querySelector("summary").textContent, "sp");
+  // the text of the section is read as Markdown, and a section interrupts a paragraph
+  const rich = render(p, "text\n<details><summary>S</summary>**strong** text</details>");
+  assert.equal(rich.querySelector("p").textContent, "text");
+  assert.equal(rich.querySelector("details strong").textContent, "strong");
+  // inside a section of several lines
+  const inner = render(p, "<details>\n<summary>outer</summary>\n<details><summary>in</summary>deep</details>\nstill\n</details>\nlast");
+  assert.deepEqual(all(inner.querySelector("details"), "summary").map((e) => e.textContent), ["outer", "in"]);
+  assert.ok(all(inner.querySelector("details"), "p").some((e) => e.textContent === "still"));
+  assert.equal(all(inner.querySelector("details"), "p").some((e) => e.textContent === "last"), false);
+});
+
+test("a one-line section that is not closed or has more after it stays text; tags in it are text", () => {
+  const p = open();
+  assert.equal(render(p, "<details><summary>x</summary>y").querySelector("details"), null, "not closed on its line: text, as before");
+  assert.equal(render(p, "<details><summary>x</summary>y</details> and more").querySelector("details"), null);
+  assert.equal(render(p, "a <details><summary>x</summary>y</details>").querySelector("details"), null);
+  const host = render(p, "<details><summary><b>x</b></summary><script>alert(1)</script></details>");
+  for (const tag of ["script", "b"]) assert.equal(host.querySelector(tag), null, tag);
+  for (const t of tagsOf(host)) assert.ok(["div", "details", "summary", "p", "br"].includes(t), `unexpected <${t}>`);
+});
+
+test("one long line with many tags stays linear", () => {
+  const p = open();
+  const t = Date.now();
+  render(p, "<details>" + "<summary>a</summary>".repeat(3000) + "x");
+  render(p, "<details>" + "</details> ".repeat(3000));
+  assert.ok(Date.now() - t < 2000, "took " + (Date.now() - t) + " ms");
+});
+
 test("a section that is never closed takes the rest of the text", () => {
   const p = open();
   const host = render(p, "<details>\n<summary>S</summary>\none\n\ntwo");

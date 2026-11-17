@@ -419,10 +419,30 @@
   // A note box: the first line of a quote is [!KIND] and nothing else.
   var RE_ALERT = /^[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*$/i;
 
+  // A section that opens and closes on one line: <details><summary>x</summary>y</details>, the
+  // summary and the text after it each optional. {open, summary, body} or null. Read with indexOf, not
+  // with one pattern for the whole line, so a long line with many tags in it stays linear.
+  var RE_DETAILS_OPEN = /^ {0,3}<details( +open)?>/i;
+  function detailsOneLine(line) {
+    var m = RE_DETAILS_OPEN.exec(line);
+    if (!m) return null;
+    var last = line.toLowerCase().lastIndexOf("</details>");
+    if (last < m[0].length || line.slice(last + 10).trim()) return null;
+    var inner = line.slice(m[0].length, last).replace(/^[ \t]+/, ""), summary = "";
+    if (inner.slice(0, 9).toLowerCase() === "<summary>") {
+      var close = inner.toLowerCase().indexOf("</summary>");
+      if (close > 0) { summary = inner.slice(9, close); inner = inner.slice(close + 10); }
+    }
+    inner = inner.trim();
+    return { open: !!m[1], summary: summary, body: inner ? [inner] : [] };
+  }
+
   // The section that starts at line i: {open, summary, body, end}, or null. It ends at its own
   // </details> (one inside it that opens another is counted), or at the end of the text when
   // there is none, as on a code host.
   function detailsAt(lines, i) {
+    var one = detailsOneLine(lines[i]);
+    if (one) { one.end = i + 1; return one; }
     var m = RE_DETAILS.exec(lines[i]);
     if (!m) return null;
     var summary = m[2], k = i + 1, s = summary == null && k < lines.length && RE_SUMMARY.exec(lines[k]);
@@ -436,7 +456,7 @@
   }
 
   function interrupts(l) {
-    if (RE_FENCE.test(l) || RE_HEAD.test(l) || RE_QUOTE.test(l) || RE_RULE.test(l) || RE_DETAILS.test(l)) return true;
+    if (RE_FENCE.test(l) || RE_HEAD.test(l) || RE_QUOTE.test(l) || RE_RULE.test(l) || RE_DETAILS.test(l) || detailsOneLine(l)) return true;
     var m = RE_ITEM.exec(l);
     return !!m && !!m[3] && (!/^\d/.test(m[2]) || /^1[.)]$/.test(m[2]));
   }
