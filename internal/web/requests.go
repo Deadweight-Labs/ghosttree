@@ -353,7 +353,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 // way on is to make one.
 func (a *app) requestNew(w http.ResponseWriter, r *http.Request) {
 	target := "/ui/orgs"
-	if m := a.newMenuFor(r, a.shellBaseFor(r)); m != nil && m.Issue != "" {
+	if m := a.newMenuFor(r, a.shellBaseFor(r), a.pickOrg(r, a.orgsOf(r))); m != nil && m.Issue != "" {
 		target = m.Issue
 		if r.URL.RawQuery != "" {
 			target += "?" + r.URL.RawQuery
