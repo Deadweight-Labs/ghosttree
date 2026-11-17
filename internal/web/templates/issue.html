@@ -55,6 +55,7 @@
 {{template "explain" .Explain}}
 {{with .Reactions}}<div class="cf">{{template "uireactions" .}}</div>{{end}}{{template "firstclose"}}{{end}}
 {{template "uitlitems" .Timeline}}</div>{{end}}
+{{template "attachbox" .Attach}}{{if .Attach}}{{if .Attach.Images}}{{template "attachlb"}}{{end}}{{end}}
 {{with .Composer}}{{template "uicomposer" .}}{{end}}
 </div>
 

@@ -161,6 +161,8 @@ func (a *app) registerWorkshopPages(mux *http.ServeMux) {
 	}
 	// Images: the form carries a file, so its limit is that of an image.
 	a.handle(mux, "POST /ui/ideas/{id}/attach", a.requirePerson(a.requireInteractive(limitBodyN(maxUploadForm, a.requireCSRFMultipart(http.HandlerFunc(a.ideaAttach))))))
+	a.handle(mux, "POST /ui/requests/{id}/attach", a.requirePerson(a.requireInteractive(limitBodyN(maxUploadForm, a.requireCSRFMultipart(http.HandlerFunc(a.requestAttach))))))
+	a.handle(mux, "POST /ui/pains/{id}/attach", a.requirePerson(a.requireInteractive(limitBodyN(maxUploadForm, a.requireCSRFMultipart(http.HandlerFunc(a.painAttach))))))
 	a.handle(mux, "GET /ui/attachments/{id}", a.requirePerson(http.HandlerFunc(a.attachmentImage)))
 }
 

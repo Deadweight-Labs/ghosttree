@@ -12,6 +12,8 @@ func init() {
 		"POST /ui/m/{machine}/entry":     webAdmin,
 		"POST /ui/ideas/{id}/phase":      webAdmin,
 		"POST /ui/ideas/{id}/attach":     webAdmin,
+		"POST /ui/requests/{id}/attach":  webAdmin,
+		"POST /ui/pains/{id}/attach":     webAdmin,
 		"GET /ui/attachments/{id}":       webProject,
 		"POST /ui/decisions/{id}/vote":   webAdmin,
 		"POST /ui/decisions/{id}/close":  webAdmin,

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -13,13 +14,46 @@ import (
 
 // Bild-Anhänge (REQ-611) liegen als Blob in der Datenbank, nicht in Transkripten
 // und nicht als Datei neben ihr: so reist ein Backup vollständig, und die Rechte
-// sind genau die des Gegenstands (Idee oder Issue), an dem das Bild hängt. Was
+// sind genau die des Gegenstands (Idee, Issue oder Pain), an dem das Bild hängt. Was
 // ankommt, hat idea.CheckImage bestanden: PNG, JPEG oder WebP nach den ersten
 // Bytes, höchstens 5 MB, begrenzte Maße. Der Dateiname des Absenders wird nie
 // gespeichert, die Auslieferung nennt das Bild nach seiner Nummer.
 
 func attachmentNotFound(id int64) error {
 	return requestdomain.NewRuleError("attachment_not_found", fmt.Sprintf("no attachment ATT-%d", id), "list the attachments of the idea to find its number", nil)
+}
+
+func painNotFound(id int64) error {
+	return requestdomain.NewRuleError("pain_not_found", fmt.Sprintf("no pain PAIN-%d", id), "search the pains of the project to find its number", nil)
+}
+
+// attachSubject prüft den Gegenstand eines Anhangs für eine Aktion und nennt sein
+// Projekt. Idee und Issue gehen wie bei den Entscheidungen; ein Pain prüft CheckPain,
+// und ein verborgener Pain antwortet wie ein unbekannter.
+func (a *ProjectAccess) attachSubject(kind string, id int64, act Action) (string, error) {
+	if kind != idea.SubjectPain {
+		return a.decisionSubject(kind, id, act)
+	}
+	p, err := a.st.PainByID(id)
+	if err != nil {
+		a.Filtered()
+		return "", painNotFound(id)
+	}
+	if err := a.CheckPain(p, act); err != nil {
+		if errors.Is(err, ErrAccessNotFound) {
+			a.Filtered()
+			return "", painNotFound(id)
+		}
+		return "", err
+	}
+	return p.Project, nil
+}
+
+// CanAttach sagt, ob der Betrachter am Gegenstand ein Bild anhängen darf (Mitarbeit,
+// ab member). Die Seiten zeigen den Knopf nur dann; Attach prüft dasselbe noch einmal.
+func (a *ProjectAccess) CanAttach(kind string, id int64) bool {
+	_, err := a.attachSubject(kind, id, ActWork)
+	return err == nil
 }
 
 // AttachmentURL ist der relative Pfad der Auslieferung.
@@ -52,9 +86,9 @@ func (s *Store) attachmentMetas(kind string, id int64) ([]idea.AttachmentMeta, e
 	return scanAttachmentMetas(rows)
 }
 
-// AttachmentsOf listet die Anhänge einer Idee oder eines Issues ohne Bytes.
+// AttachmentsOf listet die Anhänge einer Idee, eines Issues oder eines Pains ohne Bytes.
 func (a *ProjectAccess) AttachmentsOf(kind string, id int64) ([]idea.AttachmentMeta, error) {
-	if _, err := a.decisionSubject(kind, id, ActRead); err != nil {
+	if _, err := a.attachSubject(kind, id, ActRead); err != nil {
 		return nil, err
 	}
 	return a.st.attachmentMetas(kind, id)
@@ -64,7 +98,8 @@ func (a *ProjectAccess) AttachmentsOf(kind string, id int64) ([]idea.AttachmentM
 type AttachInput struct {
 	Subject   string
 	SubjectID int64
-	// Owner ist idea, reply oder variant. Bei variant ist VariantID die Variante,
+	// Owner ist idea, reply, variant, request oder pain. Bei request und pain gehört
+	// das Bild dem Gegenstand selbst (Subject muss dazu passen). Bei variant ist VariantID die Variante,
 	// bei reply ThreadID die Diskussion, deren Antwort das Bild begleitet.
 	Owner     string
 	VariantID int64
@@ -76,11 +111,11 @@ type AttachInput struct {
 	Actor        idea.Actor
 }
 
-// Attach prüft das Bild und legt es an. Wer an der Idee oder dem Issue
+// Attach prüft das Bild und legt es an. Wer an der Idee, dem Issue oder dem Pain
 // mitarbeiten darf, darf Bilder anhängen; dasselbe Bild am selben Platz noch
 // einmal ist ein No-op und liefert den vorhandenen Anhang.
 func (a *ProjectAccess) Attach(in AttachInput) (idea.AttachmentMeta, error) {
-	project, err := a.decisionSubject(in.Subject, in.SubjectID, ActWork)
+	project, err := a.attachSubject(in.Subject, in.SubjectID, ActWork)
 	if err != nil {
 		return idea.AttachmentMeta{}, err
 	}
@@ -96,7 +131,7 @@ func (a *ProjectAccess) Attach(in AttachInput) (idea.AttachmentMeta, error) {
 	switch in.Owner {
 	case idea.OwnerIdea:
 		if in.Subject != idea.SubjectIdea {
-			return idea.AttachmentMeta{}, requestdomain.NewRuleError("owner_invalid", "an image on an issue belongs to a variant of one of its decisions", "attach it to a variant", nil)
+			return idea.AttachmentMeta{}, requestdomain.NewRuleError("owner_invalid", "an image on an issue or pain belongs to the issue or pain itself, or to a variant of one of its decisions", "use owner request, pain or variant", nil)
 		}
 		i, err := a.ideaFor(in.SubjectID, ActWork)
 		if err != nil {
@@ -105,7 +140,15 @@ func (a *ProjectAccess) Attach(in AttachInput) (idea.AttachmentMeta, error) {
 		if i.Phase == idea.PhaseDismissed || i.Phase == idea.PhaseDone {
 			return idea.AttachmentMeta{}, ideaClosed(i)
 		}
+	case idea.OwnerRequest, idea.OwnerPain:
+		// Das Bild gehört dem Gegenstand selbst; Art und Gegenstand müssen übereinstimmen.
+		if in.Owner != in.Subject {
+			return idea.AttachmentMeta{}, requestdomain.NewRuleError("owner_invalid", fmt.Sprintf("owner %s does not fit an image on a %s", in.Owner, in.Subject), "use owner "+in.Subject, nil)
+		}
 	case idea.OwnerVariant:
+		if in.Subject == idea.SubjectPain {
+			return idea.AttachmentMeta{}, requestdomain.NewRuleError("owner_invalid", "a pain has no decisions, so no variants", "use owner pain", nil)
+		}
 		ok, err := a.st.variantBelongsTo(in.VariantID, in.Subject, in.SubjectID)
 		if err != nil {
 			return idea.AttachmentMeta{}, err
@@ -126,7 +169,7 @@ func (a *ProjectAccess) Attach(in AttachInput) (idea.AttachmentMeta, error) {
 		}
 		ownerRef = strconv.FormatInt(in.ThreadID, 10)
 	default:
-		return idea.AttachmentMeta{}, requestdomain.NewRuleError("owner_invalid", fmt.Sprintf("unknown owner %q", in.Owner), "use idea, reply or variant", nil)
+		return idea.AttachmentMeta{}, requestdomain.NewRuleError("owner_invalid", fmt.Sprintf("unknown owner %q", in.Owner), "use idea, reply, variant, request or pain", nil)
 	}
 	sum := sha256.Sum256(in.Data)
 	c := attachCommit{Project: project, Subject: in.Subject, SubjectID: in.SubjectID, Owner: in.Owner, OwnerRef: ownerRef, Mime: img.Mime,
@@ -181,7 +224,7 @@ func (s *Store) commitAttachment(c attachCommit) (int64, error) {
 		return 0, err
 	}
 	if n >= idea.MaxAttachmentPerSubject {
-		return 0, requestdomain.NewRuleError("attachment_limit", fmt.Sprintf("at most %d images per idea or issue", idea.MaxAttachmentPerSubject), "remove one first", nil)
+		return 0, requestdomain.NewRuleError("attachment_limit", fmt.Sprintf("at most %d images per idea, issue or pain", idea.MaxAttachmentPerSubject), "remove one first", nil)
 	}
 	res, err := tx.Exec(`INSERT INTO attachments(project,subject_kind,subject_id,owner_kind,owner_ref,mime,bytes,width,height,sha256,alt,person,created_at,data) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.Project, c.Subject, c.SubjectID, c.Owner, c.OwnerRef, c.Mime, len(c.Data), c.Width, c.Height, c.SHA256, c.Alt, c.Person, now(), c.Data)
@@ -225,7 +268,7 @@ func (a *ProjectAccess) AttachmentData(id int64) (idea.AttachmentMeta, []byte, e
 		a.Filtered()
 		return idea.AttachmentMeta{}, nil, attachmentNotFound(id)
 	}
-	if _, err := a.decisionSubject(m.Subject, m.SubjectID, ActRead); err != nil {
+	if _, err := a.attachSubject(m.Subject, m.SubjectID, ActRead); err != nil {
 		return idea.AttachmentMeta{}, nil, attachmentNotFound(id)
 	}
 	return m, data, nil
@@ -252,10 +295,10 @@ func (a *ProjectAccess) RemoveAttachment(id int64) error {
 		a.Filtered()
 		return attachmentNotFound(id)
 	}
-	if _, err := a.decisionSubject(m.Subject, m.SubjectID, ActRead); err != nil {
+	if _, err := a.attachSubject(m.Subject, m.SubjectID, ActRead); err != nil {
 		return attachmentNotFound(id)
 	}
-	if _, err := a.decisionSubject(m.Subject, m.SubjectID, ActEdit); err != nil {
+	if _, err := a.attachSubject(m.Subject, m.SubjectID, ActEdit); err != nil {
 		return err
 	}
 	return a.st.commitAttachmentRemoval(id)

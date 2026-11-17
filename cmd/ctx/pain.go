@@ -23,6 +23,7 @@ const painUsage = `usage: ctx pain <command>
   edit <n> [--title T] [--body B] --reason R
   link <n> (--request N | --idea N | --knowledge ID | --ref "text or url")
   unlink <link-id> --reason R
+  attach <PAIN-n|n> <image-file> [--alt TEXT]   attach a screenshot (PNG, JPEG or WebP, up to 5 MB)
 
 All commands take --json.`
 
@@ -110,7 +111,7 @@ func cmdPain(args []string, stdout io.Writer) int {
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
-	case "add", "list", "show", "state", "edit", "link", "unlink":
+	case "add", "list", "show", "state", "edit", "link", "unlink", "attach":
 	default:
 		return usageErr()
 	}
@@ -280,6 +281,11 @@ func cmdPain(args []string, stdout io.Writer) int {
 			return usageErr()
 		}
 		return result(c.AddPainLink(id, pain.Target{RequestID: *request, KnowledgeID: *knowledge, IdeaID: *ideaNo, ExternalRef: *ref}, cliSessionID(c, cfg)))
+	case "attach":
+		if code, ok := attachToObject(c, cfg, stdout, jsonMode, idea.SubjectPain, "PAIN-", rest); ok {
+			return code
+		}
+		return usageErr()
 	case "unlink":
 		pos, flags := splitLeading(rest)
 		if len(pos) != 1 {

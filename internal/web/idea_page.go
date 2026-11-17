@@ -53,10 +53,10 @@ type ideaPageView struct {
 	Edit *editPanel
 	// Workshop is the idea workshop (workshop.go); nil until someone worked the idea out.
 	Workshop *workshopView
-	// Images are the pictures on the idea itself (and on answers); CanAttach shows
-	// the form that adds one.
-	Images    []attachImage
-	CanAttach bool
+	// Attach is the box of the pictures on the idea itself (and on answers) with
+	// the form that adds one; HasImages says that the page has pictures to enlarge
+	// (also on the variants), so it carries the dialog.
+	Attach    *attachBox
 	HasImages bool
 }
 
@@ -119,14 +119,15 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 		v.Reactions = a.reactionsFor(r, l, store.ReactOnIdea, i.ID, s)
 	}
 	a.attachWorkshop(l, r, pa, ws, v)
-	v.Images = attachImages(l, ws.Attachments, func(m idea.AttachmentMeta) bool { return m.Owner != idea.OwnerVariant })
+	v.Attach = &attachBox{Images: attachImages(l, ws.Attachments, func(m idea.AttachmentMeta) bool { return m.Owner != idea.OwnerVariant }),
+		Action: "/ui/ideas/" + strconv.FormatInt(i.ID, 10) + "/attach", Owner: idea.OwnerIdea, Token: v.Token}
 	if ph := idea.EffectivePhase(i.State, i.Phase); interactive(r) && ph != idea.PhaseDismissed && ph != idea.PhaseDone && pa.CheckIdea(i, store.ActWork) == nil {
-		v.CanAttach = true
+		v.Attach.CanAttach = true
 	}
 	for _, m := range ws.Attachments {
 		v.HasImages = v.HasImages || m.Owner == idea.OwnerVariant
 	}
-	v.HasImages = v.HasImages || len(v.Images) > 0
+	v.HasImages = v.HasImages || len(v.Attach.Images) > 0
 	seen := map[string]bool{}
 	for _, p := range append([]string{i.Person}, peopleOf(ws)...) {
 		if p != "" && !seen[p] {

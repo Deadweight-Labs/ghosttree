@@ -41,7 +41,7 @@ var (
 	requestDoneMsg = map[string]string{
 		"added": "requests.done.added", "met": "requests.done.met", "waived": "requests.done.waived",
 		"corrected": "requests.done.corrected", "completed": "requests.done.completed", "dropped": "requests.done.dropped",
-		"moved": "requests.done.moved",
+		"moved": "requests.done.moved", "image": "ideas.result.image",
 	}
 )
 
@@ -161,6 +161,8 @@ type requestView struct {
 	EditOpen                 bool
 	Back                     string
 	Token                    string
+	// Attach is the box of the pictures on the issue and the form that adds one (issue page only).
+	Attach *attachBox
 	// ProjectRemote ist das ganze Projekt, Repo das Ziel der Rücklinks.
 	ProjectRemote string
 	// Nur die Issue-Seite füllt diese Felder (fillIssue).
@@ -712,6 +714,10 @@ func (a *app) requestResult(r *http.Request, d requestdomain.Detail) *requestRes
 	q := r.URL.Query()
 	if fail := q.Get("fail"); fail == "open_criteria" && d.Request.State == "open" {
 		return &requestResult{Text: l.msg("requests.fail.open_criteria"), Kind: "failed", Fail: true}
+	} else if strings.HasPrefix(fail, "img_") {
+		if key := ideaFailKey(fail); key != "ideas.result.failed" {
+			return &requestResult{Text: l.msg(key), Kind: "failed", Fail: true}
+		}
 	}
 	kind := q.Get("done")
 	key, ok := requestDoneMsg[kind]
