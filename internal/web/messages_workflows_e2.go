@@ -53,6 +53,7 @@ func init() {
 		{"wf.via.api", "via the API", "über die API"},
 		{"wf.reason.disabled", "The workflow was switched off", "Der Workflow wurde ausgeschaltet"},
 		{"wf.reason.invalid", "The newest version does not pass the check", "Die neueste Version besteht die Prüfung nicht"},
+		{"wf.reason.author_rights", "The author of this version may no longer act for the project", "Wer diese Version gespeichert hat, darf für das Projekt nicht mehr handeln"},
 		{"wf.run.workflow", "Workflow", "Workflow"},
 		{"wf.results", "Results", "Ergebnisse"},
 		{"gardener.model", "Model alias", "Modell-Alias"},

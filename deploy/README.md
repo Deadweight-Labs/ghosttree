@@ -826,7 +826,11 @@ several, cannot pass a cap together; the real cost replaces the estimate when
 the answer is in. A stream that breaks off before its final usage, an answer
 without usage, and a call that was sent and got no answer stay booked at the
 estimate. When a run ends, its calls still under way are stopped and booked
-before its cost is read.
+before its cost is read. A monthly cap that only other runs' open calls fill
+refuses the call and leaves the run alone; the run ends in the state budget
+when its own cap, or a monthly cap used up by settled calls, is reached. Calls
+still open when the server starts (their process died) are booked at their
+estimate with that start.
 
 **Loans.** A connection a person lent to an organization stops serving it when
 the person points it at another address or format, and when the person leaves
@@ -875,7 +879,10 @@ workflow `ghosttree/garden-ghosts`. With the start of each run
 address, a token that holds only while that run is running (at most four
 hours) and the prices of the model; Claude Code in the sessions gets them as
 `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, with the alias as its model.
-The budget of the run is enforced with the prices of the connection.
+The budget of the run is enforced with the prices of the connection: at the
+proxy the cap of a gardener's run is the budget per run in the gardener's
+settings (not the owner's cap per run); the owner's cap for the month holds
+as for any run.
 
 The proxy is used only when the alias resolves for that organization to a
 connection in the Anthropic format with prices, and no cap is reached. In every
@@ -895,6 +902,15 @@ gardener's unit (it listens on loopback only).
    Any free loopback port will do; `ss -ltn | grep 8791` shows whether it is
    taken. Then `sudo systemctl restart ghosttree` and check the log for
    `ai_proxy listen=127.0.0.1:8791`.
+
+   A restart during a gardener run (the nightly run starts at 03:05 UTC) does
+   not take the model away from it: the run's token is kept in the database and
+   the server's start leaves the gardener's runs alone. The fixed port is what
+   makes that work, because the address in `ANTHROPIC_BASE_URL` was fixed when
+   the run started. For the seconds the server is down, calls of Claude Code to
+   the proxy fail and are retried by it; a run that is cut off by a hard kill of
+   its unit is ended as interrupted once its token has run out, four hours
+   after its start.
 2. Install the new `ctx` for the server and for the gardener's unit (both run
    the same binary) and restart `ghosttree`.
 3. The gardener's unit needs no change: it allows loopback only

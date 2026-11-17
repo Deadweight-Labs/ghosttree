@@ -17,6 +17,10 @@ const (
 	// SkipInvalid: the newest version no longer passes the check (a block
 	// left the catalogue, say).
 	SkipInvalid = "invalid"
+	// SkipAuthorRights: the account that saved the version it runs may no
+	// longer act for the project (demoted below lead, removed, disabled). A run
+	// acts for that account; without the right it does not start (REQ-695).
+	SkipAuthorRights = "author_rights"
 )
 
 // skipError ends a run as skipped with a reason instead of failed.
@@ -73,6 +77,11 @@ func (r DefResolver) Resolve(ctx context.Context, run store.WorkflowRun) (Block,
 	}
 	inner := spec.Run
 	run.WorkflowVersion = version
+	// The run acts for the author of this version, with the rights the author
+	// holds now, not the ones the author had when saving it.
+	if r.Store.WorkflowRunAccount(run) > 0 && r.Store.WorkflowRunActor(run) == 0 {
+		return nil, version, Skip(SkipAuthorRights)
+	}
 	return BlockFunc(func(ctx context.Context, in Input) (store.WorkflowRunOutcome, error) {
 		in.Def = &d
 		in.Values = InputValues(d.Inputs, in.Event)

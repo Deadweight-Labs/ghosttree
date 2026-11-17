@@ -425,6 +425,13 @@ func (e *Engine) Run(ctx context.Context, interval time.Duration) {
 	} else if n > 0 && e.Log != nil {
 		e.Log.Info("workflows", "interrupted", n)
 	}
+	// Calls to a model that were under way when the previous process ended
+	// stay booked at their estimate; they are not open any more.
+	if n, err := e.Store.SettleOpenAICalls(); err != nil && e.Log != nil {
+		e.Log.Error("workflows", "error", err.Error())
+	} else if n > 0 && e.Log != nil {
+		e.Log.Info("workflows", "ai_calls_settled", n)
+	}
 	e.wake = make(chan struct{}, 1)
 	executorDone := make(chan struct{})
 	go func() {

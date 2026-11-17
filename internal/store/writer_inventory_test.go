@@ -90,6 +90,8 @@ var writerMethodClasses = map[string]string{
 	"ClaimWorkflowRun":              "write",
 	"FinishWorkflowRun":             "write",
 	"AbandonWorkflowRuns":           "write",
+	"SettleOpenAICalls":             "write",
+	"WorkflowRunActor":              "read",
 	"AbandonStaleWorkflowRuns":      "write",
 	"StaleWorkflowRuns":             "read",
 	"WorkflowSchedulesDue":          "read",

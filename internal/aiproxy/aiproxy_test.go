@@ -529,3 +529,31 @@ func TestProxyListensOnLoopbackOnly(t *testing.T) {
 		t.Fatalf("default address: %s", ln.Addr())
 	}
 }
+
+// Review of #286, 7: a call whose token was accepted just before the run's
+// token was revoked, and that registers only after EndRun, would run on past
+// the end of its run and be missing from the run's cost. Registering checks
+// the token once more, so such a call is refused in both orders.
+func TestACallThatRegistersAfterTheRunEndedIsRefused(t *testing.T) {
+	e := newEnv(t)
+	var before, after bool
+	e.blocks["test/late"] = workflow.BlockFunc(func(ctx context.Context, in workflow.Input) (store.WorkflowRunOutcome, error) {
+		_, done, ok := e.p.track(ctx, in.Run.ID, in.AI.Token)
+		before = ok
+		done()
+		// What the engine does when a run ends: revoke, then stop and wait.
+		_ = e.st.RevokeAIRunTokens(in.Run.ID)
+		e.p.EndRun(in.Run.ID)
+		_, done2, ok2 := e.p.track(ctx, in.Run.ID, in.AI.Token)
+		after = ok2
+		done2()
+		return store.WorkflowRunOutcome{State: store.RunDone, Result: "done"}, nil
+	})
+	e.run(t, "test/late", nil)
+	if !before || after {
+		t.Fatalf("call of a running run accepted: %v, call after its end accepted: %v", before, after)
+	}
+	if len(e.p.active) != 0 {
+		t.Fatalf("calls left registered: %d", len(e.p.active))
+	}
+}

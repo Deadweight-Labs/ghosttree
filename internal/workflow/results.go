@@ -88,7 +88,10 @@ func (g GateReport) String() string {
 // with its reason, so that the run page says why.
 func (g Gate) Apply(results []Result) (GateReport, error) {
 	var rep GateReport
-	account := g.Store.WorkflowRunAccount(g.Run)
+	// Only an account that still holds the right to act for the project
+	// (active, lead or owner there) lets the run write in its name: the rights
+	// the author had when saving the version may be gone by now.
+	account := g.Store.WorkflowRunActor(g.Run)
 	person := ""
 	if acc, err := g.Store.AccountByPrincipalID(fmt.Sprintf("person:%d", account)); err == nil && account > 0 {
 		person = acc.Name
@@ -194,6 +197,12 @@ type writer struct {
 
 func (w writer) ref() string { return store.WorkflowRunRefPrefix + strconv.FormatInt(w.run.ID, 10) }
 
+// actor is how the history of a criterion or a relation names who added it:
+// the account the run acts for, and the run. Neither carries a session
+// reference of its own, so the run's reference stands with the person, where
+// whoever reads the history of the issue sees that a workflow wrote it.
+func (w writer) actor() string { return w.person + " (" + w.ref() + ")" }
+
 // propose writes the staged entry a person accepts on the review page: the
 // knowledge entry itself, or a note that stands for an issue, a criterion or a
 // relation.
@@ -249,13 +258,13 @@ func (w writer) apply(r Result, noteID int64) (string, error) {
 		}
 		return fmt.Sprintf("REQ-%d", d.Request.ID), nil
 	case ResultCriterion:
-		c, err := w.st.AddCriterion(r.RequestID, r.Title, w.person)
+		c, err := w.st.AddCriterion(r.RequestID, r.Title, w.actor())
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("REQ-%d#%d", r.RequestID, c.ID), nil
 	case ResultRelation:
-		rel, err := w.st.AddRequestRelation(r.RequestID, requestdomain.Relation{Kind: r.Relation, OtherRequestID: r.OtherID}, w.person)
+		rel, err := w.st.AddRequestRelation(r.RequestID, requestdomain.Relation{Kind: r.Relation, OtherRequestID: r.OtherID}, w.actor())
 		if err != nil {
 			return "", err
 		}
@@ -311,8 +320,10 @@ func AcceptProposal(st *store.Store, noteID, by int64) (string, error) {
 }
 
 // UndoAuto takes back an automatic approval: the knowledge entry is retired,
-// the issue dropped, the criterion waived, the relation removed. Only the owner
-// of the namespace may (the caller checks).
+// the issue dropped, the criterion waived, the relation removed. Whoever may
+// review the project's proposals may take one back (owner, lead, or a member
+// with the right to review): the automatic approval stood in for exactly that
+// review. The caller checks (the handler of /ui/workflows/undo).
 func UndoAuto(st *store.Store, resultID, by int64, person string) error {
 	res, err := st.WorkflowResultByID(resultID)
 	if err != nil || res.State != store.ResultAuto {

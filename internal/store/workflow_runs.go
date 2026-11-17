@@ -908,8 +908,11 @@ func (s *Store) AbandonWorkflowRuns() (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	// A token of an interrupted run must not outlive it (REQ-694).
-	if err := revokeRunTokensTx(tx, `state='running'`); err != nil {
+	// A token of an interrupted run must not outlive it (REQ-694). A run
+	// outside the engine (trigger -1, the gardener's unit) goes on across a
+	// restart and keeps its token (it ends with its own report or after
+	// aiExternalTokenTTL).
+	if err := revokeRunTokensTx(tx, `state='running' AND trigger_id>=0`); err != nil {
 		return 0, err
 	}
 	res, err := tx.Exec(`UPDATE workflow_runs SET state='failed', reason='interrupted', finished_at=? WHERE state='running' AND trigger_id>=0`, now())
@@ -925,19 +928,43 @@ func (s *Store) AbandonWorkflowRuns() (int, error) {
 // process on the same database (a second server, an executor that is alive)
 // and stays. The engine passes "now minus the run timeout", so a run cut off
 // by a restart is ended once it could not be running any more.
+//
+// A run outside the engine (trigger -1, the gardener's unit) runs for hours
+// and ends through its own report; one whose unit was killed hard never
+// reports. It is ended as interrupted once its token has run out
+// (aiExternalTokenTTL), together with its row in garden_runs.
 func (s *Store) AbandonStaleWorkflowRuns(before time.Time) (int, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{before.UTC()}, func(d *Store, p []any) (int, error) { return d.AbandonStaleWorkflowRuns(p[0].(time.Time)) })
 	}
-	// Runs of an external block (trigger -1, the gardener's unit) run for
-	// hours outside the engine and end through their own report.
-	res, err := s.db.Exec(`UPDATE workflow_runs SET state='failed', reason='interrupted', finished_at=? WHERE state='running' AND trigger_id>=0 AND started_at<=?`,
-		now(), before.UTC().Format(time.RFC3339))
+	cut, extCut := staleCuts(before)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	ts := now()
+	if _, err := tx.Exec(`UPDATE garden_runs SET state='failed', finished_at=?, note='interrupted' WHERE state='running' AND workflow_run_id IN
+		(SELECT id FROM workflow_runs WHERE state='running' AND trigger_id<0 AND started_at<=?)`, ts, extCut); err != nil {
+		return 0, err
+	}
+	res, err := tx.Exec(`UPDATE workflow_runs SET state='failed', reason='interrupted', finished_at=? WHERE state='running'
+		AND ((trigger_id>=0 AND started_at<=?) OR (trigger_id<0 AND started_at<=?))`, ts, cut, extCut)
 	if err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
-	return int(n), nil
+	return int(n), tx.Commit()
+}
+
+// staleCuts are the start times (RFC 3339) at or before which a run of the
+// engine and a run outside it count as stale for a sweep at before.
+func staleCuts(before time.Time) (engine, external string) {
+	ext := aiNow().Add(-aiExternalTokenTTL)
+	if before.Before(ext) {
+		ext = before
+	}
+	return before.UTC().Format(time.RFC3339), ext.UTC().Format(time.RFC3339)
 }
 
 // StaleWorkflowRuns counts the runs AbandonStaleWorkflowRuns(before) would
@@ -946,8 +973,10 @@ func (s *Store) StaleWorkflowRuns(before time.Time) int {
 	if s.reader != nil {
 		return s.reader.StaleWorkflowRuns(before)
 	}
+	cut, extCut := staleCuts(before)
 	var n int
-	_ = s.db.QueryRowContext(s.ctx(), `SELECT COUNT(*) FROM workflow_runs WHERE state='running' AND trigger_id>=0 AND started_at<=?`, before.UTC().Format(time.RFC3339)).Scan(&n)
+	_ = s.db.QueryRowContext(s.ctx(), `SELECT COUNT(*) FROM workflow_runs WHERE state='running'
+		AND ((trigger_id>=0 AND started_at<=?) OR (trigger_id<0 AND started_at<=?))`, cut, extCut).Scan(&n)
 	return n
 }
 

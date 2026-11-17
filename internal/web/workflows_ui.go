@@ -95,6 +95,7 @@ var wfReasonKeys = map[string]string{
 	"unknown_workflow":    "wf.reason.unknown_workflow",
 	"disabled":            "wf.reason.disabled",
 	"invalid":             "wf.reason.invalid",
+	"author_rights":       "wf.reason.author_rights",
 	"external":            "wf.reason.external",
 	"policy.instruction":  "wf.reason.policy.instruction",
 	"policy.prompt":       "wf.reason.policy.prompt",
