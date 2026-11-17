@@ -93,7 +93,7 @@ var messagesB = map[string]string{
 	"agents.no_machine": "Unknown machine",
 	// Abläufe
 	"runbooks.search":         "Search runbooks",
-	"runbooks.empty":          "No runbooks yet.",
+	"runbooks.empty":          "A runbook is a procedure an agent runs step by step.",
 	"runbooks.n":              "%d runbooks",
 	"runbooks.n_one":          "1 runbook",
 	"runbooks.last_ok":        "last successful run",
@@ -250,7 +250,7 @@ var messagesBDE = map[string]string{
 	"agents.no_machine": "Maschine unbekannt",
 	// Abläufe
 	"runbooks.search":         "Abläufe suchen",
-	"runbooks.empty":          "Noch keine Abläufe.",
+	"runbooks.empty":          "Ein Ablauf ist eine Anleitung, die ein Agent Schritt für Schritt ausführt.",
 	"runbooks.n":              "%d Abläufe",
 	"runbooks.n_one":          "1 Ablauf",
 	"runbooks.last_ok":        "zuletzt erfolgreicher Lauf",

@@ -2,6 +2,19 @@
 // that are on the page, and the field of the member list filters the people and
 // agents. No inline script, no inline style.
 (() => {
+  // "New group" in the empty state of the rooms opens the menu of the room list. It opens one
+  // turn later, after the click that closes menus has run (shell.js).
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest ? event.target.closest("[data-open-new]") : null;
+    const menu = button ? document.querySelector("details.rstart") : null;
+    if (!menu) return;
+    event.preventDefault();
+    setTimeout(() => {
+      menu.open = true;
+      const field = menu.querySelector("input.gfield, select.gfield");
+      if (field) field.focus();
+    }, 0);
+  });
   const norm = (s) => s.toLocaleLowerCase();
   // What a search reads of a message: head, second line, quote, text, card. Not
   // the hidden forms and buttons that belong to it.

@@ -106,7 +106,7 @@ func TestKnowledgeEmptyIsOneLineAndOneAction(t *testing.T) {
 		t.Error("guest empty state offers an action or lacks the line")
 	}
 	_, review := fetchPage(t, e.Owner, e.Base+"/ui/review")
-	if !strings.Contains(review, "Nothing to review.") {
+	if !strings.Contains(review, "Proposals from agents appear here to be reviewed.") {
 		t.Error("empty review queue lacks its line")
 	}
 }

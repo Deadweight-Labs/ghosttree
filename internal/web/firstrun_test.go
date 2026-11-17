@@ -180,7 +180,7 @@ func TestContextPageHasEmptyStatesWithAnAction(t *testing.T) {
 		t.Errorf("no project chosen: %s", none)
 	}
 	_, empty := fetchPage(t, e.Owner, e.Base+"/ui/context?project="+shellProject)
-	if !strings.Contains(empty, "Nothing is given to agents yet.") || !strings.Contains(empty, "preview=1") {
+	if !strings.Contains(empty, "What agents are given at the start of a session shows here.") || !strings.Contains(empty, "preview=1") {
 		t.Error("an empty context lacks its line or its action")
 	}
 	if _, err := e.St.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "Settled", Body: "body", Scope: scope.Axes{Project: shellProject}, Person: "alice", Confidence: "trusted"}); err != nil {
@@ -228,7 +228,7 @@ func TestRoomsEmptyStateHasAnActionAndTheLandingIsTheRoom(t *testing.T) {
 	}
 	nora := loginInteractive(t, e.Srv, e.St, "nora")
 	_, empty := fetchPage(t, nora, e.Base+"/ui/coord")
-	if !strings.Contains(empty, "No rooms yet.") || !strings.Contains(empty, `href="/ui/overview?connect=1"`) || !strings.Contains(empty, "Start Claude or Codex in a project") {
+	if !strings.Contains(empty, "A room opens for every repository you work in and every group you start.") || !strings.Contains(empty, `href="/ui/overview?connect=1"`) || !strings.Contains(empty, "Connect an agent") {
 		t.Error("the empty rooms page lacks its line or its action")
 	}
 	if strings.Contains(empty, `data-sole-room="/`) {

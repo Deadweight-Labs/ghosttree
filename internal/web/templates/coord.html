@@ -31,7 +31,7 @@
     <section class="coord-conversation rmain box" id="coord-conversation" aria-label="{{t "coord.conversation"}}">
       {{with .Coord.Active}}{{if .Thread}}{{template "coord-thread-main" $}}{{else}}{{template "coord-room-main" $}}{{end}}
       {{else}}
-      <div class="coord-welcome box-empty"><p>{{t "coord.no_rooms"}}</p><a class="gbtn pri" href="/ui/overview?connect=1">{{t "ov.start"}}</a></div>
+      <div class="coord-welcome box-empty empty-act"><p>{{t "coord.no_rooms"}}</p>{{if .Coord.Recipients}}<a class="gbtn pri" href="#coord-rooms" data-open-new>{{t "coord.group_create"}}</a>{{end}}<a class="gbtn{{if not .Coord.Recipients}} pri{{end}}" href="/ui/overview?connect=1">{{t "ov.connect"}}</a></div>
       {{end}}
     </section>
 

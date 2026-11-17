@@ -56,12 +56,12 @@ func TestSearchGroupsFollowTheViewersRights(t *testing.T) {
 		groups := searchGroups(page)
 		switch name {
 		case "guest":
-			if strings.Join(groups, ",") != "Requests,Knowledge" {
-				t.Errorf("guest groups = %v, want only Requests and Knowledge", groups)
+			if strings.Join(groups, ",") != "Issues,Knowledge" {
+				t.Errorf("guest groups = %v, want only Issues and Knowledge", groups)
 			}
 		default:
-			if strings.Join(groups, ",") != "Requests,Knowledge,Tasks,Pains" {
-				t.Errorf("%s groups = %v, want the fixed order Requests, Knowledge, Tasks, Pains", name, groups)
+			if strings.Join(groups, ",") != "Issues,Knowledge,Tasks,Pains" {
+				t.Errorf("%s groups = %v, want the fixed order Issues, Knowledge, Tasks, Pains", name, groups)
 			}
 		}
 	}
@@ -93,7 +93,7 @@ func TestSearchCountsHitsAndOffersMoreOnlyBehindTheShownOnes(t *testing.T) {
 	}
 	if !regexp.MustCompile(`<span class="nm">All</span><span class="counter">8</span>`).MatchString(many) ||
 		!regexp.MustCompile(`<span class="counter">8</span></a>`).MatchString(many) {
-		t.Error("the facets do not count 8 in All and in Requests")
+		t.Error("the facets do not count 8 in All and in Issues")
 	}
 	if !strings.Contains(many, `class="row morelink" href="/ui/search?kind=requests&amp;q=Needle"`) {
 		t.Error("the shown five do not lead to the rest")

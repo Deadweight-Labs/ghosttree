@@ -16,7 +16,7 @@ import (
 func TestRepoSettingsTabAndLabels(t *testing.T) {
 	e := ovEnv(t)
 	settings := e.Base + "/ui/x/shell/settings"
-	if _, page := fetchPage(t, e.Lead, e.Base+"/ui/x/shell"); !strings.Contains(page, `data-ic="settings"`) {
+	if _, page := fetchPage(t, e.Lead, e.Base+"/ui/x/shell"); !strings.Contains(page, `data-tab="settings"`) {
 		t.Error("a lead has no settings tab")
 	}
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
