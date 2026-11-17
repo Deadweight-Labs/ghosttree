@@ -300,6 +300,7 @@ var writerMethodClasses = map[string]string{
 	"MessageAuthority":              "read",
 	"SenderRolesInProject":          "read",
 	"GrantableRoles":                "read",
+	"RoleGrantors":                  "read",
 	"ListProjectMembers":            "read",
 	"ProjectByID":                   "read",
 	"OrgOwnerPrincipal":             "read",

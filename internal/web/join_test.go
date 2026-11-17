@@ -594,8 +594,10 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp, _ := alice.Get(base + "/ui/orgs")
-	if page := body(t, resp); strings.Contains(page, `<option value="guest">`) || strings.Contains(page, "GHOSTTREE_ENFORCE_ACCESS") {
-		t.Fatalf("guest option offered without enforcement: %s", page)
+	// The guest stays visible in the choice, switched off with the reason
+	// (REQ-704); it cannot be chosen.
+	if page := body(t, resp); strings.Contains(page, `<option value="guest">`) || !strings.Contains(page, `value="guest" data-role disabled`) || !strings.Contains(page, "GHOSTTREE_ENFORCE_ACCESS") {
+		t.Fatalf("guest option without enforcement is not switched off with its reason: %s", page)
 	}
 	resp = postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
 	if page := body(t, resp); resp.StatusCode != http.StatusConflict || !strings.Contains(page, "GHOSTTREE_ENFORCE_ACCESS") {

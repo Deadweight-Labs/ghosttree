@@ -37,11 +37,17 @@ type errorPageWriter struct {
 // alone does not (a missing form token is 403 like a missing right).
 const rejectHeader = "X-Gt-Reject"
 
+// rejectRole marks a refusal whose body is the sentence of a missing role
+// (roleNeededText); the page shows it instead of the general text.
+const rejectRole = "role"
+
 func (w *errorPageWriter) WriteHeader(code int) {
 	plain := strings.HasPrefix(w.Header().Get("Content-Type"), "text/plain")
 	switch {
 	case plain && (code == http.StatusNotFound || code == http.StatusForbidden) && w.r.Method == http.MethodGet:
 		w.code, w.captured = code, true
+		w.reject = w.Header().Get(rejectHeader)
+		w.Header().Del(rejectHeader)
 		return
 	case plain && code >= http.StatusBadRequest && w.r.Method == http.MethodPost && formNavigation(w.r):
 		// A form the browser sent as a page change: the plain-text refusal becomes the
@@ -57,7 +63,7 @@ func (w *errorPageWriter) WriteHeader(code int) {
 
 func (w *errorPageWriter) Write(b []byte) (int, error) {
 	if w.captured {
-		if w.r.Method == http.MethodPost {
+		if w.r.Method == http.MethodPost || w.reject == rejectRole {
 			w.body.Write(b)
 		}
 		return len(b), nil
@@ -123,6 +129,9 @@ func (w *errorPageWriter) finish() {
 	if d := denialFrom(r); d != nil && code == http.StatusForbidden {
 		view = w.a.deniedView(r, d)
 		title = view.Title
+	}
+	if text := strings.TrimSpace(w.body.String()); w.reject == rejectRole && text != "" {
+		view.Text = text
 	}
 	w.a.renderBrowser(&statusWriter{ResponseWriter: w.ResponseWriter, code: code}, r, "errorpage", pageData{Title: title, ErrV: view})
 }

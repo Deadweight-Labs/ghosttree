@@ -2,10 +2,14 @@ package mcpserver
 
 import (
 	"context"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -57,5 +61,44 @@ func TestWorkflowToolsCreateCheckAndChangeAWorkflow(t *testing.T) {
 	}
 	if got.Versions[0].Via != store.WorkflowViaMCP || got.Versions[0].Note != "Nummer dazu" || !strings.Contains(text(t, res), "/workflows/melden") {
 		t.Fatalf("versions: %+v\n%s", got.Versions, text(t, res))
+	}
+}
+
+// REQ-704 (S03): an agent of a member who saves a workflow learns which role
+// it takes and whom to ask, not only "HTTP 403".
+func TestWorkflowWriteOfAMemberNamesTheRoleAndWhomToAsk(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if _, err := st.AddPerson("Mara Keller"); err != nil {
+		t.Fatal(err)
+	}
+	jonas, _ := st.AddPerson("Jonas Brandt")
+	org, err := st.CreateOrg("person:1", "X", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ClaimProject("person:1", pkgProject, "x"); err != nil {
+		t.Fatal(err)
+	}
+	code, _, err := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProjectRole("person:1", pkgProject, "person:2", store.RoleMember, false, store.RoleViaCLI); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(server.New(st))
+	t.Cleanup(srv.Close)
+	s := &Server{client: client.New(config.Config{ServerURL: srv.URL, Token: jonas, Machine: "workstation-a"}), ctxAxes: scope.Axes{Project: pkgProject, Branch: "main", Machine: "workstation-a"}}
+	_, _, err = s.handleWorkflowWrite(ctx, nil, WorkflowWriteInput{Name: "melden", Text: wfText})
+	if err == nil || !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "needs the role lead") || !strings.Contains(err.Error(), "Ask Mara Keller for the role lead") {
+		t.Fatalf("a member's save: %v", err)
 	}
 }

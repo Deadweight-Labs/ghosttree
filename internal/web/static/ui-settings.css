@@ -67,6 +67,19 @@
   & .mrow .acts select.gfield { max-width: 100%; }
   /* The role menus of all rows are equally wide, and the field, the tick and the button stay on one line */
   & .mrow .acts .selx { flex: none; width: 176px; }
+  /* Every project role of a person, below the name in the member list (REQ-704). */
+  & .mprojs { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  & .mproj { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 4px 8px; margin: 0 -8px; border-radius: 6px; }
+  & .mproj.hit { background: var(--success-subtle); box-shadow: inset 3px 0 0 var(--success-fg); }
+  & .mproj .mpname { display: inline-flex; align-items: center; gap: 6px; min-width: 8rem; color: var(--fg-muted); font-size: 13px; }
+  & .mproj .mpname .mono { color: var(--fg-default); }
+  & .mproj form { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; max-width: 100%; }
+  & .mproj .selx { flex: none; width: 220px; max-width: 100%; }
+  & .mprole { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+  & .invite .irc.off { cursor: default; }
+  & .invite .irc.off b { color: var(--fg-muted); }
+  & .invite .irc .needrole { margin-top: 2px; }
+  & .box > details.ipast > summary { font-weight: 400; color: var(--fg-muted); font-size: 14px; border-top: 1px solid var(--border-muted); }
   & .ghrow .gav.org, & .mrow .gav.org { border-radius: 6px; background: var(--canvas-default); color: var(--fg-default); }
   & .invite { display: flex; gap: 8px; align-items: center; padding: 12px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); border-radius: 6px 6px 0 0; }
   /* The name field grows to a sensible width and the role pill sits right behind it, not at the far edge */
@@ -95,6 +108,8 @@
   & .row .nm { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
   & .row .mt, & .box-body .mt { display: flex; flex-wrap: wrap; gap: 0 12px; margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
   & .row .mt > span + span::before, & .box-body .mt > span + span::before { content: "·"; margin-right: 12px; color: var(--fg-subtle); }
+  /* A pill is its own separator: the dot would stand inside it. */
+  & .row .mt > span.lb::before, & .box-body .mt > span.lb::before { content: none; }
   & .chk-l { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--fg-muted); white-space: nowrap; }
   & .chk-l input { width: 16px; height: 16px; accent-color: var(--accent-emphasis); }
   & .qs .chk-l { font-size: 14px; color: var(--fg-default); }

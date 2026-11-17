@@ -34,6 +34,7 @@ type wtEnv struct {
 	c     *client.Client
 	root  string
 	token string
+	url   string
 }
 
 func newWTEnv(t *testing.T) wtEnv {
@@ -60,7 +61,7 @@ func newWTEnv(t *testing.T) wtEnv {
 	}
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
-	return wtEnv{st: st, c: client.New(config.Config{ServerURL: srv.URL, Token: token}), root: t.TempDir(), token: token}
+	return wtEnv{st: st, c: client.New(config.Config{ServerURL: srv.URL, Token: token}), root: t.TempDir(), token: token, url: srv.URL}
 }
 
 func (e wtEnv) push(t *testing.T, name, note string) (int, string) {

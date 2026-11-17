@@ -547,6 +547,13 @@ func (a *app) accessDenied(w http.ResponseWriter, r *http.Request, err error) bo
 	case err == nil:
 		return false
 	case errors.Is(err, store.ErrAccessForbidden):
+		// The page or the form says which role it needs and whom to ask
+		// (REQ-704); the wrapper (errorPageWriter) takes the sentence over.
+		if need := roleNeededOf(err); need != nil {
+			w.Header().Set(rejectHeader, rejectRole)
+			http.Error(w, roleNeededText(a.langFor(r), need), http.StatusForbidden)
+			return true
+		}
 		http.Error(w, "forbidden", http.StatusForbidden)
 	default:
 		http.NotFound(w, r)
