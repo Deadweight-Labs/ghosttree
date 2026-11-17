@@ -172,7 +172,11 @@ func TestDecisionHoverCardCarriesQuestionStateAndLink(t *testing.T) {
 		}
 	}
 	// The address of the card leads to a page that shows the decision.
-	if _, idea := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/ideas/"+itoa(i.ID)); !strings.Contains(idea, `id="decision-`+itoa(d.ID)+`"`) {
-		t.Error("the page the card leads to has no anchor for the decision")
+	// Exactly one anchor: a second one (the timeline entry that asked the question) stands
+	// higher on the page, and the browser would stop there instead of at the decision.
+	if _, idea := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/ideas/"+itoa(i.ID)); strings.Count(idea, `id="decision-`+itoa(d.ID)+`"`) != 1 {
+		t.Errorf("the page the card leads to has %d anchors for the decision, want 1", strings.Count(idea, `id="decision-`+itoa(d.ID)+`"`))
+	} else if !strings.Contains(idea, `href="#decision-`+itoa(d.ID)+`"`) {
+		t.Error("the timeline entry of the question does not lead to the decision")
 	}
 }
