@@ -72,6 +72,7 @@ var writerMethodClasses = map[string]string{
 	"WorkflowPolicyFor":             "read",
 	"WorkflowPolicyOfProject":       "read",
 	"WorkflowPRInput":               "read",
+	"HeldFromMembers":               "read",
 	"OpenRequestsForPrompt":         "read",
 	"FeatureProjectOf":              "read",
 	"ProjectInstallation":           "read",

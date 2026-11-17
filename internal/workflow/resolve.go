@@ -46,6 +46,10 @@ type DefResolver struct {
 	// Research searches the net for a block that takes it, when the
 	// definition asks and the owner's policy allows; nil: no research.
 	Research Researcher
+	// Web is the research of an own prompt (stage 3): the tools web.search
+	// and web.fetch, when the definition asks and the owner's policy allows;
+	// nil when the server has no search service (REQ-698).
+	Web *WebResearch
 }
 
 // NewDefResolver is the resolver of a server with the default catalogue.
@@ -79,6 +83,10 @@ func (r DefResolver) Resolve(ctx context.Context, run store.WorkflowRun) (Block,
 		return nil, version, Skip(v)
 	}
 	spec, _ := r.Catalog.Lookup(d.Uses)
+	if d.Stage() == StagePrompt {
+		// An own prompt runs in the loop with its declared tools (REQ-698).
+		spec = BlockSpec{Name: AgentName, Model: true, Run: Agent}
+	}
 	if spec.Run == nil {
 		return nil, version, Skip(SkipExternal)
 	}
@@ -116,6 +124,10 @@ func (r DefResolver) Resolve(ctx context.Context, run store.WorkflowRun) (Block,
 			}
 		}
 		in.Data = &asm.data
+		if d.Stage() == StagePrompt {
+			in.Tools = newToolbox(asm, &d, r.Web)
+			in.Tools.allowSearchWords(inputsText(&d, in.Values))
+		}
 		var results []Result
 		in.Propose = func(r Result) { results = append(results, r) }
 		out, err := inner.Run(ctx, in)
@@ -124,7 +136,9 @@ func (r DefResolver) Resolve(ctx context.Context, run store.WorkflowRun) (Block,
 		}
 		// Evidence counts only from the declared inputs, never from the prompt
 		// or the instruction around them.
-		g := Gate{Store: r.Store, Run: run, Def: &d, Policy: policy, Inputs: inputsText(&d, in.Values), Sources: asm.sources()}
+		// What the read tools returned counts as input as well: the model
+		// may quote it, and it was read with the run's rights.
+		g := Gate{Store: r.Store, Run: run, Def: &d, Policy: policy, Inputs: inputsText(&d, in.Values) + in.Tools.Evidence(), Sources: asm.sources()}
 		grep, gerr := g.Apply(results)
 		if gerr != nil {
 			return out, gerr

@@ -362,7 +362,8 @@ func (a *api) auth(next http.Handler) http.Handler {
 			// account the run acts for and the run, and reaches nothing else
 			// through the API. What a run creates goes through the engine's
 			// check of its results; what it may read comes as its declared
-			// inputs (read tools of its own arrive with stage E5).
+			// inputs and, for an own prompt, through read tools that run in
+			// the engine, never through this API.
 			if principal, ok = a.st.PrincipalOfRunToken(token); ok && !(r.Method == http.MethodGet && r.URL.Path == "/api/whoami") {
 				writeCoded(w, http.StatusForbidden, "forbidden", "a workflow run reaches the API only to say who it is")
 				return

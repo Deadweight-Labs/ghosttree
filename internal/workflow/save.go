@@ -14,7 +14,7 @@ var ErrCheck = errors.New("the workflow does not pass the check")
 // catalogue, the aliases a run there can use and the owner's cap for a run.
 // Every way of saving (web, MCP, API) checks against the same environment.
 func EnvFor(st *store.Store, project string) Env {
-	env := Env{Catalog: DefaultCatalog()}
+	env := Env{Catalog: DefaultCatalog(), Research: ResearchConfigured}
 	aliases, run, err := st.WorkflowModelAliases(project)
 	if err != nil {
 		return env

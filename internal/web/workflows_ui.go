@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -72,6 +73,51 @@ type workflowRunView struct {
 	// Results are what the run created or was refused (REQ-695).
 	Results []wfResultRow
 	Token   string
+	// Tools are the tool calls of an own prompt (REQ-698), from the full text.
+	Tools []wfToolRow
+}
+
+// wfToolRow is one tool call of the loop of an own prompt: the round, the
+// tool, how it went, its input and (shortened) result.
+type wfToolRow struct {
+	Round           int
+	Tool            string
+	StateKey, Tone  string
+	ReasonKey       string
+	Input, Result   string
+	Refused, Submit bool
+}
+
+var wfToolLook = map[string]struct{ key, tone string }{
+	workflow.ToolOK:      {"wf.tool.ok", "ok"},
+	workflow.ToolFailed:  {"wf.tool.failed", "warn"},
+	workflow.ToolRefused: {"wf.tool.refused", "dan"},
+}
+
+var wfToolReasonKeys = map[string]string{
+	workflow.ToolReasonNotDeclared: "wf.tool.why.not_declared",
+	workflow.ToolReasonPerRound:    "wf.tool.why.per_round",
+}
+
+// wfToolRows reads the tool calls of a run's full text.
+func wfToolRows(raw string) []wfToolRow {
+	if raw == "" {
+		return nil
+	}
+	var calls []store.WorkflowToolCall
+	if json.Unmarshal([]byte(raw), &calls) != nil {
+		return nil
+	}
+	out := make([]wfToolRow, 0, len(calls))
+	for _, c := range calls {
+		look, ok := wfToolLook[c.State]
+		if !ok {
+			look = wfToolLook[workflow.ToolFailed]
+		}
+		out = append(out, wfToolRow{Round: c.Round, Tool: c.Tool, StateKey: look.key, Tone: look.tone, ReasonKey: wfToolReasonKeys[c.Reason],
+			Input: c.Input, Result: c.Result, Refused: c.State == workflow.ToolRefused, Submit: c.Tool == workflow.SubmitTool})
+	}
+	return out
 }
 
 // wfResultRow is one result of a run: its kind, how it stands, why it was
@@ -242,7 +288,7 @@ func (a *app) workflowRunPage(w http.ResponseWriter, r *http.Request, remote, id
 	v.Results, v.Token = a.wfResultRows(r, pa, remote, run.ID), csrfOf(r)
 	switch {
 	case text != nil:
-		v.Inputs, v.Output = text.Inputs, text.Output
+		v.Inputs, v.Output, v.Tools = text.Inputs, text.Output, wfToolRows(text.Tools)
 	case run.TextPurgedAt != "":
 		v.Purged = stamp(run.TextPurgedAt)
 	default:

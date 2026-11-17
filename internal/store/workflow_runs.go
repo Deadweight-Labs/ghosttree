@@ -235,6 +235,21 @@ type WorkflowRunText struct {
 	RunID  int64  `json:"run_id"`
 	Inputs string `json:"inputs"`
 	Output string `json:"output"`
+	// Tools are the tool calls of an own prompt (REQ-698) as JSON, a list of
+	// WorkflowToolCall; empty for a block.
+	Tools string `json:"tools,omitempty"`
+}
+
+// WorkflowToolCall is one tool call of the loop of an own prompt (REQ-698):
+// the round, the tool, its input and its (shortened) result, and whether it
+// ran, failed or was refused. It is model text and goes with the full text.
+type WorkflowToolCall struct {
+	Round  int    `json:"round"`
+	Tool   string `json:"tool"`
+	Input  string `json:"input"`
+	Result string `json:"result"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // WorkflowRunOutcome is how a run ended, as the executor reports it.
@@ -248,6 +263,8 @@ type WorkflowRunOutcome struct {
 	CostUSD         float64
 	Inputs          string
 	Output          string
+	// Tools: the tool calls of an own prompt as JSON (WorkflowRunText.Tools).
+	Tools string
 }
 
 // WorkflowSettings is what an owner set for the workflows of an organization
@@ -331,8 +348,11 @@ CREATE TABLE IF NOT EXISTS workflow_settings(
 `
 
 func ensureWorkflows(db *sql.DB) error {
-	_, err := db.Exec(workflowSchema)
-	return err
+	if _, err := db.Exec(workflowSchema); err != nil {
+		return err
+	}
+	// The tool calls of an own prompt (REQ-698) go with the full text.
+	return addColumnIfMissing(db, "workflow_run_texts", "tools", "TEXT NOT NULL DEFAULT ''")
 }
 
 // recordWorkflowEventTx writes an event inside the transaction of the change
@@ -882,10 +902,10 @@ func (s *Store) FinishWorkflowRun(id int64, o WorkflowRunOutcome) error {
 	if err := revokeRunTokensTx(tx, `id=?`, id); err != nil {
 		return err
 	}
-	if o.Inputs != "" || o.Output != "" {
-		if _, err := tx.Exec(`INSERT INTO workflow_run_texts(run_id,inputs,output,created_at) VALUES(?,?,?,?)
-			ON CONFLICT(run_id) DO UPDATE SET inputs=excluded.inputs, output=excluded.output`,
-			id, cutRunes(o.Inputs, workflowTextMax), cutRunes(o.Output, workflowTextMax), ts); err != nil {
+	if o.Inputs != "" || o.Output != "" || o.Tools != "" {
+		if _, err := tx.Exec(`INSERT INTO workflow_run_texts(run_id,inputs,output,tools,created_at) VALUES(?,?,?,?,?)
+			ON CONFLICT(run_id) DO UPDATE SET inputs=excluded.inputs, output=excluded.output, tools=excluded.tools`,
+			id, cutRunes(o.Inputs, workflowTextMax), cutRunes(o.Output, workflowTextMax), o.Tools, ts); err != nil {
 			return err
 		}
 	}
@@ -1061,7 +1081,7 @@ func (s *Store) WorkflowRunByID(id int64) (WorkflowRun, *WorkflowRunText, error)
 		return WorkflowRun{}, nil, err
 	}
 	var t WorkflowRunText
-	if err := s.db.QueryRowContext(s.ctx(), `SELECT run_id, inputs, output FROM workflow_run_texts WHERE run_id=?`, id).Scan(&t.RunID, &t.Inputs, &t.Output); err != nil {
+	if err := s.db.QueryRowContext(s.ctx(), `SELECT run_id, inputs, output, tools FROM workflow_run_texts WHERE run_id=?`, id).Scan(&t.RunID, &t.Inputs, &t.Output, &t.Tools); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return run, nil, nil
 		}

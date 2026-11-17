@@ -119,8 +119,8 @@ type BlockSpec struct {
 	// Inputs are the inputs of the catalogue the block always reads; the
 	// machine assembles them with the declared ones.
 	Inputs []string
-	// Research: the block can take what a research step found (stage E3 has
-	// the hook, the server's research tool comes with E5).
+	// Research: the block can take what a research step found, where the
+	// server has a search service (ResearchURLEnv).
 	Research bool
 	// Results are the kinds of result the block can produce.
 	Results []string

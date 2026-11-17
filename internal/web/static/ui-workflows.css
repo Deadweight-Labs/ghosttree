@@ -64,6 +64,16 @@
   & .wfresrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 16px; }
   & .wfresrow + .wfresrow { border-top: 1px solid var(--border-muted); }
   & .wfresrow form { margin: 0; }
+  & .wftool + .wftool { border-top: 1px solid var(--border-muted); }
+  & .wftool > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 16px; cursor: pointer; list-style: none; }
+  & .wftool > summary::-webkit-details-marker { display: none; }
+  & .wftool > summary:hover { background: var(--row-hover); }
+  & .wftool[open] > summary { border-bottom: 1px solid var(--border-muted); }
+  & .wfround { font-size: 12px; font-variant-numeric: tabular-nums; }
+  & .wftn { font-size: 13px; overflow-wrap: anywhere; min-width: 0; }
+  & .wftool.is-refused .wftn { color: var(--danger-fg); }
+  & .wftoolh { padding: 8px 16px 0; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .wftoolbody pre.wftext { max-height: 240px; padding-top: 4px; }
   & .wfreskind { font-weight: 600; }
 }
 

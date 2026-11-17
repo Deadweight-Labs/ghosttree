@@ -56,6 +56,8 @@ type Env struct {
 	Alias func(name string) bool
 	// OwnerRunUSD is the owner's cap for one run, 0 when none is set.
 	OwnerRunUSD float64
+	// Research says whether the server has a search service; nil: unknown.
+	Research func() bool
 }
 
 // CheckReport is the result of a check: the problems, and what the workflow would
@@ -73,13 +75,17 @@ type CheckReport struct {
 	// MaxRunUSD is the most one run may cost: the budget of the file, else the
 	// owner's cap for a run; 0 for a block that calls no model. Unbounded is
 	// true when a block calls a model and neither is set.
-	MaxRunUSD   float64   `json:"max_run_usd"`
-	MaxMonthUSD float64   `json:"max_month_usd,omitempty"`
-	Unbounded   bool      `json:"unbounded,omitempty"`
-	Research    bool      `json:"research,omitempty"`
-	Aliases     bool      `json:"aliases_checked"`
-	Errors      []Problem `json:"errors,omitempty"`
-	Warnings    []Problem `json:"warnings,omitempty"`
+	MaxRunUSD   float64 `json:"max_run_usd"`
+	MaxMonthUSD float64 `json:"max_month_usd,omitempty"`
+	Unbounded   bool    `json:"unbounded,omitempty"`
+	Research    bool    `json:"research,omitempty"`
+	// Tools are the read tools of an own prompt, Rounds the most turns of its
+	// loop (stage 3, REQ-698).
+	Tools    []string  `json:"tools,omitempty"`
+	Rounds   int       `json:"rounds,omitempty"`
+	Aliases  bool      `json:"aliases_checked"`
+	Errors   []Problem `json:"errors,omitempty"`
+	Warnings []Problem `json:"warnings,omitempty"`
 }
 
 // OK says whether the definition may be saved and run.
@@ -134,12 +140,49 @@ func Check(text string, env Env) (Def, CheckReport) {
 	case d.On != store.EventSchedule && d.Every != 0:
 		errf(KeyEvery, "every only belongs to on: %s", store.EventSchedule)
 	}
-	// Task: stage 1 and 2 use a block; an own prompt (stage 3) comes with E5.
-	if d.Prompt != "" || d.Uses == "" {
-		errf(KeyUses, "an own prompt (stage 3) arrives with stage E5; use a block: uses: %s<name> (known: %s)", BlockPrefix, strings.Join(env.Catalog.Names(), ", "))
+	// Task: stage 1 and 2 use a block; stage 3 is an own prompt with read
+	// tools, run in ghosttree's loop (REQ-698).
+	own := d.Stage() == StagePrompt
+	if own {
+		switch {
+		case d.Prompt != "" && d.Instruction != "":
+			errf(KeyPrompt, "an own prompt is either prompt: or the text below the second ---, not both")
+		case d.TaskPrompt() == "":
+			errf(KeyPrompt, "an own prompt needs its text below the second --- (or uses: %s<name> for a block, known: %s)", BlockPrefix, strings.Join(env.Catalog.Names(), ", "))
+		}
+		if d.Uses != "" {
+			errf(KeyPrompt, "prompt belongs to a workflow without uses; a block takes an instruction below the second ---")
+		}
+		if len(d.Results) == 0 {
+			errf(KeyResults, "an own prompt has to declare what it may propose: results: with a kind and a number")
+		}
+		rep.Rounds = d.RoundLimit()
 	}
-	if env.Policy.DenyPrompt && d.Stage() == StagePrompt {
+	if env.Policy.DenyPrompt && own {
 		errf(KeyPrompt, "the owner's policy forbids an own prompt (stage 3)")
+	}
+	if d.Rounds > 0 && !own {
+		errf(KeyRounds, "rounds belongs to an own prompt (stage 3)")
+	}
+	// Tools.
+	if len(d.Tools) > 0 && !own {
+		errf(KeyTools, "tools belong to an own prompt (stage 3), not to a block")
+	}
+	for i, n := range d.Tools {
+		if !own {
+			break
+		}
+		t, ok := ToolByName(n)
+		switch {
+		case !ok:
+			errf(KeyTools, "unknown tool %s (known: %s)", n, strings.Join(ToolNames(), ", "))
+		case t.Research:
+			errf(KeyTools, "%s comes with research: true, not in tools", n)
+		case slices.Contains(d.Tools[:i], n):
+			errf(KeyTools, "tool %s is named twice", n)
+		default:
+			rep.Tools = append(rep.Tools, n)
+		}
 	}
 	var block BlockSpec
 	known := false
@@ -188,24 +231,36 @@ func Check(text string, env Env) (Def, CheckReport) {
 		case known && !slices.Contains(block.Results, r.Kind):
 			errf(KeyResults, "%s cannot create %s", block.Name, r.Kind)
 			continue
+		case own && r.Kind == ResultDescription:
+			errf(KeyResults, "descriptions of files are the gardener's; an own prompt cannot create them")
+			continue
 		case slices.Contains(env.Policy.DenyKinds, r.Kind):
 			errf(KeyResults, "the owner's policy forbids the kind of result %s", r.Kind)
 			continue
 		}
 		rep.Writes = append(rep.Writes, r)
 	}
-	// Research comes with stage 3.
+	// Research: the tools web.search and web.fetch of an own prompt, or the
+	// research step of a block that takes one; only where the server has a
+	// search service.
 	if d.Research {
-		if env.Policy.DenyResearch {
+		switch {
+		case env.Policy.DenyResearch:
 			errf(KeyResearch, "the owner's policy forbids research on the net")
-		} else {
-			warnf(KeyResearch, "research on the net arrives with stage E5; this run will not search")
+		case known && !block.Research:
+			warnf(KeyResearch, "%s does not search; research is ignored", block.Name)
+		case env.Research != nil && !env.Research():
+			warnf(KeyResearch, "this server has no search service (%s is not set); runs do not search", ResearchURLEnv)
+		case own:
+			rep.Tools = append(rep.Tools, ToolWebSearch, ToolWebFetch)
 		}
 	}
 	// Model and budget.
 	switch {
 	case known && block.Model && d.Model == "":
 		errf(KeyModel, "%s calls a model: name a model alias, for example model: klein", block.Name)
+	case own && d.Model == "":
+		errf(KeyModel, "an own prompt calls a model: name a model alias, for example model: mittel")
 	case known && !block.Model && d.Model != "":
 		warnf(KeyModel, "%s calls no model; model is ignored", block.Name)
 	case d.Model != "" && env.Alias != nil && !env.Alias(d.Model):
@@ -219,7 +274,7 @@ func Check(text string, env Env) (Def, CheckReport) {
 		if env.OwnerRunUSD > 0 && (rep.MaxRunUSD == 0 || env.OwnerRunUSD < rep.MaxRunUSD) {
 			rep.MaxRunUSD = env.OwnerRunUSD
 		}
-		rep.Unbounded = known && rep.MaxRunUSD == 0
+		rep.Unbounded = (known || own) && rep.MaxRunUSD == 0
 	}
 	return d, rep
 }
@@ -279,6 +334,16 @@ func FormatReport(r CheckReport) string {
 	if r.Block != "" {
 		b.WriteString("block: " + r.Block + "\n")
 	}
+	if r.Stage == StagePrompt {
+		tools := "none"
+		if len(r.Tools) > 0 {
+			tools = strings.Join(r.Tools, ", ")
+		}
+		b.WriteString("tools: " + tools + " (read only)\n")
+		if r.Rounds > 0 {
+			fmt.Fprintf(&b, "rounds: at most %d\n", r.Rounds)
+		}
+	}
 	reads := "nothing beyond the event"
 	if len(r.Reads) > 0 {
 		reads = strings.Join(r.Reads, ", ")
@@ -310,6 +375,9 @@ func FormatReport(r CheckReport) string {
 	}
 	if !r.Aliases {
 		b.WriteString("aliases: not checked (no server)\n")
+		if r.Research {
+			b.WriteString("research: not checked (no server)\n")
+		}
 	}
 	return b.String()
 }

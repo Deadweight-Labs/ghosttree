@@ -91,12 +91,12 @@ func hasProblem(ps []Problem, part string) bool {
 	return false
 }
 
-// Stage 3 (an own prompt) is refused with a pointer to E5; inputs must fit the
+// An own prompt (stage 3) needs results and a model; inputs must fit the
 // event; a schedule needs every.
-func TestCheckRefusesAnOwnPromptAndInputsOfAnotherEvent(t *testing.T) {
+func TestCheckRefusesAnIncompleteOwnPromptAndInputsOfAnotherEvent(t *testing.T) {
 	for text, want := range map[string]string{
-		"---\non: pr.merged\nprompt: \"Fasse zusammen\"\n---\n":                            "stage E5",
-		"---\non: idea.created\n---\nFasse zusammen.\n":                                    "stage E5",
+		"---\non: pr.merged\nprompt: \"Fasse zusammen\"\n---\n":                            "has to declare what it may propose",
+		"---\non: idea.created\n---\nFasse zusammen.\n":                                    "name a model alias",
 		"---\non: idea.created\ninputs: [pr.title]\nuses: ghosttree/echo\n---\n":           "input pr.title is not there on idea.created",
 		"---\non: schedule\nuses: ghosttree/echo\n---\n":                                   "every 5 minutes to 7 days",
 		"---\non: idea.discussion_closed\ninputs: [pr.title]\nuses: ghosttree/echo\n---\n": "input pr.title is not there on idea.discussion_closed",
