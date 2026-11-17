@@ -246,6 +246,8 @@ type blockView struct {
 
 type shareConfirm struct {
 	Action, Level, Text, Back string
+	// Secrets: the transcript looks like it holds credentials; the button then says "anyway".
+	Secrets bool
 }
 
 type levelForm struct {
@@ -1024,17 +1026,22 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 
 	// Rückfrage vor dem Teilen mit Gästen, wenn das Transkript Zugangsdaten
 	// zu enthalten scheint; nur dem, der teilen darf.
-	if qv.Get("confirm") == store.VisGuests && v.Share != nil && sess.Visibility != store.VisGuests {
-		if n := a.countSecrets(sess.ID); n > 0 {
-			text := l.msg("sessions.secrets_many", n)
-			if n == 1 {
-				text = l.msg("sessions.secrets_one")
-			}
-			back := "/ui/sessions/" + sess.PublicID
-			a.renderBrowser(w, r, "session", pageData{Title: l.msg("nav.sessions"), SessionV: &sessionView{
-				PID: sess.PublicID, Confirm: &shareConfirm{Action: back + "/share", Level: store.VisGuests, Text: text, Back: back}}})
-			return
+	if level := qv.Get("confirm"); (level == store.VisGuests || level == store.VisProject) && v.Share != nil && shareWidens(sess.Visibility, level) {
+		text := l.msg("sessions.share_ask_project")
+		if level == store.VisGuests {
+			text = l.msg("sessions.share_ask_guests")
 		}
+		n := a.countSecrets(sess.ID)
+		switch {
+		case n == 1:
+			text += " " + l.msg("sessions.secrets_one")
+		case n > 1:
+			text += " " + l.msg("sessions.secrets_many", n)
+		}
+		back := "/ui/sessions/" + sess.PublicID
+		a.renderBrowser(w, r, "session", pageData{Title: l.msg("nav.sessions"), SessionV: &sessionView{
+			PID: sess.PublicID, Confirm: &shareConfirm{Action: back + "/share", Level: level, Text: text, Back: back, Secrets: n > 0}}})
+		return
 	}
 
 	// Verknüpfungen: nur Ziele, die der Betrachter sehen darf.
@@ -1227,16 +1234,14 @@ func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown level", http.StatusBadRequest)
 		return
 	}
-	// Vor der Stufe "mit Gästen" fragt die Seite nach, wenn das Transkript
-	// aussieht, als enthielte es Zugangsdaten. Die Frage kommt nur dem, der
-	// teilen darf.
-	if level == store.VisGuests && sess.Visibility != store.VisGuests && r.FormValue("confirm") != "1" && pa.CanShareSession(sess) {
-		if a.countSecrets(sess.ID) > 0 {
-			// Post/Redirect/Get: die Frage ist eine Seite für sich, die man
-			// neu laden kann, ohne den Wechsel erneut zu senden.
-			http.Redirect(w, r, "/ui/sessions/"+sess.PublicID+"?confirm="+store.VisGuests, http.StatusSeeOther)
-			return
-		}
+	// Wer mehr Leute lesen lässt, wird vorher gefragt (REQ-688): eine Session ist alles, was
+	// der Agent und der Mensch darin gesagt und getan haben. Die Frage kommt nur dem, der
+	// teilen darf; weniger Leute lesen zu lassen geht ohne Frage.
+	if shareWidens(sess.Visibility, level) && sess.Scope.Project != "" && r.FormValue("confirm") != "1" && pa.CanShareSession(sess) {
+		// Post/Redirect/Get: die Frage ist eine Seite für sich, die man
+		// neu laden kann, ohne den Wechsel erneut zu senden.
+		http.Redirect(w, r, "/ui/sessions/"+sess.PublicID+"?confirm="+level, http.StatusSeeOther)
+		return
 	}
 	if err := a.store.SetSessionVisibility(sess.ID, pa, level); err != nil {
 		switch {
@@ -1252,6 +1257,15 @@ func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/ui/sessions/"+sess.PublicID, http.StatusSeeOther)
+}
+
+// shareWidens says whether the level lets more people read than the session has now.
+func shareWidens(current, level string) bool {
+	rank := map[string]int{store.VisPrivate: 0, store.VisProject: 1, store.VisGuests: 2}
+	if current == "" {
+		current = store.VisPrivate
+	}
+	return rank[level] > rank[current]
 }
 
 // countSecrets zählt mögliche Zugangsdaten im Rohtranskript. Es ist dieselbe

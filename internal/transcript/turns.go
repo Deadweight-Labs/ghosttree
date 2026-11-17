@@ -56,6 +56,10 @@ func ClassifyPrompt(s string) string {
 		return "compaction-summary"
 	case strings.HasPrefix(t, "Stop hook feedback"), strings.HasPrefix(t, "UserPromptSubmit hook"):
 		return "hook-feedback"
+	case strings.HasPrefix(t, "Base directory for this skill:"):
+		// The body of a skill the harness loads into the conversation: text of the
+		// skill, not of the person (REQ-688).
+		return "skill-body"
 	}
 	if m := leadTag.FindStringSubmatch(t); m != nil {
 		if injectedTags[m[1]] {
@@ -64,6 +68,20 @@ func ClassifyPrompt(s string) string {
 		return "unknown-tag:" + m[1]
 	}
 	return "prompt"
+}
+
+// acknowledgements are the short answers that carry no task: a session whose
+// first line is "Ok" is not about "Ok".
+var acknowledgements = map[string]bool{
+	"ok": true, "okay": true, "k": true, "ja": true, "jo": true, "nein": true, "yes": true, "no": true, "y": true, "n": true,
+	"danke": true, "thanks": true, "thx": true, "weiter": true, "continue": true, "go": true, "los": true, "mach": true, "gut": true, "super": true,
+}
+
+// Substantive says whether the text of a typed prompt asks for something: more than
+// an acknowledgement. The title of a session is the first one that does.
+func Substantive(s string) bool {
+	t := strings.ToLower(strings.Trim(strings.TrimSpace(s), ".!?,; "))
+	return t != "" && !acknowledgements[t]
 }
 
 // TypedPrompt says whether a label of ClassifyPrompt is a text a person typed.

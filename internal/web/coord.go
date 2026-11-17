@@ -479,6 +479,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			HighWater: threadPage.HighWater, HasOlder: threadPage.HasOlder, HasNewer: threadPage.HasNewer,
 			ClearReplyURL: coordThreadComposerURL(room, selectedID),
 		}
+		threadDetail.Events = a.threadStateEvents(l, selectedID)
 		markViewerMentions(threadDetail.Messages, presentations, current.ID)
 		applyMessageRoles(l, a.store, activeRoom.Key, current.ID, threadDetail.Messages, presentations)
 		allAttention := append(append([]coordAttentionView{}, incomingAttention...), outgoingAttention...)

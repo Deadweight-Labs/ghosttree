@@ -245,7 +245,7 @@ func (s *Server) handleThreadReply(ctx context.Context, _ *mcp.CallToolRequest, 
 		return nil, nil, err
 	}
 	posted := store.Thread{ID: in.ID, Title: "thread " + strconv.FormatInt(in.ID, 10)}
-	return s.withCard(coordText(fmt.Sprintf("posted to thread %d", in.ID)+s.mentionNote(id, in.Body)), s.builder().ThreadCard(posted, id)), nil, nil
+	return s.withCard(coordText(fmt.Sprintf("posted to thread %d", in.ID)+s.mentionNote(id, in.Body, false)), s.builder().ThreadCard(posted, id)), nil, nil
 }
 
 // handleThreadRead ist das Werkzeug, an dem sich entscheidet, ob Threads

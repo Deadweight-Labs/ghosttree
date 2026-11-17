@@ -46,7 +46,11 @@ func TestHumanTaskAPILifecycleAndErrors(t *testing.T) {
 		t.Errorf("secret answer: %s", out)
 	}
 	f.expect(t, "mia", 400, "POST", "/api/tasks", map[string]any{"project": accProject, "kind": "input", "title": "x", "request_id": 99999})
-	f.expect(t, "mia", 400, "POST", "/api/tasks", map[string]any{"project": accProject, "kind": "input", "title": "x"})
+	// Ohne Request hängt die Aufgabe am Standard-Request des Schreibers (REQ-688).
+	if standing := decode[humantask.Task](t, f.expect(t, "mia", 201, "POST", "/api/tasks", map[string]any{"project": accProject, "kind": "input", "title": "x"})); standing.RequestID == 0 {
+		t.Errorf("task without request has no request: %+v", standing)
+	}
+	f.expect(t, "mia", 400, "POST", "/api/tasks", map[string]any{"kind": "input", "title": "x"})
 	f.expect(t, "mia", 400, "POST", "/api/tasks", map[string]any{"project": accOther, "kind": "input", "title": "x", "request_id": rid})
 	f.expect(t, "gus", 403, "POST", "/api/tasks", map[string]any{"project": accProject, "kind": "input", "title": "x", "request_id": rid})
 	f.expect(t, "nora", 409, "POST", "/api/tasks", map[string]any{"project": accProject, "kind": "input", "title": "x", "request_id": rid})

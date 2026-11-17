@@ -32,7 +32,7 @@ type CoordSendInput struct {
 	// ist 20 Sekunden weg' morgen noch als gegenwärtige Lage da.
 	Expires     string   `json:"expires_at,omitempty" jsonschema:"RFC3339 time after which this stops being current, for time-critical notices like 'the API is down for 20 seconds'. It stays readable as history either way"`
 	Mention     string   `json:"mention,omitempty" jsonschema:"session id of one peer who should get this promptly rather than bundled with ordinary room traffic"`
-	Intent      string   `json:"intent,omitempty" jsonschema:"question, approval, blocker, handoff or ack. The first four ask the mentioned peer for an answer or a decision: they open an attention item for them, take part in wait-cycle detection, and need mention. Omit it for plain information"`
+	Intent      string   `json:"intent,omitempty" jsonschema:"question, approval, blocker, handoff or ack. The first four ask the mentioned peer for an answer or a decision: they open an attention item for them and take part in wait-cycle detection. They go to the mention or an @name, else to your person. Omit it for plain information"`
 	Explanation string   `json:"explanation,omitempty" jsonschema:"only with question, approval, blocker or handoff: optional \"Kurz erklärt\" for the people who review it: two to four plain sentences in their language, in everyday words: what it is about, why it matters, what has to be done or decided, your recommendation. No markdown or links, never a secret; without it the server writes one later from the text alone"`
 	Options     []string `json:"options,omitempty" jsonschema:"only with intent question to a person: two to six short answers you propose, one line each (at most 120 characters), for example [\"Yes, merge it\", \"No, wait for review\"]. The person sees them as buttons next to a field for their own answer; picking one writes it as their reply. Not for approval, blocker or handoff"`
 	As          string   `json:"as,omitempty" jsonschema:"post as a named subagent of this session, for example \"tests\" or \"frontend\". Use it when you are a subagent so peers can address you directly. It is a self-declaration: ghosttree cannot verify it, and the peer list says so"`
@@ -183,9 +183,8 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err != nil {
 		return nil, nil, fmt.Errorf("unknown intent %q: use question, approval, blocker, handoff or ack", in.Intent)
 	}
-	if intent != "" && intent != store.IntentAck && strings.TrimSpace(in.Mention) == "" {
-		return nil, nil, fmt.Errorf("intent %s needs a mention: say which peer should answer", intent)
-	}
+	// No addressee is needed here: an @name in the body or the mention decides, and
+	// without either the server takes the person the agent works for (REQ-688).
 	if len(in.Options) > 0 && intent != store.IntentQuestion {
 		return nil, nil, fmt.Errorf("options go with intent question only")
 	}
@@ -230,15 +229,15 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	// Aufruf weiß. Ob ein anderer Agent das liest, hängt an dessen Harness
 	// und wird hier nicht behauptet (Spec §A7).
 	return s.withCard(coordText(fmt.Sprintf("stored as message %d in %s. Other agents see it when they read their inbox; "+
-		"whether a running session is interrupted for it depends on its harness.", id, key)+s.mentionNote(id, in.Body)),
+		"whether a running session is interrupted for it depends on its harness.", id, key)+s.mentionNote(id, in.Body, intent != "" && intent != store.IntentAck)),
 		s.builder().MessageCard(store.MessageHit{ID: id, RoomKey: key, Sender: sender, Body: in.Body})), nil, nil
 }
 
 // mentionNote says whom an @name in the body reached, so the sender can see
 // that the name resolved. The server answers with what the sender is allowed to
 // read back; for a guest that is the typed names, not the room's members.
-func (s *Server) mentionNote(id int64, body string) string {
-	if !strings.Contains(body, "@") {
+func (s *Server) mentionNote(id int64, body string, asks bool) string {
+	if !asks && !strings.Contains(body, "@") {
 		return ""
 	}
 	mentioned, err := s.client.CoordMessageMentions(id, s.coordRef())

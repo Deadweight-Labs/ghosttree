@@ -17,9 +17,9 @@ type HumanTaskCreateInput struct {
 	Description string               `json:"description,omitempty" jsonschema:"why it is needed and anything the human has to know"`
 	Location    string               `json:"location,omitempty" jsonschema:"where it should end up: a path, a vault entry, an env file. Required for secret and file. Never the value itself"`
 	CheckHint   string               `json:"check_hint,omitempty" jsonschema:"how you will check it is done, for example that the file exists or the entry is in the vault"`
-	RequestID   int64                `json:"request_id,omitempty" jsonschema:"the request it hangs on; omit to use the request this session works on"`
+	RequestID   int64                `json:"request_id,omitempty" jsonschema:"the request it hangs on; omit: the session's request, else a standing one"`
 	WorkID      int64                `json:"work_id,omitempty" jsonschema:"the work from request action=start_work, so the handoff travels with the task"`
-	Assignee    string               `json:"assignee,omitempty" jsonschema:"the name of a project member; omit it and the task is for the human this session belongs to"`
+	Assignee    string               `json:"assignee,omitempty" jsonschema:"the name of a project member; omit: the person @named, else the human of this session"`
 	Everyone    bool                 `json:"everyone,omitempty" jsonschema:"set it only when anybody in the project may do the task (not the person you work for); not together with assignee"`
 	Steps       []HumanTaskStepInput `json:"steps,omitempty" jsonschema:"the walk-through for the human: up to 12 numbered steps in the order they are done, each one line of plain text (no line breaks, no control or invisible characters) with an optional http(s) link, for example the settings page to open. The web interface shows them as a checklist. Never a secret or a login link"`
 	Options     []string             `json:"options,omitempty" jsonschema:"only for kind input or action: two to six short answers you propose, one line each (at most 120 characters). The person sees them as buttons next to a field for their own answer; picking one marks the task done with that text as the note. Never a secret"`

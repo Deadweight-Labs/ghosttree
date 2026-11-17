@@ -335,6 +335,7 @@ var writerMethodClasses = map[string]string{
 	"SessionResults":                "read",
 	"IdeaEditsOf":                   "read",
 	"SessionFiles":                  "read",
+	"SessionActivity":               "read",
 	"BackfillOrigins":               "write",
 	"RecordActor":                   "write",
 	"BackfillActors":                "write",

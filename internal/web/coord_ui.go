@@ -111,9 +111,14 @@ func coordComposerFor(l lang, d *coordRoomDetailView, id string, thread bool) co
 	if d.Broadcast {
 		to.Options = append(to.Options, composerOption{Value: "all-agents", Label: l.msg("coord.broadcast")})
 	}
-	for _, p := range d.Participants {
-		if !p.Current && !p.ListOnly {
-			to.Options = append(to.Options, composerOption{Value: p.ID, Label: p.Label, Selected: p.ID == d.ToDefault})
+	// People first, then agents: whoever has a role in the project can be asked,
+	// whether or not they ever joined the room (REQ-688, N06). Only a guest's
+	// viewer lacks the list, and then there is nothing to add here.
+	for _, people := range []bool{true, false} {
+		for _, p := range d.Participants {
+			if !p.Current && p.Human == people {
+				to.Options = append(to.Options, composerOption{Value: p.ID, Label: p.Label, Selected: p.ID == d.ToDefault})
+			}
 		}
 	}
 	c.To = to

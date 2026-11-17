@@ -222,7 +222,9 @@ func indexChunks(tx *sql.Tx, rows []chunkRow) error {
 		if p.Title != "" {
 			d.aiTitle = p.Title
 		}
-		if f.Prompt && d.firstPrompt == "" {
+		// The title is the first typed request: not what a harness injected, not the body of
+		// a skill, not an "Ok" (REQ-688).
+		if f.Prompt && d.firstPrompt == "" && transcript.TypedPrompt(transcript.ClassifyPrompt(f.Text)) && transcript.Substantive(f.Text) {
 			d.firstPrompt = transcript.OneLine(f.Text, 80)
 		}
 	}

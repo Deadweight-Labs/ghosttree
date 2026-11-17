@@ -265,3 +265,53 @@ func TestOwnerStartsTheDiscussionApprovesTheConceptAndTakesItBack(t *testing.T) 
 		t.Errorf("phase after withdrawing = %s", got.Phase)
 	}
 }
+
+// REQ-688 AC-3 (N14): Decide answers at the decision, in the page's language, and without the
+// browser's own bubble; once a person decided, the card says who and not "The agent decides";
+// voting on a closed question explains itself.
+func TestDecideAnswersAtTheDecisionAndSaysWhoDecided(t *testing.T) {
+	e, pa := listEnv(t)
+	i, d := workedIdea(t, pa, shellProject)
+	id := strconv.FormatInt(d.ID, 10)
+	post := func(c *http.Client, path string, form url.Values) *http.Response {
+		form.Set("csrf_token", renderedCSRFToken(t, c, e.Base+"/ui/overview"))
+		resp := sameOriginPostForm(t, c, e.Base+path, form)
+		resp.Body.Close()
+		return resp
+	}
+	_, open := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+	if strings.Contains(open, `name="reason" maxlength="500" required`) {
+		t.Error("the reason field has the browser's own bubble (required), which says nothing in the page's language")
+	}
+	if !strings.Contains(open, "The agent decides") && !strings.Contains(open, "A person decides") {
+		t.Errorf("an open decision names how it is decided")
+	}
+	// A refusal stands at the decision.
+	resp := post(e.Owner, "/ui/decisions/"+id+"/close", url.Values{"variant": {"B"}, "reason": {""}})
+	loc := resp.Header.Get("Location")
+	if !strings.Contains(loc, "wfail=reason_required") || !strings.HasSuffix(loc, "#decision-"+id) || !strings.Contains(loc, "wdec="+id) {
+		t.Fatalf("no reason -> %q, want the refusal at the decision", loc)
+	}
+	_, failed := fetchPage(t, e.Owner, e.Base+strings.TrimSuffix(loc, "#decision-"+id))
+	card := failed[strings.Index(failed, `id="decision-`+id+`"`):]
+	if !strings.Contains(card[:strings.Index(card, "</article>")], "Say why.") {
+		t.Errorf("the refusal is not inside the card of the decision")
+	}
+	// A decision is confirmed at the card as well, and names the person.
+	resp = post(e.Owner, "/ui/decisions/"+id+"/close", url.Values{"variant": {"B"}, "reason": {"Same quality everywhere"}})
+	loc = resp.Header.Get("Location")
+	_, done := fetchPage(t, e.Owner, e.Base+strings.TrimSuffix(loc, "#decision-"+id))
+	card = done[strings.Index(done, `id="decision-`+id+`"`):]
+	card = card[:strings.Index(card, "</article>")]
+	for _, want := range []string{"Decision saved.", "Decided by alice"} {
+		if !strings.Contains(card, want) {
+			t.Errorf("the closed card lacks %q", want)
+		}
+	}
+	if strings.Contains(card, "The agent decides") {
+		t.Errorf("a decision a person made still says the agent decides")
+	}
+	if !strings.Contains(card, "Voting ended with the decision") {
+		t.Errorf("a member who can no longer vote is not told why")
+	}
+}

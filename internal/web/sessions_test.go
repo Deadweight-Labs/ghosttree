@@ -607,7 +607,7 @@ func TestNumericAddressesAreGone(t *testing.T) {
 func postShare(t *testing.T, e sessEnv, c *http.Client, name, level string) *http.Response {
 	t.Helper()
 	token := renderedCSRFToken(t, c, e.Base+"/ui/sessions")
-	form := url.Values{"csrf_token": {token}, "level": {level}}
+	form := url.Values{"csrf_token": {token}, "level": {level}, "confirm": {"1"}}
 	resp := sameOriginPostForm(t, c, e.Base+"/ui/sessions/"+e.pid[name]+"/share", form)
 	return resp
 }

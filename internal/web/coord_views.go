@@ -198,8 +198,11 @@ type coordThreadDetailView struct {
 	coordThreadView
 	// Anchor is the message the thread was started from, loaded by itself so it
 	// stands at the top however old it is.
-	Anchor                                 *coordMessageView
-	Messages                               []coordMessageView
+	Anchor   *coordMessageView
+	Messages []coordMessageView
+	// Events are the state changes of the thread as lines of their own: who
+	// resolved, reopened or deferred it, and when.
+	Events                                 []coordThreadEventView
 	FirstSequence, LastSequence, HighWater int64
 	OlderURL, NewerURL                     string
 	ClearReplyURL                          string
@@ -210,6 +213,12 @@ type coordThreadDetailView struct {
 	// CanSetState: the store would accept the state change: the viewer is the
 	// thread's author, a room manager, or (project room) a lead or owner.
 	CanSetState bool
+}
+
+// coordThreadEventView is one line "Jonas marked this thread resolved".
+type coordThreadEventView struct {
+	Text, When, At string
+	State          string
 }
 
 type coordMessageView struct {

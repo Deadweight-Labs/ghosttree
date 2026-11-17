@@ -1001,11 +1001,18 @@ func TestCoordSendRejectsBadIntent(t *testing.T) {
 	for _, in := range []CoordSendInput{
 		{Body: "x", Intent: "standing", Mention: b.sessionRef},
 		{Body: "x", Intent: "urgent", Mention: b.sessionRef},
-		{Body: "x", Intent: "question"}, // braucht eine Erwähnung
 	} {
 		if _, _, err := a.handleCoordSend(ctx, nil, in); err == nil {
 			t.Errorf("accepted %+v", in)
 		}
+	}
+}
+
+// REQ-688: eine Frage braucht keinen ausdrücklichen Adressaten mehr; ohne Erwähnung entscheidet der Server.
+func TestCoordQuestionWithoutMentionIsNotRefusedByTheTool(t *testing.T) {
+	a, _, _ := twoSessions(t)
+	if _, _, err := a.handleCoordSend(context.Background(), nil, CoordSendInput{Body: "x", Intent: "question"}); err != nil && strings.Contains(err.Error(), "needs a mention") {
+		t.Errorf("the tool still insists on a mention: %v", err)
 	}
 }
 
