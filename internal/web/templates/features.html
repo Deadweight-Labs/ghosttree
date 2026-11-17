@@ -6,6 +6,9 @@
 {{end}}{{else if .NoMatch}}<div class="empty"><span>{{t "features.no_matches"}}</span><a class="gbtn sm" href="{{.ClearHref}}">{{t "requests.clear"}}</a></div>
 {{else if eq .EmptyKey "features.empty"}}{{template "emptyact" (dict "Class" "empty" "Text" (t "features.empty") "Cmd" (and (not $.Shell.Guest) (dict "Icon" "file" "Text" "ctx feature add NAME")))}}
 {{else}}{{template "emptyact" (dict "Class" "empty" "Text" (t .EmptyKey) "Action" (t "features.show_active") "Href" (index .Tabs 0).Href)}}{{end}}</div>
+{{with .Gap}}<section class="box fgap" aria-labelledby="fgap-h"><div class="box-h"><h2 class="t" id="fgap-h">{{t "features.gap.title"}}</h2>{{if .Count}}<span class="counter">{{.Count}}</span>{{end}}</div>
+{{range .Rows}}{{template "uirow" .}}
+{{else}}<div class="empty"><span>{{t "features.gap.none"}}</span></div>{{end}}</section>{{end}}
 </div></div>
 {{end}}</div>{{template "foot" .}}{{end}}
 

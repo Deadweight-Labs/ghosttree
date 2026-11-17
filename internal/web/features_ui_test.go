@@ -148,6 +148,51 @@ func TestFeaturePageShowsKnowledgeAndPainsTiedToIt(t *testing.T) {
 	}
 }
 
+// PAIN-89: a lead sees the done feature issues that sit in no feature, as a short
+// list under the features; an empty list is one line, and a member sees neither.
+func TestFeatureTabListsDoneIssuesInNoFeatureForLeads(t *testing.T) {
+	e, pa := listEnv(t)
+	base := e.Base + "/ui/x/shell/features"
+	loose := rqMake(t, e.St, rqSpec{Title: "Loose finished work", Criteria: []string{"one"}})
+	covered := rqMake(t, e.St, rqSpec{Title: "Covered finished work", Criteria: []string{"one"}})
+	for _, id := range []int64{loose.Request.ID, covered.Request.ID} {
+		if _, err := e.St.DB().Exec(`UPDATE requests SET state='done' WHERE id=?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, _ := featureFixture(t, e, pa, shellProject)
+	if _, err := pa.LinkFeature(f.ID, feature.KindRequest, covered.Request.ID, feature.RelAffects, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]*http.Client{"owner": e.Owner, "lead": e.Lead} {
+		_, page := fetchPage(t, c, base)
+		for _, want := range []string{"Done, in no feature", "Loose finished work", `href="/ui/x/shell/issues/` + strconv.FormatInt(loose.Request.ID, 10) + `"`} {
+			if !strings.Contains(page, want) {
+				t.Errorf("%s: feature tab lacks %q", name, want)
+			}
+		}
+		if strings.Contains(page, "Covered finished work") {
+			t.Errorf("%s: an issue of a feature is listed", name)
+		}
+	}
+	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
+		if _, page := fetchPage(t, c, base); strings.Contains(page, "Done, in no feature") || strings.Contains(page, "Loose finished work") {
+			t.Errorf("%s sees the list", name)
+		}
+	}
+	if _, retired := fetchPage(t, e.Owner, base+"?state=retired"); strings.Contains(retired, "Done, in no feature") {
+		t.Error("the list shows on the retired tab")
+	}
+	// Once the issue is in a feature the lead gets the one empty line.
+	if _, err := pa.LinkFeature(f.ID, feature.KindRequest, loose.Request.ID, feature.RelAffects, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	_, none := fetchPage(t, e.Owner, base)
+	if !strings.Contains(none, "Done, in no feature") || !strings.Contains(none, "Every finished feature issue is in a feature.") || strings.Contains(none, "Loose finished work") {
+		t.Error("an empty list is not one line")
+	}
+}
+
 func TestFeatureRetiredShowsItsReason(t *testing.T) {
 	e, pa := listEnv(t)
 	f, _ := featureFixture(t, e, pa, shellProject)

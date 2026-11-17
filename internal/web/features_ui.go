@@ -42,7 +42,19 @@ type featuresView struct {
 	Empty, NoMatch bool
 	EmptyKey       string
 	ClearHref      string
+	// Gap lists the done issues no feature mentions (PAIN-89); nil for anyone
+	// who is not a lead. A lead with nothing to list gets the one empty line.
+	Gap *featureGap
 }
+
+// featureGap is the short list under the features of a lead.
+type featureGap struct {
+	Rows  []uiRow
+	Count int
+}
+
+// featureGapShown is how many of those issues the tab lists.
+const featureGapShown = 8
 
 // featureAreaLine is one area of a feature: a folder or a single file. Icon is
 // the folder or the file icon, Href the tree or the blob page of the code.
@@ -154,6 +166,18 @@ func (a *app) featuresPage(w http.ResponseWriter, r *http.Request) {
 		v.NoMatch, v.ClearHref = true, base
 	case state == feature.Retired:
 		v.EmptyKey = "features.empty_retired"
+	}
+	if q == "" && state == feature.Active && pa.Allow(project, store.ResFeature, store.ActEdit, store.Object{}) {
+		v.Gap = &featureGap{}
+		list := pa.UncoveredFeatureIssues(project)
+		v.Gap.Count = len(list)
+		for i, c := range list {
+			if i == featureGapShown {
+				break
+			}
+			v.Gap.Rows = append(v.Gap.Rows, uiRow{Icon: "done", Tone: "closed", StateLabel: l.msg("requests.state.done"), Num: "#" + strconv.FormatInt(c.ID, 10),
+				Title: c.Title, Href: view.Href + "/issues/" + strconv.FormatInt(c.ID, 10), Age: shortAge(l, now, parseTime(c.UpdatedAt)), AgeTitle: l.dateTime(parseTime(c.UpdatedAt).Local())})
+		}
 	}
 	a.renderBrowser(w, r, "features", pageData{Title: l.msg("repo.tab.features"), Project: project, FeaturesV: v})
 }

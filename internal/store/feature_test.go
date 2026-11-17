@@ -877,3 +877,45 @@ func TestAFeatureLinksKnowledgeAndPains(t *testing.T) {
 		t.Fatalf("unlink: %+v %v", g.Related, err)
 	}
 }
+
+// PAIN-89: a lead sees the done feature issues that no feature mentions; a
+// member sees none, and an issue leaves the list once a feature carries it.
+func TestUncoveredFeatureIssuesAreForLeadsAndLeaveOnceAFeatureCarriesThem(t *testing.T) {
+	w := newPainWorld(t)
+	f := w.feat(t, "Abgedeckt")
+	loose := w.request(t, "Fertig und lose")
+	linked := w.request(t, "Fertig und verknüpft")
+	byVersion := w.request(t, "Fertig, löste eine Fassung aus")
+	open := w.request(t, "Noch offen")
+	for _, id := range []int64{loose, linked, byVersion} {
+		if _, err := w.st.db.Exec(`UPDATE requests SET state='done' WHERE id=?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bug := w.request(t, "Fertiger Fehler")
+	if _, err := w.st.db.Exec(`UPDATE requests SET state='done', type='bug' WHERE id=?`, bug); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.pa["mia"].LinkFeature(f.ID, feature.KindRequest, linked, feature.RelAffects, "mia"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := w.pa["mia"].UpdateFeature(f.ID, UpdateFeatureInput{Patch: feature.Patch{Summary: sp("neu")}, Requests: []int64{byVersion}, Actor: FeatureActorOf(w.actor("mia"))}); err != nil {
+		t.Fatal(err)
+	}
+	got := w.pa["lena"].UncoveredFeatureIssues(roleProject)
+	if len(got) != 1 || got[0].ID != loose || got[0].Title != "Fertig und lose" {
+		t.Fatalf("lead: %+v (open %d)", got, open)
+	}
+	if got := w.pa["mia"].UncoveredFeatureIssues(roleProject); len(got) != 0 {
+		t.Fatalf("a member sees %+v", got)
+	}
+	if got := w.pa["nora"].UncoveredFeatureIssues(roleProject); len(got) != 0 {
+		t.Fatalf("a stranger sees %+v", got)
+	}
+	if _, err := w.pa["mia"].LinkFeature(f.ID, feature.KindRequest, loose, feature.RelAffects, "mia"); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.pa["lena"].UncoveredFeatureIssues(roleProject); len(got) != 0 {
+		t.Fatalf("after linking: %+v", got)
+	}
+}
