@@ -15,7 +15,13 @@ var ErrWorkflowRerun = errors.New("this run cannot be started again")
 // Rerunnable says whether a person may start a run again: once it ended
 // without a result (failed, stopped at a budget, skipped). A run that ended
 // done already delivered; starting it again would propose everything twice.
+// A run the dispatcher's guards stopped (a chain of runs, the hourly cap of
+// its trigger) stays stopped: a rerun must not walk around them.
 func (r WorkflowRun) Rerunnable() bool {
+	switch r.Reason {
+	case SkipChain, SkipChainDepth, SkipRate:
+		return false
+	}
 	switch r.State {
 	case RunFailed, RunBudget, RunSkipped:
 		return true
@@ -48,6 +54,23 @@ func (s *Store) RerunWorkflowRun(actorPrincipal string, id int64) (WorkflowRun, 
 	}
 	if !old.Rerunnable() {
 		return WorkflowRun{}, ErrWorkflowRerun
+	}
+	// The trigger must still be on, and a rerun counts toward its hourly cap
+	// like any run it started (DispatchWorkflowEvents).
+	if old.TriggerID > 0 {
+		var enabled bool
+		if err := tx.QueryRow(`SELECT enabled FROM workflow_triggers WHERE id=?`, old.TriggerID).Scan(&enabled); err != nil || !enabled {
+			return WorkflowRun{}, ErrWorkflowRerun
+		}
+		var started int
+		hourAgo := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM workflow_runs WHERE trigger_id=? AND created_at>? AND reason NOT IN (?,?,?)`,
+			old.TriggerID, hourAgo, SkipChain, SkipChainDepth, SkipRate).Scan(&started); err != nil {
+			return WorkflowRun{}, err
+		}
+		if started >= WorkflowTriggerHourlyCap {
+			return WorkflowRun{}, ErrWorkflowRerun
+		}
 	}
 	ev, err := scanWorkflowEvent(tx.QueryRow(`SELECT `+workflowEventCols+` FROM workflow_events WHERE id=?`, old.EventID))
 	if err != nil {

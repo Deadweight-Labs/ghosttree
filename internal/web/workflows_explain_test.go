@@ -38,10 +38,6 @@ func endRun(t *testing.T, st *store.Store, workflowName, key string, out store.W
 	if err := st.FinishWorkflowRun(run.ID, out); err != nil {
 		t.Fatal(err)
 	}
-	// One run per call.
-	if _, err := st.SetWorkflowTriggerAsOperator(store.WorkflowTrigger{Project: shellProject, Workflow: workflowName, EventKind: store.EventIdeaCreated, Enabled: false}); err != nil {
-		t.Fatal(err)
-	}
 	run, _, err = st.WorkflowRunByID(run.ID)
 	if err != nil {
 		t.Fatal(err)
