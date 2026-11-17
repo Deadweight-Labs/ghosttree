@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"github.com/Deadweight-Labs/ghosttree/internal/workflow"
 )
 
 // The tab "Workflows" of a repository (REQ-693, stage E0): the runs of the
@@ -41,7 +42,19 @@ type workflowsView struct {
 	NewHref string
 	Token   string
 	Project string
+	// Templates are the templates a person with the right creates with one
+	// click (REQ-696).
+	Templates []wfTemplateOption
 }
+
+// wfTemplateKeys word the templates of workflow.TemplateNames.
+var wfTemplateKeys = map[string]string{
+	"wissen-nach-merge": "wf.tpl.wissen_nach_merge", "wuensche-im-pr": "wf.tpl.wuensche_im_pr",
+	"idee-abgleich": "wf.tpl.idee_abgleich", "kriterien-aus-diskussion": "wf.tpl.kriterien_aus_diskussion",
+}
+
+// wfTemplateOption is one template in the choice "From template".
+type wfTemplateOption struct{ Name, Key string }
 
 type workflowRunView struct {
 	wfRunRow
@@ -182,6 +195,13 @@ func (a *app) workflowsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	v := &workflowsView{Defs: a.workflowDefRows(l, pa, rv.Href, rv.Project), CanEdit: interactive(r) && pa.CanEditWorkflows(rv.Project),
 		NewHref: rv.Href + "/workflows/" + workflowNew, Token: csrfOf(r), Project: rv.Project}
+	if v.CanEdit {
+		for _, t := range workflow.TemplateNames {
+			if key, ok := wfTemplateKeys[t]; ok {
+				v.Templates = append(v.Templates, wfTemplateOption{Name: t, Key: key})
+			}
+		}
+	}
 	for _, run := range runs {
 		v.Rows = append(v.Rows, a.wfRow(l, rv.Href, run))
 	}

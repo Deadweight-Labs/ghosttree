@@ -33,10 +33,9 @@ const (
 // WorkflowEventKinds lists every kind of event the log accepts.
 var WorkflowEventKinds = []string{EventPRMerged, EventIdeaCreated, EventIdeaDiscussionClosed, EventSchedule}
 
-// WorkflowTriggerKinds lists the kinds of event a trigger may be set on. It
-// leaves out idea.discussion_closed: nothing writes that event before stage E3,
-// so a trigger on it would look switched on and never fire.
-var WorkflowTriggerKinds = []string{EventPRMerged, EventIdeaCreated, EventSchedule}
+// WorkflowTriggerKinds lists the kinds of event a trigger may be set on:
+// all of them since stage E3, which writes idea.discussion_closed (DEC-46).
+var WorkflowTriggerKinds = []string{EventPRMerged, EventIdeaCreated, EventIdeaDiscussionClosed, EventSchedule}
 
 // Where an event came from.
 const (
@@ -511,9 +510,6 @@ func setWorkflowTriggerTx(tx *sql.Tx, t WorkflowTrigger, by string) (WorkflowTri
 	name, ok := cleanWorkflowName(t.Workflow)
 	if !ok {
 		return WorkflowTrigger{}, ErrWorkflowTrigger
-	}
-	if t.EventKind == EventIdeaDiscussionClosed {
-		return WorkflowTrigger{}, fmt.Errorf("%w: %s fires from stage E3 on, nothing writes that event yet", ErrWorkflowTrigger, EventIdeaDiscussionClosed)
 	}
 	if !slices.Contains(WorkflowTriggerKinds, t.EventKind) {
 		return WorkflowTrigger{}, ErrWorkflowTrigger

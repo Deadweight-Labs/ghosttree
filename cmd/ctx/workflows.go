@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/forge"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/Deadweight-Labs/ghosttree/internal/workflow"
 )
@@ -21,7 +22,19 @@ func startWorkflows(ctx context.Context, st *store.Store, logger *slog.Logger, a
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		e := &workflow.Engine{Store: st, Resolver: workflow.NewDefResolver(st), Log: logger, AIBaseURL: ai.BaseURL, AIEndRun: ai.EndRun}
+		resolver := workflow.NewDefResolver(st)
+		// A pull request's diff comes from the GitHub App where it is set up
+		// (REQ-696); without it the changed files stand in.
+		if app := forge.NewGitHubApp(forge.AppConfigFromOS()); app.Configured() {
+			resolver.PRDiff = func(ctx context.Context, project string, pr int64) (string, error) {
+				inst, ok := st.ProjectInstallation(project)
+				if !ok {
+					return "", forge.ErrPermissionMissing
+				}
+				return app.PullRequestDiff(ctx, inst, project, pr, 80_000)
+			}
+		}
+		e := &workflow.Engine{Store: st, Resolver: resolver, Log: logger, AIBaseURL: ai.BaseURL, AIEndRun: ai.EndRun}
 		e.Run(ctx, workflowTick)
 	}()
 	return func() { <-done }

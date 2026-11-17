@@ -5,7 +5,7 @@
 
 {{define "workflows"}}{{template "head" .}}{{template "nav" .}}<main class="g2 wf"><div class="wrap">
 {{with .WorkflowsV}}{{if and .Empty (not .CanEdit)}}<div class="box">{{template "emptyact" (dict "Text" (t "wf.empty"))}}</div>
-{{else}}<div class="box wfdefs"><div class="box-h lh"><span class="t">{{t "wf.defs"}}</span><span class="sp"></span>{{if .CanEdit}}<a class="gbtn pri sm" href="{{.NewHref}}">{{mi "plus"}}{{t "wf.def.new"}}</a>{{end}}</div>
+{{else}}<div class="box wfdefs"><div class="box-h lh"><span class="t">{{t "wf.defs"}}</span><span class="sp"></span>{{if .CanEdit}}<span class="wfnew">{{if .Templates}}<form class="wftpl" method="post" action="/ui/workflows/template"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="project" value="{{.Project}}"><select class="gfield" name="template" aria-label="{{t "wf.tpl.choose"}}">{{range .Templates}}<option value="{{.Name}}">{{t .Key}}</option>{{end}}</select><button class="gbtn sm">{{mi "plus"}}{{t "wf.tpl.create"}}</button></form>{{end}}<a class="gbtn pri sm" href="{{.NewHref}}">{{mi "plus"}}{{t "wf.def.new"}}</a></span>{{end}}</div>
 {{$v := .}}{{range .Defs}}<div class="row wfdef"><div class="wfmain"><a class="wfname rl mono" href="{{.Href}}">{{.Name}}</a>{{if .Summary}} <span class="wfsum">{{.Summary}}</span>{{end}}
 <div class="wfsub"><span>{{t .EventKey}}</span><span class="mono">{{.Uses}}</span><span class="muted">{{t "wf.def.version" .Version}}</span></div></div>
 <div class="wfmeta">{{with .Last}}<a class="wflast" href="{{.Href}}" title="{{t "wf.def.last_run"}}">{{template "wfstate" .}}</a>{{if .Age}}<span class="muted">{{.Age}}</span>{{end}}{{else}}<span class="muted">{{t "wf.def.never"}}</span>{{end}}

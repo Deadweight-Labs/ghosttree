@@ -117,8 +117,6 @@ func Check(text string, env Env) (Def, CheckReport) {
 	switch {
 	case d.On == "":
 		errf(KeyOn, "on is missing: one of %s", strings.Join(store.WorkflowTriggerKinds, ", "))
-	case d.On == store.EventIdeaDiscussionClosed:
-		errf(KeyOn, "%s arrives with stage E3; nothing writes that event yet", d.On)
 	case !slices.Contains(store.WorkflowTriggerKinds, d.On):
 		errf(KeyOn, "unknown event %s (known: %s)", d.On, strings.Join(store.WorkflowTriggerKinds, ", "))
 	}
@@ -163,6 +161,7 @@ func Check(text string, env Env) (Def, CheckReport) {
 			errf(KeyUses, "%s takes no instruction; remove the text below the second ---", block.Name)
 		}
 		rep.Reads = append(rep.Reads, block.Reads...)
+		rep.Reads = append(rep.Reads, block.Inputs...)
 	}
 	if d.Stage() == StageInstruction && env.Policy.DenyInstruction {
 		errf(KeyUses, "the owner's policy forbids an instruction (stage 2)")
@@ -175,6 +174,7 @@ func Check(text string, env Env) (Def, CheckReport) {
 			errf(KeyInputs, "unknown input %s", in)
 		case len(spec.Events) > 0 && d.On != "" && !slices.Contains(spec.Events, d.On):
 			errf(KeyInputs, "input %s is not there on %s", in, d.On)
+		case slices.Contains(rep.Reads, in):
 		default:
 			rep.Reads = append(rep.Reads, in)
 		}

@@ -170,6 +170,9 @@ type IdeaWorkshopOutput struct {
 	Decisions    []DecisionOutput   `json:"decisions,omitempty"`
 	Attachments  []AttachmentOutput `json:"attachments,omitempty"`
 	Discussions  []string           `json:"discussions,omitempty"`
+	// DiscussionClosed names who closed the discussion (DEC-46): a person, or
+	// an agent with the words of its person.
+	DiscussionClosed string `json:"discussion_closed,omitempty"`
 	// Affects sind die Features, die die Idee ändert, mit dem Ist-Stand neben dem
 	// Konzept (Soll) (REQ-612).
 	Affects []IdeaAffectsOutput `json:"affects,omitempty"`
@@ -232,6 +235,12 @@ func (s *Server) workshopOutput(i idea.Idea) (IdeaWorkshopOutput, error) {
 	}
 	for _, a := range ws.Attachments {
 		out.Attachments = append(out.Attachments, AttachmentOutput{Ref: fmt.Sprintf("ATT-%d", a.ID), Owner: a.Owner, Alt: a.Alt, Mime: a.Mime, URL: a.URL})
+	}
+	if c := ws.Closed; c != nil {
+		out.DiscussionClosed = c.Person + " " + c.At
+		if c.ByAgent {
+			out.DiscussionClosed = fmt.Sprintf("%s's agent on their word %q, %s", c.Person, c.Said, c.At)
+		}
 	}
 	if threads, err := s.threadsForObjectEitherForm("idea", fmt.Sprintf("IDEA-%d", i.ID)); err == nil {
 		for _, t := range threads {
@@ -616,8 +625,12 @@ func issueSpecs(in []IdeaIssueInput) []store.IssueSpec {
 func (s *Server) workshopAction(in IdeaUpdateInput) (*mcp.CallToolResult, IdeaOutput, bool, error) {
 	switch in.Action {
 	case "phase":
-		i, err := s.client.SetIdeaPhase(in.ID, in.Phase, in.Revision)
-		return s.ideaResult(i, err, "")
+		i, err := s.client.SetIdeaPhaseSaid(in.ID, in.Phase, in.Revision, in.HumanSaid, s.currentSessionID())
+		note := ""
+		if err == nil && in.Phase == idea.PhaseDiscussed {
+			note = fmt.Sprintf("The discussion of IDEA-%d is closed on your person's word; the idea names you and them. Workflows on idea.discussion_closed start now.", in.ID)
+		}
+		return s.ideaResult(i, err, note)
 	case "requirement_waive":
 		if _, err := s.client.WaiveIdeaRequirement(in.ID, in.Requirement, in.Reason); err != nil {
 			return nil, IdeaOutput{}, true, err

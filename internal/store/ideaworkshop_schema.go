@@ -139,6 +139,24 @@ CREATE TABLE IF NOT EXISTS attachments(
 CREATE INDEX IF NOT EXISTS attachments_subject ON attachments(subject_kind, subject_id);
 `
 
+// ideaDiscussionClosureSchema: wer die Diskussion einer Idee beendet hat (DEC-46).
+// Eine Zeile je Abschluss; wird die Diskussion wieder geöffnet und erneut beendet,
+// kommt eine neue dazu, und jede löst ihr eigenes Ereignis idea.discussion_closed
+// aus. Ein Agent schließt nur mit dem Wort seines Menschen (said, Pflicht).
+const ideaDiscussionClosureSchema = `
+CREATE TABLE IF NOT EXISTS idea_discussion_closures(
+  id INTEGER PRIMARY KEY,
+  idea_id INTEGER NOT NULL REFERENCES ideas(id) ON DELETE RESTRICT,
+  person TEXT NOT NULL DEFAULT '',
+  account_id INTEGER NOT NULL DEFAULT 0,
+  by_agent INTEGER NOT NULL DEFAULT 0 CHECK(by_agent IN (0,1)),
+  session_ref TEXT NOT NULL DEFAULT '',
+  said TEXT NOT NULL DEFAULT '',
+  closed_at TEXT NOT NULL,
+  CHECK(by_agent = 0 OR trim(said) != ''));
+CREATE INDEX IF NOT EXISTS idea_discussion_closures_idea ON idea_discussion_closures(idea_id, id);
+`
+
 // ensureIdeaWorkshop legt die Tabellen und die zwei Spalten an, beliebig oft
 // aufrufbar. Er läuft nach ensureLabelsAndIdeas, denn ideas muss da sein.
 func ensureIdeaWorkshop(db *sql.DB) error {
@@ -146,6 +164,9 @@ func ensureIdeaWorkshop(db *sql.DB) error {
 		return err
 	}
 	if _, err := db.Exec(ideaCoverageSchema); err != nil {
+		return err
+	}
+	if _, err := db.Exec(ideaDiscussionClosureSchema); err != nil {
 		return err
 	}
 	if err := allowAttachmentSubjects(db); err != nil {

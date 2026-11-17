@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/knref"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -34,6 +36,16 @@ type Result struct {
 	RequestID int64  `json:"request_id,omitempty"`
 	OtherID   int64  `json:"other_id,omitempty"`
 	Relation  string `json:"relation,omitempty"`
+	// IdeaID is the idea a comment, a requirement or a relation to a feature
+	// is about; FeatureID the feature of such a relation (Relation "affects").
+	IdeaID    int64 `json:"idea_id,omitempty"`
+	FeatureID int64 `json:"feature_id,omitempty"`
+	// Session names the session (its public address) the evidence comes from:
+	// then every quote has to be in what a person typed in that session.
+	Session string `json:"session,omitempty"`
+	// SameAs is the open issue that already carries a proposed issue: the run
+	// points to it instead of proposing a second one.
+	SameAs int64 `json:"same_as,omitempty"`
 }
 
 // MinEvidenceRunes is the shortest quote that counts as evidence: a word or two
@@ -72,16 +84,25 @@ type Gate struct {
 	Policy store.WorkflowPolicy
 	// Inputs is the full input of the run, against which evidence is checked.
 	Inputs string
+	// Sources are the texts a result may name as its source (Result.Session),
+	// by name: what a person typed in one session.
+	Sources map[string]string
 }
 
 // GateReport counts what the gate did.
 type GateReport struct {
 	Proposed, Auto, Rejected int
+	// Linked counts results that point to what is already there.
+	Linked int
 }
 
 // String is the short, lasting summary for the run's result (no model text).
 func (g GateReport) String() string {
-	return fmt.Sprintf("%d proposed, %d applied, %d refused", g.Proposed, g.Auto, g.Rejected)
+	s := fmt.Sprintf("%d proposed, %d applied, %d refused", g.Proposed, g.Auto, g.Rejected)
+	if g.Linked > 0 {
+		s += fmt.Sprintf(", %d already open", g.Linked)
+	}
+	return s
 }
 
 // Apply checks and writes the results. A result that is refused is recorded
@@ -109,8 +130,23 @@ func (g Gate) Apply(results []Result) (GateReport, error) {
 			reason = store.ResultPolicy
 		case !hasEvidence(r.Evidence, g.Inputs):
 			reason = store.ResultNoEvidence
+		case r.Session != "" && !hasEvidence(r.Evidence, g.Sources[r.Session]):
+			// The quote has to be what a person typed in exactly that session.
+			reason = store.ResultNoEvidence
 		case account == 0 || person == "":
 			reason = store.ResultInvalid
+		case r.Kind == ResultIssue && r.SameAs > 0:
+			// The wish is already an open issue: the record points to it, and
+			// nothing is proposed a second time.
+			if openRequestIn(g.Store, g.Run.Project, r.SameAs) {
+				rec.State, rec.Reason, rec.Ref = store.ResultRejected, store.ResultExists, fmt.Sprintf("REQ-%d", r.SameAs)
+				if _, err := g.Store.RecordWorkflowResult(rec); err != nil {
+					return rep, err
+				}
+				rep.Linked++
+				continue
+			}
+			reason = store.ResultBadTarget
 		default:
 			reason = validResult(g.Store, g.Run.Project, r)
 		}
@@ -126,7 +162,10 @@ func (g Gate) Apply(results []Result) (GateReport, error) {
 		payload, _ := json.Marshal(r)
 		rec.Payload = string(payload)
 		w := writer{st: g.Store, run: g.Run, person: person, account: account}
-		if g.Policy.Auto(r.Kind) {
+		// A comment and a requirement always wait for a person, and so does a
+		// relation of an idea to a feature: the owner's automatic approval
+		// covers knowledge, issues, criteria and relations between issues.
+		if g.Policy.Auto(r.Kind) && r.IdeaID == 0 {
 			ref, err := w.apply(r, 0)
 			if err != nil {
 				rec.State, rec.Reason, rec.Payload = store.ResultRejected, store.ResultInvalid, ""
@@ -157,12 +196,16 @@ func (g Gate) Apply(results []Result) (GateReport, error) {
 // validResult checks what a result is about: a title, a kind of knowledge, an
 // issue of the project for a criterion or a relation.
 func validResult(st *store.Store, project string, r Result) string {
-	if strings.TrimSpace(r.Title) == "" && r.Kind != ResultRelation {
+	if strings.TrimSpace(r.Title) == "" && r.Kind != ResultRelation && r.Kind != ResultComment {
 		return store.ResultInvalid
 	}
-	inProject := func(id int64) bool {
-		d, err := st.RequestByID(id)
-		return err == nil && d.Request.Scope.Project == project && d.Request.State == "open"
+	inProject := func(id int64) bool { return openRequestIn(st, project, id) }
+	ideaOK := func(id int64) bool {
+		i, err := st.IdeaByID(id)
+		return err == nil && i.Project == project && i.State != "dismissed"
+	}
+	if r.IdeaID > 0 && !ideaOK(r.IdeaID) {
+		return store.ResultBadTarget
 	}
 	switch r.Kind {
 	case ResultKnowledge:
@@ -175,8 +218,27 @@ func validResult(st *store.Store, project string, r Result) string {
 			return store.ResultBadTarget
 		}
 	case ResultRelation:
+		if r.IdeaID > 0 {
+			// An idea affects a feature of the same project.
+			fp, ok := st.FeatureProjectOf(r.FeatureID)
+			if !ok || fp != project || r.Relation != "affects" {
+				return store.ResultBadTarget
+			}
+			return ""
+		}
 		if !inProject(r.RequestID) || !inProject(r.OtherID) || r.RequestID == r.OtherID || !slices.Contains([]string{"related", "blocks", "duplicates", "supersedes", "derived"}, r.Relation) {
 			return store.ResultBadTarget
+		}
+	case ResultComment:
+		if r.IdeaID == 0 || strings.TrimSpace(r.Body) == "" {
+			return store.ResultBadTarget
+		}
+	case ResultRequirement:
+		if r.IdeaID == 0 {
+			return store.ResultBadTarget
+		}
+		if utf8.RuneCountInString(strings.TrimSpace(r.Title)) > idea.MaxRequirement {
+			return store.ResultInvalid
 		}
 	default:
 		// A kind the engine cannot write yet (a description of a file is the
@@ -196,6 +258,23 @@ type writer struct {
 }
 
 func (w writer) ref() string { return store.WorkflowRunRefPrefix + strconv.FormatInt(w.run.ID, 10) }
+
+// access is the rights of the account the run acts for: a comment, a concept
+// and a link of a feature are written through them, as that account would.
+func (w writer) access() *store.ProjectAccess {
+	return w.st.Access(store.Principal{ID: fmt.Sprintf("person:%d", w.account), Label: w.person})
+}
+
+// sessionLine points to the session a wish was typed in.
+func sessionLine(ref string) string {
+	return "Gesagt in [Session " + ref + "](/ui/sessions/" + url.PathEscape(ref) + ")."
+}
+
+// openRequestIn says whether an issue is open and belongs to the project.
+func openRequestIn(st *store.Store, project string, id int64) bool {
+	d, err := st.RequestByID(id)
+	return err == nil && d.Request.Scope.Project == project && d.Request.State == "open"
+}
 
 // actor is how the history of a criterion or a relation names who added it:
 // the account the run acts for, and the run. Neither carries a session
@@ -226,11 +305,22 @@ func (w writer) note(r Result) store.Knowledge {
 		k.Title = fmt.Sprintf("%sKriterium? REQ-%d: %s", ResultTitlePrefix, r.RequestID, r.Title)
 	case ResultRelation:
 		k.Title = fmt.Sprintf("%sBeziehung? REQ-%d %s REQ-%d", ResultTitlePrefix, r.RequestID, r.Relation, r.OtherID)
+		if r.IdeaID > 0 {
+			k.Title = fmt.Sprintf("%sBeziehung? IDEA-%d %s FEAT-%d", ResultTitlePrefix, r.IdeaID, r.Relation, r.FeatureID)
+		}
+	case ResultComment:
+		k.Title = fmt.Sprintf("%sKommentar? IDEA-%d", ResultTitlePrefix, r.IdeaID)
+	case ResultRequirement:
+		k.Title = fmt.Sprintf("%sAnforderung? IDEA-%d: %s", ResultTitlePrefix, r.IdeaID, r.Title)
 	}
 	if k.Body == "" {
 		k.Body = r.Title
 	}
-	k.Body += "\n\nBelege:\n> " + strings.Join(r.Evidence, "\n> ") + fmt.Sprintf("\n\nVorschlag des Workflows %s, Lauf %d.", w.run.Workflow, w.run.ID)
+	k.Body += "\n\nBelege:\n> " + strings.Join(r.Evidence, "\n> ")
+	if r.Session != "" {
+		k.Body += "\n\n" + sessionLine(r.Session)
+	}
+	k.Body += fmt.Sprintf("\n\nVorschlag des Workflows %s, Lauf %d.", w.run.Workflow, w.run.ID)
 	return k
 }
 
@@ -251,7 +341,11 @@ func (w writer) apply(r Result, noteID int64) (string, error) {
 			Origin: "distilled", Person: w.person, Harness: Harness, SessionRef: w.ref(), AuthorID: w.account})
 		return knref.Format(id), err
 	case ResultIssue:
-		d, err := w.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: r.Title, Description: r.Body,
+		desc := r.Body
+		if r.Session != "" {
+			desc += "\n\n> " + strings.Join(r.Evidence, "\n> ") + "\n\n" + sessionLine(r.Session)
+		}
+		d, err := w.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: r.Title, Description: strings.TrimSpace(desc),
 			Scope: scope.Axes{Project: w.run.Project}, Person: w.person, SessionRef: w.ref()}, AuthorID: w.account})
 		if err != nil {
 			return "", err
@@ -264,11 +358,35 @@ func (w writer) apply(r Result, noteID int64) (string, error) {
 		}
 		return fmt.Sprintf("REQ-%d#%d", r.RequestID, c.ID), nil
 	case ResultRelation:
+		if r.IdeaID > 0 {
+			if _, err := w.access().LinkFeature(r.FeatureID, "idea", r.IdeaID, r.Relation, w.actor()); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("FEAT-%d", r.FeatureID), nil
+		}
 		rel, err := w.st.AddRequestRelation(r.RequestID, requestdomain.Relation{Kind: r.Relation, OtherRequestID: r.OtherID}, w.actor())
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("relation:%d", rel.ID), nil
+	case ResultComment:
+		if _, err := w.access().AddComment(store.CommentOnIdea, r.IdeaID, r.Body, store.CommentActor{Person: w.person}); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("IDEA-%d", r.IdeaID), nil
+	case ResultRequirement:
+		pa := w.access()
+		cur, _, err := pa.IdeaConcept(r.IdeaID, 0)
+		if err != nil {
+			return "", err
+		}
+		reqs := append(append([]string{}, cur.Concept.Requirements...), strings.TrimSpace(r.Title))
+		if _, _, err := pa.PutIdeaConcept(r.IdeaID, store.PutIdeaConceptInput{Patch: idea.ConceptPatch{Requirements: &reqs}, Base: cur.Revision,
+			Message: fmt.Sprintf("Anforderung aus Workflow-Lauf %d", w.run.ID),
+			Actor:   idea.Actor{AccountID: w.account, Person: w.person, SessionRef: w.ref(), Agent: true}}); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("IDEA-%d", r.IdeaID), nil
 	}
 	return "", errors.New("unknown kind of result")
 }

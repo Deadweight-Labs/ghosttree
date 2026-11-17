@@ -34,6 +34,9 @@ type Input struct {
 	// Propose hands the engine a result (REQ-695); nil for a block that a
 	// trigger names directly, which may create nothing.
 	Propose func(Result)
+	// Data is what the machine assembled for a block of a stored workflow,
+	// typed (REQ-696); nil for a block that a trigger names directly.
+	Data *Data
 }
 
 // Block is one thing a workflow can do. It reports how the run ended; the

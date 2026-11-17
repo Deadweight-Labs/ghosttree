@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -39,6 +40,12 @@ func Skip(reason string) error { return skipError{reason} }
 type DefResolver struct {
 	Store   *store.Store
 	Catalog Catalog
+	// PRDiff reads the diff of a pull request where the server can (its GitHub
+	// App); nil means the changed files stand in for it (stage E3).
+	PRDiff func(ctx context.Context, project string, pr int64) (string, error)
+	// Research searches the net for a block that takes it, when the
+	// definition asks and the owner's policy allows; nil: no research.
+	Research Researcher
 }
 
 // NewDefResolver is the resolver of a server with the default catalogue.
@@ -83,8 +90,32 @@ func (r DefResolver) Resolve(ctx context.Context, run store.WorkflowRun) (Block,
 		return nil, version, Skip(SkipAuthorRights)
 	}
 	return BlockFunc(func(ctx context.Context, in Input) (store.WorkflowRunOutcome, error) {
+		// The inputs of the run: what the definition declares and what the
+		// block always reads, assembled with the rights of the account the
+		// run acts for.
+		d.Inputs = mergeNames(d.Inputs, spec.Inputs)
+		asm := newAssembler(r.Store, run, in.Event, r.Store.WorkflowRunActor(run), r.PRDiff)
+		if d.Research && spec.Research && r.Research != nil {
+			if q := researchQuery(asm); q != "" {
+				if found, err := r.Research(ctx, q); err == nil && strings.TrimSpace(found) != "" {
+					asm.data.Research = cut(found, maxDiffChars/2)
+					d.Inputs = mergeNames(d.Inputs, []string{"research"})
+				}
+			}
+		}
 		in.Def = &d
 		in.Values = InputValues(d.Inputs, in.Event)
+		for _, n := range d.Inputs {
+			if spec, ok := InputByName(n); (ok && spec.Assembled) || n == "research" {
+				if v, ok := asm.value(ctx, n); ok {
+					if in.Values == nil {
+						in.Values = map[string]string{}
+					}
+					in.Values[n] = v
+				}
+			}
+		}
+		in.Data = &asm.data
 		var results []Result
 		in.Propose = func(r Result) { results = append(results, r) }
 		out, err := inner.Run(ctx, in)
@@ -93,7 +124,7 @@ func (r DefResolver) Resolve(ctx context.Context, run store.WorkflowRun) (Block,
 		}
 		// Evidence counts only from the declared inputs, never from the prompt
 		// or the instruction around them.
-		g := Gate{Store: r.Store, Run: run, Def: &d, Policy: policy, Inputs: inputsText(&d, in.Values)}
+		g := Gate{Store: r.Store, Run: run, Def: &d, Policy: policy, Inputs: inputsText(&d, in.Values), Sources: asm.sources()}
 		grep, gerr := g.Apply(results)
 		if gerr != nil {
 			return out, gerr
@@ -128,6 +159,32 @@ func InputValues(names []string, ev store.WorkflowEvent) map[string]string {
 		}
 	}
 	return out
+}
+
+// mergeNames is a followed by what b adds, without repeats.
+func mergeNames(a, b []string) []string {
+	out := append([]string{}, a...)
+	for _, n := range b {
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// researchQuery is all a research step may send out: the title and the start
+// of the summary of the idea, never its concept, its discussion or anything of
+// the project beyond it (IDEA-45, security).
+func researchQuery(a *assembler) string {
+	ws := a.workshop()
+	if ws == nil {
+		return ""
+	}
+	q := ws.Idea.Title
+	if ws.Summary != nil {
+		q += " " + cut(oneLine(ws.Summary.Body), 200)
+	}
+	return cut(strings.TrimSpace(q), 300)
 }
 
 // renderInputs writes the inputs of a run as a block of text for a prompt, in

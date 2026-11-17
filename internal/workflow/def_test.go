@@ -95,13 +95,13 @@ func hasProblem(ps []Problem, part string) bool {
 // event; a schedule needs every.
 func TestCheckRefusesAnOwnPromptAndInputsOfAnotherEvent(t *testing.T) {
 	for text, want := range map[string]string{
-		"---\non: pr.merged\nprompt: \"Fasse zusammen\"\n---\n":                  "stage E5",
-		"---\non: idea.created\n---\nFasse zusammen.\n":                          "stage E5",
-		"---\non: idea.created\ninputs: [pr.title]\nuses: ghosttree/echo\n---\n": "input pr.title is not there on idea.created",
-		"---\non: schedule\nuses: ghosttree/echo\n---\n":                         "every 5 minutes to 7 days",
-		"---\non: idea.discussion_closed\nuses: ghosttree/echo\n---\n":           "stage E3",
-		"---\non: pr.merged\nuses: ghosttree/echo\n---\nNimm dir Zeit.\n":        "takes no instruction",
-		"---\non: pr.merged\nuses: ghosttree/nope\n---\n":                        "unknown block ghosttree/nope",
+		"---\non: pr.merged\nprompt: \"Fasse zusammen\"\n---\n":                            "stage E5",
+		"---\non: idea.created\n---\nFasse zusammen.\n":                                    "stage E5",
+		"---\non: idea.created\ninputs: [pr.title]\nuses: ghosttree/echo\n---\n":           "input pr.title is not there on idea.created",
+		"---\non: schedule\nuses: ghosttree/echo\n---\n":                                   "every 5 minutes to 7 days",
+		"---\non: idea.discussion_closed\ninputs: [pr.title]\nuses: ghosttree/echo\n---\n": "input pr.title is not there on idea.discussion_closed",
+		"---\non: pr.merged\nuses: ghosttree/echo\n---\nNimm dir Zeit.\n":                  "takes no instruction",
+		"---\non: pr.merged\nuses: ghosttree/nope\n---\n":                                  "unknown block ghosttree/nope",
 		"on: pr.merged\n": "has to begin with a line ---",
 		"---\non: pr.merged\nuses: ghosttree/ask\nmodel: klein\nbudget: 3\n---\n": "budget takes indented",
 		"---\non: idea.created\nbranches: [main]\nuses: ghosttree/echo\n---\n":    "branches only narrows pr.merged",

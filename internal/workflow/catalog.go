@@ -11,15 +11,20 @@ import (
 // Kinds of results a run may create (REQ-695). A workflow declares which of
 // them it creates and how many per run; nothing else gets written.
 const (
-	ResultKnowledge   = "knowledge"
-	ResultIssue       = "issue"
-	ResultCriterion   = "criterion"
+	ResultKnowledge = "knowledge"
+	ResultIssue     = "issue"
+	ResultCriterion = "criterion"
+	// ResultRequirement is a requirement added to the concept of an idea
+	// (REQ-696): accepted, it becomes a new version of the concept.
+	ResultRequirement = "requirement"
 	ResultRelation    = "relation"
+	// ResultComment is a comment on the idea a run is about (REQ-696).
+	ResultComment     = "comment"
 	ResultDescription = "description"
 )
 
 // ResultKinds lists every kind of result, in the order the pages show them.
-var ResultKinds = []string{ResultKnowledge, ResultIssue, ResultCriterion, ResultRelation, ResultDescription}
+var ResultKinds = []string{ResultKnowledge, ResultIssue, ResultCriterion, ResultRequirement, ResultRelation, ResultComment, ResultDescription}
 
 // InputSpec is one input the machine puts together for a run: a fixed piece of
 // the event or of the project. Events lists the events that provide it; empty
@@ -28,6 +33,8 @@ type InputSpec struct {
 	Name    string
 	Events  []string
 	Summary string
+	// Assembled: the machine reads it from the project, not from the event.
+	Assembled bool
 }
 
 // Inputs is the catalogue of inputs of stage E2: what the event carries. Later
@@ -40,10 +47,28 @@ var Inputs = []InputSpec{
 	{Name: "pr.base", Events: []string{store.EventPRMerged}, Summary: "branch it was merged into"},
 	{Name: "pr.head", Events: []string{store.EventPRMerged}, Summary: "branch it came from"},
 	{Name: "pr.merge_sha", Events: []string{store.EventPRMerged}, Summary: "commit of the merge"},
-	{Name: "idea.number", Events: []string{store.EventIdeaCreated}, Summary: "number of the idea"},
-	{Name: "idea.title", Events: []string{store.EventIdeaCreated}, Summary: "title of the idea"},
+	{Name: "idea.number", Events: ideaEvents, Summary: "number of the idea"},
+	{Name: "idea.title", Events: ideaEvents, Summary: "title of the idea"},
 	{Name: "schedule.slot", Events: []string{store.EventSchedule}, Summary: "the period of the schedule"},
+	// Assembled from the project (stage E3), bounded in size, with the rights
+	// of the account the run acts for.
+	{Name: "pr.text", Events: []string{store.EventPRMerged}, Summary: "title and description of the pull request", Assembled: true},
+	{Name: "pr.commits", Events: []string{store.EventPRMerged}, Summary: "its commits with their messages", Assembled: true},
+	{Name: "pr.files", Events: []string{store.EventPRMerged}, Summary: "the files it changed", Assembled: true},
+	{Name: "pr.diff", Events: []string{store.EventPRMerged}, Summary: "its diff where the server can read it, else the changed files", Assembled: true},
+	{Name: "pr.knowledge", Events: []string{store.EventPRMerged}, Summary: "the knowledge entries written on its commits", Assembled: true},
+	{Name: "pr.sessions.user_messages", Events: []string{store.EventPRMerged}, Summary: "what people typed in the sessions of its commits, nothing the agents wrote", Assembled: true},
+	{Name: "knowledge.related", Events: []string{store.EventPRMerged}, Summary: "knowledge of the project its title finds", Assembled: true},
+	{Name: "requests.open", Summary: "the open issues of the project", Assembled: true},
+	{Name: "idea.text", Events: ideaEvents, Summary: "title, text and summary of the idea", Assembled: true},
+	{Name: "idea.concept", Events: ideaEvents, Summary: "the concept of the idea with its requirements", Assembled: true},
+	{Name: "idea.decisions", Events: ideaEvents, Summary: "its decisions with outcome and reason", Assembled: true},
+	{Name: "idea.related", Events: ideaEvents, Summary: "other ideas of the project with words of its title", Assembled: true},
+	{Name: "features.related", Events: ideaEvents, Summary: "features of the project with words of its title", Assembled: true},
 }
+
+// ideaEvents are the events about an idea.
+var ideaEvents = []string{store.EventIdeaCreated, store.EventIdeaDiscussionClosed}
 
 // InputByName finds an input of the catalogue.
 func InputByName(name string) (InputSpec, bool) {
@@ -91,6 +116,12 @@ type BlockSpec struct {
 	Events []string
 	// Reads names what the block reads beyond its declared inputs.
 	Reads []string
+	// Inputs are the inputs of the catalogue the block always reads; the
+	// machine assembles them with the declared ones.
+	Inputs []string
+	// Research: the block can take what a research step found (stage E3 has
+	// the hook, the server's research tool comes with E5).
+	Research bool
 	// Results are the kinds of result the block can produce.
 	Results []string
 	// Model: the block calls a model and needs a model alias.
@@ -111,12 +142,22 @@ const BlockPrefix = "ghosttree/"
 // Catalog is the set of blocks a server knows, by name.
 type Catalog map[string]BlockSpec
 
-// DefaultCatalog is what every server ships with in stage E2.
+// DefaultCatalog is what every server ships with (stage E3).
 func DefaultCatalog() Catalog {
 	c := Catalog{}
 	for _, b := range []BlockSpec{
 		{Name: EchoName, Version: "v1", Summary: "echoes its event; needs no model and costs nothing", Run: Echo},
 		{Name: AskName, Version: "v1", Summary: "one model call that describes the event in a sentence", Model: true, Instruction: true, Run: Ask},
+		// Robin's four examples (REQ-696): one model call each, a structured
+		// answer, every result through the gate.
+		{Name: PRKnowledgeName, Version: "v1", Summary: "after a merge: is the knowledge of the diff in ghosttree? proposes what is missing", Events: []string{store.EventPRMerged},
+			Inputs: []string{"pr.text", "pr.commits", "pr.diff", "pr.knowledge", "knowledge.related"}, Results: []string{ResultKnowledge}, Model: true, Instruction: true, Run: PRKnowledge},
+		{Name: PRWishesName, Version: "v1", Summary: "after a merge: what people asked for in its sessions and did not get becomes a proposed issue", Events: []string{store.EventPRMerged},
+			Inputs: []string{"pr.sessions.user_messages", "pr.text", "pr.commits", "pr.diff", "requests.open"}, Results: []string{ResultIssue}, Model: true, Instruction: true, Run: PRWishes},
+		{Name: IdeaMatchName, Version: "v1", Summary: "a new idea next to the ideas and features there are: a comment and links to features", Events: []string{store.EventIdeaCreated},
+			Inputs: []string{"idea.text", "idea.related", "features.related"}, Results: []string{ResultComment, ResultRelation}, Model: true, Instruction: true, Research: true, Run: IdeaMatch},
+		{Name: CriteriaName, Version: "v1", Summary: "a closed discussion: requirements for the concept, nothing while a decision is open", Events: []string{store.EventIdeaDiscussionClosed},
+			Inputs: []string{"idea.text", "idea.concept", "idea.decisions"}, Results: []string{ResultRequirement}, Model: true, Instruction: true, Run: Criteria},
 		// The gardener and the distillers stay Go code and run where they run
 		// today (DEC-41): the gardener in its sandboxed unit, the distillers
 		// in their jobs. As blocks they have one place in the catalogue; their

@@ -1,0 +1,21 @@
+Task: a pull request was merged. pr.sessions.user_messages holds what people
+typed to their agents in the sessions behind its commits, session by session.
+Find what they asked for that the pull request did not deliver.
+
+A wish is a feature, a change, a complaint about behaviour or a constraint a
+person stated. Not a wish: instructions for the task at hand ("run the tests",
+"commit this"), questions, corrections of the agent's last answer.
+
+Judge "delivered" by pr.text, pr.commits and pr.diff. Leave delivered wishes out
+or mark them done. One proposal per wish at most, never two for the same wish.
+If an open issue in requests.open already carries the wish, set same_as to its
+number instead of proposing it again.
+
+Answer:
+{"wishes": [{"title": "what the person wants, one line", "body": "what was asked
+  for and any condition attached", "session": "the ref of the session",
+  "quote": "exact words the person typed in that session", "done": false,
+  "same_as": "REQ-12 or empty"}]}
+
+The quote must come from the messages of exactly the session you name, from a
+message a person typed, never from the other inputs.

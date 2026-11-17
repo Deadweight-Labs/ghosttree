@@ -53,7 +53,7 @@ func isSeparator(s string) bool {
 // isTechnicalValue erlaubt Werte, die kein Text für Menschen sind.
 func isTechnicalValue(v string) bool {
 	switch v {
-	case "inbox", "resume", "pause", "interrupt", "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "all-agents", "withdraw", "met", "waived", "new", "pflicht", "optional", "share", "unshare", "discuss", "idea", "variant":
+	case "inbox", "resume", "pause", "interrupt", "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "all-agents", "withdraw", "met", "waived", "new", "pflicht", "optional", "share", "unshare", "discuss", "idea", "variant", "close", "reopen_discussion":
 		return true
 	}
 	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || strings.HasPrefix(v, "REQ-") || v == "on" || v == "shared" || v == "private" || v == "member" || v == "owner" || v == "guest" || v == "none" || v == "7" || v == "approve" || v == "reject" || v == "gardener" || v == "deny" || v == "member\x00owner" || regexp.MustCompile(`^[0-9]+$`).MatchString(v)

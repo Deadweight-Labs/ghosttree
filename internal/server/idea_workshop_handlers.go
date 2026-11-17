@@ -223,11 +223,15 @@ func (a *api) setIdeaPhase(w http.ResponseWriter, r *http.Request) {
 		Phase string `json:"phase"`
 		// ConceptRevision ist die Fassung, die der Mensch beim Freigeben gesehen hat.
 		ConceptRevision int `json:"concept_revision"`
+		// HumanSaid: schließt ein Agent die Diskussion (discussed), das Wort seines
+		// Menschen, wörtlich oder als Verweis (DEC-46).
+		HumanSaid string `json:"human_said"`
+		SessionID int64  `json:"session_id"`
 	}
 	if !readLimitedJSON(w, r, &body, maxWorkshopSmall) {
 		return
 	}
-	i, err := a.access(r).SetIdeaPhase(id, body.Phase, a.workshopActor(r, 0), body.ConceptRevision)
+	i, err := a.access(r).SetIdeaPhaseSaid(id, body.Phase, a.workshopActor(r, body.SessionID), body.ConceptRevision, body.HumanSaid)
 	if err != nil {
 		writeIdeaError(w, err)
 		return

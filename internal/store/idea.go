@@ -470,7 +470,7 @@ func (a *ProjectAccess) checkIdeaLinkable(i idea.Idea) error {
 	if err := a.CheckIdea(i, ActEdit); err != nil {
 		return err
 	}
-	if i.Phase == idea.PhaseConcept || i.Phase == idea.PhaseDiscussion {
+	if i.Phase == idea.PhaseConcept || i.Phase == idea.PhaseDiscussion || i.Phase == idea.PhaseDiscussed {
 		return requestdomain.NewRuleError("not_approved", "this idea is being worked out and is not approved yet", "approve it first; only its owner or a maintainer can", nil)
 	}
 	return nil

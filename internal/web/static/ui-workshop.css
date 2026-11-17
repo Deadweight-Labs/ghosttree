@@ -99,6 +99,11 @@
   & .ws .ws-stand > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
   & .ws .ws-stand dt { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
   & .ws .ws-stand dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  /* Who closed the discussion (DEC-46), and the proposal to close it. */
+  & .ws .ws-closed { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+  & .ws .ws-said { color: var(--fg-muted); font-style: italic; }
+  & .ws .ws-next-form { display: inline-flex; margin: 0; }
+  & .ws .ws-stand > div:has(.ws-next-form) { align-items: center; }
   & .ws .ws-dec.is-open { background: linear-gradient(var(--attention-subtle), var(--attention-subtle)) left / 3px 100% no-repeat; }
 }
 
