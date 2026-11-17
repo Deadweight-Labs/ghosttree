@@ -85,3 +85,48 @@ func TestHooksCarryTheTurnStateToTheServer(t *testing.T) {
 		t.Fatalf("an open turn, silent for ten minutes, is stuck; got %s", got)
 	}
 }
+
+// End to end, hook to server: the Stop hook leaves the agent waiting for a reply
+// (not working), the SessionEnd hook ends the session, and the next prompt of a
+// resumed session brings it back (REQ-678).
+func TestHooksCarryTheEndOfTheRunToTheServer(t *testing.T) {
+	e := registerEnv(t)
+	const id = "sess-run-end-e2e"
+	room := store.RoomKeyForProject(registerProject)
+	state := func() store.Presence {
+		t.Helper()
+		peers, err := e.st.CoordPeers(room, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range peers {
+			if p.ExternalID == id {
+				return *p.Presence
+			}
+		}
+		t.Fatal("agent not registered")
+		return store.Presence{}
+	}
+	payload := registerPayload(t, id)
+	runHookAs(t, "session-start", "claude", payload)
+	runHookAs(t, "user-prompt-submit", "claude", payload)
+	if got := state().WorkState.Value; got != store.WorkWorking {
+		t.Fatalf("an open turn is working, got %s", got)
+	}
+	runHookAs(t, "turn-end", "claude", payload)
+	if got := state().WorkState.Value; got != store.WorkAwaitingReply {
+		t.Fatalf("after the Stop hook the agent waits for a reply, got %s", got)
+	}
+	var out bytes.Buffer
+	raw, _ := json.Marshal(payload)
+	if code := cmdHookWith(bytes.NewReader(raw), []string{"session-end", "--harness", "claude"}, &out); code != 0 || out.String() != "{}\n" {
+		t.Fatalf("SessionEnd hook: exit %d, output %q, want {}", code, out.String())
+	}
+	if got := state().Reachability.Value; got != store.ReachEnded {
+		t.Fatalf("after SessionEnd the session is ended, got %s", got)
+	}
+	runHookAs(t, "user-prompt-submit", "claude", payload)
+	if p := state(); p.Reachability.Value == store.ReachEnded || p.WorkState.Value != store.WorkWorking {
+		t.Fatalf("a resumed session is alive and working, got %s / %s", p.Reachability.Value, p.WorkState.Value)
+	}
+}

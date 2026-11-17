@@ -26,6 +26,10 @@ const (
 	WorkWaitingPeer = "waiting_peer"
 	WorkBlocked     = "blocked"
 	WorkPaused      = "paused"
+	// WorkAwaitingReply: der Turn ist zu Ende (Stop-Hook) und es liegt nichts
+	// Offenes vor: der Agent wartet auf den nächsten Auftrag oder die nächste
+	// Antwort. Arbeiten tut er nicht, auch wenn das Ende gerade erst kam.
+	WorkAwaitingReply = "awaiting_reply"
 	// WorkStuck: mitten in einem Turn und seit StuckAfter kein Hook-Ereignis.
 	WorkStuck   = "stuck"
 	WorkUnknown = "unknown"
@@ -34,10 +38,12 @@ const (
 	// HookTurnStart: Prompt abgeschickt. HookTool: Werkzeugaufruf des Agenten.
 	// HookTurnEnd: Stop-Hook, der Turn ist zu Ende. HookTouch: Lebenszeichen,
 	// das den Turnzustand nicht berührt (Werkzeugaufruf eines Subagenten).
-	HookTurnStart = "turn-start"
-	HookTool      = "tool"
-	HookTurnEnd   = "turn-end"
-	HookTouch     = "touch"
+	// HookSessionEnd: SessionEnd-Hook, die Sitzung ist beendet.
+	HookTurnStart  = "turn-start"
+	HookTool       = "tool"
+	HookTurnEnd    = "turn-end"
+	HookTouch      = "touch"
+	HookSessionEnd = "session-end"
 
 	OriginObserved     = "observed"
 	OriginSelfReported = "self_reported"
@@ -64,7 +70,7 @@ const (
 // PresenceGaps nennt, was ghosttree heute NICHT beobachten kann. Der Text geht
 // in API und Werkzeugantwort, damit die Lücke da steht, wo der Wert steht.
 var PresenceGaps = []string{
-	"ended is never produced: no session-end hook or collector event exists, so a silent agent is unknown, not ended",
+	"ended needs the SessionEnd hook (claude only, installed by ctx install): without it, or when the terminal is killed, a silent agent is unknown or awaiting a reply, never ended",
 	"no self-report channel for waiting_user: it is only derived from an open question or approval addressed to a person",
 	"working is seen only through tool calls that touch a path (collector transcript scan) and through the hooks of the session; Bash-only work without hooks and model streaming are invisible",
 	"stuck needs the Stop hook (claude only, installed by ctx install): without a first turn end an agent is never called stuck, and a turn cut short with Esc fires no Stop, so it reads as stuck until StuckMaxAge; a single tool call or a permission prompt that runs longer than StuckAfter also reads as stuck, because the pause gate (PreToolUse) must never wait on the server and Notification is not wired",
@@ -112,6 +118,9 @@ type PresenceInput struct {
 	// diesem Agenten kam schon einmal ein Turn-Ende; erst dann ist ein offener
 	// Turn eine Aussage, denn ohne Stop-Hook bliebe jeder Turn "offen".
 	TurnOpen, TurnTracked bool
+	// EndedAt ist der Zeitpunkt, an dem der SessionEnd-Hook die Sitzung als
+	// beendet gemeldet hat; leer solange sie läuft oder wieder aufgenommen wurde.
+	EndedAt string
 }
 
 func parseAt(s string) (time.Time, bool) {
@@ -151,10 +160,19 @@ func DerivePresence(ref time.Time, in PresenceInput) Presence {
 	if hasActivity && ref.Sub(activity) > ActivityFreshTTL {
 		hasActivity = false
 	}
+	if _, ok := parseAt(in.EndedAt); ok {
+		// Eine beendete Sitzung ist weder erreichbar noch am Arbeiten, gleich
+		// was davor offen war: ein Wartepunkt an sie bekommt keine Antwort mehr.
+		p.Reachability = field(ReachEnded, OriginObserved, in.EndedAt, ref)
+		return p
+	}
 	if in.PauseAt != "" {
 		p.WorkState = field(WorkPaused, OriginObserved, in.PauseAt, ref)
 		return p
 	}
+	// Ein Stop-Hook ist ein Lebenszeichen, aber keine Arbeit: nach ihm kommt
+	// nichts mehr, bis der nächste Prompt einen neuen Turn öffnet.
+	turnEnded := in.TurnTracked && !in.TurnOpen
 	var blocker, user, peer *PresenceWait
 	for i := range in.Waits {
 		w := &in.Waits[i]
@@ -177,7 +195,10 @@ func DerivePresence(ref time.Time, in PresenceInput) Presence {
 		if w == nil {
 			return false
 		}
-		if !hasActivity {
+		if !hasActivity || turnEnded {
+			// Nach dem Turn-Ende arbeitet der Agent nicht weiter: sein letztes
+			// Hook-Ereignis ist das Ende selbst und löst keine Frage ab, die er
+			// im selben Turn gestellt hat.
 			return true
 		}
 		t, ok := parseAt(w.At)
@@ -190,6 +211,8 @@ func DerivePresence(ref time.Time, in PresenceInput) Presence {
 		p.WorkState = field(WorkWaitingUser, OriginDerived, user.At, ref)
 	case later(peer):
 		p.WorkState = field(WorkWaitingPeer, OriginDerived, peer.At, ref)
+	case turnEnded && in.LastActivityAt != "":
+		p.WorkState = field(WorkAwaitingReply, OriginObserved, in.LastActivityAt, ref)
 	case hasActivity:
 		p.WorkState = field(WorkWorking, OriginObserved, in.LastActivityAt, ref)
 	case in.TurnOpen && in.TurnTracked && silent >= StuckAfter && silent <= StuckMaxAge:
@@ -256,6 +279,9 @@ func ensureCoordAgentPresence(db *sql.DB) error {
 		if err := ensureCoordAgentColumn(db, col, `TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
+	}
+	if err := ensureCoordAgentColumn(db, "ended_at", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
 	}
 	for _, col := range []string{"turn_open", "turn_tracked"} {
 		if err := ensureCoordAgentColumn(db, col, `INTEGER NOT NULL DEFAULT 0`); err != nil {
@@ -383,8 +409,8 @@ type presenceDB interface {
 
 // presenceAgent sind die Angaben, aus denen die Belege gesucht werden.
 type presenceAgent struct {
-	ExternalID, PrincipalID, SessionID, LastPoll, LastHook string
-	TurnOpen, TurnTracked                                  bool
+	ExternalID, PrincipalID, SessionID, LastPoll, LastHook, EndedAt string
+	TurnOpen, TurnTracked                                           bool
 }
 
 func placeholders(n int) string {
@@ -415,7 +441,7 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 	}
 	inputs := make(map[string]*PresenceInput, len(agents))
 	for _, a := range agents {
-		inputs[a.ExternalID] = &PresenceInput{LastPollAt: a.LastPoll, LastActivityAt: a.LastHook, TurnOpen: a.TurnOpen, TurnTracked: a.TurnTracked}
+		inputs[a.ExternalID] = &PresenceInput{LastPollAt: a.LastPoll, LastActivityAt: a.LastHook, TurnOpen: a.TurnOpen, TurnTracked: a.TurnTracked, EndedAt: a.EndedAt}
 	}
 	ids := idArgs(agents, func(a presenceAgent) string { return a.ExternalID })
 

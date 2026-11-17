@@ -360,6 +360,23 @@ func turnEnd(stdin io.Reader, harness string, stdout io.Writer) int {
 	return 0
 }
 
+// sessionEnd is the SessionEnd hook: the session is over, not only its turn.
+// It tells the server so, which is what separates "finished" from "waiting for
+// the next prompt". It delivers nothing to the model and always answers with an
+// empty, well-formed object: a hook that fails costs the person their flow.
+func sessionEnd(stdin io.Reader, harness string, stdout io.Writer) int {
+	if os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
+		if harness == "claude" || harness == "codex" {
+			_ = hookstate.Record(harness, "SessionEnd")
+		}
+		if raw, err := io.ReadAll(io.LimitReader(stdin, 4<<20)); err == nil {
+			registerHookSession(raw, harness, true, store.HookSessionEnd)
+		}
+	}
+	_, _ = io.WriteString(stdout, "{}\n")
+	return 0
+}
+
 // stopReminderOutput hands the reminder to the model: the turn continues once
 // with it, and the hook's own stop_hook_active check keeps it from repeating.
 // additionalContext rather than decision block: Claude Code shows a block to

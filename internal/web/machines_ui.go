@@ -225,13 +225,28 @@ func (a *app) orgMachinesPage(w http.ResponseWriter, r *http.Request, org store.
 			v.Shared = append(v.Shared, row)
 		}
 	}
+	if !org.IsUser() {
+		// Machines of the viewer that this org does not have yet: the way to give
+		// them to it starts at the machine's own page, so the tab points there
+		// instead of reading "0" with nothing to do about it.
+		if list, err := a.store.MachinesFor(browserPrincipal(r).ID); err == nil {
+			for _, m := range list {
+				if (m.Relation != store.RelOwner && m.Relation != store.RelMaintainer) || machineOfOrg(m, org) || m.OwnerOrg != "" {
+					continue
+				}
+				v.Offer = append(v.Offer, uiRow{Icon: "server", Tone: "feat", StateLabel: l.msg("machine.title"), Title: m.Name, Href: machineHrefOf(m.Name) + "#shares",
+					Kind: label(l, machineRelationKeys, m.Relation), Pill: l.msg("machine.offer_share"), PillTone: "p-ok"})
+			}
+		}
+	}
 	a.renderBrowser(w, r, "orgmachines", pageData{Title: l.msg("ui.org.tab.machines"), OrgName: org.Name, OrgBand: a.orgBandFor(r, org, "machines"), OrgMachinesV: v})
 }
 
 // orgMachinesView: User is a person's page, which has only their own machines.
+// Offer are the viewer's own machines that could be shared with this org.
 type orgMachinesView struct {
-	Own, Shared []uiRow
-	User        bool
+	Own, Shared, Offer []uiRow
+	User               bool
 }
 
 // ownerPill nennt, in welchem Verhältnis die Maschine zur Org steht.

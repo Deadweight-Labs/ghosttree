@@ -16,7 +16,7 @@
 {{if .Next}}<a class="morelink" href="{{.Next}}">{{t "sessions.show_older"}}</a>{{end}}
 </section>
 {{else}}
-{{if .Empty}}<div class="box"><div class="box-empty">{{if .Guest}}<span>{{t "sessions.empty_guest"}}</span>{{else}}<span>{{t "sessions.empty"}}</span><a class="gbtn pri" href="/ui/overview?connect=1">{{t "sessions.connect"}}</a>{{end}}</div></div>
+{{if .Empty}}<div class="box"><div class="box-empty">{{if .Guest}}<span>{{t "sessions.empty_guest"}}</span>{{else}}<span>{{.EmptyHint.Text}}</span><a class="gbtn pri" href="{{.EmptyHint.Href}}">{{.EmptyHint.Action}}</a>{{end}}</div></div>
 {{else}}
 <form class="box" method="get" action="/ui/sessions"><div class="box-h lh"><span class="t">{{mi "term"}} {{t "sessions.n_sessions" .Total}}</span>{{if .LiveCount}}<span class="tab">{{mi "play"}}{{t "sessions.n_live" .LiveCount}}</span>{{end}}<span class="sp"></span>
 <div class="gfilters">{{range .Selects}}<select class="gfield quiet" name="{{.Name}}" aria-label="{{.Label}}" data-autosubmit><option value="">{{.Label}}</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}

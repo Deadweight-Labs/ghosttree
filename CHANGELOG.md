@@ -13,7 +13,7 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 ### Before you upgrade
 
 - Run `ctx install` again on every machine after upgrading: it adds the
-  SubagentStart hook and rewrites the rule section in `CLAUDE.md` and
+  SessionEnd and SubagentStart hooks and rewrites the rule section in `CLAUDE.md` and
   `AGENTS.md`, which now names the twelve core tools.
 
 - Existing instances move to owners with `ctx db migrate-owners --db <path>`
@@ -1122,6 +1122,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- Agents, sessions and machines show what really runs (REQ-678). An agent
+  whose turn ended no longer reads "Working": it reads "Waiting for reply"
+  (the Stop hook), and a run that said goodbye reads "Ended" and moves to the
+  inactive agents (new SessionEnd hook; run `ctx install` again, and
+  `claude --resume` brings the session back). The machine named by
+  `ctx login --machine` is the one the profile, the devices, the agents and
+  the sessions show, each as a link to `/ui/m/<name>`, which offers "Share with
+  org"; an organization's Machines tab points at the own machines it could
+  get, and a device's requests keep the machine's "last seen" current.
+  Empty lists of agents and sessions say what is missing (no agent working; a
+  connected machine whose transcripts have not arrived, which come in through
+  `ctx watch`) instead of asking to connect an agent that is connected.
 - The two hook routes are faster (PAIN-76). On a test database of the size of a
   production one (4,500 entries, 3 million chunks, `cmd/hookbench`) the
   briefing at session start takes 25 ms instead of 150 ms (p50), 28 ms instead

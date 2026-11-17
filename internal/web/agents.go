@@ -166,8 +166,8 @@ type agentSections struct {
 }
 
 // sectionAgents sorts cards (already ordered by listAgents) into the sections:
-// "wait_you" is waiting on the viewer, "work", "wait_other" and "stuck" are
-// active, "idle" and "off" are inactive. Rows that wait carry the form of the
+// "wait_you" is waiting on the viewer, "work", "wait_other", "wait_reply" and
+// "stuck" are active, "idle", "ended" and "off" are inactive. Rows that wait carry the form of the
 // check "seen" (token and the page to return to).
 func sectionAgents(cards []agentCard, token, back string) agentSections {
 	var s agentSections
@@ -176,7 +176,7 @@ func sectionAgents(cards []agentCard, token, back string) agentSections {
 		case "wait_you":
 			c.CSRFToken, c.Back = token, back
 			s.Waiting = append(s.Waiting, c)
-		case "idle", "off":
+		case "idle", "off", "ended":
 			s.Inactive = append(s.Inactive, c)
 		default:
 			s.Active = append(s.Active, c)

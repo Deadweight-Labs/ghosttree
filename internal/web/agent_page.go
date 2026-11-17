@@ -20,8 +20,10 @@ import (
 // agentGroup is the agents of one machine, with how the machine is doing.
 type agentGroup struct {
 	Machine, State, StateText string
-	Active                    int
-	Cards                     []agentCard
+	// Href is the page of the machine, empty when the viewer cannot reach it.
+	Href   string
+	Active int
+	Cards  []agentCard
 }
 
 // groupAgents puts the cards under their machine, in the order the machines first
@@ -34,7 +36,7 @@ func groupAgents(cards []agentCard, machines []machineRow) []agentGroup {
 		if !ok {
 			g := agentGroup{Machine: c.Machine}
 			for _, m := range machines {
-				if m.Name == c.Machine {
+				if strings.EqualFold(m.Name, c.Machine) {
 					g.State, g.StateText = m.State, m.StateText
 				}
 			}
@@ -42,8 +44,11 @@ func groupAgents(cards []agentCard, machines []machineRow) []agentGroup {
 			i = len(out) - 1
 			index[c.Machine] = i
 		}
+		if out[i].Href == "" {
+			out[i].Href = c.MachineHref
+		}
 		out[i].Cards = append(out[i].Cards, c)
-		if c.Presence != "off" && c.Presence != "idle" {
+		if c.Presence != "off" && c.Presence != "idle" && c.Presence != "ended" {
 			out[i].Active++
 		}
 	}

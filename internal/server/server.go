@@ -334,6 +334,11 @@ func (a *api) auth(next http.Handler) http.Handler {
 			return
 		}
 		a.st.TouchToken(principal.TokenID)
+		if principal.Machine != "" {
+			// A device that talks is a machine that was just seen: without it the
+			// machine page reads "last seen 20 min ago" next to an agent at work.
+			a.st.TouchMachine(principal.Machine)
+		}
 		if record := requestRecordFromContext(r.Context()); record != nil {
 			record.actor = principal.Label
 		}

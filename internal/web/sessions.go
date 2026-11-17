@@ -171,12 +171,15 @@ type sessionsView struct {
 	SortHref       string
 	Next           string
 	Empty          bool // keine Sitzung, nichts gefiltert
-	NoMatch        bool // Filter ohne Zeilen
-	NoResults      bool
-	ClearHref      string
-	ClearFilters   string
-	Indexing       string
-	FiltersOn      bool
+	// EmptyHint says, for an empty list, what is missing: nothing is connected,
+	// or a machine is, and its transcripts have not arrived.
+	EmptyHint    emptyHint
+	NoMatch      bool // Filter ohne Zeilen
+	NoResults    bool
+	ClearHref    string
+	ClearFilters string
+	Indexing     string
+	FiltersOn    bool
 	// HasLinked: at least one listed session links a request or knowledge entry;
 	// without any, the column is left out.
 	HasLinked bool
@@ -693,6 +696,9 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 			v.Next = linkURL(url.Values{"cursor": {page.Next}})
 		}
 		v.Empty = len(page.Rows) == 0 && !v.FiltersOn && cursor == ""
+		if v.Empty && !guest {
+			v.EmptyHint = a.sessionsEmptyHint(r, pa, l, now)
+		}
 		v.NoMatch = len(page.Rows) == 0 && v.FiltersOn
 		v.ClearFilters = "/ui/sessions"
 	}
