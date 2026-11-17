@@ -57,6 +57,7 @@ type e5Provider struct {
 	srv    *httptest.Server
 	mu     sync.Mutex
 	seen   []e5Call
+	raws   [][]byte
 	script func(c e5Call) e5Step
 }
 
@@ -76,7 +77,7 @@ func newE5Provider(t *testing.T) *e5Provider {
 			return
 		}
 		p.mu.Lock()
-		p.seen = append(p.seen, c)
+		p.seen, p.raws = append(p.seen, c), append(p.raws, raw)
 		script := p.script
 		p.mu.Unlock()
 		step := script(c)

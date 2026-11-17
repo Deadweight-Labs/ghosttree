@@ -63,10 +63,23 @@ func PublicAddress(ip netip.Addr) bool {
 // ErrNotPublic: a name resolved to an address that is not public.
 var ErrNotPublic = errors.New("not a public address")
 
+// ErrPort: a page client was pointed at a port other than 80 and 443.
+var ErrPort = errors.New("only the ports 80 and 443")
+
+// webPort says whether a port is one a page is served on.
+func webPort(port string) bool { return port == "80" || port == "443" }
+
 // PublicDialer dials only public addresses: it resolves the name itself,
 // refuses unless every answer is public and connects to exactly that address,
 // so a second lookup cannot rebind it.
 func PublicDialer(timeout time.Duration) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return publicDialer(timeout, false)
+}
+
+// publicDialer is PublicDialer; webOnly also refuses every port but 80 and
+// 443, after the address check, so that a host that is not public is named
+// as such.
+func publicDialer(timeout time.Duration, webOnly bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	d := &net.Dialer{Timeout: timeout}
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
@@ -85,6 +98,9 @@ func PublicDialer(timeout time.Duration) func(ctx context.Context, network, addr
 				return nil, fmt.Errorf("%s resolves to %s: %w", host, ip, ErrNotPublic)
 			}
 		}
+		if webOnly && !webPort(port) {
+			return nil, fmt.Errorf("%s port %s: %w", host, port, ErrPort)
+		}
 		var last error
 		for _, ip := range ips {
 			conn, err := d.DialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
@@ -97,10 +113,11 @@ func PublicDialer(timeout time.Duration) func(ctx context.Context, network, addr
 	}
 }
 
-// PublicClient is an HTTP client that reaches public addresses only, also
-// after a redirect (each hop is dialled through the same check), follows at
-// most maxRedirects of them and ignores proxy variables, which would route
-// around the check.
+// PublicClient is an HTTP client for web pages: it reaches public addresses
+// on the ports 80 and 443 only, also after a redirect (each hop is dialled
+// through the same check), follows at most maxRedirects of them and ignores
+// proxy variables, which would route around the check. Another port would let
+// a found address speak to a mail or database server in the page's place.
 func PublicClient(timeout time.Duration, maxRedirects int) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
@@ -111,6 +128,9 @@ func PublicClient(timeout time.Duration, maxRedirects int) *http.Client {
 			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 				return fmt.Errorf("redirect to %s refused", req.URL.Scheme)
 			}
+			if p := req.URL.Port(); p != "" && !webPort(p) {
+				return fmt.Errorf("redirect to port %s: %w", p, ErrPort)
+			}
 			return nil
 		},
 		Transport: &http.Transport{
@@ -118,7 +138,7 @@ func PublicClient(timeout time.Duration, maxRedirects int) *http.Client {
 			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 			TLSHandshakeTimeout:   15 * time.Second,
 			ResponseHeaderTimeout: timeout,
-			DialContext:           PublicDialer(15 * time.Second),
+			DialContext:           publicDialer(15*time.Second, true),
 		},
 	}
 }

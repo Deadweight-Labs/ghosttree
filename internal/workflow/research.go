@@ -50,7 +50,8 @@ type WebResearch struct {
 	// Searcher reaches the search service: the operator's address, https or
 	// plain http on this machine (a local SearXNG).
 	Searcher *http.Client
-	// Fetcher reads pages: public addresses only (netguard.PublicClient).
+	// Fetcher reads pages: public addresses on the ports 80 and 443 only
+	// (netguard.PublicClient).
 	Fetcher *http.Client
 }
 
@@ -139,6 +140,9 @@ func (w *WebResearch) Fetch(ctx context.Context, raw string) (title, text string
 	if err != nil {
 		if errors.Is(err, netguard.ErrNotPublic) {
 			return "", "", errors.New("the address is not public")
+		}
+		if errors.Is(err, netguard.ErrPort) {
+			return "", "", errors.New("only pages on the ports 80 and 443 are read")
 		}
 		return "", "", errors.New("the page could not be read")
 	}

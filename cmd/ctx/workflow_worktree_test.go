@@ -421,3 +421,62 @@ func TestMirrorNeverTouchesTheWorkflowWorktree(t *testing.T) {
 		t.Fatalf("the worktree shows in git status: %q %v", status, err)
 	}
 }
+
+// KN-4825 m1: a pull does not write the server's text through a symbolic link
+// a checkout brought into the worktree, also not with --force.
+func TestWorkflowPullDoesNotWriteThroughALink(t *testing.T) {
+	e := newWTEnv(t)
+	if err := workflow.WriteWorktreeFile(e.root, "deploy", wtTexts["stufe-eins"]); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := e.push(t, "deploy", "erste Fassung"); code != 0 {
+		t.Fatalf("push: %d %s", code, out)
+	}
+	outside := filepath.Join(t.TempDir(), ".bash_aliases")
+	if err := os.Remove(workflow.WorktreeFile(e.root, "deploy")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, workflow.WorktreeFile(e.root, "deploy")); err != nil {
+		t.Fatal(err)
+	}
+	for _, force := range []bool{false, true} {
+		if code, out := e.pull(t, "deploy", force); code == 0 {
+			t.Fatalf("pull (force %v) through a link: %s", force, out)
+		}
+		if _, err := os.Lstat(outside); !os.IsNotExist(err) {
+			t.Fatalf("pull (force %v) wrote outside the worktree", force)
+		}
+	}
+}
+
+// KN-4825 m2: ctx workflow keeps its worktree out of git itself, in a fresh
+// clone where the mirror never ran.
+func TestWorkflowNewInAFreshCloneIsIgnoredByGit(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", "https://github.com/alpha/app.git"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Skipf("git %v: %v %s", args, err, out)
+		}
+	}
+	t.Chdir(repo)
+	var out bytes.Buffer
+	if code := cmdWorkflowWorktree("new", []string{"entwurf"}, &out); code != 0 {
+		t.Fatalf("new: %d %s", code, out.String())
+	}
+	status, err := exec.Command("git", "-C", repo, "status", "--porcelain", "--untracked-files=all").CombinedOutput()
+	if err != nil || strings.Contains(string(status), "workflows") {
+		t.Fatalf("git sees the worktree: %s %v", status, err)
+	}
+	exclude, _ := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+	if !strings.Contains(string(exclude), ".ghosttree/workflows/") {
+		t.Fatalf("exclude: %s", exclude)
+	}
+	// A worktree a checkout brought is refused.
+	if out, err := exec.Command("git", "-C", repo, "add", "-f", ".ghosttree/workflows/entwurf.md").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v %s", err, out)
+	}
+	out.Reset()
+	if code := cmdWorkflowWorktree("new", []string{"zweiter"}, &out); code != 1 || !strings.Contains(out.String(), "git tracks") {
+		t.Fatalf("new beside a tracked file: %d %s", code, out.String())
+	}
+}

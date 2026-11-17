@@ -97,6 +97,7 @@ var wfToolLook = map[string]struct{ key, tone string }{
 var wfToolReasonKeys = map[string]string{
 	workflow.ToolReasonNotDeclared: "wf.tool.why.not_declared",
 	workflow.ToolReasonPerRound:    "wf.tool.why.per_round",
+	workflow.ToolReasonAfterSubmit: "wf.tool.why.after_submit",
 }
 
 // wfToolRows reads the tool calls of a run's full text.

@@ -12,6 +12,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/sessiondistill"
@@ -22,8 +24,10 @@ import (
 // ones it needs (tools: [knowledge.search, issue.read]); the loop offers the
 // model exactly those. Every tool reads with the rights of the account the run
 // acts for, and only what every member of the project may read on the run
-// page: knowledge of the project, issues, ideas, pains and file descriptions of
-// the project, sessions their owners shared with it (KN-4817). None of them
+// page (audience.go, the same filter as the assembled inputs): knowledge of
+// the project, issues, ideas, pains and file descriptions of the project,
+// pull requests the server knows, sessions their owners shared with it
+// (KN-4817). None of them
 // writes anything; a tool result is data for the model and, for the gate, a
 // source a quote may come from.
 
@@ -122,6 +126,9 @@ type Toolbox struct {
 	// found are the addresses web.search returned in this run: web.fetch
 	// reads only those, so a model cannot send data out in an address of its own.
 	found map[string]bool
+	// searches and fetches count what left the server; each has a ceiling
+	// per run (maxSearchesPerRun, maxFetchesPerRun).
+	searches, fetches int
 	// texts are the tool results as the model got them; quotes may come from them.
 	texts []string
 	total int
@@ -218,13 +225,53 @@ func (tb *Toolbox) call(ctx context.Context, t ToolSpec, raw json.RawMessage) (s
 
 func (tb *Toolbox) project() string { return tb.asm.run.Project }
 
-// minQueryWord is the length from which a word of a query has to come from
-// the searchable words; shorter ones carry next to nothing.
-const minQueryWord = 3
+// The rule for what a web.search may send (KN-4823). A query leaves the
+// server, so it may carry only words the run may hand out: those of the
+// declared inputs, of the team's prompt and of earlier hits, never what a read
+// tool returned. Before the check a query is normalized (NFKC, invisible
+// format characters and combining marks removed, lower case, every other
+// character a space), and what is sent is exactly the checked words: a
+// zero-width space or a dot cannot hide a word inside an allowed one. A word
+// of any length has to come from the searchable words; a short one
+// (shorter than minQueryWord) only from a fixed list of stop words, at most
+// maxShortWords of them, so that pairs of letters or digits cannot spell out
+// what the run read. What stays open is the choice and order of allowed
+// words, bounded by maxSearchesPerRun and maxResearchQuery.
+const (
+	minQueryWord      = 3
+	maxShortWords     = 3
+	maxSearchesPerRun = 10
+	// maxFetchesPerRun bounds web.fetch: which found page a model reads is a
+	// signal to whoever runs those pages (a few bits per fetch), a channel
+	// that cannot be closed, only kept small.
+	maxFetchesPerRun = 5
+)
 
-func queryWords(s string) []string {
-	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+// queryStopWords are the short words a query may use without a source: German
+// and English function words.
+var queryStopWords = map[string]bool{
+	"a": true, "an": true, "as": true, "at": true, "be": true, "by": true, "do": true, "if": true, "in": true, "is": true, "it": true,
+	"no": true, "of": true, "on": true, "or": true, "to": true, "vs": true, "we": true,
+	"ab": true, "am": true, "da": true, "du": true, "er": true, "es": true, "im": true, "ob": true, "so": true, "um": true, "wo": true, "zu": true,
 }
+
+// normalizeQuery is the form a query and the searchable words are compared
+// in, and the form a query is sent in.
+func normalizeQuery(s string) string {
+	var b strings.Builder
+	for _, r := range norm.NFKC.String(s) {
+		switch {
+		case unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r):
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(unicode.ToLower(r))
+		default:
+			b.WriteByte(' ')
+		}
+	}
+	return b.String()
+}
+
+func queryWords(s string) []string { return strings.Fields(normalizeQuery(s)) }
 
 // allowSearchWords adds the words of a text a web.search may use.
 func (tb *Toolbox) allowSearchWords(text string) {
@@ -233,24 +280,38 @@ func (tb *Toolbox) allowSearchWords(text string) {
 	}
 }
 
-// foreignQueryWords are the words of a query that come from nowhere a search
-// may take them from.
-func (tb *Toolbox) foreignQueryWords(q string) []string {
-	var out []string
-	for _, w := range queryWords(q) {
-		if utf8.RuneCountInString(w) >= minQueryWord && !tb.searchable[w] && !slices.Contains(out, w) {
-			out = append(out, w)
+// checkQuery returns the query as it is sent, or why it may not be: the words
+// that come from nowhere a search may take them from, or too many short ones.
+func (tb *Toolbox) checkQuery(q string) (string, error) {
+	words := queryWords(q)
+	var foreign []string
+	short := 0
+	for _, w := range words {
+		if utf8.RuneCountInString(w) < minQueryWord {
+			if !queryStopWords[w] {
+				foreign = appendNew(foreign, w)
+			}
+			short++
+			continue
+		}
+		if !tb.searchable[w] {
+			foreign = appendNew(foreign, w)
 		}
 	}
-	return out
+	if len(foreign) > 0 {
+		return "", fmt.Errorf("a query may use only words of the inputs, of the task and of earlier search results, and of short words only common ones like in, of, im, zu; not: %s", strings.Join(foreign, ", "))
+	}
+	if short > maxShortWords {
+		return "", fmt.Errorf("a query may have at most %d short words", maxShortWords)
+	}
+	return strings.Join(words, " "), nil
 }
 
-// readableKnowledge: an active, confirmed entry of the project, not bound to a
-// machine and not held from its members, that the run's account may read.
-func (tb *Toolbox) readableKnowledge(k store.Knowledge) bool {
-	pa := tb.asm.pa
-	return pa != nil && k.Scope.Project == tb.project() && k.Scope.Machine == "" && k.Status == "active" &&
-		k.Confidence != "staged" && k.Confidence != "quarantined" && pa.CanSeeKnowledge(k) && !tb.asm.st.HeldFromMembers(store.HeldKnowledge, k.ID)
+func appendNew(list []string, w string) []string {
+	if slices.Contains(list, w) {
+		return list
+	}
+	return append(list, w)
 }
 
 func toolKnowledgeSearch(_ context.Context, tb *Toolbox, in toolArgs) (string, error) {
@@ -264,7 +325,7 @@ func toolKnowledgeSearch(_ context.Context, tb *Toolbox, in toolArgs) (string, e
 	}
 	var lines []string
 	for _, k := range list {
-		if !tb.readableKnowledge(k) {
+		if !tb.asm.membersReadKnowledge(k) {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("KN-%d [%s] %s — %s", k.ID, k.Type, k.Title, cut(oneLine(k.Body), 300)))
@@ -279,8 +340,8 @@ func toolKnowledgeSearch(_ context.Context, tb *Toolbox, in toolArgs) (string, e
 }
 
 func toolKnowledgeRead(_ context.Context, tb *Toolbox, in toolArgs) (string, error) {
-	k, err := tb.asm.st.KnowledgeByID(int64(in.ID))
-	if err != nil || !tb.readableKnowledge(k) {
+	k, ok := tb.asm.membersReadKnowledgeID(int64(in.ID))
+	if !ok {
 		return "", errNotReadable
 	}
 	return fmt.Sprintf("KN-%d [%s] %s\n\n%s", k.ID, k.Type, k.Title, cut(k.Body, 8000)), nil
@@ -288,7 +349,7 @@ func toolKnowledgeRead(_ context.Context, tb *Toolbox, in toolArgs) (string, err
 
 func toolIssueRead(_ context.Context, tb *Toolbox, in toolArgs) (string, error) {
 	pa := tb.asm.pa
-	if pa == nil || tb.asm.st.HeldFromMembers(store.HeldRequest, int64(in.ID)) {
+	if !tb.asm.membersReadRequest(int64(in.ID)) {
 		return "", errNotReadable
 	}
 	// RequestRead checks the issue itself, as GET /api/requests/{id} does.
@@ -312,11 +373,8 @@ func toolIdeaRead(_ context.Context, tb *Toolbox, in toolArgs) (string, error) {
 	if pa == nil {
 		return "", errNotReadable
 	}
-	if tb.asm.st.HeldFromMembers(store.HeldIdea, int64(in.ID)) {
-		return "", errNotReadable
-	}
 	ws, err := pa.IdeaWorkshop(int64(in.ID))
-	if err != nil || ws.Idea.Project != tb.project() {
+	if err != nil || !tb.asm.membersReadIdea(ws.Idea) {
 		return "", errNotReadable
 	}
 	t := fmt.Sprintf("IDEA-%d %s\n\n%s", ws.Idea.ID, ws.Idea.Title, cut(ws.Idea.Body, 4000))
@@ -333,9 +391,8 @@ func toolIdeaRead(_ context.Context, tb *Toolbox, in toolArgs) (string, error) {
 }
 
 func toolPainRead(_ context.Context, tb *Toolbox, in toolArgs) (string, error) {
-	pa := tb.asm.pa
 	p, err := tb.asm.st.PainByID(int64(in.ID))
-	if err != nil || pa == nil || p.Project != tb.project() || !pa.CanSeePain(p) || tb.asm.st.HeldFromMembers(store.HeldPain, p.ID) {
+	if err != nil || !tb.asm.membersReadPain(p) {
 		return "", errNotReadable
 	}
 	t := fmt.Sprintf("PAIN-%d [%s] %s\n\n%s", p.ID, p.State, p.Title, cut(p.Body, 6000))
@@ -370,8 +427,11 @@ func toolPRDiff(ctx context.Context, tb *Toolbox, in toolArgs) (string, error) {
 	if n <= 0 {
 		n = int64(in.ID)
 	}
+	// Only a pull request the server recorded: not one from a fork, which the
+	// import leaves out on purpose, and no number GitHub would answer for
+	// although ghosttree never saw it.
 	pr, err := tb.asm.st.WorkflowPRInput(tb.project(), n)
-	if err != nil || tb.asm.pa == nil || !tb.asm.pa.CanSeeProject(tb.project(), store.ResProject) {
+	if err != nil || !pr.Known || tb.asm.pa == nil || !tb.asm.pa.CanSeeProject(tb.project(), store.ResProject) {
 		return "", errNotReadable
 	}
 	head := fmt.Sprintf("pull request #%d %s\n\n", pr.Number, pr.Title)
@@ -456,12 +516,17 @@ func toolWebSearch(ctx context.Context, tb *Toolbox, in toolArgs) (string, error
 	if utf8.RuneCountInString(q) > maxResearchQuery {
 		q = string([]rune(q)[:maxResearchQuery])
 	}
+	q, err := tb.checkQuery(q)
+	if err != nil {
+		return "", err
+	}
 	if q == "" {
 		return "", errors.New("query is empty")
 	}
-	if foreign := tb.foreignQueryWords(q); len(foreign) > 0 {
-		return "", fmt.Errorf("a query may use only words of the inputs, of the task and of earlier search results; not: %s", strings.Join(foreign, ", "))
+	if tb.searches >= maxSearchesPerRun {
+		return "", fmt.Errorf("this run has searched %d times, as often as it may; answer with what you have", maxSearchesPerRun)
 	}
+	tb.searches++
 	hits, err := tb.web.Search(ctx, q, 8)
 	if err != nil {
 		return "", err
@@ -486,6 +551,10 @@ func toolWebFetch(ctx context.Context, tb *Toolbox, in toolArgs) (string, error)
 	if !tb.found[u] {
 		return "", errors.New("only an address a web.search of this run returned can be read")
 	}
+	if tb.fetches >= maxFetchesPerRun {
+		return "", fmt.Errorf("this run has read %d pages, as many as it may; answer with what you have", maxFetchesPerRun)
+	}
+	tb.fetches++
 	title, text, err := tb.web.Fetch(ctx, u)
 	if err != nil {
 		return "", err

@@ -12,6 +12,7 @@ func init() {
 		{"wf.tool.refused", "Refused", "Abgewiesen"},
 		{"wf.tool.why.not_declared", "Not declared in the workflow", "Im Workflow nicht erklärt"},
 		{"wf.tool.why.per_round", "Too many calls in one round", "Zu viele Aufrufe in einer Runde"},
+		{"wf.tool.why.after_submit", "Called together with submit", "Zusammen mit submit aufgerufen"},
 		{"wf.tool.input", "Input", "Eingabe"},
 		{"wf.tool.result", "Result", "Ergebnis"},
 		{"wf.tool.answer", "Handed in", "Abgegeben"},
