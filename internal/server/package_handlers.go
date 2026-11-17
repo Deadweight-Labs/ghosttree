@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -349,5 +350,7 @@ func (a *api) reopenCriterion(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
+	// Who reopened it is shown on the history of the issue: an agent as its owner's agent, not as the person.
+	a.stampActor(r, actor.Criterion, criterionID, 0)
 	writeJSON(w, http.StatusOK, map[string]any{"criterion_id": criterionID, "state": "open"})
 }

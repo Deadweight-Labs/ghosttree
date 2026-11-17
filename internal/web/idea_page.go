@@ -179,17 +179,25 @@ func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, edits []store.IdeaEdit, a
 	sentence := func(key string, args ...any) template.HTML {
 		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
 	}
+	// An agent that wrote a text is named as its owner's agent ("Pia’s Claude"), a person by name.
+	byWho := func(it tlItem, person string, agent bool) tlItem {
+		it.Who = person
+		if agent && person != "" {
+			it.withActor(byAgentActor(l, person, agent))
+		}
+		return it
+	}
 	for _, t := range ws.Raw {
 		if t.Revision <= 1 {
 			continue
 		}
-		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-raw-" + strconv.Itoa(t.Revision), Act: "idea.raw", Who: t.Person, Icon: "pencil", Head: sentence("ideas.ev.raw", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}})
+		all = append(all, datedItem{t.CreatedAt, byWho(tlItem{ID: "text-raw-" + strconv.Itoa(t.Revision), Act: "idea.raw", Icon: "pencil", Head: sentence("ideas.ev.raw", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}, t.Person, t.ByAgent)})
 	}
 	if s := ws.Summary; s != nil {
-		all = append(all, datedItem{s.CreatedAt, tlItem{ID: "text-summary", Act: "idea.summary", Who: s.Person, Icon: "list", Head: sentence("ideas.ev.summary"), Age: age(s.CreatedAt), Body: mdText(s.Message)}})
+		all = append(all, datedItem{s.CreatedAt, byWho(tlItem{ID: "text-summary", Act: "idea.summary", Icon: "list", Head: sentence("ideas.ev.summary"), Age: age(s.CreatedAt), Body: mdText(s.Message)}, s.Person, s.ByAgent)})
 	}
 	for _, t := range ws.ConceptRevs {
-		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Who: t.Person, Icon: "book", Head: sentence("ideas.ev.concept", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}})
+		all = append(all, datedItem{t.CreatedAt, byWho(tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Icon: "book", Head: sentence("ideas.ev.concept", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}, t.Person, t.ByAgent)})
 	}
 	for _, d := range ws.Decisions {
 		all = append(all, datedItem{d.CreatedAt, tlItem{ID: "decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Who: d.Person, Icon: "chat", Head: sentence("ideas.ev.decision") + " " + longPill(l, "decision", d.ID, "#workshop"), Age: age(d.CreatedAt)}})

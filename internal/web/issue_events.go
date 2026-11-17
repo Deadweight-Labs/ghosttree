@@ -90,9 +90,11 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 		base = repo[0]
 	}
 	byID := map[int64]criterionLine{}
+	byNum := map[int]criterionLine{}
 	byText := map[string]criterionLine{}
 	for _, c := range criteria {
 		byID[c.ID] = c
+		byNum[c.Number] = c
 		byText[strings.TrimSpace(c.Text)] = c
 	}
 	crit := func(n int) template.HTML {
@@ -185,6 +187,8 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 				n, _ := strconv.Atoi(m[1])
 				ev.Sentence = sentence("issue.ev.criterion_reopened", crit(n))
 				ev.Criterion, ev.Quote = n, ellipsize(strings.TrimSpace(m[2]), 200)
+				// The requirement is what the stamp of who reopened it hangs on.
+				ev.CriterionID = byNum[n].ID
 			}
 		case "relation.taken_over":
 			ev.Icon, ev.Sentence = "book", sentence("issue.ev.relation_taken_over")

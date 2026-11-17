@@ -117,7 +117,7 @@ func (a *app) orgBandFor(r *http.Request, org store.Org, current string) *bandVi
 		counts["services"], showServices = len(services), true
 	}
 	counts["rooms"] = counts["repos"]
-	counts["machines"] = len(a.orgMachines(r, org))
+	counts["machines"] = a.orgMachineCount(r, org)
 	if groups, _ := a.orgAgentGroups(r, org); groups != nil {
 		n := 0
 		for _, g := range groups {
@@ -322,7 +322,7 @@ func (v *orgPageView) fillAgentFilters(canConnect bool) {
 // userBandFor is the band of a person's own namespace, with the person's
 // picture when they linked GitHub.
 func (a *app) userBandFor(r *http.Request, org store.Org, current string) *bandView {
-	counts := map[string]int{"repos": len(a.orgProjects(r, org)), "machines": len(a.orgMachines(r, org))}
+	counts := map[string]int{"repos": len(a.orgProjects(r, org)), "machines": a.orgMachineCount(r, org)}
 	opts := orgBandOpts{Owner: org.Role == store.OrgOwner}
 	if n := a.gardenOpenCount(r, org); n >= 0 {
 		counts["gardener"], opts.Gardener = n, true

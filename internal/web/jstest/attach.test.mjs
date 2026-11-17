@@ -1,3 +1,5 @@
+// REQ-685 AC-1: none of the three ways (button, Ctrl+V, dropping) loads the page again. The picture is
+// sent in the background, shows up in the row of pictures, and a comment that was begun stays in its field.
 // REQ-671 AC-2: Ctrl+V with a picture on the clipboard and dropping a picture file add it on
 // the idea, issue and pain page (static/ui-attach.js), through the form of the page. Pasting
 // text is left alone. The form is what the template renders: the fixture is written by
@@ -10,7 +12,9 @@ import { loadPage, Event } from "./dom.mjs";
 const fixture = (name) => readFileSync(new URL("./fixtures/" + name, import.meta.url), "utf8");
 const FRAME = fixture("attach-box.html") + `<textarea id="comment" class="comp-in"></textarea><input id="alt2"><p id="text">text</p>`;
 const HERE = "http://localhost/ui/x/shell/pains/7";
-const DONE = HERE + "?done=image#images";
+const IMG = (n) => `<a class="ws-zoom" href="/ui/attachments/${n}" data-zoom data-alt="Image ${n}"><img src="/ui/attachments/${n}" alt="Image ${n}" width="40" height="30"></a>`;
+const ok = (n = 9) => ({ ok: true, json: async () => ({ ok: true, id: n, owner: "pain", html: IMG(n) }) });
+const refused = (message) => ({ ok: false, json: async () => ({ ok: false, message }) });
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -24,9 +28,9 @@ class FakeFormData {
   get(name) { return this.fields.get(name); }
 }
 
-// page loads the script with a fetch that answers like the server (a redirect to the page)
+// page loads the script with a fetch that answers like the server (JSON with the new picture)
 // and a location the test can read.
-function page({ html = FRAME, answer = () => ({ ok: true, redirected: true, url: DONE }) } = {}) {
+function page({ html = FRAME, answer = () => ok() } = {}) {
   const calls = [];
   const pending = [];
   const fetch = (url, init) => {
@@ -66,7 +70,7 @@ function drop(p, files, { types = ["Files"], target } = {}) {
   return { over, dropped };
 }
 
-test("a picture pasted on the page goes through the form of the page, and the page is loaded again", async () => {
+test("a picture pasted on the page goes through the form of the page, in the background", async () => {
   const p = page();
   p.document.querySelector('input[name="alt"]').value = "The broken button";
   const file = image();
@@ -78,18 +82,68 @@ test("a picture pasted on the page goes through the form of the page, and the pa
   assert.equal(url, "/ui/pains/7/attach", "the action of the form");
   assert.equal(init.method, "POST");
   assert.equal(init.credentials, "same-origin");
+  assert.equal(init.headers.Accept, "application/json", "asks for the picture, not for a redirect to the page");
   assert.equal(init.body.get("file"), file, "the pasted picture is the file of the form");
   assert.equal(init.body.get("csrf_token"), "tok-1", "the token of the form goes along");
   assert.equal(init.body.get("owner"), "pain", "what the picture belongs to");
   assert.equal(init.body.get("alt"), "The broken button", "the description typed into the form goes along");
-  assert.equal(p.location.href, DONE, "the page the server answered with is shown: done=image or fail=img_*");
+  assert.equal(p.location.href, HERE, "the page is not left");
+  assert.equal(p.reloads.length, 0, "and not loaded again");
+  assert.equal(p.document.querySelectorAll(".ws-imgs a[data-zoom]").length, 1, "the picture is in the row");
+  assert.equal(p.document.querySelector('input[name="alt"]').value, "", "the form is empty for the next one");
 });
 
-test("the page is reloaded when the answer is the page already shown", async () => {
-  const p = page({ answer: () => ({ ok: true, redirected: true, url: HERE }) });
+test("a text that was begun is still in its field after the picture is added", async () => {
+  const p = page();
+  const area = p.document.getElementById("comment");
+  area.value = "The button does nothing when I click it, and";
+  paste(p, clip({ file: image() }), area);
+  await tick();
+  assert.equal(area.value, "The button does nothing when I click it, and", "nothing was thrown away");
+  assert.equal(p.reloads.length, 0);
+  assert.equal(p.location.href, HERE);
+  assert.equal(p.document.querySelectorAll(".ws-imgs a[data-zoom]").length, 1);
+  // A second and a third add to the row.
+  paste(p, clip({ file: image({ name: "b.png" }) }), area);
+  await tick();
+  assert.equal(p.document.querySelectorAll(".ws-imgs a[data-zoom]").length, 2);
+  assert.equal(area.value, "The button does nothing when I click it, and");
+});
+
+test("the first picture of an object makes the row, above the form", async () => {
+  const p = page();
+  assert.equal(p.document.querySelector(".ws-imgs"), null, "no row yet");
   paste(p, clip({ file: image() }));
   await tick();
-  assert.equal(p.reloads.length, 1);
+  const row = p.document.querySelector(".ws-imgs");
+  assert.ok(row, "the row is made");
+  assert.equal(row.querySelectorAll("img").length, 1);
+  assert.ok(row.parentNode.querySelector("form[data-attach]"), "in the box of the form");
+});
+
+test("the button sends the chosen file in the background; no file is told where it stands", async () => {
+  const p = page();
+  const form = p.document.querySelector("form[data-attach]");
+  const area = p.document.getElementById("comment");
+  area.value = "half a sentence";
+  const none = new Event("submit", { bubbles: true, cancelable: true });
+  form.dispatchEvent(none);
+  assert.equal(none.defaultPrevented, true, "the form never goes the plain way: that would load the page");
+  assert.equal(p.calls.length, 0);
+  assert.match(p.document.querySelector(".ws-up-note").textContent, /Choose an image file first/);
+  const input = form.querySelector('input[type="file"]');
+  const file = image({ name: "chosen.png" });
+  input.files = [file];
+  const go = new Event("submit", { bubbles: true, cancelable: true });
+  form.dispatchEvent(go);
+  assert.equal(go.defaultPrevented, true);
+  await tick();
+  assert.equal(p.calls.length, 1);
+  assert.equal(p.calls[0].init.body.get("file"), file);
+  assert.equal(p.document.querySelectorAll(".ws-imgs a[data-zoom]").length, 1);
+  assert.equal(p.document.querySelector(".ws-up-note"), null, "the note is gone once it worked");
+  assert.equal(area.value, "half a sentence");
+  assert.equal(p.reloads.length, 0);
 });
 
 test("pasting text is never touched, in a field or outside one", async () => {
@@ -132,7 +186,8 @@ test("a picture file dropped on the page is uploaded, and only a picture file", 
   await tick();
   assert.equal(p.calls.length, 1);
   assert.equal(p.calls[0].init.body.get("file"), file);
-  assert.equal(p.location.href, DONE);
+  assert.equal(p.location.href, HERE, "dropping does not leave the page either");
+  assert.equal(p.document.querySelectorAll(".ws-imgs a[data-zoom]").length, 1);
   assert.equal(p.document.body.classList.contains("ws-dropping"), false, "the mark of the dragging is gone after the drop");
 
   const q = page();
@@ -178,12 +233,23 @@ test("a picture over the limit is not sent, and the page says so", async () => {
   assert.equal(p.document.querySelectorAll(".ws-up-note").length, 1);
 });
 
-test("an answer that is no redirect, or no answer, is told on the page and the page stays", async () => {
-  const refused = page({ answer: () => ({ ok: false, redirected: false, url: "http://localhost/ui/pains/7/attach" }) });
-  paste(refused, clip({ file: image() }));
+test("a refusal of the server is told on the page with its words, and the page stays", async () => {
+  const p = page({ answer: () => refused("The image could not be read. Export it again.") });
+  p.document.getElementById("comment").value = "keep me";
+  paste(p, clip({ file: image() }));
   await tick();
-  assert.equal(refused.location.href, HERE, "the page is not left");
-  assert.match(refused.document.querySelector(".ws-up-note").textContent, /could not be uploaded/);
+  assert.equal(p.location.href, HERE, "the page is not left");
+  assert.equal(p.document.getElementById("comment").value, "keep me");
+  assert.match(p.document.querySelector(".ws-up-note").textContent, /could not be read/);
+  assert.equal(p.document.querySelectorAll(".ws-imgs a[data-zoom]").length, 0, "no picture was added");
+});
+
+test("an answer that is no JSON, or no answer, is told on the page and the page stays", async () => {
+  const html = page({ answer: () => ({ ok: true, json: async () => { throw new Error("not json"); } }) });
+  paste(html, clip({ file: image() }));
+  await tick();
+  assert.equal(html.location.href, HERE, "a login page that the server redirected to is not followed");
+  assert.match(html.document.querySelector(".ws-up-note").textContent, /could not be uploaded/);
 
   const down = page({ answer: () => Promise.reject(new Error("offline")) });
   paste(down, clip({ file: image() }));
@@ -194,7 +260,7 @@ test("an answer that is no redirect, or no answer, is told on the page and the p
 
 test("a second picture while one is on its way is not sent twice", async () => {
   let release;
-  const p = page({ answer: () => new Promise((resolve) => { release = () => resolve({ ok: true, redirected: true, url: DONE }); }) });
+  const p = page({ answer: () => new Promise((resolve) => { release = () => resolve(ok(10)); }) });
   paste(p, clip({ file: image() }));
   paste(p, clip({ file: image({ name: "second.png" }) }));
   await tick();

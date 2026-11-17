@@ -1223,6 +1223,17 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   Empty lists of agents and sessions say what is missing (no agent working; a
   connected machine whose transcripts have not arrived, which come in through
   `ctx watch`) instead of asking to connect an agent that is connected.
+- Writing never loses what was typed (REQ-685). A picture added with the button,
+  with Ctrl+V or by dropping goes up in the background and shows in the row of
+  pictures; the page is not loaded again, so a comment that was begun stays in its
+  field. "Report anyway" on a task sends the note that was typed along with the
+  report. An agent run that is over, or whose turn is finished, no longer reads
+  "working on this right now" or "Live", and an issue that is done never does.
+  A device that talks reads "used a minute ago" instead of ten, the number on an
+  organization's Machines tab is the number of rows under it, and the inactive
+  agents are open when nobody works. An agent that reopened a requirement or
+  wrote the text of an idea is named as its owner's agent in the history, not as
+  the person.
 - The two hook routes are faster (PAIN-76). On a test database of the size of a
   production one (4,500 entries, 3 million chunks, `cmd/hookbench`) the
   briefing at session start takes 25 ms instead of 150 ms (p50), 28 ms instead

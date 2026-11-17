@@ -5,7 +5,7 @@
 {{/* The pictures of an idea, an issue or a pain and the form that adds one (REQ-671). data-attach marks the form that ui-attach.js fills with a pasted or dropped picture. */}}
 {{define "attachbox"}}{{with .}}{{if or .Images .CanAttach}}<section class="box ws-imgbox" id="images" aria-labelledby="img-h"><div class="box-h"><h2 class="t" id="img-h">{{mi "image"}} {{t "workshop.images"}}</h2></div>
 {{if .Images}}<div class="ws-imgs ws-imgs-idea">{{range .Images}}{{template "wsimage" .}}{{end}}</div>{{end}}
-{{if .CanAttach}}<form class="ws-up" data-attach data-max="{{.MaxBytes}}" data-fail="{{t "workshop.img.fail"}}" data-big="{{t "ideas.result.img_size"}}" method="post" action="{{.Action}}" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="owner" value="{{.Owner}}">
+{{if .CanAttach}}<form class="ws-up" data-attach data-max="{{.MaxBytes}}" data-fail="{{t "workshop.img.fail"}}" data-big="{{t "ideas.result.img_size"}}" data-none="{{t "ideas.result.img_none"}}" method="post" action="{{.Action}}" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="owner" value="{{.Owner}}">
 {{template "uifile" (fileField "file" "image/png,image/jpeg,image/webp" (t "workshop.img.pick") (t "workshop.img.file"))}}
 <input class="gfield" name="alt" maxlength="200" autocomplete="off" placeholder="{{t "workshop.img.alt"}}" aria-label="{{t "workshop.img.alt"}}">
 <button class="gbtn">{{mi "plus"}}{{t "workshop.img.add"}}</button></form>{{end}}</section>{{end}}{{end}}{{end}}
