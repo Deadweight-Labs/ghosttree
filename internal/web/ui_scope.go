@@ -30,6 +30,38 @@ func (a *app) repoScoped(r *http.Request, project, tab string) *http.Request {
 	return a.withRepoBand(r, project, tab)
 }
 
+// repoScopedChosen is repoScoped for the pages that are about one repository as soon as one is chosen (review,
+// context, agents): the band stands over them also when the project is the remembered choice and the address does
+// not name it, so the page does not read "Review / deploy-hook" without the tabs of that repository (REQ-687).
+// Without a project, or for one the viewer has no role in, the request stays as it is.
+func (a *app) repoScopedChosen(r *http.Request, project, tab string) *http.Request {
+	if project == "" || repoFrom(r) != nil {
+		return r
+	}
+	opts, _ := a.projectOptions(r, a.access(r))
+	if !slices.ContainsFunc(opts, func(o projectOption) bool { return o.Remote == project }) {
+		return r
+	}
+	return a.withRepoBand(r, project, tab)
+}
+
+// refererProject is the project whose page the viewer came from (the Referer is one of this server's repository
+// pages), among the projects they may see; "" when there is none. The longest matching address wins.
+func refererProject(r *http.Request, opts []projectOption) string {
+	ref, err := url.Parse(r.Referer())
+	if err != nil || ref.Path == "" || (ref.Host != "" && ref.Host != r.Host) {
+		return ""
+	}
+	best := ""
+	for _, o := range opts {
+		base := repoHref(o.Remote)
+		if (ref.Path == base || strings.HasPrefix(ref.Path, base+"/")) && len(o.Remote) > len(best) {
+			best = o.Remote
+		}
+	}
+	return best
+}
+
 // withRepoBand puts the band of the repository over the page without asking
 // whether the address named the project: the caller knows it does.
 func (a *app) withRepoBand(r *http.Request, project, tab string) *http.Request {

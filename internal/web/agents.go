@@ -66,12 +66,14 @@ func (a *app) agentsPage(w http.ResponseWriter, r *http.Request) {
 	now := overviewNow().UTC()
 	pa := a.access(r)
 	who := a.shellBaseFor(r).who
-	shell := a.shellFor(r, "agents")
+	// The repository the list is narrowed to (the chosen one) gets its band, and the list follows the same project.
+	project := a.projectParam(r)
+	r = a.repoScopedChosen(r, project, "sessions")
 	view := agentsView{CSRFToken: csrfOf(r)}
 	view.Guest = who.kind == viewerGuest
 	if !view.Guest {
 		view.CanAdd, view.Connect = true, "/ui/overview?connect=1"
-		rows, err := a.listAgents(r, pa, selectedProject(shell), now, agentsMax)
+		rows, err := a.listAgents(r, pa, project, now, agentsMax)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

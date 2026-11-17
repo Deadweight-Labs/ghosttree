@@ -19,10 +19,15 @@ func TestRepoSettingsTabAndLabels(t *testing.T) {
 	if _, page := fetchPage(t, e.Lead, e.Base+"/ui/x/shell"); !strings.Contains(page, `data-tab="settings"`) {
 		t.Error("a lead has no settings tab")
 	}
+	// A member may make a label (REQ-687: the way from "Create a label" on an issue leads here), so the page is theirs
+	// to open, without the access section and without the controls that change or delete a label; a guest gets neither.
+	if code, page := fetchPage(t, e.Member, settings); code != http.StatusOK || !strings.Contains(page, `action="/ui/labels/create"`) || strings.Contains(page, `id="access"`) || strings.Contains(page, "/update") {
+		t.Errorf("member on the settings: %d", code)
+	}
+	if code, _ := fetchPage(t, e.Guest, settings); code != http.StatusNotFound {
+		t.Errorf("guest opens the settings: %d", code)
+	}
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
-		if code, _ := fetchPage(t, c, settings); code != http.StatusNotFound {
-			t.Errorf("%s opens the settings: %d", name, code)
-		}
 		if _, page := fetchPage(t, c, e.Base+"/ui/x/shell"); strings.Contains(page, `data-ic="settings"`) {
 			t.Errorf("%s sees the settings tab", name)
 		}

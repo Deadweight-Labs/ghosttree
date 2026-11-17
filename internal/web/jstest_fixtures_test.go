@@ -81,4 +81,12 @@ func TestJSFixturesAreWhatTheTemplatesRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	goldenFixture(t, "attach-box.html", attach.Bytes())
+
+	// The tile of a picture (REQ-687): its name ATT-n and the button that writes ![description](ATT-n)
+	// into a field of the page (static/ui-parts.js).
+	var tile bytes.Buffer
+	if err := langEN.page().ExecuteTemplate(&tile, "wsimage", attachImage{Src: "/ui/attachments/7", Alt: "The broken button", Desc: "The broken button", ID: 7, W: 40, H: 30}); err != nil {
+		t.Fatal(err)
+	}
+	goldenFixture(t, "attach-tile.html", tile.Bytes())
 }

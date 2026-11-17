@@ -50,10 +50,8 @@ type bandView struct {
 	// Head is the owner above the tabs of an organization or a person: picture,
 	// name and where it lives on GitHub (REQ-623).
 	Head *bandHead
-	// Waiting are the people a task of the repository waits for (REQ-599),
-	// WaitingHref where those tasks are listed.
-	Waiting     []string
-	WaitingHref string
+	// Waiting are the people a task of the repository waits for (REQ-599); the Tasks tab shows them behind its number.
+	Waiting []string
 }
 
 // bandHead is the owner line above the tabs.
@@ -367,8 +365,11 @@ type composerView struct {
 	Avatar    string
 	ModeLabel string
 	Modes     []composerMode
-	Fields    []composerField
-	Signal    *composerSelect
+	// ModeNote is a line right of the status row: why an entry of it cannot be chosen (the open requirements
+	// that keep "Done" shut).
+	ModeNote string
+	Fields   []composerField
+	Signal   *composerSelect
 	// Hidden are further fixed fields of the form (the room a reply goes to).
 	Hidden []hiddenField
 }

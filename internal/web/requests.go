@@ -189,8 +189,8 @@ type requestView struct {
 	Live []liveAgent
 	// LabelBox is the block "Labels" of the sidebar (issue page only).
 	LabelBox *labelBoxView
-	// MoveProjects sind die Projekte, in die der Betrachter den Auftrag legen
-	// darf; leer heißt: kein Formular.
+	// MoveProjects sind die anderen Projekte, in die der Betrachter den Auftrag
+	// legen darf; leer heißt: kein Formular und kein Knopf.
 	MoveProjects []filterOption
 }
 
@@ -435,7 +435,7 @@ func (a *app) buildRequestView(w http.ResponseWriter, r *http.Request) (*request
 	v.EditOpen = v.CanEdit && r.URL.Query().Get("edit") == "1"
 	if v.CanEdit {
 		v.Priorities = a.knownPriorities(pa, project, req.Priority)
-		v.MoveProjects = writableOptions(pa, project)
+		v.MoveProjects = otherProjectOptions(pa, project)
 	}
 	open := 0
 	humans := map[int64]string{}

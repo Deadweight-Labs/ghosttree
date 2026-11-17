@@ -257,6 +257,54 @@
     TOOLS[tool](ta);
   });
 
+  // Ctrl+Enter (Cmd+Enter on a Mac) in the field of a composer sends it, the same way its button does: through
+  // the submit of the form, so the checks of the browser (a required text) and the scripts that take the form
+  // over still apply. The button names the keys in its tooltip.
+  const sendKeys = /mac|iphone|ipad/.test(((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "").toLowerCase())
+    ? "⌘ Enter"
+    : (document.documentElement.lang || "").toLowerCase().startsWith("de") ? "Strg+Enter" : "Ctrl+Enter";
+  const withKeys = (tip) => (tip ? tip + " · " : "") + sendKeys;
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.isComposing) return;
+    const ta = event.target;
+    if (!ta.matches || !ta.matches(".cx textarea")) return;
+    const form = ta.closest("form");
+    const btn = $("[data-submit]", ta.closest(".cx"));
+    if (!form || !btn || btn.disabled) return;
+    event.preventDefault();
+    if (typeof form.requestSubmit === "function") form.requestSubmit(btn); else btn.click();
+  });
+  for (const b of $$(".cx [data-submit]")) {
+    b.title = withKeys(b.getAttribute("title") || "");
+    b.setAttribute("aria-keyshortcuts", "Control+Enter");
+  }
+
+  // The tile of a picture (ATT-n) puts its line, ![description](ATT-n), into the field of the composer that was
+  // used last (else the first one that is shown), at the cursor, on a line of its own. The buttons are only shown
+  // when the page has such a field (.has-cx).
+  if ($(".cx textarea")) document.documentElement.classList.add("has-cx");
+  let lastField = null;
+  document.addEventListener("focusin", (event) => {
+    if (event.target.matches && event.target.matches(".cx textarea")) lastField = event.target;
+  });
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest && event.target.closest("[data-att-insert]");
+    if (!button) return;
+    // A field is "shown" unless it sits in a closed part of the page (the field itself is hidden while the preview is open).
+    const shown = (t) => { const h = t.closest("[hidden]"); return !h || h.classList.contains("cx-w"); };
+    const ta = lastField && shown(lastField) ? lastField : $$(".cx textarea").find(shown);
+    if (!ta) return;
+    const cx = ta.closest(".cx");
+    const write = cx && $('[data-wtab="w"]', cx);
+    if (write && $(".cx-w", cx) && $(".cx-w", cx).hidden) write.click();
+    const desc = (button.dataset.desc || "").replace(/[\[\]\s]+/g, " ").trim();
+    const line = "![" + desc + "](" + button.dataset.attInsert + ")";
+    const a = ta.selectionStart || 0, b = ta.selectionEnd || 0, v = ta.value;
+    const lead = a > 0 && v[a - 1] !== "\n" ? "\n" : "";
+    const text = lead + line + "\n";
+    put(ta, a, b, text, a + text.length, a + text.length);
+  });
+
   // Composer with a mode (state, signal): the entry that is chosen sets the button label and
   // class, the placeholder, whether the words are required and the fields that belong to it.
   for (const cx of $$(".cx[data-cfg]")) {
@@ -274,7 +322,7 @@
       cx.dataset.mode = mode;
       if (btn) {
         btn.className = "gbtn " + (c.cls === undefined ? "pri" : c.cls);
-        if (c.tip) btn.title = c.tip; else btn.removeAttribute("title");
+        btn.title = withKeys(c.tip || "");
       }
       label();
       if (c.ph) { ta.placeholder = c.ph; ta.setAttribute("aria-label", c.ph); }

@@ -61,7 +61,7 @@ var repoTabIcons = map[string]string{"code": "code", "issues": "issue", "pulls":
 // Band is the tab band under the header: the row, and behind the separator the
 // tabs of the second group.
 func (v *repoView) Band() *bandView {
-	b := &bandView{Label: "repo.tabs", Waiting: v.Waiting, WaitingHref: v.Href + "/tasks"}
+	b := &bandView{Label: "repo.tabs", Waiting: v.Waiting}
 	for _, t := range v.Tabs {
 		bt := bandTab{Key: t.Key, Label: t.Label, Href: t.Href, Icon: repoTabIcons[t.Key], Count: t.Count, Mentions: t.Mentions, Current: t.Current}
 		if t.More {
@@ -413,6 +413,29 @@ func (a *app) repoDetail(w http.ResponseWriter, r *http.Request, remote, tab, id
 	http.Redirect(w, r, target+url.PathEscape(id), http.StatusFound)
 }
 
+// holdingOrg is the team organization the viewer sees the project in: the one that holds it, when they are a
+// member of it (a guest of an organization, and a project of a personal namespace, give none). r may be nil.
+func (a *app) holdingOrg(r *http.Request, remote string) (store.Org, bool) {
+	if r == nil {
+		return store.Org{}, false
+	}
+	list, err := a.store.ListProjects(browserPrincipal(r).ID, 0)
+	if err != nil {
+		return store.Org{}, false
+	}
+	for _, p := range list {
+		if p.Remote != remote || p.OrgKind != "org" {
+			continue
+		}
+		for _, o := range a.orgsOf(r) {
+			if o.ID == p.OrgID && o.Name != "" && o.Slug != "" {
+				return o, true
+			}
+		}
+	}
+	return store.Org{}, false
+}
+
 // repoViewFor builds the head for one project: the breadcrumb and the tabs with
 // their counts. A guest has no rooms; the counts are the ones the viewer's own
 // lists show.
@@ -429,6 +452,11 @@ func (a *app) repoViewFor(r *http.Request, pa *store.ProjectAccess, kind viewerK
 	}
 	base := repoHref(remote)
 	v := &repoView{Org: owner, Name: name, Initials: initialsOf(owner), Href: base, OrgHref: "/ui/" + pathEscapeAll(owner), External: external, Project: remote}
+	// The head names the organization the project belongs to, as the viewer knows it, and not the owner the remote
+	// happens to have on its host ("nurrobin / deploy-hook" in the organization "Werkstatt Keller").
+	if org, ok := a.holdingOrg(r, remote); ok {
+		v.Org, v.Initials, v.OrgHref = org.Name, initialsOf(org.Name), "/ui/"+pathEscapeAll(org.Slug)
+	}
 	tab := func(key, label string, count string, more bool) {
 		href := base
 		if key != "code" {

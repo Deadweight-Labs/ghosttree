@@ -39,11 +39,15 @@ func projectCookieOf(resp *http.Response) *http.Cookie {
 // selectedOption is the project a page is narrowed to, as the header names it
 // behind the page title; "" means all projects.
 func selectedOption(page string) string {
-	m := regexp.MustCompile(`<a class="scope"[^>]*title="([^"]*)"`).FindStringSubmatch(page)
-	if m == nil {
-		return ""
+	if m := regexp.MustCompile(`<a class="scope"[^>]*title="([^"]*)"`).FindStringSubmatch(page); m != nil {
+		return m[1]
 	}
-	return m[1]
+	// The pages of one repository (knowledge, agents, review, context) carry its band instead of the crumb, and the
+	// search field of the header names the repository (REQ-687).
+	if m := regexp.MustCompile(`data-suggest-project="([^"]*)"`).FindStringSubmatch(page); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 func TestExplicitProjectIsKeptInAnSessionCookie(t *testing.T) {

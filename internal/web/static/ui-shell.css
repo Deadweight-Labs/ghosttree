@@ -86,10 +86,16 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
    scrolling row and are not cut off. */
 .rband .utabs-box { position: relative; flex: 1 1 auto; min-width: 0; }
 .rband .utabs-nav { position: relative; margin: 0 -12px -1px; padding: 0 12px 1px; }
-.rband .band-ext, .rband .band-wait { position: relative; z-index: 2; align-self: center; margin-bottom: 4px; flex: none; }
-.rband .band-wait { display: inline-flex; border-radius: 2em; }
-/* The names of the people waiting stay in the title: in the band the tabs need the room, on the phone most of all. */
+.rband .band-ext { position: relative; z-index: 2; align-self: center; margin-bottom: 4px; flex: none; }
+/* Who the open tasks wait for stands in the Tasks tab, behind its number: the tab says what the person is waited for
+   with, and nothing floats loose at the end of the row (on the phone the arrow of the row covered it). The names stay
+   in the title of the stack: the tabs need the room. */
+.rband .band-wait { display: inline-flex; align-items: center; margin-left: 2px; }
+.rband .band-wait .waits { margin: 0; align-self: center; }
 .rband .band-wait .waits .wn { display: none; }
+.rband .band-wait .waits .ring::before { inset: -3px; }
+.rband .band-wait .waits .ring::after { inset: -2px; }
+.rband .band-wait .waits .ring .gav { width: 20px; height: 20px; font-size: 9px; }
 .utabs-nav.scroll { overflow: auto hidden; scrollbar-width: none; overscroll-behavior-x: contain; scroll-padding-inline: 24px; scroll-snap-type: x mandatory; }
 .utabs-nav.scroll .utabs > li { scroll-snap-align: start; }
 .utabs-nav.scroll::-webkit-scrollbar { display: none; }

@@ -93,8 +93,16 @@
 
 /* Pictures: thumbnails above a variant or the idea, one dialog to enlarge them. */
 :is(.g2) {
-  & .ws-imgs { display: flex; flex-wrap: wrap; gap: 8px; }
+  & .ws-imgs { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
   & .ws-imgs-idea { padding: 12px 16px; }
+  /* A tile: the picture, below it its name and the button that puts it into the text. */
+  & .ws-fig { margin: 0; display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
+  & .ws-fig .ws-zoom { align-self: flex-start; }
+  & .ws-cap { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  & .ws-att { font: 12px/1 var(--font-mono, ui-monospace, monospace); color: var(--fg-muted); padding: 3px 6px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-subtle); }
+  /* The button needs a field for a text on the page (ui-parts.js says so with .has-cx) and a script. */
+  & .ws-ins { display: none; }
+  html.js.has-cx & .ws-ins { display: inline-flex; }
   & .ws-zoom { display: block; max-width: 100%; border: 1px solid var(--border-default); border-radius: 6px; overflow: hidden; background: var(--canvas-subtle); cursor: zoom-in; line-height: 0; }
   & .ws-zoom:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
   & .ws-zoom img { display: block; max-width: 100%; max-height: 180px; width: auto; height: auto; object-fit: contain; }

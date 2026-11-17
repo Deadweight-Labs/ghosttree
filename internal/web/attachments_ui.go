@@ -33,8 +33,15 @@ const maxUploadForm = idea.MaxAttachmentBytes + 256<<10
 // attachImage ist ein Bild für die Seite.
 type attachImage struct {
 	Src, Alt, Who string
-	W, H          int
+	// ID is the number the picture is named by (ATT-n); Desc is the description the person wrote, empty when
+	// there is none (Alt then holds a made-up one for the screen reader).
+	ID   int64
+	Desc string
+	W, H int
 }
+
+// Ref is the name a text writes the picture by: ATT-n.
+func (i attachImage) Ref() string { return "ATT-" + strconv.FormatInt(i.ID, 10) }
 
 // attachBox is the box of the pictures on an idea, an issue or a pain: the pictures,
 // and the form that adds one for whoever may work on the object (CanAttach).
@@ -71,7 +78,7 @@ func attachImages(l lang, metas []idea.AttachmentMeta, keepOwner func(idea.Attac
 		if alt == "" {
 			alt = l.msg("workshop.img_alt", firstNonEmpty(m.Person, "?"))
 		}
-		out = append(out, attachImage{Src: attachmentSrc(m.ID), Alt: alt, Who: m.Person, W: m.Width, H: m.Height})
+		out = append(out, attachImage{Src: attachmentSrc(m.ID), Alt: alt, Who: m.Person, ID: m.ID, Desc: m.Alt, W: m.Width, H: m.Height})
 	}
 	return out
 }

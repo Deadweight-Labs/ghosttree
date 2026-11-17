@@ -1,6 +1,7 @@
 {{define "wsdot"}}<span aria-hidden="true">·</span>{{end}}
 
-{{define "wsimage"}}<a class="ws-zoom" href="{{.Src}}" data-zoom data-alt="{{.Alt}}" target="_blank" rel="noopener" title="{{t "workshop.zoom"}}"><img src="{{.Src}}" alt="{{.Alt}}" width="{{.W}}" height="{{.H}}" loading="lazy"></a>{{end}}
+{{/* A picture is a tile: the picture, its name (ATT-n, the one a text writes as ![](ATT-n)) and, where a field for a text is on the page, the button that puts that line into it (ui-parts.js shows it). */}}
+{{define "wsimage"}}<figure class="ws-fig"><a class="ws-zoom" href="{{.Src}}" data-zoom data-alt="{{.Alt}}" target="_blank" rel="noopener" title="{{t "workshop.zoom"}}"><img src="{{.Src}}" alt="{{.Alt}}" width="{{.W}}" height="{{.H}}" loading="lazy"></a>{{if .ID}}<figcaption class="ws-cap"><code class="ws-att">{{.Ref}}</code><button type="button" class="gbtn sm quiet ws-ins" data-att-insert="{{.Ref}}" data-desc="{{.Desc}}">{{mi "plus"}}{{t "workshop.insert"}}</button></figcaption>{{end}}</figure>{{end}}
 
 {{/* The pictures of an idea, an issue or a pain and the form that adds one (REQ-671). data-attach marks the form that ui-attach.js fills with a pasted or dropped picture. */}}
 {{define "attachbox"}}{{with .}}{{if or .Images .CanAttach}}<section class="box ws-imgbox" id="images" aria-labelledby="img-h"><div class="box-h"><h2 class="t" id="img-h">{{mi "image"}} {{t "workshop.images"}}</h2></div>

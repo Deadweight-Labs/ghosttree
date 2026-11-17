@@ -16,7 +16,13 @@ func TestRepoPageShowsBreadcrumbAndTabs(t *testing.T) {
 		if status != http.StatusOK {
 			t.Fatalf("%s: GET /ui/x/shell status=%d", name, status)
 		}
-		for _, want := range []string{`class="hcrumb"`, `class="org" href="/ui/x"`, `<a href="/ui/x/shell">shell</a>`, `data-tab="code" class="sel"><a href="/ui/x/shell" aria-current="page"`,
+		// The head names the organization that holds the project when the viewer is a member of it (REQ-687); a guest of
+		// the organization sees the owner the remote has on its host.
+		orgCrumb := `class="org" href="/ui/alpha">Alpha</a>`
+		if name == "guest" {
+			orgCrumb = `class="org" href="/ui/x">x</a>`
+		}
+		for _, want := range []string{`class="hcrumb"`, orgCrumb, `<a href="/ui/x/shell">shell</a>`, `data-tab="code" class="sel"><a href="/ui/x/shell" aria-current="page"`,
 			`data-tab="issues"><a href="/ui/x/shell/issues"`, `data-tab="knowledge"><a href="/ui/x/shell/knowledge"`, `href="https://github.com/x/shell"`} {
 			if !strings.Contains(page, want) {
 				t.Errorf("%s: repo page lacks %q", name, want)
