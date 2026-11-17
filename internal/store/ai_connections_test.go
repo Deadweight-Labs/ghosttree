@@ -27,11 +27,11 @@ func aiFixture(t *testing.T) (*Store, Org, Org) {
 
 func aiConn(t *testing.T, st *Store, actor string, orgID int64, name, format string, models ...string) AIConnection {
 	t.Helper()
-	in := AIConnectionInput{OrgID: orgID, Name: name, Format: format, BaseURL: "https://api.example.com", KeySealed: []byte("sealed-" + name), KeyLast4: "WXYZ"}
+	in := AIConnectionInput{OrgID: orgID, Name: name, Format: format, BaseURL: "https://api.example.com", KeyLast4: "WXYZ"}
 	for _, m := range models {
 		in.Models = append(in.Models, AIModel{Model: m, InUSD: 1, OutUSD: 2})
 	}
-	c, err := st.SaveAIConnection(actor, in)
+	c, err := st.SaveAIConnection(actor, in, sealedAs("sealed-"+name))
 	if err != nil {
 		t.Fatalf("save %s: %v", name, err)
 	}
@@ -84,19 +84,19 @@ func TestOwnerKeepsThreeConnectionsAndNoListingCarriesTheKey(t *testing.T) {
 	aiConn(t, st, "person:1", o.ID, "openai-b", AIFormatOpenAI, "gpt-b")
 	aiConn(t, st, "person:1", o.ID, "anthropic-team", AIFormatAnthropic, "claude-haiku-5-5", "claude-opus-5-5")
 	if _, err := st.SaveAIConnection("person:2", AIConnectionInput{OrgID: o.ID, Name: "mine", Format: AIFormatOpenAI, BaseURL: "https://x.example",
-		KeySealed: []byte("k"), Models: []AIModel{{Model: "m"}}}); !errors.Is(err, ErrNotOrgOwner) {
+		Models: []AIModel{{Model: "m"}}}, sealedAs("k")); !errors.Is(err, ErrNotOrgOwner) {
 		t.Fatalf("member: %v", err)
 	}
 	if _, err := st.SaveAIConnection("person:1", AIConnectionInput{OrgID: o.ID, Name: "openai-a", Format: AIFormatOpenAI, BaseURL: "https://x.example",
-		KeySealed: []byte("k"), Models: []AIModel{{Model: "m"}}}); !errors.Is(err, ErrAINameTaken) {
+		Models: []AIModel{{Model: "m"}}}, sealedAs("k")); !errors.Is(err, ErrAINameTaken) {
 		t.Fatalf("same name: %v", err)
 	}
 	if _, err := st.SaveAIConnection("person:1", AIConnectionInput{OrgID: o.ID, Name: "plain", Format: AIFormatOpenAI, BaseURL: "http://127.0.0.1:9",
-		KeySealed: []byte("k"), Models: []AIModel{{Model: "m"}}}); !errors.Is(err, ErrAIConnection) {
+		Models: []AIModel{{Model: "m"}}}, sealedAs("k")); !errors.Is(err, ErrAIConnection) {
 		t.Fatalf("plain http for an org: %v", err)
 	}
 	if _, err := st.SaveAIConnection("person:1", AIConnectionInput{OrgID: o.ID, Name: "nokey", Format: AIFormatOpenAI, BaseURL: "https://x.example",
-		Models: []AIModel{{Model: "m"}}}); !errors.Is(err, ErrAIKeyMissing) {
+		Models: []AIModel{{Model: "m"}}}, nil); !errors.Is(err, ErrAIKeyMissing) {
 		t.Fatalf("no key: %v", err)
 	}
 	list, err := st.AIConnectionsFor(o.ID)
@@ -109,10 +109,10 @@ func TestOwnerKeepsThreeConnectionsAndNoListingCarriesTheKey(t *testing.T) {
 	}
 	// Changing a connection without a new key keeps the stored one.
 	c := list[0]
-	if _, err := st.SaveAIConnection("person:1", AIConnectionInput{ID: c.ID, Name: c.Name, Format: c.Format, BaseURL: c.BaseURL, MonthlyCapUSD: 5, Models: c.Models}); err != nil {
+	if _, err := st.SaveAIConnection("person:1", AIConnectionInput{ID: c.ID, Name: c.Name, Format: c.Format, BaseURL: c.BaseURL, MonthlyCapUSD: 5, Models: c.Models}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if sealed, _, _ := st.AIConnectionKey(c.ID); string(sealed) != "sealed-"+c.Name {
+	if sealed, _, _ := st.AIConnectionKey(c.ID); string(sealed) != "sealed-"+c.Name+"|"+AIKeyPurposeFor(o.ID, c.ID) {
 		t.Fatalf("key after a change: %q", sealed)
 	}
 	// The stored key never follows a new address or format.
@@ -124,12 +124,12 @@ func TestOwnerKeepsThreeConnectionsAndNoListingCarriesTheKey(t *testing.T) {
 		{ID: c.ID, Name: c.Name, Format: c.Format, BaseURL: "https://elsewhere.example", Models: c.Models},
 		{ID: c.ID, Name: c.Name, Format: otherFormat, BaseURL: c.BaseURL, Models: c.Models},
 	} {
-		if _, err := st.SaveAIConnection("person:1", in); !errors.Is(err, ErrAIKeyMissing) {
+		if _, err := st.SaveAIConnection("person:1", in, nil); !errors.Is(err, ErrAIKeyMissing) {
 			t.Fatalf("change of address or format without a key: %v", err)
 		}
 	}
-	in := AIConnectionInput{ID: c.ID, Name: c.Name, Format: c.Format, BaseURL: "https://elsewhere.example", Models: c.Models, KeySealed: []byte("sealed-new"), KeyLast4: "NEW4"}
-	if got, err := st.SaveAIConnection("person:1", in); err != nil || got.BaseURL != "https://elsewhere.example" || got.KeyLast4 != "NEW4" {
+	in := AIConnectionInput{ID: c.ID, Name: c.Name, Format: c.Format, BaseURL: "https://elsewhere.example", Models: c.Models, KeyLast4: "NEW4"}
+	if got, err := st.SaveAIConnection("person:1", in, sealedAs("sealed-new")); err != nil || got.BaseURL != "https://elsewhere.example" || got.KeyLast4 != "NEW4" {
 		t.Fatalf("new address with a new key: %+v %v", got, err)
 	}
 }
@@ -138,8 +138,8 @@ func TestOwnerKeepsThreeConnectionsAndNoListingCarriesTheKey(t *testing.T) {
 // no namespaces; without a release they are neither listed nor usable.
 func TestServerConnectionsOnlyForReleasedNamespaces(t *testing.T) {
 	st, o, other := aiFixture(t)
-	if _, err := st.SaveAIConnection("person:3", AIConnectionInput{Name: "x", Format: AIFormatOpenAI, BaseURL: "https://x.example", KeySealed: []byte("k"),
-		Models: []AIModel{{Model: "m"}}}); !errors.Is(err, ErrNotServerAdmin) {
+	if _, err := st.SaveAIConnection("person:3", AIConnectionInput{Name: "x", Format: AIFormatOpenAI, BaseURL: "https://x.example",
+		Models: []AIModel{{Model: "m"}}}, sealedAs("k")); !errors.Is(err, ErrNotServerAdmin) {
 		t.Fatalf("a non-admin keeps a server connection: %v", err)
 	}
 	srv := aiConn(t, st, "person:1", 0, "standard", AIFormatAnthropic, "claude-haiku-5-5")
@@ -159,10 +159,10 @@ func TestServerConnectionsOnlyForReleasedNamespaces(t *testing.T) {
 	if _, err := st.AIRouteFor(run, "standard/claude-haiku-5-5"); !errors.Is(err, ErrAIUnavailable) {
 		t.Fatalf("no release yet: %v", err)
 	}
-	if err := st.SetAIRelease("person:3", AIReleaseAll); !errors.Is(err, ErrNotServerAdmin) {
+	if err := st.SetAIRelease("person:3", AIReleaseAll, 10); !errors.Is(err, ErrNotServerAdmin) {
 		t.Fatalf("a non-admin sets the release: %v", err)
 	}
-	if err := st.SetAIRelease("person:1", AIReleaseSelected); err != nil {
+	if err := st.SetAIRelease("person:1", AIReleaseSelected, 10); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetAIGrant("person:1", o.ID, 7); err != nil {
@@ -175,13 +175,13 @@ func TestServerConnectionsOnlyForReleasedNamespaces(t *testing.T) {
 	if err != nil || route.Via != AIViaServer || route.TightestCap != AICapServer || route.Remaining != 7 {
 		t.Fatalf("route after the grant: %+v %v", route, err)
 	}
-	if err := st.SetAIRelease("person:1", AIReleaseAll); err != nil {
+	if err := st.SetAIRelease("person:1", AIReleaseAll, 10); err != nil {
 		t.Fatal(err)
 	}
 	if !usable(other) {
 		t.Fatal("all: every namespace sees it")
 	}
-	if err := st.SetAIRelease("person:1", AIReleaseNone); err != nil {
+	if err := st.SetAIRelease("person:1", AIReleaseNone, 10); err != nil {
 		t.Fatal(err)
 	}
 	if usable(o) {
@@ -258,7 +258,7 @@ func TestLoanShowsOnlyTheNameAndRevokingStopsTheNextCall(t *testing.T) {
 func TestAliasOfTheRepositoryWinsOverTheOwnerAndTheServer(t *testing.T) {
 	st, o, _ := aiFixture(t)
 	srv := aiConn(t, st, "person:1", 0, "standard", AIFormatAnthropic, "claude-haiku-5-5")
-	if err := st.SetAIRelease("person:1", AIReleaseAll); err != nil {
+	if err := st.SetAIRelease("person:1", AIReleaseAll, 10); err != nil {
 		t.Fatal(err)
 	}
 	own := aiConn(t, st, "person:1", o.ID, "openai-a", AIFormatOpenAI, "gpt-a", "gpt-b")
@@ -374,7 +374,7 @@ func TestEachCapStopsTheRunUnderItsName(t *testing.T) {
 		{"connection", func() {
 			_ = st.SetAICap("person:1", AICap{OrgID: o.ID})
 			c := conn
-			if _, err := st.SaveAIConnection("person:1", AIConnectionInput{ID: c.ID, Name: c.Name, Format: c.Format, BaseURL: c.BaseURL, Models: c.Models, MonthlyCapUSD: 4.5}); err != nil {
+			if _, err := st.SaveAIConnection("person:1", AIConnectionInput{ID: c.ID, Name: c.Name, Format: c.Format, BaseURL: c.BaseURL, Models: c.Models, MonthlyCapUSD: 4.5}, nil); err != nil {
 				t.Fatal(err)
 			}
 		}, AICapConnection},
@@ -472,4 +472,10 @@ func TestFileConnectionIsImportedWithoutItsKey(t *testing.T) {
 	if err := st.DeleteAIConnection("person:1", c.ID); !errors.Is(err, ErrAIFromFile) {
 		t.Fatalf("delete a file connection: %v", err)
 	}
+}
+
+// sealedAs stands in for the secretbox in the store's tests: the sealed
+// value is the text and the purpose it was sealed for.
+func sealedAs(text string) AIKeySealer {
+	return func(purpose string) ([]byte, error) { return []byte(text + "|" + purpose), nil }
 }

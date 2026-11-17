@@ -92,6 +92,7 @@ type aiServerView struct {
 	Conns      []aiConnRow
 	Modes      []aiChoice
 	Selected   bool
+	DefaultCap string
 	Grants     []aiGrantRow
 	Orgs       []store.Org
 	Aliases    []aiAliasRow
@@ -125,6 +126,7 @@ func aiRow(l lang, c store.AIConnection, details bool) aiConnRow {
 	switch c.Via {
 	case store.AIViaLoan:
 		row.Spent = aiSpentLine(l, c.SpentMonth, c.LoanCapUSD)
+		row.BaseURL = c.Host
 		return row
 	case store.AIViaServer:
 		row.Models = c.Models
@@ -176,8 +178,9 @@ func (a *app) aiViewFor(r *http.Request, org store.Org) *aiView {
 	conns, _ := a.store.AIConnectionsFor(org.ID)
 	for _, c := range conns {
 		row := aiRow(l, c, false)
-		if c.Via == store.AIViaOwn && !owner {
-			// Members see what there is and what it cost, not where it goes.
+		if (c.Via == store.AIViaOwn || c.Via == store.AIViaLoan) && !owner {
+			// Members see what there is and what it cost, not where it goes;
+			// owners see the host a lent connection sends the calls to.
 			row.BaseURL, row.Last4, row.ModelsText = "", "", ""
 		}
 		if c.Via == store.AIViaOwn && v.IsUser && owner {
@@ -270,6 +273,7 @@ func (a *app) aiServerFor(r *http.Request) *aiServerView {
 		v.Modes = append(v.Modes, aiChoice{Value: m.value, Label: l.msg(m.key), On: m.value == mode})
 	}
 	v.Selected = mode == store.AIReleaseSelected
+	v.DefaultCap = aiCapText(a.store.AIReleaseDefaultCap())
 	for _, g := range grants {
 		v.Grants = append(v.Grants, aiGrantRow{OrgID: g.OrgID, Slug: g.Slug, Name: g.Name, Cap: aiCapText(g.CapUSD), Spent: aiSpentLine(l, g.SpentMonth, g.CapUSD)})
 	}
@@ -285,6 +289,7 @@ func (a *app) aiServerFor(r *http.Request) *aiServerView {
 
 var errAIModels = fmt.Errorf("%w: models", store.ErrInvalidInput)
 var errAIAddress = fmt.Errorf("%w: address", store.ErrInvalidInput)
+var errAIReleaseCap = fmt.Errorf("%w: release to all needs a cap", store.ErrInvalidInput)
 
 // parseAIModels reads one model per line: name, input price, output price
 // (USD per million tokens), separated by spaces, tabs or semicolons; a comma
@@ -380,23 +385,21 @@ func (a *app) aiConnectionSave(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	var seal store.AIKeySealer
 	if key := strings.TrimSpace(r.FormValue("key")); key != "" {
 		if a.aiBox == nil {
 			a.orgFailure(w, r, secretbox.ErrNoKey)
 			return
 		}
-		sealed, err := a.aiBox.Seal(key, store.AIKeyPurpose)
-		if err != nil {
-			a.orgFailure(w, r, err)
-			return
-		}
-		in.KeySealed, in.KeyLast4 = sealed, secretbox.Last4(key)
+		box := a.aiBox
+		seal = func(purpose string) ([]byte, error) { return box.Seal(key, purpose) }
+		in.KeyLast4 = secretbox.Last4(key)
 	}
 	if in.ID != 0 && !a.aiConnectionIn(in.ID, in.OrgID) {
 		a.orgFailure(w, r, store.ErrAIUnavailable)
 		return
 	}
-	if _, err := a.store.SaveAIConnection(browserPrincipal(r).ID, in); err != nil {
+	if _, err := a.store.SaveAIConnection(browserPrincipal(r).ID, in, seal); err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
@@ -556,7 +559,19 @@ func (a *app) aiReleaseSave(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := a.store.SetAIRelease(browserPrincipal(r).ID, r.FormValue("mode")); err != nil {
+	capUSD, err := formUSD(r, "cap")
+	if err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	mode := r.FormValue("mode")
+	if mode == store.AIReleaseAll && capUSD <= 0 {
+		capUSD = a.store.AIReleaseDefaultCap()
+	}
+	if err := a.store.SetAIRelease(browserPrincipal(r).ID, mode, capUSD); err != nil {
+		if errors.Is(err, store.ErrAICap) && mode == store.AIReleaseAll {
+			err = errAIReleaseCap
+		}
 		a.orgFailure(w, r, err)
 		return
 	}
@@ -609,6 +624,8 @@ func aiError(l lang, err error) (int, string, bool) {
 		return http.StatusBadRequest, l.msg("ai.err.address"), true
 	case errors.Is(err, errAIModels):
 		return http.StatusBadRequest, l.msg("ai.err.models"), true
+	case errors.Is(err, errAIReleaseCap):
+		return http.StatusBadRequest, l.msg("ai.err.release_cap"), true
 	}
 	return 0, "", false
 }

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/secretbox"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -36,6 +37,13 @@ type fakeProvider struct {
 	keys  []string
 	auths []string
 	fail  bool
+	// mode changes the answer: "cut" ends a stream before its final usage,
+	// "hang" holds it open there until the request ends, "nousage" answers
+	// without usage.
+	mode   string
+	delay  time.Duration
+	bodies []map[string]any
+	hung   chan struct{}
 }
 
 func (f *fakeProvider) handle(w http.ResponseWriter, r *http.Request) {
@@ -46,8 +54,10 @@ func (f *fakeProvider) handle(w http.ResponseWriter, r *http.Request) {
 	f.calls++
 	f.keys = append(f.keys, r.Header.Get("x-api-key"))
 	f.auths = append(f.auths, r.Header.Get("Authorization"))
-	fail := f.fail
+	f.bodies = append(f.bodies, req)
+	fail, mode, delay := f.fail, f.mode, f.delay
 	f.mu.Unlock()
+	time.Sleep(delay)
 	if fail {
 		// A provider that quotes the key it got, as some error pages do.
 		w.WriteHeader(http.StatusUnauthorized)
@@ -66,12 +76,31 @@ func (f *fakeProvider) handle(w http.ResponseWriter, r *http.Request) {
 				`{"type":"message_delta","usage":{"output_tokens":200}}`,
 				`{"type":"message_stop"}`,
 			} {
+				if strings.Contains(ev, "message_delta") {
+					switch mode {
+					case "cut":
+						return
+					case "hang":
+						<-r.Context().Done()
+						close(f.hung)
+						return
+					}
+				}
 				fmt.Fprintf(w, "event: x\ndata: %s\n\n", ev)
 				w.(http.Flusher).Flush()
 			}
 			return
 		}
+		if mode == "hang" {
+			<-r.Context().Done()
+			close(f.hung)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
+		if mode == "nousage" {
+			fmt.Fprint(w, `{"type":"message","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`)
+			return
+		}
 		fmt.Fprintf(w, `{"type":"message","content":[{"type":"text","text":"Ein PR wurde gemergt (%v)."}],"stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":200}}`, req["model"])
 	case "/v1/chat/completions":
 		if stream {
@@ -97,6 +126,7 @@ type env struct {
 	box      *secretbox.Box
 	provider *fakeProvider
 	proxy    *httptest.Server
+	p        *Proxy
 	logs     *bytes.Buffer
 	team     store.AIConnection
 	openai   store.AIConnection
@@ -135,6 +165,7 @@ func newEnv(t *testing.T) *env {
 	}
 	p := &Proxy{Store: st, Box: box, Log: slog.New(slog.NewJSONHandler(e.logs, nil)), FileKeys: map[int64]string{},
 		Upstream: func(store.AIConnection, *url.URL) (*http.Client, error) { return f.srv.Client(), nil }}
+	e.p = p
 	e.proxy = httptest.NewServer(p)
 	t.Cleanup(e.proxy.Close)
 	e.blocks = workflow.Builtins{workflow.AskName: workflow.Ask}
@@ -143,15 +174,11 @@ func newEnv(t *testing.T) *env {
 
 func (e *env) conn(t *testing.T, orgID int64, name, format, key string, models ...string) store.AIConnection {
 	t.Helper()
-	sealed, err := e.box.Seal(key, store.AIKeyPurpose)
-	if err != nil {
-		t.Fatal(err)
-	}
-	in := store.AIConnectionInput{OrgID: orgID, Name: name, Format: format, BaseURL: e.provider.srv.URL, KeySealed: sealed, KeyLast4: secretbox.Last4(key)}
+	in := store.AIConnectionInput{OrgID: orgID, Name: name, Format: format, BaseURL: e.provider.srv.URL, KeyLast4: secretbox.Last4(key)}
 	for _, m := range models {
 		in.Models = append(in.Models, store.AIModel{Model: m, InUSD: 1, OutUSD: 5})
 	}
-	c, err := e.st.SaveAIConnection("person:1", in)
+	c, err := e.st.SaveAIConnection("person:1", in, func(purpose string) ([]byte, error) { return e.box.Seal(key, purpose) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +196,7 @@ func (e *env) run(t *testing.T, name string, data map[string]string) store.Workf
 		Data: data, Origin: store.EventOrigin{Kind: store.OriginHuman}, DedupeKey: "e" + strconv.Itoa(e.seq)}); err != nil {
 		t.Fatal(err)
 	}
-	eng := &workflow.Engine{Store: e.st, Resolver: e.blocks, AIBaseURL: e.proxy.URL}
+	eng := &workflow.Engine{Store: e.st, Resolver: e.blocks, AIBaseURL: e.proxy.URL, AIEndRun: e.p.EndRun}
 	if _, err := eng.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
