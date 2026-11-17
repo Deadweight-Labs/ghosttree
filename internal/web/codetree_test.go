@@ -268,7 +268,7 @@ func TestCodeTabShowsWhoWorkedOnAPathAsFarAsTheViewerMaySee(t *testing.T) {
 	// The session is private to its owner, the instance owner: nobody else sees a
 	// row for it, not even a member.
 	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/blob/main/internal/store/gitanchor.go")
-	if !strings.Contains(owner, "Last worked on here") || !strings.Contains(owner, "claude@laptop") {
+	if !strings.Contains(owner, "Last worked on here") || !strings.Contains(owner, "Claude@laptop") {
 		t.Errorf("owner does not see the work:\n%s", owner)
 	}
 	_, member := fetchPage(t, e.Member, e.Base+"/ui/x/shell/blob/main/internal/store/gitanchor.go")

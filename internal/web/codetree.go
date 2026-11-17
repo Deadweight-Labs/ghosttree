@@ -456,13 +456,11 @@ func shortSHA(s string) string {
 	return s
 }
 
-// actorOf names who wrote a description: the harness when an agent did, else
-// the person.
-func actorOf(person, harness string) (kind, name string) {
+// actorOf names who wrote a description: an agent as "Robin’s Claude" with the
+// avatar of its harness (authorAgentName, the name every page uses), else the person.
+func actorOf(l lang, person, harness string) (kind, name string) {
 	if strings.TrimSpace(harness) != "" {
-		kind = harnessKind(harness)
-		name, _, _ = strings.Cut(strings.ToLower(strings.TrimSpace(harness)), "-")
-		return kind, name
+		return harnessKind(harness), authorAgentName(l, person, harness)
 	}
 	return avHuman, person
 }
@@ -583,7 +581,7 @@ func (a *app) codeFolderPage(r *http.Request, pa *store.ProjectAccess, view *rep
 	v.Filter = len(v.Rows) > 0
 	v.Folder = cp.Path
 	if newest != nil {
-		kind, who := actorOf(newest.Person, newest.Harness)
+		kind, who := actorOf(l, newest.Person, newest.Harness)
 		c := &codeCommit{AvKind: kind, Who: who, Text: newest.Path, SHA: shortSHA(newest.GitAnchor.Commit), Updated: newest.UpdatedAt}
 		if cp.Path != "" {
 			c.Text = strings.TrimPrefix(newest.Path, cp.Path+"/")
@@ -608,7 +606,7 @@ func (a *app) codeFolderPage(r *http.Request, pa *store.ProjectAccess, view *rep
 
 // codeDescription is the box with the description of a path. Without one it
 // stays a single action: write it.
-func (a *app) codeDescription(_ lang, ix *codeIndex, p string) *codeDesc {
+func (a *app) codeDescription(l lang, ix *codeIndex, p string) *codeDesc {
 	d := &codeDesc{Path: p, Label: p, Cmd: cmdLine{Icon: "file", Text: `context_remember action=describe_file path="` + p + `"`}}
 	switch {
 	case p == "":
@@ -623,7 +621,7 @@ func (a *app) codeDescription(_ lang, ix *codeIndex, p string) *codeDesc {
 		return d
 	}
 	d.HTML = renderDescription(g.Description)
-	d.AvKind, d.By = actorOf(g.Person, g.Harness)
+	d.AvKind, d.By = actorOf(l, g.Person, g.Harness)
 	d.Updated = g.UpdatedAt
 	if g.OriginContext != nil {
 		d.Area = g.OriginContext.Main()
@@ -678,7 +676,7 @@ func (a *app) codeBlobPage(r *http.Request, pa *store.ProjectAccess, view *repoV
 	if len(revs) > 1 {
 		for i, rv := range revs {
 			c := codeRev{N: len(revs) - i, At: rv.at, SHA: shortSHA(rv.sha), Note: plainLine(rv.desc, 110)}
-			c.AvKind, c.Who = actorOf(rv.person, rv.harness)
+			c.AvKind, c.Who = actorOf(l, rv.person, rv.harness)
 			if rv.sha != "" {
 				c.SHAHref = view.Href + "/commits/" + rv.sha
 			}
@@ -724,7 +722,7 @@ func (a *app) codeBlobPage(r *http.Request, pa *store.ProjectAccess, view *repoV
 		all = all[:codeMaxKnow]
 	}
 	b.Know = all
-	b.Work = a.codeWork(pa, view.Project, cp.Path)
+	b.Work = a.codeWork(l, pa, view.Project, cp.Path)
 }
 
 // codeNav is the tree at the left of a file page: the top level, with every
@@ -763,7 +761,7 @@ func codeNav(ix *codeIndex, links codeLinks, cp *codePath) []codeNavNode {
 
 // codeWork lists who worked on the path lately: the sessions behind the
 // activity, as far as the viewer may see them.
-func (a *app) codeWork(pa *store.ProjectAccess, remote, p string) []codeWorkRow {
+func (a *app) codeWork(l lang, pa *store.ProjectAccess, remote, p string) []codeWorkRow {
 	since := overviewNow().UTC().Add(-codeWorkAge).Format(time.RFC3339)
 	acts, err := a.store.PathActivitySince(remote, p, since, "")
 	if err != nil || len(acts) == 0 {
@@ -786,7 +784,7 @@ func (a *app) codeWork(pa *store.ProjectAccess, remote, p string) []codeWorkRow 
 		}
 		seen[s.ExternalID] = true
 		view := pa.MetaView(s)
-		kind, who := actorOf("", s.Harness)
+		kind, who := actorOf(l, "", s.Harness)
 		row := codeWorkRow{AvKind: kind, Who: who, Machine: view.Scope.Machine, Title: view.Title, At: act.At}
 		if pa.HidesMachines(remote) {
 			row.Machine = ""

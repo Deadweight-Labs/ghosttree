@@ -348,7 +348,7 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.stampActor(r, actor.Comment, c.ID)
-		http.Redirect(w, r, commentPage(c)+"?comment=added#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
+		http.Redirect(w, r, commentAddedURL(pa, c), http.StatusSeeOther)
 		return
 	}
 	i, err := pa.SetIdeaState(id, to, r.FormValue("reason"))

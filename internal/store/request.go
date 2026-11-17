@@ -102,6 +102,12 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 	if err := tx.Commit(); err != nil {
 		return requestdomain.Detail{}, err
 	}
+	// An @name in the description reaches the person in their inbox; the
+	// request exists either way, so a failure here is not the author's.
+	if r.Scope.Project != "" {
+		_, _ = s.recordTextMentions(textMentionSource{Project: r.Scope.Project, SourceKind: MentionInRequest, SourceID: id,
+			ObjectKind: CommentOnRequest, ObjectID: id, AuthorAccount: author, Author: r.Person}, r.Description)
+	}
 	return s.RequestByID(id)
 }
 

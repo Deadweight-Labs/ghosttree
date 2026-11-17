@@ -307,8 +307,13 @@ func (a *app) workshopDated(l lang, ws store.IdeaWorkshop, age func(string) stri
 	sentence := func(key string, args ...any) string { return html.EscapeString(l.msg(key, args...)) }
 	for _, d := range ws.Decisions {
 		for _, vt := range d.Votes {
-			out = append(out, datedItem{vt.At, tlItem{ID: "vote-" + strconv.FormatInt(d.ID, 10) + "-" + url.QueryEscape(vt.Voter), Act: "idea.vote", Who: vt.Voter, Icon: "thumb",
-				Head: template.HTML(sentence("workshop.ev.vote", vt.Variant) + " <span class=\"rn\">" + html.EscapeString(d.HumanID()) + "</span>"), Age: age(vt.At), Body: mdText(vt.Reason)}})
+			vote := tlItem{ID: "vote-" + strconv.FormatInt(d.ID, 10) + "-" + url.QueryEscape(vt.Voter), Act: "idea.vote", Who: vt.Voter, Icon: "thumb",
+				Head: template.HTML(sentence("workshop.ev.vote", vt.Variant) + " <span class=\"rn\">" + html.EscapeString(d.HumanID()) + "</span>"), Age: age(vt.At), Body: mdText(vt.Reason)}
+			if vt.ByAgent {
+				// The vote of an agent is not the vote of its person: it reads "Pia’s Agent" with the agent's mark.
+				vote.withActor(actorView{Person: vt.Voter, Agent: true, Kind: harnessKind(""), Label: authorAgentName(l, vt.Voter, "")})
+			}
+			out = append(out, datedItem{vt.At, vote})
 		}
 		if d.State == idea.DecisionOpen || d.DecidedAt == "" {
 			continue

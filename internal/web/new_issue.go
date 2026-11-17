@@ -335,7 +335,11 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, next, http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, v.Base+"/"+object+"/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+	target := v.Base + "/" + object + "/" + strconv.FormatInt(id, 10)
+	if note := unreachedParam(pa.UnreachedTextMentions(remote, v.Body)); note != "" {
+		target += "?comment=created" + note
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 // newIssueError shows a refusal of the store on the form: an access refusal as

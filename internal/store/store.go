@@ -1250,6 +1250,10 @@ func openWithOptions(path string, options OpenOptions, seed bool) (*Store, error
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureTextMentions(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureReactions(db); err != nil {
 		_ = db.Close()
 		return nil, err

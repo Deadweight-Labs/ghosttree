@@ -229,7 +229,7 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.stampActor(r, actor.Comment, c.ID)
-		http.Redirect(w, r, commentPage(c)+"?comment=added#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
+		http.Redirect(w, r, commentAddedURL(pa, c), http.StatusSeeOther)
 		return
 	}
 	if !slices.Contains(pain.States, to) {

@@ -319,6 +319,8 @@ func (a *ProjectAccess) AddComment(kind string, objectID int64, body string, act
 	if err != nil {
 		return Comment{}, err
 	}
+	_, _ = a.st.recordTextMentions(textMentionSource{Project: project, SourceKind: MentionInComment, SourceID: id,
+		ObjectKind: kind, ObjectID: objectID, AuthorAccount: a.account, Author: a.principal.Label}, body)
 	return a.commentView(id)
 }
 
@@ -399,6 +401,8 @@ func (a *ProjectAccess) EditComment(id int64, body string, actor CommentActor) (
 		if err := a.st.commitCommentEdit(id, body, actor); err != nil {
 			return Comment{}, err
 		}
+		_, _ = a.st.recordTextMentions(textMentionSource{Project: c.Project, SourceKind: MentionInComment, SourceID: id,
+			ObjectKind: c.ObjectKind, ObjectID: c.ObjectID, AuthorAccount: a.account, Author: a.principal.Label}, body)
 	}
 	return a.commentView(id)
 }

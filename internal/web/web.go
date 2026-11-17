@@ -100,41 +100,43 @@ type pageData struct {
 	SessionsV                                                  *sessionsView
 	SessionV                                                   *sessionView
 	Project, Preview                                           string
-	Coord                                                      coordPageView
-	Orgs                                                       orgsView
-	Invite                                                     bool
-	InviteV                                                    *joinView
-	ProviderName                                               string
-	Auth                                                       authView
-	Bootstrap, TokenOpen                                       bool
-	Shell                                                      shellView
-	Overview                                                   overviewView
-	Agents                                                     agentsView
-	Profile                                                    profileView
-	InboxV                                                     *inboxView
-	NewIssueV                                                  *newIssueView
-	IdeaV                                                      *ideaPageView
-	CodeV                                                      *repoCodeView
-	AgentV                                                     *agentPageView
-	OrgName                                                    string
-	OrgBand                                                    *bandView
-	OrgV                                                       *orgPageView
-	ErrV                                                       *errorView
-	RunbooksV                                                  *runbooksView
-	RunbookV                                                   *runbookPageView
-	DocsV                                                      *docsView
-	DocV                                                       *docPageView
-	RunbookFormV                                               *runbookFormView
-	SettingsV                                                  *repoSettingsView
-	FeaturesV                                                  *featuresView
-	FeatureV                                                   *featureView
-	MachineV                                                   *machinePageView
-	OrgMachinesV                                               *orgMachinesView
-	GardenTabV                                                 *gardenTabView
-	TasksV                                                     *tasksView
-	TaskV                                                      *taskPageView
-	PackagesV                                                  *packagesView
-	PackageV                                                   *packageView
+	// MentionRepo is the project an @name in a text of this page is read in (ui-mentions.js).
+	MentionRepo          string
+	Coord                coordPageView
+	Orgs                 orgsView
+	Invite               bool
+	InviteV              *joinView
+	ProviderName         string
+	Auth                 authView
+	Bootstrap, TokenOpen bool
+	Shell                shellView
+	Overview             overviewView
+	Agents               agentsView
+	Profile              profileView
+	InboxV               *inboxView
+	NewIssueV            *newIssueView
+	IdeaV                *ideaPageView
+	CodeV                *repoCodeView
+	AgentV               *agentPageView
+	OrgName              string
+	OrgBand              *bandView
+	OrgV                 *orgPageView
+	ErrV                 *errorView
+	RunbooksV            *runbooksView
+	RunbookV             *runbookPageView
+	DocsV                *docsView
+	DocV                 *docPageView
+	RunbookFormV         *runbookFormView
+	SettingsV            *repoSettingsView
+	FeaturesV            *featuresView
+	FeatureV             *featureView
+	MachineV             *machinePageView
+	OrgMachinesV         *orgMachinesView
+	GardenTabV           *gardenTabView
+	TasksV               *tasksView
+	TaskV                *taskPageView
+	PackagesV            *packagesView
+	PackageV             *packageView
 	// Styles and Scripts are the files of pageAssets for this page.
 	Styles, Scripts []string
 	// Repo is set on the pages of a repository (/ui/{org}/{repo}/…): the
@@ -244,6 +246,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/reactions", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reactionToggle))))))
 	a.handle(mux, "POST /ui/comments/{id}/delete", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.commentDelete))))))
 	a.handle(mux, "GET /ui/refs", a.requirePerson(http.HandlerFunc(a.refsLookup)))
+	a.handle(mux, "GET /ui/mentions", a.requirePerson(http.HandlerFunc(a.mentionsLookup)))
+	a.handle(mux, "POST /ui/inbox/mention-read", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxMentionRead))))))
 	a.handle(mux, "POST /ui/searches", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.searchSave))))))
 	a.handle(mux, "POST /ui/inbox/reply", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxReply))))))
 	a.handle(mux, "POST /ui/inbox/done", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxDone))))))
@@ -387,6 +391,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	data.ServerVersion = version.Label(a.buildVersion)
 	data.Shell = a.shellFor(r, name)
 	data.Repo = repoFrom(r)
+	data.MentionRepo = mentionRepoOf(data)
 	data.Styles, data.Scripts = pageAssets[name].CSS, pageAssets[name].JS
 	switch name {
 	case "inbox":
@@ -607,6 +612,8 @@ var webRoutes = map[string]webClass{
 	"GET /ui/inbox":                         webAccount,
 	"POST /ui/searches":                     webProject,
 	"GET /ui/refs":                          webProject,
+	"GET /ui/mentions":                      webProject,
+	"POST /ui/inbox/mention-read":           webProject,
 	"POST /ui/comments/{id}/edit":           webProject,
 	"POST /ui/comments/{id}/delete":         webProject,
 	"POST /ui/reactions":                    webProject,

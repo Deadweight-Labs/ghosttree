@@ -220,7 +220,7 @@ func coordHookSender(meta map[string]string) string {
 	id := safeToken(meta["sender"])
 	switch meta["sender_kind"] {
 	case store.AuthorHuman:
-		if name := store.NormalizeAccountName(meta["sender_name"]); name != "" {
+		if name := store.PromptSafeName(meta["sender_name"]); name != "" {
 			return name + " (" + id + ", human)"
 		}
 		return id + " (human)"

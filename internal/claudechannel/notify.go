@@ -58,7 +58,7 @@ func NewNotification(room store.CoordRoom, m store.CoordMessage, content string)
 	if m.AuthorKind != "" {
 		meta["sender_kind"] = m.AuthorKind
 	}
-	if name := store.NormalizeAccountName(m.SenderDisplayName); name != "" && m.AuthorKind == store.AuthorHuman {
+	if name := store.PromptSafeName(m.SenderDisplayName); name != "" && m.AuthorKind == store.AuthorHuman {
 		meta["sender_name"] = name
 	}
 	if m.AuthorKind != store.AuthorHuman && m.AuthorKind != store.AuthorSystem {

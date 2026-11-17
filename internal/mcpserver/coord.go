@@ -768,7 +768,7 @@ func toYouTag(m store.CoordMessage) string {
 // Identität (die ist die ID).
 func senderLabel(m store.CoordMessage) string {
 	id := headerSafe(m.SenderExternalID)
-	name := store.NormalizeAccountName(m.SenderDisplayName)
+	name := store.PromptSafeName(m.SenderDisplayName)
 	// Ein Systemhinweis steht als solcher in der Kopfzeile, nach author_kind und
 	// nie nach der Kennung: der Store setzt es, ein Client kann es nicht.
 	if m.AuthorKind == store.AuthorSystem {
