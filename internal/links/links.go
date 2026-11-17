@@ -186,9 +186,9 @@ func (b Builder) Idea(n int64) string { return b.repo("/ideas/" + num(n)) }
 // interface is asked to serve it at this address.
 func (b Builder) Feature(n int64) string { return b.repo("/features/" + num(n)) }
 
-// Decision is DEC-n, an open decision of an idea or an issue. It has no page of
-// its own in the schema yet; this is the address the interface is asked to
-// serve (the page of its idea or issue, anchored at the decision).
+// Decision is DEC-n, a decision of an idea or an issue. The interface serves it at this
+// address: the page of the decision itself for an issue, the workshop of the idea (anchored at
+// the decision) for an idea.
 func (b Builder) Decision(n int64) string { return b.repo("/decisions/" + num(n)) }
 
 // Knowledge is the entry KN-id.

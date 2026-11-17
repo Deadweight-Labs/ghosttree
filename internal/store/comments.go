@@ -321,6 +321,8 @@ func (a *ProjectAccess) AddComment(kind string, objectID int64, body string, act
 	}
 	_, _ = a.st.recordTextMentions(textMentionSource{Project: project, SourceKind: MentionInComment, SourceID: id,
 		ObjectKind: kind, ObjectID: objectID, AuthorAccount: a.account, Author: a.principal.Label}, body)
+	// Whoever answers on an object has read what was said to them there.
+	a.answerTextMentions(kind, objectID)
 	return a.commentView(id)
 }
 

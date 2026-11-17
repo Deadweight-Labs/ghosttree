@@ -41,15 +41,32 @@
     });
   };
 
+  // The words of the name an option can be found by: a person by their name, an agent by the person it
+  // works for and its own name, never by the machine or branch that stand in its label.
+  const wordsOf = (item) => {
+    const label = item.querySelector(".comp-suggest-name")?.textContent || "";
+    const text = item.dataset.agent === "1" ? `${item.dataset.owner || ""} ${label.split(" · ")[0]}` : label;
+    return text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  };
+  // A hit is a name that begins with what was typed: its handle, or the name from any of its words on.
+  const hits = (item, query) => {
+    if (!query) return true;
+    if (item.dataset.handle.startsWith(query)) return true;
+    const words = wordsOf(item);
+    return words.some((_, at) => words.slice(at).join("-").startsWith(query));
+  };
+
   const open = (area) => {
     const found = state(area);
     const list = listOf(area);
     if (!found || !list) return close();
     let shown = 0;
-    list.querySelectorAll("[role=option]").forEach((item, at) => {
+    const items = [...list.querySelectorAll("[role=option]")];
+    // People before agents, each in the order the page gave them; the first line is the one Enter takes.
+    items.sort((a, b) => (a.dataset.agent === "1") - (b.dataset.agent === "1")).forEach((item) => list.appendChild(item));
+    items.forEach((item, at) => {
       if (!item.id) item.id = `mention-option-${at}-${Math.random().toString(36).slice(2, 7)}`;
-      const name = fold(item.querySelector(".comp-suggest-name")?.textContent || "");
-      const hit = !found.query || item.dataset.handle.includes(found.query) || name.includes(found.query);
+      const hit = hits(item, found.query);
       item.hidden = !hit || shown >= limit;
       if (hit && !item.hidden) shown += 1;
     });

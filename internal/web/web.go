@@ -101,7 +101,10 @@ type pageData struct {
 	SessionV                                                   *sessionView
 	Project, Preview                                           string
 	// MentionRepo is the project an @name in a text of this page is read in (ui-mentions.js).
-	MentionRepo          string
+	MentionRepo string
+	// HashStrict: a #n in a text of this page is the issue or pull request of its repository, never a
+	// knowledge entry (the rooms, where nobody wrote the old #1970 for knowledge).
+	HashStrict           bool
 	Coord                coordPageView
 	Orgs                 orgsView
 	Invite               bool
@@ -116,6 +119,7 @@ type pageData struct {
 	InboxV               *inboxView
 	NewIssueV            *newIssueView
 	IdeaV                *ideaPageView
+	DecisionV            *decisionPageView
 	CodeV                *repoCodeView
 	AgentV               *agentPageView
 	OrgName              string
@@ -393,6 +397,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	data.Shell = a.shellFor(r, name)
 	data.Repo = repoFrom(r)
 	data.MentionRepo = mentionRepoOf(data)
+	data.HashStrict = name == "coord"
 	data.Styles, data.Scripts = pageAssets[name].CSS, pageAssets[name].JS
 	switch name {
 	case "inbox":

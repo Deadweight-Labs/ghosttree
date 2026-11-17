@@ -86,7 +86,7 @@ var suggestTypes = []string{"feature", "change", "bug", "investigation"}
 
 // suggestKindValues are the values of kind: the kinds the web search has groups
 // for; a guest gets no tasks, pains or sessions.
-var suggestKindValues = []string{query.KindRequest, query.KindIdea, query.KindKnowledge, query.KindDocument, query.KindPain, query.KindTask, query.KindSession}
+var suggestKindValues = []string{query.KindRequest, query.KindIdea, query.KindKnowledge, query.KindDocument, query.KindPain, query.KindTask, query.KindDecision, query.KindSession}
 
 // suggestSpans are the ages created: and updated: are offered with.
 var suggestSpans = []string{"1d", "7d", "30d"}
@@ -261,7 +261,9 @@ func (a *app) suggestValues(r *http.Request, pa *store.ProjectAccess, l lang, gu
 	case query.KeyKind:
 		kinds := slices.Clone(suggestKindValues)
 		if guest {
-			kinds = slices.DeleteFunc(kinds, func(k string) bool { return k == query.KindPain || k == query.KindTask || k == query.KindSession })
+			kinds = slices.DeleteFunc(kinds, func(k string) bool {
+				return k == query.KindPain || k == query.KindTask || k == query.KindDecision || k == query.KindSession
+			})
 		}
 		return plain(kinds...)
 	case query.KeyType:

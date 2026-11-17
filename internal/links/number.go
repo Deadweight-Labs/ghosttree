@@ -9,8 +9,8 @@ import (
 )
 
 // NumberTerm is a term that names objects by their number and says nothing else:
-// the whole term, trimmed, is one of #217, REQ-12, TASK-3, PAIN-5, IDEA-7, pr:217
-// or pull:217 (any case). REQ-, TASK-, PAIN-, IDEA- and pr: name one kind; #217
+// the whole term, trimmed, is one of #217, REQ-12, TASK-3, PAIN-5, IDEA-7, DEC-2, pr:217
+// or pull:217 (any case). REQ-, TASK-, PAIN-, IDEA-, DEC- and pr: name one kind; #217
 // names none and stands for every kind that is written with a hash number
 // (HashKinds). Every place that reads such a term (the search page and its live
 // stream, the filter of the pull request list, the qualifier pr: of the issue
@@ -27,9 +27,9 @@ type NumberTerm struct {
 var HashKinds = []string{KindRequest, KindPull, KindKnowledge}
 
 // The number is at most 15 digits, which keeps it well inside int64.
-var numberRE = regexp.MustCompile(`(?i)^(?:#(\d{1,15})|(req|task|pain|idea|kn)-(\d{1,15})|(pr|pull):\s*#?(\d{1,15}))$`)
+var numberRE = regexp.MustCompile(`(?i)^(?:#(\d{1,15})|(req|task|pain|idea|dec|kn)-(\d{1,15})|(pr|pull):\s*#?(\d{1,15}))$`)
 
-var numberPrefixKind = map[string]string{"req": KindRequest, "task": KindTask, "pain": KindPain, "idea": KindIdea, "kn": KindKnowledge, "pr": KindPull, "pull": KindPull}
+var numberPrefixKind = map[string]string{"req": KindRequest, "task": KindTask, "pain": KindPain, "idea": KindIdea, "dec": KindDecision, "kn": KindKnowledge, "pr": KindPull, "pull": KindPull}
 
 // ParseNumber reads term as a NumberTerm. A number of zero is no number, and a
 // term with more than the number does not name one object ("REQ-5 login" is a
@@ -94,6 +94,8 @@ func Short(r Ref) string {
 		return "PAIN-" + n
 	case KindIdea:
 		return "IDEA-" + n
+	case KindDecision:
+		return "DEC-" + n
 	case KindPull:
 		return "pr:" + n
 	case KindKnowledge:

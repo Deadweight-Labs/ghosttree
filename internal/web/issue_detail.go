@@ -126,6 +126,13 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 	for _, i := range detail.Ideas {
 		v.Ideas = append(v.Ideas, ideaFact{Num: "#" + strconv.FormatInt(i.ID, 10), Title: i.Title, Brief: l.msg("ref.kind.idea"), Href: repo + "/ideas/" + strconv.FormatInt(i.ID, 10)})
 	}
+	if repo != "" {
+		if list, err := pa.DecisionsOf(idea.SubjectRequest, req.ID); err == nil {
+			for _, d := range list {
+				v.Decisions = append(v.Decisions, ideaFact{Num: d.HumanID(), Title: d.Question, Brief: label(l, workshopDecisionKeys, d.State), Href: repo + "/decisions/" + strconv.FormatInt(d.ID, 10)})
+			}
+		}
+	}
 	// A commit proof leads to the commit on GitHub when the project lives there.
 	if rest, ok := strings.CutPrefix(remote, "github.com/"); ok {
 		for i := range v.Criteria {

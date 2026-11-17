@@ -148,7 +148,9 @@ type requestView struct {
 	Relations []relationLine
 	Pains     []requestPainLine
 	// Ideas are the ideas the issue came out of; the issue page shows them as its source.
-	Ideas                    []ideaFact
+	Ideas []ideaFact
+	// Decisions are the questions asked of the issue; each has a page of its own.
+	Decisions                []ideaFact
 	Tasks                    []requestTaskLine
 	Threads                  []coordThreadView
 	Activity                 []activityLine

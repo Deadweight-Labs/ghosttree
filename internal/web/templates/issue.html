@@ -63,6 +63,7 @@
 <div class="sblk live-side" data-live-side="{{.ID}}" aria-live="polite"{{if not .Live}} hidden{{end}}>{{range .Live}}{{liveBox .}}{{end}}</div>
 {{with .LabelBox}}{{template "uilabelbox" .}}{{end}}
 {{if or .Pains .Ideas}}<div class="sblk"><h3>{{t "issue.source"}}</h3>{{range .Ideas}}<div class="v"><div class="origin">{{template "uihc" (hc .Num .Title .Brief .Href)}}</div></div>{{end}}{{range .Pains}}<div class="v"><div class="origin">{{template "uihc" (hc (printf "#%d" .ID) .Title (t "ref.kind.pain") .Href)}}</div></div>{{end}}</div>{{end}}
+{{if .Decisions}}<div class="sblk"><h3>{{t "decision.side.title"}}</h3>{{range .Decisions}}<div class="v">{{template "uihc" (hc .Num .Title .Brief .Href)}}</div>{{end}}</div>{{end}}
 {{with .Branch}}{{if .HasPackage}}<div class="sblk"><h3>{{t "issues.side.package"}}</h3><div class="v"><span>{{.Package}}</span>{{if .Progress}}<span class="prog"><span class="bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{.Progress}}</span>{{end}}</div></div>{{end}}
 <div class="sblk"><h3>{{t "issues.side.branch"}}</h3><div class="v"><span>{{branchPill .Name (printf "%s?q=branch%%3A%s" $.IssueV.Base (urlquery .Name))}}</span></div></div>{{end}}
 {{range .Links}}{{if eq .Rel "parent"}}<div class="sblk"><h3>{{t "issues.side.parent"}}</h3><div class="v"><span>{{template "uihc" (hc (printf "#%d" .N) .Title .Label .Href)}}</span></div></div>{{end}}{{end}}

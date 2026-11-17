@@ -283,13 +283,13 @@ function simple(piece) {
   let rest = piece;
   const tag = /^[a-zA-Z][\w-]*/.exec(rest);
   if (tag) { checks.push((el) => el.localName === tag[0].toLowerCase()); rest = rest.slice(tag[0].length); }
-  const re = /^(?:\.([\w-]+)|\[([\w-]+)(?:="([^"]*)")?\]|:not\(([^)]*)\))/;
+  const re = /^(?:\.([\w-]+)|\[([\w-]+)(?:=(?:"([^"]*)"|([\w-]+)))?\]|:not\(([^)]*)\))/;
   while (rest) {
     const m = re.exec(rest);
     if (!m) throw new Error("selector not supported by the test DOM: " + piece);
     if (m[1]) checks.push((el) => el.classList.contains(m[1]));
-    else if (m[2]) checks.push((el) => el.hasAttribute(m[2]) && (m[3] === undefined || el.getAttribute(m[2]) === m[3]));
-    else { const inner = simple(m[4]); checks.push((el) => !inner(el)); }
+    else if (m[2]) checks.push((el) => el.hasAttribute(m[2]) && ((m[3] ?? m[4]) === undefined || el.getAttribute(m[2]) === (m[3] ?? m[4])));
+    else { const inner = simple(m[5]); checks.push((el) => !inner(el)); }
     rest = rest.slice(m[0].length);
   }
   return (el) => checks.every((c) => c(el));

@@ -79,6 +79,13 @@ func (a *ProjectAccess) CanCloseDecision(d idea.Decision) bool {
 	return err == nil
 }
 
+// CanWorkDecision sagt, ob der Betrachter an der Entscheidung mitarbeiten, also
+// abstimmen und Varianten anlegen darf: wer am Gegenstand mitarbeiten darf.
+func (a *ProjectAccess) CanWorkDecision(d idea.Decision) bool {
+	_, err := a.decisionSubject(d.Subject, d.SubjectID, ActWork)
+	return err == nil
+}
+
 // ---- Lesen
 
 const decisionCols = `id,project,subject_kind,subject_id,question,detail,way,way_why,aspects,state,answer,reason,trigger_text,

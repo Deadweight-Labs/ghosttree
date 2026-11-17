@@ -52,7 +52,7 @@ func TestMentionInACommentArrivesInTheInboxAndTheSenderLearnsWhoWasMissed(t *tes
 		t.Errorf("the sender is not told: %.400s", after)
 	}
 	inbox := fetchBody(t, e.Lead, e.Base+"/ui/inbox")
-	if !strings.Contains(inbox, "Hey @lars, ist das für dich?") || !strings.Contains(inbox, "anna") {
+	if !strings.Contains(inbox, "Hey lars, ist das für dich?") || !strings.Contains(inbox, "anna") {
 		t.Fatalf("lars finds nothing in the inbox:\n%.1500s", inbox)
 	}
 	if !strings.Contains(inbox, `id="mentioned"`) || !strings.Contains(inbox, `/ui/inbox/mention-read`) {
@@ -86,7 +86,7 @@ func TestMentionInANewIssueReachesThePersonWithAccessOnly(t *testing.T) {
 	if loc := resp.Header.Get("Location"); resp.StatusCode != http.StatusSeeOther || !strings.Contains(loc, "unreached=olga") {
 		t.Fatalf("create issue -> %d %q: olga has no access and the sender must hear it", resp.StatusCode, loc)
 	}
-	if !strings.Contains(fetchBody(t, e.Lead, e.Base+"/ui/inbox"), "@lars schau bitte drauf") {
+	if !strings.Contains(fetchBody(t, e.Lead, e.Base+"/ui/inbox"), "lars schau bitte drauf") {
 		t.Error("lars is not told about the issue that names him")
 	}
 }

@@ -17,6 +17,7 @@ func TestParseNumberReadsEveryFormOfANumberTerm(t *testing.T) {
 		"TASK-3":    {N: 3, Kind: KindTask},
 		"task-3":    {N: 3, Kind: KindTask},
 		"IDEA-7":    {N: 7, Kind: KindIdea},
+		"DEC-2":     {N: 2, Kind: KindDecision},
 		"KN-12":     {N: 12, Kind: KindKnowledge},
 		"kn-12":     {N: 12, Kind: KindKnowledge},
 		"Idea-7":    {N: 7, Kind: KindIdea},
@@ -37,7 +38,7 @@ func TestParseNumberReadsEveryFormOfANumberTerm(t *testing.T) {
 func TestParseNumberLeavesEverythingElseToTheSearch(t *testing.T) {
 	for _, in := range []string{
 		"", "#", "#0", "#-3", "#12a", "# 12", "##12", "217", "REQ-", "REQ-0", "REQ-12 login", "login REQ-12", "REQ-12#2", "AC-4.2",
-		"FEAT-3", "DEC-4", "pr:", "pr:0", "pr:12 13", "pr:abc", "pr:1234567890123456", "#1234567890123456", "commit:abcdef1", "is:open",
+		"FEAT-3", "DEC-", "DEC-0", "pr:", "pr:0", "pr:12 13", "pr:abc", "pr:1234567890123456", "#1234567890123456", "commit:abcdef1", "is:open",
 	} {
 		if got, ok := ParseNumber(in); ok {
 			t.Errorf("ParseNumber(%q) = %+v, want no number", in, got)
@@ -74,7 +75,7 @@ func TestNumberTermKindsAreTheOneItNamesOrTheHashKinds(t *testing.T) {
 // The references of a page, the hover cards and the terminal read their numbers
 // through ParseRef; it has to agree with the search on what a number is.
 func TestParseRefAgreesWithParseNumber(t *testing.T) {
-	for _, in := range []string{"REQ-12", "req-12", "PAIN-5", "TASK-3", "IDEA-7", "pr:217", "pull:217", "PR: 217", "pr:#217"} {
+	for _, in := range []string{"REQ-12", "req-12", "PAIN-5", "TASK-3", "IDEA-7", "DEC-2", "pr:217", "pull:217", "PR: 217", "pr:#217"} {
 		term, ok := ParseNumber(in)
 		if !ok {
 			t.Fatalf("%q is no number", in)

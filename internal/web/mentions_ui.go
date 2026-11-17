@@ -46,7 +46,16 @@ func (a *app) mentionsLookup(w http.ResponseWriter, r *http.Request) {
 	}{Options: []store.MentionOption{}, Names: map[string]store.MentionName{}}
 	if project != "" {
 		if q.Get("options") == "1" {
-			out.Options = append(out.Options, pa.MentionOptions(project)...)
+			l := a.langFor(r)
+			for _, o := range pa.MentionOptions(project) {
+				if o.Agent {
+					o.Note = l.msg("coord.mention.agent")
+					if o.Owner != "" {
+						o.Note = l.msg("coord.mention.agent_of", o.Owner)
+					}
+				}
+				out.Options = append(out.Options, o)
+			}
 		}
 		if h := q["h"]; len(h) > 0 {
 			if len(h) > maxMentionHandles {

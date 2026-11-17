@@ -85,14 +85,14 @@
     return p;
   }
 
-  // ref builds the pill of a key "REQ-5" or "KN-1970": "#5" (knowledge: "KN-1970")
-  // next to the icon.
+  // ref builds the pill of a key: "#5" for an issue (REQ-5), the key itself for every other
+  // kind ("PAIN-5", "DEC-2", "KN-1970"), next to the icon.
   // href may be empty (then it is a span until the address is known).
   function ref(key, o) {
     o = o || {};
     var m = /^([A-Z]+)-(\d+)$/.exec(key), kd = m && KINDS[m[1]];
     if (!kd) return null;
-    return make({ cls: kd.cls, icon: kd.icon, text: m[1] === "KN" ? key : "#" + m[2], title: o.title, href: o.href, ref: key });
+    return make({ cls: kd.cls, icon: kd.icon, text: m[1] === "REQ" ? "#" + m[2] : key, title: o.title, href: o.href, ref: key });
   }
 
   // setTitle gives a short pill its title (long form), or takes it away.

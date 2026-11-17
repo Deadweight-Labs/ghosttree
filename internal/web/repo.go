@@ -392,6 +392,9 @@ func (a *app) repoDetail(w http.ResponseWriter, r *http.Request, remote, tab, id
 	case "ideas":
 		a.ideaInRepo(w, r, remote, id)
 		return
+	case "decisions":
+		a.decisionInRepo(w, r, remote, id)
+		return
 	case "knowledge":
 		a.knowledgeInRepo(w, r, remote, id)
 		return

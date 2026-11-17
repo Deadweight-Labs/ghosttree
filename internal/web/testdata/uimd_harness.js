@@ -30,8 +30,9 @@ function load(path) {
     contains: () => false,
     getElementById: () => null,
     querySelector: () => null,
-    // The body of a page of a repository carries data-repo; tests set globalThis.__repo.
-    body: { getAttribute: (k) => (k === "data-repo" ? g.__repo || null : null) },
+    // The body of a page of a repository carries data-repo; tests set globalThis.__repo. The page of a
+    // room also carries data-hash="strict" (globalThis.__hash).
+    body: { getAttribute: (k) => (k === "data-repo" ? g.__repo || null : k === "data-hash" ? g.__hash || null : null) },
   };
   g.location = { hash: "" };
   g.GTPill = {

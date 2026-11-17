@@ -297,6 +297,23 @@ func (s *Store) markTextMentionRead(id, account int64) error {
 	return nil
 }
 
+// answerTextMentions takes the viewer's own unread mentions on an object out of the inbox: they wrote
+// a comment there, which is the answer to what was said to them (REQ-684).
+func (a *ProjectAccess) answerTextMentions(kind string, objectID int64) {
+	if a.st.writer != nil {
+		_ = queueWrite(a.st, []any{a.account, kind, objectID}, func(d *Store, p []any) error {
+			return d.answerTextMentions(p[0].(int64), p[1].(string), p[2].(int64))
+		})
+		return
+	}
+	_ = a.st.answerTextMentions(a.account, kind, objectID)
+}
+
+func (s *Store) answerTextMentions(account int64, kind string, objectID int64) error {
+	_, err := s.db.Exec(`UPDATE text_mentions SET read_at=? WHERE account_id=? AND object_kind=? AND object_id=? AND read_at=''`, now(), account, kind, objectID)
+	return err
+}
+
 // MentionOption is one person or agent a text of the project can address, as
 // the editor offers it after @: the Handle it writes, the Label it shows.
 type MentionOption struct {
@@ -305,6 +322,10 @@ type MentionOption struct {
 	Label    string `json:"label"`
 	Provider string `json:"provider,omitempty"`
 	Agent    bool   `json:"agent,omitempty"`
+	// Owner is the person an agent works for; Note is the line the editor shows next to an agent
+	// ("Agent of Mara"), written by the page in its language.
+	Owner string `json:"owner,omitempty"`
+	Note  string `json:"note,omitempty"`
 }
 
 // mentionDirectory is who an @name in a text of project can mean for the
@@ -370,6 +391,7 @@ func (a *ProjectAccess) MentionOptions(project string) []MentionOption {
 		o := MentionOption{ID: c.id, Handle: handle, Label: c.label, Agent: !strings.HasPrefix(c.id, "person:")}
 		if o.Agent {
 			o.Provider = toolWord(c.provider)
+			o.Owner = c.owner
 			if strings.Contains(o.Label, c.id) && c.owner != "" {
 				// An agent that gave no name is "Claude · Lena", not its identifier.
 				o.Label = actorFamilyWord(c.provider) + " · " + c.owner

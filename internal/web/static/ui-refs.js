@@ -16,15 +16,20 @@
 // pill stays without a card.
 //
 // A "#231" in a text on the page of a repository (ui-md.js marks it with
-// data-pr) is asked for twice in the same call: as the pull request 231 of that
-// repository (the key PR-231, "pr:231" with ?project=) and as the knowledge
-// entry KN-231. The pull request wins; only when there is none does the old
-// spelling of a knowledge entry still show the entry. A "#231" with neither stays text.
+// data-pr) is asked for in the same call as the pull request 231 of that repository (the key
+// PR-231, "pr:231" with ?project=), as the issue 231 of it (ISSUE-231, "issue:231") and, where the
+// page allows the old spelling, as the knowledge entry KN-231. The pull request wins, then the
+// issue, then the knowledge entry. A "#231" with none of them stays text.
 (function () {
   "use strict";
-  var KEY = /^(?:REQ|PAIN|TASK|IDEA|DEC|FEAT|KN|PR)-\d+$/;
-  // The lookup speaks the short forms of the API: a pull request is "pr:231" there.
-  function apiRef(key) { return key.indexOf("PR-") === 0 ? "pr:" + key.slice(3) : key; }
+  var KEY = /^(?:REQ|PAIN|TASK|IDEA|DEC|FEAT|KN|PR|ISSUE)-\d+$/;
+  // The lookup speaks the short forms of the API: a pull request is "pr:231" there, and the issue 231
+  // of the repository of the page "issue:231" (only found when the issue lives in that repository).
+  function apiRef(key) {
+    if (key.indexOf("PR-") === 0) return "pr:" + key.slice(3);
+    if (key.indexOf("ISSUE-") === 0) return "issue:" + key.slice(6);
+    return key;
+  }
   // The repository of the page: pull requests are only asked for with it.
   function pageRepo() { return (document.body && document.body.getAttribute("data-repo")) || ""; }
   function $$(s, c) { return [].slice.call((c || document).querySelectorAll(s)); }
@@ -130,7 +135,7 @@
     if (keys.length) {
       keys.forEach(function (k) { asked[k] = true; });
       var q = keys.map(function (k) { return "ref=" + encodeURIComponent(apiRef(k)); }).join("&");
-      if (keys.some(function (k) { return k.indexOf("PR-") === 0; })) q += "&project=" + encodeURIComponent(pageRepo());
+      if (keys.some(function (k) { return k.indexOf("PR-") === 0 || k.indexOf("ISSUE-") === 0; })) q += "&project=" + encodeURIComponent(pageRepo());
       var req = fetch("/ui/refs?" + q, { credentials: "same-origin", headers: { Accept: "application/json" } })
         .then(function (r) { return r.ok ? r.json() : { refs: [] }; })
         .then(function (data) {
@@ -196,21 +201,27 @@
   // the plain text it was. Only what the server knows and the viewer may read.
   // A mark whose key the first call had no room for is asked for in a call of its own.
   function resolve(root, done, round) {
-    var marks = $$("[data-maybe]", root);
+    var marks = $$("[data-maybe],[data-pr]", root);
     if (!marks.length) { if (done) done(); return; }
     var keys = [];
     marks.forEach(function (m) {
-      if (m.hasAttribute("data-pr")) keys.push("PR-" + m.getAttribute("data-pr"));
-      keys.push(m.getAttribute("data-maybe"));
+      if (m.hasAttribute("data-pr")) keys.push("PR-" + m.getAttribute("data-pr"), "ISSUE-" + m.getAttribute("data-pr"));
+      if (m.hasAttribute("data-maybe")) keys.push(m.getAttribute("data-maybe"));
     });
     lookup(function () {
       var again = false;
       marks.forEach(function (m) {
-        var key = m.getAttribute("data-maybe"), n = m.getAttribute("data-pr"), pkey = n ? "PR-" + n : "";
-        var known = !!remote[key] || !!template(key);
-        if ((pkey && !asked[pkey]) || (!known && !asked[key])) { again = true; return; }
+        var key = m.getAttribute("data-maybe"), n = m.getAttribute("data-pr"), pkey = n ? "PR-" + n : "", ikey = n ? "ISSUE-" + n : "";
+        var known = key ? !!remote[key] || !!template(key) : false;
+        if ((pkey && !asked[pkey]) || (ikey && !asked[ikey]) || (key && !known && !asked[key])) { again = true; return; }
         if (pkey && remote[pkey]) { m.replaceWith(prPill(n, remote[pkey])); return; }
-        var href = window.GTRefs.href(key);
+        if (ikey && remote[ikey] && window.GTPill) {
+          // The issue is REQ-n: its card is the one of that key.
+          remote["REQ-" + n] = remote[ikey];
+          m.replaceWith(window.GTPill.ref("REQ-" + n, { href: safeLink(remote[ikey].link) }));
+          return;
+        }
+        var href = key ? window.GTRefs.href(key) : "";
         if (known && href && window.GTPill) m.replaceWith(window.GTPill.ref(key, { href: href }));
         else m.replaceWith(document.createTextNode(m.textContent));
       });

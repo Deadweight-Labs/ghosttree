@@ -47,7 +47,10 @@ const (
 	KindFeature   = "feature"
 	KindCriterion = "criterion"
 	KindTask      = "task"
-	KindFile      = "file"
+	// Entscheidungen (DEC-n) einer Idee oder eines Issues: offen, entschieden, vertagt
+	// oder fallengelassen. for: trifft die Person, auf die eine offene Entscheidung wartet.
+	KindDecision = "decision"
+	KindFile     = "file"
 	// Raum-Nachrichten und Sessions haben keinen Zustand und kein Label; was sie
 	// kennen, sind Projekt, Branch, Zeit, Urheber und (Nachrichten) Anker und Bereich.
 	KindMessage = "message"
@@ -58,7 +61,7 @@ const (
 )
 
 // Kinds sind alle Objektarten in fester Reihenfolge.
-var Kinds = []string{KindKnowledge, KindRequest, KindPain, KindIdea, KindFeature, KindCriterion, KindTask, KindFile, KindMessage, KindSession, KindDocument}
+var Kinds = []string{KindKnowledge, KindRequest, KindPain, KindIdea, KindFeature, KindCriterion, KindTask, KindDecision, KindFile, KindMessage, KindSession, KindDocument}
 
 var kindAlias = map[string]string{
 	"knowledge": KindKnowledge, "wissen": KindKnowledge,
@@ -66,7 +69,7 @@ var kindAlias = map[string]string{
 	"pain": KindPain, "pains": KindPain, "idea": KindIdea, "ideas": KindIdea,
 	"feature": KindFeature, "features": KindFeature, "feat": KindFeature,
 	"criterion": KindCriterion, "criteria": KindCriterion,
-	"task": KindTask, "tasks": KindTask, "file": KindFile, "files": KindFile, "ghost": KindFile,
+	"task": KindTask, "tasks": KindTask, "decision": KindDecision, "decisions": KindDecision, "dec": KindDecision, "file": KindFile, "files": KindFile, "ghost": KindFile,
 	"message": KindMessage, "messages": KindMessage, "nachricht": KindMessage, "session": KindSession, "sessions": KindSession,
 	"document": KindDocument, "documents": KindDocument, "doc": KindDocument, "docs": KindDocument, "dokument": KindDocument,
 }
@@ -135,6 +138,15 @@ func StateClass(kind, state string) string {
 		case "dropped":
 			return ClassClosed
 		}
+	case KindDecision:
+		switch state {
+		case "open":
+			return ClassOpen
+		case "decided":
+			return ClassDone
+		case "deferred", "dropped":
+			return ClassClosed
+		}
 	}
 	return ""
 }
@@ -144,6 +156,7 @@ var rawStates = map[string]bool{
 	"dropped": true, "met": true, "waived": true,
 	"active": true, "mitigated": true, "resolved": true, "obsolete": true,
 	"accepted": true, "dismissed": true, "confirmed": true, "retired": true,
+	"decided": true, "deferred": true,
 	// Vertrauensstufen eines Wissenseintrags. Die Agentensuche lässt
 	// unbestätigte Einträge weg, is:staged holt sie ausdrücklich.
 	"staged": true, "quarantined": true, "trusted": true, "verified": true,

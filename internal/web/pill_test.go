@@ -247,7 +247,7 @@ func TestKnowledgePillSaysKNAndTheOthersSayHash(t *testing.T) {
 		t.Errorf("refPillHTML of a request: %s", got)
 	}
 	js := string(mustReadEmbeddedFile(t, "static/ui-pill.js"))
-	if !strings.Contains(js, `m[1] === "KN" ? key : "#" + m[2]`) {
+	if !strings.Contains(js, `m[1] === "REQ" ? "#" + m[2] : key`) {
 		t.Error("ui-pill.js does not write the knowledge pill as KN-n")
 	}
 }
