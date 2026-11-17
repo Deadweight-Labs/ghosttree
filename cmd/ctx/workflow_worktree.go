@@ -11,6 +11,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/Deadweight-Labs/ghosttree/internal/workflow"
 )
@@ -58,6 +59,16 @@ func cmdWorkflowWorktree(command string, args []string, stdout io.Writer) int {
 	gitCtx := collector.ResolveGitContext(cwd)
 	if gitCtx.Project == "" || gitCtx.Root == "" {
 		fmt.Fprintln(stdout, "ctx workflow "+command+" must run inside a repository with an origin remote")
+		return 1
+	}
+	// Nothing of the worktree is committed (KN-4824): git learns to ignore it
+	// here, not only once the mirror ran in this checkout.
+	if err := ghost.EnsureExcluded(gitCtx.Root); err != nil {
+		fmt.Fprintf(stdout, "cannot add .ghosttree/workflows/ to .git/info/exclude: %v\n", err)
+		return 1
+	}
+	if err := workflow.CheckWorktree(gitCtx.Root); err != nil {
+		fmt.Fprintln(stdout, err)
 		return 1
 	}
 	if command == "new" {

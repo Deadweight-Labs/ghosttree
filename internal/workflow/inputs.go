@@ -20,8 +20,9 @@ import (
 // block never reads the database itself: the resolver assembles what the
 // definition declares and what the block always reads (BlockSpec.Inputs), with
 // the rights of the account the run acts for, and the gate checks evidence
-// against exactly that text. Every input is bounded, so a large pull request
-// costs at most a known amount.
+// against exactly that text. What goes in is only what every member of the
+// project may read (audience.go), since every member reads the run's page.
+// Every input is bounded, so a large pull request costs at most a known amount.
 
 // Limits of the assembled inputs, in characters.
 const (
@@ -108,6 +109,15 @@ func (a *assembler) pr() *store.WorkflowPR {
 		a.errs = append(a.errs, "pull request: "+err.Error())
 		return nil
 	}
+	// The entries written on it count only as far as the members read them,
+	// also where a block merely counts them.
+	readable := pr.Knowledge[:0]
+	for _, pk := range pr.Knowledge {
+		if _, ok := a.membersReadKnowledgeID(pk.ID); ok {
+			readable = append(readable, pk)
+		}
+	}
+	pr.Knowledge = readable
 	a.data.PR = &pr
 	return a.data.PR
 }
@@ -123,6 +133,10 @@ func (a *assembler) workshop() *store.IdeaWorkshop {
 	ws, err := a.pa.IdeaWorkshop(a.data.IdeaID)
 	if err != nil {
 		a.errs = append(a.errs, "idea: "+err.Error())
+		return nil
+	}
+	if !a.membersReadIdea(ws.Idea) {
+		a.errs = append(a.errs, "idea: "+errNotReadable.Error())
 		return nil
 	}
 	a.data.Workshop = &ws
@@ -256,9 +270,18 @@ func (a *assembler) value(ctx context.Context, name string) (string, bool) {
 		}
 		return a.relatedKnowledge(pr), true
 	case "requests.open":
-		lines, err := a.st.OpenRequestsForPrompt(a.run.Project, maxListLines)
+		list, err := a.st.OpenRequestTitles(a.run.Project, 4*maxListLines)
 		if err != nil {
 			return "", false
+		}
+		var lines []string
+		for _, r := range list {
+			if a.membersReadRequest(r.ID) {
+				lines = append(lines, fmt.Sprintf("REQ-%d %s", r.ID, r.Title))
+			}
+			if len(lines) == maxListLines {
+				break
+			}
 		}
 		return strings.Join(lines, "\n"), true
 	case "idea.text":
@@ -332,7 +355,7 @@ func (a *assembler) relatedKnowledge(pr *store.WorkflowPR) string {
 			continue
 		}
 		for _, k := range list {
-			if seen[k.ID] || k.Scope.Project != a.run.Project || k.Status != "active" {
+			if seen[k.ID] || !a.membersReadKnowledge(k) {
 				continue
 			}
 			seen[k.ID] = true
@@ -359,7 +382,7 @@ func (a *assembler) relatedIdeas(i idea.Idea) string {
 			continue
 		}
 		for _, o := range list {
-			if o.ID == i.ID {
+			if o.ID == i.ID || !a.membersReadIdea(o) {
 				continue
 			}
 			hits[o.ID]++

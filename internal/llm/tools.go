@@ -94,11 +94,16 @@ func (c *httpClient) chatToolsAnthropic(ctx context.Context, system string, turn
 			}
 			blocks = append(blocks, b)
 		}
-		if t.Text != "" {
+		// The API refuses a text block of white space only, and a message
+		// without blocks (content null).
+		if strings.TrimSpace(t.Text) != "" {
 			blocks = append(blocks, map[string]any{"type": "text", "text": t.Text})
 		}
 		for _, call := range t.Calls {
 			blocks = append(blocks, map[string]any{"type": "tool_use", "id": call.ID, "name": call.Name, "input": inputOf(call.Input)})
+		}
+		if len(blocks) == 0 {
+			blocks = append(blocks, map[string]any{"type": "text", "text": "(empty)"})
 		}
 		messages = append(messages, map[string]any{"role": t.Role, "content": blocks})
 	}

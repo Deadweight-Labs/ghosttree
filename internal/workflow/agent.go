@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,9 @@ const (
 
 	ToolReasonNotDeclared = "not_declared"
 	ToolReasonPerRound    = "per_round"
+	// ToolReasonAfterSubmit: the call came in the turn of submit, which ends
+	// the work; the model would never see its result.
+	ToolReasonAfterSubmit = "after_submit"
 )
 
 //go:embed prompts/agent.txt
@@ -163,7 +167,14 @@ var Agent = BlockFunc(func(ctx context.Context, in Input) (store.WorkflowRunOutc
 		if t := strings.TrimSpace(reply.Text); t != "" {
 			fmt.Fprintf(&l.output, "[%d] %s\n\n", round, t)
 		}
-		turns = append(turns, llm.Turn{Role: "assistant", Text: reply.Text, Calls: reply.Calls})
+		said := reply.Text
+		if strings.TrimSpace(said) == "" && len(reply.Calls) == 0 {
+			// A turn with neither text nor calls (max_tokens, an empty answer)
+			// is refused when sent back; a placeholder keeps the conversation
+			// valid, and the next turn asks for submit.
+			said = "(no answer)"
+		}
+		turns = append(turns, llm.Turn{Role: "assistant", Text: said, Calls: reply.Calls})
 		if len(reply.Calls) == 0 {
 			// An answer in text instead of submit counts when it is the object.
 			var s agentSubmit
@@ -174,10 +185,17 @@ var Agent = BlockFunc(func(ctx context.Context, in Input) (store.WorkflowRunOutc
 			turns = append(turns, llm.Turn{Role: "user", Text: "Call submit with your results (an empty list is fine)."})
 			continue
 		}
+		// submit ends the work: in its turn no other tool runs, before or
+		// after it, since the model handed in without their results; what
+		// they would return must not become evidence for the gate.
+		submit := slices.IndexFunc(reply.Calls, func(c llm.ToolCall) bool { return c.Name == SubmitTool })
 		var results []llm.ToolResult
 		for i, call := range reply.Calls {
-			res := l.call(ctx, in.Tools, round, i, call, &final)
-			results = append(results, res)
+			if submit >= 0 && i != submit {
+				results = append(results, l.skip(round, call))
+				continue
+			}
+			results = append(results, l.call(ctx, in.Tools, round, i, call, &final))
 		}
 		if final != nil {
 			break
@@ -230,6 +248,15 @@ func (l *agentLog) toolsJSON() string {
 	}
 	raw, _ := json.Marshal(l.calls)
 	return string(raw)
+}
+
+// skip records a call of the turn of submit, which does not run.
+func (l *agentLog) skip(round int, call llm.ToolCall) llm.ToolResult {
+	const why = "not run: submit ends the work"
+	l.refused++
+	l.calls = append(l.calls, store.WorkflowToolCall{Round: round, Tool: cutRunes(call.Name, 80), Input: cutRunes(string(call.Input), maxRecordChars),
+		State: ToolRefused, Reason: ToolReasonAfterSubmit, Result: why})
+	return llm.ToolResult{CallID: call.ID, Content: why, IsError: true}
 }
 
 // call answers one tool call of the model and records it.

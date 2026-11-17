@@ -21,7 +21,10 @@ type WorkflowPRCommit struct {
 
 // WorkflowPR is a merged pull request as a run reads it.
 type WorkflowPR struct {
-	Number                  int64
+	Number int64
+	// Known: the server recorded the pull request (git_pull_requests), which
+	// it does only for one of the project's own repository, never for a fork.
+	Known                   bool
 	Title, Body, Base, Head string
 	Commits                 []WorkflowPRCommit
 	// Paths are the changed paths a client reported for the pull request.
@@ -45,7 +48,7 @@ func (s *Store) WorkflowPRInput(project string, pr int64) (WorkflowPR, error) {
 	if err != nil {
 		return out, err
 	}
-	out.Title, out.Base, out.Head, out.Knowledge = brief.Title, brief.Base, brief.Head, brief.Knowledge
+	out.Known, out.Title, out.Base, out.Head, out.Knowledge = brief.Known, brief.Title, brief.Base, brief.Head, brief.Knowledge
 	_ = s.db.QueryRow(`SELECT body FROM git_pull_requests WHERE project=? AND number=?`, project, pr).Scan(&out.Body)
 	rows, err := s.db.Query(`SELECT c.sha, c.title, COALESCE(m.message,''), COALESCE(m.files,'[]') FROM git_pr_commits c
 		LEFT JOIN git_commit_meta m ON m.project=c.project AND m.sha=c.sha
@@ -102,25 +105,32 @@ func commitFilePaths(raw string) []string {
 	return paths
 }
 
-// OpenRequestsForPrompt lists the open issues of a project as "REQ-n title",
-// newest first, at most limit: what a run may point to instead of proposing a
-// second issue for the same wish.
-func (s *Store) OpenRequestsForPrompt(project string, limit int) ([]string, error) {
+// RequestTitle is an issue by its number and title.
+type RequestTitle struct {
+	ID    int64
+	Title string
+}
+
+// OpenRequestTitles lists the open issues of a project, newest first, at most
+// limit: what a run may point to instead of proposing a second issue for the
+// same wish. It reads no rights; the caller drops what the run's audience may
+// not read, so it asks for more than it shows.
+func (s *Store) OpenRequestTitles(project string, limit int) ([]RequestTitle, error) {
 	if s.reader != nil {
-		return s.reader.OpenRequestsForPrompt(project, limit)
+		return s.reader.OpenRequestTitles(project, limit)
 	}
-	rows, err := s.db.Query(`SELECT 'REQ-' || id || ' ' || title FROM requests WHERE project=? AND state='open' ORDER BY id DESC LIMIT ?`, scopeNormalize(project), limit)
+	rows, err := s.db.Query(`SELECT id, title FROM requests WHERE project=? AND state='open' ORDER BY id DESC LIMIT ?`, scopeNormalize(project), limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+	var out []RequestTitle
 	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err != nil {
+		var r RequestTitle
+		if err := rows.Scan(&r.ID, &r.Title); err != nil {
 			return nil, err
 		}
-		out = append(out, line)
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }
