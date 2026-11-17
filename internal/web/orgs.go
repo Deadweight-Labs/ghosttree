@@ -77,6 +77,9 @@ type projectRolesView struct {
 
 // orgsView sammelt, was die Org-Seite zeigt.
 type orgsView struct {
+	// Retention is how many days the full text of workflow runs stays; set
+	// only for an owner, who alone may change it (REQ-693).
+	Retention int
 	Orgs      []store.Org
 	Selected  store.Org
 	Owner     bool
@@ -222,6 +225,9 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	if v.Selected.ID != 0 {
 		v.GardenSet = a.gardenSettingsFor(r, v.Selected)
 		v.Owner = v.Selected.Role == store.OrgOwner
+		if v.Owner {
+			v.Retention = a.store.WorkflowSettingsFor(v.Selected.ID).RetentionDays
+		}
 		v.CanRename = v.Owner || a.isAdmin(browserPrincipal(r))
 		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me, a.store.AccessEnforced())
 		v.GuestLinks = a.store.AccessEnforced()
@@ -425,6 +431,8 @@ func orgNotice(l lang, key string) string {
 		return l.msg("adm.notice.project")
 	case "garden":
 		return l.msg("gardener.saved")
+	case "workflows":
+		return l.msg("wf.retention.saved")
 	case "moved":
 		return l.msg("adm.notice.moved")
 	case "joined":
@@ -507,7 +515,7 @@ func noticeAnchor(notice string) string { return noticeSection[notice] }
 var noticeSection = map[string]string{
 	"source_added": "#sources", "source_failed": "#sources", "source_proved": "#sources", "source_removed": "#sources", "imported": "#sources", "follow": "#sources", "assigned": "#projects",
 	"visibility": "#projects", "project": "#projects", "moved": "#projects", "project_created": "#projects",
-	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener",
+	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener", "workflows": "#workflows",
 }
 
 // fillInvites lists the organization's invitations with the links their

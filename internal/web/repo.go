@@ -56,7 +56,7 @@ type repoTab struct {
 }
 
 // repoTabIcons names the icon of each tab of the band.
-var repoTabIcons = map[string]string{"code": "code", "issues": "issue", "pulls": "pr", "knowledge": "book", "docs": "file", "runbooks": "play", "rooms": "chat", "sessions": "term", "commits": "commit", "tasks": "tasks", "packages": "list", "settings": "gear"}
+var repoTabIcons = map[string]string{"code": "code", "issues": "issue", "pulls": "pr", "knowledge": "book", "docs": "file", "runbooks": "play", "workflows": "sprout", "rooms": "chat", "sessions": "term", "commits": "commit", "tasks": "tasks", "packages": "list", "settings": "gear"}
 
 // Band is the tab band under the header: the row, and behind the separator the
 // tabs of the second group.
@@ -246,7 +246,9 @@ func (a *app) repoRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	remote, rest, ok := parseRepoPath(segs)
 	isCode := ok && len(rest) > 0 && (rest[0] == "tree" || rest[0] == "blob")
-	if !ok || (len(rest) > 2 && !isCode) {
+	// The page of a run: /ui/{org}/{repo}/workflows/runs/{n}.
+	isRun := ok && len(rest) == 3 && rest[0] == "workflows" && rest[1] == "runs"
+	if !ok || (len(rest) > 2 && !isCode && !isRun) {
 		http.NotFound(w, r)
 		return
 	}
@@ -278,6 +280,9 @@ func (a *app) repoRoute(w http.ResponseWriter, r *http.Request) {
 		tab = "code"
 	}
 	switch {
+	case isRun:
+		a.workflowRunPage(w, r, remote, rest[2])
+		return
 	case len(rest) == 2 && tab != "code":
 		a.repoDetail(w, r, remote, tab, rest[1])
 		return
@@ -312,6 +317,8 @@ func (a *app) repoRoute(w http.ResponseWriter, r *http.Request) {
 		tab = "code"
 	case "runbooks":
 		h = a.runbooksPage
+	case "workflows":
+		h = a.workflowsPage
 	case "tasks":
 		h = a.repoTasksPage
 	case "packages":
@@ -478,6 +485,9 @@ func (a *app) repoViewFor(r *http.Request, pa *store.ProjectAccess, kind viewerK
 		tab("docs", "repo.tab.docs", countText(n), false)
 	}
 	tab("runbooks", "repo.tab.runbooks", "", false)
+	if pa.CanSeeWorkflows(remote) {
+		tab("workflows", "repo.tab.workflows", "", false)
+	}
 	// Behind the separator, as in the mock: rooms, then the lists that show as icon
 	// with their number (sessions, features, commits), settings last.
 	if kind != viewerGuest {

@@ -1,0 +1,33 @@
+{{define "wfstate"}}<span class="lb {{.Tone}} wfstate">{{mi .Icon}}{{t .StateKey}}</span>{{end}}
+{{define "wftrigger"}}<span class="wftrig"><span>{{t .EventKey}}</span>{{if .Href}} <a class="mono" href="{{.Href}}">{{.Label}}</a>{{end}}</span>{{end}}
+
+{{define "workflows"}}{{template "head" .}}{{template "nav" .}}<main class="g2 wf"><div class="wrap">
+{{with .WorkflowsV}}{{if .Empty}}<div class="box">{{template "emptyact" (dict "Text" (t "wf.empty"))}}</div>
+{{else}}<div class="box"><div class="box-h lh"><span class="t">{{if eq (len .Rows) 1}}{{t "wf.n_one"}}{{else}}{{t "wf.n" (len .Rows)}}{{end}}</span></div>
+{{range .Rows}}<div class="row wfrow"><span class="st {{.Tone}}" aria-hidden="true">{{mi .Icon}}</span><div class="wfmain"><a class="wfname rl mono" href="{{.Href}}">{{.Workflow}}</a> <span class="muted">#{{.ID}}</span>
+<div class="wfsub">{{template "wftrigger" .Trigger}}{{if .Result}}<span class="wfres">{{.Result}}</span>{{else if .Reason}}<span class="wfres muted">{{.Reason}}</span>{{end}}</div></div>
+<div class="wfmeta">{{template "wfstate" .}}<span class="mono wfcost">{{.Cost}}</span>{{if .Age}}<span class="muted">{{.Age}}</span>{{end}}</div></div>
+{{end}}</div>{{end}}{{end}}
+</div>{{template "foot" .}}{{end}}
+
+{{define "workflowrun"}}{{template "head" .}}{{template "nav" .}}<main class="g2 wf"><div class="wrap">
+{{with .WorkflowRunV}}<div class="dhead"><div class="dtitle"><h1><span class="mono">{{.Workflow}}</span><span class="n">#{{.ID}}</span></h1></div>
+<div class="dmeta">{{template "wfstate" .}}{{template "wftrigger" .Trigger}}{{if .Age}}<span class="muted">{{.Age}}</span>{{end}}</div></div>
+<div class="dgrid"><div class="dmain">
+{{if .Result}}<div class="sec"><h2>{{t "wf.result"}}</h2></div><div class="box"><div class="box-r">{{.Result}}</div></div>{{end}}
+{{if .Reason}}<div class="sec"><h2>{{t "wf.reason"}}</h2></div><div class="box"><div class="box-r">{{.Reason}}</div></div>{{end}}
+{{if .Purged}}<div class="box"><div class="box-empty">{{t "wf.purged" .Purged}}</div></div>
+{{else if not .NoText}}<div class="sec"><h2>{{t "wf.inputs"}}</h2></div><div class="box"><pre class="wftext">{{.Inputs}}</pre></div>
+<div class="sec"><h2>{{t "wf.output"}}</h2></div><div class="box"><pre class="wftext">{{.Output}}</pre></div>{{end}}
+</div>
+<aside class="side" aria-label="{{t "wf.side"}}">
+<div class="sblk"><h3>{{t "wf.cost"}}</h3><div class="v"><span class="mono">{{.Cost}}</span></div></div>
+{{if .Version}}<div class="sblk"><h3>{{t "wf.version"}}</h3><div class="v"><span class="mono">{{.Version}}</span></div></div>{{end}}
+{{if or .Connection .Model}}<div class="sblk"><h3>{{t "wf.model"}}</h3><div class="v">{{if .Connection}}<span>{{.Connection}}</span>{{end}}{{if .Model}}<span class="mono">{{.Model}}</span>{{end}}</div></div>{{end}}
+{{if .Started}}<div class="sblk"><h3>{{t "wf.started"}}</h3><div class="v"><span>{{.Started}}</span></div></div>{{end}}
+{{if .Finished}}<div class="sblk"><h3>{{t "wf.finished"}}</h3><div class="v"><span>{{.Finished}}</span></div></div>{{end}}
+{{if gt .Chain 1}}<div class="sblk"><h3>{{t "wf.chain"}}</h3><div class="v"><span>{{t "wf.chain_n" .Chain}}</span></div></div>{{end}}
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}
+
+{{define "pullruns"}}{{if .}}<div class="sblk wfside"><h3>{{t "repo.tab.workflows"}}</h3><div class="v">{{range .}}<a class="wfline" href="{{.Href}}"><span class="st {{.Tone}}" aria-hidden="true">{{mi .Icon}}</span><span class="mono">{{.Workflow}}</span><span class="sr">{{t .StateKey}}</span></a>{{end}}</div></div>{{end}}{{end}}
