@@ -357,7 +357,7 @@ func docPush(repoRoot, project string, c *client.Client, slug, message string, c
 	fmt.Fprintf(stdout, "%s rev %d\n", slug, document.HeadRevision)
 	cliCard(stdout, clientBuilder(c, project).DocumentCard(document))
 	if clean {
-		if err := os.Remove(filepath.Join(docwork.Dir(repoRoot), filepath.FromSlash(entry.Path))); err != nil {
+		if err := docwork.RemoveFile(repoRoot, entry.Path); err != nil {
 			fmt.Fprintf(stdout, "remove worktree copy: %v\n", err)
 			return 1
 		}

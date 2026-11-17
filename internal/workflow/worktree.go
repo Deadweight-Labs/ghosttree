@@ -1,18 +1,15 @@
 package workflow
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"unicode/utf8"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/plainfs"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -62,38 +59,10 @@ func CheckWorktreeName(name string) error {
 	return nil
 }
 
-// errNotPlain refuses what is not a plain directory or a regular file.
-func errNotPlain(path string) error {
-	return fmt.Errorf("%s is not a plain directory or regular file (a symbolic link?); ctx workflow does not follow it", path)
-}
-
 // checkWorktreeDirs refuses a .ghosttree or .ghosttree/workflows that exists
 // and is not a plain directory.
 func checkWorktreeDirs(repoRoot string) error {
-	for _, dir := range []string{filepath.Join(repoRoot, ".ghosttree"), WorktreeDir(repoRoot)} {
-		fi, err := os.Lstat(dir)
-		if os.IsNotExist(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if !fi.Mode().IsDir() {
-			return errNotPlain(dir)
-		}
-	}
-	return nil
-}
-
-// ensureWorktreeDir makes the directory where it is missing, after the check.
-func ensureWorktreeDir(repoRoot string) error {
-	if err := checkWorktreeDirs(repoRoot); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(WorktreeDir(repoRoot), 0o755); err != nil {
-		return err
-	}
-	return checkWorktreeDirs(repoRoot)
+	return plainfs.CheckDirs(filepath.Join(repoRoot, ".ghosttree"), WorktreeDir(repoRoot))
 }
 
 // CheckWorktree refuses a worktree a checkout brought: a directory that is a
@@ -113,60 +82,9 @@ func CheckWorktree(repoRoot string) error {
 	return nil
 }
 
-// readPlainFile reads a regular file without following a symbolic link.
-func readPlainFile(path string) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		if errors.Is(err, syscall.ELOOP) {
-			return nil, errNotPlain(path)
-		}
-		return nil, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !fi.Mode().IsRegular() {
-		return nil, errNotPlain(path)
-	}
-	return io.ReadAll(f)
-}
-
-// writePlainFile writes a file through a new temporary file beside it and a
-// rename, which replaces a directory entry and never writes through a link.
-// An existing entry that is not a regular file is refused.
+// writePlainFile writes a file of the worktree through plainfs.
 func writePlainFile(repoRoot, path string, data []byte) error {
-	if err := ensureWorktreeDir(repoRoot); err != nil {
-		return err
-	}
-	if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() {
-		return errNotPlain(path)
-	} else if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o644); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := io.Copy(tmp, bytes.NewReader(data)); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return plainfs.Write(path, data, filepath.Join(repoRoot, ".ghosttree"), WorktreeDir(repoRoot))
 }
 
 // LoadWorktreeState reads .state.json; a missing file is an empty state.
@@ -175,7 +93,7 @@ func LoadWorktreeState(repoRoot string) (WorktreeState, error) {
 		return nil, err
 	}
 	path := filepath.Join(WorktreeDir(repoRoot), ".state.json")
-	raw, err := readPlainFile(path)
+	raw, err := plainfs.Read(path)
 	if os.IsNotExist(err) {
 		return WorktreeState{}, nil
 	}
@@ -208,7 +126,7 @@ func ReadWorktreeFile(repoRoot, name string) (string, error) {
 	if err := checkWorktreeDirs(repoRoot); err != nil {
 		return "", err
 	}
-	raw, err := readPlainFile(WorktreeFile(repoRoot, name))
+	raw, err := plainfs.Read(WorktreeFile(repoRoot, name))
 	if err != nil {
 		return "", err
 	}

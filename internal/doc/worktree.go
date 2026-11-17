@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/plainfs"
 )
 
 var Kinds = []string{"spec", "plan", "investigation", "report", "other"}
@@ -95,8 +97,11 @@ func ValidateSlug(slug string) error {
 }
 
 func LoadState(repoRoot string) (State, error) {
+	if err := plainfs.CheckDirs(rootDirs(repoRoot)...); err != nil {
+		return nil, err
+	}
 	path := filepath.Join(Dir(repoRoot), ".state.json")
-	raw, err := os.ReadFile(path)
+	raw, err := plainfs.Read(path)
 	if os.IsNotExist(err) {
 		return State{}, nil
 	}
@@ -111,36 +116,11 @@ func LoadState(repoRoot string) (State, error) {
 }
 
 func SaveState(repoRoot string, state State) error {
-	dir := Dir(repoRoot)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
 	raw, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".state.json.tmp-")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o644); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(append(raw, '\n')); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, filepath.Join(dir, ".state.json"))
+	return plainfs.Write(filepath.Join(Dir(repoRoot), ".state.json"), append(raw, '\n'), rootDirs(repoRoot)...)
 }
 
 func ReadFile(repoRoot, rel string) (string, error) {
@@ -148,7 +128,10 @@ func ReadFile(repoRoot, rel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	raw, err := os.ReadFile(full)
+	if err := plainfs.CheckDirs(dirChain(repoRoot, rel)...); err != nil {
+		return "", err
+	}
+	raw, err := plainfs.Read(full)
 	if err != nil {
 		return "", err
 	}
@@ -163,10 +146,7 @@ func WriteFile(repoRoot, rel, body string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(full, []byte(body), 0o644)
+	return plainfs.Write(full, []byte(body), dirChain(repoRoot, rel)...)
 }
 
 func MoveFile(repoRoot, oldRel, newRel string) error {
@@ -178,6 +158,15 @@ func MoveFile(repoRoot, oldRel, newRel string) error {
 	if err != nil {
 		return err
 	}
+	if err := plainfs.CheckDirs(dirChain(repoRoot, oldRel)...); err != nil {
+		return err
+	}
+	if fi, err := os.Lstat(oldPath); err == nil && !fi.Mode().IsRegular() {
+		return plainfs.ErrNotPlain(oldPath)
+	}
+	if err := plainfs.CheckDirs(dirChain(repoRoot, newRel)...); err != nil {
+		return err
+	}
 	if _, err := os.Lstat(newPath); err == nil {
 		return fmt.Errorf("destination already exists: %s", newRel)
 	} else if !os.IsNotExist(err) {
@@ -186,7 +175,42 @@ func MoveFile(repoRoot, oldRel, newRel string) error {
 	if err := os.MkdirAll(filepath.Dir(newPath), 0o755); err != nil {
 		return err
 	}
+	if err := plainfs.CheckDirs(dirChain(repoRoot, newRel)...); err != nil {
+		return err
+	}
 	return os.Rename(oldPath, newPath)
+}
+
+// RemoveFile deletes the copy of a document in the worktree. A link is
+// removed as the entry it is, never followed, but a link on the way to it is
+// refused.
+func RemoveFile(repoRoot, rel string) error {
+	full, err := safePath(repoRoot, rel)
+	if err != nil {
+		return err
+	}
+	if err := plainfs.CheckDirs(dirChain(repoRoot, rel)...); err != nil {
+		return err
+	}
+	return os.Remove(full)
+}
+
+// rootDirs are the directories above the state file, from the outside in.
+func rootDirs(repoRoot string) []string {
+	return []string{filepath.Join(repoRoot, ".ghosttree"), Dir(repoRoot)}
+}
+
+// dirChain lists the directories from .ghosttree down to the one that holds
+// the file rel, so that a link anywhere on that way is found.
+func dirChain(repoRoot, rel string) []string {
+	chain := rootDirs(repoRoot)
+	dir := Dir(repoRoot)
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel))), "/")
+	for _, part := range parts[:len(parts)-1] {
+		dir = filepath.Join(dir, part)
+		chain = append(chain, dir)
+	}
+	return chain
 }
 
 func safePath(repoRoot, rel string) (string, error) {
