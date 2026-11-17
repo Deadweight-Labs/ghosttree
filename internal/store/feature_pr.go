@@ -267,3 +267,61 @@ func (s *Store) commitFeatureCheck(id, pr int64, note, person string) error {
 		ON CONFLICT(feature_id,pr) DO UPDATE SET note=excluded.note, person=excluded.person, created_at=excluded.created_at`, id, pr, note, person, now())
 	return err
 }
+
+// UncoveredIssue is a finished issue that no feature mentions.
+type UncoveredIssue struct {
+	ID        int64
+	Title     string
+	UpdatedAt string
+}
+
+// uncoveredIssueMax bounds what one call reads; a project has far fewer
+// finished feature issues without a feature than this.
+const uncoveredIssueMax = 200
+
+// UncoveredFeatureIssues lists the done issues of type feature in the project
+// that are tied to no feature and triggered no feature version (PAIN-89),
+// the latest first. Only a lead sees them (the right to retire a feature); for
+// anyone else the list is empty, as is one of a hidden project.
+func (a *ProjectAccess) UncoveredFeatureIssues(project string) []UncoveredIssue {
+	if !a.Allow(project, ResFeature, ActEdit, Object{}) {
+		return nil
+	}
+	ids, err := a.st.uncoveredFeatureIssues(project)
+	if err != nil {
+		return nil
+	}
+	var out []UncoveredIssue
+	for _, c := range ids {
+		ref, err := a.st.RequestRef(RefRequest, c.ID)
+		if err != nil || ref.Project != project || !requestReadable(a, ref) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func (s *Store) uncoveredFeatureIssues(project string) ([]UncoveredIssue, error) {
+	if s.reader != nil {
+		return s.reader.uncoveredFeatureIssues(project)
+	}
+	rows, err := s.db.Query(`SELECT r.id, r.title, r.updated_at FROM requests r
+		WHERE r.project=? AND r.type='feature' AND r.state='done'
+		AND NOT EXISTS(SELECT 1 FROM feature_links l WHERE l.kind='request' AND l.ref_id=r.id)
+		AND NOT EXISTS(SELECT 1 FROM feature_version_requests v WHERE v.request_id=r.id)
+		ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, project, uncoveredIssueMax)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UncoveredIssue
+	for rows.Next() {
+		var c UncoveredIssue
+		if err := rows.Scan(&c.ID, &c.Title, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}

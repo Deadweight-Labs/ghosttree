@@ -3,6 +3,7 @@
 
 :is(.g2.ft) {
   & .st.feat { color: var(--done-fg); }
+  & .fgap { margin-top: 16px; }
   & .irow .meta .fm { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-muted); }
   & .irow .meta a.fm:hover { color: var(--accent-fg); text-decoration: none; }
   & .irow .meta .fm .i { width: 14px; height: 14px; }

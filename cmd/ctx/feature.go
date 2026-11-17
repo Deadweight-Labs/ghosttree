@@ -33,8 +33,9 @@ const featureUsage = `usage: ctx feature <command>
   update FEAT-n [the fields of add, those you pass replace the old text] [--idea N] [--request N ...] [--pr N] [--base REV] [--message M]
                                   write how it is NOW as a new version; --idea and --pr say what triggered it
   retire FEAT-n --reason R        the product no longer does this (a lead)      reopen FEAT-n  take it up again
-  link FEAT-n idea|request N [--rel origin|affects]     unlink FEAT-n idea|request N [--rel ...]
-                                  tie it to an idea or issue; an idea that affects it shows its description next to the wish
+  link FEAT-n idea|request|knowledge|pain N [--rel origin|affects]     unlink FEAT-n KIND N [--rel ...]
+                                  tie it to an idea or issue (an idea that affects it shows its description next to the wish),
+                                  or to a knowledge entry (KN-n) or a pain (PAIN-n), which take no --rel
   paths --pr N [--base REF] [PATH ...]
                                   report the paths a pull request changes (default: git diff --name-only REF...HEAD, REF origin/main)
                                   and print the checklist items 'Feature X: Beschreibung angepasst?'
@@ -63,6 +64,14 @@ func parseRequestNumber(s string) (int64, error) {
 	n, err := strconv.ParseInt(strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(s)), "REQ-"), 10, 64)
 	if err != nil || n <= 0 {
 		return 0, fmt.Errorf("%q is not a request number like REQ-12", s)
+	}
+	return n, nil
+}
+
+func parsePrefixedNumber(s, prefix, what string) (int64, error) {
+	n, err := strconv.ParseInt(strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(s)), prefix), 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%q is not %s", s, what)
 	}
 	return n, nil
 }
@@ -119,7 +128,7 @@ func renderFeatureText(o featureView) string {
 	for _, g := range []struct {
 		title string
 		refs  []feature.Ref
-	}{{"came out of", f.Origin}, {"changed by", f.Affects}} {
+	}{{"came out of", f.Origin}, {"changed by", f.Affects}, {"related", f.Related}} {
 		for _, r := range g.refs {
 			extra := ""
 			if g.title == "changed by" && !r.Advanced {
@@ -402,8 +411,12 @@ func cmdFeature(args []string, stdout io.Writer) int {
 			ref, err = parseIdeaNumber(positional[2])
 		case feature.KindRequest:
 			ref, err = parseRequestNumber(positional[2])
+		case feature.KindKnowledge:
+			ref, err = parsePrefixedNumber(positional[2], "KN-", "a knowledge number like KN-12")
+		case feature.KindPain:
+			ref, err = parsePrefixedNumber(positional[2], "PAIN-", "a pain number like PAIN-12")
 		default:
-			err = fmt.Errorf("link idea or request, not %q", positional[1])
+			err = fmt.Errorf("link idea, request, knowledge or pain, not %q", positional[1])
 		}
 		if err != nil {
 			return fail(err)

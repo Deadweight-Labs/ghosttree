@@ -133,6 +133,24 @@ func (s *Store) attachFeatureMeta(list []feature.Feature) error {
 	}); err != nil {
 		return err
 	}
+	if err := chunked(ids, func(part []int64) error {
+		rows, err := s.db.Query(`SELECT feature_id, kind, ref_id FROM feature_related WHERE feature_id IN (`+placeholders(len(part))+`) ORDER BY added_at, ref_id`, factIDArgs(part)...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var fid, ref int64
+			var kind string
+			if err := rows.Scan(&fid, &kind, &ref); err != nil {
+				return err
+			}
+			list[idx[fid]].Related = append(list[idx[fid]].Related, feature.Ref{Kind: kind, ID: ref})
+		}
+		return rows.Err()
+	}); err != nil {
+		return err
+	}
 	return chunked(ids, func(part []int64) error {
 		rows, err := s.db.Query(`SELECT feature_id, kind, ref_id, rel FROM feature_links WHERE feature_id IN (`+placeholders(len(part))+`) ORDER BY added_at, ref_id`, factIDArgs(part)...)
 		if err != nil {
@@ -213,6 +231,34 @@ func (a *ProjectAccess) fillFeatureRefs(f *feature.Feature) {
 	}
 	f.Origin = fill(f.Origin)
 	f.Affects = fill(f.Affects)
+	f.Related = a.fillRelated(f.Project, f.Related)
+}
+
+// fillRelated keeps the knowledge entries and pains of a feature that the
+// viewer may read, with title and state; the others are left out without a
+// trace, as a hidden idea is.
+func (a *ProjectAccess) fillRelated(project string, in []feature.Ref) []feature.Ref {
+	var out []feature.Ref
+	for _, r := range in {
+		switch r.Kind {
+		case feature.KindKnowledge:
+			k, err := a.st.KnowledgeByID(r.ID)
+			if err != nil || k.Scope.Project != project || !a.CanSeeKnowledge(k) {
+				continue
+			}
+			r.Title, r.State = k.Title, k.Type
+		case feature.KindPain:
+			p, err := a.st.PainByID(r.ID)
+			if err != nil || p.Project != project || !a.CanSeePain(p) {
+				continue
+			}
+			r.Title, r.State = p.Title, p.State
+		default:
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // advancedRefs sagt, welche Ideen und Issues eine Fassung des Features tragen.
@@ -793,6 +839,9 @@ func (a *ProjectAccess) LinkFeature(id int64, kind string, ref int64, rel string
 	if err != nil {
 		return feature.Feature{}, err
 	}
+	if feature.Related(kind) {
+		return a.linkFeatureRelated(f, kind, ref, by)
+	}
 	if rel != feature.RelOrigin && rel != feature.RelAffects {
 		return feature.Feature{}, requestdomain.NewRuleError("invalid_relation", fmt.Sprintf("unknown relation %q", rel), "use origin or affects", nil)
 	}
@@ -803,7 +852,7 @@ func (a *ProjectAccess) LinkFeature(id int64, kind string, ref int64, rel string
 	case feature.KindRequest:
 		requests = []int64{ref}
 	default:
-		return feature.Feature{}, requestdomain.NewRuleError("invalid_kind", fmt.Sprintf("cannot link a %q", kind), "use idea or request", nil)
+		return feature.Feature{}, requestdomain.NewRuleError("invalid_kind", fmt.Sprintf("cannot link a %q", kind), "use idea, request, knowledge or pain", nil)
 	}
 	if _, _, err := a.cleanFeatureRefs(f.Project, ideas, requests); err != nil {
 		return feature.Feature{}, err
@@ -820,10 +869,54 @@ func (a *ProjectAccess) UnlinkFeature(id int64, kind string, ref int64, rel stri
 	if _, err := a.featureFor(id, ActWork); err != nil {
 		return feature.Feature{}, err
 	}
+	if feature.Related(kind) {
+		if err := a.st.commitFeatureRelated(id, kind, ref, "", false); err != nil {
+			return feature.Feature{}, err
+		}
+		return a.FeatureView(id)
+	}
 	if err := a.st.commitFeatureLink(id, kind, ref, rel, "", false); err != nil {
 		return feature.Feature{}, err
 	}
 	return a.FeatureView(id)
+}
+
+// linkFeatureRelated ties a knowledge entry or a pain of the same project to a
+// feature. A target the viewer may not read answers like a missing one.
+func (a *ProjectAccess) linkFeatureRelated(f feature.Feature, kind string, ref int64, by string) (feature.Feature, error) {
+	if ref <= 0 {
+		return feature.Feature{}, requestdomain.NewRuleError("invalid_ref", "a reference is a positive number", "name the number of the entry", nil)
+	}
+	switch kind {
+	case feature.KindKnowledge:
+		k, err := a.st.KnowledgeByID(ref)
+		if err != nil || k.Scope.Project != f.Project || !a.CanSeeKnowledge(k) {
+			return feature.Feature{}, requestdomain.NewRuleError("knowledge_not_found", fmt.Sprintf("no knowledge entry KN-%d", ref), "name an entry of the same project", nil)
+		}
+	case feature.KindPain:
+		p, err := a.st.PainByID(ref)
+		if err != nil || p.Project != f.Project || !a.CanSeePain(p) {
+			return feature.Feature{}, requestdomain.NewRuleError("pain_not_found", fmt.Sprintf("no pain PAIN-%d", ref), "name a pain of the same project", nil)
+		}
+	}
+	if err := a.st.commitFeatureRelated(f.ID, kind, ref, by, true); err != nil {
+		return feature.Feature{}, err
+	}
+	return a.FeatureView(f.ID)
+}
+
+func (s *Store) commitFeatureRelated(id int64, kind string, ref int64, by string, add bool) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{id, kind, ref, by, add}, func(d *Store, p []any) error {
+			return d.commitFeatureRelated(p[0].(int64), p[1].(string), p[2].(int64), p[3].(string), p[4].(bool))
+		})
+	}
+	if !add {
+		_, err := s.db.Exec(`DELETE FROM feature_related WHERE feature_id=? AND kind=? AND ref_id=?`, id, kind, ref)
+		return err
+	}
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO feature_related(feature_id,kind,ref_id,added_by,added_at) VALUES(?,?,?,?,?)`, id, kind, ref, by, now())
+	return err
 }
 
 func (s *Store) commitFeatureLink(id int64, kind string, ref int64, rel, by string, add bool) error {
