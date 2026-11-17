@@ -43,10 +43,12 @@ type inboxRow struct {
 	Forms           bool
 	// Actor is who the row comes from, TaskN the number of its task, RequestID
 	// the issue it hangs on; Live is the agent working on that issue right now.
-	Actor     string
-	TaskN     int64
-	RequestID int64
-	Live      liveAgent
+	Actor string
+	// ActorKind and ActorOwner draw the avatar of an agent (authorship, REQ-677).
+	ActorKind, ActorOwner string
+	TaskN                 int64
+	RequestID             int64
+	Live                  liveAgent
 	// Cats are the filters the row belongs to ("direkt", "fragen", "aufgaben",
 	// "issues"). Href is where a click on the row leads.
 	Cats []string

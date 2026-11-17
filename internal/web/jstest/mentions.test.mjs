@@ -28,7 +28,7 @@ const answerNames = (url) => ({
 
 test("the pill of a handle shows the full name, as text, with the brackets of the name", async () => {
   const p = page(`<p class="t"><span class="mention">@mara</span> kannst du das ansehen?</p><p class="u"><span class="mention">@nobody</span></p>`, answerNames);
-  await p.window.GTMentions.resolve(p.document);
+  await tick(); await tick(); p.window.GTMentions.resolve(p.document);
   const pill = p.document.querySelector(".t .mention");
   assert.equal(pill.textContent, "@" + NAME);
   assert.equal(pill.getAttribute("title"), NAME);
@@ -38,20 +38,20 @@ test("the pill of a handle shows the full name, as text, with the brackets of th
   assert.equal(url.pathname, "/ui/mentions");
   assert.equal(url.searchParams.get("project"), "github.com/x/shell");
   assert.deepEqual(url.searchParams.getAll("h").sort(), ["mara", "nobody"]);
-  await p.window.GTMentions.resolve(p.document);
+  await tick(); await tick(); p.window.GTMentions.resolve(p.document);
   assert.equal(p.calls.length, 1, "a pill that was answered is not asked again");
 });
 
 test("a name typed out after the handle is not said twice", async () => {
   const p = page(`<p class="t"><span class="mention">@Mara</span> Keller (Tech-Lead) gute Frage</p>`, (url) => ({ names: { Mara: { name: NAME } } }));
-  await p.window.GTMentions.resolve(p.document);
+  await tick(); await tick(); p.window.GTMentions.resolve(p.document);
   const t = p.document.querySelector(".t");
   assert.equal(t.textContent, "@" + NAME + " gute Frage");
 });
 
 test("a page without a project asks nothing and leaves the pills as written", async () => {
   const p = page(`<p><span class="mention">@mara</span></p>`, answerNames, "");
-  await p.window.GTMentions.resolve(p.document);
+  await tick(); await tick(); p.window.GTMentions.resolve(p.document);
   assert.equal(p.calls.length, 0);
   assert.equal(p.document.querySelector(".mention").textContent, "@mara");
 });

@@ -106,4 +106,8 @@
   });
 
   window.GTMentions = { resolve: resolve, offer: offer };
+  // ui-md.js draws the texts of the page before this script exists in the bundle:
+  // the pills that are there already are named now.
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { resolve(document); });
+  else resolve(document);
 })();

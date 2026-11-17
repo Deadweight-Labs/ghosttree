@@ -218,10 +218,6 @@
   & .coord-composer .cx textarea, & .coord-thread-composer .cx textarea { min-height: 56px; }
   & .coord-readonly { padding: 12px 16px; border-top: 1px solid var(--border-default); }
   & .coord-composer .cx, & .coord-thread-composer .cx { border-color: var(--border-default); }
-  & .comp-suggest { position: absolute; z-index: 40; left: 12px; bottom: calc(100% + 4px); min-width: 260px; margin: 0; padding: 4px; list-style: none; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-pop); }
-  & .comp-suggest li { display: flex; justify-content: space-between; gap: 16px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
-  & .comp-suggest li[aria-selected="true"], & .comp-suggest li:hover { background: var(--accent-subtle); }
-  & .comp-suggest small { color: var(--fg-muted); }
   & .coord-option-panel { min-width: 300px; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
   & .coord-option-field small { display: block; }
   & .coord-zone-local { display: none; }

@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+
+	actordomain "github.com/Deadweight-Labs/ghosttree/internal/actor"
 )
 
 // Mentions in texts outside the rooms (REQ-677): a comment, the description of
@@ -210,16 +212,12 @@ func (s *Store) mayReadMentionTarget(account int64, src textMentionSource) bool 
 	return pa.canReadTextTarget(src.Project, src.SourceKind, src.ObjectKind, src.ObjectID)
 }
 
-func (a *ProjectAccess) canReadTextTarget(project, sourceKind, objectKind string, objectID int64) bool {
-	switch sourceKind {
-	case MentionInComment:
-		_, err := a.commentTarget(objectKind, objectID)
-		return err == nil
-	case MentionInPain:
-		return a.CanSeeProject(project, ResPain)
-	default:
-		return a.CanSeeProject(project, ResRequest)
-	}
+// canReadTextTarget asks the right of reading the one object the text belongs to
+// (commentTarget, the same rule as opening its page), not just the project: an
+// entry held back from a viewer stays unknown to them, mentioned or not.
+func (a *ProjectAccess) canReadTextTarget(_, _, objectKind string, objectID int64) bool {
+	_, err := a.commentTarget(objectKind, objectID)
+	return err == nil
 }
 
 // UnreachedTextMentions are the typed @names of a text that would reach nobody
@@ -370,6 +368,13 @@ func (a *ProjectAccess) MentionOptions(project string) []MentionOption {
 			continue
 		}
 		o := MentionOption{ID: c.id, Handle: handle, Label: c.label, Agent: !strings.HasPrefix(c.id, "person:")}
+		if o.Agent {
+			o.Provider = toolWord(c.provider)
+			if strings.Contains(o.Label, c.id) && c.owner != "" {
+				// An agent that gave no name is "Claude · Lena", not its identifier.
+				o.Label = actorFamilyWord(c.provider) + " · " + c.owner
+			}
+		}
 		out = append(out, o)
 	}
 	return out
@@ -396,4 +401,9 @@ func (a *ProjectAccess) MentionNames(project string, handles []string) map[strin
 		}
 	}
 	return out
+}
+
+// actorFamilyWord is the tool as a person names it: Claude, Codex.
+func actorFamilyWord(provider string) string {
+	return actordomain.Family(provider)
 }

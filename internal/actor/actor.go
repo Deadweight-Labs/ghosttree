@@ -79,6 +79,11 @@ type Actor struct {
 func (a Actor) IsAgent() bool { return a.Kind == Agent }
 func (a Actor) IsHuman() bool { return a.Kind == Human }
 
+// transportWords are the ways an entry reached the server, which some stamps
+// carry where a harness belongs. They are not an agent's name: nobody wrote
+// "mcp", an agent did, through it.
+var transportWords = map[string]bool{"mcp": true, "api": true, "cli": true, "hook": true, "web": true, "http": true, "unknown": true, "unidentified-harness": true}
+
 // Family is the harness as a person names it: Claude, Codex, OpenCode. An
 // agent without a known harness is "Agent".
 func Family(harness string) string {
@@ -90,7 +95,7 @@ func Family(harness string) string {
 		return "Codex"
 	case h == "opencode":
 		return "OpenCode"
-	case h == "":
+	case h == "", transportWords[h]:
 		return "Agent"
 	}
 	r := []rune(h)

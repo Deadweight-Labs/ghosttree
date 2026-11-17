@@ -1,6 +1,7 @@
 package web
 
 import (
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
 	"net/http"
@@ -232,7 +233,10 @@ func (a *app) fillKnowledgeItem(l lang, k store.Knowledge, v *knowledgeItemView)
 		v.Timeline = append(v.Timeline, tlItem{Who: v.Closure.By, Icon: "drop", Tone: "don", Head: template.HTML(head), Age: v.Closure.Age, Body: mdText(v.Closure.Reason)})
 	}
 	if c.Person != "" {
-		v.Timeline = append(v.Timeline, tlItem{Who: c.Person, Icon: "book", Tone: "warn", Head: template.HTML(html.EscapeString(l.msg("knowledge.tl.created")) + sha), Age: c.Age})
+		created := tlItem{Who: c.Person, Icon: "book", Tone: "warn", Head: template.HTML(html.EscapeString(l.msg("knowledge.tl.created")) + sha), Age: c.Age}
+		// The entry says "Robin’s Claude" at its head; its line in the history says the same.
+		created.withActor(a.stampedActors(l, actor.Knowledge, map[int64]string{k.ID: c.Person})[k.ID])
+		v.Timeline = append(v.Timeline, created)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -36,7 +37,8 @@ func (a *app) inboxTextMentions(r *http.Request, project string) []inboxRow {
 		return nil
 	}
 	l := a.langFor(r)
-	list, err := a.access(r).TextMentions(project)
+	pa := a.access(r)
+	list, err := pa.TextMentions(project)
 	if err != nil {
 		return nil
 	}
@@ -49,7 +51,8 @@ func (a *app) inboxTextMentions(r *http.Request, project string) []inboxRow {
 		if m.SourceKind == store.MentionInComment {
 			go2 += "#comment-" + strconv.FormatInt(m.SourceID, 10)
 		}
-		row := inboxRow{Mark: "rooms", Mention: true, Actor: m.Author, Lead: m.Author, In: key, InHref: href, Href: go2, Body: m.Snippet,
+		who := a.textMentionAuthor(l, pa, m)
+		row := inboxRow{Mark: "rooms", Mention: true, Actor: who.Label, ActorKind: who.Kind, ActorOwner: who.Owner(), Lead: who.Label, In: key, InHref: href, Href: go2, Body: m.Snippet,
 			Age: shortAgo(l, now, at), at: at, Cats: []string{"direkt"}}
 		if m.SourceKind != store.MentionInComment {
 			row.Cats = append(row.Cats, "issues")
@@ -58,6 +61,19 @@ func (a *app) inboxTextMentions(r *http.Request, project string) []inboxRow {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// textMentionAuthor is who wrote the text: a person by name, an agent as "Robin’s
+// Claude" (the stamp of the text says which), the same as on the page it stands on.
+func (a *app) textMentionAuthor(l lang, pa *store.ProjectAccess, m store.TextMention) actorView {
+	kind := actor.Comment
+	switch m.SourceKind {
+	case store.MentionInRequest:
+		kind = actor.Request
+	case store.MentionInPain:
+		kind = actor.Pain
+	}
+	return a.actorViewOf(l, pa, kind, m.SourceID, m.Author, false)
 }
 
 // inboxMentionRead is POST /ui/inbox/mention-read: one mention in a text is read.
