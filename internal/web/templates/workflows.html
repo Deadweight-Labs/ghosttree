@@ -5,7 +5,7 @@
 
 {{define "workflows"}}{{template "head" .}}{{template "nav" .}}<main class="g2 wf"><div class="wrap">
 {{with .WorkflowsV}}{{if and .Empty (not .CanEdit)}}<div class="box">{{template "emptyact" (dict "Text" (t "wf.empty"))}}</div>
-{{else}}<div class="box wfdefs"><div class="box-h lh"><span class="t">{{t "wf.defs"}}</span><span class="sp"></span>{{if .CanEdit}}<span class="wfnew">{{if .Templates}}<form class="wftpl" method="post" action="/ui/workflows/template"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="project" value="{{.Project}}"><select class="gfield" name="template" aria-label="{{t "wf.tpl.choose"}}">{{range .Templates}}<option value="{{.Name}}">{{t .Key}}</option>{{end}}</select><button class="gbtn sm">{{mi "plus"}}{{t "wf.tpl.create"}}</button></form>{{end}}<a class="gbtn pri sm" href="{{.NewHref}}">{{mi "plus"}}{{t "wf.def.new"}}</a></span>{{end}}</div>
+{{else}}{{if .ReviewHref}}<div class="box wfwait"><div class="row"><span class="st warn" aria-hidden="true">{{mi "inbox"}}</span><span>{{t "wf.review.waiting" .Waiting}}</span><span class="sp"></span><a class="gbtn sm pri" href="{{.ReviewHref}}">{{t "wf.review.open"}}</a></div></div>{{end}}<div class="box wfdefs"><div class="box-h lh"><span class="t">{{t "wf.defs"}}</span><span class="sp"></span>{{if .CanEdit}}<span class="wfnew">{{if .Templates}}<form class="wftpl" method="post" action="/ui/workflows/template"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="project" value="{{.Project}}"><select class="gfield" name="template" aria-label="{{t "wf.tpl.choose"}}">{{range .Templates}}<option value="{{.Name}}">{{t .Key}}</option>{{end}}</select><button class="gbtn sm">{{mi "plus"}}{{t "wf.tpl.create"}}</button></form>{{end}}<a class="gbtn pri sm" href="{{.NewHref}}">{{mi "plus"}}{{t "wf.def.new"}}</a></span>{{end}}</div>
 {{$v := .}}{{range .Defs}}<div class="row wfdef"><div class="wfmain"><a class="wfname rl mono" href="{{.Href}}">{{.Name}}</a>{{if .Summary}} <span class="wfsum">{{.Summary}}</span>{{end}}
 <div class="wfsub"><span>{{t .EventKey}}</span><span class="mono">{{.Uses}}</span><span class="muted">{{t "wf.def.version" .Version}}</span></div></div>
 <div class="wfmeta">{{with .Last}}<a class="wflast" href="{{.Href}}" title="{{t "wf.def.last_run"}}">{{template "wfstate" .}}</a>{{if .Age}}<span class="muted">{{.Age}}</span>{{end}}{{else}}<span class="muted">{{t "wf.def.never"}}</span>{{end}}
@@ -58,27 +58,29 @@
 {{end}}</div>{{template "foot" .}}{{end}}
 
 {{define "workflowrun"}}{{template "head" .}}{{template "nav" .}}<main class="g2 wf"><div class="wrap">
-{{with .WorkflowRunV}}<div class="dhead"><div class="dtitle"><h1><span class="mono">{{.Workflow}}</span><span class="n">#{{.ID}}</span></h1></div>
+{{with .WorkflowRunV}}<div class="dhead"><div class="dtitle"><h1><span class="mono">{{.Workflow}}</span><span class="n">#{{.ID}}</span></h1>{{if .CanRerun}}<div class="dact"><form method="post" action="/ui/workflows/rerun"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="project" value="{{.Project}}"><input type="hidden" name="id" value="{{.ID}}"><button class="gbtn">{{mi "play"}}{{t "wf.rerun"}}</button></form></div>{{end}}</div>
 <div class="dmeta">{{template "wfstate" .}}{{template "wftrigger" .Trigger}}{{if .Age}}<span class="muted">{{.Age}}</span>{{end}}</div></div>
 <div class="dgrid"><div class="dmain">
 {{if .Result}}<div class="sec"><h2>{{t "wf.result"}}</h2></div><div class="box"><div class="box-r">{{.Result}}</div></div>{{end}}
-{{if .Reason}}<div class="sec"><h2>{{t "wf.reason"}}</h2></div><div class="box"><div class="box-r">{{.Reason}}</div></div>{{end}}
-{{if .Results}}<div class="sec" id="results"><h2>{{t "wf.results"}}</h2><span class="counter">{{len .Results}}</span></div>
-<div class="box">{{$tok := .Token}}{{range .Results}}<div class="row wfresrow"><span class="lb {{.Tone}}">{{t .StateKey}}</span><span class="wfreskind">{{t .KindKey}}</span>{{if .RefHref}}<a class="mono" href="{{.RefHref}}">{{.Ref}}</a>{{else if .Ref}}<span class="mono">{{.Ref}}</span>{{end}}{{if .ReasonKey}}<span class="muted wfreswhy">{{t .ReasonKey}}</span>{{end}}<span class="sp"></span>{{if .CanUndo}}<form method="post" action="/ui/workflows/undo"><input type="hidden" name="csrf_token" value="{{$tok}}"><input type="hidden" name="id" value="{{.ID}}"><button class="gbtn sm">{{t "wf.result.undo"}}</button></form>{{end}}</div>{{end}}</div>{{end}}
+{{with .Why}}<div class="sec"><h2>{{t "wf.why"}}</h2></div><div class="box wfwhy"><div class="box-r"><p class="wfwhyt">{{.Text}}</p>{{if .Who}}<p class="muted wfwho">{{.Who}}</p>{{end}}{{if .FixHref}}<p class="wfwhyact"><a class="gbtn sm" href="{{.FixHref}}">{{mi "gear"}}{{t .FixKey}}</a></p>{{end}}</div>
+{{if .Raw}}<details class="wfraw"><summary>{{t "wf.why.raw"}}</summary><pre class="wftext">{{.Raw}}</pre></details>{{end}}</div>
+{{else}}{{if .Reason}}<div class="sec"><h2>{{t "wf.reason"}}</h2></div><div class="box"><div class="box-r">{{.Reason}}</div></div>{{end}}{{end}}
+{{if .Results}}<div class="sec" id="results"><h2>{{t "wf.results"}}</h2><span class="counter">{{len .Results}}</span>{{if .ReviewHref}}<span class="sp"></span><a class="gbtn sm pri" href="{{.ReviewHref}}">{{t "wf.review.waiting" .Waiting}}</a>{{end}}</div>
+<div class="box">{{$tok := .Token}}{{range .Results}}<div class="row wfresrow"><span class="lb {{.Tone}}">{{t .StateKey}}</span><span class="wfreskind">{{t .KindKey}}</span>{{if .RefHref}}<a class="mono" href="{{.RefHref}}">{{.Ref}}</a>{{else if .Ref}}<span class="mono">{{.Ref}}</span>{{end}}{{if .ReasonKey}}<span class="muted wfreswhy">{{t .ReasonKey}}</span>{{end}}<span class="sp"></span>{{if and .Waiting $.WorkflowRunV.ReviewHref}}<a class="gbtn sm" href="{{$.WorkflowRunV.ReviewHref}}">{{t "wf.review.open"}}</a>{{end}}{{if .CanUndo}}<form method="post" action="/ui/workflows/undo"><input type="hidden" name="csrf_token" value="{{$tok}}"><input type="hidden" name="id" value="{{.ID}}"><button class="gbtn sm">{{t "wf.result.undo"}}</button></form>{{end}}</div>{{end}}</div>{{end}}
 {{if .Tools}}<div class="sec" id="tools"><h2>{{t "wf.tools"}}</h2><span class="counter">{{len .Tools}}</span></div>
 <div class="box wftools">{{range .Tools}}<details class="wftool{{if .Refused}} is-refused{{end}}"{{if .Refused}} open{{end}}><summary><span class="lb {{.Tone}}">{{t .StateKey}}</span><span class="muted wfround">{{t "wf.tool.round" .Round}}</span><span class="mono wftn">{{.Tool}}</span>{{if .ReasonKey}}<span class="muted wfreswhy">{{t .ReasonKey}}</span>{{end}}</summary>
 <div class="wftoolbody"><div class="wftoolh">{{t "wf.tool.input"}}</div><pre class="wftext">{{.Input}}</pre><div class="wftoolh">{{if .Submit}}{{t "wf.tool.answer"}}{{else}}{{t "wf.tool.result"}}{{end}}</div><pre class="wftext">{{.Result}}</pre></div></details>{{end}}</div>{{end}}
 {{if .Purged}}<div class="box"><div class="box-empty">{{t "wf.purged" .Purged}}</div></div>
-{{else if not .NoText}}<div class="sec"><h2>{{t "wf.inputs"}}</h2></div><div class="box"><pre class="wftext">{{.Inputs}}</pre></div>
-<div class="sec"><h2>{{t "wf.output"}}</h2></div><div class="box"><pre class="wftext">{{.Output}}</pre></div>{{end}}
+{{else if not .NoText}}<div class="sec"><h2>{{t "wf.output"}}</h2></div><div class="box">{{if .Output}}<pre class="wftext">{{.Output}}</pre>{{else}}<div class="box-empty">{{t "wf.output.none"}}</div>{{end}}</div>
+{{if .Inputs}}<details class="box wfin"><summary class="box-h lh"><span class="car">{{mi "chevr"}}</span><span class="t">{{t "wf.inputs"}}</span></summary><pre class="wftext">{{.Inputs}}</pre></details>{{end}}{{end}}
 </div>
 <aside class="side" aria-label="{{t "wf.side"}}">
-<div class="sblk"><h3>{{t "wf.cost"}}</h3><div class="v"><span class="mono">{{.Cost}}</span></div></div>
+<div class="sblk"><h3>{{t "wf.cost"}}</h3><div class="v">{{if .NoCall}}<span class="muted">{{t "wf.cost.none"}}</span>{{else}}<span class="mono">{{.Cost}}</span>{{end}}</div></div>
 {{if .WorkflowHref}}<div class="sblk"><h3>{{t "wf.run.workflow"}}</h3><div class="v"><a class="mono" href="{{.WorkflowHref}}">{{.Workflow}}</a></div></div>{{end}}
 {{if .Version}}<div class="sblk"><h3>{{t "wf.version"}}</h3><div class="v">{{if .VersionHref}}<a class="mono" href="{{.VersionHref}}">{{.Version}}</a>{{else}}<span class="mono">{{.Version}}</span>{{end}}</div></div>{{end}}
 {{if or .Connection .Model}}<div class="sblk"><h3>{{t "wf.model"}}</h3><div class="v">{{if .Connection}}<span>{{.Connection}}</span>{{end}}{{if .Model}}<span class="mono">{{.Model}}</span>{{end}}</div></div>{{end}}
 {{if .Started}}<div class="sblk"><h3>{{t "wf.started"}}</h3><div class="v"><span>{{.Started}}</span></div></div>{{end}}
-{{if .Finished}}<div class="sblk"><h3>{{t "wf.finished"}}</h3><div class="v"><span>{{.Finished}}</span></div></div>{{end}}
+{{if .Duration}}<div class="sblk"><h3>{{t "wf.duration"}}</h3><div class="v"><span>{{.Duration}}</span></div></div>{{else if .Finished}}<div class="sblk"><h3>{{t "wf.finished"}}</h3><div class="v"><span>{{.Finished}}</span></div></div>{{end}}
 {{if gt .Chain 1}}<div class="sblk"><h3>{{t "wf.chain"}}</h3><div class="v"><span>{{t "wf.chain_n" .Chain}}</span></div></div>{{end}}
 </aside></div>
 {{end}}</div>{{template "foot" .}}{{end}}

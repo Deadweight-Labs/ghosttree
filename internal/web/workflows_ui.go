@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/Deadweight-Labs/ghosttree/internal/workflow"
@@ -46,6 +47,9 @@ type workflowsView struct {
 	// Templates are the templates a person with the right creates with one
 	// click (REQ-696).
 	Templates []wfTemplateOption
+	// Waiting counts the proposals of runs that wait on the review page (S12).
+	Waiting    int
+	ReviewHref string
 }
 
 // wfTemplateKeys word the templates of workflow.TemplateNames.
@@ -75,6 +79,17 @@ type workflowRunView struct {
 	Token   string
 	// Tools are the tool calls of an own prompt (REQ-698), from the full text.
 	Tools []wfToolRow
+	// Why says in words how a run that has no result ended (S02).
+	Why *wfWhy
+	// CanRerun offers to start the run again (leads and owners).
+	CanRerun bool
+	Project  string
+	// Waiting counts the results of this run that wait on the review page.
+	Waiting    int
+	ReviewHref string
+	Duration   string
+	// NoCall: the run reached no model, so there is no cost to show.
+	NoCall bool
 }
 
 // wfToolRow is one tool call of the loop of an own prompt: the round, the
@@ -129,6 +144,8 @@ type wfResultRow struct {
 	Tone, ReasonKey   string
 	Ref, RefHref      string
 	CanUndo           bool
+	// Waiting: the result waits for a person on the review page.
+	Waiting bool
 }
 
 var wfStateLook = map[string]struct{ icon, tone, key string }{
@@ -171,6 +188,23 @@ var wfReasonKeys = map[string]string{
 	store.AICapLoan:       "wf.reason.cap.loan",
 }
 
+// wfDuration words how long a run took: seconds below two minutes, then
+// minutes; "" while it has not ended.
+func wfDuration(l lang, started, finished string) string {
+	a, b := parseTime(started), parseTime(finished)
+	if a.IsZero() || b.IsZero() || b.Before(a) {
+		return ""
+	}
+	d := b.Sub(a)
+	switch {
+	case d < time.Second:
+		return l.msg("wf.duration.under_second")
+	case d < 2*time.Minute:
+		return l.msg("wf.duration.seconds", int(d.Seconds()))
+	}
+	return l.msg("wf.duration.minutes", int(d.Minutes()))
+}
+
 func workflowRunHref(base string, id int64) string {
 	return base + "/workflows/runs/" + strconv.FormatInt(id, 10)
 }
@@ -199,12 +233,7 @@ func (a *app) wfRow(l lang, base string, run store.WorkflowRun) wfRunRow {
 	look := wfStateLook[run.State]
 	row := wfRunRow{ID: run.ID, Href: workflowRunHref(base, run.ID), Workflow: run.Workflow, StateKey: look.key, Icon: look.icon, Tone: look.tone,
 		Result: run.Result, Cost: wfCost(l, run.CostUSD), Trigger: wfTriggerOf(base, run)}
-	row.Reason = run.Reason
-	if key, ok := wfReasonKeys[run.Reason]; ok {
-		row.Reason = l.msg(key)
-	} else if kind, ok := strings.CutPrefix(run.Reason, "policy.kind:"); ok {
-		row.Reason = l.msg("wf.reason.policy.kind", kind)
-	}
+	row.Reason = wfReasonText(l, run.Reason)
 	if t := parseTime(run.CreatedAt); !t.IsZero() {
 		row.Age = shortAgo(l, overviewNow().UTC(), t)
 	}
@@ -253,6 +282,11 @@ func (a *app) workflowsPage(w http.ResponseWriter, r *http.Request) {
 		v.Rows = append(v.Rows, a.wfRow(l, rv.Href, run))
 	}
 	v.Empty = len(v.Rows) == 0 && len(v.Defs) == 0
+	if v.Waiting = a.store.WorkflowProposalsWaiting(rv.Project); v.Waiting > 0 && reviews(pa.Role(rv.Project)) {
+		v.ReviewHref = rv.Href + "/review"
+	} else {
+		v.Waiting = 0
+	}
 	a.renderBrowser(w, r, "workflows", pageData{Title: l.msg("repo.tab.workflows"), Project: rv.Project, WorkflowsV: v})
 }
 
@@ -272,14 +306,19 @@ func (a *app) workflowRunPage(w http.ResponseWriter, r *http.Request, remote, id
 	}
 	r2, view := a.repoDetailRequest(r, pa, remote, "workflows")
 	v := &workflowRunView{wfRunRow: a.wfRow(l, view.Href, run), Version: run.WorkflowVersion, Connection: run.Connection, Model: run.Model,
-		Chain: run.ChainDepth, Base: view.Href + "/workflows"}
+		Chain: run.ChainDepth, Base: view.Href + "/workflows", Project: remote}
 	stamp := func(s string) string {
 		if t := parseTime(s); !t.IsZero() {
-			return l.dateTime(t.Local())
+			return l.date(t.Local(), true) + " " + t.Local().Format("15:04")
 		}
 		return ""
 	}
 	v.Started, v.Finished = stamp(run.StartedAt), stamp(run.FinishedAt)
+	v.Duration = wfDuration(l, run.StartedAt, run.FinishedAt)
+	v.NoCall = run.CostUSD == 0 && run.Connection == ""
+	org, _ := a.orgOfProject(r, remote)
+	v.Why = wfExplain(l, run, org)
+	v.CanRerun = interactive(r) && run.Rerunnable() && pa.CanEditWorkflows(remote)
 	if !strings.Contains(run.Workflow, "/") && run.WorkflowVersion != "" {
 		if _, err := pa.WorkflowDef(remote, run.Workflow); err == nil {
 			v.VersionHref = workflowHref(remote, run.Workflow) + "?v=" + url.QueryEscape(run.WorkflowVersion)
@@ -287,6 +326,14 @@ func (a *app) workflowRunPage(w http.ResponseWriter, r *http.Request, remote, id
 		v.WorkflowHref = workflowHref(remote, run.Workflow)
 	}
 	v.Results, v.Token = a.wfResultRows(r, pa, remote, run.ID), csrfOf(r)
+	for _, res := range v.Results {
+		if res.Waiting {
+			v.Waiting++
+		}
+	}
+	if v.Waiting > 0 && reviews(pa.Role(remote)) {
+		v.ReviewHref = view.Href + "/review"
+	}
 	switch {
 	case text != nil:
 		v.Inputs, v.Output, v.Tools = text.Inputs, text.Output, wfToolRows(text.Tools)
@@ -301,10 +348,16 @@ func (a *app) workflowRunPage(w http.ResponseWriter, r *http.Request, remote, id
 // pullWorkflowRuns are the runs a pull request started, for the side of its
 // page; nil when the viewer may not see runs or there are none.
 func pullWorkflowRuns(l lang, a *app, pa *store.ProjectAccess, base, remote string, n int64) []wfRunRow {
+	return subjectWorkflowRuns(l, a, pa, base, remote, "pr", n)
+}
+
+// subjectWorkflowRuns are the runs a pull request or an idea started, for the
+// side of its page, so that a run that failed is seen where it began (S02).
+func subjectWorkflowRuns(l lang, a *app, pa *store.ProjectAccess, base, remote, kind string, n int64) []wfRunRow {
 	if !pa.CanSeeWorkflows(remote) {
 		return nil
 	}
-	runs, err := pa.WorkflowRuns(remote, store.WorkflowRunFilter{SubjectKind: "pr", SubjectID: strconv.FormatInt(n, 10), Limit: 10})
+	runs, err := pa.WorkflowRuns(remote, store.WorkflowRunFilter{SubjectKind: kind, SubjectID: strconv.FormatInt(n, 10), Limit: 10})
 	if err != nil {
 		return nil
 	}

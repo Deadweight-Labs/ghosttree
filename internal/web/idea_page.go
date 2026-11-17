@@ -28,7 +28,9 @@ import (
 type ideaFact struct{ Num, Title, Brief, Href string }
 
 type ideaPageView struct {
-	ID                 int64
+	ID int64
+	// Runs are the workflow runs the idea started (S02, usability run 5).
+	Runs               []wfRunRow
 	Title, Person, Age string
 	Actor              actorView
 	// First is the head of the bubble that opens the timeline.
@@ -158,6 +160,7 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 	case r.URL.Query().Get("done") == "state":
 		v.Result = &requestResult{Text: l.msg("ideas.result.state"), Kind: "done"}
 	}
+	v.Runs = subjectWorkflowRuns(l, a, pa, view.Href, remote, "idea", i.ID)
 	a.renderBrowser(w, r2, "idea", pageData{Title: i.Title, Project: remote, IdeaV: v})
 }
 

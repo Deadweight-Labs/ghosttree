@@ -22,5 +22,6 @@
 {{if .Pains}}<div class="sblk"><h3>{{t "ideas.side.pains"}}</h3><div class="v">{{range .Pains}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
 {{if .Issues}}<div class="sblk"><h3>{{t "ideas.side.issues"}}</h3><div class="v">{{range .Issues}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
 {{if .People}}<div class="sblk"><h3>{{t "pains.side.people"}}</h3><div class="v">{{range .People}}<span class="person">{{avatarOf .}}<span>{{.}}</span></span>{{end}}</div></div>{{end}}
+{{template "pullruns" .Runs}}
 </aside></div>
 {{end}}</div>{{template "foot" .}}{{end}}

@@ -19,7 +19,7 @@ var pageAssets = map[string]struct{ CSS, JS []string }{
 	"issues":       {CSS: []string{"ui-labels.css", "ui-issues.css"}},
 	"issue":        {CSS: []string{"ui-labels.css", "ui-issue.css", "ui-workshop.css"}, JS: []string{"ui-workshop.js", "ui-attach.js"}},
 	"pain":         {CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css", "ui-workshop.css"}, JS: []string{"ui-workshop.js", "ui-attach.js"}},
-	"idea":         {CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css"}, JS: []string{"ui-workshop.js", "ui-attach.js"}},
+	"idea":         {CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css", "ui-workflows.css"}, JS: []string{"ui-workshop.js", "ui-attach.js"}},
 	"decision":     {CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css", "ui-workshop.css"}},
 	"repocode":     {CSS: []string{"ui-code.css"}},
 	"repoblob":     {CSS: []string{"ui-code.css"}},

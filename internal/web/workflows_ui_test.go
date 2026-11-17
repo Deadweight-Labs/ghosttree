@@ -96,7 +96,7 @@ func TestRunPageAfterTheRetentionKeepsCostResultAndVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/x/shell/workflows/runs/"+itoa(run.ID))
-	mustContain(t, "purged run", page, "pr.merged PR #15", "builtin", "0.00 $", "Full text deleted on")
+	mustContain(t, "purged run", page, "pr.merged PR #15", "builtin", "No model call", "Full text deleted on")
 	mustNotContain(t, "purged run", page, "&#34;subject_id&#34;")
 }
 
