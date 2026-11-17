@@ -15,11 +15,11 @@ const workflowTick = 15 * time.Second
 
 // startWorkflows runs the dispatcher and executor of workflows in the
 // background of the server. An idle tick only reads.
-func startWorkflows(ctx context.Context, st *store.Store, logger *slog.Logger) func() {
+func startWorkflows(ctx context.Context, st *store.Store, logger *slog.Logger, aiBaseURL string) func() {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		e := &workflow.Engine{Store: st, Resolver: workflow.DefaultBuiltins(), Log: logger}
+		e := &workflow.Engine{Store: st, Resolver: workflow.DefaultBuiltins(), Log: logger, AIBaseURL: aiBaseURL}
 		e.Run(ctx, workflowTick)
 	}()
 	return func() { <-done }

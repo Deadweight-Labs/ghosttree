@@ -324,3 +324,54 @@
 
 @keyframes toast-out { to { opacity: 0; visibility: hidden; } }
 @media (prefers-reduced-motion: reduce) { :is(.g2.set) .flash.fly { animation-duration: .01s; } }
+
+/* AI connections (REQ-694): connections with their models and spend, the
+   forms to add or edit one, aliases, caps and the costs of the month. */
+:is(.g2.set) {
+  & .aih { margin: 24px 0 8px; font-size: 16px; font-weight: 600; }
+  & .aih .muted { font-weight: 400; font-size: 14px; }
+  & .aiconn { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 16px; }
+  & .aiconn .aitop { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  & .aiconn .mt { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; margin-top: 2px; }
+  & .aiconn .aiurl { overflow-wrap: anywhere; }
+  & .aimodels { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  & .ailoan { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; font-size: 14px; }
+  & .ailend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  & .ailend .gfield { max-width: 14rem; }
+  & .aiedit, & .ainew { margin-top: 8px; }
+  & .aiedit > summary, & .ainew > summary { list-style: none; display: inline-flex; gap: 6px; }
+  & .aiedit > summary::-webkit-details-marker, & .ainew > summary::-webkit-details-marker { display: none; }
+  & .aiedit form, & .ainew form { margin-top: 12px; }
+  & .ainew .flash { margin: 12px 0 0; }
+  & .aifoot { padding: 12px 16px; background: var(--canvas-subtle); }
+  & .aifoot .ainew { margin-top: 0; width: 100%; }
+  & .aigrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+  & .aigrid .aiwide { grid-column: 1 / -1; }
+  & .aigrid textarea.gfield { min-height: 72px; resize: vertical; font: 12px var(--ui-mono); padding: 6px 8px; }
+  & .aiact { display: flex; justify-content: flex-end; margin-top: 12px; }
+  & .aitab td, & .aitab th { vertical-align: middle; }
+  & .aitab .aiend { text-align: right; width: 1%; white-space: nowrap; }
+  & .aitab + .aitab { margin-top: 12px; }
+  & .aicost { table-layout: fixed; }
+  & .aicost th:first-child { width: 52%; }
+  & .aicost td:first-child { overflow-wrap: anywhere; }
+  & .aicost td:not(:first-child), & .aicost th:not(:first-child) { text-align: right; white-space: nowrap; }
+  & .aialias, & .aicaps { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; padding: 12px 16px; border-top: 1px solid var(--border-muted); background: var(--canvas-subtle); }
+  & .aialias .fl, & .aicaps .fl { flex: 1 1 9rem; }
+  & .aicaps:first-child { border-top: 0; }
+  & .airelease { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 16px; }
+  & .airelease fieldset { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; padding: 0; border: 0; min-width: 0; flex: 1; }
+  & .airelease .irc { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
+  & .box > .aitab { margin: 0; }
+}
+@media (max-width: 767px) {
+  :is(.g2.set) {
+    & .aiconn { grid-template-columns: minmax(0, 1fr) auto; }
+    & .aiconn > .gav { display: none; }
+    & .aigrid { grid-template-columns: minmax(0, 1fr); }
+    & .aialias .fl, & .aicaps .fl { flex: 1 1 100%; }
+    & .aialias .gbtn, & .aicaps .gbtn, & .airelease .gbtn { flex: 1 1 100%; min-height: 44px; }
+    & .aicost th:nth-child(3), & .aicost td:nth-child(3) { display: none; }
+    & .aicost th:first-child { width: 60%; }
+  }
+}

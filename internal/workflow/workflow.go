@@ -18,11 +18,13 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-// Input is what a block gets for one run: the run and the event that caused
-// it. Stage E1 adds the way to call a model on the run's behalf here.
+// Input is what a block gets for one run: the run, the event that caused it
+// and, when the server runs its model proxy, the way to call a model on the
+// run's behalf (REQ-694). AI carries a token, never a provider key.
 type Input struct {
 	Run   store.WorkflowRun
 	Event store.WorkflowEvent
+	AI    *ModelAccess
 }
 
 // Block is one thing a workflow can do. It reports how the run ended; the
@@ -84,7 +86,7 @@ var Echo = BlockFunc(func(_ context.Context, in Input) (store.WorkflowRunOutcome
 })
 
 // DefaultBuiltins are the blocks every server has.
-func DefaultBuiltins() Builtins { return Builtins{EchoName: Echo} }
+func DefaultBuiltins() Builtins { return Builtins{EchoName: Echo, AskName: Ask} }
 
 // Engine dispatches events and executes runs.
 type Engine struct {
@@ -99,6 +101,9 @@ type Engine struct {
 	RunTimeout time.Duration
 	// PurgeEvery is how often the retention is applied; 0 means hourly.
 	PurgeEvery time.Duration
+	// AIBaseURL is the address of the model proxy on loopback; empty means
+	// runs get no model access.
+	AIBaseURL string
 
 	lastPurge time.Time
 }
@@ -186,12 +191,19 @@ func (e *Engine) execute(ctx context.Context, run store.WorkflowRun, ev store.Wo
 	}
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	defer func() {
-		if p := recover(); p != nil {
-			out = store.WorkflowRunOutcome{State: store.RunFailed, Reason: fmt.Sprintf("panic: %v", p), WorkflowVersion: version}
+	in := Input{Run: run, Event: ev}
+	if e.AIBaseURL != "" {
+		token, err := e.Store.IssueAIRunToken(run.ID)
+		if err != nil {
+			return store.WorkflowRunOutcome{State: store.RunFailed, Reason: "model access: " + err.Error(), WorkflowVersion: version}
 		}
-	}()
-	out, err = block.Run(rctx, Input{Run: run, Event: ev})
+		in.AI = &ModelAccess{BaseURL: e.AIBaseURL, Token: token}
+		// The token ends with the block, before the run is recorded, so that
+		// nothing the block started can call a model afterwards.
+		defer func() { _ = e.Store.RevokeAIRunTokens(run.ID) }()
+		defer func() { out = withModelUsage(e.Store, run.ID, out) }()
+	}
+	out, err = safeRun(rctx, block, in)
 	if out.WorkflowVersion == "" {
 		out.WorkflowVersion = version
 	}
@@ -202,6 +214,34 @@ func (e *Engine) execute(ctx context.Context, run store.WorkflowRun, ev store.Wo
 	case store.RunDone, store.RunFailed, store.RunBudget, store.RunSkipped:
 	default:
 		out.State, out.Reason = store.RunFailed, "block ended without a state"
+	}
+	return out
+}
+
+// safeRun runs a block; a panic ends the run as failed.
+func safeRun(ctx context.Context, block Block, in Input) (out store.WorkflowRunOutcome, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			out, err = store.WorkflowRunOutcome{}, fmt.Errorf("panic: %v", p)
+		}
+	}()
+	return block.Run(ctx, in)
+}
+
+// withModelUsage puts what the proxy booked on the run into its outcome: the
+// connections and models it called, its cost, and the cap it reached, which
+// ends it in the state budget whatever the block said.
+func withModelUsage(st *store.Store, runID int64, out store.WorkflowRunOutcome) store.WorkflowRunOutcome {
+	u, err := st.AIRunUsageOf(runID)
+	if err != nil {
+		return out
+	}
+	if u.Calls > 0 {
+		out.Connection, out.Model = strings.Join(u.Connections, ", "), strings.Join(u.Models, ", ")
+		out.CostUSD = u.CostUSD
+	}
+	if u.Cap != "" {
+		out.State, out.Reason = store.RunBudget, u.Cap
 	}
 	return out
 }

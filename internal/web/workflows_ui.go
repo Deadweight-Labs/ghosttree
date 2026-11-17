@@ -2,7 +2,6 @@ package web
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -66,17 +65,23 @@ var wfEventKeys = map[string]string{
 // wfReasonKeys word the reasons the server gives; a block's own reason is
 // shown as it is.
 var wfReasonKeys = map[string]string{
-	store.SkipChain:      "wf.reason.chain",
-	store.SkipChainDepth: "wf.reason.chain_depth",
-	"unknown_workflow":   "wf.reason.unknown_workflow",
-	"interrupted":        "wf.reason.interrupted",
+	store.SkipChain:       "wf.reason.chain",
+	store.SkipChainDepth:  "wf.reason.chain_depth",
+	"unknown_workflow":    "wf.reason.unknown_workflow",
+	"interrupted":         "wf.reason.interrupted",
+	store.AICapRun:        "wf.reason.cap.run",
+	store.AICapWorkflow:   "wf.reason.cap.workflow",
+	store.AICapOwner:      "wf.reason.cap.owner",
+	store.AICapConnection: "wf.reason.cap.connection",
+	store.AICapServer:     "wf.reason.cap.server",
+	store.AICapLoan:       "wf.reason.cap.loan",
 }
 
 func workflowRunHref(base string, id int64) string {
 	return base + "/workflows/runs/" + strconv.FormatInt(id, 10)
 }
 
-func wfCost(usd float64) string { return fmt.Sprintf("%.2f $", usd) }
+func wfCost(usd float64) string { return aiUSD(usd) }
 
 func (a *app) wfRow(l lang, base string, run store.WorkflowRun) wfRunRow {
 	look := wfStateLook[run.State]

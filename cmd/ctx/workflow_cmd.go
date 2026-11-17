@@ -17,7 +17,9 @@ Events: pr.merged, idea.created, idea.discussion_closed, schedule.
 --branch narrows pr.merged (empty: the default branch, *: every branch),
 --every is the period of a schedule in minutes, --chain lets events that a
 run of this workflow causes start it again (two stages at most).
-The built-in workflow ghosttree/echo needs no model and echoes its event.`
+The built-in workflow ghosttree/echo needs no model and echoes its event.
+The built-in workflow ghosttree/ask makes one model call through the model
+proxy: the model named in the event data ("model"), else the alias klein.`
 
 // cmdWorkflow is the operator's way to switch workflows on until workflows
 // get their own pages (REQ-693, stage E2).

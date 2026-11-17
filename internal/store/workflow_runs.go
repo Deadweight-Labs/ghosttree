@@ -762,6 +762,10 @@ func (s *Store) FinishWorkflowRun(id int64, o WorkflowRunOutcome) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrWorkflowRun
 	}
+	// The run's token for the model proxy ends with the run (REQ-694).
+	if err := revokeRunTokensTx(tx, `id=?`, id); err != nil {
+		return err
+	}
 	if o.Inputs != "" || o.Output != "" {
 		if _, err := tx.Exec(`INSERT INTO workflow_run_texts(run_id,inputs,output,created_at) VALUES(?,?,?,?)
 			ON CONFLICT(run_id) DO UPDATE SET inputs=excluded.inputs, output=excluded.output`,
@@ -779,12 +783,21 @@ func (s *Store) AbandonWorkflowRuns() (int, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{}, func(d *Store, _ []any) (int, error) { return d.AbandonWorkflowRuns() })
 	}
-	res, err := s.db.Exec(`UPDATE workflow_runs SET state='failed', reason='interrupted', finished_at=? WHERE state='running'`, now())
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	// A token of an interrupted run must not outlive it (REQ-694).
+	if err := revokeRunTokensTx(tx, `state='running'`); err != nil {
+		return 0, err
+	}
+	res, err := tx.Exec(`UPDATE workflow_runs SET state='failed', reason='interrupted', finished_at=? WHERE state='running'`, now())
 	if err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
-	return int(n), nil
+	return int(n), tx.Commit()
 }
 
 func cutRunes(s string, n int) string {

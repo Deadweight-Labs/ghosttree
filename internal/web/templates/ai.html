@@ -1,0 +1,69 @@
+{{define "ai_hidden"}}<input type="hidden" name="csrf_token" value="{{.Page.CSRFToken}}"><input type="hidden" name="org" value="{{.Page.Orgs.Selected.Slug}}">{{if .Server}}<input type="hidden" name="scope" value="server">{{end}}{{end}}
+
+{{define "ai_fields"}}{{$r := .Row}}<div class="aigrid">
+<label class="fl"><span>{{t "ai.name"}}</span><span class="gfield"><input name="name" type="text" maxlength="40" required autocomplete="off" spellcheck="false" value="{{if $r}}{{$r.Name}}{{end}}"{{if and $r $r.FromFile}} readonly{{end}}></span></label>
+<label class="fl"><span>{{t "ai.format"}}</span><select class="gfield" name="format"{{if and $r $r.FromFile}} disabled{{end}}><option value="anthropic"{{if and $r (eq $r.Format "anthropic")}} selected{{end}}>anthropic</option><option value="openai"{{if and $r (eq $r.Format "openai")}} selected{{end}}>openai</option></select></label>
+<label class="fl aiwide"><span>{{t "ai.base_url"}}</span><span class="gfield"><input name="base_url" type="url" maxlength="300" required autocomplete="off" spellcheck="false" placeholder="https://api.anthropic.com" value="{{if $r}}{{$r.BaseURL}}{{end}}"{{if and $r $r.FromFile}} readonly{{end}}></span></label>
+{{if not (and $r $r.FromFile)}}<label class="fl aiwide"><span>{{t "ai.key"}}</span><span class="gfield"><input name="key" type="password" maxlength="500" autocomplete="new-password" spellcheck="false"{{if $r}} placeholder="{{t "ai.key.unchanged"}}"{{else}} required{{end}}{{if not .CanSeal}} disabled{{end}}></span></label>{{end}}
+<label class="fl aiwide"><span>{{t "ai.models"}}</span><textarea class="gfield mono" name="models" rows="3" required spellcheck="false" placeholder="claude-haiku-5-5 0.10 0.50" aria-describedby="aimh-{{if $r}}{{$r.ID}}{{else if .Server}}server{{else}}new{{end}}">{{if $r}}{{$r.ModelsText}}{{end}}</textarea><small id="aimh-{{if $r}}{{$r.ID}}{{else if .Server}}server{{else}}new{{end}}">{{t "ai.models.price"}}</small></label>
+<label class="fl"><span>{{t "ai.cap"}}</span><span class="gfield"><input name="cap" type="number" min="0" max="1000000" step="0.01" inputmode="decimal" placeholder="{{t "ai.cap.none"}}" value="{{if $r}}{{$r.Cap}}{{end}}"></span></label>
+</div>{{end}}
+
+{{define "ai_conn"}}{{$p := .Page}}{{$server := .Server}}{{$edit := .Edit}}{{with .Row}}<div class="row aiconn" id="ai-{{.ID}}"><span class="gav lg org" aria-hidden="true">{{mi "bot"}}</span>
+<div class="aimain"><div class="aitop"><b>{{.Name}}</b>{{if eq .Via "loan"}}<span class="lb out">{{t "ai.via.loan"}}</span>{{else if and (eq .Via "server") (not $server)}}<span class="lb out">{{t "ai.via.server"}}</span>{{end}}{{if .FromFile}}<span class="lb out">{{t "ai.from_file"}}</span>{{end}}</div>
+<div class="mt muted">{{if .Format}}<span>{{.Format}}</span>{{end}}{{if .BaseURL}}<span class="mono aiurl">{{.BaseURL}}</span>{{end}}{{if .Last4}}<span class="mono" aria-label="{{t "ai.key"}}">••••{{.Last4}}</span>{{end}}<span>{{.Spent}}</span></div>
+{{if .Models}}<div class="aimodels">{{range .Models}}<span class="lb out mono">{{.Model}}</span>{{end}}</div>{{end}}
+{{range .Loans}}<div class="ailoan"><span>{{t "ai.lent_to" .Org}}</span><span class="muted">{{.Spent}}</span>{{if $p.Interactive}}{{template "uiconfirm" (dict "Summary" "gbtn sm" "Text" (t "ai.revoke") "Question" (t "ai.ask.revoke" $.Row.Name .Org) "Do" (t "ai.revoke") "Action" "/ui/orgs/ai/loan/revoke" "Token" $p.CSRFToken "Hidden" (dict "org" $p.Orgs.Selected.Slug "id" .ID))}}{{end}}</div>{{end}}
+{{if and $edit .Lendable $p.Orgs.AI.LendTo}}<form class="ailend" method="post" action="/ui/orgs/ai/lend">{{template "ai_hidden" (dict "Page" $p)}}<input type="hidden" name="id" value="{{.ID}}"><select class="gfield" name="to" aria-label="{{t "ai.lend.to"}}">{{range $p.Orgs.AI.LendTo}}<option value="{{.Slug}}">{{.Name}}</option>{{end}}</select><span class="gfield"><input name="cap" type="number" min="0.01" max="1000000" step="0.01" inputmode="decimal" required aria-label="{{t "ai.cap"}}" placeholder="{{t "ai.cap"}}"></span><button class="gbtn sm">{{t "ai.lend"}}</button></form>{{end}}
+{{if $edit}}<details class="aiedit"><summary class="gbtn sm">{{mi "pencil"}}{{t "ai.edit"}}</summary><form method="post" action="/ui/orgs/ai/connection">{{template "ai_hidden" (dict "Page" $p "Server" $server)}}<input type="hidden" name="id" value="{{.ID}}">{{if .FromFile}}<input type="hidden" name="name" value="{{.Name}}"><input type="hidden" name="format" value="{{.Format}}">{{end}}{{template "ai_fields" (dict "Row" . "CanSeal" true "Server" $server)}}<div class="aiact"><button class="gbtn pri">{{t "ai.save"}}</button></div></form></details>{{end}}
+</div>
+<div class="acts">{{if and $edit (not .FromFile)}}{{template "uiconfirm" (dict "Summary" "gbtn sm danger" "Icon" "trash" "Label" (t "ai.delete") "Question" (t "ai.ask.delete" .Name) "Do" (t "ai.delete") "Action" "/ui/orgs/ai/connection/delete" "Token" $p.CSRFToken "Hidden" (dict "org" $p.Orgs.Selected.Slug "id" .ID "scope" (or (and $server "server") "")))}}{{end}}</div></div>{{end}}{{end}}
+
+{{define "ai_new"}}<details class="ainew"><summary class="gbtn sm">{{mi "plus"}}{{t "ai.add"}}</summary>{{if not .CanSeal}}<div class="flash att">{{mi "tri"}}<div>{{t "ai.no_secret"}}</div></div>{{end}}<form method="post" action="/ui/orgs/ai/connection">{{template "ai_hidden" .}}{{template "ai_fields" (dict "CanSeal" .CanSeal "Server" .Server)}}<div class="aiact"><button class="gbtn pri"{{if not .CanSeal}} disabled{{end}}>{{t "ai.save"}}</button></div></form></details>{{end}}
+
+{{define "ai_aliases"}}{{$p := .Page}}{{$server := .Server}}<table class="days aitab"><thead><tr><th>{{t "ai.alias"}}</th><th>{{t "ai.where"}}</th><th>{{t "ai.connection"}}</th><th>{{t "ai.model"}}</th><th aria-hidden="true"></th></tr></thead><tbody>
+{{range .Rows}}<tr><td><b class="mono">{{.Alias}}</b></td><td>{{.Where}}</td><td>{{.Connection}}</td><td class="mono">{{.Model}}</td><td class="aiend">{{if and .Editable $p.Interactive}}{{template "uiconfirm" (dict "Summary" "gbtn sm icon quiet" "Icon" "x" "Label" (t "ai.alias.delete") "Question" (t "ai.ask.alias_delete" .Alias) "Do" (t "ai.alias.delete") "Action" "/ui/orgs/ai/alias/delete" "Token" $p.CSRFToken "Hidden" (dict "org" $p.Orgs.Selected.Slug "id" .ID "scope" (or (and $server "server") "")))}}{{end}}</td></tr>
+{{else}}<tr><td colspan="5" class="muted">{{t "ai.alias.none"}}</td></tr>{{end}}</tbody></table>
+{{if .Edit}}<form class="aialias" method="post" action="/ui/orgs/ai/alias">{{template "ai_hidden" (dict "Page" $p "Server" $server)}}
+<label class="fl"><span>{{t "ai.alias"}}</span><span class="gfield"><input name="alias" type="text" maxlength="40" required autocomplete="off" spellcheck="false" placeholder="klein"></span></label>
+{{if .Wheres}}<label class="fl"><span>{{t "ai.where"}}</span><select class="gfield" name="where">{{range .Wheres}}<option value="{{.Value}}"{{if .On}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>{{end}}
+<label class="fl"><span>{{t "ai.connection"}}</span><select class="gfield" name="connection" required>{{range .Conns}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
+<label class="fl"><span>{{t "ai.model"}}</span><span class="gfield"><input name="model" type="text" maxlength="100" required autocomplete="off" spellcheck="false" list="aimodels-{{if $server}}server{{else}}org{{end}}"></span></label>
+<datalist id="aimodels-{{if $server}}server{{else}}org{{end}}">{{range .Models}}<option value="{{.}}">{{end}}</datalist>
+<button class="gbtn">{{t "ai.alias.set"}}</button></form>{{end}}{{end}}
+
+{{define "orgs_ai"}}{{with .Orgs.AI}}<div class="sh2" id="ai"><h2>{{t "ai.title"}}</h2></div>
+<div class="box">{{range .Conns}}{{template "ai_conn" (dict "Page" $ "Row" . "Edit" (and $.Orgs.AI.Owner (eq .Via "own")))}}{{else}}<div class="box-empty"><span>{{t "ai.none"}}</span></div>{{end}}
+{{if .Owner}}<div class="row aifoot">{{template "ai_new" (dict "Page" $ "CanSeal" .CanSeal)}}</div>{{end}}</div>
+<h3 class="aih">{{t "ai.aliases"}}</h3>
+<div class="box">{{template "ai_aliases" (dict "Page" $ "Rows" .Aliases "Edit" (and .Owner .Usable) "Wheres" .Wheres "Conns" .Usable "Models" .ModelNames)}}</div>
+<h3 class="aih">{{t "ai.caps"}}</h3>
+<div class="box">{{if .Owner}}<form class="aicaps" method="post" action="/ui/orgs/ai/cap">{{template "ai_hidden" (dict "Page" $)}}
+<label class="fl"><span>{{t "ai.cap.owner_month"}}</span><span class="gfield"><input name="month" type="number" min="0" step="0.01" inputmode="decimal" placeholder="{{t "ai.cap.none"}}" value="{{.OwnerMonth}}"></span></label>
+<label class="fl"><span>{{t "ai.cap.run"}}</span><span class="gfield"><input name="run" type="number" min="0" step="0.01" inputmode="decimal" placeholder="{{t "ai.cap.none"}}" value="{{.OwnerRun}}"></span></label>
+<button class="gbtn">{{t "ai.save"}}</button></form>{{else}}<div class="row prow"><span>{{t "ai.cap.owner_month"}}</span><span>{{or .OwnerMonth (t "ai.cap.none")}}</span></div><div class="row prow"><span>{{t "ai.cap.run"}}</span><span>{{or .OwnerRun (t "ai.cap.none")}}</span></div>{{end}}
+<table class="days aitab"><thead><tr><th>{{t "ai.cap.workflow"}}</th><th>{{t "ai.cap.month"}}</th><th>{{t "ai.cap.run"}}</th><th aria-hidden="true"></th></tr></thead><tbody>
+{{range .WorkflowCaps}}<tr><td class="mono">{{.Workflow}}</td><td>{{or .Month "–"}}</td><td>{{or .Run "–"}}</td><td class="aiend">{{if $.Orgs.AI.Owner}}<form method="post" action="/ui/orgs/ai/cap">{{template "ai_hidden" (dict "Page" $)}}<input type="hidden" name="workflow" value="{{.Workflow}}"><button class="gbtn sm icon quiet" aria-label="{{t "ai.alias.delete"}}" title="{{t "ai.alias.delete"}}">{{mi "x"}}</button></form>{{end}}</td></tr>{{end}}
+</tbody></table>
+{{if .Owner}}<form class="aicaps" method="post" action="/ui/orgs/ai/cap">{{template "ai_hidden" (dict "Page" $)}}
+<label class="fl"><span>{{t "ai.cap.workflow"}}</span><span class="gfield"><input name="workflow" type="text" maxlength="200" required autocomplete="off" spellcheck="false" placeholder="ghosttree/ask"></span></label>
+<label class="fl"><span>{{t "ai.cap.month"}}</span><span class="gfield"><input name="month" type="number" min="0" step="0.01" inputmode="decimal"></span></label>
+<label class="fl"><span>{{t "ai.cap.run"}}</span><span class="gfield"><input name="run" type="number" min="0" step="0.01" inputmode="decimal"></span></label>
+<button class="gbtn">{{t "ai.save"}}</button></form>{{end}}</div>
+<h3 class="aih">{{t "ai.costs"}}{{with .CostTotal}} <span class="muted">{{.}}</span>{{end}}</h3>
+<div class="box">{{range .Costs}}<table class="days aitab aicost"><thead><tr><th>{{.Head}}</th><th>{{t "ai.costs.calls"}}</th><th>{{t "ai.costs.tokens"}}</th><th>{{t "ai.costs.cost"}}</th></tr></thead><tbody>{{range .Rows}}<tr><td>{{if .Href}}<a class="mono" href="{{.Href}}">{{.Key}}</a> <span class="mono muted">{{.Sub}}</span>{{else}}<span class="mono">{{.Key}}</span>{{end}}</td><td>{{.Calls}}</td><td>{{.Tokens}}</td><td class="mono">{{.Cost}}</td></tr>{{end}}</tbody></table>{{else}}<div class="box-empty"><span>{{t "ai.costs.none"}}</span></div>{{end}}</div>
+{{end}}{{end}}
+
+{{define "orgs_aiserver"}}{{with .Orgs.AIServer}}<div class="sh2" id="ai-server"><h2>{{t "ai.server.title"}}</h2></div>
+<div class="box">{{range .Conns}}{{template "ai_conn" (dict "Page" $ "Row" . "Edit" true "Server" true)}}{{else}}<div class="box-empty"><span>{{t "ai.none"}}</span></div>{{end}}
+<div class="row aifoot">{{template "ai_new" (dict "Page" $ "CanSeal" .CanSeal "Server" true)}}</div></div>
+<h3 class="aih">{{t "ai.release"}}</h3>
+<div class="box"><form class="airelease" method="post" action="/ui/orgs/ai/release">{{template "ai_hidden" (dict "Page" $)}}<fieldset><legend class="sr">{{t "ai.release"}}</legend>{{range .Modes}}<label class="irc"><input type="radio" name="mode" value="{{.Value}}"{{if .On}} checked{{end}}><span>{{.Label}}</span></label>{{end}}</fieldset><button class="gbtn">{{t "ai.save"}}</button></form>
+<table class="days aitab"><thead><tr><th>{{t "ai.grant.org"}}</th><th>{{t "ai.cap"}}</th><th><span class="sr">{{t "ai.grant.remove"}}</span></th></tr></thead><tbody>
+{{range .Grants}}<tr><td>{{.Name}} <span class="mono muted">{{.Slug}}</span></td><td>{{.Spent}}</td><td class="aiend">{{template "uiconfirm" (dict "Summary" "gbtn sm icon quiet" "Icon" "x" "Label" (t "ai.grant.remove") "Question" (t "ai.ask.grant_remove" .Name) "Do" (t "ai.grant.remove") "Action" "/ui/orgs/ai/grant" "Token" $.CSRFToken "Hidden" (dict "org" $.Orgs.Selected.Slug "target" .Slug "remove" "1"))}}</td></tr>{{end}}
+</tbody></table>
+<form class="aicaps" method="post" action="/ui/orgs/ai/grant">{{template "ai_hidden" (dict "Page" $)}}<label class="fl"><span>{{t "ai.grant.org"}}</span><select class="gfield" name="target">{{range .Orgs}}<option value="{{.Slug}}">{{.Name}} ({{.Slug}})</option>{{end}}</select></label>
+<label class="fl"><span>{{t "ai.cap"}}</span><span class="gfield"><input name="cap" type="number" min="0" step="0.01" inputmode="decimal" placeholder="{{t "ai.cap.none"}}"></span></label><button class="gbtn">{{t "ai.grant.add"}}</button></form></div>
+<h3 class="aih">{{t "ai.aliases"}}</h3>
+<div class="box">{{template "ai_aliases" (dict "Page" $ "Server" true "Rows" .Aliases "Edit" .Conns "Conns" .Conns "Models" .ModelNames)}}</div>
+{{end}}{{end}}

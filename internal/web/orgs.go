@@ -129,6 +129,10 @@ type orgsView struct {
 	Garden *gardenAdminView
 	// Transcripts is the same for the stored transcripts; nil for anyone else.
 	Transcripts *transcriptsAdminView
+	// AI is the section "AI connections" of the namespace (REQ-694); AIServer
+	// the server's, for the instance admin.
+	AI       *aiView
+	AIServer *aiServerView
 	// GardenSet is the gardener's settings section, for the owner (REQ-624).
 	GardenSet *gardenSettingsView
 	// Moved: the viewer's namespaces that had to yield their address to its
@@ -206,6 +210,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	v.Explain = a.explainAdminFor(r)
 	v.Garden = a.gardenAdminFor(r)
 	v.Transcripts = a.transcriptsAdminFor(r)
+	v.AIServer = a.aiServerFor(r)
 	if interactive(r) && a.isAdmin(browserPrincipal(r)) {
 		v.Assign, _ = a.store.AllOwners()
 	}
@@ -224,6 +229,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	}
 	if v.Selected.ID != 0 {
 		v.GardenSet = a.gardenSettingsFor(r, v.Selected)
+		v.AI = a.aiViewFor(r, v.Selected)
 		v.Owner = v.Selected.Role == store.OrgOwner
 		if v.Owner {
 			v.Retention = a.store.WorkflowSettingsFor(v.Selected.ID).RetentionDays
@@ -336,6 +342,9 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 
 // orgError übersetzt Store-Fehler in eine Meldung und einen Statuscode.
 func orgError(l lang, err error) (int, string) {
+	if status, msg, ok := aiError(l, err); ok {
+		return status, msg
+	}
 	switch {
 	case errors.Is(err, store.ErrLoginLinkScope):
 		return http.StatusForbidden, l.msg("adm.err.login_scope")
@@ -433,6 +442,8 @@ func orgNotice(l lang, key string) string {
 		return l.msg("gardener.saved")
 	case "workflows":
 		return l.msg("wf.retention.saved")
+	case "ai", "ai_server":
+		return l.msg("ai.saved")
 	case "moved":
 		return l.msg("adm.notice.moved")
 	case "joined":
@@ -515,7 +526,7 @@ func noticeAnchor(notice string) string { return noticeSection[notice] }
 var noticeSection = map[string]string{
 	"source_added": "#sources", "source_failed": "#sources", "source_proved": "#sources", "source_removed": "#sources", "imported": "#sources", "follow": "#sources", "assigned": "#projects",
 	"visibility": "#projects", "project": "#projects", "moved": "#projects", "project_created": "#projects",
-	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener", "workflows": "#workflows",
+	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener", "workflows": "#workflows", "ai": "#ai", "ai_server": "#ai-server",
 }
 
 // fillInvites lists the organization's invitations with the links their
