@@ -148,7 +148,11 @@ func (a *assembler) sessions() []SessionText {
 	total := 0
 	for _, id := range pr.Sessions {
 		sess, ok := owners[id]
-		if !ok || sess.Scope.Project != a.run.Project || !a.pa.CanSeeTranscript(sess) {
+		// The run's text and its proposals are read by every member of the
+		// project, so only a session shared with them goes in: an owner or a
+		// lead reads private transcripts too, and their reading must not
+		// carry a private one onto the run page.
+		if !ok || sess.Scope.Project != a.run.Project || !sharedWithProject(sess) || !a.pa.CanSeeTranscript(sess) {
 			continue
 		}
 		chunks, err := a.st.ReadSession(id, 0, 5000)
@@ -175,6 +179,12 @@ func (a *assembler) sessions() []SessionText {
 		}
 	}
 	return a.data.Sessions
+}
+
+// sharedWithProject says whether the owner of a session opened it to the
+// members of its project (or to its guests as well).
+func sharedWithProject(sess store.Session) bool {
+	return sess.Visibility == store.VisProject || sess.Visibility == store.VisGuests
 }
 
 // value is the text of an assembled input; ok is false when the run has

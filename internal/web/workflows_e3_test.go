@@ -303,15 +303,34 @@ func TestTemplateWishesProposesOneIssuePerOpenWishFromTypedMessagesOnly(t *testi
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := e.St.SetSessionVisibility(sid, e.St.Access(store.Principal{ID: "person:1", Label: "alice"}), store.VisProject); err != nil {
+		t.Fatal(err)
+	}
 	sess, _ := e.St.SessionByID(sid)
+	// Anna's session at the same commit stays private: alice as owner may
+	// read it, but the run's text and proposals are for every member.
+	private, err := e.St.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "s-private", AccountID: 2, Scope: scope.Axes{Project: shellProject}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.St.AppendChunks(private, []store.Chunk{user(0, "Mein privater Wunsch: Gehaltsliste im Reiter anzeigen.")}); err != nil {
+		t.Fatal(err)
+	}
 	sha := strings.Repeat("b2", 20)
 	e.merge(t, 41, "feat: webhook", "Baut den Webhook um.", store.PullCommit{SHA: sha, Title: "feat: webhook", CommittedAt: "2026-11-17T09:10:00Z"})
 	if _, err := e.St.RecordSessionGitEvents(1, "", []store.SessionGitEvent{{Harness: "claude-code", SessionExternalID: "s-wishes", Seq: 4, Kind: store.GitEventCommit, Op: "commit",
 		StartedAt: "2026-11-17T09:10:00Z", EndedAt: "2026-11-17T09:10:01Z", OK: true, Branch: "feat/e3-41", SHAs: []string{sha}}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := e.St.RecordSessionGitEvents(2, "", []store.SessionGitEvent{{Harness: "claude-code", SessionExternalID: "s-private", Seq: 1, Kind: store.GitEventCommit, Op: "commit",
+		StartedAt: "2026-11-17T09:10:00Z", EndedAt: "2026-11-17T09:10:01Z", OK: true, Branch: "feat/e3-41", SHAs: []string{sha}}}); err != nil {
+		t.Fatal(err)
+	}
+	if links, _ := e.St.SessionsForPull(shellProject, 41); len(links) != 2 {
+		t.Fatalf("both sessions belong to the pull request: %+v", links)
+	}
 	e.provider.answer = func(system, user string) string {
-		if !strings.Contains(user, `<session ref="`+sess.PublicID+`"`) || strings.Contains(user, "Export als PDF") {
+		if !strings.Contains(user, `<session ref="`+sess.PublicID+`"`) || strings.Contains(user, "Export als PDF") || strings.Contains(user, "Gehaltsliste") {
 			t.Errorf("the model got more or less than the typed messages: %s", user)
 		}
 		return jsonText(map[string]any{"wishes": []map[string]any{
