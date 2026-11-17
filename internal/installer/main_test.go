@@ -22,6 +22,11 @@ func TestMain(m *testing.M) {
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
 	os.Setenv("XDG_DATA_HOME", filepath.Join(dir, ".local", "share"))
 	os.Setenv("XDG_STATE_HOME", filepath.Join(dir, ".local", "state"))
+	// Claude Code's own directory follows CLAUDE_CONFIG_DIR, which a session that
+	// runs the tests may have set to the real configuration (PAIN-86, KN-4752).
+	// Tests that need it set it themselves.
+	_ = os.Unsetenv("CLAUDE_CONFIG_DIR")
+	_ = os.Unsetenv("CODEX_HOME")
 	code := testtmp.Run(m)
 	os.RemoveAll(dir)
 	os.Exit(code)
