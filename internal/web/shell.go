@@ -122,7 +122,7 @@ type newMenu struct {
 func (m *newMenu) Any() bool { return m != nil && (m.Issue != "" || m.Repo != "" || m.Org != "") }
 
 // newMenuFor builds the "+" menu for the viewer on this request.
-func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
+func (a *app) newMenuFor(r *http.Request, base shellBase, work store.Org) *newMenu {
 	if base.who.kind == viewerGuest {
 		return nil
 	}
@@ -145,13 +145,10 @@ func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
 	if interactive(r) {
 		m.Org = newOrgHref
 	}
-	if orgs, err := a.store.ListOrgs(browserPrincipal(r).ID); err == nil {
-		for _, o := range orgs {
-			// Every member creates projects in the organization (17 A, #4376).
-			if !o.Guest && !o.IsUser() && m.Repo == "" {
-				m.Repo = "/ui/orgs?org=" + url.QueryEscape(o.Slug) + "#projects"
-			}
-		}
+	// Every member creates projects in the organization (17 A, #4376): in the one
+	// the viewer works in.
+	if work.ID != 0 {
+		m.Repo = orgSettingsHref(work, "#projects")
 	}
 	if !m.Any() {
 		return nil
@@ -310,14 +307,25 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 			v.TabsLabel = "nav.team_devices"
 		}
 	}
-	// Organization and devices are one entry in the account menu.
+	// Organization and devices are one entry in the account menu; it opens the
+	// organization the viewer works in.
+	orgs := a.orgsOf(r)
+	work := a.pickOrg(r, orgs)
 	if kind != viewerGuest {
 		v.Team = "/ui/orgs"
+		if work.ID != 0 {
+			v.Team = orgSettingsHref(work, "")
+		}
+		for i := range v.Tabs {
+			if v.Tabs[i].Key == "team" {
+				v.Tabs[i].Href = v.Team
+			}
+		}
 	}
 
 	v.Inbox = len(a.waitingFor(r, selectedProjectOf(base)))
-	v.Orgs = a.orgSwitchFor(r)
-	v.New = a.newMenuFor(r, base)
+	v.Orgs = a.orgSwitchFor(r, orgs, work)
+	v.New = a.newMenuFor(r, base, work)
 
 	v.ProjectAction = "/ui/knowledge"
 	if projectAware[name] {
@@ -338,35 +346,16 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 
 // orgSwitchFor lists the organizations of the viewer for the header. Each entry
 // leads to the organization's page.
-func (a *app) orgSwitchFor(r *http.Request) *orgSwitch {
-	all, err := a.store.ListOrgs(browserPrincipal(r).ID)
-	if err != nil {
-		return nil
-	}
-	// A guest's organizations are not in the menu: guests see their project
-	// only (14 A, #4376).
-	var orgs []store.Org
-	for _, o := range all {
-		if !o.Guest {
-			orgs = append(orgs, o)
-		}
-	}
+func (a *app) orgSwitchFor(r *http.Request, orgs []store.Org, work store.Org) *orgSwitch {
 	if len(orgs) == 0 {
 		return nil
 	}
-	current := 0
-	for i, o := range orgs {
-		if o.Default {
-			current = i
-			break
-		}
-	}
-	sw := &orgSwitch{Current: orgs[current].Name}
+	sw := &orgSwitch{Current: work.Name}
 	if interactive(r) {
 		sw.New = newOrgHref
 	}
-	for i, o := range orgs {
-		sw.Items = append(sw.Items, orgSwitchItem{Label: o.Name, Href: "/ui/" + url.PathEscape(o.Slug), Current: i == current})
+	for _, o := range orgs {
+		sw.Items = append(sw.Items, orgSwitchItem{Label: o.Name, Href: "/ui/" + url.PathEscape(o.Slug), Current: o.ID == work.ID})
 	}
 	return sw
 }

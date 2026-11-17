@@ -16,13 +16,17 @@
   // lives shorter. The first option names the length the server will use.
   for (const days of document.querySelectorAll("[data-days]")) {
     const form = days.closest("form");
-    const role = form && form.querySelector("[data-role]");
-    if (!role) continue;
+    const roles = form ? [...form.querySelectorAll("[data-role]")] : [];
+    if (!roles.length) continue;
+    // A select holds the role, or radio buttons do: the checked one counts.
+    const current = () => (roles.find((el) => el.checked) || roles[0]).value;
     const sync = () => {
       const first = days.options[0];
-      first.textContent = role.value === "guest" ? first.dataset.guest : first.dataset.member;
+      first.textContent = current() === "guest" ? first.dataset.guest : first.dataset.member;
+      // The styled menu of the select shows the new text, too.
+      days.dispatchEvent(new Event("change"));
     };
-    role.addEventListener("change", sync);
+    for (const el of roles) el.addEventListener("change", sync);
     sync();
   }
 

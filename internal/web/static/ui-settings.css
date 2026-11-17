@@ -17,7 +17,9 @@
   & .sh2 .acts { display: flex; gap: 8px; }
   & .setlayout > div > [hidden] { display: none !important; }
   & .ist { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; color: var(--attention-fg); }
-  & .ist.is-done { color: var(--success-fg); }
+  & .ist.is-done, & .ist.is-accepted { color: var(--success-fg); }
+  & .ist.is-revoked { color: var(--danger-fg); }
+  & .ist.is-expired { color: var(--fg-muted); }
   & .setlayout > div > .sh2:not(:first-child):not(.is-first) { margin-top: 32px; }
   & .setlayout > div > .box + .box { margin-top: 16px; }
   & .wrap > .box + .sh2 { margin-top: 32px; }
@@ -31,6 +33,29 @@
   & .flash.err > .i { color: var(--danger-fg); }
   & .flash.info { border-color: var(--accent-muted); background: var(--accent-subtle); }
   & .flash.info > .i { color: var(--accent-fg); }
+  /* The outcome of an action floats over the page, so the page does not move; it leaves by itself. */
+  & .flash.fly { position: fixed; z-index: 60; left: 50%; bottom: 24px; width: max-content; max-width: min(560px, calc(100vw - 32px)); margin: 0; background: var(--canvas-default); border-color: var(--success-muted); box-shadow: var(--shadow-pop); transform: translateX(-50%); animation: toast-out .4s ease 10s forwards; }
+  & .flash.fly:hover, & .flash.fly:focus-within { animation-play-state: paused; }
+  /* The row an action changed. */
+  & .wrap > .box:has(+ .setlayout) { margin-bottom: 16px; }
+  & .row.hit { background: var(--success-subtle); box-shadow: inset 3px 0 0 var(--success-fg); }
+  /* Which organization is shown: a choice with a check, not a primary button. */
+  & .orgsw { display: inline-flex; justify-self: start; width: fit-content; flex-wrap: wrap; gap: 2px; max-width: 100%; padding: 2px; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; }
+  & .orgsw a { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 4px; color: var(--fg-default); font-size: 14px; white-space: nowrap; }
+  & .orgsw a:hover { background: var(--neutral-muted); text-decoration: none; }
+  & .orgsw a[aria-current] { background: var(--canvas-default); font-weight: 600; box-shadow: 0 0 0 1px var(--border-default); }
+  & .orgsw a[aria-current] .i { color: var(--success-fg); }
+  /* Role of an invitation: one line each says what it allows. */
+  & .invite { flex-wrap: wrap; }
+  & .invite .irole { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 24px; margin: 0; padding: 4px 0 0; border: 0; min-width: 0; }
+  & .invite .irole legend { float: left; margin-right: 12px; padding: 0; font-size: 12px; font-weight: 600; color: var(--fg-muted); line-height: 20px; }
+  & .invite .irc { display: flex; align-items: flex-start; gap: 8px; max-width: 320px; font-size: 14px; cursor: pointer; }
+  & .invite .irc input { margin-top: 3px; }
+  & .invite .irc > span { display: flex; flex-direction: column; }
+  & .invite .irc .muted { font-size: 12px; }
+  & .invite .irproj { display: none; align-items: center; gap: 8px; }
+  & .invite:has(input[value="guest"]:checked) .irproj { display: flex; }
+  & .invite:has(input[value="guest"]:checked) label:has(input[name="email"]) { display: none; }
   & .flash.att { border-color: var(--attention-muted); background: var(--attention-subtle); }
   & .flash.att > .i { color: var(--attention-fg); }
   & .flash code, & .callout code { font: 12px var(--ui-mono); padding: 1px 4px; background: var(--neutral-muted); border-radius: 4px; }
@@ -58,8 +83,8 @@
   & .trow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 24px; align-items: center; padding: 12px 16px; }
   & .mono.m { font-size: 13px; }
   & .row .nm { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
-  & .row .mt { display: flex; flex-wrap: wrap; gap: 0 12px; margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
-  & .row .mt > span + span::before { content: "·"; margin-right: 12px; color: var(--fg-subtle); }
+  & .row .mt, & .box-body .mt { display: flex; flex-wrap: wrap; gap: 0 12px; margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
+  & .row .mt > span + span::before, & .box-body .mt > span + span::before { content: "·"; margin-right: 12px; color: var(--fg-subtle); }
   & .chk-l { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--fg-muted); white-space: nowrap; }
   & .chk-l input { width: 16px; height: 16px; accent-color: var(--accent-emphasis); }
   & .qs .chk-l { font-size: 14px; color: var(--fg-default); }
@@ -265,3 +290,6 @@
     & .pav .gav { width: 96px; height: 96px; font-size: 32px; }
   }
 }
+
+@keyframes toast-out { to { opacity: 0; visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { :is(.g2.set) .flash.fly { animation-duration: .01s; } }

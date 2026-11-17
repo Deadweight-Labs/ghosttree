@@ -47,6 +47,7 @@ type projectRoleRow struct {
 	Inherited          bool
 	Grantable          []string
 	Self               bool
+	RowID              string
 }
 
 type projectRolesView struct {
@@ -89,6 +90,11 @@ type orgsView struct {
 	Notice      string
 	// NoticeBad: the notice reports a failure and is shown as one.
 	NoticeBad bool
+	// HitRow is the id of the row the last action changed (marked on the page);
+	// OpenRemote the project whose roles stay open after it.
+	HitRow, OpenRemote string
+	// NewFor is whom the invitation just made is for.
+	NewFor string
 	// NewOrg: the page shows only the form for a new organization.
 	NewOrg bool
 	// Explain is the administrator's block on "Kurz erklärt"; nil for anyone else.
@@ -122,7 +128,13 @@ func (a *app) orgsPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	key := r.URL.Query().Get("notice")
-	a.renderOrgs(w, r, http.StatusOK, orgsView{Notice: orgNotice(l, key), NoticeBad: key == "source_failed"}, r.URL.Query().Get("org"), "")
+	v := orgsView{Notice: orgNotice(l, key), NoticeBad: key == "source_failed"}
+	// The note of the action that led here names the person and the object; the
+	// generic text above stays for a link without one.
+	if n, ok := adminNotes.take(r.URL.Query().Get("done"), browserPrincipal(r).ID); ok {
+		v.Notice, v.HitRow, v.OpenRemote = n.Text, n.Row, n.Open
+	}
+	a.renderOrgs(w, r, http.StatusOK, v, r.URL.Query().Get("org"), "")
 }
 
 // orgNewPage is the form for a new organization. The "+" menu and the
@@ -167,15 +179,13 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			v.Selected = o
 		}
 	}
-	// Without a choice: the first organization, a personal namespace only when
-	// there is nothing else.
-	for _, o := range orgs {
-		if v.Selected.ID == 0 && !o.IsUser() {
-			v.Selected = o
-		}
-	}
+	// Without a choice: the one the viewer works in (the last used), else the first
+	// that holds a project; a personal namespace only when there is nothing else.
 	if v.Selected.ID == 0 && len(orgs) > 0 {
-		v.Selected = orgs[0]
+		v.Selected = a.pickOrg(r, orgs)
+	}
+	if v.Selected.ID != 0 && !v.NewOrg {
+		r = a.enterOrg(w, r, v.Selected.Slug)
 	}
 	if v.Selected.ID != 0 {
 		v.GardenSet = a.gardenSettingsFor(r, v.Selected)
@@ -252,6 +262,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				rv.Rows = append(rv.Rows, projectRoleRow{
 					Account: store.NormalizeAccountName(m.Account), AccountID: m.AccountID, Role: m.Role, CanReview: m.CanReview,
 					Implicit: m.Implicit, Inherited: m.Inherited, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
+					RowID: rowAnchor("pr", p.Remote+"-"+m.AccountID),
 				})
 			}
 			v.Roles = append(v.Roles, rv)
@@ -420,6 +431,41 @@ func orgRedirect(w http.ResponseWriter, r *http.Request, slug, notice string) {
 	http.Redirect(w, r, "/ui/orgs?"+q.Encode()+noticeAnchor(notice), http.StatusSeeOther)
 }
 
+// orgDone goes back to the settings with the note of what was done: the page
+// shows it once, marks the row that changed and opens its section.
+func (a *app) orgDone(w http.ResponseWriter, r *http.Request, slug, notice string, n doneNote) {
+	q := url.Values{"org": {slug}, "done": {adminNotes.put(browserPrincipal(r).ID, n)}}
+	frag := noticeAnchor(notice)
+	if n.Row != "" {
+		frag = "#" + n.Row
+	}
+	http.Redirect(w, r, "/ui/orgs?"+q.Encode()+frag, http.StatusSeeOther)
+}
+
+// orgMemberName is the shown name of a member of the organization, the account
+// itself when it is none.
+func (a *app) orgMemberName(orgID int64, account string) string {
+	members, _ := a.store.ListOrgMembers(orgID)
+	for _, m := range members {
+		if m.AccountID == account {
+			return store.NormalizeAccountName(m.Account)
+		}
+	}
+	return account
+}
+
+// inviteSubject says whom an invitation is for: the project of a guest link, the
+// address it is bound to, else "single-use link".
+func inviteSubject(l lang, inv store.Invitation) string {
+	switch {
+	case inv.ProjectRemote != "":
+		return inv.ProjectRemote
+	case inv.Email != "":
+		return inv.Email
+	}
+	return l.msg("adm.invite.open_link")
+}
+
 // noticeAnchor names the section of the settings a notice belongs to, so that
 // the page opens there and not on "General".
 func noticeAnchor(notice string) string { return noticeSection[notice] }
@@ -447,7 +493,7 @@ func (a *app) fillInvites(r *http.Request, v *orgsView, me string) {
 		} else if link, ok := a.inviteLinks.get(inv.ID, me); ok {
 			row.URL = a.inviteURL(r, link.code, link.project)
 			if inv.ID == newID {
-				v.NewURL, v.NewExpiry = row.URL, inv.ExpiresAt
+				v.NewURL, v.NewExpiry, v.NewFor = row.URL, inv.ExpiresAt, inviteSubject(a.langFor(r), inv)
 			}
 		}
 		v.Invites = append(v.Invites, row)
@@ -497,9 +543,14 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	var code string
 	var inv store.Invitation
 	link := false
-	if project := strings.TrimSpace(r.FormValue("project")); project != "" {
-		// A project link is for guests only, whatever the form says: people who
-		// work with the organization are invited into it.
+	project := strings.TrimSpace(r.FormValue("project"))
+	if role := r.FormValue("role"); role == store.RoleGuest || (role == "" && project != "") {
+		// A project link is for guests only: people who work with the
+		// organization are invited into it as members.
+		if project == "" {
+			a.orgFailure(w, r, store.ErrInvalidInput)
+			return
+		}
 		link = true
 		if _, known := a.store.ProjectByRemote(project); known && r.FormValue("claim") != "1" {
 			code, inv, err = a.store.CreateProjectInvitation(me, o.ID, project, store.RoleGuest, ttl)
@@ -526,57 +577,82 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
+	me := browserPrincipal(r).ID
+	var id int64
+	subject := ""
 	if err == nil {
-		var id int64
 		if id, err = strconv.ParseInt(r.FormValue("id"), 10, 64); err != nil {
 			err = store.ErrInvalidInput
 		} else {
-			err = a.store.RevokeInvitation(browserPrincipal(r).ID, o.ID, id)
+			invs, _ := a.store.ListInvitations(me, o.ID)
+			for _, inv := range invs {
+				if inv.ID == id {
+					subject = inviteSubject(a.langFor(r), inv)
+				}
+			}
+			err = a.store.RevokeInvitation(me, o.ID, id)
 		}
 	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
-	if id, perr := strconv.ParseInt(r.FormValue("id"), 10, 64); perr == nil {
-		a.inviteLinks.drop(id)
-	}
-	orgRedirect(w, r, o.Slug, "revoked")
+	a.inviteLinks.drop(id)
+	a.orgDone(w, r, o.Slug, "revoked", doneNote{Text: a.langFor(r).msg("adm.done.revoked", subject), Row: "invite-" + strconv.FormatInt(id, 10)})
 }
 
 func (a *app) orgMemberRole(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
+	me := browserPrincipal(r).ID
+	account, role := r.FormValue("account"), r.FormValue("role")
+	name := ""
 	if err == nil {
-		err = a.store.SetOrgRole(browserPrincipal(r).ID, o.ID, r.FormValue("account"), r.FormValue("role"))
+		name = a.orgMemberName(o.ID, account)
+		err = a.store.SetOrgRole(me, o.ID, account, role)
 	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "role")
+	l := a.langFor(r)
+	text := l.msg("adm.done.member", name, o.Name)
+	switch {
+	case role == store.OrgOwner:
+		text = l.msg("adm.done.owner", name, o.Name)
+	case account == me:
+		text = l.msg("adm.done.member_self", o.Name)
+	}
+	a.orgDone(w, r, o.Slug, "role", doneNote{Text: text, Row: rowAnchor("m", account)})
 }
 
 func (a *app) orgMemberRemove(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
+	me := browserPrincipal(r).ID
+	account := r.FormValue("account")
+	name := ""
 	if err == nil {
-		err = a.store.RemoveOrgMember(browserPrincipal(r).ID, o.ID, r.FormValue("account"))
+		name = a.orgMemberName(o.ID, account)
+		err = a.store.RemoveOrgMember(me, o.ID, account)
 	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
-	if a.store.OrgRole(o.ID, browserPrincipal(r).ID) == "" {
-		http.Redirect(w, r, "/ui/orgs", http.StatusSeeOther)
+	l := a.langFor(r)
+	if a.store.OrgRole(o.ID, me) == "" {
+		token := adminNotes.put(me, doneNote{Text: l.msg("adm.done.left", o.Name)})
+		http.Redirect(w, r, "/ui/orgs?done="+token, http.StatusSeeOther)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "removed")
+	a.orgDone(w, r, o.Slug, "removed", doneNote{Text: l.msg("adm.done.removed", name, o.Name)})
 }
 
 func (a *app) orgProjectMove(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
 	if err == nil {
-		if _, err = a.store.MoveProject(browserPrincipal(r).ID, r.FormValue("remote"), r.FormValue("to")); err == nil {
-			orgRedirect(w, r, o.Slug, "moved")
+		var p store.Project
+		if p, err = a.store.MoveProject(browserPrincipal(r).ID, r.FormValue("remote"), r.FormValue("to")); err == nil {
+			a.orgDone(w, r, o.Slug, "moved", doneNote{Text: a.langFor(r).msg("adm.done.moved", p.Remote, p.Org)})
 			return
 		}
 	}
@@ -634,7 +710,17 @@ func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "project")
+	l := a.langFor(r)
+	remote, account, role := r.FormValue("remote"), r.FormValue("account"), r.FormValue("role")
+	name := a.orgMemberName(o.ID, account)
+	text := l.msg("adm.done.prole", name, adminLabel(l, "prole", role), remote)
+	switch {
+	case role == "none":
+		text = l.msg("adm.done.prole_none", name, remote)
+	case r.FormValue("review") == "1":
+		text = l.msg("adm.done.prole_review", name, adminLabel(l, "prole", role), remote)
+	}
+	a.orgDone(w, r, o.Slug, "project", doneNote{Text: text, Row: rowAnchor("pr", remote+"-"+account), Open: remote})
 }
 
 // grantable nennt die wählbaren Rollen, aber nur in einer interaktiven Sitzung:
