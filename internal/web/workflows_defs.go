@@ -452,6 +452,7 @@ func (a *app) wfResultRows(r *http.Request, pa *store.ProjectAccess, remote stri
 			row.Ref = ""
 		}
 		row.CanUndo = canUndo && res.State == store.ResultAuto
+		row.Waiting = res.State == store.ResultProposed
 		out = append(out, row)
 	}
 	return out

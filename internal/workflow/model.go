@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
@@ -22,6 +24,29 @@ import (
 type ModelAccess struct {
 	BaseURL string
 	Token   string
+
+	mu       sync.Mutex
+	resolved []Resolved
+}
+
+// Tried is every connection and model the run resolved, in order and once
+// each. A call that the provider refused is not booked, so this is how a
+// failed run still names what it tried to reach.
+func (m *ModelAccess) Tried() (connections, models []string) {
+	if m == nil {
+		return nil, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.resolved {
+		if !slices.Contains(connections, r.Connection) {
+			connections = append(connections, r.Connection)
+		}
+		if !slices.Contains(models, r.Model) {
+			models = append(models, r.Model)
+		}
+	}
+	return connections, models
 }
 
 // Resolved is what a model name stands for in this run.
@@ -55,6 +80,9 @@ func (m *ModelAccess) Resolve(ctx context.Context, model string) (Resolved, erro
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return Resolved{}, err
 	}
+	m.mu.Lock()
+	m.resolved = append(m.resolved, r)
+	m.mu.Unlock()
 	return r, nil
 }
 

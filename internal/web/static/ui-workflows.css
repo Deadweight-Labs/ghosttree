@@ -14,7 +14,7 @@
   & .sec:first-child { margin-top: 0; }
   & pre.wftext { margin: 0; padding: 12px 16px; max-height: 480px; overflow: auto; font: 12px/18px var(--ui-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 }
-:is(.g2.wf, .g2.pr) {
+:is(.g2.wf, .g2.pr, .g2.id) {
   & .wfstate { display: inline-flex; align-items: center; gap: 4px; }
   & .wfstate .i { width: 12px; height: 12px; }
   & .st.ok { color: var(--success-fg); }
@@ -92,4 +92,26 @@
     & .wftpl > .selx { flex: 1 1 auto; min-width: 0; }
     & .wftpl > button { flex: none; }
   }
+}
+
+/* How a run ended, in words (S02, usability run 5): the sentence, who fixes
+   it and where, and the raw message folded; the input folded below the
+   output; proposals waiting in review. */
+:is(.g2.wf) {
+  & .wfwhy .box-r { display: grid; gap: 8px; }
+  & .wfwhy p { margin: 0; }
+  & .wfwhyt { font-weight: 600; }
+  & .wfwho { font-size: 13px; }
+  & .wfraw { border-top: 1px solid var(--border-muted); }
+  & .wfraw > summary { padding: 8px 16px; font-size: 12px; color: var(--fg-muted); cursor: pointer; }
+  & .wfraw[open] > summary { border-bottom: 1px solid var(--border-muted); }
+  & .wfin { margin-top: 16px; }
+  & .wfin > summary { cursor: pointer; list-style: none; gap: 8px; }
+  & .wfin > summary::-webkit-details-marker { display: none; }
+  & .wfin > summary .car { display: inline-flex; transition: transform .12s; }
+  & .wfin[open] > summary .car { transform: rotate(90deg); }
+  & .wfin:not([open]) > summary { border-bottom: 0; }
+  & .sec { display: flex; align-items: center; gap: 8px; }
+  & .wfwait { margin-bottom: 16px; }
+  & .wfwait .row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
 }

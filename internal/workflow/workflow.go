@@ -350,6 +350,12 @@ func (e *Engine) execute(ctx context.Context, run store.WorkflowRun, ev store.Wo
 				e.AIEndRun(run.ID)
 			}
 			out = withModelUsage(e.Store, run.ID, out)
+			if out.Connection == "" {
+				// No call was booked (the provider refused it): the run still
+				// names what it tried to reach.
+				conns, models := in.AI.Tried()
+				out.Connection, out.Model = strings.Join(conns, ", "), strings.Join(models, ", ")
+			}
 		}()
 	}
 	done := make(chan blockResult, 1)

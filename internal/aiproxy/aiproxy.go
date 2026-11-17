@@ -403,7 +403,7 @@ func (p *Proxy) client(c store.AIConnection, u *url.URL) (*http.Client, error) {
 // forward makes the call and relays the answer. ctx ends with the client's
 // request or with EndRun.
 func (p *Proxy) forward(ctx context.Context, w http.ResponseWriter, r *http.Request, run store.WorkflowRun, route store.AIRoute, format, key string, body []byte, stream bool) booking {
-	target, err := url.Parse(strings.TrimRight(route.Connection.BaseURL, "/") + r.URL.Path)
+	target, err := url.Parse(llm.Endpoint(route.Connection.BaseURL, r.URL.Path))
 	if err != nil {
 		p.fail(w, apiError{http.StatusBadGateway, "api_error", "connection address is not valid"})
 		return booking{}

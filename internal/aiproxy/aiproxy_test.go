@@ -241,9 +241,9 @@ func (e *env) mustNotLeak(t *testing.T, where, text string, extra ...string) {
 // connection and model, and the token is refused once the run ended.
 func TestRunCallsAModelOnlyWithItsTokenAndTheTokenEndsWithTheRun(t *testing.T) {
 	e := newEnv(t)
-	var seen workflow.ModelAccess
+	var seen struct{ BaseURL, Token string }
 	e.blocks["test/spy"] = workflow.BlockFunc(func(ctx context.Context, in workflow.Input) (store.WorkflowRunOutcome, error) {
-		seen = *in.AI
+		seen.BaseURL, seen.Token = in.AI.BaseURL, in.AI.Token
 		return workflow.Ask.Run(ctx, in)
 	})
 	run := e.run(t, "test/spy", nil)
@@ -555,5 +555,46 @@ func TestACallThatRegistersAfterTheRunEndedIsRefused(t *testing.T) {
 	}
 	if len(e.p.active) != 0 {
 		t.Fatalf("calls left registered: %d", len(e.p.active))
+	}
+}
+
+// S01 (usability run 5): connections whose base address ends in "/v1", as
+// Ollama and most OpenAI-compatible services document it, reach the provider
+// in both formats; before, the proxy sent them to "/v1/v1/..." and got a 404.
+func TestConnectionsWithV1InTheBaseAddressReachTheProvider(t *testing.T) {
+	e := newEnv(t)
+	in := func(name, format, key, model string) {
+		c := store.AIConnectionInput{OrgID: e.org.ID, Name: name, Format: format, BaseURL: e.provider.srv.URL + "/v1/", KeyLast4: "1234",
+			Models: []store.AIModel{{Model: model, InUSD: 1, OutUSD: 5}}}
+		if _, err := e.st.SaveAIConnection("person:1", c, func(purpose string) ([]byte, error) { return e.box.Seal(key, purpose) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in("ollama-v1", store.AIFormatOpenAI, openaiKey, "jev-text")
+	in("anthropic-v1", store.AIFormatAnthropic, anthropicKey, "claude-v1")
+	for _, model := range []string{"ollama-v1/jev-text", "anthropic-v1/claude-v1"} {
+		run := e.run(t, workflow.AskName, map[string]string{"model": model})
+		if run.State != store.RunDone {
+			t.Fatalf("%s: %+v", model, run)
+		}
+	}
+}
+
+// S02 (usability run 5): a run whose model call fails still names the
+// connection and the model it tried, so that its page can say which address
+// did not answer.
+func TestAFailedCallStillNamesConnectionAndModelOnTheRun(t *testing.T) {
+	e := newEnv(t)
+	c := store.AIConnectionInput{OrgID: e.org.ID, Name: "wrong-path", Format: store.AIFormatOpenAI, BaseURL: e.provider.srv.URL + "/nowhere", KeyLast4: "1234",
+		Models: []store.AIModel{{Model: "m1", InUSD: 1, OutUSD: 5}}}
+	if _, err := e.st.SaveAIConnection("person:1", c, func(purpose string) ([]byte, error) { return e.box.Seal(openaiKey, purpose) }); err != nil {
+		t.Fatal(err)
+	}
+	run := e.run(t, workflow.AskName, map[string]string{"model": "wrong-path/m1"})
+	if run.State != store.RunFailed || !strings.Contains(run.Reason, "404") {
+		t.Fatalf("run: %+v", run)
+	}
+	if run.Connection != "wrong-path" || run.Model != "m1" || run.CostUSD != 0 {
+		t.Fatalf("the failed run names what it tried: %+v", run)
 	}
 }
