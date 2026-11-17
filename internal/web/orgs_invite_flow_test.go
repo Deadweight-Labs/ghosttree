@@ -31,11 +31,15 @@ func TestInvitingIsOneStepIntoTheOrgAndSurvivesAReload(t *testing.T) {
 			t.Errorf("invite form lacks %q", want)
 		}
 	}
-	// Inviting means inviting into the org: no project and no role to pick.
-	for _, gone := range []string{`name="project"`, `name="project_role"`, `name="role"`} {
+	// Inviting means inviting into the org: the role is chosen (here only member,
+	// as guests need enforced visibility), a project is not asked for.
+	for _, gone := range []string{`name="project"`, `name="project_role"`} {
 		if strings.Contains(page, gone) {
 			t.Errorf("the invite form still asks for %q", gone)
 		}
+	}
+	if !strings.Contains(page, `name="role" value="member"`) {
+		t.Errorf("the invite form names no role")
 	}
 	resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}})
 	loc := resp.Header.Get("Location")

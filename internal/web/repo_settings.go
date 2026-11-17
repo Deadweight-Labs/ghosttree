@@ -37,6 +37,8 @@ type repoSettingsView struct {
 	CanCreate   bool
 	// NewColor is the colour a new label starts with.
 	NewColor string
+	// HitRow is the id of the label row the last action changed.
+	HitRow string
 }
 
 func (a *app) repoSettings(w http.ResponseWriter, r *http.Request) {
@@ -68,6 +70,10 @@ func (a *app) repoSettings(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case q.Get("fail") != "":
 		v.Error = l.msg(labelFailKey(q.Get("fail")))
+	case q.Get("note") != "":
+		if n, ok := adminNotes.take(q.Get("note"), browserPrincipal(r).ID); ok {
+			v.Notice, v.HitRow = n.Text, n.Row
+		}
 	case q.Get("done") != "":
 		v.Notice = label(l, labelDoneKeys, q.Get("done"))
 	}
@@ -75,6 +81,21 @@ func (a *app) repoSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 var labelDoneKeys = map[string]string{"created": "settings.done.created", "updated": "settings.done.updated", "deleted": "settings.done.deleted"}
+
+// labelDoneNamedKeys are the same notes with the name of the label.
+var labelDoneNamedKeys = map[string]string{"created": "settings.done.created_named", "updated": "settings.done.updated_named", "deleted": "settings.done.deleted_named"}
+
+// labelDone goes back to the label list with a note that names the label; the
+// row of a saved label is marked there.
+func (a *app) labelDone(w http.ResponseWriter, r *http.Request, project, done, name string, id int64) {
+	n := doneNote{Text: a.langFor(r).msg(labelDoneNamedKeys[done], name)}
+	frag := "#labels"
+	if done != "deleted" {
+		n.Row = "lbl-" + strconv.FormatInt(id, 10)
+		frag = "#" + n.Row
+	}
+	http.Redirect(w, r, repoHref(project)+"/settings?note="+adminNotes.put(browserPrincipal(r).ID, n)+frag, http.StatusSeeOther)
+}
 
 // labelFailKey maps the fail= value of a redirect to its message.
 func labelFailKey(code string) string {
@@ -112,10 +133,10 @@ func (a *app) labelFail(w http.ResponseWriter, r *http.Request, project, code st
 	a.failFormTo(w, r, repoHref(project)+"/settings#labels", http.StatusUnprocessableEntity, a.langFor(r).msg(labelFailKey(code)), field)
 }
 
-func (a *app) labelResult(w http.ResponseWriter, r *http.Request, project string, err error, done string) {
+func (a *app) labelResult(w http.ResponseWriter, r *http.Request, project string, err error, done, name string, id int64) {
 	switch {
 	case err == nil:
-		a.labelRedirect(w, r, project, "done", done)
+		a.labelDone(w, r, project, done, name, id)
 	case requestdomain.Code(err) != "":
 		a.labelFail(w, r, project, requestdomain.Code(err))
 	case err == store.ErrAccessForbidden:
@@ -133,8 +154,8 @@ func (a *app) labelCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
-	_, err := a.access(r).CreateLabel(in)
-	a.labelResult(w, r, project, err, "created")
+	lb, err := a.access(r).CreateLabel(in)
+	a.labelResult(w, r, project, err, "created", lb.Name, lb.ID)
 }
 
 func (a *app) labelUpdate(w http.ResponseWriter, r *http.Request) {
@@ -144,8 +165,8 @@ func (a *app) labelUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
-	_, err = a.access(r).UpdateLabel(id, store.LabelPatch{Name: &in.Name, Color: &in.Color, Description: &in.Description})
-	a.labelResult(w, r, project, err, "updated")
+	lb, err := a.access(r).UpdateLabel(id, store.LabelPatch{Name: &in.Name, Color: &in.Color, Description: &in.Description})
+	a.labelResult(w, r, project, err, "updated", lb.Name, lb.ID)
 }
 
 func (a *app) labelDelete(w http.ResponseWriter, r *http.Request) {
@@ -155,5 +176,13 @@ func (a *app) labelDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
-	a.labelResult(w, r, project, a.access(r).DeleteLabel(id), "deleted")
+	name := ""
+	if labels, lerr := a.access(r).ListLabels(project); lerr == nil {
+		for _, lb := range labels {
+			if lb.ID == id {
+				name = lb.Name
+			}
+		}
+	}
+	a.labelResult(w, r, project, a.access(r).DeleteLabel(id), "deleted", name, id)
 }

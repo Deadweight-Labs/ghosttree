@@ -32,7 +32,7 @@ func TestRepoSettingsTabAndLabels(t *testing.T) {
 		v.Set("project", shellProject)
 		return sameOriginPostForm(t, c, e.Base+path, v)
 	}
-	if resp := form(e.Lead, "/ui/labels/create", url.Values{"name": {"ui"}, "color": {"0969da"}}); resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "done=created") {
+	if resp := form(e.Lead, "/ui/labels/create", url.Values{"name": {"ui"}, "color": {"0969da"}}); resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "note=") {
 		t.Fatalf("create = %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if resp := form(asBrowser(e.Lead), "/ui/labels/create", url.Values{"name": {"UI"}, "color": {"#0969da"}}); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/x/shell/settings#labels" {
@@ -54,13 +54,13 @@ func TestRepoSettingsTabAndLabels(t *testing.T) {
 		t.Fatalf("labels = %v %v", list, err)
 	}
 	id := list[0].ID
-	if resp := form(e.Lead, "/ui/labels/"+strconv.FormatInt(id, 10)+"/update", url.Values{"name": {"design"}, "color": {"#fbca04"}, "description": {"Aussehen"}}); !strings.Contains(resp.Header.Get("Location"), "done=updated") {
+	if resp := form(e.Lead, "/ui/labels/"+strconv.FormatInt(id, 10)+"/update", url.Values{"name": {"design"}, "color": {"#fbca04"}, "description": {"Aussehen"}}); !strings.Contains(resp.Header.Get("Location"), "note=") {
 		t.Errorf("update: %s", resp.Header.Get("Location"))
 	}
-	if resp := form(asBrowser(e.Member), "/ui/labels/"+strconv.FormatInt(id, 10)+"/delete", url.Values{}); resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "done=") {
+	if resp := form(asBrowser(e.Member), "/ui/labels/"+strconv.FormatInt(id, 10)+"/delete", url.Values{}); resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "note=") {
 		t.Errorf("a member deleting a label: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if resp := form(e.Lead, "/ui/labels/"+strconv.FormatInt(id, 10)+"/delete", url.Values{}); !strings.Contains(resp.Header.Get("Location"), "done=deleted") {
+	if resp := form(e.Lead, "/ui/labels/"+strconv.FormatInt(id, 10)+"/delete", url.Values{}); !strings.Contains(resp.Header.Get("Location"), "note=") {
 		t.Errorf("delete: %s", resp.Header.Get("Location"))
 	}
 }

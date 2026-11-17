@@ -172,6 +172,7 @@ func (a *app) orgAgentCards(r *http.Request, org store.Org) ([]agentCard, error)
 // orgPage renders one tab of an organisation.
 func (a *app) orgPage(w http.ResponseWriter, r *http.Request, org store.Org, tab string) {
 	l := a.langFor(r)
+	r = a.enterOrg(w, r, org.Slug)
 	v := &orgPageView{Org: org, Tab: tab}
 	switch tab {
 	case "repos":

@@ -351,7 +351,7 @@ func TestOrgInviteOffersOwnProjectsAsChoiceAndClaimsOnlyWhatTheOwnerUploaded(t *
 	// A project link is for guests only, whatever the form says.
 	resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {"member"}, "days": {"7"}})
 	page = body(t, resp)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(page, "/join/") || !strings.Contains(page, "stays here until it is used") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(page, "/join/") || !strings.Contains(page, "stays on this page until it is used") {
 		t.Fatalf("claim and invite: %d %s", resp.StatusCode, page)
 	}
 	if p, ok := st.ProjectByRemote("github.com/x/mine"); !ok || p.OrgID != org.ID {

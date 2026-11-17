@@ -351,6 +351,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	l := a.langFor(r)
 	principal := browserPrincipal(r)
 	data.Person = principal.Label
+	a.rememberRepoOrg(w, r)
 	data.CSRFToken = csrfOf(r)
 	data.Interactive = interactive(r)
 	data.ServerVersion = version.Label(a.buildVersion)

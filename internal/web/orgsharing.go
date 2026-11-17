@@ -181,19 +181,28 @@ func (a *app) callbackURL(r *http.Request) string {
 // "privat". Die Regeln prüft der Store.
 func (a *app) orgProjectVisibility(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
+	var remote string
+	var shared bool
 	if err == nil {
 		p, known := a.store.ProjectByRemote(r.FormValue("remote"))
 		if !known || p.OrgID != o.ID {
 			err = store.ErrProjectNotFound
 		} else {
-			err = a.store.SetProjectVisibility(browserPrincipal(r).ID, p.Remote, r.FormValue("shared") == "1")
+			shared = r.FormValue("shared") == "1"
+			remote = p.Remote
+			err = a.store.SetProjectVisibility(browserPrincipal(r).ID, p.Remote, shared)
 		}
 	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "visibility")
+	l := a.langFor(r)
+	text := l.msg("adm.done.private", remote)
+	if shared {
+		text = l.msg("adm.done.shared", remote, o.Name)
+	}
+	a.orgDone(w, r, o.Slug, "visibility", doneNote{Text: text, Row: rowAnchor("p", remote)})
 }
 
 // orgSourceConnect schickt den Browser des Owners zu GitHub, wo er die App für
