@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -43,6 +44,7 @@ func (a *app) inboxTextMentions(r *http.Request, project string) []inboxRow {
 		return nil
 	}
 	now := overviewNow().UTC()
+	token := csrfOf(r)
 	rows := make([]inboxRow, 0, len(list))
 	for _, m := range list {
 		key, href := textMentionTarget(m)
@@ -58,6 +60,10 @@ func (a *app) inboxTextMentions(r *http.Request, project string) []inboxRow {
 			row.Cats = append(row.Cats, "issues")
 		}
 		row.Actions = []inboxAction{{Label: l.msg("inbox.act.read"), MentionID: m.ID}}
+		// The answer goes where the question was asked: a comment on the same object.
+		row.Reply = &composerView{Action: "/ui/inbox/mention-reply", Token: token, Placeholder: l.msg("inbox.reply_to", who.Label),
+			Submit: l.msg("inbox.reply_send"), Cancel: l.msg("inbox.reply_cancel"),
+			Hidden: []hiddenField{{"id", strconv.FormatInt(m.ID, 10)}, {"to", who.Label}}}
 		rows = append(rows, row)
 	}
 	return rows
@@ -92,6 +98,47 @@ func (a *app) inboxMentionRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/ui/inbox", http.StatusSeeOther)
+}
+
+// inboxMentionReply is POST /ui/inbox/mention-reply: the quick answer to a mention in a
+// text. It is written as a comment on the object the mention stands in, so it
+// is read where the question was asked and not as a loose message in the room.
+// Writing the comment also takes the mention out of the inbox (AddComment).
+func (a *app) inboxMentionReply(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	id, err := strconv.ParseInt(r.FormValue("id"), 10, 64)
+	body := strings.TrimSpace(r.FormValue("body"))
+	if err != nil || id <= 0 || body == "" {
+		http.Error(w, "mention and body are required", http.StatusBadRequest)
+		return
+	}
+	pa := a.access(r)
+	list, err := pa.TextMentions("")
+	if err != nil {
+		http.Error(w, "could not read", http.StatusInternalServerError)
+		return
+	}
+	for _, m := range list {
+		if m.ID != id {
+			continue
+		}
+		c, err := pa.AddComment(m.ObjectKind, m.ObjectID, body, a.commentActor(r))
+		if err != nil {
+			a.commentFail(w, r, "/ui/inbox", err)
+			return
+		}
+		a.stampActor(r, actor.Comment, c.ID)
+		back := "/ui/inbox?sent=1"
+		if to := strings.TrimSpace(r.FormValue("to")); to != "" {
+			back = "/ui/inbox?sent=" + url.QueryEscape(cleanLineWeb(to, 80))
+		}
+		http.Redirect(w, r, back, http.StatusSeeOther)
+		return
+	}
+	http.NotFound(w, r)
 }
 
 // unreachedParam is the query a redirect after writing carries so the page can

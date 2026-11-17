@@ -107,7 +107,7 @@
       <nav class="coord-paging coord-thread-paging" aria-label="{{t "coord.thread_history"}}">{{if .HasOlder}}<a class="gbtn sm" href="{{.OlderURL}}">{{t "coord.older_replies"}}</a>{{end}}{{if .HasNewer}}<a class="gbtn sm" href="{{.NewerURL}}">{{t "coord.newer_replies"}}</a>{{end}}</nav>
       <div class="rbody">
         {{if not $.Coord.Active.CanPost}}<p class="coord-action-status callout" data-coord-action-status role="status" hidden></p>{{end}}
-        <ol class="coord-thread-messages coord-messages" data-chat tabindex="-1" aria-label="{{t "coord.thread_history"}}">{{with .Anchor}}{{template "coord-message" .}}{{end}}{{range .Messages}}{{template "coord-message" .}}{{else}}<li class="coord-empty">{{t "coord.no_replies"}}</li>{{end}}</ol>
+        <ol class="coord-thread-messages coord-messages" data-chat tabindex="-1" aria-label="{{t "coord.thread_history"}}">{{with .Anchor}}{{template "coord-message" .}}{{end}}{{range .Messages}}{{template "coord-message" .}}{{else}}<li class="coord-empty">{{t "coord.no_replies"}}</li>{{end}}{{range .Events}}<li class="coord-thread-event cte-{{.State}}" role="note"><span class="cte-dot" aria-hidden="true"></span><span>{{.Text}}</span><time datetime="{{.At}}">{{.When}}</time></li>{{end}}</ol>
         <p class="rnone muted" hidden>{{t "room.search_none"}}</p>
         <button type="button" class="rnew gbtn sm" data-chat-new hidden>{{mi "chev"}}<span>{{t "coord.new_messages"}}</span></button>
       </div>

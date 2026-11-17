@@ -131,6 +131,9 @@ type workshopDecision struct {
 }
 
 type workshopView struct {
+	// ResultDecision is the decision the result of the last step is about; its card shows the
+	// result, the top of the workshop does not repeat it.
+	ResultDecision        int64
 	ID                    int64
 	Token, Anchor         string
 	Phase, PhaseLabel     string
@@ -273,6 +276,13 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 			w.Result = &requestResult{Text: l.msg(key), Kind: "done"}
 		}
 	}
+	if n, err := strconv.ParseInt(q.Get("wdec"), 10, 64); err == nil && n > 0 && w.Result != nil {
+		for _, d := range w.Decisions {
+			if d.ID == n {
+				w.ResultDecision = n
+			}
+		}
+	}
 	v.Workshop = w
 }
 
@@ -285,6 +295,10 @@ func decisionViewOf(l lang, r *http.Request, d idea.Decision, now time.Time, can
 	wd := workshopDecision{ID: d.ID, Num: d.HumanID(), Question: d.Question, Detail: bodyBlocks(d.Detail, 0), State: d.State, StateLabel: label(l, workshopDecisionKeys, d.State),
 		Tone: workshopDecisionTone[d.State], WayLabel: label(l, workshopWayKeys, d.Way), WayWhy: workshopWhy(l, d.WayWhy), Open: d.State == idea.DecisionOpen,
 		Answer: d.Answer, Reason: d.Reason, Trigger: d.Trigger, DecidedBy: d.DecidedBy, DecidedAge: age(d.DecidedAt)}
+	// Once somebody has decided, the way says who: "The agent decides" would be a lie after a person chose.
+	if d.State == idea.DecisionDecided && d.DecidedBy != "" && !d.ByAgent {
+		wd.WayLabel, wd.WayWhy = l.msg("workshop.way.decided_by", d.DecidedBy), ""
+	}
 	// Schließen darf, wer den Gegenstand bearbeiten darf; abstimmen, wer mitarbeiten darf.
 	wd.CanDecide, wd.CanVote, wd.CanReopen = wd.Open && canEdit, wd.Open && canWork && len(d.Variants) > 0, !wd.Open && canWork
 	for _, vr := range d.Variants {
@@ -393,7 +407,14 @@ func (a *app) workshopFailTo(w http.ResponseWriter, r *http.Request, err error, 
 // of its idea, or for a decision of an issue the page of the decision itself.
 func decisionBack(d idea.Decision) func(key, value string) string {
 	if d.Subject == idea.SubjectIdea {
-		return func(key, value string) string { return workshopBack(d.Project, d.SubjectID, key, value) }
+		// The answer stands at the decision it is about, not at the top of the workshop.
+		return func(key, value string) string {
+			u := repoHref(d.Project) + "/ideas/" + strconv.FormatInt(d.SubjectID, 10)
+			if key != "" {
+				u += "?" + key + "=" + url.QueryEscape(value) + "&wdec=" + strconv.FormatInt(d.ID, 10)
+			}
+			return u + "#decision-" + strconv.FormatInt(d.ID, 10)
+		}
 	}
 	return func(key, value string) string {
 		u := decisionPageHref(d)

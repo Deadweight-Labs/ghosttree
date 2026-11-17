@@ -750,6 +750,12 @@
       if (result === coordPageLoadOffline) location.assign(target.href);
     });
   });
+  document.addEventListener("change", (event) => {
+    const pick = event.target.closest?.("[data-pick].invalid");
+    if (!pick) return;
+    pick.classList.remove("invalid");
+    pick.querySelector("[data-dd]")?.removeAttribute("aria-invalid");
+  });
   document.addEventListener("submit", (event) => stampCoordExpiryOffset(event.target), true);
   document.addEventListener("submit", (event) => {
     const form = event.target;
@@ -757,11 +763,16 @@
     if (!target) return;
     event.preventDefault();
     // A request goes to someone: say so before anything is sent.
+    // An @name in the words is an addressee too: the server resolves it.
     if (event.submitter?.matches?.("[data-needs-to]")) {
       const to = form.querySelector('input[name="mentions"]');
-      if (!to || !to.value) {
+      const named = /(^|[^\p{L}\p{N}@._-])@[\p{L}\p{N}]/u.test(form.querySelector('textarea[name="body"]')?.value || "");
+      const pick = to?.closest?.("[data-pick]");
+      if (pick && !to.value && !named) {
+        pick.classList.add("invalid");
+        pick.querySelector("[data-dd]")?.setAttribute("aria-invalid", "true");
         setActionStatus(text("need_to"), true);
-        form.querySelector("[data-pick] [data-dd]")?.focus();
+        pick.querySelector("[data-dd]")?.focus();
         return;
       }
     }

@@ -259,6 +259,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/mentions", a.requirePerson(http.HandlerFunc(a.mentionsLookup)))
 	a.handle(mux, "POST /ui/inbox/mention-read", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxMentionRead))))))
 	a.handle(mux, "POST /ui/searches", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.searchSave))))))
+	a.handle(mux, "POST /ui/inbox/mention-reply", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxMentionReply))))))
 	a.handle(mux, "POST /ui/inbox/reply", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxReply))))))
 	a.handle(mux, "POST /ui/inbox/done", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxDone))))))
 	a.handle(mux, "GET /ui/overview", a.requirePerson(http.HandlerFunc(a.overviewPage)))
@@ -634,6 +635,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/reactions":                    webProject,
 	"POST /ui/ideas/{id}/state":             webProject,
 	"POST /ui/issues/create":                webProject,
+	"POST /ui/inbox/mention-reply":          webProject,
 	"POST /ui/inbox/reply":                  webCoord,
 	"POST /ui/inbox/done":                   webCoord,
 	"GET /ui/{a}":                           webAccount,

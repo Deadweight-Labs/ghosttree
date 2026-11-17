@@ -141,9 +141,12 @@ func TestSharingWithGuestsAsksAboutSecrets(t *testing.T) {
 		resp := sameOriginPostForm(t, e.Member, e.Base+"/ui/sessions/"+sess.PublicID+"/share", form)
 		return resp, body(t, resp)
 	}
-	// Members need no question.
-	if resp, _ := post(url.Values{"level": {store.VisProject}}); resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("project level: %d", resp.StatusCode)
+	// Whoever lets more people read is asked, also for the project; confirmed, it goes through.
+	if resp, _ := post(url.Values{"level": {store.VisProject}}); resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "confirm=project") {
+		t.Fatalf("project level: %d %q, want the question", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if resp, _ := post(url.Values{"level": {store.VisProject}, "confirm": {"1"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("project level confirmed: %d", resp.StatusCode)
 	}
 	resp, _ := post(url.Values{"level": {store.VisGuests}})
 	if resp.StatusCode != http.StatusSeeOther {
@@ -165,12 +168,16 @@ func TestSharingWithGuestsAsksAboutSecrets(t *testing.T) {
 	if got, _ := e.St.SessionByID(id); got.Visibility != store.VisGuests {
 		t.Errorf("level after confirmation = %q", got.Visibility)
 	}
-	// A clean session goes straight through.
+	// A clean session is asked too, but the question holds no word about secrets and its button says "Share".
 	clean := e.pid["anna-private"]
 	token := renderedCSRFToken(t, e.Member, e.Base+"/ui/sessions")
 	r := sameOriginPostForm(t, e.Member, e.Base+"/ui/sessions/"+clean+"/share", url.Values{"csrf_token": {token}, "level": {store.VisGuests}})
-	if r.StatusCode != http.StatusSeeOther {
-		t.Errorf("clean session asked a question: %d", r.StatusCode)
+	if r.StatusCode != http.StatusSeeOther || !strings.Contains(r.Header.Get("Location"), "confirm=guests") {
+		t.Fatalf("clean session did not ask: %d %q", r.StatusCode, r.Header.Get("Location"))
+	}
+	_, ask := e.get(t, e.Member, r.Header.Get("Location"))
+	if !strings.Contains(ask, "guests included") || strings.Contains(ask, "possible secret") || strings.Contains(ask, "Share anyway") || !strings.Contains(ask, ">Share<") {
+		t.Errorf("the question of a clean session: %.600s", ask)
 	}
 }
 
@@ -207,9 +214,16 @@ func TestSharingWithGuestsAsksAboutLabeledPasswordsInOlderSessions(t *testing.T)
 	if err := e.St.AppendChunks(newID, chunks(uLine("Das Passwort ist Hx7!kQ2pz, bitte merken"))); err != nil {
 		t.Fatal(err)
 	}
-	if resp := share(newPID); resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "confirm=") {
-		t.Fatalf("a session stored with redaction asked: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	// Nothing to warn about, so the question holds no word about secrets.
+	resp = share(newPID)
+	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "confirm=guests") {
+		t.Fatalf("a session stored with redaction: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
+	if _, ask := e.get(t, e.Member, resp.Header.Get("Location")); strings.Contains(ask, "possible secret") {
+		t.Errorf("a session stored with redaction warns about secrets")
+	}
+	token := renderedCSRFToken(t, e.Member, e.Base+"/ui/sessions")
+	sameOriginPostForm(t, e.Member, e.Base+"/ui/sessions/"+newPID+"/share", url.Values{"csrf_token": {token}, "level": {store.VisGuests}, "confirm": {"1"}})
 	if got, _ := e.St.SessionByID(newID); got.Visibility != store.VisGuests {
 		t.Errorf("level = %q", got.Visibility)
 	}

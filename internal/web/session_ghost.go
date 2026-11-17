@@ -35,6 +35,26 @@ type sessionGhost struct {
 	Started, StartedAt string
 	Areas, Issues      []template.HTML
 	Made               []madeLine
+	// Quiet: the run left nothing in ghosttree and used no tool; its conversation is in the raw history.
+	Quiet bool
+}
+
+// toolsBody is the line under "made N tool calls": the calls by kind.
+func toolsBody(l lang, a store.SessionActivity) template.HTML {
+	if !a.Detailed {
+		return ""
+	}
+	var parts []string
+	for _, p := range []struct {
+		n   int
+		key string
+	}{{a.Commands, "sessions.tools.commands"}, {a.Reads, "sessions.tools.reads"}, {a.Edits, "sessions.tools.edits"},
+		{a.Searches, "sessions.tools.searches"}, {a.Ghost, "sessions.tools.ghost"}, {a.Other, "sessions.tools.other"}} {
+		if p.n > 0 {
+			parts = append(parts, html.EscapeString(l.msg(p.key, p.n)))
+		}
+	}
+	return template.HTML(strings.Join(parts, " · "))
 }
 
 // sessionAgentLabel is how the page names the agent of a session: "Robins Claude", and
@@ -167,6 +187,19 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 	if len(files) > 0 {
 		items = append(items, a.filesEntry(l, entry, files, sess))
 	}
+
+	// What the run did with its tools stands in as one entry, so a run that left nothing in
+	// ghosttree is not an empty page (REQ-688).
+	if view.ExternalID != "" {
+		if act := a.store.SessionActivity(sess); act.Total > 0 {
+			at := act.At
+			if at == "" {
+				at = sess.LastSeenAt
+			}
+			items = append(items, entry(at, "code", "", template.HTML(html.EscapeString(l.msg("sessions.ev.tools", act.Total))), toolsBody(l, act)))
+		}
+	}
+	g.Quiet = len(items) == 0
 
 	items = append(items, entry(sess.StartedAt, "play", "acc", template.HTML(html.EscapeString(l.msg("sessions.ev.started"))), ""))
 	sort.SliceStable(items, func(i, j int) bool { return items[i].at.After(items[j].at) })

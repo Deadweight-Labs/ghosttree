@@ -1180,6 +1180,23 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- Agent tools without detours, readable sessions, answers where the question
+  was asked (REQ-688). `human_task` needs no request any more: without one it
+  hangs on the session's request, else on a standing "Agent tasks" request per
+  project and person, and its recipient is the person `@named` in the text, else
+  the human the session belongs to. A question from an agent that names nobody
+  goes to the person it works for, and nobody ever addresses themselves. The
+  "To" menu of a room lists the people of the project before the agents, and an
+  `@name` in the words is a recipient for "Send as an ask". The quick answer to a
+  mention in a comment is a comment on the same object, and a resolved thread
+  says who resolved it. In the workshop, Decide answers at the decision (also
+  without a reason, in the page's language), a decided question says "Decided
+  by" the person, and a closed question explains why it takes no vote. The
+  ghosttree view of a session shows the tool calls of the run by kind and, for a
+  run without anything, leads to the raw history; the title is the first typed
+  request (not a skill's text or an "Ok"; sessions stored before keep theirs),
+  and sharing asks before more people may read.
+
 - Invitations are honest and complete, and the right organization is active
   (REQ-683). An invitation with an address sends a mail with the link (guest
   links too); without an address, without mail on the server, or when sending

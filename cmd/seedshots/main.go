@@ -88,6 +88,7 @@ func main() {
 		seedMaengel(st, project, room, org.ID, out)
 		after = seedPulls(st, project)
 		seedSessionLinks(st, project)
+		seedPolishC(st, project, room)
 	}
 	json.NewEncoder(os.Stdout).Encode(out)
 	if after != nil {

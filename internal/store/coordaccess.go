@@ -1020,6 +1020,13 @@ func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 	}
 	message.Mentions = append(append([]string(nil), message.Mentions...), textIDs...)
 	message.IsBroadcast = textRoom != "" && !guestRoom && BodyHasBroadcast(message.Body)
+	// Nobody addresses themselves: an agent that names its own id, or an @name that
+	// resolves to the sender, reaches the others only (REQ-688). A guest keeps the
+	// item for their own question: it is how they find it again without seeing
+	// who else is in the room.
+	if !guestRoom {
+		message.Mentions = withoutSender(message.Mentions, actor)
+	}
 	if _, actionable := attentionReasonForIntent(message.Intent); actionable && len(normalizeMembers(message.Mentions)) == 0 && len(typedMentions) == 0 {
 		if message.DestinationKind == DestinationRoom {
 			var roomKind string
@@ -1047,6 +1054,12 @@ func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 				if err := rows.Close(); err != nil {
 					return 0, false, err
 				}
+			}
+		}
+		if len(normalizeMembers(message.Mentions)) == 0 {
+			// A question from an agent that names nobody goes to the person it works for.
+			if owner, ok := a.defaultAgentRecipient(actor); ok {
+				message.Mentions = append(message.Mentions, owner)
 			}
 		}
 		if len(normalizeMembers(message.Mentions)) == 0 {
@@ -3077,3 +3090,29 @@ func validateRequestLinkTx(tx *sql.Tx, roomKey, linkID string) error {
 // that belongs to another project, so a link cannot probe which request ids
 // exist elsewhere.
 var errLinkedRequestNotFound = errors.New("linked request not found")
+
+// withoutSender drops the sender from a list of addressees: asking yourself is
+// no question, and an attention item for the asker would only pile up in their
+// own inbox.
+func withoutSender(members []string, sender string) []string {
+	var out []string
+	for _, m := range members {
+		if strings.TrimSpace(m) != sender {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// defaultAgentRecipient is whom a question of an agent reaches when it names
+// nobody: the person the agent works for. A human sender gets none, there the
+// composer asks who it is for.
+func (a CoordAccess) defaultAgentRecipient(actor string) (string, bool) {
+	if a.authorKind() != AuthorAgent || a.Principal.ID == actor {
+		return "", false
+	}
+	if _, err := parsePersonPrincipalID(a.Principal.ID); err != nil {
+		return "", false
+	}
+	return a.Principal.ID, true
+}
