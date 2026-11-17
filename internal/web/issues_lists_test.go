@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -298,5 +299,53 @@ func TestNewIssueTakesParentAndOriginAndShowsThem(t *testing.T) {
 	form := url.Values{"kind": {"issue"}, "title": {"x"}, "project": {shellProject}, "parent": {"REQ-" + itoa(parent.Request.ID)}, "csrf_token": {renderedCSRFToken(t, e.Guest, e.Base+"/ui/overview")}}
 	if resp := sameOriginPostForm(t, e.Guest, e.Base+"/ui/issues/create", form); resp.StatusCode < 400 {
 		t.Errorf("a guest created an issue: %d", resp.StatusCode)
+	}
+}
+
+// REQ-682 AC-2: two labels chosen in the form are set when the issue is made, the checkbox of
+// a label is a real control over its whole row, and labels that cannot be set are said, not dropped.
+func TestNewIssueSetsSeveralLabelsAndSaysWhenItCannot(t *testing.T) {
+	e, pa := listEnv(t)
+	for _, n := range []string{"backend", "testlücke"} {
+		if _, err := pa.CreateLabel(store.LabelInput{Project: shellProject, Name: n, Color: "0969da", By: "alice"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/issues/new")
+	if strings.Contains(page, `class="sr" type="checkbox" name="label"`) {
+		t.Error("the checkbox of a label is visually hidden (sr): a click on its pill does not reach it")
+	}
+	if n := strings.Count(page, `type="checkbox" name="label"`); n != 2 {
+		t.Errorf("checkboxes for the labels: %d, want 2", n)
+	}
+	resp := newIssuePost(t, e, url.Values{"kind": {"issue"}, "title": {"Two labels"}, "label": {"backend", "testlücke"}})
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	m := regexp.MustCompile(`^/ui/x/shell/issues/(\d+)$`).FindStringSubmatch(loc)
+	if resp.StatusCode != http.StatusSeeOther || m == nil {
+		t.Fatalf("create -> %d %q", resp.StatusCode, loc)
+	}
+	id, _ := strconv.ParseInt(m[1], 10, 64)
+	labels, _ := e.St.LabelsFor("request", []int64{id})
+	if len(labels[id]) != 2 {
+		t.Fatalf("labels set: %+v, want both", labels[id])
+	}
+	// A label that is gone by the time the form arrives: the issue exists and the page says that its labels were not set.
+	resp = newIssuePost(t, e, url.Values{"kind": {"issue"}, "title": {"Gone label"}, "label": {"backend", "deleted-meanwhile"}})
+	resp.Body.Close()
+	loc = resp.Header.Get("Location")
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasSuffix(loc, "?fail=labels") {
+		t.Fatalf("labels that cannot be set -> %d %q, want a redirect to the issue with ?fail=labels", resp.StatusCode, loc)
+	}
+	if _, issue := fetchPage(t, e.Owner, e.Base+loc); !strings.Contains(issue, "its labels could not be set") {
+		t.Error("the issue page does not say that the labels were not set")
+	}
+	resp = newIssuePost(t, e, url.Values{"kind": {"idea"}, "title": {"Idea gone label"}, "label": {"deleted-meanwhile"}})
+	resp.Body.Close()
+	if loc = resp.Header.Get("Location"); !strings.Contains(loc, "/ideas/") || !strings.HasSuffix(loc, "?fail=labels") {
+		t.Fatalf("idea with labels that cannot be set -> %q", loc)
+	}
+	if _, idea := fetchPage(t, e.Owner, e.Base+loc); !strings.Contains(idea, "labels could not be set") {
+		t.Error("the idea page does not say that the labels were not set")
 	}
 }

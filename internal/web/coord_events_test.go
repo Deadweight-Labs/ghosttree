@@ -722,3 +722,42 @@ func TestCoordSSEEndsWhenTokenIsRevoked(t *testing.T) {
 		t.Fatal("browser session survived")
 	}
 }
+
+// REQ-682 AC-4: what went wrong with a send stands at the composer, under the text field, and not as
+// a bar over the history; a form for a new thread opens in the column and is not a pop-up that
+// extends to the left (the column scrolls and cuts it off).
+func TestCoordSendErrorStandsAtTheComposerAndTheThreadFormOpensInTheColumn(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	materializeWebRoom(t, st, room)
+	if _, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "fixture:" + room, ClientID: "layout", Body: "ready"}); err != nil {
+		t.Fatal(err)
+	}
+	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+room)
+	if n := strings.Count(page, `data-coord-action-status`); n != 1 {
+		t.Fatalf("the place of the error messages is there %d times, want once", n)
+	}
+	body := page[strings.Index(page, `class="rbody"`):]
+	history := body[:strings.Index(body, "</ol>")]
+	if strings.Contains(history, `data-coord-action-status`) {
+		t.Error("the error message lies in the history: it covers messages")
+	}
+	field := strings.Index(page, `name="body"`)
+	status := strings.Index(page, `data-coord-action-status`)
+	if field < 0 || status < field || status > strings.Index(page, `class="cx-f"`) {
+		t.Errorf("the error message is not between the text field and the buttons of the composer (field %d, status %d)", field, status)
+	}
+	css := string(mustReadEmbedded(t, "static/ui-rooms.css"))
+	for _, want := range []string{".coord-new-thread > .pop.pform { position: static;"} {
+		if !strings.Contains(css, want) {
+			t.Errorf("ui-rooms.css lacks %q", want)
+		}
+	}
+	if strings.Contains(css, "& .coord-action-status { position: absolute") {
+		t.Error("the status is laid over the history again")
+	}
+	js := string(mustReadEmbedded(t, "static/ui-coord.js"))
+	if strings.Contains(js, "setTimeout(() => { const el = actionStatusEl()") {
+		t.Error("progress is drawn as a bar that fades again")
+	}
+}

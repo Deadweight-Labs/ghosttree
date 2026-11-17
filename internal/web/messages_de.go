@@ -851,6 +851,8 @@ var messagesDE = map[string]string{
 	"requests.toolarge.title":         "Der Text ist zu lang",
 	"requests.toolarge.back":          "Zurück zu den Issues",
 	"requests.fail.open_criteria":     "Erfüll zuerst die offenen Kriterien.",
+	"newissue.fail.labels":            "Angelegt, aber die Labels konnten nicht gesetzt werden. Setz sie rechts unter „Labels“.",
+	"newissue.fail.package":           "Angelegt, aber das Arbeitspaket konnte nicht gesetzt werden. Ordne es auf der Seite des Pakets zu.",
 	"requests.act.created":            "Angelegt",
 	"requests.act.corrected":          "Korrigiert",
 	"requests.act.moved":              "Verschoben",

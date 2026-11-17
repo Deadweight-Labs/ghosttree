@@ -311,18 +311,16 @@
     if (liveStatus) liveStatus.textContent = label;
     if (announcement && announce) announce.textContent = announcement;
   };
-  let actionTimer = null;
+  // What went wrong with a send stands at the composer, where the words are (the element is in
+  // the composer; a room that cannot be written in has one over the history). Progress and
+  // confirmations are not drawn at all: a bar over the history hid the messages, the button is
+  // busy and disabled while it works, and screen readers are told through the live region.
   const setActionStatus = (message, error = false) => {
     const actionStatus = actionStatusEl();
     if (actionStatus) {
-      actionStatus.textContent = message;
-      actionStatus.hidden = !message;
+      actionStatus.textContent = error ? message : "";
+      actionStatus.hidden = !(message && error);
       actionStatus.dataset.error = error ? "true" : "false";
-      clearTimeout(actionTimer);
-      // Progress and confirmations fade; errors stay until the next action.
-      if (message && !error) {
-        actionTimer = setTimeout(() => { const el = actionStatusEl(); if (el) el.hidden = true; }, 3000);
-      }
     }
     if (message && announce) announce.textContent = message;
   };

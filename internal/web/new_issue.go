@@ -325,7 +325,12 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 			names = append(names, n)
 		}
 		slices.Sort(names)
-		_, _ = pa.SetLabels(kind, id, names, nil)
+		if _, err := pa.SetLabels(kind, id, names, nil); err != nil {
+			// The object exists; only its labels failed. Lead to it and say so, instead of
+			// leaving it unlabelled without a word.
+			http.Redirect(w, r, v.Base+"/"+object+"/"+strconv.FormatInt(id, 10)+"?fail=labels", http.StatusSeeOther)
+			return
+		}
 	}
 	if v.Again {
 		next := v.Base + "/issues/new?again=1&made=" + strconv.FormatInt(id, 10)

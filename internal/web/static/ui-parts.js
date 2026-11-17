@@ -125,9 +125,11 @@
     if (t) t.focus();
   });
 
-  // Composer: write/preview. The preview renders the Markdown (ui-md.js) into
-  // nodes and takes the height of the text field while that is visible; the
-  // toolbar belongs to writing, so it goes while the preview is open.
+  // Composer: write/preview. The preview renders the Markdown (ui-md.js) into nodes. It is at
+  // least as tall as the text field it replaces, so the box does not jump, and it grows with its
+  // content up to the height of the window (CSS: .cx-pv), then scrolls inside itself: a table or
+  // a diagram can be checked before sending. The toolbar stays where it is while the preview is
+  // open and is greyed out, because it belongs to writing.
   for (const tab of $$(".cx [data-wtab]")) {
     tab.addEventListener("click", (event) => {
       event.preventDefault();
@@ -137,8 +139,7 @@
       const pv = $(".cx-pv", cx);
       const w = $(".cx-w", cx);
       if (preview) {
-        // The preview has exactly the height of the field it replaces and scrolls inside it, so the box never jumps.
-        if (!w.hidden) pv.style.height = w.offsetHeight + "px";
+        if (!w.hidden) pv.style.minHeight = w.offsetHeight + "px";
         pv.textContent = "";
         if (window.GTMarkdown) {
           pv.appendChild(window.GTMarkdown.render(ta.value, { empty: pv.dataset.empty, done: pv.dataset.done, open: pv.dataset.open }));
@@ -151,7 +152,11 @@
       w.hidden = preview;
       pv.hidden = !preview;
       const tools = $(".wtools", cx);
-      if (tools) tools.hidden = preview;
+      if (tools) {
+        tools.classList.toggle("off", preview);
+        if (preview) tools.setAttribute("aria-disabled", "true"); else tools.removeAttribute("aria-disabled");
+        for (const b of $$("[data-tool]", tools)) b.disabled = preview;
+      }
       for (const x of $$("[data-wtab]", cx)) {
         const li = x.closest("li");
         li.classList.toggle("sel", x === tab);
