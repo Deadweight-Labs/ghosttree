@@ -19,9 +19,11 @@
 {{end}}</div>{{end}}
 {{if .CheckHint}}<div class="cs"><div class="cs-h">{{mi "check"}}<span>{{t "tasks.check_hint"}}</span></div><div class="cs-b">{{.CheckHint}}</div></div>{{end}}
 {{template "firstclose"}}</div>{{end}}
-{{if .DoneBy}}<div class="callout" role="status">{{mi "done"}}<div><div class="k">{{t "tasks.done_by" .DoneBy .DoneAge}}</div>{{if .DoneNote}}<div class="tt">{{md .DoneNote}}</div>{{end}}</div></div>{{end}}
+{{if .DoneBy}}<div class="callout ok" role="status">{{mi "done"}}<div><div class="k">{{t "tasks.done_by" .DoneBy .DoneAge}}</div>{{if .DoneNote}}<div class="tt">{{md .DoneNote}}</div>{{end}}</div></div>{{end}}
 {{if .Reason}}<div class="callout neu" role="note">{{mi "drop"}}<div><div class="k">{{t "tasks.state_note"}}</div><div class="tt">{{md .Reason}}</div></div></div>{{end}}
+{{if .Notes}}<div id="notes">{{range .Notes}}<div class="callout neu" role="note">{{mi "chat"}}<div><div class="k">{{if .By}}{{.By}}{{end}}{{if .Age}} · {{.Age}}{{end}}</div><div class="tt">{{md .Text}}</div></div></div>{{end}}</div>{{end}}
 {{with .Composer}}{{template "uicomposer" .}}{{end}}
+{{if .Report}}<div class="treport" id="report">{{if .OpenSteps}}{{template "uiconfirm" (dict "Summary" "gbtn" "Icon" "check" "Text" (t "tasks.mark_done") "Question" .Question "Do" (t "tasks.report_anyway") "DoClass" "pri" "Open" .ReportAsk "Action" .DoneAction "Token" .Token "Hidden" (dict "id" .ID "back" "task" "confirm_open" "1"))}}{{else}}<form method="post" action="{{.DoneAction}}"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="back" value="task"><button class="gbtn">{{mi "check"}}{{t "tasks.mark_done"}}</button></form>{{end}}</div>{{end}}
 </div>
 <aside class="side" aria-label="{{t "tasks.side.facts"}}">
 {{if .Request}}<div class="sblk"><h3>{{t "tasks.side.issue"}}</h3><div class="v">{{with .Request}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}

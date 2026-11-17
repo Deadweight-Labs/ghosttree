@@ -794,7 +794,7 @@ var messages = map[string]string{
 	"tasks.kind.file":                 "File",
 	"tasks.kind.input":                "Input",
 	"tasks.kind.action":               "Action",
-	"tasks.state.done":                "Done",
+	"tasks.state.done":                "Reported done",
 	"tasks.state.confirmed":           "Confirmed",
 	"tasks.state.dropped":             "Dropped",
 	"pains.empty":                     "No pains recorded.",

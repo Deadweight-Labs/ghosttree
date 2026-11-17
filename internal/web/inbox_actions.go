@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
 	"strconv"
@@ -49,7 +50,8 @@ func (a *app) inboxReply(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if id, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("attention_id")), 10, 64); err == nil && id > 0 {
-		if err := access.ResolveAttention(id, store.AttentionActionAnswer); err != nil {
+		// A reply to the question has closed it already; that is not a failure.
+		if err := access.ResolveAttention(id, store.AttentionActionAnswer); err != nil && !errors.Is(err, store.ErrAttentionClosed) {
 			coordHTTPError(l, w, err)
 			return
 		}

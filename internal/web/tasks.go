@@ -67,6 +67,14 @@ func (a *app) tasksDone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pa := a.access(r)
+	// One report with steps still open asks first (REQ-679): the page of the task
+	// carries the question, also for the tick in the inbox that sends the person there.
+	if len(ids) == 1 && r.FormValue("confirm_open") != "1" {
+		if t, err := pa.GetHumanTask(ids[0]); err == nil && t.State == humantask.Open && a.openSteps(t) > 0 && t.Project != "" && a.canOpenRepo(r, pa, t.Project) {
+			http.Redirect(w, r, taskHrefOf(t)+"?ask=done#report", http.StatusSeeOther)
+			return
+		}
+	}
 	accountID, _ := store.AccountNumericID(browserPrincipal(r).ID)
 	actor := humantask.Actor{AccountID: accountID, Person: personOf(r), Web: interactive(r)}
 	if _, err := pa.MarkTasksDone(ids, note, actor); err != nil {
@@ -74,6 +82,18 @@ func (a *app) tasksDone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, back, http.StatusSeeOther)
+}
+
+// openSteps counts the steps of a task nobody has ticked off yet.
+func (a *app) openSteps(t humantask.Task) int {
+	marks, _ := a.store.TaskStepMarks(t.ID)
+	open := 0
+	for i := range t.Steps {
+		if _, ok := marks[i+1]; !ok {
+			open++
+		}
+	}
+	return open
 }
 
 // taskBack is the page a task form leads back to, on success and on refusal: the page

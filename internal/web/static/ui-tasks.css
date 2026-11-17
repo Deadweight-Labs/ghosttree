@@ -1,6 +1,8 @@
 /* Task page: the steps as a checklist and the form that marks the task done. */
 
 :is(.g2.tk) {
+  & #notes .tt { font-weight: 400; }
+  & .treport { display: flex; justify-content: flex-end; margin-top: 12px; }
   & .tstep { display: flex; align-items: flex-start; gap: 10px; }
   & .tstep .tx { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   & .tstep.done .tx { color: var(--fg-muted); }

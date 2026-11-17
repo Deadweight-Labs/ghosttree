@@ -196,6 +196,12 @@
   & .rq4-f { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border-muted); background: var(--canvas-subtle); }
   & .rq4-f:not(:has(*)) { display: none; }
   & .rq4-f form { display: inline-flex; margin: 0; }
+  /* Proposed answers of a question: one full line each, the whole line is the button. */
+  & .rq4-opts { display: flex; flex-direction: column; gap: 6px; padding: 0 12px 12px; }
+  & .rq4-opts form { display: block; margin: 0; }
+  & .rq4-opts .gbtn { width: 100%; height: auto; min-height: 32px; justify-content: flex-start; gap: 8px; padding: 6px 12px; line-height: 20px; font-weight: 400; text-align: left; white-space: normal; }
+  & .rq4-opts .gbtn .ok { flex: none; width: 20px; color: var(--fg-muted); font-weight: 600; }
+  & .rq4-opts .gbtn span { min-width: 0; overflow-wrap: anywhere; }
   & .rq4-n { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-muted); }
   & .rq4-f .sp { flex: 1 0 8px; }
   & .rq4-menu > .pop { min-width: 200px; }

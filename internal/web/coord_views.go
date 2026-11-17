@@ -418,6 +418,9 @@ type coordAttentionView struct {
 	// Primary is the one action worth showing without a disclosure; More
 	// holds everything else behind "Aktionen".
 	Primary *coordAttentionActionView
+	// Options are the answers the asking agent proposed (an open question to the
+	// viewer only); a click answers through /ui/inbox/answer.
+	Options []inboxOption
 	// Inline holds the approval verdicts, which stay visible on the card.
 	Inline                   []coordAttentionActionView
 	Preview                  string

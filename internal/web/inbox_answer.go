@@ -48,7 +48,7 @@ func (a *app) inboxAnswer(w http.ResponseWriter, r *http.Request) {
 	// Ein Formular ohne Skript kehrt in den Posteingang zurück. Das Ziel ist
 	// fest, nichts aus der Anfrage bestimmt, wohin weitergeleitet wird.
 	if r.FormValue("next") != "" {
-		http.Redirect(w, r, "/ui/inbox", http.StatusSeeOther)
+		http.Redirect(w, r, answerBackTo(r), http.StatusSeeOther)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

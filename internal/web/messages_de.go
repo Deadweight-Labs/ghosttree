@@ -795,7 +795,7 @@ var messagesDE = map[string]string{
 	"tasks.kind.file":                 "Datei",
 	"tasks.kind.input":                "Eingabe",
 	"tasks.kind.action":               "Aktion",
-	"tasks.state.done":                "Erledigt",
+	"tasks.state.done":                "Als erledigt gemeldet",
 	"tasks.state.confirmed":           "Bestätigt",
 	"tasks.state.dropped":             "Verworfen",
 	"pains.empty":                     "Keine Pains erfasst.",

@@ -113,7 +113,7 @@ func TestTaskNoteIsCountedInCharactersAndTooLongGoesBackWithAMessage(t *testing.
 	_, page := fetchPage(t, e.Member, e.Base+path)
 	mustContain(t, "task page", page, `maxlength="500"`)
 	send := func(note string) *http.Response {
-		resp := tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {itoa(task.ID)}, "back": {"task"}, "note": {note}})
+		resp := tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {itoa(task.ID)}, "back": {"task"}, "note": {note}, "confirm_open": {"1"}})
 		resp.Body.Close()
 		return resp
 	}
