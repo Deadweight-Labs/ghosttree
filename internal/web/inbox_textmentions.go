@@ -52,7 +52,7 @@ func (a *app) inboxTextMentions(r *http.Request, project string) []inboxRow {
 			go2 += "#comment-" + strconv.FormatInt(m.SourceID, 10)
 		}
 		who := a.textMentionAuthor(l, pa, m)
-		row := inboxRow{Mark: "rooms", Mention: true, Actor: who.Label, ActorKind: who.Kind, ActorOwner: who.Owner(), Lead: who.Label, In: key, InHref: href, Href: go2, Body: m.Snippet,
+		row := inboxRow{Mark: "rooms", Mention: true, Actor: who.Label, ActorKind: who.Kind, ActorOwner: who.Owner(), Lead: who.Label, In: key, InHref: href, Href: go2, Body: previewText(l, m.Snippet, 220, mentionNamesOf(pa, m.Project, m.Snippet)),
 			Age: shortAgo(l, now, at), at: at, Cats: []string{"direkt"}}
 		if m.SourceKind != store.MentionInComment {
 			row.Cats = append(row.Cats, "issues")

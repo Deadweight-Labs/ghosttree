@@ -146,6 +146,14 @@ for (const [name, text] of Object.entries(slow)) {
   globalThis.__repo = "github.com/x/y";
   eq("see #231.", '<p>see <span data-maybe="KN-231" data-pr="231">#231</span>.</p>');
   eq("(#7) and #8", '<p>(<span data-maybe="KN-7" data-pr="7">#7</span>) and <span data-maybe="KN-8" data-pr="8">#8</span></p>');
+  // A room (data-hash="strict"): #n is the pull request or issue of the repository of the room and
+  // never a knowledge entry; a room without a repository leaves it as it was written.
+  globalThis.__hash = "strict";
+  eq("see #231.", '<p>see <span data-pr="231">#231</span>.</p>');
+  globalThis.__repo = "";
+  eq("see #231.", "<p>see <span>#231</span>.</p>");
+  globalThis.__hash = "";
+  globalThis.__repo = "github.com/x/y";
   // not a reference: part of a word, an address, an entity, a heading mark, code
   eq("a#5 b&#5 c/#5 d-#5", "<p>a#5 b&amp;#5 c/#5 d-#5</p>");
   eq("`#5`", "<p><code>#5</code></p>");

@@ -90,14 +90,20 @@
     var b = document.body;
     return (b && b.getAttribute && b.getAttribute("data-repo")) || "";
   }
+  // A page whose "#n" is the issue or pull request of its repository and never a knowledge
+  // entry (the rooms): the server writes data-hash="strict" into the body.
+  function strictHash() {
+    var b = document.body;
+    return !!(b && b.getAttribute && b.getAttribute("data-hash") === "strict");
+  }
   // A "#231" is a number, nothing more, until the server says what it names
   // (GTRefs.resolve). In a text of a repository it is first the pull request of
-  // that number (data-pr); knowledge is spelled KN-n, but the old "#1970" of a
-  // knowledge entry is still found when there is no such pull request. It stays text,
-  // marked, until then, and when the server knows nothing it was.
+  // that number, then the issue (data-pr); knowledge is spelled KN-n, but the old "#1970" of a
+  // knowledge entry is still found when there is neither (data-maybe), except where the page is
+  // strict. It stays text, marked, until then, and when the server knows nothing it was.
   function maybeNumber(num) {
     var m = el("span", "", "#" + num);
-    m.setAttribute("data-maybe", "KN-" + num);
+    if (!strictHash()) m.setAttribute("data-maybe", "KN-" + num);
     if (pageRepo()) m.setAttribute("data-pr", num);
     return m;
   }

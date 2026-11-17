@@ -83,9 +83,11 @@
       name.className = "comp-suggest-name";
       name.textContent = o.label || o.handle;
       li.appendChild(name);
-      if (o.provider) {
+      if (o.agent) {
+        li.setAttribute("data-agent", "1");
+        li.setAttribute("data-owner", o.owner || "");
         var small = document.createElement("small");
-        small.textContent = o.provider;
+        small.textContent = o.note || o.provider || "";
         li.appendChild(small);
       }
       ul.appendChild(li);

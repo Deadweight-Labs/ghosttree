@@ -30,7 +30,7 @@ var guestQualifiers = []string{query.KeyBranch, query.KeyPackage, query.KeyFor}
 
 // webKinds sind die Arten, die die Seite in Gruppen zeigt; für die anderen
 // (Kriterien, Features, Dateien, Nachrichten) gibt es API, MCP und CLI.
-var webKinds = []string{query.KindRequest, query.KindIdea, query.KindPain, query.KindTask, query.KindKnowledge, query.KindSession, query.KindDocument}
+var webKinds = []string{query.KindRequest, query.KindIdea, query.KindPain, query.KindTask, query.KindDecision, query.KindKnowledge, query.KindSession, query.KindDocument}
 
 // searchLine ist eine Suchzeile, bereit zum Lauf.
 type searchLine struct {
@@ -47,6 +47,8 @@ type searchLine struct {
 	// hits as the count needs (searchCountCap+1) and the union is counted.
 	union   bool
 	project string
+	// person is the viewer, the one for:@me stands for.
+	person string
 }
 
 // searchProblem ist, was an einer Zeile nicht geht: ein Schlüssel der Meldung
@@ -75,7 +77,7 @@ func (a *app) parseSearchLine(line string, pa *store.ProjectAccess, guest bool, 
 		}
 		return searchLine{}, &searchProblem{Key: "search.err.invalid", Args: []any{err.Error()}}
 	}
-	sl := searchLine{q: q, text: q.Text, qualified: q.Qualified(), project: project, fetch: searchCountCap + 1}
+	sl := searchLine{q: q, text: q.Text, qualified: q.Qualified(), project: project, person: person, fetch: searchCountCap + 1}
 	if !sl.qualified {
 		return sl, nil
 	}

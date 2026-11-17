@@ -122,6 +122,9 @@ func ParseRef(input string) (Ref, error) {
 		case "pr", "pull":
 			n, err := num()
 			return Ref{Kind: KindPull, ID: n}, err
+		case "issue":
+			n, err := num()
+			return Ref{Kind: KindRequest, ID: n}, err
 		case "commit", "sha":
 			if !hashRE.MatchString(strings.ToLower(first)) || len(fields) != 1 {
 				return Ref{}, fmt.Errorf("commit: needs 7 to 40 hexadecimal characters")

@@ -62,14 +62,17 @@ func safeRefHref(href string) string {
 	return href
 }
 
-// pillNum is the number a pill shows next to its icon: "#5" for the numbered kinds
-// that read like that on a code host, "KN-5" for knowledge, because a bare #5 means
-// a pull request there.
+// pillNum is the number a pill shows next to its icon: "#5" for an issue, which reads like
+// that on a code host, and the kind in front of every other number (PAIN-5, IDEA-2, DEC-2,
+// TASK-3, FEAT-9, KN-5), so that a chip says what it points at.
 func pillNum(prefix string, n int64) string {
-	if prefix == "KN" {
+	switch prefix {
+	case "KN":
 		return knref.Format(n)
+	case "REQ":
+		return "#" + strconv.FormatInt(n, 10)
 	}
-	return "#" + strconv.FormatInt(n, 10)
+	return prefix + "-" + strconv.FormatInt(n, 10)
 }
 
 // refHTML writes one identifier in its short form: icon and "#5", no frame. It is

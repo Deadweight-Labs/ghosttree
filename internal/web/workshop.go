@@ -247,33 +247,10 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 				Ist: ellipsize(f.Current.Summary, 280), Rev: l.msg("features.rev", f.Revision), Advanced: f.Advanced})
 		}
 	}
-	me := browserPrincipal(r).Label
 	for _, d := range ws.Decisions {
-		wd := workshopDecision{ID: d.ID, Num: d.HumanID(), Question: d.Question, Detail: bodyBlocks(d.Detail, 0), State: d.State, StateLabel: label(l, workshopDecisionKeys, d.State),
-			Tone: workshopDecisionTone[d.State], WayLabel: label(l, workshopWayKeys, d.Way), WayWhy: workshopWhy(l, d.WayWhy), Open: d.State == idea.DecisionOpen,
-			Answer: d.Answer, Reason: d.Reason, Trigger: d.Trigger, DecidedBy: d.DecidedBy, DecidedAge: age(d.DecidedAt)}
+		wd := decisionViewOf(l, r, d, now, canWork, canEdit)
 		if wd.Open {
 			w.OpenCount++
-		}
-		// Schließen darf, wer die Idee bearbeiten darf; abstimmen, wer mitarbeiten darf.
-		wd.CanDecide, wd.CanVote, wd.CanReopen = wd.Open && canEdit, wd.Open && canWork && len(d.Variants) > 0, !wd.Open && canWork
-		for _, vr := range d.Variants {
-			wv := workshopVariant{ID: vr.ID, Label: vr.Label, Title: vr.Title, Images: attachImages(l, vr.Attachments, func(idea.AttachmentMeta) bool { return true }), Text: bodyBlocks(vr.Text, 0), Pro: bodyBlocks(vr.Pro, 0), Contra: bodyBlocks(vr.Contra, 0), Chosen: d.ChosenVariant == vr.Label}
-			for _, vt := range d.Votes {
-				if vt.Variant == vr.Label {
-					wv.Votes = append(wv.Votes, workshopVote{Voter: vt.Voter, Reason: vt.Reason, Tip: vt.Voter + ": " + vt.Reason})
-					if vt.Voter == me && !vt.ByAgent {
-						wd.MyVote = vr.Label
-					}
-				}
-			}
-			if wv.Chosen {
-				wd.Chosen = vr.Label + " · " + vr.Title
-			}
-			wd.Variants = append(wd.Variants, wv)
-		}
-		for n := range wd.Variants {
-			wd.Variants[n].Checked = wd.Variants[n].Label == wd.MyVote
 		}
 		wd.CanAttach = canWork && wd.Open && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
 		w.Decisions = append(w.Decisions, wd)
@@ -297,6 +274,38 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		}
 	}
 	v.Workshop = w
+}
+
+// decisionViewOf is the view of one decision, on the page of its idea and on its own page.
+// Closing needs the right to edit the subject, voting the right to work on it; the caller has
+// looked both up (and ruled out a session that is no person). CanAttach is the caller's to set.
+func decisionViewOf(l lang, r *http.Request, d idea.Decision, now time.Time, canWork, canEdit bool) workshopDecision {
+	age := func(at string) string { return shortAgo(l, now, parseTime(at)) }
+	me := browserPrincipal(r).Label
+	wd := workshopDecision{ID: d.ID, Num: d.HumanID(), Question: d.Question, Detail: bodyBlocks(d.Detail, 0), State: d.State, StateLabel: label(l, workshopDecisionKeys, d.State),
+		Tone: workshopDecisionTone[d.State], WayLabel: label(l, workshopWayKeys, d.Way), WayWhy: workshopWhy(l, d.WayWhy), Open: d.State == idea.DecisionOpen,
+		Answer: d.Answer, Reason: d.Reason, Trigger: d.Trigger, DecidedBy: d.DecidedBy, DecidedAge: age(d.DecidedAt)}
+	// Schließen darf, wer den Gegenstand bearbeiten darf; abstimmen, wer mitarbeiten darf.
+	wd.CanDecide, wd.CanVote, wd.CanReopen = wd.Open && canEdit, wd.Open && canWork && len(d.Variants) > 0, !wd.Open && canWork
+	for _, vr := range d.Variants {
+		wv := workshopVariant{ID: vr.ID, Label: vr.Label, Title: vr.Title, Images: attachImages(l, vr.Attachments, func(idea.AttachmentMeta) bool { return true }), Text: bodyBlocks(vr.Text, 0), Pro: bodyBlocks(vr.Pro, 0), Contra: bodyBlocks(vr.Contra, 0), Chosen: d.ChosenVariant == vr.Label}
+		for _, vt := range d.Votes {
+			if vt.Variant == vr.Label {
+				wv.Votes = append(wv.Votes, workshopVote{Voter: vt.Voter, Reason: vt.Reason, Tip: vt.Voter + ": " + vt.Reason})
+				if vt.Voter == me && !vt.ByAgent {
+					wd.MyVote = vr.Label
+				}
+			}
+		}
+		if wv.Chosen {
+			wd.Chosen = vr.Label + " · " + vr.Title
+		}
+		wd.Variants = append(wd.Variants, wv)
+	}
+	for n := range wd.Variants {
+		wd.Variants[n].Checked = wd.Variants[n].Label == wd.MyVote
+	}
+	return wd
 }
 
 // workshopDated sind die Einträge, die die Werkstatt zur Zeitleiste der Idee beisteuert:
@@ -354,7 +363,12 @@ func workshopBack(project string, id int64, key, value string) string {
 // workshopFail antwortet auf einen Fehler eines Schrittes: ohne Recht 403, unbekannt oder fremd
 // 404, eine Regel des Stores als Hinweis auf der Idee.
 func (a *app) workshopFail(w http.ResponseWriter, r *http.Request, err error, project string, ideaID int64) {
-	if a.secretRefused(w, r, err, workshopBack(project, ideaID, "", "")) {
+	a.workshopFailTo(w, r, err, func(key, value string) string { return workshopBack(project, ideaID, key, value) })
+}
+
+// workshopFailTo is workshopFail for any page a step returns to (back adds the result to its address).
+func (a *app) workshopFailTo(w http.ResponseWriter, r *http.Request, err error, back func(key, value string) string) {
+	if a.secretRefused(w, r, err, back("", "")) {
 		return
 	}
 	switch {
@@ -365,13 +379,28 @@ func (a *app) workshopFail(w http.ResponseWriter, r *http.Request, err error, pr
 	default:
 		code := requestdomain.Code(err)
 		switch code {
-		case "idea_not_found", "decision_not_found":
+		case "idea_not_found", "decision_not_found", "request_not_found":
 			http.NotFound(w, r)
 		case "":
 			http.Error(w, "workshop step failed", http.StatusInternalServerError)
 		default:
-			http.Redirect(w, r, workshopBack(project, ideaID, "wfail", code), http.StatusSeeOther)
+			http.Redirect(w, r, back("wfail", code), http.StatusSeeOther)
 		}
+	}
+}
+
+// decisionBack is the address a step on a decision returns to, with the result: the workshop
+// of its idea, or for a decision of an issue the page of the decision itself.
+func decisionBack(d idea.Decision) func(key, value string) string {
+	if d.Subject == idea.SubjectIdea {
+		return func(key, value string) string { return workshopBack(d.Project, d.SubjectID, key, value) }
+	}
+	return func(key, value string) string {
+		u := decisionPageHref(d)
+		if key != "" {
+			u += "?" + key + "=" + url.QueryEscape(value)
+		}
+		return u
 	}
 }
 
@@ -385,20 +414,20 @@ func (a *app) workshopIdea(w http.ResponseWriter, r *http.Request, id int64) (id
 	return i, true
 }
 
-// workshopDecision liest die Entscheidung des Schrittes samt ihrer Idee.
-func (a *app) workshopDecisionOf(w http.ResponseWriter, r *http.Request) (idea.Decision, idea.Idea, bool) {
+// workshopDecisionOf liest die Entscheidung des Schrittes, ihrer Idee oder ihres Issues. Wer sie
+// nicht lesen darf, bekommt 404.
+func (a *app) workshopDecisionOf(w http.ResponseWriter, r *http.Request) (idea.Decision, bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.NotFound(w, r)
-		return idea.Decision{}, idea.Idea{}, false
+		return idea.Decision{}, false
 	}
 	d, err := a.access(r).DecisionView(id)
-	if err != nil || d.Subject != idea.SubjectIdea {
+	if err != nil {
 		http.NotFound(w, r)
-		return idea.Decision{}, idea.Idea{}, false
+		return idea.Decision{}, false
 	}
-	i, ok := a.workshopIdea(w, r, d.SubjectID)
-	return d, i, ok
+	return d, true
 }
 
 func formLine(r *http.Request, name string, max int) (string, bool) {
@@ -446,10 +475,11 @@ func (a *app) workshopPhase(w http.ResponseWriter, r *http.Request) {
 
 // workshopVote: POST /ui/decisions/{id}/vote.
 func (a *app) workshopVote(w http.ResponseWriter, r *http.Request) {
-	d, i, ok := a.workshopDecisionOf(w, r)
+	d, ok := a.workshopDecisionOf(w, r)
 	if !ok {
 		return
 	}
+	back := decisionBack(d)
 	reason, fits := formLine(r, "reason", maxFieldChars)
 	if !fits {
 		http.Error(w, "invalid input", http.StatusBadRequest)
@@ -457,20 +487,21 @@ func (a *app) workshopVote(w http.ResponseWriter, r *http.Request) {
 	}
 	voter := store.IdeaActorFor(browserPrincipal(r), "")
 	if _, err := a.access(r).VoteDecision(d.ID, r.FormValue("variant"), reason, voter); err != nil {
-		a.workshopFail(w, r, err, i.Project, i.ID)
+		a.workshopFailTo(w, r, err, back)
 		return
 	}
 	a.stampActor(r, actor.Vote, actor.VoteEntryID(d.ID, store.VoterKey(voter)))
-	http.Redirect(w, r, workshopBack(i.Project, i.ID, "wdone", "vote")+"", http.StatusSeeOther)
+	http.Redirect(w, r, back("wdone", "vote"), http.StatusSeeOther)
 }
 
 // workshopClose: POST /ui/decisions/{id}/close: der Mensch wählt eine Variante oder gibt eine
 // eigene Antwort und sagt warum. Vertagen und Fallenlassen gibt es hier nicht.
 func (a *app) workshopClose(w http.ResponseWriter, r *http.Request) {
-	d, i, ok := a.workshopDecisionOf(w, r)
+	d, ok := a.workshopDecisionOf(w, r)
 	if !ok {
 		return
 	}
+	back := decisionBack(d)
 	reason, fits1 := formLine(r, "reason", maxFieldChars)
 	answer, fits2 := formLine(r, "answer", maxFieldChars)
 	if !fits1 || !fits2 {
@@ -480,28 +511,29 @@ func (a *app) workshopClose(w http.ResponseWriter, r *http.Request) {
 	_, err := a.access(r).CloseDecision(store.CloseDecisionInput{ID: d.ID, Outcome: idea.DecisionDecided, Variant: r.FormValue("variant"), Answer: answer, Reason: reason,
 		Actor: store.IdeaActorFor(browserPrincipal(r), "")})
 	if err != nil {
-		a.workshopFail(w, r, err, i.Project, i.ID)
+		a.workshopFailTo(w, r, err, back)
 		return
 	}
-	http.Redirect(w, r, workshopBack(i.Project, i.ID, "wdone", "decided"), http.StatusSeeOther)
+	http.Redirect(w, r, back("wdone", "decided"), http.StatusSeeOther)
 }
 
 // workshopReopen: POST /ui/decisions/{id}/reopen.
 func (a *app) workshopReopen(w http.ResponseWriter, r *http.Request) {
-	d, i, ok := a.workshopDecisionOf(w, r)
+	d, ok := a.workshopDecisionOf(w, r)
 	if !ok {
 		return
 	}
+	back := decisionBack(d)
 	reason, fits := formLine(r, "reason", maxFieldChars)
 	if !fits {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
 	if _, err := a.access(r).ReopenDecision(d.ID, reason, store.IdeaActorFor(browserPrincipal(r), "")); err != nil {
-		a.workshopFail(w, r, err, i.Project, i.ID)
+		a.workshopFailTo(w, r, err, back)
 		return
 	}
-	http.Redirect(w, r, workshopBack(i.Project, i.ID, "wdone", "reopen"), http.StatusSeeOther)
+	http.Redirect(w, r, back("wdone", "reopen"), http.StatusSeeOther)
 }
 
 var _ = time.Second

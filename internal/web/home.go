@@ -226,7 +226,7 @@ func (a *app) homeAttention(r *http.Request, now time.Time) ([]forYouRow, error)
 		room := coordShortRoomName(coordRoomKindOf(item.HomeRoomKey), coordRoomLabel(l, store.CoordRoom{Key: item.HomeRoomKey}, "", labels))
 		created := parseTime(item.CreatedAt)
 		row := forYouRow{
-			Title: questionTitle(v.Preview, 110), Href: v.URL, at: created, Tone: "ask", Actor: coordSenderLabel(l, item, labels),
+			Title: previewText(l, v.Preview, 110, mentionNamesOf(a.access(r), roomProject(item.HomeRoomKey), v.Preview)), Href: v.URL, at: created, Tone: "ask", Actor: coordSenderLabel(l, item, labels),
 			Rest:        coordSenderLabel(l, item, labels) + agentLabelSep + room,
 			explainKind: explain.KindQuestion, explainID: item.MessageID, explainStored: item.Reason != store.AttentionQuestion,
 			attentionID: item.ID, messageID: item.MessageID,

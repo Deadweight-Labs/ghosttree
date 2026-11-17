@@ -1039,12 +1039,34 @@ func (a *app) coordSetReadState(w http.ResponseWriter, r *http.Request, unread b
 		err = access.MarkUnread(store.DestinationRoom, room, sequence)
 	} else {
 		err = access.MarkRead(store.DestinationRoom, room, sequence)
+		if err == nil && r.FormValue("threads") == "1" {
+			err = markThreadMentionsRead(access, room)
+		}
 	}
 	if err != nil {
 		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, backTo(r, "/ui/coord?room="+url.QueryEscape(room)), http.StatusSeeOther)
+}
+
+// markThreadMentionsRead reads the threads of the room in which the viewer has unread mentions, each
+// through its last mention: the inbox row of a room stands for the mentions in its threads too.
+func markThreadMentionsRead(access store.CoordAccess, room string) error {
+	list, err := access.UnreadThreadMentions(room)
+	if err != nil {
+		return err
+	}
+	through := map[int64]int64{}
+	for _, tm := range list {
+		through[tm.ThreadID] = max(through[tm.ThreadID], tm.Sequence)
+	}
+	for thread, seq := range through {
+		if err := access.MarkRead(store.DestinationDiscussion, store.ThreadDestinationID(thread), seq); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // coordEndStanding beendet eine Vorgabe. Ausdrücklich und von einem

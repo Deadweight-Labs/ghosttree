@@ -32,6 +32,10 @@ func seedSearchAll(t *testing.T) sessEnv {
 			tag = "SECRET"
 		}
 		req := rqMake(t, e.St, rqSpec{Title: "zebrafish request " + tag, Project: p})
+		if _, err := owner.OpenDecision(store.OpenDecisionInput{Subject: idea.SubjectRequest, SubjectID: req.Request.ID, Question: "zebrafish decision " + tag, Way: idea.WayHuman,
+			Actor: idea.Actor{AccountID: 1, Person: "alice"}}); err != nil {
+			t.Fatal(err)
+		}
 		knInsert(t, e.St, store.Knowledge{Title: "zebrafish note " + tag, Body: "about the zebrafish", Confidence: "trusted", Scope: scope.Axes{Project: p}})
 		if _, err := owner.CreateIdea(store.CreateIdeaInput{Project: p, Title: "zebrafish idea " + tag, Body: "zebrafish", Actor: idea.Actor{AccountID: 1, Person: "alice"}}); err != nil {
 			t.Fatal(err)
@@ -148,7 +152,7 @@ func TestSearchStreamShowsEachViewerWhatThePageShows(t *testing.T) {
 				keys = append(keys, ev.Key)
 			}
 			// The page of all kinds leaves the sessions out (decision #4447).
-			wantKeys := []string{"requests", "ideas", "knowledge", "docs", "tasks", "pains"}
+			wantKeys := []string{"requests", "ideas", "knowledge", "docs", "tasks", "pains", "decisions"}
 			if v.name == "guest" {
 				wantKeys = wantKeys[:4]
 			}
@@ -218,8 +222,8 @@ func TestSearchStreamGivesUpAKindAfterItsBudget(t *testing.T) {
 			t.Errorf("%s: %+v, want given up without hits", ev.Key, ev.searchEvent)
 		}
 	}
-	if n != 6 {
-		t.Fatalf("%d kinds said, want 6 (the sessions are not searched on the page of all kinds)", n)
+	if n != 7 {
+		t.Fatalf("%d kinds said, want 7 (the sessions are not searched on the page of all kinds)", n)
 	}
 	events = readSearchStream(t, e.Owner, e.Base+"/ui/search/stream?q=zebrafish&only=sessions")
 	if len(events) != 2 || events[0].Key != "sessions" || events[0].Slow || !strings.Contains(events[0].Body, `class="ht rl"`) {
@@ -273,14 +277,14 @@ func TestSearchLivePageIsTheFrame(t *testing.T) {
 	if !strings.Contains(page, `<meta http-equiv="refresh" content="0;url=/ui/search?q=zebrafish">`) {
 		t.Errorf("no way back without the page script:\n%s", page)
 	}
-	for _, k := range []string{"requests", "ideas", "knowledge", "docs", "tasks", "pains"} {
+	for _, k := range []string{"requests", "ideas", "knowledge", "docs", "tasks", "pains", "decisions"} {
 		if !strings.Contains(page, `data-kind-side="`+k+`"`) || !strings.Contains(page, `data-kind-body="`+k+`"`) {
 			t.Errorf("no place for %s", k)
 		}
 	}
 	// The sessions are not searched on the page of all kinds: no place for them,
 	// a plain link to the same line narrowed to them instead.
-	if strings.Contains(page, `data-kind-side="sessions"`) || !strings.Contains(page, `data-total="6"`) {
+	if strings.Contains(page, `data-kind-side="sessions"`) || !strings.Contains(page, `data-total="7"`) {
 		t.Errorf("the frame of all kinds has a place for sessions or the wrong count:\n%s", page)
 	}
 	if !strings.Contains(page, `href="/ui/search?kind=sessions&amp;q=zebrafish"`) {

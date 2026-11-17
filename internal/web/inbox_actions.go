@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -34,7 +35,16 @@ func (a *app) inboxReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	access := a.browserCoord(r)
-	mid, err := access.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: newFormClientID(r), Body: body, ReplyTo: replyTo})
+	message := store.CoordMessage{ClientID: newFormClientID(r), Body: body, ReplyTo: replyTo}
+	var mid int64
+	// A mention in a thread is answered in that thread, and reading it is reading the thread.
+	thread, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("thread")), 10, 64)
+	if thread > 0 {
+		mid, err = access.ThreadPost(thread, message)
+	} else {
+		message.DestinationKind, message.DestinationID = store.DestinationRoom, room
+		mid, err = access.Send(message)
+	}
 	if err != nil {
 		coordHTTPError(l, w, err)
 		return
@@ -42,9 +52,22 @@ func (a *app) inboxReply(w http.ResponseWriter, r *http.Request) {
 	a.stampActor(r, actor.Message, mid)
 	// Answering is reading: the conversation falls out of the inbox. A failed
 	// read mark only costs that; the answer is stored.
+	if thread > 0 {
+		if list, err := access.UnreadThreadMentions(room); err == nil {
+			var through int64
+			for _, tm := range list {
+				if tm.ThreadID == thread {
+					through = max(through, tm.Sequence)
+				}
+			}
+			if through > 0 {
+				_ = access.MarkRead(store.DestinationDiscussion, store.ThreadDestinationID(thread), through)
+			}
+		}
+	}
 	if summaries, err := access.RoomSummaries(); err == nil {
 		for _, s := range summaries {
-			if s.Room.Key == room {
+			if s.Room.Key == room && thread == 0 {
 				_ = access.MarkRead(store.DestinationRoom, room, s.LastSequence)
 			}
 		}
@@ -56,7 +79,21 @@ func (a *app) inboxReply(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.Redirect(w, r, "/ui/inbox", http.StatusSeeOther)
+	// The answer is confirmed on the inbox: to whom it went, in one line.
+	back := "/ui/inbox?sent=1"
+	if to := strings.TrimSpace(r.FormValue("to")); to != "" {
+		back = "/ui/inbox?sent=" + url.QueryEscape(cleanLineWeb(to, 80))
+	}
+	http.Redirect(w, r, back, http.StatusSeeOther)
+}
+
+// cleanLineWeb is a name from a form cut to one line of at most max characters.
+func cleanLineWeb(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > max {
+		return string(r[:max])
+	}
+	return s
 }
 
 // inboxDone closes an open question, approval or blocker as seen, without an

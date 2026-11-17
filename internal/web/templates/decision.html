@@ -1,0 +1,12 @@
+{{define "decision"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id"><div class="wrap">
+{{with .DecisionV}}<div class="dhead"><div class="dtitle"><h1>{{.Question}}<span class="n">{{.Num}}</span></h1></div>
+<div class="dmeta"><span class="lb pillbig {{.Decision.Tone}}">{{mi "decide"}}{{.Decision.StateLabel}}</span>{{if .Asked}}<span>{{.Asked}} {{t "decision.asked" .Age}}</span>{{end}}</div></div>
+{{template "resultbanner" (dict "R" .Result "Strip" "wdone wfail")}}
+<div class="dgrid"><div class="dmain">
+<section class="box ws" id="workshop">{{template "wsdec" (dict "D" .Decision "Token" .Token "IdeaID" 0)}}</section>
+</div>
+<aside class="side" aria-label="{{t "decision.side.facts"}}">
+{{with .Subject}}<div class="sblk"><h3>{{t "decision.subject"}}</h3><div class="v">{{template "uihc" (hc .Num .Title .Brief .Href)}}</div></div>{{end}}
+<div class="sblk"><h3>{{t "pains.side.status"}}</h3><div class="v"><span class="lb {{.Decision.Tone}}">{{.Decision.StateLabel}}</span> <span class="lb p-mute">{{.Decision.WayLabel}}</span></div></div>
+</aside></div>
+{{end}}</div>{{template "foot" .}}{{end}}

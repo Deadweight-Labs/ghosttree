@@ -158,7 +158,7 @@ func TestFeatureReferencePillHasItsOwnIcon(t *testing.T) {
 			t.Errorf("feature pill lacks %q: %s", want, pill)
 		}
 	}
-	if !strings.Contains(string(refHTML(langEN, "feature", 12, "")), "#12") {
+	if !strings.Contains(string(refHTML(langEN, "feature", 12, "")), "FEAT-12") {
 		t.Error("the short form of a feature reference lacks the number")
 	}
 }
