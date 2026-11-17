@@ -90,7 +90,9 @@ func TestFeatureAPIWalkThrough(t *testing.T) {
 	// Verweise: ein Issue und eine Idee, die das Feature betrifft.
 	iid := decode[idea.Idea](t, f.expect(t, "mia", 201, "POST", "/api/ideas", map[string]any{"project": accProject, "title": "Pakete pro PR"})).ID
 	f.expect(t, "mia", 200, "POST", featPath("/api/features/%d/links", fid), map[string]any{"kind": "request", "ref": f.id["r-mia"], "rel": "origin"})
-	f.expect(t, "mia", 400, "POST", featPath("/api/features/%d/links", fid), map[string]any{"kind": "pain", "ref": 1})
+	f.expect(t, "mia", 400, "POST", featPath("/api/features/%d/links", fid), map[string]any{"kind": "task", "ref": 1})
+	f.expect(t, "mia", 404, "POST", featPath("/api/features/%d/links", fid), map[string]any{"kind": "pain", "ref": 9999})
+	f.expect(t, "mia", 404, "POST", featPath("/api/features/%d/links", fid), map[string]any{"kind": "knowledge", "ref": 9999})
 	f.expect(t, "mia", 404, "POST", featPath("/api/features/%d/links", fid), map[string]any{"kind": "idea", "ref": 999, "rel": "affects"})
 	f.expect(t, "gus", 403, "POST", featPath("/api/ideas/%d/features", iid), map[string]any{"feature": fid})
 	f.expect(t, "nora", 404, "POST", featPath("/api/ideas/%d/features", iid), map[string]any{"feature": fid})

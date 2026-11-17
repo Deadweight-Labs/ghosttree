@@ -221,7 +221,7 @@ var table = []Core{
 			{Name: "create", Rare: true, Tool: "feature_create", Line: "new page (name; summary, behavior, limits, cli, mcp, api, ui, areas, from_idea)"},
 			{Name: "update", Tool: "feature_update", Line: "how it is NOW after your change (id and changed fields; pr, idea, requests)"},
 			{Name: "state", Rare: true, Tool: "feature_state", Line: "retire it or take it up again (id, state, reason)"},
-			{Name: "link", Rare: true, Tool: "feature_link", Inner: "link", Line: "tie it to an idea, issue, knowledge entry or pain (id, kind idea|request|knowledge|pain, ref; rel origin|affects for idea and request)"},
+			{Name: "link", Rare: true, Tool: "feature_link", Inner: "link", Line: "tie it to an idea, issue, KN or pain (id, kind, ref, rel)"},
 			{Name: "unlink", Rare: true, Tool: "feature_link", Inner: "unlink", Line: "take a tie off (id, kind, ref)"},
 			{Name: "pr_paths", Rare: true, Tool: "feature_pr_paths", Line: "report the paths a pull request changes and read its feature checklist (pr, paths)"},
 			{Name: "check", Rare: true, Tool: "feature_check", Line: "the description still holds for a pull request (id, pr, note)"},
