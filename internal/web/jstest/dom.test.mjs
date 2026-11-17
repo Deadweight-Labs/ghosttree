@@ -140,3 +140,10 @@ test("the clock of a test runs timers in the order of their time and only when i
   assert.deepEqual(ran, ["early", "again", "late"]);
   assert.equal(clock.pending(), 0);
 });
+
+test("an attribute selector with an unquoted value matches like one with quotes", () => {
+  const p = loadPage(`<form><input type="hidden" name="a"><input type="text" name="b"></form>`);
+  assert.deepEqual([...p.document.querySelectorAll("input[type=hidden]")].map((i) => i.getAttribute("name")), ["a"]);
+  assert.deepEqual([...p.document.querySelectorAll('input[type="text"]')].map((i) => i.getAttribute("name")), ["b"]);
+  assert.equal(p.document.querySelectorAll("input[type]").length, 2);
+});

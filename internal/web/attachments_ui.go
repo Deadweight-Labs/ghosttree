@@ -1,6 +1,8 @@
 package web
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -191,26 +193,54 @@ func (a *app) painAttach(w http.ResponseWriter, r *http.Request) {
 	a.attachUpload(w, r, pa, store.AttachInput{Subject: idea.SubjectPain, SubjectID: id, Owner: idea.OwnerPain}, repoHref(p.Project)+"/pains/"+strconv.FormatInt(id, 10))
 }
 
+// attachMessages are the texts of a refused picture for the script that uploads in the
+// background (the page shows the same words after a redirect, from ?fail=img_*).
+var attachMessages = map[string]string{
+	"img_none": "ideas.result.img_none", "img_type": "ideas.result.img_type", "img_size": "ideas.result.img_size",
+	"img_bad": "ideas.result.img_bad", "img_other": "ideas.result.img_other",
+}
+
+// writeAttachJSON answers the upload that ui-attach.js sends in the background (wantsJSON, joinpair.go):
+// the new picture or the reason it was refused, instead of a redirect to a page that would be loaded
+// again and take a begun comment with it.
+func writeAttachJSON(w http.ResponseWriter, status int, v map[string]any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// attachRefused answers a refused picture: the redirect with fail=img_* for the form, the
+// words for the script.
+func (a *app) attachRefused(w http.ResponseWriter, r *http.Request, back, short string) {
+	if wantsJSON(r) {
+		writeAttachJSON(w, http.StatusUnprocessableEntity, map[string]any{"ok": false, "message": a.langFor(r).msg(attachMessages[short])})
+		return
+	}
+	http.Redirect(w, r, back+"?fail="+url.QueryEscape(short)+"#images", http.StatusSeeOther)
+}
+
 // attachUpload reads the file of the form, hands it to Attach (which checks the right
 // to work on the object and the image itself) and goes back to the page: with done=image
 // when it worked, with fail=img_* when the picture was refused. The type is the one the
-// bytes show, never the one the browser names.
+// bytes show, never the one the browser names. Asked for JSON (the script of the page),
+// it answers with the markup of the new picture instead, and the page stays as it is.
 func (a *app) attachUpload(w http.ResponseWriter, r *http.Request, pa *store.ProjectAccess, in store.AttachInput, back string) {
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		http.Redirect(w, r, back+"?fail=img_none#images", http.StatusSeeOther)
+		a.attachRefused(w, r, back, "img_none")
 		return
 	}
 	defer file.Close()
 	// One byte more than allowed, so that a file over the limit is told from one at it.
 	data, err := io.ReadAll(io.LimitReader(file, idea.MaxAttachmentBytes+1))
 	if err != nil {
-		http.Redirect(w, r, back+"?fail=img_bad#images", http.StatusSeeOther)
+		a.attachRefused(w, r, back, "img_bad")
 		return
 	}
 	// DeclaredType stays empty on purpose: what the browser says the file is does not count.
 	in.Data, in.Alt, in.Actor = data, r.FormValue("alt"), store.IdeaActorFor(browserPrincipal(r), "")
-	_, err = pa.Attach(in)
+	meta, err := pa.Attach(in)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrAccessForbidden):
@@ -220,7 +250,7 @@ func (a *app) attachUpload(w http.ResponseWriter, r *http.Request, pa *store.Pro
 		default:
 			code := requestdomain.Code(err)
 			if short, ok := attachFailCodes[code]; ok {
-				http.Redirect(w, r, back+"?fail="+url.QueryEscape(short)+"#images", http.StatusSeeOther)
+				a.attachRefused(w, r, back, short)
 				return
 			}
 			if code == "pain_not_found" || code == "request_not_found" {
@@ -228,11 +258,23 @@ func (a *app) attachUpload(w http.ResponseWriter, r *http.Request, pa *store.Pro
 				return
 			}
 			if code != "" {
-				http.Redirect(w, r, back+"?fail=img_other#images", http.StatusSeeOther)
+				a.attachRefused(w, r, back, "img_other")
 				return
 			}
 			http.Error(w, "could not save", http.StatusInternalServerError)
 		}
+		return
+	}
+	if wantsJSON(r) {
+		l := a.langFor(r)
+		var img bytes.Buffer
+		for _, im := range attachImages(l, []idea.AttachmentMeta{meta}, func(idea.AttachmentMeta) bool { return true }) {
+			if err := l.page().ExecuteTemplate(&img, "wsimage", im); err != nil {
+				http.Error(w, "could not render", http.StatusInternalServerError)
+				return
+			}
+		}
+		writeAttachJSON(w, http.StatusOK, map[string]any{"ok": true, "id": meta.ID, "owner": meta.Owner, "html": img.String()})
 		return
 	}
 	http.Redirect(w, r, back+"?done=image#images", http.StatusSeeOther)

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"regexp"
@@ -160,5 +161,67 @@ func TestIdeaPagePastesAndDropsThroughTheSameFormAsThePainPage(t *testing.T) {
 	js.Body.Close()
 	if !regexp.MustCompile(`addEventListener\("paste"`).Match(body) || !regexp.MustCompile(`addEventListener\("drop"`).Match(body) {
 		t.Error("the script does not listen for paste and drop")
+	}
+}
+
+// REQ-685 AC-1: the script of the page uploads in the background. Asked for JSON, the route does not redirect
+// (a page that is loaded again takes a begun comment with it): it answers with the markup of the new picture, or,
+// when the picture is refused, with the words the page would show, and nothing is attached.
+func TestUploadAskedForJSONAnswersWithThePictureAndNeverRedirects(t *testing.T) {
+	e, pa := listEnv(t)
+	pn := mustPain(t, pa, shellProject, "Screenshot wanted")
+	route := "/ui/pains/" + strconv.FormatInt(pn.Pain.ID, 10) + "/attach"
+	fields := map[string]string{"owner": "pain", "alt": "The broken button"}
+
+	resp, body := uploadAsking(t, e, e.Member, route, fields, pngBytes(t, 3, 2), "text/html", true, "application/json")
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("upload -> %d %q, want 200 JSON (a redirect would load the page again): %s", resp.StatusCode, resp.Header.Get("Content-Type"), body)
+	}
+	var got struct {
+		OK    bool   `json:"ok"`
+		ID    int64  `json:"id"`
+		HTML  string `json:"html"`
+		Owner string `json:"owner"`
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("answer is no JSON: %v\n%s", err, body)
+	}
+	if !got.OK || got.ID == 0 || got.Owner != "pain" {
+		t.Errorf("answer = %+v", got)
+	}
+	for _, want := range []string{`class="ws-zoom"`, `data-zoom`, `alt="The broken button"`, `src="/ui/attachments/` + strconv.FormatInt(got.ID, 10) + `"`} {
+		if !strings.Contains(got.HTML, want) {
+			t.Errorf("the markup of the picture lacks %q: %s", want, got.HTML)
+		}
+	}
+	// The same markup is what a loaded page shows for it.
+	_, page := fetchPage(t, e.Member, e.Base+painPagePath(pn.Pain.ID))
+	if !strings.Contains(page, got.HTML) {
+		t.Error("the picture of the answer is not the markup the page draws for it")
+	}
+
+	// A refused picture: the words of the page, status 422, nothing attached.
+	bad, text := uploadAsking(t, e, e.Member, route, fields, []byte("not an image"), "image/png", true, "application/json")
+	if bad.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("a refused picture -> %d, want 422: %s", bad.StatusCode, text)
+	}
+	var refused struct {
+		OK      bool   `json:"ok"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(text), &refused); err != nil || refused.OK || !strings.Contains(refused.Message, "PNG, JPEG and WebP") {
+		t.Errorf("a refused picture answers %q (%v), want the words of ideas.result.img_type", text, err)
+	}
+	none, text := uploadAsking(t, e, e.Member, route, fields, nil, "", true, "application/json")
+	if none.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(text, "Choose an image file first") {
+		t.Errorf("no file -> %d %s", none.StatusCode, text)
+	}
+	// A guest is refused as before.
+	if r, _ := uploadAsking(t, e, e.Guest, route, fields, pngBytes(t, 5, 5), "image/png", true, "application/json"); r.StatusCode != http.StatusForbidden {
+		t.Errorf("a guest -> %d, want 403", r.StatusCode)
+	}
+	// Without the Accept header it stays the redirect of the form (no script).
+	if r := upload(t, e, e.Member, route, fields, pngBytes(t, 4, 4), "image/png", true); r.StatusCode != http.StatusSeeOther {
+		t.Errorf("the form without script -> %d, want 303", r.StatusCode)
 	}
 }

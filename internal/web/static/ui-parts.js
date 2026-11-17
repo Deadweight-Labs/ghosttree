@@ -347,6 +347,30 @@
     });
   }
 
+  // Reporting a task as done (the button, and "Report anyway" of the question about the steps still open) is a
+  // form of its own; the note that was typed into the field of the page is not part of it. So the note goes along:
+  // at the moment of the report it is copied into a hidden field of that form, and the server writes it as the
+  // note of the report. Nothing that was typed is thrown away by the report. A note that is refused (it looks like
+  // a secret) comes back into the field of the page, the way the draft above keeps it.
+  for (const form of $$(".treport form")) {
+    form.addEventListener("submit", () => {
+      const ta = $$('textarea[name="note"]').find((t) => !form.contains(t));
+      const text = ta ? ta.value.trim() : "";
+      let carry = $('input[type="hidden"][name="note"]', form);
+      if (!text) {
+        if (carry) carry.remove();
+        return;
+      }
+      if (!carry) {
+        carry = document.createElement("input");
+        carry.type = "hidden";
+        carry.name = "note";
+        form.appendChild(carry);
+      }
+      carry.value = text;
+    });
+  }
+
   // Selects that show their choice in the button: label, check mark, hidden field.
   for (const dd of $$(".dd[data-pick]")) {
     for (const opt of $$(".opt[data-val]", dd)) {

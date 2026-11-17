@@ -47,6 +47,13 @@ func webpBytes(w, h int) []byte {
 // token as a field. claimed is the type the "browser" says the file has.
 func upload(t *testing.T, e shellEnv, c *http.Client, path string, fields map[string]string, data []byte, claimed string, withToken bool) *http.Response {
 	t.Helper()
+	resp, _ := uploadAsking(t, e, c, path, fields, data, claimed, withToken, "")
+	return resp
+}
+
+// uploadAsking is upload with an Accept header (the script of the page asks for JSON) and the body of the answer.
+func uploadAsking(t *testing.T, e shellEnv, c *http.Client, path string, fields map[string]string, data []byte, claimed string, withToken bool, accept string) (*http.Response, string) {
+	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	if withToken {
@@ -72,13 +79,16 @@ func upload(t *testing.T, e shellEnv, c *http.Client, path string, fields map[st
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Origin", e.Base)
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
 	resp, err := c.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	io.Copy(io.Discard, resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	return resp
+	return resp, string(body)
 }
 
 var attachSrcRE = regexp.MustCompile(`src="(/ui/attachments/\d+)"`)
