@@ -265,6 +265,14 @@ func (a CoordAccess) rawRoom(roomKey string) (CoordRoom, error) {
 	err := reader.db.QueryRow(`SELECT room_key,kind,label,created_at FROM coord_rooms WHERE room_key=?`, roomKey).
 		Scan(&room.Key, &room.Kind, &room.Label, &room.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
+		// The room of a project exists with the project: the row appears when somebody
+		// first writes (roomAccessTx), and a project nobody has written in is an empty
+		// room, not "does not exist". Every project page links to it.
+		if project, ok := strings.CutPrefix(roomKey, "project:"); ok {
+			if _, known := projectTx(reader.db, project); known {
+				return CoordRoom{Key: roomKey, Kind: RoomProject}, nil
+			}
+		}
 		return CoordRoom{}, ErrCoordNotFound
 	}
 	if err != nil {
@@ -842,7 +850,27 @@ func (a CoordAccess) requireRoomAccessTx(tx *sql.Tx, actor, roomKey string) erro
 func (a CoordAccess) roomAccessTx(tx *sql.Tx, actor, roomKey string, via Action) error {
 	var kind string
 	if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, roomKey).Scan(&kind); errors.Is(err, sql.ErrNoRows) {
-		return ErrCoordNotFound
+		// The first write into the room of a project nobody has used yet makes the row
+		// (see rawRoom); the gate below still decides whether the writer may.
+		project, ok := strings.CutPrefix(roomKey, "project:")
+		if _, known := projectTx(tx, project); !ok || !known {
+			return ErrCoordNotFound
+		}
+		kind = RoomProject
+		if err := a.projectRoomGate(kind, roomKey, ResRoom, tx); err != nil {
+			return err
+		}
+		if !a.roleOpensProjectRoom(roomKey, tx, via) {
+			return noMembershipError(kind)
+		}
+		if via != ActPost {
+			// A read runs on a read-only handle and finds an empty room.
+			return nil
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_rooms(room_key,kind,label,created_at) VALUES(?,?,?,?)`, roomKey, RoomProject, "", now()); err != nil {
+			return err
+		}
+		return nil
 	} else if err != nil {
 		return err
 	}

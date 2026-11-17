@@ -72,7 +72,7 @@ func TestFeatureTabListsTheFeaturesWithTheirStateIdeasAndPullRequests(t *testing
 		t.Errorf("guest feature list = %d", code)
 	}
 	// What the viewer has no role in is unknown.
-	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/features"); code != http.StatusNotFound {
+	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/features"); code != http.StatusForbidden {
 		t.Errorf("features of a hidden project = %d", code)
 	}
 }

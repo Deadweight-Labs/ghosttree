@@ -65,6 +65,19 @@ func (a *app) issueDetail(w http.ResponseWriter, r *http.Request, remote, id str
 		return
 	}
 	if v.ProjectRemote != remote {
+		// The issue was moved: its number is the same in the project it lives in now.
+		// The old address leads there when the viewer can open that project, with
+		// what the address carried (a notice, a panel).
+		if home := a.requestRepo(r2); home != "" && home != remote {
+			target := repoHref(home) + "/issues/" + url.PathEscape(id)
+			rq := r.URL.Query()
+			rq.Del("project")
+			if len(rq) > 0 {
+				target += "?" + rq.Encode()
+			}
+			http.Redirect(w, r, target, http.StatusFound)
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}

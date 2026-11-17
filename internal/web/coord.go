@@ -135,7 +135,34 @@ func (a *app) roomPageError(w http.ResponseWriter, r *http.Request, err error) {
 	l := a.langFor(r)
 	var status int
 	v := &errorView{BackHref: "/ui/inbox", BackLabel: l.msg("err.back_inbox")}
+	// A member of the organization the project belongs to is told why they may
+	// not use its room; for anyone else the room does not exist.
+	var denied *denial
+	if errors.Is(err, store.ErrCoordNotFound) || errors.Is(err, store.ErrCoordForbidden) {
+		room := r.URL.Query().Get("room")
+		if r.Method != http.MethodGet {
+			room = r.FormValue("room")
+		}
+		if remote, ok := strings.CutPrefix(room, "project:"); ok {
+			denied = a.denialFor(r, remote)
+		}
+	}
+	if r.Method != http.MethodGet && (errors.Is(err, store.ErrCoordNotFound) || errors.Is(err, store.ErrCoordForbidden)) {
+		// The composer shows the sentence it is given instead of the bare status.
+		switch {
+		case denied != nil:
+			http.Error(w, a.deniedText(r, denied), http.StatusForbidden)
+		case errors.Is(err, store.ErrCoordForbidden):
+			http.Error(w, l.msg("err.form.forbidden"), http.StatusForbidden)
+		default:
+			http.Error(w, l.msg("err.form.gone"), http.StatusNotFound)
+		}
+		return
+	}
 	switch {
+	case denied != nil:
+		status = http.StatusForbidden
+		v = a.deniedView(r, denied)
 	case errors.Is(err, store.ErrCoordForbidden):
 		status = http.StatusForbidden
 		v.Icon, v.Title, v.Text = "lock", l.msg("coord.forbidden.title"), l.msg("coord.forbidden.body")

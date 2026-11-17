@@ -107,6 +107,13 @@ func reservedSegment(seg string) bool {
 // github.com unless the owner collides with a fixed route.
 func repoHref(remote string) string {
 	remote = scope.NormalizeRemote(remote)
+	if scope.IsNamedProject(remote) {
+		// A project without a host ("acme/infra", made in the browser or by a
+		// remote without a host) has no github.com/acme/infra in front of it. It gets
+		// its own marker so that it never competes with a repository of the same
+		// owner and name on GitHub.
+		return "/ui/" + repoHostless + "/" + pathEscapeAll(remote)
+	}
 	rest, ok := strings.CutPrefix(remote, repoHost+"/")
 	if !ok || reservedSegment(strings.SplitN(rest, "/", 2)[0]) {
 		return "/ui/" + pathEscapeAll(remote)
@@ -145,6 +152,9 @@ func pathEscapeAll(p string) string {
 // parseRepoPath reads the segments after /ui/: the project's remote and what
 // follows it. ok is false when there are too few segments.
 func parseRepoPath(segs []string) (remote string, rest []string, ok bool) {
+	if len(segs) >= 3 && segs[0] == repoHostless {
+		return scope.NormalizeRemote(segs[1] + "/" + segs[2]), segs[3:], true
+	}
 	if len(segs) >= 3 && strings.Contains(segs[0], ".") {
 		return scope.NormalizeRemote(strings.Join(segs[:3], "/")), segs[3:], true
 	}
@@ -152,6 +162,25 @@ func parseRepoPath(segs []string) (remote string, rest []string, ok bool) {
 		return scope.NormalizeRemote(repoHost + "/" + segs[0] + "/" + segs[1]), segs[2:], true
 	}
 	return "", nil, false
+}
+
+// repoHostless marks the address of a project that has no host: /ui/-/{org}/{name}.
+// No owner and no organization can be called "-", so the marker is free.
+const repoHostless = "-"
+
+// hostlessFallback is the project "{a}/{b}" without a host for the short address
+// /ui/{a}/{b}, which reads as github.com/{a}/{b} first. It lets a link typed by
+// hand, or an old one, reach a project of an organization; "" when the two
+// segments cannot name one.
+func hostlessFallback(segs []string) string {
+	if len(segs) < 2 || strings.Contains(segs[0], ".") || segs[0] == repoHostless {
+		return ""
+	}
+	id := scope.NormalizeRemote(segs[0] + "/" + segs[1])
+	if scope.IsNamedProject(id) {
+		return id
+	}
+	return ""
 }
 
 func (a *app) registerRepoPages(mux *http.ServeMux) {
@@ -223,9 +252,19 @@ func (a *app) repoRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	pa := a.access(r)
 	opts, _ := a.projectOptions(r, pa)
-	if !slices.ContainsFunc(opts, func(o projectOption) bool { return o.Remote == remote }) {
-		http.NotFound(w, r)
-		return
+	visible := func(id string) bool {
+		return slices.ContainsFunc(opts, func(o projectOption) bool { return o.Remote == id })
+	}
+	if !visible(remote) {
+		// The short address of a project without a host: /ui/{org}/{name}.
+		if id := hostlessFallback(segs); id != "" && visible(id) {
+			remote = id
+		} else {
+			// A project the viewer has no role in answers 404 like an unknown one; the
+			// page writer turns that into 403 for a member of its own organization.
+			http.NotFound(w, r)
+			return
+		}
 	}
 	tab := "code"
 	if len(rest) > 0 {

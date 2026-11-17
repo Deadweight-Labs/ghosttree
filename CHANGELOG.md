@@ -1143,6 +1143,25 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- One project per repository, and a missing right is said instead of hidden
+  (REQ-675). The project form (Organization, Projects) takes the address of a
+  repository in any form git knows (`https://…`, `git@host:owner/repo.git`,
+  `github.com/owner/repo`) as well as a plain name. The normalized address is the
+  identity of the project, so an agent in a clone of that repository works in
+  exactly that project and no second one appears; the usual ownership check of
+  `ctx project claim` still applies, and a refusal now comes as a sentence. A
+  project without a remote has a repository page (`/ui/-/{org}/{name}`) with an
+  empty state, a project shared with the organization opens its room for every
+  member (the room exists before the first message), and the role choice of a
+  member who only has the default role reads "Default (Member)" instead of
+  showing Owner. A member of the organization who has no role in a project gets a
+  403 page that names the project, the reason and whom to ask; for anyone else the
+  project still looks like one that does not exist. Writing in such a room shows
+  that sentence instead of "Failed (HTTP 404)". After moving an issue the page
+  says where it went, and the old address and `/ui/r/{n}` lead there;
+  `/ui/requests/new` opens the form of the current repository. Lists tell two
+  projects with the same name apart by their owner.
+
 - The two hook routes are faster (PAIN-76). On a test database of the size of a
   production one (4,500 entries, 3 million chunks, `cmd/hookbench`) the
   briefing at session start takes 25 ms instead of 150 ms (p50), 28 ms instead

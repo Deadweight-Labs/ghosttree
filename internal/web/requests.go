@@ -332,6 +332,10 @@ func evidenceLabel(l lang, kind string) string { return label(l, evidenceKeys, k
 // viewer can open leads on to its page in the repository; the old page stays
 // for the others (requests without a project).
 func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
+	if r.PathValue("id") == "new" {
+		a.requestNew(w, r)
+		return
+	}
 	if remote := a.requestRepo(r); remote != "" {
 		target := repoHref(remote) + "/issues/" + url.PathEscape(r.PathValue("id"))
 		if r.URL.RawQuery != "" {
@@ -341,6 +345,23 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.issueGlobal(w, r)
+}
+
+// requestNew is /ui/requests/new, the address the old "New issue" led to: the form
+// of the repository the viewer is in or has chosen, else the first one they can
+// write to. Without any repository there is nothing to write an issue into, and the
+// way on is to make one.
+func (a *app) requestNew(w http.ResponseWriter, r *http.Request) {
+	target := "/ui/orgs"
+	if m := a.newMenuFor(r, a.shellBaseFor(r)); m != nil && m.Issue != "" {
+		target = m.Issue
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+	} else if m != nil && m.Repo != "" {
+		target = m.Repo
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // requestRepo is the project a request belongs to when the viewer can read the
@@ -749,6 +770,9 @@ func (a *app) requestResult(r *http.Request, d requestdomain.Detail) *requestRes
 			return nil
 		}
 		res.Text = l.msg(key)
+	case "moved":
+		// The page the move leads to says where the issue is now.
+		res.Text = l.msg(key, deniedProjectName(d.Request.Scope.Project))
 	default:
 		res.Text = l.msg(key)
 	}

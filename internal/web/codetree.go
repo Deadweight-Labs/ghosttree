@@ -351,6 +351,11 @@ type repoCodeView struct {
 	// KnowledgeHref is the action of a repository without descriptions.
 	KnowledgeHref string
 	Current       string // path of the page, folder or file
+	// NoRemote: the project has no git remote (a project made in the browser) and no
+	// code was ever connected. The page says so and offers the next step instead of
+	// the empty tree of a repository.
+	NoRemote     bool
+	NewIssueHref string
 }
 
 type codeBranchView struct {
@@ -533,6 +538,9 @@ func (a *app) repoCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.codeFolderPage(r, pa, view, v, ix, links, cp)
+	if scope.IsNamedProject(view.Project) && v.Empty && cp.Path == "" {
+		v.NoRemote, v.Readme, v.NewIssueHref = true, nil, view.Href+"/issues/new"
+	}
 	// "Open on GitHub" leads to the same place there: the repository, or the folder.
 	if view.External != "" {
 		v.GitHub = view.External

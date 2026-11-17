@@ -217,7 +217,11 @@ func TestIssuePagesHideWhatTheViewerMayNotSee(t *testing.T) {
 	pub := rqMake(t, e.St, rqSpec{Title: "Visible request"})
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
 		for _, path := range []string{"/ui/x/hidden/issues", "/ui/x/hidden/issues/" + itoa(secret.Request.ID), "/ui/x/shell/issues/" + itoa(secret.Request.ID), "/ui/requests/" + itoa(secret.Request.ID)} {
-			if status, page := fetchPage(t, c, e.Base+path); status != http.StatusNotFound || strings.Contains(page, "SECRET-REQ") {
+			want := http.StatusNotFound
+			if name == "member" {
+				want = memberStatusFor(path)
+			}
+			if status, page := fetchPage(t, c, e.Base+path); status != want || strings.Contains(page, "SECRET-REQ") {
 				t.Errorf("%s: GET %s = %d", name, path, status)
 			}
 		}

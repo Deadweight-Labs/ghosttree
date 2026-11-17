@@ -80,17 +80,24 @@ func TestDocsRightsByRole(t *testing.T) {
 			t.Errorf("%s: diff %d", name, code)
 		}
 	}
-	_, unknown := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/docs/no-such-doc")
+	_, unknown := fetchPage(t, e.Guest, e.Base+"/ui/x/hidden/docs/no-such-doc")
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
 		for _, path := range []string{"/ui/x/hidden/docs", "/ui/x/hidden/docs/secret-plan", "/ui/x/hidden/docs/secret-plan?raw=1", "/ui/x/hidden/docs/secret-plan?from=1&to=1"} {
 			code, page := fetchPage(t, c, e.Base+path)
+			if name == "member" {
+				// A member of the organization is told why they cannot open it.
+				if code != http.StatusForbidden || strings.Contains(page, "SECRET") || strings.Contains(page, "zebra secret") {
+					t.Errorf("%s (no role in hidden) %s = %d", name, path, code)
+				}
+				continue
+			}
 			if code != http.StatusNotFound || strings.Contains(page, "SECRET") || strings.Contains(page, "zebra secret") {
 				t.Errorf("%s (no role in hidden) %s = %d", name, path, code)
 			}
 		}
 	}
-	if code, page := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/docs/secret-plan"); stripCSRF(page) != stripCSRF(unknown) || code != http.StatusNotFound {
-		t.Error("a hidden document answers differently from one that does not exist")
+	if code, page := fetchPage(t, e.Guest, e.Base+"/ui/x/hidden/docs/secret-plan"); stripCSRF(page) != stripCSRF(unknown) || code != http.StatusNotFound {
+		t.Error("a hidden document answers a guest differently from one that does not exist")
 	}
 	if code, page := fetchPage(t, e.Owner, e.Base+"/ui/x/hidden/docs/secret-plan"); code != http.StatusOK || !strings.Contains(page, "SECRET plan") {
 		t.Errorf("owner of hidden: %d", code)
@@ -220,7 +227,7 @@ func TestRenamedDocumentRedirectsFromItsOldSlug(t *testing.T) {
 	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/ui/x/shell/docs/zebra-report-v2?rev=1" {
 		t.Errorf("member: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/docs/secret-plan"); code != http.StatusNotFound {
+	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/docs/secret-plan"); code != http.StatusForbidden {
 		t.Errorf("member follows the old slug of a hidden document: %d", code)
 	}
 	resp, err = e.Owner.Get(e.Base + "/ui/x/hidden/docs/secret-plan")

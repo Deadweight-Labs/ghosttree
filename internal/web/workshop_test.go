@@ -89,7 +89,7 @@ func TestWorkshopShowsTheConceptAndTheVariantsSideBySideWithTheRightFormsPerRole
 	if !strings.Contains(guest, "On the device") || !strings.Contains(guest, "On the server") {
 		t.Error("a guest cannot compare the variants")
 	}
-	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/ideas/"+strconv.FormatInt(i.ID, 10)); code != http.StatusNotFound {
+	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/ideas/"+strconv.FormatInt(i.ID, 10)); code != http.StatusForbidden {
 		t.Errorf("idea under a foreign project = %d", code)
 	}
 }
