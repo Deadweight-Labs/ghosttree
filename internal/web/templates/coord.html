@@ -107,7 +107,7 @@
       <nav class="coord-paging coord-thread-paging" aria-label="{{t "coord.thread_history"}}">{{if .HasOlder}}<a class="gbtn sm" href="{{.OlderURL}}">{{t "coord.older_replies"}}</a>{{end}}{{if .HasNewer}}<a class="gbtn sm" href="{{.NewerURL}}">{{t "coord.newer_replies"}}</a>{{end}}</nav>
       <div class="rbody">
         {{if not $.Coord.Active.CanPost}}<p class="coord-action-status callout" data-coord-action-status role="status" hidden></p>{{end}}
-        <ol class="coord-thread-messages coord-messages" data-chat tabindex="-1" aria-label="{{t "coord.thread_history"}}">{{with .Anchor}}{{template "coord-message" .}}{{end}}{{range .Messages}}{{template "coord-message" .}}{{else}}<li class="coord-empty">{{t "coord.no_replies"}}</li>{{end}}{{range .Events}}<li class="coord-thread-event cte-{{.State}}" role="note"><span class="cte-dot" aria-hidden="true"></span><span>{{.Text}}</span><time datetime="{{.At}}">{{.When}}</time></li>{{end}}</ol>
+        <ol class="coord-thread-messages coord-messages" data-chat tabindex="-1" aria-label="{{t "coord.thread_history"}}">{{with .Anchor}}{{template "coord-message" .}}{{end}}{{range .Messages}}{{template "coord-message" .}}{{else}}{{if not .AnsweredElsewhere}}<li class="coord-empty">{{t "coord.no_replies"}}</li>{{end}}{{end}}{{range .Events}}<li class="coord-thread-event cte-{{.State}}" role="note"><span class="cte-dot" aria-hidden="true"></span><span>{{.Text}}</span><time datetime="{{.At}}">{{.When}}</time></li>{{end}}</ol>
         <p class="rnone muted" hidden>{{t "room.search_none"}}</p>
         <button type="button" class="rnew gbtn sm" data-chat-new hidden>{{mi "chev"}}<span>{{t "coord.new_messages"}}</span></button>
       </div>
@@ -159,7 +159,7 @@
     {{template "coord-head" .}}
     {{template "coord-quote" .}}
     <div class="rq4 rq-{{.Intent}}">
-      <div class="rq4-h"><span class="lb rqk-{{.Intent}}">{{template "room-ask-icon"}}{{.Request.Title}}</span><span class="sp"></span>{{if .Request.State}}<span class="ask-state">{{.Request.State}}</span>{{else if .Request.Items}}<span class="rq-open">{{if .Request.Waiting}}{{.Request.Waiting}}{{else}}{{t "coord.open_state"}}{{end}}</span>{{end}}</div>
+      <div class="rq4-h"><span class="lb rqk-{{.Intent}}">{{template "room-ask-icon"}}{{.Request.Title}}</span><span class="sp"></span>{{if .Request.State}}<span class="ask-state">{{if .Request.StateHref}}<a href="{{.Request.StateHref}}">{{.Request.State}}</a>{{else}}{{.Request.State}}{{end}}</span>{{else if .Request.Items}}<span class="rq-open">{{if .Request.Waiting}}{{.Request.Waiting}}{{else}}{{t "coord.open_state"}}{{end}}</span>{{end}}</div>
       <div class="ask-t">{{.BodyHTML}}</div>
       {{template "room-fold" .Request.Explain}}
       {{template "coord-request-foot" .Request}}

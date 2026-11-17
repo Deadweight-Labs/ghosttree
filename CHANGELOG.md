@@ -1180,6 +1180,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- The inbox names the right sender and keeps the whole question (REQ-689). A
+  question from one person to another shows the person's name instead of
+  "Someone", in the row and in "Reply sent to …". The answer to a question that
+  has a thread is a post in that thread, and "Answered" leads to it (a thread
+  started after the answer leads to the reply in the room, and does not say "No
+  replies yet"). A name typed out after the handle ("@Mara Keller") is said once
+  and the addressee does not stand in the title; a long question keeps its first
+  word, "z. B." does not end a sentence, and the whole text unfolds under
+  "Full text". A proposal that answers a question takes it out of "Waiting for
+  you" and the numbers of the tabs follow the list. The preview drops the marks of
+  note boxes, quotes and task lists, and the tick says "Done" or "Read".
+
 - Agent tools without detours, readable sessions, answers where the question
   was asked (REQ-688). `human_task` needs no request any more: without one it
   hangs on the session's request, else on a standing "Agent tasks" request per

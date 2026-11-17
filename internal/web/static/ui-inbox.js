@@ -38,25 +38,38 @@
   });
 
   // Proposed answers: a click sends the form in the background. When the server
-  // took the answer the row says what it was answered with and its numbers go
-  // down by one; when anything fails the form is sent the plain way, which ends
-  // on the inbox with the entry as the server has it.
+  // took the answer the question leaves the list, as it does after a reload, and a
+  // line says what it was answered with; the numbers go down by one. When anything
+  // fails the form is sent the plain way, which ends on the inbox with the entry as
+  // the server has it.
   const countDown = (el) => {
     const n = el ? parseInt(el.textContent, 10) : 0;
     if (n > 0) el.textContent = String(n - 1);
   };
+  const announce = (text) => {
+    let note = $("[data-answered-note]");
+    if (!note) {
+      note = document.createElement("div");
+      note.className = "callout ok";
+      note.setAttribute("role", "status");
+      note.setAttribute("data-answered-note", "");
+      const line = document.createElement("div");
+      line.className = "tt";
+      note.appendChild(line);
+      const anchor = $(".ntools") || $(".box");
+      if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(note, anchor);
+    }
+    const line = $(".tt", note);
+    if (line) line.textContent = text;
+  };
   const settle = (row, opts, text) => {
-    const line = document.createElement("div");
-    line.className = "sub qa";
-    line.textContent = (opts.dataset.answered || "") + " " + text;
-    opts.replaceWith(line);
-    row.classList.toggle("open", false);
-    row.classList.toggle("answered", true);
-    row.classList.toggle("is-done", true);
     const box = row.closest(".box");
     if (box) countDown($(".box-h .counter", box));
     const cats = (row.dataset.cat || "").split(" ").filter(Boolean).concat("alle");
     for (const cat of cats) countDown($('.ifilter [data-f="' + cat + '"] .counter'));
+    announce((opts.dataset.answered || "") + " " + text);
+    row.remove();
+    if (box && !$(".nrow", box)) box.remove();
   };
   document.addEventListener("submit", async (event) => {
     const form = event.target;

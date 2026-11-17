@@ -433,6 +433,12 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			detail.Messages[i].CanPromote = detail.CanPost
 		}
 	}
+	for i := range detail.Messages {
+		// The threads are known only now: an answered question leads to its thread.
+		if rq := detail.Messages[i].Request; rq != nil && rq.State != "" && rq.StateHref == "" {
+			rq.StateHref = answerHref(detail.Messages, i)
+		}
+	}
 	if selectedText := strings.TrimSpace(r.URL.Query().Get("thread")); selectedText != "" {
 		selectedID, parseErr := strconv.ParseInt(selectedText, 10, 64)
 		if parseErr != nil || selectedID <= 0 {
@@ -491,6 +497,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			threadDetail.Messages[i].CSRFToken = csrfOf(r)
 		}
 		threadDetail.Anchor = a.coordThreadAnchor(r, l, access, room, selected, detail, labels, attention, attentionLabels, allAttention, roleRoom)
+		linkAnsweredAnchor(threadDetail, room, detail.Messages)
 		threadDetail.ReplyTo, threadDetail.ReplyTarget, parseErr = coordReplyTarget(l, presentations, r.URL.Query().Get("thread_reply_to"))
 		if parseErr != nil {
 			http.Error(w, parseErr.Error(), http.StatusBadRequest)

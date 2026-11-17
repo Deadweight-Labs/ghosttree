@@ -39,6 +39,14 @@ func (a *app) inboxReply(w http.ResponseWriter, r *http.Request) {
 	var mid int64
 	// A mention in a thread is answered in that thread, and reading it is reading the thread.
 	thread, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("thread")), 10, 64)
+	// The answer to a message somebody started a thread on is a post in that thread:
+	// where the asker follows the question, not a loose line in the room (REQ-689).
+	if thread == 0 && replyTo > 0 {
+		if thread = threadAnchoredAt(access, room, replyTo); thread > 0 {
+			// The question stands in the room, the answer in the thread: nothing to quote there.
+			message.ReplyTo = 0
+		}
+	}
 	if thread > 0 {
 		mid, err = access.ThreadPost(thread, message)
 	} else {
@@ -114,4 +122,19 @@ func (a *app) inboxDone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/ui/inbox", http.StatusSeeOther)
+}
+
+// threadAnchoredAt is the thread of a room that was started from the message, 0 when there is none
+// or the viewer may not see the room's threads.
+func threadAnchoredAt(access store.CoordAccess, room string, messageID int64) int64 {
+	threads, err := access.RoomThreads(room)
+	if err != nil {
+		return 0
+	}
+	for _, t := range threads {
+		if t.Home.AnchorMessageID == messageID {
+			return t.Thread.ID
+		}
+	}
+	return 0
 }

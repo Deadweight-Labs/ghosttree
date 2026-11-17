@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
@@ -48,6 +49,8 @@ type forYouRow struct {
 	// question), RequestID the issue it hangs on (0 for none).
 	Actor     string
 	RequestID int64
+	// Full is the whole text of a question when Title shows only a part of it ("" when Title is all).
+	Full string
 	// Primary fills the action: the one next thing for an agent that waits.
 	Primary bool
 	// Open: the first row is unfolded and carries "Kurz erklärt".
@@ -225,8 +228,11 @@ func (a *app) homeAttention(r *http.Request, now time.Time) ([]forYouRow, error)
 		item := byID[v.ID]
 		room := coordShortRoomName(coordRoomKindOf(item.HomeRoomKey), coordRoomLabel(l, store.CoordRoom{Key: item.HomeRoomKey}, "", labels))
 		created := parseTime(item.CreatedAt)
+		names := mentionNamesOf(a.access(r), roomProject(item.HomeRoomKey), item.Body)
+		asked := withoutAddressee(item.Body, names)
+		title := previewText(l, asked, 110, names)
 		row := forYouRow{
-			Title: previewText(l, v.Preview, 110, mentionNamesOf(a.access(r), roomProject(item.HomeRoomKey), v.Preview)), Href: v.URL, at: created, Tone: "ask", Actor: coordSenderLabel(l, item, labels),
+			Title: title, Full: fullIfCut(l, asked, title, names), Href: v.URL, at: created, Tone: "ask", Actor: coordSenderLabel(l, item, labels),
 			Rest:        coordSenderLabel(l, item, labels) + agentLabelSep + room,
 			explainKind: explain.KindQuestion, explainID: item.MessageID, explainStored: item.Reason != store.AttentionQuestion,
 			attentionID: item.ID, messageID: item.MessageID,
@@ -306,7 +312,7 @@ func questionTitle(s string, limit int) string {
 	}
 	start := 0
 	for i, c := range rs {
-		end := i == len(rs)-1 || ((c == '.' || c == '!' || c == '?') && rs[i+1] == ' ')
+		end := i == len(rs)-1 || ((c == '.' || c == '!' || c == '?') && rs[i+1] == ' ' && (c != '.' || !abbreviationDot(rs, i)))
 		if !end {
 			continue
 		}
@@ -319,6 +325,29 @@ func questionTitle(s string, limit int) string {
 		}
 	}
 	return shortWords(s, limit)
+}
+
+// abbreviationDot: the full stop at rs[i] belongs to an abbreviation ("z. B.", "ca.", "Nr."), or the
+// word after it goes on in lower case, so no sentence ends there.
+func abbreviationDot(rs []rune, i int) bool {
+	start := i
+	for start > 0 && (unicode.IsLetter(rs[start-1]) || rs[start-1] == '.') {
+		start--
+	}
+	word := strings.ToLower(string(rs[start:i]))
+	if len([]rune(strings.ReplaceAll(word, ".", ""))) <= 1 {
+		return true
+	}
+	switch word {
+	case "ca", "bzw", "usw", "vgl", "nr", "abs", "ggf", "inkl", "evtl", "etc", "approx", "vs", "bspw", "ggü", "mind", "max", "min":
+		return true
+	}
+	for j := i + 1; j < len(rs); j++ {
+		if rs[j] != ' ' {
+			return unicode.IsLower(rs[j])
+		}
+	}
+	return false
 }
 
 // bundleFacts is the oldest creation time and the projects of a set of entries.

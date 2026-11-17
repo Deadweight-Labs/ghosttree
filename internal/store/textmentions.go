@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"unicode"
 
 	actordomain "github.com/Deadweight-Labs/ghosttree/internal/actor"
 )
@@ -108,7 +109,7 @@ func (s *Store) recordTextMentions(src textMentionSource, body string) ([]string
 	}
 	defer tx.Rollback()
 	at := now()
-	snippet := oneLine(body, 220)
+	snippet := snippetLines(body, 600)
 	for _, account := range allowed {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO text_mentions(project,source_kind,source_id,object_kind,object_id,account_id,author,author_account_id,snippet,created_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?)`, src.Project, src.SourceKind, src.SourceID, src.ObjectKind, src.ObjectID, account, src.Author, src.AuthorAccount, snippet, at); err != nil {
@@ -428,4 +429,34 @@ func (a *ProjectAccess) MentionNames(project string, handles []string) map[strin
 // actorFamilyWord is the tool as a person names it: Claude, Codex.
 func actorFamilyWord(provider string) string {
 	return actordomain.Family(provider)
+}
+
+// snippetLines is the start of a text for a row of the inbox: the lines stay, so the row can tell a
+// quote or a list item from running text; spaces are collapsed and the text is cut at max runes.
+func snippetLines(s string, max int) string {
+	var lines []string
+	blank := false
+	for _, line := range strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, line))
+		if line == "" {
+			if blank || len(lines) == 0 {
+				continue
+			}
+			blank = true
+		} else {
+			blank = false
+			line = strings.Join(strings.Fields(line), " ")
+		}
+		lines = append(lines, line)
+	}
+	out := strings.TrimSpace(strings.Join(lines, "\n"))
+	if r := []rune(out); max > 0 && len(r) > max {
+		out = strings.TrimSpace(string(r[:max-1])) + "…"
+	}
+	return out
 }

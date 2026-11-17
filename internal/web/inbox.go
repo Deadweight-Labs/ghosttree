@@ -16,9 +16,11 @@ import (
 // (TaskID), a mention is marked read with a POST (ReadRoom, ReadSeq); every
 // other action is a link.
 type inboxAction struct {
-	Label, Href string
-	Primary     bool
-	TaskID      int64
+	// Short is the word that stands beside the tick ("Done", "Read"); Label is the longer line
+	// for the tooltip and for screen readers.
+	Label, Short, Href string
+	Primary            bool
+	TaskID             int64
 	// AttentionID closes an open question, approval or blocker as seen.
 	AttentionID int64
 	// MentionID marks a mention in a text (comment, issue, pain) as read.
@@ -46,6 +48,8 @@ type inboxRow struct {
 	// Actor is who the row comes from, TaskN the number of its task, RequestID
 	// the issue it hangs on; Live is the agent working on that issue right now.
 	Actor string
+	// Full is the whole text of a question whose Title is cut; the row unfolds it.
+	Full string
 	// ActorKind and ActorOwner draw the avatar of an agent (authorship, REQ-677).
 	ActorKind, ActorOwner string
 	TaskN                 int64
@@ -407,7 +411,7 @@ func (a *app) inboxMentions(r *http.Request, project string, asked map[int64]boo
 		row := inboxRow{Mark: "rooms", Mention: true, Title: name, In: name, InHref: "/ui/coord?room=" + url.QueryEscape(s.Room.Key),
 			Href: "/ui/coord?room=" + url.QueryEscape(s.Room.Key), at: last,
 			Age: shortAgo(l, overviewNow().UTC(), last)}
-		row.Actions = []inboxAction{{Label: l.msg("inbox.act.read"), ReadRoom: s.Room.Key, ReadSeq: s.LastSequence, ReadThreads: true}}
+		row.Actions = []inboxAction{{Label: l.msg("inbox.act.read"), Short: l.msg("inbox.short.read"), ReadRoom: s.Room.Key, ReadSeq: s.LastSequence, ReadThreads: true}}
 		if m.Present {
 			row.Actor, row.Lead, row.Title, row.Body = m.Author, m.Author, "", previewText(l, m.Msg.Body, 220, mentionNamesOf(a.access(r), roomProject(s.Room.Key), m.Msg.Body))
 			row.Age = shortAgo(l, overviewNow().UTC(), parseTime(m.Msg.CreatedAt))
@@ -483,7 +487,7 @@ func (a *app) inboxDirect(r *http.Request, asked map[int64]bool) ([]inboxRow, er
 			}
 		}
 		row.Reply = a.inboxReplyComposer(l, token, m.Author, s.Room.Key, m.Msg.ID, 0)
-		row.Actions = []inboxAction{{Label: l.msg("inbox.act.read"), ReadRoom: s.Room.Key, ReadSeq: s.LastSequence}}
+		row.Actions = []inboxAction{{Label: l.msg("inbox.act.read"), Short: l.msg("inbox.short.read"), ReadRoom: s.Room.Key, ReadSeq: s.LastSequence}}
 		rows = append(rows, row)
 	}
 	sortInboxRows(rows)
@@ -535,13 +539,13 @@ func (a *app) inboxRows(r *http.Request, forYou []forYouRow) []inboxRow {
 	rows := make([]inboxRow, 0, len(forYou))
 	for _, f := range forYou {
 		row := inboxRow{Mark: f.Mark, Tone: f.Tone, Title: f.Title, Lead: f.Lead, Rest: f.Rest, Age: f.Age, AgeOld: f.AgeOld,
-			Token: token, Forms: forms, taskID: f.taskID, TaskN: f.taskID, Actor: f.Actor, RequestID: f.RequestID, Href: f.Href, Cats: inboxCats(f), AttentionID: f.attentionID, DecisionN: f.decisionID, Brief: f.Brief}
+			Token: token, Forms: forms, taskID: f.taskID, TaskN: f.taskID, Actor: f.Actor, Full: f.Full, RequestID: f.RequestID, Href: f.Href, Cats: inboxCats(f), AttentionID: f.attentionID, DecisionN: f.decisionID, Brief: f.Brief}
 		switch {
 		case f.taskID != 0:
 			row.Num, row.NumHref = f.num, f.Href
 			row.Note = a.taskNoteFor(l, f.taskID, f.steps)
 			if forms {
-				row.Actions = append(row.Actions, inboxAction{Label: l.msg("inbox.act.done"), TaskID: f.taskID, Primary: true})
+				row.Actions = append(row.Actions, inboxAction{Label: l.msg("inbox.act.done"), Short: l.msg("inbox.short.done"), TaskID: f.taskID, Primary: true})
 			} else {
 				row.Actions = append(row.Actions, inboxAction{Label: l.msg("inbox.act.open"), Href: f.Href, Primary: true})
 			}
@@ -550,7 +554,7 @@ func (a *app) inboxRows(r *http.Request, forYou []forYouRow) []inboxRow {
 				if f.roomKey != "" && f.Mark == "ask" {
 					row.Reply = a.inboxReplyComposer(l, token, f.Actor, f.roomKey, f.messageID, f.attentionID)
 				}
-				row.Actions = append(row.Actions, inboxAction{Label: l.msg("inbox.act.done"), AttentionID: f.attentionID})
+				row.Actions = append(row.Actions, inboxAction{Label: l.msg("inbox.act.done"), Short: l.msg("inbox.short.done"), AttentionID: f.attentionID})
 			} else {
 				row.Actions = []inboxAction{{Label: f.Action, Href: f.Href, Primary: true}}
 			}

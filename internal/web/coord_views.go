@@ -198,8 +198,11 @@ type coordThreadDetailView struct {
 	coordThreadView
 	// Anchor is the message the thread was started from, loaded by itself so it
 	// stands at the top however old it is.
-	Anchor   *coordMessageView
-	Messages []coordMessageView
+	Anchor *coordMessageView
+	// AnsweredElsewhere: the thread has no post, but the question it was started
+	// from was answered in the room; the thread does not say "No replies yet".
+	AnsweredElsewhere bool
+	Messages          []coordMessageView
 	// Events are the state changes of the thread as lines of their own: who
 	// resolved, reopened or deferred it, and when.
 	Events                                 []coordThreadEventView
@@ -292,9 +295,11 @@ type coordDirectiveView struct {
 type coordRequestView struct {
 	Title, Waiting string
 	// State names how a closed request ended, e.g. "Answered · robin".
-	State   string
-	Items   []coordAttentionView
-	Explain *explainView
+	State string
+	// StateHref leads from State to the answer, when it can be found ("" otherwise).
+	StateHref string
+	Items     []coordAttentionView
+	Explain   *explainView
 	// WithdrawLabel names the withdraw action in the language of the page.
 	WithdrawLabel string
 }
@@ -973,6 +978,10 @@ func readableAuthor(l lang, label string) string {
 // bloße Absender-ID (die Agenten-ID, die auch ein Gast sehen darf) statt
 // "Unbekannter Teilnehmer".
 func coordSenderLabel(l lang, item store.AttentionItem, labels map[string]string) string {
+	// A person who asks is named by their account: the peers of a room are agents.
+	if name := strings.TrimSpace(item.AuthorName); name != "" {
+		return name
+	}
 	if label := strings.TrimSpace(labels[item.SenderID]); label != "" {
 		return label
 	}
@@ -1491,6 +1500,42 @@ func applyRequestStatesIn(l lang, views []coordMessageView, pres []store.CoordMe
 			}
 		}
 		views[i].Request.State = strings.Join(parts, ", ")
+		if len(parts) > 0 {
+			views[i].Request.StateHref = answerHref(views, i)
+		}
+	}
+}
+
+// answerHref is where "Answered" leads in a room: the reply that quotes the question when it is on the
+// page, else the thread the question started. "" when the answer is not at hand.
+func answerHref(views []coordMessageView, i int) string {
+	for j := range views {
+		if j != i && views[j].Reply != nil && views[j].Reply.MessageID == views[i].ID && views[j].DOMID != "" {
+			return "#" + views[j].DOMID
+		}
+	}
+	return views[i].ThreadURL
+}
+
+// linkAnsweredAnchor points "Answered" on the question a thread was started from at the answer: the
+// first post of the thread, else the reply that stands in the room. Without one the thread has no
+// reply to show, and AnsweredElsewhere stays false.
+func linkAnsweredAnchor(t *coordThreadDetailView, room string, roomMessages []coordMessageView) {
+	anchor := t.Anchor
+	if anchor == nil || anchor.Request == nil || anchor.Request.State == "" {
+		return
+	}
+	anchor.Request.StateHref = ""
+	if len(t.Messages) > 0 {
+		anchor.Request.StateHref = "#" + t.Messages[0].DOMID
+		return
+	}
+	for _, m := range roomMessages {
+		if m.Reply != nil && m.Reply.MessageID == anchor.ID {
+			anchor.Request.StateHref = coordRoomURL(room, "around", m.Sequence) + "#message-" + strconv.FormatInt(m.Sequence, 10)
+			t.AnsweredElsewhere = true
+			return
+		}
 	}
 }
 

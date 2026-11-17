@@ -59,7 +59,7 @@ func (a *app) inboxTextMentions(r *http.Request, project string) []inboxRow {
 		if m.SourceKind != store.MentionInComment {
 			row.Cats = append(row.Cats, "issues")
 		}
-		row.Actions = []inboxAction{{Label: l.msg("inbox.act.read"), MentionID: m.ID}}
+		row.Actions = []inboxAction{{Label: l.msg("inbox.act.read"), Short: l.msg("inbox.short.read"), MentionID: m.ID}}
 		// The answer goes where the question was asked: a comment on the same object.
 		row.Reply = &composerView{Action: "/ui/inbox/mention-reply", Token: token, Placeholder: l.msg("inbox.reply_to", who.Label),
 			Submit: l.msg("inbox.reply_send"), Cancel: l.msg("inbox.reply_cancel"),

@@ -54,10 +54,13 @@ type AttentionItem struct {
 	Sequence        int64  `json:"sequence,omitempty"`
 	Body            string `json:"body,omitempty"`
 	AuthorID        string `json:"author_id,omitempty"`
-	SenderID        string `json:"sender_id,omitempty"`
-	HomeRoomKey     string `json:"home_room_key,omitempty"`
-	IsRecipient     bool   `json:"is_recipient,omitempty"`
-	CanWithdraw     bool   `json:"can_withdraw,omitempty"`
+	// AuthorName is the account name of a person who wrote the message, for the
+	// viewer who may see names; empty for an agent's message and for a guest's view.
+	AuthorName  string `json:"author_name,omitempty"`
+	SenderID    string `json:"sender_id,omitempty"`
+	HomeRoomKey string `json:"home_room_key,omitempty"`
+	IsRecipient bool   `json:"is_recipient,omitempty"`
+	CanWithdraw bool   `json:"can_withdraw,omitempty"`
 }
 
 func attentionReasonForIntent(intent string) (string, bool) {
@@ -94,29 +97,29 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 	rows, err := tx.Query(`SELECT attention.id,attention.recipient_principal_id,
 		m.destination_kind,m.destination_id,attention.reason,attention.state,
 		attention.created_at,attention.resolved_at,attention.message_id,m.sequence,
-		m.body,m.author_principal_id,m.sender_external_id,COALESCE(m.expires_at,'')
+		m.body,m.author_principal_id,m.sender_external_id,COALESCE(m.expires_at,''),
+		CASE WHEN m.author_kind='human' THEN COALESCE(p.name,'') ELSE '' END
 		FROM coord_attention attention JOIN coord_messages m ON m.id=attention.message_id
+		LEFT JOIN persons p ON ('person:' || p.id)=m.author_principal_id
 		WHERE attention.recipient_principal_id=? OR m.sender_external_id=? OR m.author_principal_id=?
 		ORDER BY attention.created_at DESC, attention.message_id DESC, attention.id DESC`, actor, actor, a.Principal.ID)
 	if err != nil {
 		return nil, err
 	}
-	var candidates []struct {
-		item      AttentionItem
-		sender    string
-		expiresAt string
+	type attentionCandidate struct {
+		item       AttentionItem
+		sender     string
+		expiresAt  string
+		authorName string
 	}
+	var candidates []attentionCandidate
 	for rows.Next() {
-		var candidate struct {
-			item      AttentionItem
-			sender    string
-			expiresAt string
-		}
+		var candidate attentionCandidate
 		if err := rows.Scan(&candidate.item.ID, &candidate.item.RecipientID,
 			&candidate.item.DestinationKind, &candidate.item.DestinationID,
 			&candidate.item.Reason, &candidate.item.State, &candidate.item.CreatedAt,
 			&candidate.item.ResolvedAt, &candidate.item.MessageID, &candidate.item.Sequence,
-			&candidate.item.Body, &candidate.item.AuthorID, &candidate.sender, &candidate.expiresAt); err != nil {
+			&candidate.item.Body, &candidate.item.AuthorID, &candidate.sender, &candidate.expiresAt, &candidate.authorName); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -159,8 +162,9 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 		candidate.item.CanWithdraw = candidate.item.AuthorID == a.Principal.ID || candidate.sender == actor
 		// Gastsicht (nur eigene Empfängerzeilen kommen hier an): das Konto
 		// hinter einem fremden Agenten bleibt verborgen.
+		candidate.item.AuthorName = NormalizeAccountName(candidate.authorName)
 		if candidate.item.AuthorID != a.Principal.ID && a.guestViewForMessageTx(tx, candidate.item.DestinationKind, candidate.item.DestinationID) {
-			candidate.item.AuthorID = ""
+			candidate.item.AuthorID, candidate.item.AuthorName = "", ""
 		}
 		if candidate.item.State == AttentionOpen && expiredAt(candidate.expiresAt, nowTS) {
 			candidate.item.State = AttentionExpired
