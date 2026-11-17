@@ -589,6 +589,10 @@ func (s *Store) RemoveOrgMember(actorPrincipal string, orgID int64, targetPrinci
 	if _, err := tx.Exec(`DELETE FROM org_guests WHERE org_id=? AND account_id=?`, orgID, target); err != nil {
 		return err
 	}
+	// What the member lent the organization goes with the member.
+	if err := revokeAILoansTx(tx, `org_id=? AND lender=?`, orgID, target); err != nil {
+		return err
+	}
 	// Ein Standard, auf den das Konto keinen Zugriff mehr hat, wird gelöscht
 	// statt zu wirken.
 	if _, err := tx.Exec(`UPDATE persons SET default_org_id=0 WHERE id=? AND default_org_id=?`, target, orgID); err != nil {

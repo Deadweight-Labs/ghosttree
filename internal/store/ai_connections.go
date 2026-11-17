@@ -57,8 +57,9 @@ const (
 	AICapServer     = "cap.server"
 	AICapLoan       = "cap.loan"
 
-	// AIKeyPurpose is what a sealed key is bound to (secretbox purpose).
-	AIKeyPurpose = "ghosttree/ai-connection-key"
+	// aiKeyPurposeV1 is the purpose keys were sealed with before they were
+	// bound to their row; ResealAIKeys moves such keys to AIKeyPurposeFor.
+	aiKeyPurposeV1 = "ghosttree/ai-connection-key"
 	// AIRunTokenPrefix marks a run token, so that a leaked one is recognisable.
 	AIRunTokenPrefix = "gtr_"
 
@@ -93,6 +94,17 @@ var (
 	ErrAIToken = errors.New("run token is not valid")
 )
 
+// AIKeyPurposeFor is what the sealed key of one connection is bound to: its
+// owner and its id. A sealed key copied into another row does not open there.
+func AIKeyPurposeFor(orgID, connectionID int64) string {
+	return fmt.Sprintf("ghosttree/ai-connection-key/v2/org/%d/connection/%d", orgID, connectionID)
+}
+
+// AIKeySealer seals the key a connection is saved with for the purpose the
+// store names (AIKeyPurposeFor of the row); the store calls it once the row
+// has its id.
+type AIKeySealer func(purpose string) ([]byte, error)
+
 // AIBudgetError says a cap stops the call; Cap is one of the AICap names.
 type AIBudgetError struct{ Cap string }
 
@@ -124,18 +136,21 @@ type AIConnection struct {
 	Via        string  `json:"via,omitempty"`
 	LoanID     int64   `json:"loan_id,omitempty"`
 	LoanCapUSD float64 `json:"loan_cap_usd,omitempty"`
+	// Host is the host a lent connection sends the organization's calls to,
+	// for the owners of the organization.
+	Host       string  `json:"host,omitempty"`
 	SpentMonth float64 `json:"spent_month_usd"`
 }
 
-// AIConnectionInput creates (ID 0) or changes a connection. KeySealed is
-// required for a new one; on a change nil keeps the stored key.
+// AIConnectionInput creates (ID 0) or changes a connection. The key comes as
+// an AIKeySealer next to it: required for a new connection, on a change nil
+// keeps the stored key.
 type AIConnectionInput struct {
 	ID            int64
 	OrgID         int64
 	Name          string
 	Format        string
 	BaseURL       string
-	KeySealed     []byte
 	KeyLast4      string
 	MonthlyCapUSD float64
 	Models        []AIModel
@@ -344,8 +359,12 @@ CREATE INDEX IF NOT EXISTS ai_calls_loan ON ai_calls(loan_id, created_at) WHERE 
 `
 
 func ensureAIConnections(db *sql.DB) error {
-	_, err := db.Exec(aiSchema)
-	return err
+	if _, err := db.Exec(aiSchema); err != nil {
+		return err
+	}
+	// The cap every namespace has under the release "all" when its grant sets
+	// none (review of #283, m6).
+	return addColumnIfMissing(db, "ai_server_release", "default_cap_usd", `REAL NOT NULL DEFAULT 0 CHECK(default_cap_usd >= 0)`)
 }
 
 // aiMonthStart is the first second of the current month in UTC, as stored.
@@ -502,11 +521,17 @@ func setAIModelsTx(tx *sql.Tx, id int64, models []AIModel) error {
 }
 
 // SaveAIConnection creates or changes a connection of the server (OrgID 0,
-// admin only) or of a namespace (its owner only).
-func (s *Store) SaveAIConnection(actorPrincipal string, in AIConnectionInput) (AIConnection, error) {
+// admin only) or of a namespace (its owner only). seal seals a new key for
+// the row (nil: keep the stored one); it is called inside the transaction,
+// after the row has its id, so that the key is bound to owner and id.
+//
+// When the address or the format of a lent connection changes, its loans
+// end and the aliases the organizations set on it go: they agreed to send
+// their calls to the old address.
+func (s *Store) SaveAIConnection(actorPrincipal string, in AIConnectionInput, seal AIKeySealer) (AIConnection, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{actorPrincipal, in}, func(d *Store, p []any) (AIConnection, error) {
-			return d.SaveAIConnection(p[0].(string), p[1].(AIConnectionInput))
+			return d.SaveAIConnection(p[0].(string), p[1].(AIConnectionInput), seal)
 		})
 	}
 	actor, err := parsePersonPrincipalID(actorPrincipal)
@@ -536,7 +561,7 @@ func (s *Store) SaveAIConnection(actorPrincipal string, in AIConnectionInput) (A
 		if !checkAIBaseURL(in.BaseURL, in.OrgID == 0) {
 			return AIConnection{}, ErrAIConnection
 		}
-		if len(in.KeySealed) == 0 {
+		if seal == nil {
 			return AIConnection{}, ErrAIKeyMissing
 		}
 		var n int
@@ -544,8 +569,8 @@ func (s *Store) SaveAIConnection(actorPrincipal string, in AIConnectionInput) (A
 		if n >= aiMaxPerKind {
 			return AIConnection{}, ErrAIConnection
 		}
-		res, err := tx.Exec(`INSERT INTO ai_connections(org_id, name, format, base_url, key_sealed, key_last4, monthly_cap_usd, created_by, created_at, updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?)`, in.OrgID, name, in.Format, in.BaseURL, in.KeySealed, in.KeyLast4, in.MonthlyCapUSD, actor, ts, ts)
+		res, err := tx.Exec(`INSERT INTO ai_connections(org_id, name, format, base_url, key_last4, monthly_cap_usd, created_by, created_at, updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?)`, in.OrgID, name, in.Format, in.BaseURL, in.KeyLast4, in.MonthlyCapUSD, actor, ts, ts)
 		if err != nil {
 			if isUniqueViolation(err) {
 				return AIConnection{}, ErrAINameTaken
@@ -553,6 +578,9 @@ func (s *Store) SaveAIConnection(actorPrincipal string, in AIConnectionInput) (A
 			return AIConnection{}, err
 		}
 		id, _ = res.LastInsertId()
+		if err := sealAIKeyTx(tx, in.OrgID, id, seal); err != nil {
+			return AIConnection{}, err
+		}
 	} else {
 		old, err := aiConnectionTx(tx, id)
 		if err != nil {
@@ -561,26 +589,37 @@ func (s *Store) SaveAIConnection(actorPrincipal string, in AIConnectionInput) (A
 		if err := canKeepAIOf(tx, old.OrgID, actor); err != nil {
 			return AIConnection{}, err
 		}
+		moved := in.BaseURL != old.BaseURL || in.Format != old.Format
 		if old.FromFile {
 			// Address, format and key come from llm.json; cap and models are kept here.
-			in.Format, in.BaseURL, in.KeySealed, name = old.Format, old.BaseURL, nil, old.Name
+			in.Format, in.BaseURL, seal, name, moved = old.Format, old.BaseURL, nil, old.Name, false
 		} else if !checkAIBaseURL(in.BaseURL, old.OrgID == 0) {
 			return AIConnection{}, ErrAIConnection
-		} else if (in.BaseURL != old.BaseURL || in.Format != old.Format) && len(in.KeySealed) == 0 {
+		} else if moved && seal == nil {
 			// The stored key never goes to an address it was not entered for.
 			return AIConnection{}, ErrAIKeyMissing
 		}
 		q := `UPDATE ai_connections SET name=?, format=?, base_url=?, monthly_cap_usd=?, updated_at=?`
 		args := []any{name, in.Format, in.BaseURL, in.MonthlyCapUSD, ts}
-		if len(in.KeySealed) > 0 {
-			q += `, key_sealed=?, key_last4=?`
-			args = append(args, in.KeySealed, in.KeyLast4)
+		if seal != nil {
+			q += `, key_last4=?`
+			args = append(args, in.KeyLast4)
 		}
 		if _, err := tx.Exec(q+` WHERE id=?`, append(args, id)...); err != nil {
 			if isUniqueViolation(err) {
 				return AIConnection{}, ErrAINameTaken
 			}
 			return AIConnection{}, err
+		}
+		if seal != nil {
+			if err := sealAIKeyTx(tx, old.OrgID, id, seal); err != nil {
+				return AIConnection{}, err
+			}
+		}
+		if moved {
+			if err := revokeAILoansTx(tx, `connection_id=?`, id); err != nil {
+				return AIConnection{}, err
+			}
 		}
 	}
 	if err := setAIModelsTx(tx, id, models); err != nil {
@@ -600,6 +639,114 @@ func (s *Store) SaveAIConnection(actorPrincipal string, in AIConnectionInput) (A
 
 func isUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+func sealAIKeyTx(tx *sql.Tx, orgID, id int64, seal AIKeySealer) error {
+	sealed, err := seal(AIKeyPurposeFor(orgID, id))
+	if err != nil {
+		return err
+	}
+	if len(sealed) == 0 {
+		return ErrAIKeyMissing
+	}
+	_, err = tx.Exec(`UPDATE ai_connections SET key_sealed=? WHERE id=?`, sealed, id)
+	return err
+}
+
+// revokeAILoansTx ends the active loans that match where (columns of
+// ai_loans) and removes the aliases the borrowing organizations set on them.
+func revokeAILoansTx(tx *sql.Tx, where string, args ...any) error {
+	rows, err := tx.Query(`SELECT id, connection_id, org_id FROM ai_loans WHERE revoked_at='' AND (`+where+`)`, args...)
+	if err != nil {
+		return err
+	}
+	type loan struct{ id, conn, org int64 }
+	var loans []loan
+	for rows.Next() {
+		var l loan
+		if err := rows.Scan(&l.id, &l.conn, &l.org); err != nil {
+			rows.Close()
+			return err
+		}
+		loans = append(loans, l)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	ts := now()
+	for _, l := range loans {
+		if _, err := tx.Exec(`UPDATE ai_loans SET revoked_at=? WHERE id=?`, ts, l.id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM ai_aliases WHERE connection_id=? AND org_id=? AND level IN ('owner','repo')`, l.conn, l.org); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ResealAIKeys binds every stored key to its row (AIKeyPurposeFor). Keys
+// sealed before that carried one purpose for all rows; each is opened with
+// the old purpose and sealed again for its row. A key that opens for its row
+// already is left alone, so the call is cheap to repeat at every start. A key
+// that opens neither way (another server key, a damaged value) stays as it is
+// and is counted in unusable: the proxy cannot use it, its owner has to enter
+// it again.
+func (s *Store) ResealAIKeys(open func(sealed []byte, purpose string) (string, error), seal func(plain, purpose string) ([]byte, error)) (resealed, unusable int, err error) {
+	type counts struct{ Resealed, Unusable int }
+	if s.writer != nil {
+		c, err := queueValue(s, nil, func(d *Store, _ []any) (counts, error) {
+			r, u, err := d.ResealAIKeys(open, seal)
+			return counts{r, u}, err
+		})
+		return c.Resealed, c.Unusable, err
+	}
+	rows, err := s.db.Query(`SELECT id, org_id, key_sealed FROM ai_connections WHERE key_sealed IS NOT NULL AND length(key_sealed) > 0 ORDER BY id`)
+	if err != nil {
+		return 0, 0, err
+	}
+	type row struct {
+		id, org int64
+		sealed  []byte
+	}
+	var all []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.org, &r.sealed); err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		all = append(all, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+	for _, r := range all {
+		purpose := AIKeyPurposeFor(r.org, r.id)
+		if _, err := open(r.sealed, purpose); err == nil {
+			continue
+		}
+		plain, err := open(r.sealed, aiKeyPurposeV1)
+		if err != nil {
+			unusable++
+			continue
+		}
+		again, err := seal(plain, purpose)
+		if err != nil {
+			return resealed, unusable, err
+		}
+		// Only the value that was read is replaced.
+		res, err := s.db.Exec(`UPDATE ai_connections SET key_sealed=? WHERE id=? AND key_sealed=?`, again, r.id, r.sealed)
+		if err != nil {
+			return resealed, unusable, err
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			resealed++
+		}
+	}
+	return resealed, unusable, nil
 }
 
 // DeleteAIConnection removes a connection with its models, loans and aliases.
@@ -741,8 +888,17 @@ func aiReleaseModeTx(q rowQuerier) string {
 	return mode
 }
 
+func aiReleaseDefaultCapTx(q rowQuerier) float64 {
+	var v float64
+	_ = q.QueryRow(`SELECT default_cap_usd FROM ai_server_release WHERE id=1`).Scan(&v)
+	return v
+}
+
 // aiServerGrantTx says whether the server's connections are released to the
-// namespace, and with which cap.
+// namespace, and with which cap. Under the release "all" every namespace,
+// personal ones too, has the default cap unless its grant sets one; without a
+// default cap (a release saved before there was one) "all" releases nothing,
+// so that no namespace calls the server's models without any cap.
 func aiServerGrantTx(q rowQuerier, orgID int64) (bool, float64) {
 	if orgID <= 0 {
 		return false, 0
@@ -751,7 +907,13 @@ func aiServerGrantTx(q rowQuerier, orgID int64) (bool, float64) {
 	has := q.QueryRow(`SELECT monthly_cap_usd FROM ai_server_grants WHERE org_id=?`, orgID).Scan(&capUSD) == nil
 	switch aiReleaseModeTx(q) {
 	case AIReleaseAll:
-		return true, capUSD
+		if has && capUSD > 0 {
+			return true, capUSD
+		}
+		if def := aiReleaseDefaultCapTx(q); def > 0 {
+			return true, def
+		}
+		return false, 0
 	case AIReleaseSelected:
 		return has, capUSD
 	}
@@ -776,16 +938,20 @@ func (s *Store) AIConnectionsFor(orgID int64) ([]AIConnection, error) {
 		c.SpentMonth = aiSum(s.db, `connection_id=? AND org_id=? AND created_at>=?`, c.ID, orgID, month)
 		out = append(out, c)
 	}
-	rows, err := s.db.Query(`SELECT l.id, l.monthly_cap_usd, c.id, c.name FROM ai_loans l JOIN ai_connections c ON c.id=l.connection_id
-		WHERE l.org_id=? AND l.revoked_at='' ORDER BY c.name`, orgID)
+	rows, err := s.db.Query(`SELECT l.id, l.monthly_cap_usd, c.id, c.name, c.base_url FROM ai_loans l JOIN ai_connections c ON c.id=l.connection_id
+		WHERE l.org_id=? AND l.revoked_at='' AND `+aiLenderIsMember+` ORDER BY c.name`, orgID)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		c := AIConnection{Via: AIViaLoan}
-		if err := rows.Scan(&c.LoanID, &c.LoanCapUSD, &c.ID, &c.Name); err != nil {
+		var base string
+		if err := rows.Scan(&c.LoanID, &c.LoanCapUSD, &c.ID, &c.Name, &base); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if u, err := url.Parse(base); err == nil {
+			c.Host = u.Host
 		}
 		out = append(out, c)
 	}
@@ -835,11 +1001,24 @@ func (s *Store) AIRelease() (string, []AIGrant, error) {
 	return mode, out, rows.Err()
 }
 
+// AIReleaseDefaultCap is the monthly cap each namespace has under the
+// release "all" when its grant sets none.
+func (s *Store) AIReleaseDefaultCap() float64 {
+	if s.reader != nil {
+		return s.reader.AIReleaseDefaultCap()
+	}
+	return aiReleaseDefaultCapTx(s.db)
+}
+
 // SetAIRelease says to whom the server's connections are released: all
-// namespaces, the selected ones (grants), or none. Admin only.
-func (s *Store) SetAIRelease(actorPrincipal, mode string) error {
+// namespaces, the selected ones (grants), or none. "all" needs a default
+// monthly cap per namespace (defaultCapUSD > 0); the other modes keep the
+// stored one when it is 0. Admin only.
+func (s *Store) SetAIRelease(actorPrincipal, mode string, defaultCapUSD float64) error {
 	if s.writer != nil {
-		return queueWrite(s, []any{actorPrincipal, mode}, func(d *Store, p []any) error { return d.SetAIRelease(p[0].(string), p[1].(string)) })
+		return queueWrite(s, []any{actorPrincipal, mode, defaultCapUSD}, func(d *Store, p []any) error {
+			return d.SetAIRelease(p[0].(string), p[1].(string), p[2].(float64))
+		})
 	}
 	actor, err := parsePersonPrincipalID(actorPrincipal)
 	if err != nil {
@@ -851,8 +1030,12 @@ func (s *Store) SetAIRelease(actorPrincipal, mode string) error {
 	if !isServerAdminTx(s.db, actor) {
 		return ErrNotServerAdmin
 	}
-	_, err = s.db.Exec(`INSERT INTO ai_server_release(id, mode, updated_by, updated_at) VALUES(1,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET mode=excluded.mode, updated_by=excluded.updated_by, updated_at=excluded.updated_at`, mode, actor, now())
+	if !validCap(defaultCapUSD) || (mode == AIReleaseAll && defaultCapUSD <= 0) {
+		return ErrAICap
+	}
+	_, err = s.db.Exec(`INSERT INTO ai_server_release(id, mode, default_cap_usd, updated_by, updated_at) VALUES(1,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET mode=excluded.mode, default_cap_usd=CASE WHEN excluded.default_cap_usd > 0 THEN excluded.default_cap_usd ELSE default_cap_usd END,
+		updated_by=excluded.updated_by, updated_at=excluded.updated_at`, mode, defaultCapUSD, actor, now())
 	return err
 }
 
@@ -968,10 +1151,7 @@ func (s *Store) RevokeAILoan(actorPrincipal string, loanID int64) error {
 	if orgRoleTx(tx, owner, actor) != OrgOwner {
 		return ErrNotOrgOwner
 	}
-	if _, err := tx.Exec(`UPDATE ai_loans SET revoked_at=? WHERE id=?`, now(), loanID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM ai_aliases WHERE connection_id=? AND org_id=? AND level IN ('owner','repo')`, connID, orgID); err != nil {
+	if err := revokeAILoansTx(tx, `id=?`, loanID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1016,11 +1196,16 @@ func aiUsableTx(q rowQuerier, orgID int64, c AIConnection) (via string, loanID i
 		}
 		return "", 0, 0, false
 	}
-	if q.QueryRow(`SELECT id, monthly_cap_usd FROM ai_loans WHERE connection_id=? AND org_id=? AND revoked_at=''`, c.ID, orgID).Scan(&loanID, &loanCap) == nil {
+	if q.QueryRow(`SELECT l.id, l.monthly_cap_usd FROM ai_loans l WHERE l.connection_id=? AND l.org_id=? AND l.revoked_at='' AND `+aiLenderIsMember, c.ID, orgID).Scan(&loanID, &loanCap) == nil {
 		return AIViaLoan, loanID, loanCap, true
 	}
 	return "", 0, 0, false
 }
+
+// aiLenderIsMember holds a loan (alias l) only while its lender belongs to
+// the organization. RemoveOrgMember ends the loans of whoever leaves; this
+// is the second lock for a membership that ends another way.
+const aiLenderIsMember = `EXISTS(SELECT 1 FROM org_members m WHERE m.org_id=l.org_id AND m.account_id=l.lender)`
 
 func aiHasModel(c AIConnection, model string) (AIModel, bool) {
 	for _, m := range c.Models {
@@ -1441,6 +1626,110 @@ func (s *Store) MarkAIRunCap(runID int64, capName string) error {
 	}
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO ai_run_caps(run_id, cap, created_at) SELECT id, ?, ? FROM workflow_runs WHERE id=?`, capName, now(), runID)
 	return err
+}
+
+// aiCallPending is the status of a call that is reserved and not settled
+// yet: it counts against every cap with its estimate.
+const aiCallPending = 0
+
+// ReserveAICall books the most a call can cost before it goes out, in the
+// writer, so that calls in parallel (of one run or of several) see each
+// other: every cap counts what is settled and what is reserved. When the
+// estimate does not fit under a cap, nothing is booked, the run is marked
+// with that cap (MarkAIRunCap) and an *AIBudgetError comes back. The id goes
+// to SettleAICall once the provider answered, or to ReleaseAICall when no
+// call happened. A reservation that is never settled (the server stopped
+// mid-call) stays booked at the estimate.
+func (s *Store) ReserveAICall(r AIRoute, estimateUSD float64) (int64, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{r, estimateUSD}, func(d *Store, p []any) (int64, error) { return d.ReserveAICall(p[0].(AIRoute), p[1].(float64)) })
+	}
+	if estimateUSD < 0 || math.IsNaN(estimateUSD) || math.IsInf(estimateUSD, 0) {
+		return 0, ErrAICap
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	ts := now()
+	var capped string
+	if tx.QueryRow(`SELECT cap FROM ai_run_caps WHERE run_id=?`, r.RunID).Scan(&capped) == nil {
+		return 0, &AIBudgetError{Cap: capped}
+	}
+	for _, cl := range aiCapsFor(tx, r) {
+		if cl.limit > 0 && cl.spent+estimateUSD > cl.limit {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO ai_run_caps(run_id, cap, created_at) SELECT id, ?, ? FROM workflow_runs WHERE id=?`, cl.name, ts, r.RunID); err != nil {
+				return 0, err
+			}
+			if err := tx.Commit(); err != nil {
+				return 0, err
+			}
+			return 0, &AIBudgetError{Cap: cl.name}
+		}
+	}
+	res, err := tx.Exec(`INSERT INTO ai_calls(run_id, org_id, project, workflow, connection_id, connection, via, loan_id, requested, model, cost_usd, status, created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.RunID, r.OrgID, r.Project, r.Workflow, r.Connection.ID, r.Connection.Name, r.Via, r.LoanID,
+		cutRunes(r.Requested, 200), r.Model.Model, estimateUSD, aiCallPending, ts)
+	if err != nil {
+		return 0, err
+	}
+	id, _ := res.LastInsertId()
+	return id, tx.Commit()
+}
+
+// SettleAICall replaces the reservation id with what the call really used
+// (c.Route is ignored; the reservation names it). When the call used up a
+// cap, the run is marked and the cap's name returned.
+func (s *Store) SettleAICall(id int64, c AICall) (string, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{id, c}, func(d *Store, p []any) (string, error) { return d.SettleAICall(p[0].(int64), p[1].(AICall)) })
+	}
+	if c.CostUSD < 0 || math.IsNaN(c.CostUSD) || math.IsInf(c.CostUSD, 0) {
+		c.CostUSD = 0
+	}
+	if c.Status == aiCallPending {
+		c.Status = 200
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var r AIRoute
+	if err := tx.QueryRow(`SELECT run_id, org_id, project, workflow, connection_id, via, loan_id FROM ai_calls WHERE id=? AND status=?`, id, aiCallPending).
+		Scan(&r.RunID, &r.OrgID, &r.Project, &r.Workflow, &r.Connection.ID, &r.Via, &r.LoanID); err != nil {
+		return "", fmt.Errorf("%w: no open reservation %d", ErrInvalidInput, id)
+	}
+	if _, err := tx.Exec(`UPDATE ai_calls SET input_tokens=?, output_tokens=?, cache_read_tokens=?, cache_write_tokens=?, cost_usd=?, status=? WHERE id=?`,
+		c.InputTokens, c.OutputTokens, c.CacheReadTokens, c.CacheWriteTokens, c.CostUSD, c.Status, id); err != nil {
+		return "", err
+	}
+	reached, err := markReachedCapTx(tx, r)
+	if err != nil {
+		return "", err
+	}
+	return reached, tx.Commit()
+}
+
+// ReleaseAICall drops a reservation for which no call was billed: the
+// provider could not be reached or answered with an error.
+func (s *Store) ReleaseAICall(id int64) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{id}, func(d *Store, p []any) error { return d.ReleaseAICall(p[0].(int64)) })
+	}
+	_, err := s.db.Exec(`DELETE FROM ai_calls WHERE id=? AND status=?`, id, aiCallPending)
+	return err
+}
+
+func markReachedCapTx(tx *sql.Tx, r AIRoute) (string, error) {
+	for _, cl := range aiCapsFor(tx, r) {
+		if cl.limit > 0 && cl.spent >= cl.limit {
+			_, err := tx.Exec(`INSERT OR IGNORE INTO ai_run_caps(run_id, cap, created_at) VALUES(?,?,?)`, r.RunID, cl.name, now())
+			return cl.name, err
+		}
+	}
+	return "", nil
 }
 
 // RecordAICall books one call into the ledger. When it used up a cap, the

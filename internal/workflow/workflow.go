@@ -113,6 +113,10 @@ type Engine struct {
 	// AIBaseURL is the address of the model proxy on loopback; empty means
 	// runs get no model access.
 	AIBaseURL string
+	// AIEndRun stops the model calls of a run that are still under way and
+	// returns once they are booked (aiproxy.Proxy.EndRun); nil when the proxy
+	// runs elsewhere.
+	AIEndRun func(runID int64)
 	// StopGrace is how long a run that its context has cut off may take to
 	// return before the engine ends it without its answer; 0 means ten seconds.
 	// It is also how long Run waits for the executor at shutdown.
@@ -331,9 +335,16 @@ func (e *Engine) execute(ctx context.Context, run store.WorkflowRun, ev store.Wo
 		in.AI = &ModelAccess{BaseURL: e.AIBaseURL, Token: token}
 		// The token ends with execute, before the run is recorded, so that
 		// nothing the block started (even a block still running after the
-		// grace) can call a model afterwards.
-		defer func() { _ = e.Store.RevokeAIRunTokens(run.ID) }()
-		defer func() { out = withModelUsage(e.Store, run.ID, out) }()
+		// grace) can call a model afterwards. Calls still under way are
+		// stopped and booked before the cost is read, so that the run shows
+		// all it spent.
+		defer func() {
+			_ = e.Store.RevokeAIRunTokens(run.ID)
+			if e.AIEndRun != nil {
+				e.AIEndRun(run.ID)
+			}
+			out = withModelUsage(e.Store, run.ID, out)
+		}()
 	}
 	done := make(chan blockResult, 1)
 	go func() {

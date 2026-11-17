@@ -25,7 +25,9 @@ const fileConnectionName = "standard"
 type aiRuntime struct {
 	Box     *secretbox.Box
 	BaseURL string
-	wait    func()
+	// EndRun stops the calls of a run still under way (Proxy.EndRun).
+	EndRun func(runID int64)
+	wait   func()
 }
 
 func (a aiRuntime) Wait() {
@@ -46,6 +48,14 @@ func startAI(ctx context.Context, st *store.Store, logger *slog.Logger) (aiRunti
 	rt.Box = box
 	if box != nil {
 		logger.Info("ai_secret_key", "set", true)
+		// Keys sealed before they were bound to their row are sealed again.
+		resealed, unusable, err := st.ResealAIKeys(box.Open, box.Seal)
+		switch {
+		case err != nil:
+			logger.Error("ai_keys", "error", err.Error())
+		case resealed > 0 || unusable > 0:
+			logger.Info("ai_keys", "resealed", resealed, "unusable", unusable)
+		}
 	} else {
 		logger.Info("ai_secret_key", "set", false, "note", "no connection key can be stored without it; see deploy/README.md")
 	}
@@ -71,6 +81,7 @@ func startAI(ctx context.Context, st *store.Store, logger *slog.Logger) (aiRunti
 	}
 	p := &aiproxy.Proxy{Store: st, Box: box, FileKeys: fileKeys, Log: logger}
 	rt.BaseURL, rt.wait = p.Serve(ctx, ln)
+	rt.EndRun = p.EndRun
 	logger.Info("ai_proxy", "listen", ln.Addr().String())
 	return rt, nil
 }

@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
@@ -54,6 +55,9 @@ type Proxy struct {
 	// Upstream makes the HTTP client for a connection; nil uses the safe
 	// default (UpstreamClient). Tests point it at a fake provider.
 	Upstream func(c store.AIConnection, u *url.URL) (*http.Client, error)
+
+	mu     sync.Mutex
+	active map[int64]*runCalls
 }
 
 // Listen opens the proxy's listener. Only loopback addresses are accepted:
@@ -163,12 +167,29 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	price := llm.Price{InUSD: route.Model.InUSD, OutUSD: route.Model.OutUSD}
-	if est := price.Cost(estimate(req, len(body))); est > route.Remaining {
+	est := price.Cost(limitOutput(req, format, len(body)))
+	if est > route.Remaining {
 		_ = p.Store.MarkAIRunCap(run.ID, route.TightestCap)
 		p.logf(slog.LevelInfo, "ai_budget", run.ID, route, "cap", route.TightestCap, "estimate_usd", est)
 		p.fail(w, budgetError(route.TightestCap))
 		return
 	}
+	// The estimate is booked before the call goes out, in the writer, so that
+	// calls in parallel cannot all pass the same remaining amount.
+	callID, err := p.Store.ReserveAICall(route, est)
+	if err != nil {
+		var be *store.AIBudgetError
+		if errors.As(err, &be) {
+			p.logf(slog.LevelInfo, "ai_budget", run.ID, route, "cap", be.Cap, "estimate_usd", est)
+			p.fail(w, budgetError(be.Cap))
+			return
+		}
+		p.logf(slog.LevelError, "ai_call", run.ID, route, "error", err.Error())
+		p.fail(w, apiError{http.StatusServiceUnavailable, "api_error", "the call cannot be booked"})
+		return
+	}
+	ctx, done := p.track(r.Context(), run.ID)
+	defer done()
 	stream := false
 	_ = json.Unmarshal(req["stream"], &stream)
 	req["model"], _ = json.Marshal(route.Model.Model)
@@ -179,7 +200,102 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		req["stream_options"], _ = json.Marshal(opts)
 	}
 	out, _ := json.Marshal(req)
-	p.forward(w, r, run, route, format, key, out, stream, price)
+	b := p.forward(ctx, w, r, run, route, format, key, out, stream)
+	p.settle(run, route, callID, b, price, est)
+}
+
+// booking is what came back from the provider for one call.
+type booking struct {
+	// called: the provider answered with success; otherwise the reservation
+	// is dropped (nothing was billed).
+	called bool
+	status int
+	usage  llm.Usage
+	// complete: the answer carried its final usage. A stream that broke off
+	// before its last event, or an answer without usage, is booked at the
+	// estimate: the provider bills what it generated, which nobody saw.
+	complete bool
+}
+
+func (p *Proxy) settle(run store.WorkflowRun, route store.AIRoute, callID int64, b booking, price llm.Price, est float64) {
+	if !b.called {
+		if err := p.Store.ReleaseAICall(callID); err != nil {
+			p.logf(slog.LevelError, "ai_call", run.ID, route, "error", err.Error())
+		}
+		return
+	}
+	cost := price.Cost(b.usage)
+	if !b.complete {
+		cost = max(cost, est)
+	}
+	reached, err := p.Store.SettleAICall(callID, store.AICall{InputTokens: b.usage.InputTokens, OutputTokens: b.usage.OutputTokens,
+		CacheReadTokens: b.usage.CacheReadTokens, CacheWriteTokens: b.usage.CacheWriteTokens, CostUSD: cost, Status: b.status})
+	if err != nil {
+		p.logf(slog.LevelError, "ai_call", run.ID, route, "error", err.Error())
+		return
+	}
+	p.logf(slog.LevelInfo, "ai_call", run.ID, route, "status", b.status, "input_tokens", b.usage.InputTokens, "output_tokens", b.usage.OutputTokens,
+		"cache_read_tokens", b.usage.CacheReadTokens, "cache_write_tokens", b.usage.CacheWriteTokens, "cost_usd", cost, "complete", b.complete, "cap", reached)
+}
+
+// track registers a call of a run so that EndRun can stop it.
+func (p *Proxy) track(parent context.Context, runID int64) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	p.mu.Lock()
+	if p.active == nil {
+		p.active = map[int64]*runCalls{}
+	}
+	rc := p.active[runID]
+	if rc == nil {
+		rc = &runCalls{cancels: map[*context.CancelFunc]struct{}{}}
+		p.active[runID] = rc
+	}
+	key := &cancel
+	rc.cancels[key] = struct{}{}
+	rc.wg.Add(1)
+	p.mu.Unlock()
+	return ctx, func() {
+		cancel()
+		p.mu.Lock()
+		delete(rc.cancels, key)
+		if len(rc.cancels) == 0 && p.active[runID] == rc {
+			delete(p.active, runID)
+		}
+		p.mu.Unlock()
+		rc.wg.Done()
+	}
+}
+
+type runCalls struct {
+	cancels map[*context.CancelFunc]struct{}
+	wg      sync.WaitGroup
+}
+
+// endRunWait is how long EndRun waits for the stopped calls to be booked.
+var endRunWait = 10 * time.Second
+
+// EndRun stops the calls of a run that are still under way and waits until
+// they are booked. The engine calls it when a run ends, after the run's
+// token is revoked and before the run's cost is read, so that a stream left
+// running by the block neither goes on nor is missing from the run.
+func (p *Proxy) EndRun(runID int64) {
+	p.mu.Lock()
+	rc := p.active[runID]
+	if rc != nil {
+		for c := range rc.cancels {
+			(*c)()
+		}
+	}
+	p.mu.Unlock()
+	if rc == nil {
+		return
+	}
+	finished := make(chan struct{})
+	go func() { rc.wg.Wait(); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(endRunWait):
+	}
 }
 
 func budgetError(capName string) apiError {
@@ -219,23 +335,38 @@ func (p *Proxy) keyOf(route store.AIRoute) (string, error) {
 		}
 		return "", errors.New("the key from llm.json is not loaded")
 	}
-	return p.Box.Open(route.KeySealed, store.AIKeyPurpose)
+	return p.Box.Open(route.KeySealed, store.AIKeyPurposeFor(route.Connection.OrgID, route.Connection.ID))
 }
 
-// estimate is the most a request can cost: the body as input (a token is
-// at least about three bytes of JSON) and the full output limit.
-func estimate(req map[string]json.RawMessage, bodyLen int) llm.Usage {
-	maxOut := 0
-	for _, k := range []string{"max_tokens", "max_completion_tokens", "max_output_tokens"} {
-		if v, ok := req[k]; ok {
-			_ = json.Unmarshal(v, &maxOut)
-			if maxOut > 0 {
-				break
-			}
+// outputLimitKeys are the fields a request may name its output limit in.
+var outputLimitKeys = []string{"max_tokens", "max_completion_tokens", "max_output_tokens"}
+
+// limitOutput is the most a request can cost: the body as input (a token is
+// at least about three bytes of JSON) and the output limit. A provider may
+// honour any of the limit fields, so the largest one counts. A request that
+// names none gets one (defaultMaxOut) put in, so that the provider cannot
+// write more than was estimated.
+func limitOutput(req map[string]json.RawMessage, format string, bodyLen int) llm.Usage {
+	maxOut, named := 0, false
+	for _, k := range outputLimitKeys {
+		v, ok := req[k]
+		if !ok {
+			continue
 		}
+		var n float64
+		if json.Unmarshal(v, &n) != nil || n <= 0 {
+			continue
+		}
+		named = true
+		maxOut = max(maxOut, int(min(n, 1<<30)))
 	}
-	if maxOut <= 0 {
+	if !named {
 		maxOut = defaultMaxOut
+		k := "max_tokens"
+		if format == store.AIFormatOpenAI {
+			k = "max_completion_tokens"
+		}
+		req[k], _ = json.Marshal(maxOut)
 	}
 	return llm.Usage{InputTokens: bodyLen / 3, OutputTokens: maxOut}
 }
@@ -247,22 +378,24 @@ func (p *Proxy) client(c store.AIConnection, u *url.URL) (*http.Client, error) {
 	return UpstreamClient(c, u)
 }
 
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, run store.WorkflowRun, route store.AIRoute, format, key string, body []byte, stream bool, price llm.Price) {
+// forward makes the call and relays the answer. ctx ends with the client's
+// request or with EndRun.
+func (p *Proxy) forward(ctx context.Context, w http.ResponseWriter, r *http.Request, run store.WorkflowRun, route store.AIRoute, format, key string, body []byte, stream bool) booking {
 	target, err := url.Parse(strings.TrimRight(route.Connection.BaseURL, "/") + r.URL.Path)
 	if err != nil {
 		p.fail(w, apiError{http.StatusBadGateway, "api_error", "connection address is not valid"})
-		return
+		return booking{}
 	}
 	client, err := p.client(route.Connection, target)
 	if err != nil {
 		p.logf(slog.LevelWarn, "ai_upstream", run.ID, route, "error", err.Error())
 		p.fail(w, apiError{http.StatusBadGateway, "api_error", "connection address is not allowed"})
-		return
+		return booking{}
 	}
-	up, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.String(), bytes.NewReader(body))
+	up, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(body))
 	if err != nil {
 		p.fail(w, apiError{http.StatusBadGateway, "api_error", "request cannot be made"})
-		return
+		return booking{}
 	}
 	up.Header.Set("Content-Type", "application/json")
 	if a := r.Header.Get("Accept"); a != "" {
@@ -287,7 +420,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, run store.Workfl
 		// scrubbed all the same.
 		p.logf(slog.LevelWarn, "ai_upstream", run.ID, route, "error", scrub(err.Error(), key))
 		p.fail(w, apiError{http.StatusBadGateway, "api_error", "provider did not answer"})
-		return
+		return booking{}
 	}
 	defer resp.Body.Close()
 	for _, h := range []string{"Content-Type", "Retry-After"} {
@@ -296,14 +429,15 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, run store.Workfl
 		}
 	}
 	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
-	var usage llm.Usage
+	b := booking{called: ok, status: resp.StatusCode}
 	if ok && stream {
 		w.WriteHeader(resp.StatusCode)
-		usage = relayStream(w, resp.Body, format)
+		b.usage, b.complete = relayStream(w, resp.Body, format)
 	} else {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 		if ok {
-			usage = usageOf(raw, format)
+			b.usage, b.complete = usageOf(raw, format)
+			b.complete = b.complete && err == nil
 		} else {
 			// An error body can quote what it was sent; the key does not go back.
 			raw = []byte(scrub(string(raw), key))
@@ -314,17 +448,8 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, run store.Workfl
 	}
 	if !ok {
 		p.logf(slog.LevelWarn, "ai_call", run.ID, route, "status", resp.StatusCode)
-		return
 	}
-	cost := price.Cost(usage)
-	reached, err := p.Store.RecordAICall(store.AICall{RunID: run.ID, Route: route, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
-		CacheReadTokens: usage.CacheReadTokens, CacheWriteTokens: usage.CacheWriteTokens, CostUSD: cost, Status: resp.StatusCode})
-	if err != nil {
-		p.logf(slog.LevelError, "ai_call", run.ID, route, "error", err.Error())
-		return
-	}
-	p.logf(slog.LevelInfo, "ai_call", run.ID, route, "status", resp.StatusCode, "input_tokens", usage.InputTokens, "output_tokens", usage.OutputTokens,
-		"cache_read_tokens", usage.CacheReadTokens, "cache_write_tokens", usage.CacheWriteTokens, "cost_usd", cost, "cap", reached)
+	return b
 }
 
 // logf writes one line about a call: run, connection and model, never a key
@@ -351,19 +476,39 @@ func scrub(s, key string) string {
 }
 
 // relayStream passes server-sent events through line by line, flushing each
-// event, and reads the usage the provider reports in them.
-func relayStream(w http.ResponseWriter, body io.Reader, format string) llm.Usage {
+// event, and reads the usage the provider reports in them. complete says the
+// stream reached its end with the final usage: for Anthropic the event
+// message_stop after a message_delta with usage, for OpenAI the chunk with
+// usage (the proxy asks for it) and [DONE]. A stream that breaks off earlier,
+// because the run, the client or the provider ended it, is not complete.
+func relayStream(w http.ResponseWriter, body io.Reader, format string) (u llm.Usage, complete bool) {
 	flusher, _ := w.(http.Flusher)
 	br := bufio.NewReaderSize(body, 64<<10)
-	var u llm.Usage
+	finalUsage, end := false, false
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
 			if _, werr := w.Write(line); werr != nil {
-				return u
+				return u, false
 			}
 			if data, ok := bytes.CutPrefix(bytes.TrimSpace(line), []byte("data:")); ok {
-				mergeUsage(&u, usageOf(bytes.TrimSpace(data), format))
+				data = bytes.TrimSpace(data)
+				if format == store.AIFormatOpenAI && string(data) == "[DONE]" {
+					end = true
+				} else {
+					v, has := usageOf(data, format)
+					mergeUsage(&u, v)
+					if format == store.AIFormatAnthropic {
+						var ev struct {
+							Type string `json:"type"`
+						}
+						_ = json.Unmarshal(data, &ev)
+						finalUsage = finalUsage || (has && ev.Type == "message_delta")
+						end = end || ev.Type == "message_stop"
+					} else {
+						finalUsage = finalUsage || has
+					}
+				}
 			}
 			if flusher != nil && len(bytes.TrimSpace(line)) == 0 {
 				flusher.Flush()
@@ -373,7 +518,7 @@ func relayStream(w http.ResponseWriter, body io.Reader, format string) llm.Usage
 			if flusher != nil {
 				flusher.Flush()
 			}
-			return u
+			return u, finalUsage && end && errors.Is(err, io.EOF)
 		}
 	}
 }
@@ -400,8 +545,9 @@ type openAIUsage struct {
 	} `json:"prompt_tokens_details"`
 }
 
-// usageOf reads the usage of a reply or of one streamed event.
-func usageOf(raw []byte, format string) llm.Usage {
+// usageOf reads the usage of a reply or of one streamed event; has says the
+// reply carried one at all. A reply without usage is booked at the estimate.
+func usageOf(raw []byte, format string) (u llm.Usage, has bool) {
 	if format == store.AIFormatAnthropic {
 		var v struct {
 			Usage   *anthropicUsage `json:"usage"`
@@ -410,22 +556,22 @@ func usageOf(raw []byte, format string) llm.Usage {
 			} `json:"message"`
 		}
 		if json.Unmarshal(raw, &v) != nil {
-			return llm.Usage{}
+			return llm.Usage{}, false
 		}
-		var u llm.Usage
 		for _, a := range []*anthropicUsage{v.Usage, v.Message.Usage} {
 			if a != nil {
+				has = true
 				mergeUsage(&u, llm.Usage{InputTokens: a.InputTokens, OutputTokens: a.OutputTokens, CacheReadTokens: a.CacheReadTokens, CacheWriteTokens: a.CacheWriteTokens})
 			}
 		}
-		return u
+		return u, has
 	}
 	var v struct {
 		Usage *openAIUsage `json:"usage"`
 	}
 	if json.Unmarshal(raw, &v) != nil || v.Usage == nil {
-		return llm.Usage{}
+		return llm.Usage{}, false
 	}
 	cached := min(v.Usage.Details.CachedTokens, v.Usage.PromptTokens)
-	return llm.Usage{InputTokens: v.Usage.PromptTokens - cached, OutputTokens: v.Usage.CompletionTokens, CacheReadTokens: cached}
+	return llm.Usage{InputTokens: v.Usage.PromptTokens - cached, OutputTokens: v.Usage.CompletionTokens, CacheReadTokens: cached}, true
 }

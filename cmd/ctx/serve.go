@@ -475,7 +475,7 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	judgeCtx, stopJudge := context.WithCancel(ctx)
 	waitJudge := startUsageJudge(judgeCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)))
 	workflowCtx, stopWorkflows := context.WithCancel(ctx)
-	waitWorkflows := startWorkflows(workflowCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)), ai.BaseURL)
+	waitWorkflows := startWorkflows(workflowCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)), ai)
 	err = serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)))
 	stopWorkflows()
 	waitWorkflows()

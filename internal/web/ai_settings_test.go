@@ -116,7 +116,7 @@ func TestOwnerAddsThreeConnectionsAndTheKeyIsNeverShown(t *testing.T) {
 		t.Fatalf("edit: %d %s", status, body)
 	}
 	sealed, _, _ := e.St.AIConnectionKey(conns[1].ID)
-	if key, err := e.box.Open(sealed, store.AIKeyPurpose); err != nil || key != aiKeyA {
+	if key, err := e.box.Open(sealed, store.AIKeyPurposeFor(e.org.ID, conns[1].ID)); err != nil || key != aiKeyA {
 		t.Fatalf("key after the edit: %v", err)
 	}
 	noKeys(t, "the server's log", e.logs.String())
@@ -153,6 +153,16 @@ func TestServerConnectionsAreTheAdminsAndShownOnlyAfterTheRelease(t *testing.T) 
 	mustNotContain(t, "member after the release", member, `id="ai-server"`, "••••3333")
 	_, admin = fetchPage(t, e.Owner, e.Base+"/ui/orgs?org=alpha")
 	mustContain(t, "grant row", admin, "0.00 $ of 15.00 $ this month")
+	// Review of #283, m6: "all" needs a cap per organization.
+	status, body := e.aiPost(t, e.Owner, "alpha", "/ui/orgs/ai/release", url.Values{"mode": {"all"}})
+	if status != http.StatusBadRequest || !strings.Contains(body, "needs a cap per organization") {
+		t.Fatalf("all without a cap: %d", status)
+	}
+	if status, _ := e.aiPost(t, e.Owner, "alpha", "/ui/orgs/ai/release", url.Values{"mode": {"all"}, "cap": {"3"}}); status != http.StatusSeeOther {
+		t.Fatalf("all with a cap: %d", status)
+	}
+	_, admin = fetchPage(t, e.Owner, e.Base+"/ui/orgs?org=alpha")
+	mustContain(t, "release form", admin, `name="cap" type="number" min="0.01" max="1000000" step="0.01" inputmode="decimal" value="3"`)
 }
 
 // AC-694.3 in the browser: anna lends a connection of her profile to alpha;
@@ -173,8 +183,12 @@ func TestLentConnectionShowsItsNameOnlyAndCanBeTakenBack(t *testing.T) {
 		t.Fatalf("lend: %d %s", status, body)
 	}
 	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/orgs?org=alpha")
-	mustContain(t, "org page", owner, "anna-key", "Lent")
-	mustNotContain(t, "org page", owner, "••••4444", "gpt-x", "api.example.com")
+	// The owners of the org see where the calls go (the host), nothing more.
+	mustContain(t, "org page", owner, "anna-key", "Lent", "api.example.com")
+	mustNotContain(t, "org page", owner, "••••4444", "gpt-x", "https://api.example.com")
+	_, memberView := fetchPage(t, e.Member, e.Base+"/ui/orgs?org=alpha")
+	mustContain(t, "org page of a member", memberView, "anna-key")
+	mustNotContain(t, "org page of a member", memberView, "api.example.com")
 	noKeys(t, "the org page", owner)
 	_, profile = fetchPage(t, e.Member, e.Base+"/ui/orgs?org="+ns.Slug)
 	mustContain(t, "profile after lending", profile, "Lent to Alpha", "0.00 $ of 4.00 $ this month")
