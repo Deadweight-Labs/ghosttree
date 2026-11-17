@@ -26,7 +26,12 @@
     commit: '<circle cx="8" cy="8" r="2.6"/><path d="M1.5 8h3.9M10.6 8h3.9"/>',
     branch: '<circle cx="4" cy="3.75" r="1.6"/><circle cx="4" cy="12.25" r="1.6"/><circle cx="12" cy="5.5" r="1.6"/><path d="M4 5.35v5.3M12 7.1c0 2.6-8 1.2-8 3.6"/>',
     ext: '<path d="M9.5 2.5h4v4M13.5 2.5 8 8M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3"/>',
-    check: '<path d="m3.5 8.4 3 3 6-6.5"/>'
+    check: '<path d="m3.5 8.4 3 3 6-6.5"/>',
+    // the four marks of the note boxes of a text (ui-md.js); the fifth is the bulb of idea
+    info: '<circle cx="8" cy="8" r="6.25"/><path d="M8 7.2v4"/><circle cx="8" cy="4.9" r=".95" fill="currentColor" stroke="none"/>',
+    tri: '<path d="M8 2.4 14.2 13H1.8z"/><path d="M8 6.6v3"/><circle cx="8" cy="11.2" r=".8" fill="currentColor" stroke="none"/>',
+    stop: '<path d="M5.3 1.9h5.4l3.4 3.4v5.4l-3.4 3.4H5.3L1.9 10.7V5.3z"/><path d="M8 5v3.4"/><circle cx="8" cy="10.8" r=".9" fill="currentColor" stroke="none"/>',
+    bubble: '<path d="M2.2 3.2a1 1 0 0 1 1-1h9.6a1 1 0 0 1 1 1v6.6a1 1 0 0 1-1 1H8.6L5.6 13.8v-3H3.2a1 1 0 0 1-1-1z"/><path d="M8 4.6v2.8"/><circle cx="8" cy="9" r=".8" fill="currentColor" stroke="none"/>'
   };
   var cache = {};
   function icon(name) {

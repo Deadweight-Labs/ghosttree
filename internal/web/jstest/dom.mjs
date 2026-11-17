@@ -34,6 +34,16 @@ class Node {
     this.parentNode = null;
   }
   get nextSibling() { const p = this.parentNode; return p ? p.childNodes[p.childNodes.indexOf(this) + 1] || null : null; }
+  get firstChild() { return this.childNodes[0] || null; }
+  get lastChild() { return this.childNodes[this.childNodes.length - 1] || null; }
+  // The node takes the place of this one (a Text has no ownerDocument, so the parent does it).
+  replaceWith(...n) {
+    const p = this.parentNode;
+    if (!p) return;
+    const at = p.childNodes.indexOf(this);
+    this.remove();
+    insert(p, n, at);
+  }
 }
 
 class Text extends Node {
@@ -42,6 +52,8 @@ class Text extends Node {
 }
 
 class Fragment extends Node {
+  append(...n) { insert(this, n, this.childNodes.length); }
+  appendChild(n) { insert(this, [n], this.childNodes.length); return n; }
   get children() { return this.childNodes.filter((n) => n instanceof Element); }
   get firstElementChild() { return this.children[0] || null; }
   get textContent() { return this.childNodes.map((n) => n.textContent).join(""); }
@@ -148,6 +160,8 @@ export class Element extends Node {
   }
   append(...n) { insert(this, n, this.childNodes.length); }
   appendChild(n) { insert(this, [n], this.childNodes.length); return n; }
+  insertBefore(n, ref) { insert(this, [n], ref ? this.childNodes.indexOf(ref) : this.childNodes.length); return n; }
+  get isConnected() { return this.ownerDocument.html.contains(this); }
   before(...n) { insert(this.parentNode, n, this.parentNode.childNodes.indexOf(this)); }
   after(...n) { insert(this.parentNode, n, this.parentNode.childNodes.indexOf(this) + 1); }
   contains(n) { for (let x = n; x; x = x.parentNode) if (x === this) return true; return false; }
@@ -311,8 +325,9 @@ class Document extends Node {
     this.readyState = "complete";
     this.cookie = "";
     this.html = this.createElement("html");
+    this.head = this.createElement("head");
     this.body = this.createElement("body");
-    this.html.append(this.body);
+    this.html.append(this.head, this.body);
     this.activeElement = this.body;
     this.documentElement = this.html;
     this.windowListeners = new Map();
@@ -322,6 +337,8 @@ class Document extends Node {
     return new (t === "form" ? HTMLFormElement : t === "input" ? HTMLInputElement : Element)(t, this);
   }
   createTextNode(s) { return new Text(s); }
+  createDocumentFragment() { return new Fragment(); }
+  contains(n) { return this.html.contains(n); }
   getElementById(id) { return queryAll(this.html, `[id="${id}"]`)[0] || null; }
   querySelectorAll(sel) { return queryAll(this.html, sel); }
   querySelector(sel) { return queryAll(this.html, sel)[0] || null; }

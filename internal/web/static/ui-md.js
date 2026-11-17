@@ -11,6 +11,14 @@
 // entry) as pills (ui-pill.js), and "#231" as in a code host: on the page of a
 // repository it is that repository's pull request 231 once the server confirms it,
 // else the knowledge entry of that number (the old spelling) or just text.
+// Also: a quote that starts with [!NOTE], [!TIP], [!IMPORTANT], [!WARNING] or
+// [!CAUTION] is a note box (the .callout of the page); <details> with an optional
+// <summary> on lines of their own, up to </details>, is a section that opens and
+// closes; ![alt](ATT-5) (or ![alt](/ui/attachments/5)) is the image of that
+// attachment in the text, drawn when the reader may see it and else shown as its
+// alt text, and no other address is ever loaded as an image; a ```mermaid block is
+// a diagram, drawn by ui-mermaid.js, which this script loads only when there is
+// one, and shown as its source when it cannot be drawn.
 // A box with data-md-anchors (the documents) gives its headings an address
 // "h-text" (a number after it counts up until it is free) and fills the nav
 // with data-toc with the outline.
@@ -31,6 +39,22 @@
 
   // The icons and the pill are the ones of ui-pill.js, the same the server writes.
   function icon(name) { return window.GTPill.icon(name); }
+
+  // The few words this script writes itself (the title of a note box, what a diagram
+  // that cannot be drawn says), in the language of the page.
+  var root = document.documentElement;
+  var DE = /^de\b/i.test((root && root.getAttribute && root.getAttribute("lang")) || "");
+  var WORDS = DE
+    ? { note: "Hinweis", tip: "Tipp", important: "Wichtig", warning: "Warnung", caution: "Achtung", details: "Details", diagram: "Diagramm", nodiagram: "Das Diagramm konnte nicht gezeichnet werden" }
+    : { note: "Note", tip: "Tip", important: "Important", warning: "Warning", caution: "Caution", details: "Details", diagram: "Diagram", nodiagram: "The diagram could not be drawn" };
+  // [!KIND] of a note box: the title, the icon and the colour of the .callout it is drawn in.
+  var ALERTS = {
+    NOTE: { word: "note", icon: "info", cls: "note" },
+    TIP: { word: "tip", icon: "idea", cls: "ok" },
+    IMPORTANT: { word: "important", icon: "bubble", cls: "done" },
+    WARNING: { word: "warning", icon: "tri", cls: "" },
+    CAUTION: { word: "caution", icon: "stop", cls: "is-danger" }
+  };
 
   // Allowed: http(s) and relative addresses. Everything else (javascript:, data:, //host) is dropped,
   // and so is an address with a control, space or direction mark (U+202A-202E, U+2066-2069,
@@ -179,6 +203,26 @@
     return { sq: sq, rd: rd };
   }
 
+  // The attachment an image address names: "ATT-5" or "/ui/attachments/5" (a title after it is
+  // ignored), as the number, or "". It is the only thing an image in a text can load; the server
+  // decides who may see it and answers a reader who may not like a number there is none of.
+  var RE_IMAGE_SRC = /^\s*(?:ATT-(\d{1,15})|\/ui\/attachments\/(\d{1,15}))(?:\s+(?:"[^"]*"|'[^']*'))?\s*$/;
+  function attachmentOf(raw) {
+    var m = RE_IMAGE_SRC.exec(raw), n = m ? Number(m[1] || m[2]) : 0;
+    return n > 0 && Number.isSafeInteger(n) ? String(n) : "";
+  }
+  // The image of an attachment. It is the alt text when it cannot be loaded (not found, not
+  // allowed, not an image), the same for every reason, so a reader learns nothing from it.
+  function image(id, alt) {
+    var img = el("img", "md-img"), text = alt || "ATT-" + id;
+    img.setAttribute("src", "/ui/attachments/" + id);
+    img.setAttribute("alt", alt);
+    img.setAttribute("loading", "lazy");
+    img.setAttribute("decoding", "async");
+    img.addEventListener("error", function () { img.replaceWith(document.createTextNode(text)); });
+    return img;
+  }
+
   function inline(src, parent, o) {
     var buf = "", i = 0, n = src.length, deep = (o.d || 0) + 1, closers = {}, pairs = null;
     function flush() { if (buf) { parent.appendChild(document.createTextNode(buf)); buf = ""; } }
@@ -219,6 +263,11 @@
           (c === "*" || !prev || !RE_WORD.test(prev))) {
         j = firstAfter(closers[c] || (closers[c] = italicClosers(src, c)), i + 1);
         if (j > 0) { sub("em", src.slice(i + 1, j)); i = j + 1; continue; }
+      }
+      if (c === "!" && src.charAt(i + 1) === "[") {
+        pairs = pairs || bracketPairs(src);
+        var ie = pairs.sq[i + 1], ir = ie > 0 && src.charAt(ie + 1) === "(" ? pairs.rd[ie + 1] : -1, att = ir > 0 ? attachmentOf(src.slice(ie + 2, ir)) : "";
+        if (att) { flush(); parent.appendChild(image(att, src.slice(i + 2, ie).trim().slice(0, 300))); i = ir + 1; continue; }
       }
       if (deep < 7 && c === "[" && !o.noLink) {
         pairs = pairs || bracketPairs(src);
@@ -361,8 +410,53 @@
     return a.indexOf("|") >= 0 && b.indexOf("|") >= 0 && RE_SEP.test(b) && cellsOf(a).length === cellsOf(b).length;
   }
 
+  // <details> and </details> stand on lines of their own, and so may the <summary>, or it
+  // stands on the line of the <details>. [open, summary] or null; the text of a summary is
+  // read as inline text, never as HTML.
+  var RE_DETAILS = /^ {0,3}<details( +open)?>[ \t]*(?:<summary>(.*?)<\/summary>[ \t]*)?$/i;
+  var RE_SUMMARY = /^ {0,3}<summary>(.*?)<\/summary>[ \t]*$/i;
+  var RE_DETAILS_END = /^ {0,3}<\/details>[ \t]*$/i;
+  // A note box: the first line of a quote is [!KIND] and nothing else.
+  var RE_ALERT = /^[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*$/i;
+
+  // A section that opens and closes on one line: <details><summary>x</summary>y</details>, the
+  // summary and the text after it each optional. {open, summary, body} or null. Read with indexOf, not
+  // with one pattern for the whole line, so a long line with many tags in it stays linear.
+  var RE_DETAILS_OPEN = /^ {0,3}<details( +open)?>/i;
+  function detailsOneLine(line) {
+    var m = RE_DETAILS_OPEN.exec(line);
+    if (!m) return null;
+    var last = line.toLowerCase().lastIndexOf("</details>");
+    if (last < m[0].length || line.slice(last + 10).trim()) return null;
+    var inner = line.slice(m[0].length, last).replace(/^[ \t]+/, ""), summary = "";
+    if (inner.slice(0, 9).toLowerCase() === "<summary>") {
+      var close = inner.toLowerCase().indexOf("</summary>");
+      if (close > 0) { summary = inner.slice(9, close); inner = inner.slice(close + 10); }
+    }
+    inner = inner.trim();
+    return { open: !!m[1], summary: summary, body: inner ? [inner] : [] };
+  }
+
+  // The section that starts at line i: {open, summary, body, end}, or null. It ends at its own
+  // </details> (one inside it that opens another is counted), or at the end of the text when
+  // there is none, as on a code host.
+  function detailsAt(lines, i) {
+    var one = detailsOneLine(lines[i]);
+    if (one) { one.end = i + 1; return one; }
+    var m = RE_DETAILS.exec(lines[i]);
+    if (!m) return null;
+    var summary = m[2], k = i + 1, s = summary == null && k < lines.length && RE_SUMMARY.exec(lines[k]);
+    if (s) { summary = s[1]; k++; }
+    var level = 1, j = k;
+    while (j < lines.length) {
+      if (RE_DETAILS_END.test(lines[j])) { if (--level === 0) break; } else if (RE_DETAILS.test(lines[j])) level++;
+      j++;
+    }
+    return { open: !!m[1], summary: summary || "", body: lines.slice(k, j), end: Math.min(j + 1, lines.length) };
+  }
+
   function interrupts(l) {
-    if (RE_FENCE.test(l) || RE_HEAD.test(l) || RE_QUOTE.test(l) || RE_RULE.test(l)) return true;
+    if (RE_FENCE.test(l) || RE_HEAD.test(l) || RE_QUOTE.test(l) || RE_RULE.test(l) || RE_DETAILS.test(l) || detailsOneLine(l)) return true;
     var m = RE_ITEM.exec(l);
     return !!m && !!m[3] && (!/^\d/.test(m[2]) || /^1[.)]$/.test(m[2]));
   }
@@ -477,7 +571,25 @@
         i++;
         var pre = el("pre"), cd = el("code", "", code.join("\n"));
         if (m[2]) pre.setAttribute("data-lang", m[2]);
-        pre.appendChild(cd); out.appendChild(pre); continue;
+        pre.appendChild(cd);
+        if (m[2].toLowerCase() === "mermaid" && code.join("").trim()) {
+          // The source stays in the box (hidden while the diagram is drawn): it is what is shown
+          // when the diagram cannot be, and what is drawn again when the colour scheme changes.
+          var dg = el("div", "mmd");
+          dg.setAttribute("data-mermaid", "");
+          dg.appendChild(pre); out.appendChild(dg);
+          wantDiagrams = true;
+          continue;
+        }
+        out.appendChild(pre); continue;
+      }
+      if (depth < 5 && (m = detailsAt(lines, i))) {
+        var dt = el("details", "md-details"), sm = el("summary");
+        if (m.open) dt.setAttribute("open", "");
+        if (m.summary.trim()) inline(m.summary.trim(), sm, { noLink: true }); else sm.textContent = WORDS.details;
+        dt.appendChild(sm);
+        blocks(m.body, dt, depth + 1, words);
+        out.appendChild(dt); i = m.end; continue;
       }
       if ((m = RE_HEAD.exec(ln))) {
         var h = el("h" + m[1].length);
@@ -488,6 +600,16 @@
       if (RE_QUOTE.test(ln) && depth < 5) {
         var inner = [];
         while (i < lines.length && RE_QUOTE.test(lines[i])) { inner.push(lines[i].replace(/^ {0,3}> ?/, "")); i++; }
+        var al = RE_ALERT.exec(inner[0]), kind = al && ALERTS[al[1].toUpperCase()];
+        if (kind) {
+          // The same box as the notes of the page (.callout), with the title of its kind in it.
+          var cl = el("div", "callout md-alert" + (kind.cls ? " " + kind.cls : "")), ic = icon(kind.icon), cb = el("div");
+          cl.setAttribute("role", "note");
+          if (ic) cl.appendChild(ic);
+          cb.appendChild(el("p", "md-alert-t", WORDS[kind.word]));
+          blocks(inner.slice(1), cb, depth + 1, words);
+          cl.appendChild(cb); out.appendChild(cl); continue;
+        }
         var bq = el("blockquote");
         blocks(inner, bq, depth + 1, words);
         out.appendChild(bq); continue;
@@ -513,9 +635,50 @@
     // Too long to read as Markdown within a moment: shown as it is, nothing is interpreted.
     if (src.length > MAX_MD) { frag.appendChild(el("pre", "", src)); return frag; }
     blocks(src.split("\n"), frag, 0, words);
+    // A fragment is put on the page by whoever asked for it (the preview of the composer): the
+    // diagrams in it are drawn when the next frame has seen where it went.
+    if (wantDiagrams) { wantDiagrams = false; requestAnimationFrame(function () { diagrams(document); }); }
     return frag;
   }
-  window.GTMarkdown = { render: render, safeUrl: safeUrl, maxLength: MAX_MD };
+  window.GTMarkdown = { render: render, safeUrl: safeUrl, maxLength: MAX_MD, word: function (k) { return WORDS[k] || ""; } };
+
+  // Diagrams. A text with a ```mermaid block has a box .mmd with the source in it; the script that
+  // draws it (ui-mermaid.js, and behind it the library in a frame of its own) is not part of the base
+  // bundle: it is asked for here, by a script element of this origin, the first time a box needs it.
+  var wantDiagrams = false, mermaidLoad = 0, mermaidWaiting = [];
+  function mermaidDone(ok) {
+    mermaidLoad = ok ? 3 : 2;
+    var list = mermaidWaiting;
+    mermaidWaiting = [];
+    list.forEach(function (fn) { fn(ok); });
+  }
+  function loadMermaid(fn) {
+    if (window.GTMermaid) { fn(true); return; }
+    if (mermaidLoad === 2) { fn(false); return; }
+    mermaidWaiting.push(fn);
+    if (mermaidLoad) return;
+    mermaidLoad = 1;
+    var s = document.createElement("script");
+    s.setAttribute("src", (document.body && document.body.getAttribute("data-mermaid")) || "/static/ui-mermaid.js");
+    s.addEventListener("load", function () { mermaidDone(!!window.GTMermaid); });
+    s.addEventListener("error", function () { mermaidDone(false); });
+    document.head.appendChild(s);
+  }
+  // The boxes on the page that no one has taken up yet are drawn; one that cannot be shows its source
+  // and a short note.
+  function diagrams(root) {
+    var found = [];
+    for (var b of root.querySelectorAll(".mmd[data-mermaid]:not([data-state])")) if (document.contains(b)) found.push(b);
+    if (!found.length) return;
+    for (var f of found) f.setAttribute("data-state", "wait");
+    loadMermaid(function (ok) {
+      for (var box of found) {
+        if (ok) { window.GTMermaid.draw(box); continue; }
+        box.setAttribute("data-state", "err");
+        box.appendChild(el("p", "mmd-err", WORDS.nodiagram));
+      }
+    });
+  }
 
   // The address of a heading: "h-" and its words, a number after it counts up
   // until nothing on the page has it (markdown.go writes the same for a page
@@ -573,6 +736,7 @@
       done = true;
     }
     done = refify(root || document) || done;
+    diagrams(root || document);
     if (!done) return;
     if (window.GTCards) window.GTCards.scan(root || document);
     if (window.GTRefs) window.GTRefs.resolve(root || document);

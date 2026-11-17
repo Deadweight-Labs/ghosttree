@@ -684,6 +684,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   hover cards on every reference, a Markdown preview, machine pages with their
   knowledge and sharing, and the idea workshop with its decisions. The previous
   interface is gone; its addresses redirect.
+- Texts of every kind (comments, descriptions, notes, room messages, documents
+  and the preview while writing) read more Markdown: a `mermaid` code block is
+  drawn as a diagram, in the light or dark colours of the page; `> [!NOTE]`,
+  `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` and `[!CAUTION]` quotes become note
+  boxes; `<details><summary>…</summary> … </details>` is a section that opens
+  and closes; `![alt](ATT-5)` shows the attachment of an idea in the text when
+  the reader may see it and its alt text when not. The diagrams come from the
+  library inside the server (Mermaid 12.3.0, see `THIRD_PARTY_NOTICES.md`),
+  loaded only for a text that has one and drawn in a sandboxed frame of its own,
+  so the content security policy of the pages stays as strict as it was (the
+  only addition is `frame-src 'self'`). Without the script every block stays
+  readable as a code block, a quote or paragraphs.
 - Guests see neither machine names nor branch names other than the default
   branch, and filters on branches are not offered to them.
 - Every entry links its Git anchor (commit, pull request, branch, or "web"); the
