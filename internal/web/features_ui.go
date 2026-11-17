@@ -68,6 +68,7 @@ type featureView struct {
 	Reason              string
 	Items               []tlItem
 	Ideas, Origin, Reqs []featureRef
+	Knowledge, Pains    []featureRef
 	PRs                 []featurePR
 	People              []string
 }
@@ -294,6 +295,15 @@ func (a *app) featureDetail(w http.ResponseWriter, r *http.Request, remote, id s
 			v.Origin = append(v.Origin, ideaRef(ref))
 		} else {
 			v.Origin = append(v.Origin, reqRef(ref))
+		}
+	}
+	for _, ref := range f.Related {
+		if ref.Kind == feature.KindKnowledge {
+			v.Knowledge = append(v.Knowledge, featureRef{Num: "KN-" + strconv.FormatInt(ref.ID, 10), Title: ref.Title,
+				Href: view.Href + "/knowledge/" + strconv.FormatInt(ref.ID, 10), Brief: l.msg("knowledge.type." + ref.State)})
+		} else {
+			v.Pains = append(v.Pains, featureRef{Num: "PAIN-" + strconv.FormatInt(ref.ID, 10), Title: ref.Title,
+				Href: view.Href + "/pains/" + strconv.FormatInt(ref.ID, 10), Brief: l.msg("pains.state." + ref.State)})
 		}
 	}
 	versions, _ := pa.FeatureVersions(n, false)

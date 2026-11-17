@@ -11,6 +11,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
 func sp(s string) *string      { return &s }
@@ -227,7 +228,7 @@ func TestAFeatureLinksIdeasAndIssuesAndAnImplementedIdeaBecomesOne(t *testing.T)
 	if _, err := w.pa["mia"].LinkFeature(f.ID, feature.KindRequest, 9999, feature.RelOrigin, "mia"); ruleCode(err) != "request_not_found" {
 		t.Fatalf("link to a missing request: %v", err)
 	}
-	if _, err := w.pa["mia"].LinkFeature(f.ID, "pain", 1, feature.RelOrigin, "mia"); ruleCode(err) != "invalid_kind" {
+	if _, err := w.pa["mia"].LinkFeature(f.ID, "task", 1, feature.RelOrigin, "mia"); ruleCode(err) != "invalid_kind" {
 		t.Fatalf("link of an unknown kind: %v", err)
 	}
 	if _, err := w.pa["mia"].LinkFeature(f.ID, feature.KindRequest, req, "likes", "mia"); ruleCode(err) != "invalid_relation" {
@@ -824,5 +825,55 @@ func TestALaterVersionByAMemberDoesNotLaunderTheStrangersText(t *testing.T) {
 		if b.ID == id {
 			t.Fatalf("a member's later version laundered the stranger's text: %+v", ctx)
 		}
+	}
+}
+
+// PAIN-88: a feature is tied to the knowledge entries and pains that belong to
+// it; the page shows them with title and state, and what the viewer may not
+// read is left out.
+func TestAFeatureLinksKnowledgeAndPains(t *testing.T) {
+	w := newPainWorld(t)
+	f := w.feat(t, "Wissen am Feature")
+	kid, err := w.st.InsertKnowledge(Knowledge{Type: "pitfall", Title: "Falle am Feature", Body: "b", Scope: scope.Axes{Project: roleProject}, Person: "mia", Confidence: "trusted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := w.newPain(t, "mia")
+	g, err := w.pa["mia"].LinkFeature(f.ID, feature.KindKnowledge, kid, "", "mia")
+	if err != nil || len(g.Related) != 1 || g.Related[0].HumanID() != "KN-"+itoa(kid) || g.Related[0].Title != "Falle am Feature" || g.Related[0].State != "pitfall" {
+		t.Fatalf("knowledge: %+v %v", g.Related, err)
+	}
+	if g, err = w.pa["mia"].LinkFeature(f.ID, feature.KindPain, p.Pain.ID, "", "mia"); err != nil || len(g.Related) != 2 || g.Related[1].HumanID() != "PAIN-"+itoa(p.Pain.ID) || g.Related[1].State != "active" {
+		t.Fatalf("pain: %+v %v", g.Related, err)
+	}
+	// Twice is once; a number that does not exist is refused, not invented.
+	if g, err = w.pa["mia"].LinkFeature(f.ID, feature.KindPain, p.Pain.ID, "", "mia"); err != nil || len(g.Related) != 2 {
+		t.Fatalf("again: %+v %v", g.Related, err)
+	}
+	if _, err := w.pa["mia"].LinkFeature(f.ID, feature.KindKnowledge, 99999, "", "mia"); ruleCode(err) != "knowledge_not_found" {
+		t.Fatalf("missing knowledge: %v", err)
+	}
+	if _, err := w.pa["mia"].LinkFeature(f.ID, feature.KindPain, 99999, "", "mia"); ruleCode(err) != "pain_not_found" {
+		t.Fatalf("missing pain: %v", err)
+	}
+	// The list of features carries them as well.
+	list, err := w.pa["mia"].SearchFeatures(feature.Filter{Project: roleProject, State: "all"})
+	if err != nil || len(list) != 1 || len(list[0].Related) != 2 {
+		t.Fatalf("list: %+v %v", list, err)
+	}
+	// An entry of another project is neither linked nor shown.
+	other, _ := w.st.InsertKnowledge(Knowledge{Type: "note", Title: "Fremd", Body: "b", Scope: scope.Axes{Project: "github.com/other/elsewhere"}, Person: "mia", Confidence: "trusted"})
+	if _, err := w.pa["mia"].LinkFeature(f.ID, feature.KindKnowledge, other, "", "mia"); ruleCode(err) != "knowledge_not_found" {
+		t.Fatalf("knowledge of another project: %v", err)
+	}
+	if _, err := w.st.db.Exec(`UPDATE knowledge SET project='github.com/other/elsewhere' WHERE id=?`, kid); err != nil {
+		t.Fatal(err)
+	} else {
+		if got, err := w.pa["mia"].FeatureView(f.ID); err != nil || len(got.Related) != 1 {
+			t.Fatalf("an entry that moved away still shows: %+v %v", got.Related, err)
+		}
+	}
+	if g, err = w.pa["mia"].UnlinkFeature(f.ID, feature.KindPain, p.Pain.ID, ""); err != nil || len(g.Related) != 0 && g.Related[0].Kind == feature.KindPain {
+		t.Fatalf("unlink: %+v %v", g.Related, err)
 	}
 }

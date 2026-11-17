@@ -78,9 +78,9 @@ type FeatureStateInput struct {
 type FeatureLinkInput struct {
 	ID     int64  `json:"id" jsonschema:"the feature number, FEAT-n"`
 	Action string `json:"action,omitempty" jsonschema:"link (default) or unlink"`
-	Kind   string `json:"kind" jsonschema:"idea or request"`
-	Ref    int64  `json:"ref" jsonschema:"the number of the idea or request"`
-	Rel    string `json:"rel,omitempty" jsonschema:"origin (it came out of that) or affects (that changes it: an idea with 'concerns FEAT-n'). Default affects for an idea, origin otherwise"`
+	Kind   string `json:"kind" jsonschema:"idea, request, knowledge (KN-n) or pain (PAIN-n)"`
+	Ref    int64  `json:"ref" jsonschema:"the number of the idea, request, knowledge entry or pain"`
+	Rel    string `json:"rel,omitempty" jsonschema:"origin (it came out of that) or affects (that changes it: an idea with 'concerns FEAT-n'). Default affects for an idea, origin otherwise. Knowledge and pains take no relation"`
 }
 
 type FeaturePRPathsInput struct {
@@ -124,7 +124,7 @@ func (s *Server) registerFeatureTools(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "feature_create", Description: "Create a feature page for something the product does now (not a plan: a wish is an idea). It needs a name; summary, behavior, limits, usage and the paths it lives in make it useful. An implemented idea becomes a feature with from_idea, unless it changes an existing feature, then write a new version of that one.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleFeatureCreate)
 	mcp.AddTool(srv, &mcp.Tool{Name: "feature_update", Description: "Write how a feature is NOW, after your change: a new version from the fields you pass on top of the current one. Name what triggered it (idea, requests, pr); the pull request's checklist item closes. Every version stays readable; unchanged text creates none.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleFeatureUpdate)
 	mcp.AddTool(srv, &mcp.Tool{Name: "feature_state", Description: "Retire a feature the product no longer has (a reason is required; a lead does it) or take it up again. A retired feature stays readable but leaves context and checklists.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleFeatureState)
-	mcp.AddTool(srv, &mcp.Tool{Name: "feature_link", Description: "Tie a feature to an idea or an issue: origin (it came out of that) or affects (that changes it). An idea that affects a feature shows its current description next to the wish, and its implementation carries that description forward instead of creating a new feature. Unlink takes a tie off; versions already written keep theirs.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleFeatureLink)
+	mcp.AddTool(srv, &mcp.Tool{Name: "feature_link", Description: "Tie a feature to an idea or an issue: origin (it came out of that) or affects (that changes it); or to a knowledge entry (KN-n, a pitfall or decision about it) or a pain (PAIN-n, a problem it touches), which take no relation and show on the feature page. An idea that affects a feature shows its current description next to the wish, and its implementation carries that description forward instead of creating a new feature. Unlink takes a tie off; versions already written keep theirs.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleFeatureLink)
 	mcp.AddTool(srv, &mcp.Tool{Name: "feature_pr_paths", Description: "Tell ghosttree which paths a pull request changes, and read the checklist that follows: for every feature whose paths contain one of them the item 'Feature X: Beschreibung angepasst?'. Get the paths with git diff --name-only <merge-base>...HEAD. Without paths it only reads the checklist of that pull request.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleFeaturePRPaths)
 	mcp.AddTool(srv, &mcp.Tool{Name: "feature_check", Description: "Say that you looked at a feature's description for a pull request and it still holds (a refactoring, behavior unchanged): closes the checklist item without a new version. A note says why. If the behavior changed, write feature action=update with pr instead.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleFeatureCheck)
 }
@@ -370,6 +370,7 @@ func RenderFeature(o FeatureOutput) string {
 	}
 	refs("Came out of", f.Origin)
 	refs("Changed by", f.Affects)
+	refs("Related", f.Related)
 	if len(o.Versions) > 0 {
 		var lines []string
 		for _, v := range o.Versions {

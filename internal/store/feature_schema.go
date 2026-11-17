@@ -23,6 +23,10 @@ import "database/sql"
 // Tabelle für beide Richtungen, damit die Idee ihr Feature und das Feature seine
 // Ideen aus derselben Zeile liest.
 //
+// feature_related (PAIN-88) verbindet ein Feature mit Wissen (KN-n) und Pains
+// (PAIN-n), ohne Richtung. Eine eigene Tabelle, weil die CHECK-Klausel von
+// feature_links die Arten festschreibt und SQLite sie nicht nachträglich ändert.
+//
 // feature_pr_paths sind die Pfade, die ein PR ändert, wie ein Client sie gemeldet
 // hat (git diff). Der Server hat das Repo nicht und fragt GitHub nicht; die Pfade
 // sind die Grundlage der Checkliste des PRs. feature_pr_checks hält fest, dass
@@ -90,6 +94,14 @@ CREATE TABLE IF NOT EXISTS feature_links(
   added_at TEXT NOT NULL,
   PRIMARY KEY(feature_id, kind, ref_id, rel));
 CREATE INDEX IF NOT EXISTS feature_links_ref ON feature_links(kind, ref_id);
+CREATE TABLE IF NOT EXISTS feature_related(
+  feature_id INTEGER NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL CHECK(kind IN ('knowledge','pain')),
+  ref_id INTEGER NOT NULL,
+  added_by TEXT NOT NULL DEFAULT '',
+  added_at TEXT NOT NULL,
+  PRIMARY KEY(feature_id, kind, ref_id));
+CREATE INDEX IF NOT EXISTS feature_related_ref ON feature_related(kind, ref_id);
 CREATE TABLE IF NOT EXISTS feature_pr_paths(
   project TEXT NOT NULL CHECK(project != ''),
   pr INTEGER NOT NULL CHECK(pr > 0),

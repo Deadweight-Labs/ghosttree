@@ -26,6 +26,8 @@
 {{if .Ideas}}<div class="sblk"><h3>{{t "features.side.ideas"}}</h3><div class="v">{{range .Ideas}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
 {{if .Origin}}<div class="sblk"><h3>{{t "features.side.origin"}}</h3><div class="v">{{range .Origin}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
 {{if .Reqs}}<div class="sblk"><h3>{{t "features.side.issues"}}</h3><div class="v">{{range .Reqs}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
+{{if .Knowledge}}<div class="sblk"><h3>{{t "features.side.knowledge"}}</h3><div class="v">{{range .Knowledge}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
+{{if .Pains}}<div class="sblk"><h3>{{t "features.side.pains"}}</h3><div class="v">{{range .Pains}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
 {{if .PRs}}<div class="sblk"><h3>{{t "features.side.pulls"}}</h3><div class="v">{{range .PRs}}{{pillx "pr" .Text .Href .Title ""}}{{end}}</div></div>{{end}}
 {{if .People}}<div class="sblk"><h3>{{t "pains.side.people"}}</h3><div class="v">{{range .People}}<span class="person">{{avatarOf .}}<span>{{.}}</span></span>{{end}}</div></div>{{end}}
 </aside></div>
