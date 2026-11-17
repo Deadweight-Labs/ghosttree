@@ -18,6 +18,12 @@ func renderDescription(src string) template.HTML {
 	src = strings.ReplaceAll(strings.ReplaceAll(src, "\r\n", "\n"), "\r", "\n")
 	var b strings.Builder
 	for _, block := range splitBlocks(src) {
+		// "Synopsis:" and "Context:" head the sections the gardener writes; they
+		// are the structure of the text, not something to read (P35).
+		block = withoutGhostLabel(block)
+		if block == "" {
+			continue
+		}
 		lines := strings.Split(block, "\n")
 		switch {
 		case strings.HasPrefix(lines[0], "# ") || strings.HasPrefix(lines[0], "## ") || strings.HasPrefix(lines[0], "### "):
@@ -109,6 +115,7 @@ func inlineMD(s string) string {
 // plainLine ist eine Beschreibung als eine Zeile ohne Auszeichnung, für die
 // Spalte der Tabelle.
 func plainLine(s string, limit int) string {
+	s = withoutGhostLabel(s)
 	s = strings.NewReplacer("`", "", "**", "", "\n> ", " ", "\n- ", " ").Replace(s)
 	s = strings.TrimLeft(s, "#> -*")
 	return leadSentence(s, limit)

@@ -735,6 +735,9 @@ func activityLines(l lang, acts []requestdomain.Activity, humans map[int64]strin
 func (a *app) requestResult(r *http.Request, d requestdomain.Detail) *requestResult {
 	l := a.langFor(r)
 	q := r.URL.Query()
+	if res := labelAssignResult(r, l); res != nil {
+		return res
+	}
 	if fail := q.Get("fail"); fail == "open_criteria" && d.Request.State == "open" {
 		return &requestResult{Text: l.msg("requests.fail.open_criteria"), Kind: "failed", Fail: true}
 	} else if strings.HasPrefix(fail, "img_") {

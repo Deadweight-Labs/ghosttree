@@ -521,14 +521,18 @@ func (s *Server) handleRequestStartWork(_ context.Context, _ *mcp.CallToolReques
 		role = "primary"
 	}
 	sessionID := in.SessionID
+	var ownNote string
 	if sessionID == 0 {
-		found, err := s.ownSession()
+		found, note, err := s.ownSession()
 		if err != nil {
 			return nil, RequestWorkOutput{}, err
 		}
-		sessionID = found
+		sessionID, ownNote = found, note
 	}
 	work, warnings, briefing, err := s.client.StartRequestWorkBriefing(in.RequestID, sessionID, role)
+	if ownNote != "" {
+		warnings = append(warnings, ownNote)
+	}
 	out := RequestWorkOutput{Work: work, Warnings: warnings, IdeaBriefing: briefing}
 	return s.withRequestLink(requestResult(out), work.RequestID, err), out, err
 }
@@ -545,13 +549,14 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 		return nil, RequestChangeOutput{}, fmt.Errorf("relation_remove needs relation_id; request action=get lists each relation with its id")
 	}
 	var err error
+	var retried bool
 	switch in.Action {
 	case "criterion_add":
 		_, err = s.client.AddRequestCriterion(in.RequestID, in.Description)
 	case "criterion_met":
-		err = s.client.SetRequestCriterion(in.CriterionID, "met", evidence)
+		retried, err = s.setCriterion(in.RequestID, in.CriterionID, "met", evidence)
 	case "criterion_waive":
-		err = s.client.SetRequestCriterion(in.CriterionID, "waived", evidence)
+		retried, err = s.setCriterion(in.RequestID, in.CriterionID, "waived", evidence)
 	case "criterion_reopen":
 		// Der Rückweg des Prüfmodus: das Kriterium war erfüllt oder verzichtet,
 		// der Nachweis hält gegen den Code nicht. Die Begründung prüft der Server.
@@ -589,6 +594,9 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 	detail, err := s.client.GetRequest(in.RequestID)
 	out := changeOutput(detail, in.Action, in.CriterionID)
 	res := requestResult(out)
+	if retried {
+		res.Content = append(res.Content, &mcp.TextContent{Text: "The server answered slowly; the change was repeated or checked and is saved."})
+	}
 	if err == nil {
 		res = s.withCard(res, s.builder().RequestCard(detail))
 	}
@@ -599,8 +607,13 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 // looks through.
 const ownSessionScan = 200
 
+// ownSessionRecent: so jung muss eine Session sein, damit ownSession sie ohne
+// Harness-Kennung für die eigene hält.
+const ownSessionRecent = 30 * time.Minute
+
 // ownSession findet die Session dieses MCP-Prozesses, wenn der Agent ihre Nummer
-// nicht nennt (PAIN-57).
+// nicht nennt (PAIN-57). Die zweite Rückgabe ist ein Hinweis, wenn die Wahl nicht
+// sicher war und der Agent sie prüfen soll.
 //
 // Der Branch der Session-Zeile ist der vom Sessionstart: der Sammler liest ihn
 // einmal aus den ersten Zeilen des Transkripts. Der Agent legt mitten in der
@@ -609,38 +622,52 @@ const ownSessionScan = 200
 // des Arbeitsverzeichnisses überein. Wer nach dem Branch sucht, findet die
 // eigene Session genau dann nicht mehr, wenn er sie braucht. Deshalb, in dieser
 // Reihenfolge: die Harness-Session-ID dieses Prozesses (sicher, wo gesetzt),
-// dann das Arbeitsverzeichnis (ein Branchwechsel ändert es nicht), zuletzt der
-// Branch von früher, wie es vorher allein galt.
+// dann das Arbeitsverzeichnis (ein Branchwechsel ändert es nicht), dann der
+// Branch von früher, zuletzt die neueste Session dieser Maschine.
 //
 // Nach dem Alter geordnet liegen die Sessions eines Projekts, in dem viele
 // Agenten zugleich arbeiten (ein Orchestrator mit Workern in Worktrees),
 // schnell weiter hinten als die ersten zwanzig: die eigene wurde dann nicht
 // mehr gefunden, obwohl sie passte (REQ-436 AC-5). Deshalb wird bis
 // ownSessionScan Zeilen weit gesucht.
-func (s *Server) ownSession() (int64, error) {
+//
+// Die Harness-Kennung ist bei einem frisch gestarteten claude -p früher da als die
+// Session auf dem Server: der Sammler lädt sie erst beim nächsten Durchlauf hoch
+// (alle 30 Sekunden), und der Agent ruft start_work meist in den ersten Sekunden
+// auf (REQ-690). Kennt der Server die Session noch nicht, legt ownSession sie an;
+// der Sammler füllt dieselbe Zeile später (gleicher Harness, gleiche Adresse).
+func (s *Server) ownSession() (int64, string, error) {
 	sessions, err := s.client.Sessions(scope.Axes{Project: s.ctxAxes.Project}, ownSessionScan)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if s.sessionRef != "" {
 		for _, candidate := range sessions {
 			if candidate.ExternalID == s.sessionRef {
-				return candidate.ID, nil
+				return candidate.ID, "", nil
 			}
 		}
 	}
-	cutoff := time.Now().Add(-30 * time.Minute)
-	var cwd string
+	cutoff := time.Now().Add(-ownSessionRecent)
+	var cwd, liveBranch string
 	branches := map[string]bool{}
 	if s.ctxAxes.Branch != "" {
 		branches[s.ctxAxes.Branch] = true
 	}
 	if s.live != nil {
 		l := s.live()
-		cwd = l.CWD
+		cwd, liveBranch = l.CWD, l.Branch
 		if l.Branch != "" {
 			branches[l.Branch] = true
 		}
+	}
+	// Nur für Claude Code: dort ist die Kennung des Prozesses nachweislich die
+	// Adresse, unter der der Sammler die Session führt. Bei Codex und OpenCode ist
+	// das nicht gesichert, eine zweite Zeile derselben Session wäre schlimmer als
+	// der Rückfall unten.
+	if s.sessionRef != "" && (s.sessionHarness == "" || s.sessionHarness == "claude-code") {
+		id, err := s.announceOwnSession(cwd, liveBranch)
+		return id, "", err
 	}
 	recent := func(candidate store.Session) bool {
 		seen, err := time.Parse(time.RFC3339Nano, candidate.LastSeenAt)
@@ -649,14 +676,59 @@ func (s *Server) ownSession() (int64, error) {
 	if cwd != "" {
 		for _, candidate := range sessions {
 			if recent(candidate) && candidate.CWD == cwd {
-				return candidate.ID, nil
+				return candidate.ID, "", nil
 			}
 		}
 	}
 	for _, candidate := range sessions {
 		if recent(candidate) && (len(branches) == 0 || branches[candidate.Scope.Branch]) {
-			return candidate.ID, nil
+			return candidate.ID, "", nil
 		}
 	}
-	return 0, fmt.Errorf("no recently active session matches this project, working directory, and machine; sync the collector or provide session_id")
+	// Zuletzt die neueste Session dieser Maschine, gleich in welchem Projekt: der
+	// Agent weiß seine Nummer nicht, und ohne diese Bindung bliebe die Arbeit ohne
+	// Session. Wer mehrere Agenten auf einer Maschine hat, prüft sie am Hinweis.
+	if s.ctxAxes.Machine != "" {
+		all, err := s.client.Sessions(scope.Axes{Machine: s.ctxAxes.Machine}, ownSessionScan)
+		if err != nil {
+			return 0, "", err
+		}
+		for _, candidate := range all {
+			if recent(candidate) {
+				title := candidate.Title
+				if title == "" {
+					title = candidate.ExternalID
+				}
+				return candidate.ID, fmt.Sprintf("this process does not know its harness session, so the work is attached to the newest session of machine %s: %q (session %d). If that is not yours, finish the work and start it again with session_id.", s.ctxAxes.Machine, title, candidate.ID), nil
+			}
+		}
+	}
+	return 0, "", fmt.Errorf("start_work does not know which session you are: this process has no harness session id and no session of machine %q was active in the last %d minutes. Start it again with session_id (context_search action=sessions lists the sessions), or make sure the collector runs (ctx watch, ctx status) and try again in half a minute", s.ctxAxes.Machine, int(ownSessionRecent/time.Minute))
+}
+
+// announceOwnSession legt die Session dieses Prozesses auf dem Server an, bevor
+// der Sammler sie hochgeladen hat. Der Upsert ist derselbe wie der des Sammlers
+// (Harness plus Adresse); Konto und Maschine prüft der Server.
+func (s *Server) announceOwnSession(cwd, branch string) (int64, error) {
+	if !store.ValidExternalID(s.sessionRef) {
+		return 0, fmt.Errorf("start_work cannot use the harness session id %q; pass session_id", s.sessionRef)
+	}
+	harness := s.sessionHarness
+	if harness == "" {
+		harness = "claude-code"
+	}
+	if branch == "" {
+		branch = s.ctxAxes.Branch
+	}
+	ref, err := s.client.UpsertSessionRef(store.Session{
+		Harness: harness, ExternalID: s.sessionRef, CWD: cwd,
+		Scope: scope.Axes{Project: s.ctxAxes.Project, Branch: branch, Machine: s.ctxAxes.Machine},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("start_work could not register session %s on the server: %w; pass session_id or start it again once the collector has uploaded the session (ctx status)", s.sessionRef, err)
+	}
+	if ref.ID == 0 {
+		return 0, fmt.Errorf("start_work: this token may not attach work to a session; use a member token")
+	}
+	return ref.ID, nil
 }

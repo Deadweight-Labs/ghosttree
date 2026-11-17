@@ -51,6 +51,7 @@ var mockIcons = map[string]string{
 	"lock":      `<rect x="3" y="7" width="10" height="6.5" rx="1.5"/><path d="M5.2 7V5.2a2.8 2.8 0 0 1 5.6 0V7"/>`,
 	"merge":     `<circle cx="3.75" cy="3.75" r="1.6"/><circle cx="3.75" cy="12.25" r="1.6"/><circle cx="12.25" cy="8" r="1.6"/><path d="M3.75 5.35v5.3M5.3 4.9C8.3 5.3 9.4 6.3 10.65 8"/>`,
 	"moon":      `<path d="M13.5 9.6A5.7 5.7 0 0 1 6.4 2.5a5.7 5.7 0 1 0 7.1 7.1z"/>`,
+	"system":    `<rect x="2" y="2.8" width="12" height="8.2" rx="1.4"/><path d="M6 13.6h4M8 11v2.6"/>`,
 	"pain":      `<circle cx="8" cy="8" r="6.25"/><path d="M8 4.7v3.9"/><circle cx="8" cy="11.1" r=".95" fill="currentColor" stroke="none"/>`,
 	"pause":     `<circle cx="8" cy="8" r="6.25"/><path d="M6.4 5.6v4.8M9.6 5.6v4.8"/>`,
 	"pencil":    `<path d="m10.4 3.1 2.5 2.5-7.2 7.2-3.2.7.7-3.2z"/><path d="m9.2 4.3 2.5 2.5"/>`,

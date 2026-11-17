@@ -110,10 +110,9 @@ func TestLabelAssignRefusesGuestsStrangersMissingTokensAndForgedInput(t *testing
 		t.Errorf("without a token -> %d, want 403", resp.StatusCode)
 	}
 	for name, f := range map[string]url.Values{
-		"unknown kind":  {"kind": {"knowledge"}, "id": {itoa(req.Request.ID)}, "add": {"ui"}},
-		"unknown label": {"kind": {"request"}, "id": {itoa(req.Request.ID)}, "add": {"nope"}},
-		"nothing":       {"kind": {"request"}, "id": {itoa(req.Request.ID)}},
-		"bad id":        {"kind": {"request"}, "id": {"x"}, "add": {"ui"}},
+		"unknown kind": {"kind": {"knowledge"}, "id": {itoa(req.Request.ID)}, "add": {"ui"}},
+		"nothing":      {"kind": {"request"}, "id": {itoa(req.Request.ID)}},
+		"bad id":       {"kind": {"request"}, "id": {"x"}, "add": {"ui"}},
 	} {
 		if r := postForm(t, e, e.Member, "/ui/labels/assign", f); r.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s -> %d, want 400", name, r.StatusCode)
@@ -121,5 +120,38 @@ func TestLabelAssignRefusesGuestsStrangersMissingTokensAndForgedInput(t *testing
 	}
 	if got := labelNames(t, e, "request", req.Request.ID); len(got) != 0 {
 		t.Errorf("a refused request set labels: %v", got)
+	}
+}
+
+// REQ-690 AC-3 (R04): a label that cannot be set is not a blank error page. The
+// browser comes back to the page of the object and the page says what happened; a
+// success says so as well.
+func TestLabelAssignAnswersOnThePageOfTheObject(t *testing.T) {
+	e := ovEnv(t)
+	owner := tpOwner(e)
+	if _, err := owner.CreateLabel(store.LabelInput{Project: shellProject, Name: "ui", Color: "0969da", By: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	req := rqMake(t, e.St, rqSpec{Title: "Needs a label"})
+	page := "/ui/x/shell/issues/" + itoa(req.Request.ID)
+
+	resp := postForm(t, e, e.Member, "/ui/labels/assign", url.Values{"kind": {"request"}, "id": {itoa(req.Request.ID)}, "add": {"nope"}})
+	loc := resp.Header.Get("Location")
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, page+"?fail=label") {
+		t.Fatalf("an unknown label -> %d %q", resp.StatusCode, loc)
+	}
+	_, body := fetchPage(t, e.Member, e.Base+loc)
+	if !strings.Contains(body, "The label could not be set") {
+		t.Errorf("the page does not say that the label failed:\n%.1500s", body)
+	}
+
+	resp = postForm(t, e, e.Member, "/ui/labels/assign", url.Values{"kind": {"request"}, "id": {itoa(req.Request.ID)}, "add": {"ui"}})
+	loc = resp.Header.Get("Location")
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, page+"?done=label") {
+		t.Fatalf("a known label -> %d %q", resp.StatusCode, loc)
+	}
+	_, body = fetchPage(t, e.Member, e.Base+loc)
+	if !strings.Contains(body, "Labels saved.") {
+		t.Errorf("the page does not confirm the label:\n%.1500s", body)
 	}
 }

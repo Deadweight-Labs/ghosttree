@@ -8,6 +8,7 @@ func init() {
 		"sessions.ghost_view":            {"ghosttree view", "ghosttree-Ansicht"},
 		"sessions.ev.started":            {"started the session", "hat die Session gestartet"},
 		"sessions.ev.tools":              {"made %d tool calls", "hat %d Werkzeugaufrufe gemacht"},
+		"sessions.ev.answer":             {"answered", "hat geantwortet"},
 		"sessions.tools.commands":        {"%d commands", "%d Befehle"},
 		"sessions.tools.reads":           {"%d reads", "%d Lesezugriffe"},
 		"sessions.tools.edits":           {"%d edits", "%d Änderungen"},

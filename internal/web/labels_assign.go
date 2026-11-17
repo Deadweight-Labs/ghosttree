@@ -82,18 +82,38 @@ func (a *app) labelAssign(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
 	if _, err := pa.SetLabels(kind, id, add, remove); err != nil {
 		switch {
-		case errors.Is(err, store.ErrAccessForbidden):
-			http.Error(w, "forbidden", http.StatusForbidden)
 		case errors.Is(err, store.ErrAccessNotFound):
 			http.NotFound(w, r)
+		case errors.Is(err, store.ErrAccessForbidden):
+			// Wer kein Recht hat, sieht das Formular nicht; das hier ist ein gebautes.
+			http.Error(w, "forbidden", http.StatusForbidden)
 		default:
-			// Ein Name, den es im Projekt nicht gibt, kommt nur aus einem
-			// gefälschten Formular: die Auswahl bietet ihn nie an.
+			// Ein Name, den es im Projekt nicht gibt: die Seite war älter als eine
+			// Umbenennung. Die Antwort steht auf der Seite des Objekts, statt einer
+			// leeren Fehlerseite: ein Fehlschlag ohne Meldung sah aus wie „es passiert
+			// nichts“ (R04).
+			if page := a.objectPage(pa, kind, id); page != "/ui/inbox" {
+				http.Redirect(w, r, page+"?fail=label#labels", http.StatusSeeOther)
+				return
+			}
 			http.Error(w, "invalid input", http.StatusBadRequest)
 		}
 		return
 	}
-	http.Redirect(w, r, a.objectPage(pa, kind, id)+"#labels", http.StatusSeeOther)
+	http.Redirect(w, r, a.objectPage(pa, kind, id)+"?done=label#labels", http.StatusSeeOther)
+}
+
+// labelAssignResult is the line a page shows after the label form: the refusals as
+// ?fail= and the success as ?done=label. Nil for anything else.
+func labelAssignResult(r *http.Request, l lang) *requestResult {
+	q := r.URL.Query()
+	switch {
+	case q.Get("fail") == "label":
+		return &requestResult{Text: l.msg("labels.fail"), Kind: "failed", Fail: true}
+	case q.Get("done") == "label":
+		return &requestResult{Text: l.msg("labels.done"), Kind: "done"}
+	}
+	return nil
 }
 
 // formNames macht aus Formularwerten saubere Labelnamen: ohne Leeres, ohne

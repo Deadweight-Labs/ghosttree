@@ -453,17 +453,26 @@ func isTranscript(p string) bool {
 
 // Sweep syncs every transcript under the roots once.
 func Sweep(roots map[string]string, up Uploader, st *State, machine string) error {
+	// Hat der Server einen Upload auch nach den Wiederholungen nicht genommen,
+	// wiederholt dieser Durchlauf für die übrigen Transkripte nicht mehr: sonst
+	// wartete er bei jedem von fünfzig Transkripten, während der Server steht.
+	retries := syncRetries
 	for root, harness := range roots {
 		err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !isTranscript(p) {
 				return nil
 			}
-			logSyncError(p, SyncFile(p, harness, up, st, machine))
+			if syncOne(p, harness, up, st, machine, retries) {
+				retries = 0
+			}
 			return nil
 		})
 		if err != nil && !os.IsNotExist(err) {
 			log.Printf("walk %s: %v", root, err)
 		}
+	}
+	if err := st.WriteHealth(); err != nil {
+		log.Printf("health report: %v", err)
 	}
 	return st.Save()
 }
@@ -525,7 +534,9 @@ func Watch(roots map[string]string, up Uploader, st *State, machine string, inte
 			if ev.Op&(fsnotify.Write|fsnotify.Create) == 0 {
 				continue
 			}
-			logSyncError(ev.Name, SyncFile(ev.Name, harnessOf(ev.Name), up, st, machine))
+			// Ein Ereignis wiederholt nicht: der nächste Durchlauf holt es nach, und
+			// die Schleife darf nicht warten, während Dateien weiter schreiben.
+			syncOne(ev.Name, harnessOf(ev.Name), up, st, machine, 0)
 		case err, ok := <-w.Errors:
 			if !ok {
 				return nil

@@ -186,6 +186,7 @@
   & .pop .ph { padding: 4px 16px 8px; font-size: 12px; font-weight: 600; color: var(--fg-muted); border-bottom: 1px solid var(--border-muted); margin-bottom: 4px; }
   & .pop .opt { display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 0 8px; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-default); text-align: left; cursor: pointer; font-size: 14px; text-decoration: none; }
   & .pop .opt:hover { background: var(--neutral-muted); text-decoration: none; }
+  & .pop .opt:focus-visible { background: var(--neutral-muted); outline: 2px solid var(--accent-fg); outline-offset: -2px; text-decoration: none; }
   & .pop .opt small { margin-left: auto; color: var(--fg-muted); font-size: 12px; }
   & .pop .opt .chk { display: inline-flex; width: 16px; color: var(--fg-default); }
   & .pop .opt .chk.off { visibility: hidden; }

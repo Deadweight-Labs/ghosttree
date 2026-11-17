@@ -260,10 +260,10 @@ func TestAccountMenuHasNoDoubleEntriesNamesTheThemeAndTicksTheOrganization(t *te
 			t.Errorf("the menu lacks %q", want)
 		}
 	}
-	// The theme is named by its state; the page script shows the one that is on.
-	for _, want := range []string{`data-theme-is="dark" hidden>Theme: Dark`, `data-theme-is="light" hidden>Theme: Light`} {
+	// The theme is a choice of three, and the page script marks the one that is on.
+	for _, want := range []string{`data-theme-set="light"`, `data-theme-set="dark"`, `data-theme-set="system"`, `role="radiogroup"`, "<span>Light</span>", "<span>Dark</span>", "<span>System</span>"} {
 		if !strings.Contains(menu, want) {
-			t.Errorf("the theme entry lacks %q", want)
+			t.Errorf("the theme choice lacks %q", want)
 		}
 	}
 	// Only the organization that is shown has a tick.

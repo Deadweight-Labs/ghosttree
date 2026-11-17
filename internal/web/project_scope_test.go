@@ -204,3 +204,27 @@ func TestLogoutForgetsTheSelection(t *testing.T) {
 		t.Errorf("logout must clear the project cookie, got %+v", cookie)
 	}
 }
+
+// REQ-690 AC-4 (R06): the header of an organization's page names the organization and nothing
+// the viewer picked earlier. The repository remembered from another page stood behind the
+// organization ("Default / deploy-hook") although it belongs to another one.
+func TestOrganizationPageDoesNotCarryTheRememberedRepositoryInItsHeader(t *testing.T) {
+	base, owner, _, _ := shellWeb(t)
+	c := remembering(t, base, owner)
+	_, page := fetchPage(t, c, base+"/ui/knowledge?project="+shellProject)
+	if selectedOption(page) != shellProject {
+		t.Fatalf("the repository is not remembered on a global page: %q", selectedOption(page))
+	}
+	status, org := fetchPage(t, c, base+"/ui/alpha")
+	if status != http.StatusOK {
+		t.Fatalf("organization page = %d", status)
+	}
+	head := org[strings.Index(org, `class="hcrumb"`):]
+	head = head[:strings.Index(head, "</div>")]
+	if !strings.Contains(head, `<span class="cur">Alpha</span>`) {
+		t.Fatalf("the header does not name the organization: %s", head)
+	}
+	if strings.Contains(head, `class="scope"`) {
+		t.Errorf("the header of the organization still carries the remembered repository: %s", head)
+	}
+}

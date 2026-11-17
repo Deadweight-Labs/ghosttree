@@ -280,8 +280,12 @@ func TestStartWorkFindsTheOwnSessionAfterABranchSwitch(t *testing.T) {
 	t.Run("no match is an error that says what was compared", func(t *testing.T) {
 		s, st := pkgServer(t, "feat/new")
 		req := pkgRequests(t, st, "r")[0].Request.ID
-		mk(s, st, "stranger", "/work/other", "feat/other")
-		if _, err := start(t, s, st, req); err == nil || !strings.Contains(err.Error(), "working directory") {
+		// Eine Session einer anderen Maschine ist auch nicht der Rückfall.
+		if _, err := st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "stranger", CWD: "/work/other",
+			Scope: scope.Axes{Project: pkgProject, Branch: "feat/other", Machine: "workstation-b"}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := start(t, s, st, req); err == nil || !strings.Contains(err.Error(), "session_id") {
 			t.Fatalf("error = %v", err)
 		}
 	})

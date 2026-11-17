@@ -13,14 +13,16 @@ var messagesWP20 = map[string]string{
 	"login.continue_as": "Continue as %s",
 	"login.device_link": "ctx web on %s opened this link. The session reads and does everyday work; roles, invitations and settings need your own sign-in.",
 
-	"adm.this_device":   "this device",
-	"adm.device.note":   "Signed in through %s. This session reads and does everyday work; roles, invitations and settings need your own sign-in.",
-	"adm.device.signin": "Sign in as yourself",
-	"adm.device.locked": "Needs your own sign-in",
-	"nav.team_settings": "Team settings",
-	"shell.theme_dark":  "Theme: Dark",
-	"shell.theme_light": "Theme: Light",
-	"shell.org_current": "Current organization",
+	"adm.this_device":    "this device",
+	"adm.device.note":    "Signed in through %s. This session reads and does everyday work; roles, invitations and settings need your own sign-in.",
+	"adm.device.signin":  "Sign in as yourself",
+	"adm.device.locked":  "Needs your own sign-in",
+	"nav.team_settings":  "Team settings",
+	"shell.theme":        "Appearance",
+	"shell.theme_dark":   "Dark",
+	"shell.theme_light":  "Light",
+	"shell.theme_system": "System",
+	"shell.org_current":  "Current organization",
 }
 
 var messagesWP20DE = map[string]string{
@@ -33,14 +35,16 @@ var messagesWP20DE = map[string]string{
 	"login.continue_as": "Weiter als %s",
 	"login.device_link": "ctx web auf %s hat diesen Link geöffnet. Die Sitzung liest und erledigt die tägliche Arbeit; Rollen, Einladungen und Einstellungen brauchen deine eigene Anmeldung.",
 
-	"adm.this_device":   "diesem Gerät",
-	"adm.device.note":   "Angemeldet über %s. Diese Sitzung liest und erledigt die tägliche Arbeit; Rollen, Einladungen und Einstellungen brauchen deine eigene Anmeldung.",
-	"adm.device.signin": "Als du selbst anmelden",
-	"adm.device.locked": "Braucht deine eigene Anmeldung",
-	"nav.team_settings": "Team-Einstellungen",
-	"shell.theme_dark":  "Darstellung: Dunkel",
-	"shell.theme_light": "Darstellung: Hell",
-	"shell.org_current": "Aktuelle Organisation",
+	"adm.this_device":    "diesem Gerät",
+	"adm.device.note":    "Angemeldet über %s. Diese Sitzung liest und erledigt die tägliche Arbeit; Rollen, Einladungen und Einstellungen brauchen deine eigene Anmeldung.",
+	"adm.device.signin":  "Als du selbst anmelden",
+	"adm.device.locked":  "Braucht deine eigene Anmeldung",
+	"nav.team_settings":  "Team-Einstellungen",
+	"shell.theme":        "Darstellung",
+	"shell.theme_dark":   "Dunkel",
+	"shell.theme_light":  "Hell",
+	"shell.theme_system": "System",
+	"shell.org_current":  "Aktuelle Organisation",
 }
 
 func init() {
