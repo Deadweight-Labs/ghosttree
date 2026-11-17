@@ -27,7 +27,7 @@
 {{with .Diff}}<div class="box dcdiff"><div class="box-h"><span class="t">{{t "wf.def.diff_h" .From .To}}</span><span class="add">{{t "docs.plus" .Added}}</span><span class="del">{{t "docs.minus" .Removed}}</span><span class="sp"></span><a class="gbtn sm" href="{{$.WorkflowDefV.Href}}">{{mi "file"}}{{t "wf.def.show_text"}}</a></div>
 {{if .Lines}}<div class="dlines">{{range .Lines}}{{if eq .Op "skip"}}<div class="dl skip" aria-hidden="true"></div>{{else}}<div class="dl {{.Op}}"><span class="ln">{{if .Old}}{{.Old}}{{end}}</span><span class="ln">{{if .New}}{{.New}}{{end}}</span><span class="tx">{{if eq .Op "add"}}<span class="visually-hidden">{{t "code.diff_add"}} </span>{{else if eq .Op "del"}}<span class="visually-hidden">{{t "code.diff_del"}} </span>{{end}}{{.Text}}</span></div>{{end}}{{end}}</div>
 {{else}}<div class="box-empty">{{t "wf.def.diff_same"}}</div>{{end}}</div>
-{{else}}<div class="box"><pre class="wftext wffile" aria-label="{{t "wf.def.text"}}">{{.Text}}</pre></div>{{end}}
+{{else}}<div class="box wfv"{{with .Visual}} data-wfv data-model="{{.Model}}" data-catalog="{{.Catalog}}" data-l10n="{{.L10n}}"{{end}}><pre class="wftext wffile wfv-text" aria-label="{{t "wf.def.text"}}">{{.Text}}</pre></div>{{end}}
 <div class="sec" id="runs"><h2>{{t "wf.def.runs"}}</h2><span class="counter">{{len .Runs}}</span></div>
 <div class="box">{{range .Runs}}<div class="row wfrow"><span class="st {{.Tone}}" aria-hidden="true">{{mi .Icon}}</span><div class="wfmain"><a class="wfname rl mono" href="{{.Href}}">#{{.ID}}</a>
 <div class="wfsub">{{template "wftrigger" .Trigger}}{{if .Result}}<span class="wfres">{{.Result}}</span>{{else if .Reason}}<span class="wfres muted">{{.Reason}}</span>{{end}}</div></div>
@@ -51,8 +51,8 @@
 <div class="dhead"><div class="dtitle"><h1>{{if .New}}{{t "wf.def.new"}}{{else}}{{t "wf.def.edit" .Name}}{{end}}</h1></div></div>
 <form class="wfform" method="post" action="/ui/workflows/save"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="project" value="{{.Project}}"><input type="hidden" name="mode" value="{{if .New}}new{{else}}edit{{end}}">{{if not .New}}<input type="hidden" name="base_version" value="{{.Base}}">{{end}}
 <label class="pfield"><span>{{t "wf.def.name"}}</span><input class="gfield mono" name="name" value="{{.Name}}" maxlength="64" pattern="[a-z0-9_\-]{2,64}" required{{if not .New}} readonly{{end}} autocomplete="off" spellcheck="false"></label>
-<label class="pfield"><span>{{t "wf.def.text"}}</span><textarea class="gfield mono wfedit" name="text" rows="18" spellcheck="false" required>{{.Text}}</textarea></label>
-<p class="wfblocks"><span class="muted">{{t "wf.def.blocks"}}</span>{{range .Blocks}} <code>{{.}}</code>{{end}}</p>
+<div class="wfv wfv-edit"{{with .Visual}} data-wfv data-edit data-model="{{.Model}}" data-catalog="{{.Catalog}}" data-l10n="{{.L10n}}"{{end}}><label class="pfield wfv-text"><span>{{t "wf.def.text"}}</span><textarea class="gfield mono wfedit" name="text" rows="18" spellcheck="false" required>{{.Text}}</textarea></label>
+<p class="wfblocks wfv-text"><span class="muted">{{t "wf.def.blocks"}}</span>{{range .Blocks}} <code>{{.}}</code>{{end}}</p></div>
 <label class="pfield"><span>{{t "wf.def.note"}}</span><input class="gfield" name="note" value="{{.Note}}" maxlength="500" autocomplete="off"></label>
 <div class="rbact"><button class="gbtn pri">{{if .New}}{{t "wf.def.create"}}{{else}}{{t "wf.def.save"}}{{end}}</button><a class="gbtn" href="{{.Cancel}}">{{t "wf.def.cancel"}}</a></div></form>
 {{end}}</div>{{template "foot" .}}{{end}}

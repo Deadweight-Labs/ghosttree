@@ -61,6 +61,7 @@ type workflowDefView struct {
 	Runs                      []wfRunRow
 	Result                    *requestResult
 	CmpFrom, CmpTo            int
+	Visual                    *wfVisualView
 }
 
 type workflowFormView struct {
@@ -71,6 +72,7 @@ type workflowFormView struct {
 	Errors, Warnings    []workflow.Problem
 	ErrorKey            string
 	Blocks              []string
+	Visual              *wfVisualView
 }
 
 // workflowStarter is the text a new workflow starts with: a block that needs
@@ -187,6 +189,9 @@ func (a *app) workflowDefPage(w http.ResponseWriter, r *http.Request, remote, na
 		}
 		v.Versions = append(v.Versions, row)
 	}
+	if v.Diff == nil {
+		v.Visual = a.wfVisualFor(l, remote, v.Text, false)
+	}
 	r2, view := a.repoDetailRequest(r, pa, remote, "workflows")
 	if runs, err := pa.WorkflowRuns(remote, store.WorkflowRunFilter{Workflow: name, Limit: 50}); err == nil {
 		for _, run := range runs {
@@ -232,6 +237,7 @@ func (a *app) renderWorkflowForm(w http.ResponseWriter, r *http.Request, v *work
 	l := a.langFor(r)
 	v.Token = csrfOf(r)
 	v.Blocks = workflow.DefaultCatalog().Names()
+	v.Visual = a.wfVisualFor(l, v.Project, v.Text, true)
 	v.Cancel = repoHref(v.Project) + "/workflows"
 	title := l.msg("wf.def.new")
 	if !v.New {
