@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -106,7 +107,13 @@ func AIKeyPurposeFor(orgID, connectionID int64) string {
 type AIKeySealer func(purpose string) ([]byte, error)
 
 // AIBudgetError says a cap stops the call; Cap is one of the AICap names.
-type AIBudgetError struct{ Cap string }
+// Final says the run is done with it: the cap is the run's own, or what was
+// settled against the cap has used it up. A cap only other runs' open
+// reservations fill is not final; it refuses this call and may admit the next.
+type AIBudgetError struct {
+	Cap   string
+	Final bool
+}
 
 func (e *AIBudgetError) Error() string { return "budget reached: " + e.Cap }
 
@@ -223,6 +230,8 @@ type AIRoute struct {
 	LoanID      int64
 	Remaining   float64 // USD; +Inf without any cap
 	TightestCap string
+	// TightestFinal: see AIBudgetError.Final.
+	TightestFinal bool
 }
 
 // AICall is one booked call.
@@ -1486,7 +1495,7 @@ func (s *Store) AIRouteFor(run WorkflowRun, requested string) (AIRoute, error) {
 	}
 	var capped string
 	if s.db.QueryRow(`SELECT cap FROM ai_run_caps WHERE run_id=?`, run.ID).Scan(&capped) == nil {
-		return AIRoute{}, &AIBudgetError{Cap: capped}
+		return AIRoute{}, &AIBudgetError{Cap: capped, Final: true}
 	}
 	requested = strings.TrimSpace(requested)
 	if requested == "" || len(requested) > 200 {
@@ -1532,9 +1541,9 @@ func (s *Store) AIRouteFor(run WorkflowRun, requested string) (AIRoute, error) {
 	var sealed []byte
 	_ = s.db.QueryRow(`SELECT key_sealed FROM ai_connections WHERE id=?`, route.Connection.ID).Scan(&sealed)
 	route.KeySealed = sealed
-	route.Remaining, route.TightestCap = s.aiRemaining(route)
+	route.Remaining, route.TightestCap, route.TightestFinal = s.aiRemaining(route)
 	if route.Remaining <= 0 {
-		return AIRoute{}, &AIBudgetError{Cap: route.TightestCap}
+		return AIRoute{}, &AIBudgetError{Cap: route.TightestCap, Final: route.TightestFinal}
 	}
 	return route, nil
 }
@@ -1566,16 +1575,38 @@ func (s *Store) aiAliasOf(run WorkflowRun, alias string) (AIAlias, bool) {
 	return AIAlias{}, false
 }
 
+// aiCapLine is one cap that applies to a call, with what was spent against it:
+// settled calls, and reservations still open (a call under way, at its
+// estimate).
+type aiCapLine struct {
+	name                    string
+	limit, settled, pending float64
+}
+
+func (c aiCapLine) spent() float64 { return c.settled + c.pending }
+
+// reached says the cap is used up for good: the run's own cap with every
+// reservation of the run counted, a cap of the month only by what was settled.
+// What other runs have open now may be released or settled lower in a moment
+// and says nothing about this run (see AIBudgetError.Final).
+func (c aiCapLine) reached() bool {
+	if c.limit <= 0 {
+		return false
+	}
+	if c.name == AICapRun {
+		return c.spent() >= c.limit
+	}
+	return c.settled >= c.limit
+}
+
 // aiCapsFor lists every cap that applies to a call on a route, with what was
 // spent against it.
-func aiCapsFor(q rowQuerier, r AIRoute) []struct {
-	name         string
-	limit, spent float64
-} {
+func aiCapsFor(q rowQuerier, r AIRoute) []aiCapLine {
 	month := aiMonthStart()
-	type capLine = struct {
-		name         string
-		limit, spent float64
+	line := func(name string, limit float64, where string, args ...any) aiCapLine {
+		return aiCapLine{name: name, limit: limit,
+			settled: aiSum(q, where+` AND status<>`+strconv.Itoa(aiCallPending), args...),
+			pending: aiSum(q, where+` AND status=`+strconv.Itoa(aiCallPending), args...)}
 	}
 	var owner, wf AICap
 	_ = q.QueryRow(`SELECT month_usd, run_usd FROM ai_caps WHERE org_id=? AND workflow=''`, r.OrgID).Scan(&owner.MonthUSD, &owner.RunUSD)
@@ -1583,6 +1614,14 @@ func aiCapsFor(q rowQuerier, r AIRoute) []struct {
 	runCap := wf.RunUSD
 	if runCap == 0 {
 		runCap = owner.RunUSD
+	}
+	// The gardener's run (trigger -1) is capped by the budget per run in the
+	// gardener's settings, not by the owner's cap per run: its budget is what
+	// its owner chose for it, and the owner's month still holds below.
+	var trigger int64
+	if q.QueryRow(`SELECT trigger_id FROM workflow_runs WHERE id=?`, r.RunID).Scan(&trigger) == nil && trigger < 0 {
+		g, _ := gardenSettingsTx(q, r.OrgID)
+		runCap = g.BudgetRun
 	}
 	// The budget in the file of a workflow (REQ-695) only tightens: the lower
 	// of it and the caps set in the settings applies.
@@ -1593,35 +1632,35 @@ func aiCapsFor(q rowQuerier, r AIRoute) []struct {
 	runCap, wf.MonthUSD = tighterCap(runCap, defRun), tighterCap(wf.MonthUSD, defMonth)
 	var conn float64
 	_ = q.QueryRow(`SELECT monthly_cap_usd FROM ai_connections WHERE id=?`, r.Connection.ID).Scan(&conn)
-	out := []capLine{
-		{AICapRun, runCap, aiSum(q, `run_id=?`, r.RunID)},
-		{AICapWorkflow, wf.MonthUSD, aiSum(q, `org_id=? AND workflow=? AND created_at>=?`, r.OrgID, r.Workflow, month)},
-		{AICapOwner, owner.MonthUSD, aiSum(q, `org_id=? AND created_at>=?`, r.OrgID, month)},
-		{AICapConnection, conn, aiSum(q, `connection_id=? AND created_at>=?`, r.Connection.ID, month)},
+	out := []aiCapLine{
+		line(AICapRun, runCap, `run_id=?`, r.RunID),
+		line(AICapWorkflow, wf.MonthUSD, `org_id=? AND workflow=? AND created_at>=?`, r.OrgID, r.Workflow, month),
+		line(AICapOwner, owner.MonthUSD, `org_id=? AND created_at>=?`, r.OrgID, month),
+		line(AICapConnection, conn, `connection_id=? AND created_at>=?`, r.Connection.ID, month),
 	}
 	switch r.Via {
 	case AIViaServer:
 		_, grant := aiServerGrantTx(q, r.OrgID)
-		out = append(out, capLine{AICapServer, grant, aiSum(q, `org_id=? AND via='server' AND created_at>=?`, r.OrgID, month)})
+		out = append(out, line(AICapServer, grant, `org_id=? AND via='server' AND created_at>=?`, r.OrgID, month))
 	case AIViaLoan:
 		var loan float64
 		_ = q.QueryRow(`SELECT monthly_cap_usd FROM ai_loans WHERE id=?`, r.LoanID).Scan(&loan)
-		out = append(out, capLine{AICapLoan, loan, aiSum(q, `loan_id=? AND created_at>=?`, r.LoanID, month)})
+		out = append(out, line(AICapLoan, loan, `loan_id=? AND created_at>=?`, r.LoanID, month))
 	}
 	return out
 }
 
-func (s *Store) aiRemaining(r AIRoute) (float64, string) {
-	remaining, name := math.Inf(1), ""
+func (s *Store) aiRemaining(r AIRoute) (remaining float64, name string, final bool) {
+	remaining = math.Inf(1)
 	for _, c := range aiCapsFor(s.db, r) {
 		if c.limit <= 0 {
 			continue
 		}
-		if left := c.limit - c.spent; left < remaining {
-			remaining, name = left, c.name
+		if left := c.limit - c.spent(); left < remaining {
+			remaining, name, final = left, c.name, c.reached()
 		}
 	}
-	return remaining, name
+	return remaining, name, final
 }
 
 // MarkAIRunCap notes that a run reached a cap: no further call of the run
@@ -1662,17 +1701,23 @@ func (s *Store) ReserveAICall(r AIRoute, estimateUSD float64) (int64, error) {
 	ts := now()
 	var capped string
 	if tx.QueryRow(`SELECT cap FROM ai_run_caps WHERE run_id=?`, r.RunID).Scan(&capped) == nil {
-		return 0, &AIBudgetError{Cap: capped}
+		return 0, &AIBudgetError{Cap: capped, Final: true}
 	}
 	for _, cl := range aiCapsFor(tx, r) {
-		if cl.limit > 0 && cl.spent+estimateUSD > cl.limit {
-			if _, err := tx.Exec(`INSERT OR IGNORE INTO ai_run_caps(run_id, cap, created_at) SELECT id, ?, ? FROM workflow_runs WHERE id=?`, cl.name, ts, r.RunID); err != nil {
-				return 0, err
+		if cl.limit > 0 && cl.spent()+estimateUSD > cl.limit {
+			// The run is marked (and ends in the state budget) when this cap is
+			// used up for good. A call that only does not fit, because other
+			// runs have reservations open, is refused alone.
+			final := cl.name == AICapRun || cl.reached()
+			if final {
+				if _, err := tx.Exec(`INSERT OR IGNORE INTO ai_run_caps(run_id, cap, created_at) SELECT id, ?, ? FROM workflow_runs WHERE id=?`, cl.name, ts, r.RunID); err != nil {
+					return 0, err
+				}
+				if err := tx.Commit(); err != nil {
+					return 0, err
+				}
 			}
-			if err := tx.Commit(); err != nil {
-				return 0, err
-			}
-			return 0, &AIBudgetError{Cap: cl.name}
+			return 0, &AIBudgetError{Cap: cl.name, Final: final}
 		}
 	}
 	res, err := tx.Exec(`INSERT INTO ai_calls(run_id, org_id, project, workflow, connection_id, connection, via, loan_id, requested, model, cost_usd, status, created_at)
@@ -1683,6 +1728,24 @@ func (s *Store) ReserveAICall(r AIRoute, estimateUSD float64) (int64, error) {
 	}
 	id, _ := res.LastInsertId()
 	return id, tx.Commit()
+}
+
+// SettleOpenAICalls books every reservation that is still open at the
+// estimate, as a call that was sent and got no answer (status 499, as the
+// proxy books one). The engine calls it once when the server starts: one
+// process serves calls, so a reservation open at its start belongs to a call
+// that died with the previous process, and would otherwise stay open in the
+// cost overview and count against the caps for good.
+func (s *Store) SettleOpenAICalls() (int, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{}, func(d *Store, _ []any) (int, error) { return d.SettleOpenAICalls() })
+	}
+	res, err := s.db.Exec(`UPDATE ai_calls SET status=499 WHERE status=?`, aiCallPending)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // SettleAICall replaces the reservation id with what the call really used
@@ -1731,7 +1794,7 @@ func (s *Store) ReleaseAICall(id int64) error {
 
 func markReachedCapTx(tx *sql.Tx, r AIRoute) (string, error) {
 	for _, cl := range aiCapsFor(tx, r) {
-		if cl.limit > 0 && cl.spent >= cl.limit {
+		if cl.reached() {
 			_, err := tx.Exec(`INSERT OR IGNORE INTO ai_run_caps(run_id, cap, created_at) VALUES(?,?,?)`, r.RunID, cl.name, now())
 			return cl.name, err
 		}
@@ -1763,7 +1826,7 @@ func (s *Store) RecordAICall(c AICall) (string, error) {
 	}
 	reached := ""
 	for _, cl := range aiCapsFor(tx, r) {
-		if cl.limit > 0 && cl.spent >= cl.limit {
+		if cl.reached() {
 			reached = cl.name
 			break
 		}

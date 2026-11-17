@@ -352,3 +352,63 @@ func TestRunPageShowsResultsAndTheReviewPageAcceptsAProposal(t *testing.T) {
 	_, page = fetchPage(t, e.Lead, e.Base+runHref)
 	mustContain(t, "after undo", page, "Undone")
 }
+
+// Review of #285, 10: whoever may review the project's proposals (owner, lead)
+// takes an automatic approval back; a member without that right and a guest
+// cannot, and an approval taken back once stays taken back.
+func TestOnlyReviewersUndoAnAutomaticApproval(t *testing.T) {
+	e, _ := workflowEnv(t)
+	text := "---\non: pr.merged\ninputs: [pr.title]\nuses: ghosttree/echo\nresults:\n  issue: 1\n---\n"
+	cat := workflow.DefaultCatalog()
+	spec := cat[workflow.EchoName]
+	spec.Results = workflow.ResultKinds
+	spec.Run = workflow.BlockFunc(func(_ context.Context, in workflow.Input) (store.WorkflowRunOutcome, error) {
+		in.Propose(workflow.Result{Kind: workflow.ResultIssue, Title: "Zweiten Weg prüfen", Evidence: []string{"feat: second path"}})
+		return store.WorkflowRunOutcome{State: store.RunDone, Result: "echo"}, nil
+	})
+	cat[workflow.EchoName] = spec
+	d, _ := workflow.Parse(text)
+	if _, err := e.St.SaveWorkflowDef("person:1", store.WorkflowDefSave{Project: shellProject, Name: "melden", Text: text, Event: d.On, Uses: d.Uses}); err != nil {
+		t.Fatal(err)
+	}
+	if r := postForm(t, e, e.Owner, "/ui/orgs/workflow-policy", url.Values{"org": {"alpha"}, "auto_kind": {"issue"}}); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("policy: %d", r.StatusCode)
+	}
+	autoResult := func(n int64) store.WorkflowResult {
+		t.Helper()
+		for _, state := range []string{"open", "merged"} {
+			if _, err := e.St.RecordPullRequest(store.PullRequestChange{InstallationID: 77, Remote: shellProject, HeadRemote: shellProject, Number: n, Action: "closed",
+				Title: "feat: second path", Head: "feat/" + itoa(n), Base: "main", DefaultBranch: "main", State: state}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		eng := &workflow.Engine{Store: e.St, Resolver: workflow.DefResolver{Store: e.St, Catalog: cat}}
+		if _, err := eng.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		runs, _ := e.St.WorkflowRunsIn(shellProject, store.WorkflowRunFilter{Workflow: "melden", Limit: 1})
+		results, _ := e.St.WorkflowResultsOf(runs[0].ID)
+		if len(results) != 1 || results[0].State != store.ResultAuto {
+			t.Fatalf("results: %+v", results)
+		}
+		return results[0]
+	}
+	res := autoResult(30)
+	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
+		if r := postForm(t, e, c, "/ui/workflows/undo", url.Values{"id": {itoa(res.ID)}}); r.StatusCode != http.StatusNotFound {
+			t.Errorf("%s undoes: %d", name, r.StatusCode)
+		}
+		if got, _ := e.St.WorkflowResultByID(res.ID); got.State != store.ResultAuto {
+			t.Fatalf("after %s: %+v", name, got)
+		}
+	}
+	if r := postForm(t, e, e.Lead, "/ui/workflows/undo", url.Values{"id": {itoa(res.ID)}}); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("lead undoes: %d", r.StatusCode)
+	}
+	if r := postForm(t, e, e.Owner, "/ui/workflows/undo", url.Values{"id": {itoa(res.ID)}}); r.StatusCode != http.StatusConflict {
+		t.Fatalf("undone twice: %d", r.StatusCode)
+	}
+	if r := postForm(t, e, e.Owner, "/ui/workflows/undo", url.Values{"id": {itoa(autoResult(31).ID)}}); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("owner undoes: %d", r.StatusCode)
+	}
+}

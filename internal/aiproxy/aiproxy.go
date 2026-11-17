@@ -170,14 +170,19 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	price := llm.Price{InUSD: route.Model.InUSD, OutUSD: route.Model.OutUSD}
 	est := price.Cost(limitOutput(req, format, len(body)))
-	if est > route.Remaining {
-		_ = p.Store.MarkAIRunCap(run.ID, route.TightestCap)
-		p.logf(slog.LevelInfo, "ai_budget", run.ID, route, "cap", route.TightestCap, "estimate_usd", est)
-		p.fail(w, budgetError(route.TightestCap))
+	// The call counts as under way from here, so that EndRun waits for it. A
+	// run that ended between the check of its token and this point takes no
+	// call any more: its token is gone and its cost already read.
+	ctx, done, ok := p.track(r.Context(), run.ID, runToken(r))
+	if !ok {
+		p.fail(w, apiError{http.StatusUnauthorized, "authentication_error", "run token is not valid"})
 		return
 	}
+	defer done()
 	// The estimate is booked before the call goes out, in the writer, so that
-	// calls in parallel cannot all pass the same remaining amount.
+	// calls in parallel cannot all pass the same remaining amount. It also
+	// decides whether the estimate fits under the caps, and marks the run only
+	// when a cap is used up for good (store.AIBudgetError.Final).
 	callID, err := p.Store.ReserveAICall(route, est)
 	if err != nil {
 		var be *store.AIBudgetError
@@ -190,8 +195,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, apiError{http.StatusServiceUnavailable, "api_error", "the call cannot be booked"})
 		return
 	}
-	ctx, done := p.track(r.Context(), run.ID)
-	defer done()
 	stream := false
 	_ = json.Unmarshal(req["stream"], &stream)
 	req["model"], _ = json.Marshal(route.Model.Model)
@@ -244,8 +247,12 @@ func (p *Proxy) settle(run store.WorkflowRun, route store.AIRoute, callID int64,
 		"cache_read_tokens", b.usage.CacheReadTokens, "cache_write_tokens", b.usage.CacheWriteTokens, "cost_usd", cost, "complete", b.complete, "cap", reached)
 }
 
-// track registers a call of a run so that EndRun can stop it.
-func (p *Proxy) track(parent context.Context, runID int64) (context.Context, func()) {
+// track registers a call of a run so that EndRun can stop it. ok is false
+// when the run's token is no longer valid by the time the call is registered:
+// EndRun runs after the token is revoked, so a call registered after it would
+// run on past the end of its run and be missing from the run's cost; checking
+// the token once the call is registered closes that gap in both orders.
+func (p *Proxy) track(parent context.Context, runID int64, token string) (context.Context, func(), bool) {
 	ctx, cancel := context.WithCancel(parent)
 	p.mu.Lock()
 	if p.active == nil {
@@ -260,7 +267,7 @@ func (p *Proxy) track(parent context.Context, runID int64) (context.Context, fun
 	rc.cancels[key] = struct{}{}
 	rc.wg.Add(1)
 	p.mu.Unlock()
-	return ctx, func() {
+	done := func() {
 		cancel()
 		p.mu.Lock()
 		delete(rc.cancels, key)
@@ -270,6 +277,11 @@ func (p *Proxy) track(parent context.Context, runID int64) (context.Context, fun
 		p.mu.Unlock()
 		rc.wg.Done()
 	}
+	if _, err := p.Store.AIRunOfToken(token); err != nil {
+		done()
+		return ctx, func() {}, false
+	}
+	return ctx, done, true
 }
 
 type runCalls struct {
@@ -316,7 +328,11 @@ func (p *Proxy) routeError(run store.WorkflowRun, err error) (apiError, bool) {
 	case err == nil:
 		return apiError{}, true
 	case errors.As(err, &be):
-		_ = p.Store.MarkAIRunCap(run.ID, be.Cap)
+		// A cap that only other runs' open reservations fill refuses this call
+		// and leaves the run alone.
+		if be.Final {
+			_ = p.Store.MarkAIRunCap(run.ID, be.Cap)
+		}
 		return budgetError(be.Cap), false
 	case errors.Is(err, store.ErrAIUnavailable):
 		return apiError{http.StatusForbidden, "permission_error", "model is not available to this run"}, false

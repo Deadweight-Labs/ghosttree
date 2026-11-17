@@ -284,6 +284,27 @@ func (s *Store) WorkflowRunAccount(run WorkflowRun) int64 {
 	return id
 }
 
+// WorkflowRunActor is WorkflowRunAccount while the account may still act for
+// the run: it is active and holds at least the role lead in the run's project
+// now (the right it needed to save the workflow). 0 otherwise: the account was
+// disabled, removed from the project or demoted after it saved the version,
+// and the run writes nothing in its name.
+func (s *Store) WorkflowRunActor(run WorkflowRun) int64 {
+	if s.reader != nil {
+		return s.reader.WorkflowRunActor(run)
+	}
+	account := s.WorkflowRunAccount(run)
+	if account <= 0 {
+		return 0
+	}
+	id := principalOfID(account)
+	acc, err := s.AccountByPrincipalID(id)
+	if err != nil || acc.State != "active" || RoleRank(s.ProjectRole(run.Project, id).Role) < RoleRank(RoleLead) {
+		return 0
+	}
+	return account
+}
+
 // MarkWorkflowRunVersion records the version a running run executes, as soon
 // as it is known, so that its token acts for the author of that version.
 func (s *Store) MarkWorkflowRunVersion(id int64, version string) error {
@@ -307,13 +328,13 @@ func (s *Store) PrincipalOfRunToken(token string) (Principal, bool) {
 	if err != nil {
 		return Principal{}, false
 	}
-	account := s.WorkflowRunAccount(run)
+	account := s.WorkflowRunActor(run)
 	if account <= 0 {
 		return Principal{}, false
 	}
 	id := principalOfID(account)
 	acc, err := s.AccountByPrincipalID(id)
-	if err != nil || acc.State != "active" {
+	if err != nil {
 		return Principal{}, false
 	}
 	return Principal{ID: id, Label: acc.Name, TokenKind: WorkflowRunKind, RunID: run.ID}, true
