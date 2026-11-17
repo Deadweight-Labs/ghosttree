@@ -74,6 +74,11 @@
   & .prow.pname .inline-form { display: flex; min-width: 0; }
   /* The retention of workflow runs is a number of days: a short field, the unit and the button right behind it */
   & .prow.wfret { grid-template-columns: 240px 7rem auto auto; justify-content: start; }
+  & .wfpol { margin-top: 12px; }
+  & .wfpol .gform { padding: 12px 16px; display: grid; gap: 12px; }
+  & .wfpolset { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 20px; }
+  & .wfpolset legend { font-weight: 600; font-size: 14px; margin-bottom: 8px; padding: 0; }
+  & .wfchk { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
   & .inline-form .grow { flex: 1; }
   & .invite .gfield:first-child, & .invite .grow { flex: 1; }
   & .invite select.gfield { width: auto; }

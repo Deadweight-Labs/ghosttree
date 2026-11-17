@@ -966,6 +966,10 @@ func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nothing to change", http.StatusConflict)
 		return
 	}
+	if err := a.settleWorkflowProposal(r, k, plan); err != nil {
+		http.Error(w, "could not apply the proposal", http.StatusConflict)
+		return
+	}
 	if err := a.store.UpdateKnowledgeFromWeb(k.ID, plan.patch, personOf(r)); err != nil {
 		if a.secretRefused(w, r, err, "") {
 			return
@@ -1033,6 +1037,10 @@ func (a *app) reviewBulk(w http.ResponseWriter, r *http.Request) {
 		todo = append(todo, decision{k, plan})
 	}
 	for _, d := range todo {
+		if err := a.settleWorkflowProposal(r, d.k, d.plan); err != nil {
+			http.Error(w, "could not apply the proposal", http.StatusConflict)
+			return
+		}
 		if err := a.store.UpdateKnowledgeFromWeb(d.k.ID, d.plan.patch, person); err != nil {
 			http.Error(w, "could not save", http.StatusBadRequest)
 			return

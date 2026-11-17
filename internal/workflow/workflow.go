@@ -31,6 +31,9 @@ type Input struct {
 	// that a trigger names directly; Values are its declared inputs.
 	Def    *Def
 	Values map[string]string
+	// Propose hands the engine a result (REQ-695); nil for a block that a
+	// trigger names directly, which may create nothing.
+	Propose func(Result)
 }
 
 // Block is one thing a workflow can do. It reports how the run ended; the
@@ -312,6 +315,10 @@ func (e *Engine) execute(ctx context.Context, run store.WorkflowRun, ev store.Wo
 	}
 	if err != nil {
 		return store.WorkflowRunOutcome{State: store.RunFailed, Reason: err.Error()}
+	}
+	if version != "" {
+		_ = e.Store.MarkWorkflowRunVersion(run.ID, version)
+		run.WorkflowVersion = version
 	}
 	rctx, cancel := context.WithTimeout(ctx, e.runTimeout())
 	defer cancel()

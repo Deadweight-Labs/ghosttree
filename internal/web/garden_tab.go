@@ -60,6 +60,8 @@ type gardenVerdictPill struct {
 }
 
 type gardenRunRow struct {
+	// Href is the same run in the tab Workflows of its repository.
+	Href                    string
 	When, Repo, State, Cost string
 	Proposals               int
 	Tone                    string
@@ -195,6 +197,9 @@ func (a *app) gardenTab(w http.ResponseWriter, r *http.Request, org store.Org) {
 		}
 		row := gardenRunRow{When: shortAge(l, now, parseTime(run.StartedAt)), Repo: lastSegment(run.Project), State: l.msg(gardenRunKeys[run.State]),
 			Cost: fmt.Sprintf("%.2f $", run.CostUSD), Proposals: run.Proposals}
+		if run.WorkflowRunID > 0 && pa.CanSeeWorkflows(run.Project) {
+			row.Href = workflowRunHref(repoHref(run.Project), run.WorkflowRunID)
+		}
 		if run.State == "failed" || run.State == "budget" {
 			row.Tone = "warn"
 		}
@@ -265,6 +270,7 @@ func (a *app) orgGardenSave(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, store.ErrGardenSettings)
 		return
 	}
+	g.ModelAlias = strings.TrimSpace(r.FormValue("model_alias"))
 	g.Repos, g.Rules = nil, nil
 	if r.FormValue("repos_all") != "1" {
 		g.Repos = r.Form["repo"]
@@ -289,6 +295,8 @@ type gardenSettingsView struct {
 	Frequencies         []gardenChoice
 	Weekdays            []gardenChoice
 	Budget, Spent, Next string
+	// Aliases are the model aliases the owner's runs can use (REQ-695).
+	Aliases []gardenChoice
 }
 
 type gardenRepoChoice struct {
@@ -326,6 +334,15 @@ func (a *app) gardenSettingsFor(r *http.Request, org store.Org) *gardenSettingsV
 	for d := 1; d <= 7; d++ {
 		wd := d % 7
 		v.Weekdays = append(v.Weekdays, gardenChoice{Value: strconv.Itoa(wd), Label: l.weekdayName(time.Weekday(wd)), On: g.Weekday == wd})
+	}
+	seen := map[string]bool{}
+	own, _ := a.store.AIAliasesFor(org.ID)
+	server, _ := a.store.ServerAIAliases()
+	for _, al := range slices.Concat(own, server) {
+		if (al.Level == "owner" || al.Level == "server") && !seen[al.Alias] {
+			seen[al.Alias] = true
+			v.Aliases = append(v.Aliases, gardenChoice{Value: al.Alias, Label: al.Alias, On: g.ModelAlias == al.Alias})
+		}
 	}
 	now := overviewNow().UTC()
 	v.Spent = fmt.Sprintf("%.2f $", a.store.GardenSpent(org.ID, now))

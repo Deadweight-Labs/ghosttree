@@ -8,7 +8,7 @@
 {{if .Undone}}<span class="lb out">{{t "gardener.undone"}}</span>{{else if .CanUndo}}<form method="post" action="/ui/gardener/undo"><input type="hidden" name="csrf_token" value="{{$.GardenTabV.Token}}"><input type="hidden" name="id" value="{{.ID}}"><button class="gbtn sm">{{t "gardener.undo"}}</button></form>{{end}}</div>
 {{else}}<div class="box-empty">{{t "gardener.no_auto"}}</div>{{end}}</div>
 <h2 class="gt-sec">{{t "gardener.runs"}}</h2>
-<div class="box">{{range .Runs}}<div class="row prow">{{mi "clock"}}<div><b>{{.Repo}}</b> <span class="lb {{if .Tone}}warn{{else}}out{{end}}">{{.State}}</span><div class="muted">{{.When}} · {{t "gardener.proposals" .Proposals}}</div></div><span class="mono">{{.Cost}}</span></div>
+<div class="box">{{range .Runs}}<div class="row prow">{{mi "clock"}}<div>{{if .Href}}<a href="{{.Href}}"><b>{{.Repo}}</b></a>{{else}}<b>{{.Repo}}</b>{{end}} <span class="lb {{if .Tone}}warn{{else}}out{{end}}">{{.State}}</span><div class="muted">{{.When}} · {{t "gardener.proposals" .Proposals}}</div></div><span class="mono">{{.Cost}}</span></div>
 {{else}}<div class="box-empty">{{t "gardener.no_runs"}}</div>{{end}}</div>
 </div>
 <aside><div class="box"><div class="box-h"><span class="t">{{t "gardener.next"}}</span></div><div class="box-r">

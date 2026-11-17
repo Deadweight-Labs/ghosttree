@@ -61,16 +61,49 @@ func (r DefResolver) Resolve(ctx context.Context, run store.WorkflowRun) (Block,
 	if !rep.OK() {
 		return nil, version, Skip(SkipInvalid)
 	}
+	// The owner's policy as it is now: a workflow saved before the owner
+	// forbade what it does does not run (REQ-695).
+	policy := r.Store.WorkflowPolicyOfProject(run.Project)
+	if v := PolicyOf(policy).Violation(d); v != "" {
+		return nil, version, Skip(v)
+	}
 	spec, _ := r.Catalog.Lookup(d.Uses)
 	if spec.Run == nil {
-		return nil, version, Skip(SkipInvalid)
+		return nil, version, Skip(SkipExternal)
 	}
 	inner := spec.Run
+	run.WorkflowVersion = version
 	return BlockFunc(func(ctx context.Context, in Input) (store.WorkflowRunOutcome, error) {
 		in.Def = &d
 		in.Values = InputValues(d.Inputs, in.Event)
-		return inner.Run(ctx, in)
+		var results []Result
+		in.Propose = func(r Result) { results = append(results, r) }
+		out, err := inner.Run(ctx, in)
+		if err != nil || len(results) == 0 || ctx.Err() != nil {
+			return out, err
+		}
+		// Evidence counts only from the declared inputs, never from the prompt
+		// or the instruction around them.
+		g := Gate{Store: r.Store, Run: run, Def: &d, Policy: policy, Inputs: inputsText(&d, in.Values)}
+		grep, gerr := g.Apply(results)
+		if gerr != nil {
+			return out, gerr
+		}
+		if out.Result != "" {
+			out.Result += "; "
+		}
+		out.Result += grep.String()
+		return out, nil
 	}), version, nil
+}
+
+// SkipExternal: the block runs outside the engine (the gardener's unit) and
+// is started by its own settings, not by a trigger.
+const SkipExternal = "external"
+
+// PolicyOf is the policy of the check from the stored one.
+func PolicyOf(p store.WorkflowPolicy) Policy {
+	return Policy{DenyInstruction: p.DenyInstruction, DenyPrompt: p.DenyPrompt, DenyResearch: p.DenyResearch, DenyKinds: p.DenyKinds}
 }
 
 // InputValues puts together the declared inputs of a run from its event.
@@ -97,6 +130,17 @@ func renderInputs(d *Def, values map[string]string) string {
 	var b strings.Builder
 	for _, n := range d.Inputs {
 		fmt.Fprintf(&b, "<input name=%q>\n%s\n</input>\n", n, values[n])
+	}
+	return b.String()
+}
+
+// inputsText is the text of the declared inputs, against which evidence is
+// checked.
+func inputsText(d *Def, values map[string]string) string {
+	var b strings.Builder
+	for _, n := range d.Inputs {
+		b.WriteString(values[n])
+		b.WriteString("\n")
 	}
 	return b.String()
 }

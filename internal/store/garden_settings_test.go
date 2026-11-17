@@ -297,3 +297,57 @@ func TestVanishedProofGetsANewCommitAndNothingElse(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// AC-695.3: a run of the gardener is a run of its block ghosttree/garden-ghosts
+// as well: the tab Workflows lists it while it runs and after, with the cost
+// the runner reported; the sweep of interrupted runs leaves it alone, however
+// long it runs; the settings take a model alias the owner can use.
+func TestTheGardenersRunIsARunOfItsBlock(t *testing.T) {
+	st, o := gardenFixture(t)
+	g := DefaultGardenSettings(o.ID)
+	g.Enabled, g.Repos = true, []string{"github.com/alpha/one"}
+	g.ModelAlias = "riesig"
+	if err := st.SetGardenSettings("person:1", g); !errors.Is(err, ErrGardenSettings) {
+		t.Fatalf("an unknown alias: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO ai_connections(id,org_id,name,format,base_url,key_sealed,key_last4,created_at,updated_at) VALUES(90,0,'standard','anthropic','http://127.0.0.1:1','', '', ?, ?)`, now(), now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO ai_aliases(level,org_id,project,alias,connection_id,model,updated_at) VALUES('server',0,'','mittel',90,'claude-sonnet-5-5',?)`, now()); err != nil {
+		t.Fatal(err)
+	}
+	g.ModelAlias = "mittel"
+	if err := st.SetGardenSettings("person:1", g); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := st.GardenDue(time.Now().UTC())
+	if err != nil || len(jobs) != 1 || jobs[0].ModelAlias != "mittel" {
+		t.Fatalf("due jobs: %+v %v", jobs, err)
+	}
+	id, err := st.StartGardenRun("person:3", o.ID, "github.com/alpha/one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := st.WorkflowRunsIn("github.com/alpha/one", WorkflowRunFilter{})
+	if err != nil || len(runs) != 1 || runs[0].Workflow != GardenBlock || runs[0].State != RunRunning {
+		t.Fatalf("workflow runs while the gardener runs: %+v %v", runs, err)
+	}
+	if n, err := st.AbandonStaleWorkflowRuns(time.Now().Add(time.Hour)); err != nil || n != 0 {
+		t.Fatalf("the sweep ended the gardener's run: %d %v", n, err)
+	}
+	if err := st.FinishGardenRun("person:3", id, "done", 1.25, "ok"); err != nil {
+		t.Fatal(err)
+	}
+	runs, _ = st.WorkflowRunsIn("github.com/alpha/one", WorkflowRunFilter{})
+	if runs[0].State != RunDone || runs[0].CostUSD != 1.25 || runs[0].Result != "0 proposals" || runs[0].FinishedAt == "" {
+		t.Fatalf("workflow run after the gardener: %+v", runs[0])
+	}
+	list, _ := st.GardenRuns(o.ID, 10)
+	if len(list) != 1 || list[0].WorkflowRunID != runs[0].ID {
+		t.Fatalf("garden runs: %+v", list)
+	}
+	// Nothing in the event log starts from the gardener's run.
+	if events, _ := st.WorkflowWorkPending(); events {
+		t.Fatal("the gardener's run left an event to dispatch")
+	}
+}

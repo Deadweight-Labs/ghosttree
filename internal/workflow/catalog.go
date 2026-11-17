@@ -102,6 +102,9 @@ type BlockSpec struct {
 	Run      Block
 }
 
+// DistillSessionsName is the block of the session distiller.
+const DistillSessionsName = "ghosttree/distill-sessions"
+
 // BlockPrefix is the namespace of the blocks ghosttree ships.
 const BlockPrefix = "ghosttree/"
 
@@ -114,6 +117,15 @@ func DefaultCatalog() Catalog {
 	for _, b := range []BlockSpec{
 		{Name: EchoName, Version: "v1", Summary: "echoes its event; needs no model and costs nothing", Run: Echo},
 		{Name: AskName, Version: "v1", Summary: "one model call that describes the event in a sentence", Model: true, Instruction: true, Run: Ask},
+		// The gardener and the distillers stay Go code and run where they run
+		// today (DEC-41): the gardener in its sandboxed unit, the distillers
+		// in their jobs. As blocks they have one place in the catalogue; their
+		// settings start them, not a workflow file, and the gardener's runs are
+		// runs of its block (store.GardenBlock).
+		{Name: store.GardenBlock, Version: "v1", Summary: "the gardener: descriptions of files, checks of knowledge against the code", Events: []string{store.EventSchedule},
+			Reads: []string{"repository checkout", "knowledge", "requests"}, Results: []string{ResultDescription, ResultKnowledge}, Model: true, External: true},
+		{Name: DistillSessionsName, Version: "v1", Summary: "the distiller: knowledge and wishes from finished sessions", Events: []string{store.EventSchedule},
+			Reads: []string{"session transcripts"}, Results: []string{ResultKnowledge}, Model: true, External: true},
 	} {
 		c[b.Name] = b
 	}

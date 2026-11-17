@@ -64,6 +64,7 @@
 <div class="row prow"><span>{{t "gardener.repos"}}</span><div><label><input type="checkbox" name="repos_all" value="1"{{if .AllRepos}} checked{{end}}> {{t "gardener.repos_all"}}</label>{{range .Repos}}<label class="gpick"><input type="checkbox" name="repo" value="{{.Remote}}"{{if .On}} checked{{end}}> {{.Name}}</label>{{end}}</div></div>
 <div class="row prow"><span>{{t "gardener.budget_run"}}</span><label class="gfield"><input type="number" name="budget_run" min="0" max="1000" step="0.5" value="{{printf "%.2f" .G.BudgetRun}}" aria-label="{{t "gardener.budget_run"}}"></label><span class="muted">{{t "gardener.usd"}}</span></div>
 <div class="row prow"><span>{{t "gardener.budget_month"}}</span><label class="gfield"><input type="number" name="budget_month" min="0" max="100000" step="1" value="{{printf "%.2f" .G.BudgetMon}}" aria-label="{{t "gardener.budget_month"}}"></label><span class="muted">{{t "gardener.spent" .Spent}}</span></div>
+{{if .Aliases}}<div class="row prow"><span>{{t "gardener.model"}}</span><label class="gfield"><select class="gfield" name="model_alias" aria-label="{{t "gardener.model"}}"><option value="">{{t "gardener.model_server"}}</option>{{range .Aliases}}<option value="{{.Value}}"{{if .On}} selected{{end}}>{{.Label}}</option>{{end}}</select></label></div>{{end}}
 <div class="row prow"><span>{{t "gardener.auto"}}</span><div>{{range .Rules}}<label class="gpick"><input type="checkbox" name="rule" value="{{.Key}}"{{if .On}} checked{{end}}> <b>{{.Label}}</b> <span class="muted">{{.Hint}}</span></label>{{end}}<p class="muted">{{t "gardener.never_auto"}}</p></div></div>
 <div class="row prow"><span>{{if .Next}}{{t "gardener.next_at" .Next}}{{end}}</span><button class="gbtn pri">{{t "gardener.save"}}</button></div>
 </form></div>{{end}}
@@ -71,7 +72,18 @@
 {{if and .Orgs.Owner .Orgs.Retention}}<div class="sh2" id="workflows"><h2>{{t "repo.tab.workflows"}}</h2></div>
 <div class="box"><form class="gform" method="post" action="/ui/orgs/workflows">{{template "orgs_hidden" $}}
 <div class="row prow wfret"><label for="wf-retention">{{t "wf.retention"}}</label><span class="gfield"><input id="wf-retention" type="number" name="retention_days" min="1" max="3650" step="1" value="{{.Orgs.Retention}}" required></span><span class="muted">{{t "wf.retention.days"}}</span>{{if .Interactive}}<button class="gbtn pri">{{t "wf.retention.save"}}</button>{{end}}</div>
-</form></div>{{end}}
+</form></div>
+{{with .Orgs.Policy}}<div class="box wfpol"><form class="gform" method="post" action="/ui/orgs/workflow-policy">{{template "orgs_hidden" $}}
+<fieldset class="wfpolset"><legend>{{t "wf.policy.forbid"}}</legend>
+<label class="wfchk"><input type="checkbox" name="deny_instruction" value="1"{{if .DenyInstruction}} checked{{end}}><span>{{t "wf.policy.instruction"}}</span></label>
+<label class="wfchk"><input type="checkbox" name="deny_prompt" value="1"{{if .DenyPrompt}} checked{{end}}><span>{{t "wf.policy.prompt"}}</span></label>
+<label class="wfchk"><input type="checkbox" name="deny_research" value="1"{{if .DenyResearch}} checked{{end}}><span>{{t "wf.policy.research"}}</span></label></fieldset>
+<fieldset class="wfpolset"><legend>{{t "wf.policy.forbid_kinds"}}</legend>
+{{range .Kinds}}<label class="wfchk"><input type="checkbox" name="deny_kind" value="{{.Kind}}"{{if .Deny}} checked{{end}}><span>{{t .Key}}</span></label>{{end}}</fieldset>
+<fieldset class="wfpolset"><legend>{{t "wf.policy.auto"}}</legend>
+{{range .Kinds}}{{if .CanAuto}}<label class="wfchk"><input type="checkbox" name="auto_kind" value="{{.Kind}}"{{if .Auto}} checked{{end}}><span>{{t .Key}}</span></label>{{end}}{{end}}</fieldset>
+{{if $.Interactive}}<div class="wfpolact"><button class="gbtn pri">{{t "wf.retention.save"}}</button></div>{{end}}
+</form></div>{{end}}{{end}}
 {{template "orgs_ai" .}}
 
 {{if and .Orgs.Owner .Interactive .Orgs.GuestLinks .Orgs.InviteProjects}}<div class="sh2" id="guests"><h2>{{t "adm.guests"}}</h2><span class="counter">{{len .Orgs.Guests}}</span></div>

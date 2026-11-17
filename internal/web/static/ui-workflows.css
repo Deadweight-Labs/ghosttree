@@ -60,3 +60,9 @@
     & .wfdef .wfmeta { grid-column: 1; flex-wrap: wrap; gap: 4px 12px; }
   }
 }
+:is(.g2.wf) {
+  & .wfresrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 16px; }
+  & .wfresrow + .wfresrow { border-top: 1px solid var(--border-muted); }
+  & .wfresrow form { margin: 0; }
+  & .wfreskind { font-weight: 600; }
+}

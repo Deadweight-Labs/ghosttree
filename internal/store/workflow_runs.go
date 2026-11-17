@@ -912,7 +912,7 @@ func (s *Store) AbandonWorkflowRuns() (int, error) {
 	if err := revokeRunTokensTx(tx, `state='running'`); err != nil {
 		return 0, err
 	}
-	res, err := tx.Exec(`UPDATE workflow_runs SET state='failed', reason='interrupted', finished_at=? WHERE state='running'`, now())
+	res, err := tx.Exec(`UPDATE workflow_runs SET state='failed', reason='interrupted', finished_at=? WHERE state='running' AND trigger_id>=0`, now())
 	if err != nil {
 		return 0, err
 	}
@@ -929,7 +929,9 @@ func (s *Store) AbandonStaleWorkflowRuns(before time.Time) (int, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{before.UTC()}, func(d *Store, p []any) (int, error) { return d.AbandonStaleWorkflowRuns(p[0].(time.Time)) })
 	}
-	res, err := s.db.Exec(`UPDATE workflow_runs SET state='failed', reason='interrupted', finished_at=? WHERE state='running' AND started_at<=?`,
+	// Runs of an external block (trigger -1, the gardener's unit) run for
+	// hours outside the engine and end through their own report.
+	res, err := s.db.Exec(`UPDATE workflow_runs SET state='failed', reason='interrupted', finished_at=? WHERE state='running' AND trigger_id>=0 AND started_at<=?`,
 		now(), before.UTC().Format(time.RFC3339))
 	if err != nil {
 		return 0, err
@@ -945,7 +947,7 @@ func (s *Store) StaleWorkflowRuns(before time.Time) int {
 		return s.reader.StaleWorkflowRuns(before)
 	}
 	var n int
-	_ = s.db.QueryRowContext(s.ctx(), `SELECT COUNT(*) FROM workflow_runs WHERE state='running' AND started_at<=?`, before.UTC().Format(time.RFC3339)).Scan(&n)
+	_ = s.db.QueryRowContext(s.ctx(), `SELECT COUNT(*) FROM workflow_runs WHERE state='running' AND trigger_id>=0 AND started_at<=?`, before.UTC().Format(time.RFC3339)).Scan(&n)
 	return n
 }
 
@@ -1125,6 +1127,10 @@ func (s *Store) PurgeWorkflowRunTexts(at time.Time) (int, error) {
 		return 0, nil
 	}
 	if _, err := tx.Exec(`DELETE FROM workflow_run_texts WHERE run_id IN (SELECT id FROM workflow_runs WHERE text_purged_at<>'')`); err != nil {
+		return 0, err
+	}
+	// The text of a proposal goes with the run's full text (REQ-695).
+	if _, err := tx.Exec(`UPDATE workflow_run_results SET payload='' WHERE payload<>'' AND run_id IN (SELECT id FROM workflow_runs WHERE text_purged_at<>'')`); err != nil {
 		return 0, err
 	}
 	return int(n), tx.Commit()

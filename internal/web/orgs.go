@@ -80,6 +80,8 @@ type orgsView struct {
 	// Retention is how many days the full text of workflow runs stays; set
 	// only for an owner, who alone may change it (REQ-693).
 	Retention int
+	// Policy is the owner's policy for the workflows (REQ-695).
+	Policy    *wfPolicyView
 	Orgs      []store.Org
 	Selected  store.Org
 	Owner     bool
@@ -233,6 +235,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		v.Owner = v.Selected.Role == store.OrgOwner
 		if v.Owner {
 			v.Retention = a.store.WorkflowSettingsFor(v.Selected.ID).RetentionDays
+			v.Policy = wfPolicyViewOf(a.store.WorkflowPolicyFor(v.Selected.ID))
 		}
 		v.CanRename = v.Owner || a.isAdmin(browserPrincipal(r))
 		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me, a.store.AccessEnforced())

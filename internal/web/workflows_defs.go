@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -318,4 +319,157 @@ func (a *app) workflowEnable(w http.ResponseWriter, r *http.Request) {
 		back = repoHref(project) + "/workflows"
 	}
 	http.Redirect(w, r, back, http.StatusSeeOther)
+}
+
+// settleWorkflowProposal makes the proposal of a workflow run effective when a
+// person approves its staged entry on the review page (REQ-695), before the
+// entry is confirmed: the issue, criterion or relation it stands for is
+// written, and the run's record says who accepted it. A rejected entry marks
+// the proposal rejected. Entries that are no waiting proposal pass unchanged.
+func (a *app) settleWorkflowProposal(r *http.Request, k store.Knowledge, plan reviewPlan) error {
+	if k.Harness != workflow.Harness || !store.ReservedForWorkflowRun(k.SessionRef) {
+		return nil
+	}
+	by := a.accountNumber(r)
+	switch plan.done {
+	case "approved":
+		_, err := workflow.AcceptProposal(a.store, k.ID, by)
+		if errors.Is(err, workflow.ErrNotProposal) {
+			return nil
+		}
+		return err
+	case "rejected", "retired":
+		if res, err := a.store.WorkflowResultOfNote(k.ID); err == nil {
+			_ = a.store.SettleWorkflowResult(res.ID, store.ResultProposed, store.ResultRejected, "", by)
+		}
+	}
+	return nil
+}
+
+var wfResultStates = map[string]struct{ key, tone string }{
+	store.ResultProposed: {"wf.result.proposed", "neu"},
+	store.ResultAccepted: {"wf.result.accepted", "ok"},
+	store.ResultAuto:     {"wf.result.auto", "ok"},
+	store.ResultRejected: {"wf.result.rejected", "out"},
+	store.ResultUndone:   {"wf.result.undone", "out"},
+}
+
+var wfResultReasons = map[string]string{
+	store.ResultNotDeclared: "wf.result.why.not_declared",
+	store.ResultOverMax:     "wf.result.why.over_max",
+	store.ResultNoEvidence:  "wf.result.why.no_evidence",
+	store.ResultPolicy:      "wf.result.why.policy",
+	store.ResultBadTarget:   "wf.result.why.bad_target",
+	store.ResultInvalid:     "wf.result.why.invalid",
+	"":                      "wf.result.why.declined",
+}
+
+// wfResultRows are the results of a run for its page.
+func (a *app) wfResultRows(r *http.Request, pa *store.ProjectAccess, remote string, runID int64) []wfResultRow {
+	results, err := a.store.WorkflowResultsOf(runID)
+	if err != nil {
+		return nil
+	}
+	canUndo := interactive(r) && reviews(pa.Role(remote))
+	var out []wfResultRow
+	for _, res := range results {
+		st := wfResultStates[res.State]
+		row := wfResultRow{ID: res.ID, KindKey: wfKindKeys[res.Kind], StateKey: st.key, Tone: st.tone, Ref: res.Ref}
+		if row.KindKey == "" {
+			row.KindKey = "wf.kind.other"
+		}
+		if res.State == store.ResultRejected {
+			row.ReasonKey = wfResultReasons[res.Reason]
+			if row.ReasonKey == "" {
+				row.ReasonKey = "wf.result.why.invalid"
+			}
+		}
+		switch {
+		case strings.HasPrefix(res.Ref, "KN-"):
+			row.RefHref = repoHref(remote) + "/knowledge/" + strings.TrimPrefix(res.Ref, "KN-")
+		case strings.HasPrefix(res.Ref, "REQ-"):
+			n, _, _ := strings.Cut(strings.TrimPrefix(res.Ref, "REQ-"), "#")
+			row.RefHref = repoHref(remote) + "/issues/" + n
+		}
+		if strings.HasPrefix(res.Ref, "relation:") {
+			row.Ref = ""
+		}
+		row.CanUndo = canUndo && res.State == store.ResultAuto
+		out = append(out, row)
+	}
+	return out
+}
+
+var wfKindKeys = map[string]string{
+	workflow.ResultKnowledge: "wf.kind.knowledge", workflow.ResultIssue: "wf.kind.issue", workflow.ResultCriterion: "wf.kind.criterion",
+	workflow.ResultRelation: "wf.kind.relation", workflow.ResultDescription: "wf.kind.description",
+}
+
+// workflowUndo is POST /ui/workflows/undo: take back an automatic approval of
+// a workflow. Whoever may review the project's proposals may, as with the
+// gardener's automatic approvals.
+func (a *app) workflowUndo(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.FormValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	res, err := a.store.WorkflowResultByID(id)
+	pa := a.access(r)
+	if err != nil || !pa.CanSeeWorkflows(res.Project) || !reviews(pa.Role(res.Project)) {
+		http.NotFound(w, r)
+		return
+	}
+	if err := workflow.UndoAuto(a.store, id, a.accountNumber(r), personOf(r)); err != nil {
+		http.Error(w, "could not undo", http.StatusConflict)
+		return
+	}
+	http.Redirect(w, r, workflowRunHref(repoHref(res.Project), res.RunID), http.StatusSeeOther)
+}
+
+// wfPolicyView is the owner's policy in the settings of a namespace.
+type wfPolicyView struct {
+	DenyInstruction, DenyPrompt, DenyResearch bool
+	Kinds                                     []wfPolicyKind
+}
+
+type wfPolicyKind struct {
+	Kind, Key           string
+	Deny, Auto, CanAuto bool
+}
+
+func wfPolicyViewOf(p store.WorkflowPolicy) *wfPolicyView {
+	v := &wfPolicyView{DenyInstruction: p.DenyInstruction, DenyPrompt: p.DenyPrompt, DenyResearch: p.DenyResearch}
+	for _, k := range workflow.ResultKinds {
+		v.Kinds = append(v.Kinds, wfPolicyKind{Kind: k, Key: wfKindKeys[k], Deny: slices.Contains(p.DenyKinds, k), Auto: p.Auto(k),
+			CanAuto: slices.Contains(store.WorkflowAutoKinds, k)})
+	}
+	return v
+}
+
+// orgWorkflowPolicySave stores the owner's policy for the workflows of a
+// namespace (POST /ui/orgs/workflow-policy); only its owner may.
+func (a *app) orgWorkflowPolicySave(w http.ResponseWriter, r *http.Request) {
+	o, err := a.formOrg(r)
+	if err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	p := store.WorkflowPolicy{DenyInstruction: r.FormValue("deny_instruction") == "1", DenyPrompt: r.FormValue("deny_prompt") == "1",
+		DenyResearch: r.FormValue("deny_research") == "1"}
+	for _, k := range r.Form["deny_kind"] {
+		if slices.Contains(workflow.ResultKinds, k) && !slices.Contains(p.DenyKinds, k) {
+			p.DenyKinds = append(p.DenyKinds, k)
+		}
+	}
+	for _, k := range r.Form["auto_kind"] {
+		if slices.Contains(store.WorkflowAutoKinds, k) && !slices.Contains(p.AutoKinds, k) {
+			p.AutoKinds = append(p.AutoKinds, k)
+		}
+	}
+	if err := a.store.SetWorkflowPolicy(browserPrincipal(r).ID, o.ID, p); err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	orgRedirect(w, r, o.Slug, "workflows")
 }

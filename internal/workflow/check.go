@@ -151,6 +151,9 @@ func Check(text string, env Env) (Def, CheckReport) {
 			errf(KeyUses, "unknown block %s (known: %s)", d.Uses, strings.Join(env.Catalog.Names(), ", "))
 		}
 	}
+	if known && block.External {
+		errf(KeyUses, "%s is started by its own settings (the gardener's tab, the distiller's job), not by a workflow file", block.Name)
+	}
 	if known {
 		rep.Block, rep.External = block.Name, block.External
 		if len(block.Events) > 0 && d.On != "" && !slices.Contains(block.Events, d.On) {
