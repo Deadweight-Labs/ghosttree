@@ -37,6 +37,9 @@ type Input struct {
 	// Data is what the machine assembled for a block of a stored workflow,
 	// typed (REQ-696); nil for a block that a trigger names directly.
 	Data *Data
+	// Tools are the read tools of an own prompt (stage 3, REQ-698); nil for
+	// a block.
+	Tools *Toolbox
 }
 
 // Block is one thing a workflow can do. It reports how the run ended; the

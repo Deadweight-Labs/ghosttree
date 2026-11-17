@@ -34,8 +34,8 @@ func TestWorkflowToolsCreateCheckAndChangeAWorkflow(t *testing.T) {
 		t.Fatalf("check: %+v %v", rep, err)
 	}
 	res, out, err := s.handleWorkflowWrite(ctx, nil, WorkflowWriteInput{Name: "melden", Text: "---\non: pr.merged\nprompt: \"sag was\"\n---\n"})
-	if err != nil || out.Version != 0 || !strings.Contains(text(t, res), "not saved") || !strings.Contains(text(t, res), "stage E5") {
-		t.Fatalf("stage 3 saved: %+v %v", out, err)
+	if err != nil || out.Version != 0 || !strings.Contains(text(t, res), "not saved") || !strings.Contains(text(t, res), "has to declare what it may propose") {
+		t.Fatalf("incomplete stage 3 saved: %+v %v", out, err)
 	}
 	if _, err := st.WorkflowDefByName(pkgProject, "melden"); err == nil {
 		t.Fatal("a file with errors reached the server")

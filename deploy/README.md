@@ -868,6 +868,22 @@ single kinds; a workflow against it does not run and is listed as skipped.
 version it runs) and the run, at `GET /api/whoami`, and reaches nothing else
 of the API; what a run creates goes through the check of its results.
 
+**Own prompts (stage 3, REQ-698)** run in the server's own loop: the model
+calls the read tools the file names (`tools:`), each reading only what every
+member of the project may read, until it hands in its results or reaches its
+rounds (`rounds:`, 12 by default, at most 24), eight minutes, or a cap. Every
+tool call, refused ones included, stands with its input and a shortened result
+in the run's full text and goes with it after the retention.
+
+**Research on the net** needs a search service the operator names; the server
+ships none. Set `GHOSTTREE_RESEARCH_URL` to an address that answers like
+SearXNG (`GET <address>?q=…&format=json`, a list `results` of `url`, `title`,
+`content`), for example `http://127.0.0.1:8888/search` for a SearXNG on the
+same machine (plain http only to this machine, else https). Without it no
+workflow searches and `ctx workflow check` says so for a file with
+`research: true`. Pages are read as text only, from public addresses only
+(also after a redirect), and only addresses a search of the same run returned.
+
 ### The gardener over the proxy
 
 When the owner of an organization or profile picks a model alias for the

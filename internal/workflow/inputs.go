@@ -53,7 +53,8 @@ type SessionText struct {
 }
 
 // Researcher searches the net for a short query and returns what it found as
-// text. The server has none until stage E5; a test brings its own.
+// text. The server has one when its operator names a search service
+// (ResearchURLEnv); a test brings its own.
 type Researcher func(ctx context.Context, query string) (string, error)
 
 // assembler puts the inputs of one run together.

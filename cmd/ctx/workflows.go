@@ -34,6 +34,13 @@ func startWorkflows(ctx context.Context, st *store.Store, logger *slog.Logger, a
 				return app.PullRequestDiff(ctx, inst, project, pr, 80_000)
 			}
 		}
+		// Research on the net only where the operator named a search
+		// service (REQ-698); without it no workflow searches.
+		if web, err := workflow.ResearchFromEnv(); err != nil {
+			logger.Error("workflows", "research", err.Error())
+		} else if web != nil {
+			resolver.Web, resolver.Research = web, web.Researcher()
+		}
 		e := &workflow.Engine{Store: st, Resolver: resolver, Log: logger, AIBaseURL: ai.BaseURL, AIEndRun: ai.EndRun}
 		e.Run(ctx, workflowTick)
 	}()

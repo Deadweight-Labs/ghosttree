@@ -30,6 +30,21 @@ import (
 //	  month_usd: 5
 //	---
 //	Achte besonders auf Migrationen.
+//
+// Without uses the Markdown is an own prompt (stage 3, REQ-698). It runs in
+// ghosttree's loop with the read tools it names and proposes the results it
+// declares:
+//
+//	---
+//	on: idea.created
+//	inputs: [idea.text]
+//	tools: [knowledge.search, issue.read]
+//	research: true
+//	results:
+//	  comment: 1
+//	model: mittel
+//	---
+//	Prüfe, ob es schon Wissen oder Issues zu dieser Idee gibt.
 
 // Keys of the front matter, in the order the block view shows them.
 const (
@@ -45,10 +60,14 @@ const (
 	KeyBudget      = "budget"
 	KeyResearch    = "research"
 	KeyPrompt      = "prompt"
+	// KeyTools and KeyRounds belong to an own prompt (stage 3, REQ-698): the
+	// read tools the model may call and how many rounds the loop may take.
+	KeyTools  = "tools"
+	KeyRounds = "rounds"
 )
 
 // Keys lists every key a definition may have.
-var Keys = []string{KeyDescription, KeyOn, KeyBranches, KeyEvery, KeyChain, KeyInputs, KeyUses, KeyResults, KeyModel, KeyBudget, KeyResearch, KeyPrompt}
+var Keys = []string{KeyDescription, KeyOn, KeyBranches, KeyEvery, KeyChain, KeyInputs, KeyUses, KeyTools, KeyRounds, KeyResults, KeyModel, KeyBudget, KeyResearch, KeyPrompt}
 
 // Budget keys.
 const (
@@ -62,7 +81,8 @@ const (
 	StageBlock = 1
 	// StageInstruction: a block plus an instruction of the team.
 	StageInstruction = 2
-	// StagePrompt: an own prompt; it arrives with stage E5.
+	// StagePrompt: an own prompt with declared read tools, run in the loop
+	// of stage E5 (REQ-698).
 	StagePrompt = 3
 )
 
@@ -86,10 +106,39 @@ type Def struct {
 	RunUSD      float64       `json:"run_usd,omitempty"`
 	MonthUSD    float64       `json:"month_usd,omitempty"`
 	Research    bool          `json:"research,omitempty"`
-	// Prompt is an own prompt (stage 3), refused until stage E5.
+	// Prompt is an own prompt in one line (stage 3); the Markdown below the
+	// front matter is the longer way to write it.
 	Prompt string `json:"prompt,omitempty"`
-	// Instruction is the Markdown below the front matter.
+	// Tools are the read tools of an own prompt (stage 3); Rounds bounds its
+	// loop, 0 means DefaultRounds.
+	Tools  []string `json:"tools,omitempty"`
+	Rounds int      `json:"rounds,omitempty"`
+	// Instruction is the Markdown below the front matter: the instruction of
+	// the team to a block (stage 2), or the own prompt (stage 3).
 	Instruction string `json:"instruction,omitempty"`
+}
+
+// Bounds of the loop of an own prompt.
+const (
+	DefaultRounds = 12
+	MaxRounds     = 24
+)
+
+// TaskPrompt is the own prompt of a stage 3 definition: the prompt key, else
+// the Markdown below the front matter.
+func (d Def) TaskPrompt() string {
+	if p := strings.TrimSpace(d.Prompt); p != "" {
+		return p
+	}
+	return strings.TrimSpace(d.Instruction)
+}
+
+// RoundLimit is how many model calls the loop of the definition may make.
+func (d Def) RoundLimit() int {
+	if d.Rounds <= 0 {
+		return DefaultRounds
+	}
+	return min(d.Rounds, MaxRounds)
 }
 
 // Stage is the stage of freedom the definition uses.
@@ -330,6 +379,16 @@ func Parse(text string) (Def, []Problem) {
 			d.Research = boolOf(v, key, add)
 		case KeyPrompt:
 			d.Prompt = scalarOf(v, key, add)
+		case KeyTools:
+			d.Tools = listOf(v, key, add)
+		case KeyRounds:
+			if s := scalarOf(v, key, add); s != "" {
+				n, err := strconv.Atoi(s)
+				if err != nil || n < 1 || n > MaxRounds {
+					add(v.line, key, "rounds: a number from 1 to %d", MaxRounds)
+				}
+				d.Rounds = n
+			}
 		default:
 			add(v.line, key, "unknown key %s (known: %s)", key, strings.Join(Keys, ", "))
 		}

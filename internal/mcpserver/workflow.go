@@ -31,7 +31,7 @@ type WorkflowGetOutput struct {
 
 type WorkflowWriteInput struct {
 	Name    string `json:"name" jsonschema:"workflow name: 2 to 64 lower-case letters, digits, - and _"`
-	Text    string `json:"text" jsonschema:"the whole file: a line ---, the settings (on, branches, every, chain, inputs, uses, results, model, budget, description), a line ---, then an optional instruction in Markdown. uses names a block ghosttree/<name>; an own prompt is refused until stage E5"`
+	Text    string `json:"text" jsonschema:"the whole file: a line ---, the settings (on, branches, every, chain, inputs, uses, tools, rounds, results, model, budget, research, description), a line ---, then Markdown. With uses (a block ghosttree/<name>) the Markdown is an optional instruction; without uses it is an own prompt (stage 3) that runs with the declared read tools"`
 	Base    int    `json:"base_version,omitempty" jsonschema:"the version the text was written on, from workflow_get; 0 creates a new workflow. A save on an older version is refused"`
 	Note    string `json:"note,omitempty" jsonschema:"what changed in this version"`
 	Project string `json:"project,omitempty" jsonschema:"the project when it is not the session's own"`
