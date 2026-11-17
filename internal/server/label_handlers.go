@@ -419,7 +419,7 @@ func (a *api) runPreset(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) ideaActor(r *http.Request, sessionID int64) idea.Actor {
 	sid := a.callerSession(r, sessionID)
-	ext := a.st.SessionExternalByID(sid)
+	ext := runRefOf(r, a.st.SessionExternalByID(sid))
 	return idea.Actor{AccountID: authorIDOf(r), Person: personOf(r), SessionID: sid, SessionRef: ext,
 		GitAnchor: anchorFromRequest(r), Origin: a.originFor(r, ext)}
 }

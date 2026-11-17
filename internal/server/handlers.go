@@ -35,6 +35,9 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "harness and external_id are required")
 		return
 	}
+	if !a.gateWorkflowRunRef(w, r, s.ExternalID) {
+		return
+	}
 	s.Scope = scope.CanonicalAxes(s.Scope)
 	if !a.gateMachine(w, r, s.Scope.Machine, true) {
 		return
@@ -268,9 +271,10 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if k.Scope.IsGlobal() && req.AutoScope != nil {
 		k.Scope = scope.DefaultAxes(k.Type, req.AutoScope.Context)
 	}
-	if !a.gateGardener(w, r, k) {
+	if !a.gateGardener(w, r, k) || !a.gateWorkflowRunRef(w, r, k.SessionRef) {
 		return
 	}
+	k.SessionRef = runRefOf(r, k.SessionRef)
 	shareOrgs, ok := a.shareOrgsForNewEntry(w, r, k.Scope.Project, k.Scope.Machine, req.ShareWithOrgs)
 	if !ok {
 		return
@@ -390,7 +394,7 @@ func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	if !a.gateGardener(w, r, in.Knowledge) {
+	if !a.gateGardener(w, r, in.Knowledge) || !a.gateWorkflowRunRef(w, r, in.Knowledge.SessionRef) {
 		return
 	}
 	in.Knowledge.Person = personOf(r)
@@ -1354,6 +1358,9 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.GitAnchor = anchorFromRequest(r)
+	if !a.gateWorkflowRunRef(w, r, g.SessionRef) {
+		return
+	}
 	if store.ReservedForGardener(store.Knowledge{Harness: g.Harness, SessionRef: g.SessionRef}) && !a.gardenerDescribes(w, r, g) {
 		return
 	}

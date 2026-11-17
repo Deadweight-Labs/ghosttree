@@ -107,6 +107,10 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{sess}, func(d *Store, p []any) (int64, error) { return d.UpsertSession(p[0].(Session)) })
 	}
+	if ReservedForWorkflowRun(sess.ExternalID) {
+		// A session named like a run would let its owner write as that run.
+		return 0, fmt.Errorf("%w: session ids starting with %q are reserved for workflow runs", ErrInvalidInput, WorkflowRunRefPrefix)
+	}
 	if sess.StartedAt == "" {
 		sess.StartedAt = now()
 	}
