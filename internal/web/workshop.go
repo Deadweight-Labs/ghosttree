@@ -126,9 +126,17 @@ type workshopDecision struct {
 	DecidedBy, DecidedAge, Chosen string
 	CanDecide, CanVote, CanReopen bool
 	MyVote                        string
-	// CanAttach shows the form that adds a picture to one of the variants.
+	// CanAttach puts the form that adds a picture into the card of each variant.
 	CanAttach bool
+	// Stack puts the cards one below the other: four variants side by side are too narrow to read.
+	Stack bool
 }
+
+// workshopStackFrom is the number of variants from which the cards stand one below the other.
+const workshopStackFrom = 4
+
+// workshopNext is what comes next on an idea: the first open decision (with its anchor) or the next step of the way.
+type workshopNext struct{ Text, Href string }
 
 type workshopView struct {
 	// ResultDecision is the decision the result of the last step is about; its card shows the
@@ -146,11 +154,14 @@ type workshopView struct {
 	Affects               []workshopAffect
 	Decisions             []workshopDecision
 	OpenCount             int
-	CanDiscuss            bool
-	CanApprove            bool
-	CanWithdraw           bool
-	Revision              int
-	Result                *requestResult
+	// Stand says how many of the decisions are open; Next what comes next.
+	Stand       string
+	Next        *workshopNext
+	CanDiscuss  bool
+	CanApprove  bool
+	CanWithdraw bool
+	Revision    int
+	Result      *requestResult
 }
 
 func (a *app) registerWorkshopPages(mux *http.ServeMux) {
@@ -258,6 +269,7 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		wd.CanAttach = canWork && wd.Open && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
 		w.Decisions = append(w.Decisions, wd)
 	}
+	w.standAndNext(l, phase, cur, ws.Concept != nil)
 	// Die Wege der Phase: Diskussion anstoßen kann, wer mitarbeitet; freigeben und die Freigabe
 	// zurücknehmen nur, wer die Idee bearbeiten darf.
 	w.CanDiscuss = canWork && (phase == idea.PhaseRaw || phase == idea.PhaseConcept) && ws.Concept != nil
@@ -286,6 +298,31 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 	v.Workshop = w
 }
 
+// standAndNext fills the top of the workshop: how many decisions are open and what comes next.
+// Decisions first: while one is open it is the next thing; then the next step of the way.
+func (w *workshopView) standAndNext(l lang, phase string, cur int, hasConcept bool) {
+	if n := len(w.Decisions); n > 0 {
+		if w.OpenCount > 0 {
+			w.Stand = l.msg("workshop.stand.open", w.OpenCount, n)
+		} else {
+			w.Stand = l.msg("workshop.stand.done", n)
+		}
+	}
+	for _, d := range w.Decisions {
+		if d.Open {
+			w.Next = &workshopNext{Text: d.Num + " · " + d.Question, Href: "#decision-" + strconv.FormatInt(d.ID, 10)}
+			return
+		}
+	}
+	switch {
+	case phase == idea.PhaseDismissed || cur < 0 || cur+1 >= len(workshopSteps):
+	case hasConcept && w.Revision > 0 && (phase == idea.PhaseConcept || phase == idea.PhaseDiscussion):
+		w.Next = &workshopNext{Text: l.msg("workshop.approve", w.Revision)}
+	default:
+		w.Next = &workshopNext{Text: label(l, workshopPhaseKeys, workshopSteps[cur+1])}
+	}
+}
+
 // decisionViewOf is the view of one decision, on the page of its idea and on its own page.
 // Closing needs the right to edit the subject, voting the right to work on it; the caller has
 // looked both up (and ruled out a session that is no person). CanAttach is the caller's to set.
@@ -301,13 +338,20 @@ func decisionViewOf(l lang, r *http.Request, d idea.Decision, now time.Time, can
 	}
 	// Schließen darf, wer den Gegenstand bearbeiten darf; abstimmen, wer mitarbeiten darf.
 	wd.CanDecide, wd.CanVote, wd.CanReopen = wd.Open && canEdit, wd.Open && canWork && len(d.Variants) > 0, !wd.Open && canWork
+	var personVote, agentVote string
 	for _, vr := range d.Variants {
 		wv := workshopVariant{ID: vr.ID, Label: vr.Label, Title: vr.Title, Images: attachImages(l, vr.Attachments, func(idea.AttachmentMeta) bool { return true }), Text: bodyBlocks(vr.Text, 0), Pro: bodyBlocks(vr.Pro, 0), Contra: bodyBlocks(vr.Contra, 0), Chosen: d.ChosenVariant == vr.Label}
 		for _, vt := range d.Votes {
 			if vt.Variant == vr.Label {
 				wv.Votes = append(wv.Votes, workshopVote{Voter: vt.Voter, Reason: vt.Reason, Tip: vt.Voter + ": " + vt.Reason})
-				if vt.Voter == me && !vt.ByAgent {
-					wd.MyVote = vr.Label
+				// A vote of the viewer's agent is the viewer's vote: the card shows it picked. A vote
+				// the viewer cast themselves wins over it.
+				if vt.Voter == me {
+					if vt.ByAgent {
+						agentVote = vr.Label
+					} else {
+						personVote = vr.Label
+					}
 				}
 			}
 		}
@@ -316,8 +360,12 @@ func decisionViewOf(l lang, r *http.Request, d idea.Decision, now time.Time, can
 		}
 		wd.Variants = append(wd.Variants, wv)
 	}
+	if wd.MyVote = personVote; wd.MyVote == "" {
+		wd.MyVote = agentVote
+	}
+	wd.Stack = len(wd.Variants) >= workshopStackFrom
 	for n := range wd.Variants {
-		wd.Variants[n].Checked = wd.Variants[n].Label == wd.MyVote
+		wd.Variants[n].Checked = wd.MyVote != "" && wd.Variants[n].Label == wd.MyVote
 	}
 	return wd
 }
