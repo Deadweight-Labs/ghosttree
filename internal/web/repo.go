@@ -114,6 +114,26 @@ func repoHref(remote string) string {
 	return "/ui/" + pathEscapeAll(rest)
 }
 
+// repoAddressable says whether the repository pages answer for this project:
+// its address has to lead back to the same remote. A remote without a host
+// (nurrobin/infra) or with a different depth (ai//opt/assistant) does not.
+func repoAddressable(remote string) bool {
+	rest, ok := strings.CutPrefix(repoHref(remote), "/ui/")
+	if !ok {
+		return false
+	}
+	segs := strings.Split(rest, "/")
+	for i, s := range segs {
+		u, err := url.PathUnescape(s)
+		if err != nil || u == "" {
+			return false
+		}
+		segs[i] = u
+	}
+	back, tail, ok := parseRepoPath(segs)
+	return ok && len(tail) == 0 && back == scope.NormalizeRemote(remote)
+}
+
 func pathEscapeAll(p string) string {
 	parts := strings.Split(p, "/")
 	for i, s := range parts {
