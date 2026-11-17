@@ -134,6 +134,8 @@ type pageData struct {
 	ErrV                 *errorView
 	RunbooksV            *runbooksView
 	RunbookV             *runbookPageView
+	WorkflowsV           *workflowsView
+	WorkflowRunV         *workflowRunView
 	DocsV                *docsView
 	DocV                 *docPageView
 	RunbookFormV         *runbookFormView
@@ -351,7 +353,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		"/ui/orgs/source/connect": a.orgSourceConnect, "/ui/orgs/source/add": a.orgSourceAdd,
 		"/ui/orgs/source/remove": a.orgSourceRemove, "/ui/orgs/source/import": a.orgSourceImport,
 		"/ui/orgs/prefix/visibility": a.orgPrefixVisibility, "/ui/orgs/follow": a.orgFollowGitHub,
-		"/ui/orgs/garden": a.orgGardenSave, "/ui/gardener/undo": a.gardenAutoUndo,
+		"/ui/orgs/garden": a.orgGardenSave, "/ui/orgs/workflows": a.orgWorkflowsSave, "/ui/gardener/undo": a.gardenAutoUndo,
 		"/ui/handover": a.handoverConsent, "/ui/orgs/takeover": a.handoverTakeOver,
 		"/ui/orgs/assign": a.orgAssign, "/ui/orgs/member/login-link": a.orgMemberLoginLink,
 	} {
@@ -730,6 +732,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/follow":                  webAdmin,
 	"POST /ui/orgs/assign":                  webAdmin,
 	"POST /ui/orgs/garden":                  webAdmin,
+	"POST /ui/orgs/workflows":               webAdmin,
 	"POST /ui/gardener/undo":                webAdmin,
 	"POST /ui/handover":                     webAdmin,
 	"POST /ui/orgs/takeover":                webAdmin,

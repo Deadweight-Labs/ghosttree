@@ -1,0 +1,33 @@
+/* Workflows of a repository (REQ-693): the list of runs, the page of a run and
+   the block of runs at the side of a pull request. */
+
+:is(.g2.wf) {
+  & .wfrow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 16px; }
+  & .wfrow > .st { display: inline-flex; align-items: center; height: 24px; }
+  & .wfname { font-size: 14px; line-height: 24px; font-weight: 600; color: var(--accent-fg); }
+  & .wfsub { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--fg-muted); margin-top: 2px; }
+  & .wfres { color: var(--fg-default); min-width: 0; overflow-wrap: anywhere; }
+  & .wfmeta { display: flex; align-items: center; gap: 16px; align-self: center; }
+  & .wfcost { font-size: 12px; }
+  & .dhead h1 .mono { font-size: 28px; font-weight: 400; overflow-wrap: anywhere; }
+  & .sec { margin: 24px 0 8px; }
+  & .sec:first-child { margin-top: 0; }
+  & pre.wftext { margin: 0; padding: 12px 16px; max-height: 480px; overflow: auto; font: 12px/18px var(--ui-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+}
+:is(.g2.wf, .g2.pr) {
+  & .wfstate { display: inline-flex; align-items: center; gap: 4px; }
+  & .wfstate .i { width: 12px; height: 12px; }
+  & .st.ok { color: var(--success-fg); }
+  & .st.dan { color: var(--danger-fg); }
+  & .st.warn { color: var(--attention-fg); }
+  & .st.out { color: var(--fg-muted); }
+  & .wftrig { display: inline-flex; gap: 4px; align-items: baseline; }
+  & .wfline { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  & .wfline .mono { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+@media (max-width: 767px) {
+  :is(.g2.wf) {
+    & .wfrow { grid-template-columns: 16px minmax(0, 1fr); }
+    & .wfmeta { grid-column: 2; flex-wrap: wrap; gap: 4px 12px; }
+  }
+}

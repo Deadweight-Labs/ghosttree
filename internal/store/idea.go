@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -311,6 +312,11 @@ func (s *Store) commitIdea(in CreateIdeaInput) (int64, error) {
 		return 0, err
 	}
 	if _, err := tx.Exec(`UPDATE ideas SET anchor_id=?, origin_id=? WHERE id=?`, anchorID, originID, id); err != nil {
+		return 0, err
+	}
+	ref := strconv.FormatInt(id, 10)
+	if _, _, err := recordWorkflowEventTx(tx, WorkflowEventInput{Kind: EventIdeaCreated, Project: in.Project, SubjectKind: "idea", SubjectID: ref,
+		Data: map[string]string{"title": in.Title}, Origin: OriginOfActor(in.Actor.Person, in.Actor.SessionRef, in.Actor.Agent), DedupeKey: EventIdeaCreated + ":" + ref}); err != nil {
 		return 0, err
 	}
 	return id, tx.Commit()

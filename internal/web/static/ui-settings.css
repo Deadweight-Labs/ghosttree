@@ -72,6 +72,8 @@
   /* The name field grows to a sensible width and the role pill sits right behind it, not at the far edge */
   & .prow.pname { grid-template-columns: 120px minmax(0, 28rem) auto; justify-content: start; }
   & .prow.pname .inline-form { display: flex; min-width: 0; }
+  /* The retention of workflow runs is a number of days: a short field, the unit and the button right behind it */
+  & .prow.wfret { grid-template-columns: 240px 7rem auto auto; justify-content: start; }
   & .inline-form .grow { flex: 1; }
   & .invite .gfield:first-child, & .invite .grow { flex: 1; }
   & .invite select.gfield { width: auto; }
@@ -237,6 +239,8 @@
 @media (max-width: 767px) {
   :is(.g2.set) {
     & .prow { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    & .prow.wfret { grid-template-columns: 7rem auto; }
+    & .prow.wfret > label, & .prow.wfret > button { grid-column: 1 / -1; }
     & .lrow { grid-template-columns: minmax(0, 1fr) auto; }
     & .lrow .mono { display: none; }
     & .trow { grid-template-columns: minmax(0, 1fr); gap: 8px; }

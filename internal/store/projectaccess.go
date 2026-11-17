@@ -58,6 +58,10 @@ const (
 	// ResComment ist ein Kommentar an einem Issue, einer Idee oder einem Pain. Wer
 	// das Objekt lesen darf, liest ihn; geprüft wird zusätzlich das Objekt.
 	ResComment Resource = "comment"
+	// ResWorkflow are the workflows of a project and their runs (REQ-693):
+	// what ran, on which event, at what cost, with which full text. Members and
+	// up read them; guests never (costs and texts stay inside the team).
+	ResWorkflow Resource = "workflow"
 )
 
 // Action ist, was getan werden soll.
@@ -270,6 +274,13 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 			// Freigabe.
 			return rank >= 2
 		case ActApprove:
+			return rank >= 3
+		}
+	case ResWorkflow:
+		switch act {
+		case ActRead:
+			return rank >= 2
+		case ActEdit:
 			return rank >= 3
 		}
 	case ResSnapshot:
