@@ -17,12 +17,18 @@ import (
 // connects to that exact address (no second lookup to rebind). It also ignores
 // HTTP_PROXY and friends, which would carry the key off the machine in the
 // clear. The Host header is left alone, so a proxy that routes by it still works.
+//
+// It never follows a redirect. Go drops Authorization on a redirect to another
+// host but keeps every other header, and the key of Anthropic travels in
+// x-api-key: a provider (or whoever answers in its place) that redirects would
+// get the key. The redirect comes back as the answer and is an error like any
+// other status.
 func newHTTPClient(u *url.URL, timeout time.Duration) *http.Client {
 	if u == nil || u.Scheme != "http" {
-		return &http.Client{Timeout: timeout}
+		return &http.Client{Timeout: timeout, CheckRedirect: refuseRedirect}
 	}
 	d := &net.Dialer{Timeout: 30 * time.Second}
-	return &http.Client{Timeout: timeout, Transport: &http.Transport{
+	return &http.Client{Timeout: timeout, CheckRedirect: refuseRedirect, Transport: &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			ips, err := loopbackTargets(addr)
@@ -44,6 +50,9 @@ func newHTTPClient(u *url.URL, timeout time.Duration) *http.Client {
 		},
 	}}
 }
+
+// refuseRedirect hands a redirect back as the answer instead of following it.
+func refuseRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // loopbackTargets resolves addr's host now and returns its addresses, or an
 // error if any answer is not loopback or nothing resolves.
