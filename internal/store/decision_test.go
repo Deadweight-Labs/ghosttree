@@ -217,8 +217,12 @@ func TestVariantsVotesAndAdoptionIntoKnowledgeAndConcept(t *testing.T) {
 	if _, err := w.pa["rex"].VoteDecision(d.ID, "Z", "x", w.actor("rex")); ruleCode(err) != "variant_not_found" {
 		t.Fatalf("unknown variant: %v", err)
 	}
-	if _, err := w.pa["rex"].VoteDecision(d.ID, "A", "", w.actor("rex")); ruleCode(err) != "reason_required" {
-		t.Fatalf("a vote needs a reason: %v", err)
+	// An agent says why it votes; a person may leave it out.
+	if _, err := w.pa["rex"].VoteDecision(d.ID, "A", "", w.agent("rex")); ruleCode(err) != "reason_required" {
+		t.Fatalf("an agent's vote needs a reason: %v", err)
+	}
+	if _, err := w.pa["rex"].VoteDecision(d.ID, "A", "", w.actor("rex")); err != nil {
+		t.Fatalf("a person votes without a reason: %v", err)
 	}
 	w.pa["rex"].VoteDecision(d.ID, "B", "Dateien sind einfach", w.actor("rex"))
 	w.pa["rex"].VoteDecision(d.ID, "A", "ich würde A nehmen, weil ein Backup reicht", w.actor("rex"))
