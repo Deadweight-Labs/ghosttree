@@ -462,6 +462,26 @@ func TestJoinWrongGuessesLockTheNetworkIncludingIPv6Prefixes(t *testing.T) {
 	}
 }
 
+// Wrong codes from very many networks do not lock a source that has not guessed.
+func TestJoinGlobalWaveOfWrongCodesSparesSourcesWithoutFailures(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	pair, _ := j.Create("person:2")
+	for i := 0; i < maxJoinFailuresGlobal; i++ {
+		// Each network stays under its own limit.
+		if _, err := j.Claim(codeReq("BCDF-GHJK", "m", fmt.Sprintf("203.%d.%d.1", i/200, i%200))); err != ErrJoinInvalid {
+			t.Fatalf("guess %d: %v", i, err)
+		}
+	}
+	// A source with one failure waits, a source without any goes on.
+	if _, err := j.Claim(codeReq(pair, "m", "203.0.0.1")); !errors.Is(err, ErrJoinLocked) {
+		t.Fatalf("a source that guessed during the wave: %v", err)
+	}
+	if _, err := j.Claim(codeReq(pair, "m", "198.51.100.77")); err != nil {
+		t.Fatalf("a source without a failure is locked by others: %v", err)
+	}
+}
+
 func TestJoinBusyAddressAnswersTheSameForValidAndInvalidCodes(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
