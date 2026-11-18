@@ -787,7 +787,13 @@ func (a *app) workshopClose(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
-	_, err := a.access(r).CloseDecision(store.CloseDecisionInput{ID: d.ID, Outcome: idea.DecisionDecided, Variant: r.FormValue("variant"), Answer: answer, Reason: reason,
+	// An own answer replaces the choice: the variant that was preselected (the
+	// person's own vote) must not swallow what they wrote instead.
+	variant := r.FormValue("variant")
+	if strings.TrimSpace(answer) != "" {
+		variant = ""
+	}
+	_, err := a.access(r).CloseDecision(store.CloseDecisionInput{ID: d.ID, Outcome: idea.DecisionDecided, Variant: variant, Answer: answer, Reason: reason,
 		Actor: store.IdeaActorFor(browserPrincipal(r), "")})
 	if err != nil {
 		a.workshopFailTo(w, r, err, back)

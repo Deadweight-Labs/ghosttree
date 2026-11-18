@@ -138,12 +138,9 @@ func TestMemberVotesAndTheOwnerDecidesAndBothShowInTheTimeline(t *testing.T) {
 	if resp := post(e.Member, "/ui/decisions/"+id+"/close", url.Values{"variant": {"B"}, "reason": {"I say so"}}); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("a member closes the question -> %d, want 403", resp.StatusCode)
 	}
-	// The owner needs a reason and a choice.
-	if resp := post(e.Owner, "/ui/decisions/"+id+"/close", url.Values{"variant": {"B"}, "reason": {" "}}); !strings.Contains(resp.Header.Get("Location"), "wfail=reason_required") {
-		t.Errorf("no reason -> %q", resp.Header.Get("Location"))
-	}
-	if _, failed := fetchPage(t, e.Owner, e.Base+ideaPath(i)+"?wfail=reason_required"); !strings.Contains(failed, "Say why.") {
-		t.Error("the refusal is not shown")
+	// The owner needs a choice; why is optional.
+	if _, page := fetchPage(t, e.Owner, e.Base+ideaPath(i)); !strings.Contains(page, "Why this one? (optional)") {
+		t.Error("the reason field does not say it may stay empty")
 	}
 	if resp := post(e.Owner, "/ui/decisions/"+id+"/close", url.Values{"reason": {"Because"}}); !strings.Contains(resp.Header.Get("Location"), "wfail=variant_required") && !strings.Contains(resp.Header.Get("Location"), "wfail=answer_required") {
 		t.Errorf("no choice -> %q", resp.Header.Get("Location"))
@@ -311,14 +308,14 @@ func TestDecideAnswersAtTheDecisionAndSaysWhoDecided(t *testing.T) {
 		t.Errorf("an open decision names how it is decided")
 	}
 	// A refusal stands at the decision.
-	resp := post(e.Owner, "/ui/decisions/"+id+"/close", url.Values{"variant": {"B"}, "reason": {""}})
+	resp := post(e.Owner, "/ui/decisions/"+id+"/close", url.Values{"reason": {"because"}})
 	loc := resp.Header.Get("Location")
-	if !strings.Contains(loc, "wfail=reason_required") || !strings.HasSuffix(loc, "#decision-"+id) || !strings.Contains(loc, "wdec="+id) {
-		t.Fatalf("no reason -> %q, want the refusal at the decision", loc)
+	if !strings.Contains(loc, "wfail=variant_required") || !strings.HasSuffix(loc, "#decision-"+id) || !strings.Contains(loc, "wdec="+id) {
+		t.Fatalf("no choice -> %q, want the refusal at the decision", loc)
 	}
 	_, failed := fetchPage(t, e.Owner, e.Base+strings.TrimSuffix(loc, "#decision-"+id))
 	card := failed[strings.Index(failed, `id="decision-`+id+`"`):]
-	if !strings.Contains(card[:strings.Index(card, "</article>")], "Say why.") {
+	if !strings.Contains(card[:strings.Index(card, "</article>")], "Pick a variant or write your own answer.") {
 		t.Errorf("the refusal is not inside the card of the decision")
 	}
 	// A decision is confirmed at the card as well, and names the person.
@@ -450,5 +447,31 @@ func TestWorkshopTopShowsSummaryAndStand(t *testing.T) {
 	_, bare := fetchPage(t, e.Owner, e.Base+ideaPath(j))
 	if !strings.Contains(bare, "1 of 1 decisions open") || strings.Contains(bare, ">Summary<") {
 		t.Errorf("an idea without a summary shows a summary or lacks the stand")
+	}
+}
+
+// Robin, 2026-11-18: an own answer vanished, because the preselected variant (his own
+// vote) was taken and the missing reason refused the form. Now the own answer is the
+// decision, and the reason may stay empty.
+func TestOwnAnswerWinsOverThePreselectedVariantAndNeedsNoReason(t *testing.T) {
+	e, pa := listEnv(t)
+	i, d := workedIdea(t, pa, shellProject)
+	id := strconv.FormatInt(d.ID, 10)
+	form := url.Values{"variant": {"A"}, "answer": {"Neither: keep it on the device for now"}, "reason": {""}}
+	form.Set("csrf_token", renderedCSRFToken(t, e.Owner, e.Base+"/ui/overview"))
+	resp := sameOriginPostForm(t, e.Owner, e.Base+"/ui/decisions/"+id+"/close", form)
+	resp.Body.Close()
+	if loc := resp.Header.Get("Location"); resp.StatusCode != http.StatusSeeOther || !strings.Contains(loc, "wdone=decided") {
+		t.Fatalf("own answer without reason -> %d %q", resp.StatusCode, loc)
+	}
+	got, err := pa.DecisionView(d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "decided" || got.ChosenVariant != "" || got.Answer != "Neither: keep it on the device for now" || got.Reason != "" {
+		t.Fatalf("decision after an own answer: state %q variant %q answer %q reason %q", got.State, got.ChosenVariant, got.Answer, got.Reason)
+	}
+	if _, page := fetchPage(t, e.Owner, e.Base+ideaPath(i)); !strings.Contains(page, "Neither: keep it on the device for now") {
+		t.Error("the idea page does not show the own answer")
 	}
 }

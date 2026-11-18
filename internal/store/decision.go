@@ -606,7 +606,9 @@ func (a *ProjectAccess) VoteDecision(decisionID int64, variant, reason string, a
 	if err != nil {
 		return idea.Decision{}, err
 	}
-	reason, err = idea.CleanReasonLine(reason, true)
+	// A person may vote without saying why; an agent says why, because nobody
+	// watched it choose.
+	reason, err = idea.CleanReasonLine(reason, actor.Agent)
 	if err != nil {
 		return idea.Decision{}, err
 	}
@@ -854,7 +856,8 @@ func (a *ProjectAccess) CloseDecision(in CloseDecisionInput) (idea.Decision, err
 	c := decisionClose{ID: d.ID, Actor: in.Actor}
 	switch in.Outcome {
 	case idea.DecisionDecided:
-		if c.Reason, err = idea.CleanReasonLine(in.Reason, true); err != nil {
+		// The choice is the decision; why is welcome, and required only of an agent.
+		if c.Reason, err = idea.CleanReasonLine(in.Reason, in.Actor.Agent); err != nil {
 			return idea.Decision{}, err
 		}
 		answer := strings.TrimSpace(in.Answer)
