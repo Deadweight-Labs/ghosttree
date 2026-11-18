@@ -38,6 +38,13 @@ runs on the machine. A release that the Ghosttree release key signed comes from
 the public installer (see "Installing from a release" below). Cautious readers
 can fetch the script, read it, and run it afterwards.
 
+`ctx update --channel dev` on a client takes the build of this server. If the
+`dist` directory also holds `checksums.txt.minisig` (the signature file of a
+release, served next to `checksums.txt`), the client checks it against the
+release key built into ctx and installs without a question; a build the server
+made itself has no such signature, and the client installs it only with
+`--trust-server` and says that only the server vouches for it.
+
 ## Installing from a release, and how it is checked
 
 The public installer is for a machine that has no ghosttree server to ask:
