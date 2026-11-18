@@ -69,6 +69,7 @@ const takes = {
     // Open the card to show the full text.
     const t = await s.textBox('Refunds send their receipt through the same path as payments');
     const chevron = { x: 45, y: t.y + 20 };
+    await s.page.evaluate(() => { window.__ptr = true; });
     await s.glide(chevron.x, chevron.y, 600);
     await s.page.mouse.down(); await s.pause(80); await s.page.mouse.up();
     s.mark('expanded');
@@ -77,19 +78,23 @@ const takes = {
     const approve = s.page.getByRole('button', { name: 'Approve', exact: true });
     const boxes = await approve.evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; }));
     const near = boxes.filter(q => q.h > 0).sort((a, b) => Math.abs(a.y - t2.y) - Math.abs(b.y - t2.y))[0];
+    await s.page.evaluate(() => { window.__ptr = true; });
     await s.glide(near.x + near.w / 2, near.y + near.h / 2, 800);
     await s.pause(250);
     s.mark('click-approve');
     await s.page.mouse.down(); await s.pause(90); await s.page.mouse.up();
-    await s.page.waitForLoadState('networkidle');
+    await s.page.waitForLoadState('load'); await s.pause(500);
     await s.mask();
-    await s.note('banner', 'Approved: Refunds send their receipt');
+    await s.note('banner', 'Approved: Refunds send their receipt through the same path as payments');
     await s.pause(1800);
     s.mark('end');
   },
   // The next session on payments starts with the lesson.
   async brief(s) {
     await s.go(`/ui/context?project=github.com%2Fnorthwind%2Fpayments`);
+    // The pitfall line sits in the middle of the frame, not at its lower edge.
+    const l = await s.textBox('Refunds send their receipt through the same path as payments');
+    if (l) await s.page.evaluate((y) => window.scrollBy(0, y), Math.round(l.y - H * 0.45));
     await s.pause(600);
     s.mark('start');
     await s.toText('### pitfall', 800, 0.5);
@@ -125,7 +130,7 @@ const takes = {
     await s.toText('a repeated callback sends nothing', 800, 0.5);
     await s.pause(900);
     s.mark('to-link');
-    await s.click(s.page.locator('span.ref[data-ref="KN-37"]').last(), 800);
+    await s.click(s.page.locator('[data-ref="KN-37"], a:has-text("KN-37")').last(), 800);
     s.mark('card');
     await s.pause(2200);
     await s.go(`${PAY}/knowledge/37`);
@@ -173,6 +178,7 @@ const takes = {
     await s.clickNav(s.page.getByText('From the gardener').first(), 800);
     await s.pause(700);
     const t = await s.textBox('Deploys start when a version tag is pushed');
+    await s.page.evaluate(() => { window.__ptr = true; });
     await s.glide(45, t.y + 12, 800);
     await s.page.mouse.down(); await s.pause(80); await s.page.mouse.up();
     s.mark('expanded');
@@ -188,20 +194,22 @@ const takes = {
     await s.page.locator('text=Longer helps people who come back').first().evaluate(e => window.scrollTo(0, e.getBoundingClientRect().top + window.scrollY - 150));
     await s.pause(600);
     s.mark('start');
-    await s.to(s.page.locator('text=Covers the weekend gap').first(), 900);
+    await s.toText('Covers the weekend gap', 900);
     await s.pause(500);
-    await s.to(s.page.locator('text=Catches most returning shoppers').first(), 700);
+    await s.toText('Catches most returning shoppers', 700);
     await s.pause(500);
-    await s.to(s.page.locator('text=A second device cannot restore it').first(), 700);
+    await s.toText('A second device cannot restore it', 700);
     await s.pause(700);
     s.mark('reason');
-    await s.click(s.page.getByPlaceholder('Why this one? (optional)').first(), 900);
+    const why = s.page.getByPlaceholder('Why this one? (optional)').first();
+    await s.click(why, 900);
+    await why.focus();
     await s.pause(200);
     await s.type('Most shoppers come back within three days. A week covers it with the least data.', 32);
     await s.pause(400);
     s.mark('decide');
     await s.click(s.page.getByRole('button', { name: 'Decide' }).first(), 800);
-    await s.page.waitForLoadState('networkidle');
+    await s.page.waitForLoadState('load'); await s.pause(500);
     await s.mask();
     await s.pause(600);
     const d = s.page.locator('text=How long does a guest cart live on the server?').last();

@@ -12,21 +12,25 @@ PLAYWRIGHT=/path/to/node_modules/playwright/index.mjs docs/images/src/film/make.
 ```
 
 It builds `ctx` and the seed in [`readme/`](readme/) and starts a throwaway
-server like the pictures below. [`film/takes.mjs`](film/takes.mjs) then signs
-in as Mia and records four takes at twice the pixel density, with real clicks:
-the failing test in the session that found the duplicate receipts, Mia
-approving the pitfall that agent proposed, the payments briefing that now
-contains it, and the refunds agent's message that links to it. Each take writes
-the time and position of what it points at, so [`film/gen.mjs`](film/gen.mjs)
-can frame and highlight exactly that. It writes a
-[HyperFrames](https://hyperframes.heygen.com) composition, `npx hyperframes`
-renders it, and ffmpeg turns it into an animated WebP. GitHub plays an animated
-WebP in the README on its own; a video file in the repository does not play
-inline. With `KEEP=/path` the recordings and the composition are kept.
+server like the pictures below. [`film/moments.mjs`](film/moments.mjs) then
+signs in as Mia and takes one still per moment at phone width and four times
+the pixel density, without a pointer: the failing test in the session that
+found the duplicate receipts, the lesson that agent wrote down, Mia's approval,
+the payments briefing that now contains it, and the refunds agent's message
+that follows it. Each still comes with the box of the one element it is about,
+so [`film/split.mjs`](film/split.mjs) can show exactly that element beside one
+word on the brand blue (landscape: word left, detail right; portrait: word on
+top, detail below). It writes a [HyperFrames](https://hyperframes.heygen.com)
+composition, `npx hyperframes` renders it, and ffmpeg turns it into an
+animated WebP. GitHub plays an animated WebP in the README on its own; a video
+file in the repository does not play inline. With `KEEP=/path` the stills and
+the compositions are kept.
 
-`TAKES=all` records the takes of the launch film and of the clips on the
-website as well. The launch film needs music and sound effects that are not in
-this repository; they live with the website material.
+`split.mjs landscape vertical` writes the launch film in 16:9 and 9:16 from the
+same stills; it needs music and sound effects that are not in this repository
+and live with the website material. `TAKES=all` also records the screen takes
+of the website's feature clips ([`film/takes.mjs`](film/takes.mjs), composed by
+[`film/gen.mjs`](film/gen.mjs)); there the pointer shows only while it moves.
 
 Fonts in [`fonts/`](fonts/) are Fira Sans Condensed Heavy and IBM Plex Sans,
 both under the SIL Open Font License, as on the website.

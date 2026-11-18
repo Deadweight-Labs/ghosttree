@@ -18,8 +18,8 @@ export async function storage(browser, scheme = 'light', who = 'Mia') {
   const c = await browser.newContext({ viewport: { width: 1280, height: 720 }, colorScheme: scheme, locale: 'en-US' });
   const p = await c.newPage();
   await p.goto(loginLink(who));
-  await p.locator('main form button').first().click();
-  await p.waitForLoadState('networkidle');
+  // The page after sign-in keeps a live connection open, so wait for the address, not for an idle network.
+  await Promise.all([p.waitForURL(u => !u.href.includes('/login'), { timeout: 15000 }), p.locator('main form button').first().click()]);
   const s = await c.storageState();
   await c.close();
   return s;
@@ -37,7 +37,14 @@ export async function scene(browser, state, { w = 1280, h = 720, dpr = 2, scheme
       c.innerHTML = '<svg width="30" height="30" viewBox="0 0 22 22"><path d="M3 2l14 8-6 1.6L8 18z" fill="#11130f" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>';
       Object.assign(c.style, { position: 'fixed', left: '-4px', top: '-3px', zIndex: 2147483647, pointerEvents: 'none', transition: 'scale .12s', transform: `translate(${window.__cx ?? 640}px,${window.__cy ?? 360}px)` });
       document.body.appendChild(c);
-      addEventListener('mousemove', (e) => { c.style.transform = `translate(${e.clientX}px,${e.clientY}px)`; });
+      // The pointer shows only on the way to a click (window.__ptr, set by click and clickNav) and fades out
+      // when it rests, so it never sits on or wanders over what is read.
+      c.style.transition = 'scale .12s, opacity .25s';
+      c.style.opacity = '0';
+      let idle;
+      const wake = () => { if (!window.__ptr) return; c.style.opacity = '1'; clearTimeout(idle); idle = setTimeout(() => { c.style.opacity = '0'; window.__ptr = false; }, 450); };
+      addEventListener('mousemove', (e) => { c.style.transform = `translate(${e.clientX}px,${e.clientY}px)`; wake(); });
+      addEventListener('mousedown', wake);
       addEventListener('mousedown', () => { c.style.scale = '.82'; });
       addEventListener('mouseup', () => { c.style.scale = '1'; });
     });
@@ -72,7 +79,9 @@ export async function scene(browser, state, { w = 1280, h = 720, dpr = 2, scheme
       });
     },
     async go(path) {
-      await page.goto(base + path, { waitUntil: 'networkidle' });
+      // Pages with a room keep a live connection open, so wait for load and a moment, not for an idle network.
+      await page.goto(base + path, { waitUntil: 'load' });
+      await page.waitForTimeout(500);
       await api.mask();
       await page.evaluate(([x, y]) => { window.__cx = x; window.__cy = y; }, [cx, cy]);
       await page.mouse.move(cx, cy);
@@ -112,10 +121,12 @@ export async function scene(browser, state, { w = 1280, h = 720, dpr = 2, scheme
         return null;
       }, str);
     },
+    // Point at a text without covering it: the pointer rests just below the line it points at.
     async toText(str, ms = 700, frac = 0.5) {
       const b = await api.textBox(str);
       if (!b) throw new Error('text not found: ' + str);
-      await api.glide(Math.round(b.x + Math.min(b.width * frac, 200)), Math.round(b.y + b.height / 2), ms);
+      const last = b.all ? b.all[b.all.length - 1] : b;
+      await api.glide(Math.round(b.x + Math.min(b.width * frac, 200)), Math.round(last.y + last.height + 10), ms);
       api.mark('text:' + str.slice(0, 40), b);
       return b;
     },
@@ -126,6 +137,7 @@ export async function scene(browser, state, { w = 1280, h = 720, dpr = 2, scheme
       return b;
     },
     async click(locator, ms = 700) {
+      await page.evaluate(() => { window.__ptr = true; });
       await api.to(locator, ms);
       await page.waitForTimeout(150);
       api.mark('click');
@@ -134,12 +146,14 @@ export async function scene(browser, state, { w = 1280, h = 720, dpr = 2, scheme
     // Click something that loads another page and wait until it is there.
     async clickNav(locator, ms = 700) {
       const old = page.url();
+      await page.evaluate(() => { window.__ptr = true; });
       await api.to(locator, ms);
       await page.waitForTimeout(150);
       api.mark('click');
       await page.mouse.down(); await page.waitForTimeout(90);
       await Promise.all([page.waitForURL(u => u.href !== old, { timeout: 10000 }), page.mouse.up()]);
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('load');
+      await page.waitForTimeout(500);
       await api.mask();
     },
     async scroll(dy, ms = 900) {
