@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -75,9 +76,18 @@ type release struct {
 	files map[string][]byte
 	// latest is what the API answers for the newest stable release ("" = 404).
 	latest string
+	// redirects answers a path with a 302 to the given location.
+	redirects map[string]string
 }
 
-func (r *release) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+func (r *release) ServeHTTP(w http.ResponseWriter, req *http.Request) { r.serve(w, req, true) }
+
+// withoutRedirects serves the same files and answers every path itself.
+func (r *release) withoutRedirects() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { r.serve(w, req, false) })
+}
+
+func (r *release) serve(w http.ResponseWriter, req *http.Request, redirects bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if strings.HasSuffix(req.URL.Path, "/releases/latest") {
@@ -86,6 +96,10 @@ func (r *release) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		fmt.Fprintf(w, `{"url": "x", "tag_name": %q, "draft": false}`, r.latest)
+		return
+	}
+	if loc, ok := r.redirects[req.URL.Path]; ok && redirects {
+		http.Redirect(w, req, loc, http.StatusFound)
 		return
 	}
 	b, ok := r.files[strings.TrimPrefix(req.URL.Path, "/dl/")]
@@ -125,6 +139,15 @@ func (r *release) set(path string, b []byte) {
 	r.files[path] = b
 }
 
+func (r *release) redirect(from, to string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.redirects == nil {
+		r.redirects = map[string]string{}
+	}
+	r.redirects[from] = to
+}
+
 func (r *release) get(path string) []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -135,9 +158,16 @@ func (r *release) get(path string) []byte {
 // exactly the checkers the test wants it to have.
 func toolbox(t *testing.T, openssl, minisignBin bool) string {
 	t.Helper()
+	return toolboxWith(t, "curl", openssl, minisignBin)
+}
+
+// toolboxWith is toolbox with the given download client (curl or wget) and no
+// other; "" gives none.
+func toolboxWith(t *testing.T, client string, openssl, minisignBin bool) string {
+	t.Helper()
 	dir := t.TempDir()
 	tools := []string{"sh", "uname", "mktemp", "rm", "mkdir", "cp", "mv", "chmod", "cat", "tr", "awk", "sed", "grep",
-		"cut", "wc", "head", "tail", "od", "tar", "gzip", "id", "sha256sum", "curl", "env", "dirname", "sleep", "ls"}
+		"cut", "wc", "head", "tail", "od", "tar", "gzip", "id", "sha256sum", client, "env", "dirname", "sleep", "ls"}
 	if openssl {
 		tools = append(tools, "openssl")
 	}
@@ -145,6 +175,9 @@ func toolbox(t *testing.T, openssl, minisignBin bool) string {
 		tools = append(tools, "minisign")
 	}
 	for _, name := range tools {
+		if name == "" {
+			continue
+		}
 		p, err := exec.LookPath(name)
 		if err != nil {
 			t.Skipf("%s is not installed", name)
@@ -270,6 +303,16 @@ func TestTamperedReleaseIsRefused(t *testing.T) {
 		}, "a release without a signature is not installed"},
 		{"signature garbled", func(t *testing.T, rel *release, k key) {
 			rel.set("v0.1.0/checksums.txt.minisig", []byte("untrusted comment: x\nAAAA\ntrusted comment: ghosttree v0.1.0\nAAAA\n"))
+		}, "does not match the ghosttree release key"},
+		{"trusted comment rewritten to the requested tag", func(t *testing.T, rel *release, k key) {
+			// Everything is genuine for v0.0.9; only the comment line has been
+			// edited to say v0.1.0. The comment is covered by its own signature.
+			rel.publish(t, k, "v0.0.9", fakeCtx)
+			sig := strings.Replace(string(rel.get("v0.0.9/checksums.txt.minisig")),
+				"trusted comment: ghosttree v0.0.9", "trusted comment: ghosttree v0.1.0", 1)
+			rel.set("v0.1.0/checksums.txt", rel.get("v0.0.9/checksums.txt"))
+			rel.set("v0.1.0/checksums.txt.minisig", []byte(sig))
+			rel.set("v0.1.0/"+archiveName("0.1.0"), rel.get("v0.0.9/"+archiveName("0.0.9")))
 		}, "does not match the ghosttree release key"},
 		{"genuine list of another release", func(t *testing.T, rel *release, k key) {
 			rel.publish(t, k, "v0.0.9", fakeCtx)
@@ -462,4 +505,208 @@ func TestReleaseKeyScriptMakesAWorkingInstaller(t *testing.T) {
 	if string(after) != string(body) {
 		t.Error("a refused key file changed install.sh")
 	}
+}
+
+// runWith runs the script with the key of k and exactly this environment (plus
+// HOME, TMPDIR and PATH).
+func runWith(t *testing.T, k key, tools string, env []string, args ...string) run {
+	t.Helper()
+	src, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	script := filepath.Join(t.TempDir(), "install.sh")
+	body := strings.Replace(string(src), "__GHOSTTREE_MINISIGN_PUBKEY__", k.pub.String(), 1)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", append([]string{script, "--no-modify-path"}, args...)...)
+	cmd.Env = append([]string{"PATH=" + tools, "HOME=" + home, "TMPDIR=" + t.TempDir(), "SHELL=/bin/sh"}, env...)
+	out, err := cmd.CombinedOutput()
+	r := run{dir: home, out: string(out)}
+	if ee, ok := err.(*exec.ExitError); ok {
+		r.code = ee.ExitCode()
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// "http://localhost:1@example.org" is a request to example.org with the user
+// name "localhost:1". The loopback exception must not mistake it for this
+// machine, in either address.
+func TestPlainHttpWithUserInformationIsRefused(t *testing.T) {
+	_, k, _ := setup(t)
+	for _, base := range []string{
+		"http://localhost:1@example.org/dl",
+		"http://localhost@example.org/dl",
+		"http://127.0.0.1:1@example.org/dl",
+		"http://127.0.0.1@example.org/dl",
+		"http://[::1]:1@example.org/dl",
+		"http://[::1]@example.org/dl",
+		`http://localhost:1\@example.org/dl`,
+		"http://localhost.example.org/dl",
+		"http://127.0.0.1.example.org/dl",
+	} {
+		for _, name := range []string{"GHOSTTREE_RELEASE_BASE", "GHOSTTREE_API_URL"} {
+			t.Run(name+"="+base, func(t *testing.T) {
+				r := runWith(t, k, toolbox(t, true, false), []string{name + "=" + base}, "--version", "v0.1.0")
+				if r.code == 0 || !strings.Contains(r.out, "refusing to download over plain http") {
+					t.Fatalf("exit %d:\n%s", r.code, r.out)
+				}
+				if strings.Contains(r.out, "Downloading") {
+					t.Errorf("something was fetched:\n%s", r.out)
+				}
+			})
+		}
+	}
+}
+
+// The other direction: a loopback address with a port and a path is what the
+// tests and local mirrors use, and must keep working.
+func TestPlainHttpToThisMachineStillWorks(t *testing.T) {
+	_, k, srv := setup(t)
+	r := runWith(t, k, toolbox(t, true, false), []string{
+		"GHOSTTREE_RELEASE_BASE=" + srv.URL + "/dl", "GHOSTTREE_API_URL=" + srv.URL + "/api",
+	}, "--version", "v0.1.0")
+	if r.code != 0 || !r.installed() {
+		t.Fatalf("exit %d:\n%s", r.code, r.out)
+	}
+}
+
+// clients are the download clients install.sh can drive on this machine:
+// curl, and GNU Wget 1.x (BusyBox wget and Wget2 are refused, see the tests
+// below).
+func clients(t *testing.T) []string {
+	t.Helper()
+	var have []string
+	if _, err := exec.LookPath("curl"); err == nil {
+		have = append(have, "curl")
+	}
+	if p, err := exec.LookPath("wget"); err == nil {
+		out, _ := exec.Command(p, "--version").CombinedOutput()
+		if strings.HasPrefix(string(out), "GNU Wget 1.") {
+			have = append(have, "wget")
+		}
+	}
+	return have
+}
+
+// install.sh uses wget when there is no curl, and wget has to do what curl
+// does: get the release, and follow a redirect to where the file really is.
+func TestWgetInstallsAGenuineReleaseAndFollowsARedirect(t *testing.T) {
+	rel, k, srv := setup(t)
+	arch := archiveName("0.1.0")
+	rel.set("elsewhere/"+arch, rel.get("v0.1.0/"+arch))
+	rel.redirect("/dl/v0.1.0/"+arch, "/dl/elsewhere/"+arch)
+	rel.redirect("/dl/v0.1.0/checksums.txt", srv.URL+"/dl/elsewhere/checksums.txt")
+	rel.set("elsewhere/checksums.txt", rel.get("v0.1.0/checksums.txt"))
+	for _, client := range clients(t) {
+		t.Run(client, func(t *testing.T) {
+			r := runWith(t, k, toolboxWith(t, client, true, false), []string{
+				"GHOSTTREE_RELEASE_BASE=" + srv.URL + "/dl", "GHOSTTREE_API_URL=" + srv.URL + "/api",
+			}, "--version", "v0.1.0")
+			if r.code != 0 || !r.installed() {
+				t.Fatalf("exit %d:\n%s", r.code, r.out)
+			}
+		})
+	}
+}
+
+// A redirect that leaves the allowed protocols is followed by neither client.
+// With loopback http allowed (the tests' setting) the target is judged by the
+// same rule as the first address.
+func TestRedirectToPlainHttpOfAnotherHostIsRefused(t *testing.T) {
+	for _, client := range clients(t) {
+		for _, loc := range []string{"http://downloads.example.org/x", "http://localhost:1@example.org/x"} {
+			t.Run(client+"/"+loc, func(t *testing.T) {
+				rel, k, srv := setup(t)
+				rel.redirect("/dl/v0.1.0/checksums.txt", loc)
+				r := runWith(t, k, toolboxWith(t, client, true, false), []string{
+					"GHOSTTREE_RELEASE_BASE=" + srv.URL + "/dl", "GHOSTTREE_API_URL=" + srv.URL + "/api",
+				}, "--version", "v0.1.0")
+				if r.code == 0 || r.installed() {
+					t.Fatalf("followed it (exit %d):\n%s", r.code, r.out)
+				}
+			})
+		}
+	}
+}
+
+// The case the whole rule is for: the address is https, and the answer sends
+// the client to plain http (here to a second, genuine server, so that following
+// would succeed). Neither curl nor wget may go.
+func TestRedirectFromHttpsToPlainHttpIsNotFollowed(t *testing.T) {
+	rel, k, _ := setup(t)
+	tlsSrv := httptest.NewTLSServer(rel)
+	t.Cleanup(tlsSrv.Close)
+	plain := httptest.NewServer(rel.withoutRedirects())
+	t.Cleanup(plain.Close)
+	certFile := filepath.Join(t.TempDir(), "ca.pem")
+	pemBytes := pemOf(tlsSrv.Certificate().Raw)
+	if err := os.WriteFile(certFile, pemBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wgetrc := filepath.Join(t.TempDir(), "wgetrc")
+	if err := os.WriteFile(wgetrc, []byte("ca_certificate = "+certFile+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{
+		"GHOSTTREE_RELEASE_BASE=" + tlsSrv.URL + "/dl", "GHOSTTREE_API_URL=" + tlsSrv.URL + "/api",
+		"SSL_CERT_FILE=" + certFile, "CURL_CA_BUNDLE=" + certFile, "WGETRC=" + wgetrc,
+	}
+	for _, client := range clients(t) {
+		t.Run(client+"/control", func(t *testing.T) {
+			rel.mu.Lock()
+			rel.redirects = nil
+			rel.mu.Unlock()
+			r := runWith(t, k, toolboxWith(t, client, true, false), env, "--version", "v0.1.0")
+			if r.code != 0 || !r.installed() {
+				// Without this the refusal below proves nothing.
+				t.Fatalf("%s does not accept the test certificate (exit %d):\n%s", client, r.code, r.out)
+			}
+		})
+		t.Run(client+"/downgrade", func(t *testing.T) {
+			rel.redirect("/dl/v0.1.0/checksums.txt", plain.URL+"/dl/v0.1.0/checksums.txt")
+			r := runWith(t, k, toolboxWith(t, client, true, false), env, "--version", "v0.1.0")
+			if r.code == 0 || r.installed() {
+				t.Fatalf("followed a redirect from https to http (exit %d):\n%s", r.code, r.out)
+			}
+		})
+	}
+}
+
+// BusyBox wget and Wget2 (Fedora's wget) follow a redirect to plain http and
+// cannot be told not to, so they are turned away with the way out instead of
+// being trusted.
+func TestWgetThatCannotRefuseARedirectIsTurnedAway(t *testing.T) {
+	for name, version := range map[string]string{
+		"busybox": "BusyBox v1.36.1 (2024-01-01) multi-call binary.",
+		"wget2":   "GNU Wget2 2.2.1 - multithreaded metalink/file/website downloader",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, k, srv := setup(t)
+			tools := toolboxWith(t, "", true, false) // no curl, no wget of the real kind
+			fake := "#!/bin/sh\necho '" + version + "'\nexit 0\n"
+			if err := os.WriteFile(filepath.Join(tools, "wget"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			r := runWith(t, k, tools, []string{
+				"GHOSTTREE_RELEASE_BASE=" + srv.URL + "/dl", "GHOSTTREE_API_URL=" + srv.URL + "/api",
+			}, "--version", "v0.1.0")
+			if r.code == 0 || r.installed() {
+				t.Fatalf("exit %d:\n%s", r.code, r.out)
+			}
+			for _, want := range []string{"is not GNU Wget 1.x", "Install curl", version} {
+				if !strings.Contains(r.out, want) {
+					t.Errorf("output lacks %q:\n%s", want, r.out)
+				}
+			}
+		})
+	}
+}
+
+func pemOf(der []byte) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }

@@ -192,7 +192,11 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   either check is not installed. `--version v0.1.0-rc.3` installs a release
   candidate. It is tested in fresh Debian, Ubuntu and Fedora containers without
   a terminal, with a tampered archive, tampered checksums, a foreign key, a
-  missing signature and a signed list of another release.
+  missing signature and a signed list of another release. A plain-http address
+  is only accepted for this machine (`http://localhost:1@example.org` is not
+  this machine), wget is followed redirect by redirect and never from https to
+  http (BusyBox wget and Wget2 are refused), and the release job reads the signing key from
+  the environment `release`, in the one step before goreleaser.
 
 - Every person chooses German or English: in the profile and with a DE | EN
   switcher in the account menu and on the sign-in and invitation pages. The

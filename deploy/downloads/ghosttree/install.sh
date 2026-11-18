@@ -109,11 +109,21 @@ main() {
 
   # Plain http would let anyone on the path swap archive and checksums alike;
   # the signature would catch it, but there is no reason to allow it.
+  # Plain http is only for this machine, and only when the host part is exactly
+  # that: "http://localhost:1@example.org" has the user name "localhost" and
+  # goes to example.org, so an "@" (or a backslash, which some clients read as
+  # a slash) in the host part ends the discussion.
   protos_for() {
     case "$1" in
       https://*) printf '%s\n' '=https' ;;
-      http://localhost | http://localhost:* | http://127.0.0.1 | http://127.0.0.1:* | http://\[::1\] | http://\[::1\]:* | http://\[::1]*)
-        printf '%s\n' '=http,https' ;;
+      http://*)
+        auth=${1#http://}
+        auth=${auth%%[/?#]*}
+        case "$auth" in
+          *[@\\]*) die "refusing to download over plain http from $1: user information in an address hides the real host" ;;
+          localhost | localhost:* | 127.0.0.1 | 127.0.0.1:* | \[::1\] | \[::1\]:*) printf '%s\n' '=http,https' ;;
+          *) die "refusing to download over plain http from $1" ;;
+        esac ;;
       *) die "refusing to download over plain http from $1" ;;
     esac
   }
@@ -123,8 +133,49 @@ main() {
   if command -v curl >/dev/null 2>&1; then
     fetch() { curl -fsSL --proto "$2" --proto-redir "$2" -o "$3" "$1"; }
   elif command -v wget >/dev/null 2>&1; then
-    fetch() {
-      if [ "$2" = '=https' ]; then wget -qO "$3" --https-only "$1"; else wget -qO "$3" "$1"; fi
+    # wget has no switch that keeps a redirect on https: GNU wget's --https-only
+    # only governs recursive downloads, and BusyBox wget follows a redirect to
+    # plain http without asking. So GNU Wget 1.x is told not to follow anything
+    # (--max-redirect=0) and every hop is followed here, after the address has
+    # been checked by the same rule as the first one. BusyBox wget and Wget2
+    # (which Fedora ships as wget) cannot be driven that way and are turned away
+    # with the way out.
+    wget_id=$(wget --version 2>&1 | head -n 1)
+    case "$wget_id" in
+      'GNU Wget 1.'*) ;;
+      *) die "the wget on this system ($wget_id) is not GNU Wget 1.x; BusyBox wget and Wget2 cannot be stopped from following a redirect to plain http.
+Install curl (apk add curl, apt install curl, dnf install curl) and run this again." ;;
+    esac
+    fetch() { # url, allowed protocols, output file
+      furl=$1 fprotos=$2 fout=$3 hops=0
+      while :; do
+        hops=$((hops + 1))
+        [ "$hops" -le 8 ] || { printf 'ghosttree install: too many redirects for %s\n' "$1" >&2; return 1; }
+        if wget -q -S --max-redirect=0 -O "$fout" "$furl" 2>"$tmp/wget.headers"; then
+          return 0
+        fi
+        fcode=$(awk '/^[[:space:]]*HTTP\//{ c = $2 } END { print c }' "$tmp/wget.headers")
+        case "$fcode" in
+          301 | 302 | 303 | 307 | 308) ;;
+          *) return 1 ;;
+        esac
+        floc=$(sed -n 's/^[[:space:]]*[Ll][Oo][Cc][Aa][Tt][Ii][Oo][Nn]:[[:space:]]*//p' "$tmp/wget.headers" | tail -n 1 | tr -d '\r')
+        case "$floc" in
+          //*) return 1 ;;
+          /*)
+            forigin=${furl#*://}
+            forigin=${furl%%://*}://${forigin%%/*}
+            floc=$forigin$floc ;;
+        esac
+        # Each hop has to pass the rule the first address passed, and a hop may
+        # not be less strict than the one before it.
+        hop_protos=$(protos_for "$floc") || return 1
+        if [ "$fprotos" = '=https' ] && [ "$hop_protos" != '=https' ]; then
+          printf 'ghosttree install: refusing a redirect to plain http (%s)\n' "$floc" >&2
+          return 1
+        fi
+        furl=$floc
+      done
     }
   else
     die "curl or wget is required"
