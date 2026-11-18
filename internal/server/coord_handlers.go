@@ -242,7 +242,7 @@ func (a *api) coordInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	after, _ := strconv.ParseInt(q.Get("after"), 10, 64)
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	limit := intParam(r, "limit", 0)
 	access := a.coordAccess(r, asker)
 	if publicOnly {
 		access = a.st.CoordinationPublicFor(principalOf(r))
@@ -714,7 +714,7 @@ func (a *api) sessionActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	minutes, _ := strconv.Atoi(q.Get("minutes"))
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	limit := intParam(r, "limit", 0)
 	out, err := a.st.SessionPathActivity(q.Get("session"), store.AccountIDOf(principalOf(r).ID), store.ActivityWindow(minutes), limit)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)

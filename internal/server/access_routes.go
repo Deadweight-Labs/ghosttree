@@ -212,6 +212,7 @@ func (a *api) route(mux *http.ServeMux, pattern string, h http.Handler) {
 		panic("server: route " + pattern + " is not classified in accessRoutes")
 	}
 	a.registered = append(a.registered, pattern)
+	h = a.withBodyLimit(pattern, h)
 	if class != classProject {
 		mux.Handle(pattern, h)
 		return

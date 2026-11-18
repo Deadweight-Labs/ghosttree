@@ -46,6 +46,9 @@ func refuseSecretsChanged(stored map[string]string, pairs ...string) error {
 		if prev, ok := stored[field]; ok && prev == text {
 			continue
 		}
+		if err := checkTextLength(field, text); err != nil {
+			return err
+		}
 		for _, m := range redact.FindSecrets(text) {
 			total++
 			if len(spots) < maxSecretSpots {

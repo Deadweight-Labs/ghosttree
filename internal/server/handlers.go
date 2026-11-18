@@ -1540,7 +1540,7 @@ func (a *api) ghostHistory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]int{"count": n})
 		return
 	}
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	limit := intParam(r, "limit", 0)
 	read := a.st.GhostFileHistory
 	// Die Kette nimmt die aktuelle Fassung als Kopf dazu. Ohne sie hat die
 	// neueste abgeloeste Fassung keinen Nachfolger, und genau der Vergleich
