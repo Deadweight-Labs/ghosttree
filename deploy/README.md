@@ -780,13 +780,15 @@ and cost on the run and stops a run at its cap.
 **The server key.** Keys in the database need a 32-byte server key, which never
 lives in the database. Make one and hand it to the unit as a systemd credential:
 
-    sudo install -d -m 0700 /etc/ghosttree
-    head -c 32 /dev/urandom | base64 | sudo tee /etc/ghosttree/secret-key >/dev/null
-    sudo chmod 0600 /etc/ghosttree/secret-key
-    sudo systemctl edit ghosttree.service    # add the two lines below
-    #   [Service]
-    #   LoadCredential=ghosttree-secret-key:/etc/ghosttree/secret-key
-    sudo systemctl restart ghosttree
+```sh
+sudo install -d -m 0700 /etc/ghosttree
+head -c 32 /dev/urandom | base64 | sudo tee /etc/ghosttree/secret-key >/dev/null
+sudo chmod 0600 /etc/ghosttree/secret-key
+sudo systemctl edit ghosttree.service    # add the two lines below
+#   [Service]
+#   LoadCredential=ghosttree-secret-key:/etc/ghosttree/secret-key
+sudo systemctl restart ghosttree
+```
 
 Outside systemd, `GHOSTTREE_SECRET_KEY_FILE=/path/to/secret-key` names the
 file (base64 or hex, 32 bytes). A key that is configured but cannot be read
@@ -909,13 +911,15 @@ prices, cap reached) the run uses the gardener's entry of `llm.json` exactly as
 before, and run-due prints why. The proxy must run on the machine of the
 gardener's unit (it listens on loopback only).
 
-**What the operator does on the server host (orax):**
+**What the operator does on the server host:**
 
 1. Give the proxy a fixed loopback port in the server's environment
    (`/etc/ghosttree/server.env`), so that the address the gardener gets stays
    the same when the server restarts during a run:
 
-       GHOSTTREE_AI_PROXY_ADDR=127.0.0.1:8791
+   ```sh
+   GHOSTTREE_AI_PROXY_ADDR=127.0.0.1:8791
+   ```
 
    Any free loopback port will do; `ss -ltn | grep 8791` shows whether it is
    taken. Then `sudo systemctl restart ghosttree` and check the log for
