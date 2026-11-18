@@ -664,6 +664,22 @@ func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	// Herkunft und Ersetzung sind keine Felder zum Patchen: wer ersetzt, geht über
+	// /supersede (mit den Prüfungen von Projekt und Lesbarkeit), die Herkunft setzt
+	// der Server. Der Status geht nur zusammen mit einer Beurteilung (Prüfseite)
+	// oder auf deprecated.
+	for _, field := range []string{"origin", "superseded_by"} {
+		if _, ok := patch[field]; ok {
+			writeCoded(w, http.StatusBadRequest, "field_not_patchable", "field "+field+" is not patchable here")
+			return
+		}
+	}
+	if status, ok := patch["status"]; ok && status != "deprecated" {
+		if _, judged := patch["confidence"]; !judged {
+			writeCoded(w, http.StatusBadRequest, "field_not_patchable", "status can only be set to deprecated, or together with a judgement (confidence)")
+			return
+		}
+	}
 	// Der Token ist die einzige vertrauenswürdige Quelle für den Bestätiger;
 	// ein mitgesendeter Name darf keine fremde Freigabe vortäuschen. Die
 	// Zuschreibung (person) ist nicht patchbar und bleibt dem ersten Autor.
