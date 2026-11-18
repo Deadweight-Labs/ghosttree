@@ -84,7 +84,7 @@ func Build(in Input) []Doc {
 
 	docs := make([]Doc, 0, len(knowledge)+len(in.Documents)+len(in.Requests)+1)
 	for _, k := range knowledge {
-		path := fmt.Sprintf("knowledge/%s/%d-%s.md", k.Type, k.ID, slug(k.Title))
+		path := fmt.Sprintf("knowledge/%s/%d-%s.md", pathPart(k.Type), k.ID, slug(k.Title))
 		docs = append(docs, Doc{Path: path, Body: knowledgeBody(k, mentions[mentionKey(knref.Prefix, k.ID)], motivated[mentionKey(knref.Prefix, k.ID)])})
 	}
 	for _, document := range in.Documents {
@@ -358,8 +358,24 @@ func slug(title string) string {
 	return out
 }
 
+// pathPart macht aus einem Wert des Servers (Typ, Zustand) ein Verzeichnisstück.
+// Ein ehrlicher Server liefert nur kleine Wörter aus fester Liste; alles andere
+// wird nicht bereinigt, sondern durch "other" ersetzt, damit ein Wert wie
+// "../../x" den Spiegel nicht verlassen kann.
+func pathPart(v string) string {
+	if v == "" || len(v) > 40 {
+		return "other"
+	}
+	for _, r := range v {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '-' && r != '_' {
+			return "other"
+		}
+	}
+	return v
+}
+
 func painPath(p pain.Pain) string {
-	return fmt.Sprintf("pains/%s/PAIN-%d-%s.md", p.State, p.ID, slug(p.Title))
+	return fmt.Sprintf("pains/%s/PAIN-%d-%s.md", pathPart(p.State), p.ID, slug(p.Title))
 }
 
 // painBody shows title, state, what remains, the text, what the pain motivates

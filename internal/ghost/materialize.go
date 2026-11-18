@@ -16,41 +16,6 @@ type Doc struct {
 	Body string
 }
 
-// Materialize schreibt den Baum vollständig neu, statt ihn abzugleichen. Der
-// ganze Baum dieses Repos sind rund 47 KB — ein kompletter Durchlauf dauert
-// Millisekunden, und "vollständig neu" hat keine Abgleichfehler.
-//
-// Erst daneben bauen, dann tauschen: bricht es mittendrin ab, bleibt der alte
-// Baum stehen. Das kurze Fenster zwischen Entfernen und Umbenennen ist
-// hinnehmbar, weil der Baum eine Projektion ist — was dort verlorengeht, ist
-// beim nächsten Schreibzugriff wieder da.
-func Materialize(root string, docs []Doc) error {
-	tmp := root + tmpSuffix
-	if err := os.RemoveAll(tmp); err != nil {
-		return err
-	}
-	for _, d := range docs {
-		full := filepath.Join(tmp, filepath.FromSlash(d.Path))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			return err
-		}
-		body := d.Body
-		if !strings.HasSuffix(body, "\n") {
-			body += "\n"
-		}
-		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
-			return err
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(root), 0o755); err != nil {
-		return err
-	}
-	if err := os.RemoveAll(root); err != nil {
-		return err
-	}
-	return os.Rename(tmp, root)
-}
-
 // DirDoc ist der Dateiname der Verzeichnisbeschreibung. Nicht README.md: der
 // Baum steht neben echten Repos voller echter READMEs, und ein Leser, der
 // .ghosttree/tree/internal/README.md sieht, hält es für die README von
@@ -72,15 +37,16 @@ func MirrorPath(path, kind string) string {
 	return path + ".md"
 }
 
-// TreeRoot ist das Verzeichnis, in das der Baum geschrieben wird. Im Repo,
+// TreeRoot ist das Verzeichnis, in das der Baum geschrieben wird, als
+// vertrauenswürdige Wurzel und Pfad darunter. Im Repo,
 // weil der Agent ihn dort findet, ohne dass jemand ihm einen Pfad nennt — er
 // sucht ohnehin schon nach .claude/ und .codex/. Ohne Repo bleibt das
 // Maschinen-Zuhause.
-func TreeRoot(repoRoot, project, home string) string {
+func TreeRoot(repoRoot, project, home string) (base, rel string) {
 	if repoRoot != "" {
-		return filepath.Join(repoRoot, ".ghosttree", "tree")
+		return repoRoot, ".ghosttree/tree"
 	}
-	return filepath.Join(home, ".ghosttree", "trees", filepath.FromSlash(project))
+	return home, ".ghosttree/trees/" + project
 }
 
 // tmpSuffix hängt an der Baumwurzel und macht daraus das Geschwisterverzeichnis,

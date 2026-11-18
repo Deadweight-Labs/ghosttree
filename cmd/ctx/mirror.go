@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"time"
 
@@ -185,29 +184,39 @@ func writeMirrorDocs(root, repoRoot string, docs []mirror.Doc) error {
 	if err := ghost.EnsureExcluded(repoRoot); err != nil {
 		return err
 	}
+	rel, err := filepath.Rel(repoRoot, root)
+	if err != nil {
+		return err
+	}
+	rel = filepath.ToSlash(rel)
 	byDir := map[string][]ghost.Doc{}
 	for _, d := range docs {
 		dir, rest := split(d.Path)
+		// Nur die Verzeichnisse, die der Spiegel selbst besitzt: edit/, workflows/,
+		// snapshots/ und tree/ haben eigene Schreiber und werden nie ersetzt.
+		if dir != "" && !mirrorDirs[dir] {
+			continue
+		}
 		byDir[dir] = append(byDir[dir], ghost.Doc{Path: rest, Body: d.Body})
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return err
 	}
 	for dir, group := range byDir {
 		if dir == "" {
 			for _, d := range group {
-				if err := os.WriteFile(filepath.Join(root, d.Path), []byte(d.Body), 0o644); err != nil {
+				if err := ghost.WriteFile(repoRoot, rel+"/"+d.Path, []byte(d.Body)); err != nil {
 					return err
 				}
 			}
 			continue
 		}
-		if err := ghost.Materialize(filepath.Join(root, dir), group); err != nil {
+		if err := ghost.Materialize(repoRoot, rel+"/"+dir, group); err != nil {
 			return err
 		}
 	}
 	return nil
 }
+
+// mirrorDirs sind die obersten Verzeichnisse, die mirror.Build füllt.
+var mirrorDirs = map[string]bool{"knowledge": true, "docs": true, "requests": true, "pains": true, "threads": true}
 
 // split trennt das oberste Verzeichnis vom Rest. Eine Datei direkt unter
 // .ghosttree/ — INDEX.md — bekommt das leere Verzeichnis.
