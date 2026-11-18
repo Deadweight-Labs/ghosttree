@@ -32,6 +32,13 @@ func (a *api) gateMachine(w http.ResponseWriter, r *http.Request, machine string
 	if machine == "" {
 		return true
 	}
+	// Ein Maschinenname wird Schlüssel in der Maschinentabelle und steht in
+	// Oberflächen und im Kontext der Agenten: druckbar, einzeilig, kurz. Der
+	// Geräte-Login prüft dasselbe (validMachine).
+	if !validMachine(machine) || !store.ValidOneLine(machine, maxMachineLength) {
+		writeCoded(w, http.StatusBadRequest, "invalid_machine", "the machine name must be one printable line of at most 128 characters")
+		return false
+	}
 	p := principalOf(r)
 	if p.Machine != "" && strings.ToLower(p.Machine) != machine {
 		writeCoded(w, http.StatusForbidden, "machine_bound", "this token is bound to machine "+p.Machine)
