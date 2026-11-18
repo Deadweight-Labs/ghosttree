@@ -308,17 +308,20 @@
     ? "⌘ Enter"
     : (document.documentElement.lang || "").toLowerCase().startsWith("de") ? "Strg+Enter" : "Ctrl+Enter";
   const withKeys = (tip) => (tip ? tip + " · " : "") + sendKeys;
+  // The button that sends a composer: the comment composers name theirs (data-submit); the composers of the rooms
+  // and threads have the send button of the room (.comp-send), not the request button beside it.
+  const sendButton = (cx) => $("[data-submit]", cx) || $(".comp-send", cx);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.isComposing) return;
     const ta = event.target;
     if (!ta.matches || !ta.matches(".cx textarea")) return;
     const form = ta.closest("form");
-    const btn = $("[data-submit]", ta.closest(".cx"));
+    const btn = sendButton(ta.closest(".cx"));
     if (!form || !btn || btn.disabled) return;
     event.preventDefault();
     if (typeof form.requestSubmit === "function") form.requestSubmit(btn); else btn.click();
   });
-  for (const b of $$(".cx [data-submit]")) {
+  for (const b of $$(".cx [data-submit], .cx .comp-send")) {
     b.title = withKeys(b.getAttribute("title") || "");
     b.setAttribute("aria-keyshortcuts", "Control+Enter");
   }

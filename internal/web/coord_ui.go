@@ -159,10 +159,12 @@ func coordComposerFor(l lang, d *coordRoomDetailView, id string, thread bool) co
 		c.States = coordStateOptions(l, d.Thread.State)
 	}
 	kind := &composerSelect{Name: "intent", Label: l.msg("coord.kind")}
-	kind.Options = []composerOption{{Value: "", Label: l.msg("coord.mode.message"), Selected: true}}
+	kind.Options = []composerOption{{Value: "", Label: l.msg("coord.mode.message"), Hint: l.msg("coord.kind.hint.message"), Selected: true}}
 	for _, k := range []composerOption{
-		{Value: "question", Label: l.msg("coord.reason.question")}, {Value: "approval", Label: l.msg("coord.reason.approval")},
-		{Value: "blocker", Label: l.msg("coord.reason.blocker")}, {Value: "handoff", Label: l.msg("coord.reason.handoff")},
+		{Value: "question", Label: l.msg("coord.reason.question"), Hint: l.msg("coord.kind.hint.question")},
+		{Value: "approval", Label: l.msg("coord.reason.approval"), Hint: l.msg("coord.kind.hint.approval")},
+		{Value: "blocker", Label: l.msg("coord.reason.blocker"), Hint: l.msg("coord.kind.hint.blocker")},
+		{Value: "handoff", Label: l.msg("coord.reason.handoff"), Hint: l.msg("coord.kind.hint.handoff")},
 	} {
 		kind.Options = append(kind.Options, k)
 	}

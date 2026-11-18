@@ -89,4 +89,20 @@ func TestJSFixturesAreWhatTheTemplatesRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	goldenFixture(t, "attach-tile.html", tile.Bytes())
+
+	// The reply field of a thread and the field of a room (REQ-706): both send with the button .comp-send,
+	// and Ctrl+Enter in the field has to find it (static/ui-parts.js).
+	for name, thread := range map[string]bool{"thread": true, "room": false} {
+		d := &coordRoomDetailView{Room: coordRoomView{Name: "General"}}
+		if thread {
+			d.Thread = &coordThreadDetailView{CanSetState: true}
+			d.Thread.State = "open"
+			d.Thread.States = coordStateOptions(langEN, "open")
+		}
+		var field bytes.Buffer
+		if err := langEN.page().ExecuteTemplate(&field, "coord-composer", coordComposerFor(langEN, d, "coord-"+name+"-body", thread)); err != nil {
+			t.Fatal(err)
+		}
+		goldenFixture(t, "coord-composer-"+name+".html", field.Bytes())
+	}
 }

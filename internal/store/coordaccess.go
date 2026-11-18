@@ -1910,7 +1910,7 @@ func (a CoordAccess) requireThreadMutation(threadID int64) (Thread, error) {
 	if err != nil {
 		return Thread{}, err
 	}
-	thread, err := a.requireThreadStateTx(tx, actor, threadID)
+	thread, err := a.requireThreadSettleTx(tx, actor, threadID)
 	if err != nil {
 		return Thread{}, err
 	}
@@ -1943,17 +1943,24 @@ func (a CoordAccess) CanSetThreadState(threadID int64) bool {
 }
 
 func (a CoordAccess) requireThreadMutationTx(tx *sql.Tx, actor string, threadID int64) (Thread, error) {
-	return a.requireThreadChangeTx(tx, actor, threadID, false)
+	return a.requireThreadChangeTx(tx, actor, threadID, false, false)
 }
 
 // requireThreadStateTx is requireThreadMutationTx plus the project lead and up:
 // only changing the state and archiving open to them, never links, summaries,
 // outcomes or touching.
 func (a CoordAccess) requireThreadStateTx(tx *sql.Tx, actor string, threadID int64) (Thread, error) {
-	return a.requireThreadChangeTx(tx, actor, threadID, true)
+	return a.requireThreadChangeTx(tx, actor, threadID, true, false)
 }
 
-func (a CoordAccess) requireThreadChangeTx(tx *sql.Tx, actor string, threadID int64, leadMay bool) (Thread, error) {
+// requireThreadSettleTx is requireThreadStateTx plus whoever answered in the
+// thread: the rule for changing the state alone (resolve, defer, open again),
+// not for archiving.
+func (a CoordAccess) requireThreadSettleTx(tx *sql.Tx, actor string, threadID int64) (Thread, error) {
+	return a.requireThreadChangeTx(tx, actor, threadID, true, true)
+}
+
+func (a CoordAccess) requireThreadChangeTx(tx *sql.Tx, actor string, threadID int64, leadMay, participantMay bool) (Thread, error) {
 	if a.publicOnly {
 		return Thread{}, ErrCoordForbidden
 	}
@@ -1985,6 +1992,20 @@ func (a CoordAccess) requireThreadChangeTx(tx *sql.Tx, actor string, threadID in
 			return Thread{}, err
 		}
 		if manager > 0 {
+			return thread, nil
+		}
+	}
+	// Whoever took part in the thread may say it is settled, put it aside or
+	// open it again: a person who answered in it is no stranger to it. Only the
+	// state opens to them, never links, summaries, outcomes or the archive.
+	if participantMay && a.AgentExternalID == "" && a.Principal.TokenKind == WebSessionKind && a.Principal.ID != "" {
+		var wrote int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_messages
+			WHERE destination_kind='discussion' AND destination_id=? AND author_kind='human' AND author_principal_id=?`,
+			ThreadDestinationID(threadID), a.Principal.ID).Scan(&wrote); err != nil {
+			return Thread{}, err
+		}
+		if wrote > 0 {
 			return thread, nil
 		}
 	}
@@ -2113,7 +2134,7 @@ func (a CoordAccess) SetThreadState(threadID int64, state string, anchor ...*git
 	if err != nil {
 		return err
 	}
-	if _, err := a.requireThreadStateTx(tx, actor, threadID); err != nil {
+	if _, err := a.requireThreadSettleTx(tx, actor, threadID); err != nil {
 		return err
 	}
 	ts := now()

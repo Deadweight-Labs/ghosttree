@@ -144,7 +144,7 @@
 
 {{define "coord-thread-state"}}{{with .Coord.Active.Thread}}{{if .States}}<details class="dd top-menu rtstate" data-coord-draft-key="thread-state-{{.ID}}"><summary class="state {{.StateTone}} sm" aria-label="{{t "coord.thread_state"}}" title="{{t "coord.thread_state"}}" data-coord-focus-key="thread-state-summary-{{.ID}}">{{template "threadstate" .State}}<span>{{.StateText}}</span>{{mi "chev"}}</summary>
   <form class="pop r rtstate-pop" method="post" action="/ui/coord/thread/state"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="thread_id" value="{{.ID}}">{{range .States}}<button class="opt{{if .Current}} cur{{end}}" name="state" value="{{.Value}}"{{if .Current}} aria-current="true"{{end}}>{{template "threadstate" .Value}}<span>{{.Label}}</span>{{if .Current}}<span class="chk">{{mi "check"}}</span>{{end}}</button>{{end}}</form></details>
-{{- else}}<span class="state {{.StateTone}} sm">{{template "threadstate" .State}}<span>{{.StateText}}</span></span>{{end}}{{end}}{{end}}
+{{- else}}<span class="state {{.StateTone}} sm" title="{{t "coord.thread_state_lock"}}" tabindex="0">{{template "threadstate" .State}}<span>{{.StateText}}</span></span>{{end}}{{end}}{{end}}
 
 {{define "coord-thread-who"}}{{if .Who}}<details class="dd top-menu rwho rtwho" data-coord-draft-key="thread-who-{{.ID}}"><summary class="wstack-btn" aria-label="{{t "coord.participants"}}" title="{{t "coord.participants"}}" data-coord-focus-key="thread-who-summary-{{.ID}}"><span class="stackav">{{range $i, $h := .Who}}{{if lt $i 4}}{{template "coord-here-av" $h}}{{end}}{{end}}{{if gt (len .Who) 4}}<span class="stackmore">{{more (len .Who) 4}}</span>{{end}}</span></summary>
   <div class="pop r rwho-pop"><div class="ph">{{t "coord.participants"}}</div>{{if gt (len .Who) 7}}<form class="rsearch rwho-find" role="search"><label class="gfield">{{mi "search"}}<input type="search" data-here-filter placeholder="{{t "room.who_filter"}}" aria-label="{{t "room.who_filter"}}" autocomplete="off"></label></form>{{end}}<ul class="coord-participants rm-here">{{range .Who}}{{template "coord-thread-who-row" .}}{{end}}</ul><p class="rwho-none muted" hidden>{{t "room.who_none"}}</p></div></details>{{end}}{{end}}
@@ -217,7 +217,7 @@
 </article>
 {{- end}}</li>{{end}}
 
-{{define "coord-message-links"}}{{if .ThreadURL}}<a class="cm-thread" href="{{.ThreadURL}}">{{mi "chat"}}<b>{{if .ReplyCount}}{{t "coord.replies" .ReplyCount}}{{else}}{{.ThreadTitle}}{{end}}</b>{{if .ThreadMeta}}<small class="muted">{{.ThreadMeta}}</small>{{end}}</a>{{else if .ReplyCount}}<small class="coord-reply-count muted">{{mi "chat"}}{{t "coord.replies" .ReplyCount}}</small>{{end}}{{end}}
+{{define "coord-message-links"}}{{if .ThreadURL}}<a class="cm-thread" href="{{.ThreadURL}}">{{mi "chat"}}<b>{{if .ReplyCount}}{{t "coord.replies" .ReplyCount}}{{else}}{{.ThreadTitle}}{{end}}</b>{{if .ThreadMeta}}<small class="muted">{{.ThreadMeta}}</small>{{end}}</a>{{else if .ReplyCount}}<small class="coord-reply-count muted" title="{{t "coord.replies_in_room"}}">{{mi "reply"}}{{t "coord.replies" .ReplyCount}}</small>{{end}}{{end}}
 
 {{define "coord-here-av"}}{{if .Human}}{{avatarOf .Person.Label}}{{else}}{{avatarX "" (agentKindOf .Provider) .Title .Owner false}}{{end}}{{end}}
 
