@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitsafe"
 	"github.com/Deadweight-Labs/ghosttree/internal/plainfs"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -72,7 +72,7 @@ func CheckWorktree(repoRoot string) error {
 	if err := checkWorktreeDirs(repoRoot); err != nil {
 		return err
 	}
-	out, err := exec.Command("git", "-C", repoRoot, "ls-files", "-z", "--", ".ghosttree/workflows").Output()
+	out, err := gitsafe.Command("-C", repoRoot, "ls-files", "-z", "--", ".ghosttree/workflows").Output()
 	if err != nil {
 		return nil
 	}

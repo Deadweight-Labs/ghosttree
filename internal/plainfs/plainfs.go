@@ -72,7 +72,7 @@ func Write(path string, data []byte, dirs ...string) error {
 	if err := CheckDirs(dirs...); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	if err := CheckDirs(dirs...); err != nil {
@@ -89,7 +89,7 @@ func Write(path string, data []byte, dirs ...string) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o644); err != nil {
+	if err := tmp.Chmod(0o600); err != nil {
 		tmp.Close()
 		return err
 	}

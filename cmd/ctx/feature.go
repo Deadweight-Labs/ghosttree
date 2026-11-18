@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitsafe"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
@@ -573,7 +573,7 @@ func gitChangedPaths(root, ref string) ([]string, error) {
 	if !featureRefRE.MatchString(ref) || strings.Contains(ref, "..") {
 		return nil, fmt.Errorf("%q is not a Git ref", ref)
 	}
-	cmd := exec.Command("git", "-C", root, "diff", "--name-only", "--no-renames", ref+"...HEAD", "--")
+	cmd := gitsafe.Command("-C", root, "diff", "--name-only", "--no-renames", ref+"...HEAD", "--")
 	raw, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git diff against %s failed: pass --ref with the branch the pull request is compared with, or the paths as arguments", ref)

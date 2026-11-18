@@ -2,10 +2,10 @@ package collector
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitsafe"
 	"github.com/Deadweight-Labs/ghosttree/internal/projectlink"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -167,7 +167,7 @@ func gitOut(cwd string, args ...string) (string, error) {
 }
 
 func gitBytes(cwd string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+	cmd := gitsafe.Command(append([]string{"-C", cwd}, args...)...)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
