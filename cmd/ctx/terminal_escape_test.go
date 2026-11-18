@@ -50,7 +50,7 @@ func TestRawOutputIsKeptForProtocolsAndPrograms(t *testing.T) {
 // ctx idea/pain/request attach sends a file only when it is an image.
 func TestReadImageArgRefusesAFileThatIsNoImage(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "id_ed25519")
-	if err := os.WriteFile(p, []byte("-----BEGIN OPENSSH " + "PRIVATE KEY-----\n"), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte("-----BEGIN OPENSSH "+"PRIVATE KEY-----\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := readImageArg(p); err == nil {

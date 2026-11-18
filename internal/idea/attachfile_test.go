@@ -21,8 +21,8 @@ func TestReadImageFileStrictOnlyReadsImages(t *testing.T) {
 		}
 		return p
 	}
-	key := write(".ssh/id_ed25519", []byte("-----BEGIN OPENSSH " + "PRIVATE KEY-----\nAAAA\n"))
-	keyAsPng := write("shots/key.png", []byte("-----BEGIN OPENSSH " + "PRIVATE KEY-----\nAAAA\n"))
+	key := write(".ssh/id_ed25519", []byte("-----BEGIN OPENSSH "+"PRIVATE KEY-----\nAAAA\n"))
+	keyAsPng := write("shots/key.png", []byte("-----BEGIN OPENSSH "+"PRIVATE KEY-----\nAAAA\n"))
 	okPng := write("shots/ok.png", good)
 	hiddenPng := write(".cache/shot.png", good)
 	linkToKey := filepath.Join(home, "shots", "link.png")

@@ -30,8 +30,8 @@ func TestAttachByPathReadsOnlyImages(t *testing.T) {
 		}
 		return p
 	}
-	key := put(".ssh/id_ed25519", []byte("-----BEGIN OPENSSH " + "PRIVATE KEY-----\n"))
-	fake := put("pics/key.png", []byte("-----BEGIN OPENSSH " + "PRIVATE KEY-----\n"))
+	key := put(".ssh/id_ed25519", []byte("-----BEGIN OPENSSH "+"PRIVATE KEY-----\n"))
+	fake := put("pics/key.png", []byte("-----BEGIN OPENSSH "+"PRIVATE KEY-----\n"))
 	hidden := put(".config/shot.png", testPNGBytes(t))
 	link := filepath.Join(home, "pics", "link.png")
 	if err := os.Symlink(key, link); err != nil {
