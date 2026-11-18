@@ -272,10 +272,11 @@ func TestCtxWebSessionHasTheRightsOfTheDeviceNotOfAPerson(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("inbox: %d", code)
 	}
-	// The session may what the device token may (DEC-50), so it is offered a new
-	// organization; the forms of a human right, like the own profile, stay shut.
-	if !strings.Contains(page, `data-new="org"`) {
-		t.Fatal("a session from ctx web is not offered what its token may do")
+	// The session may what the device token may (DEC-50). Founding an
+	// organization is a person's right (review of PR #315), so it is not offered,
+	// and neither are the forms of the own profile.
+	if strings.Contains(page, `data-new="org"`) {
+		t.Fatal("a session from ctx web is offered to found an organization")
 	}
 	if _, profile := get("/ui/profile"); strings.Contains(profile, `action="/ui/profile"`) {
 		t.Fatal("a session from ctx web is offered administrative actions of a person")

@@ -410,20 +410,19 @@ func TestHeldEntriesOverTheAPI(t *testing.T) {
 	if code, _ := f.call(t, "GET", "/api/projects/held?project="+remote, f.carl, nil); code != 404 {
 		t.Fatalf("an outsider counts held entries: %d", code)
 	}
-	// Releasing is knowledge.verify, the same right as in the web (DEC-50):
-	// the outsider who planted it finds nothing, the owner releases it.
+	// Releasing is a person's decision in the web: no token releases, not the
+	// outsider who planted it and not the owner's agent.
 	id := int64(k["id"].(float64))
-	if code, _ := f.call(t, "POST", "/api/projects/held", f.carl, map[string]any{"kind": "knowledge", "id": id, "release": true}); code != 404 {
-		t.Fatalf("an outsider released: %d", code)
-	}
-	if code, out := f.call(t, "POST", "/api/projects/held", f.robin, map[string]any{"kind": "knowledge", "id": id, "release": true}); code != 200 || out["released"] != true {
-		t.Fatalf("released over the API: %d %v", code, out)
+	for name, tok := range map[string]string{"outsider": f.carl, "owner": f.robin} {
+		if code, out := f.call(t, "POST", "/api/projects/held", tok, map[string]any{"kind": "knowledge", "id": id, "release": true}); code != 403 || out["code"] != "web_session_required" {
+			t.Fatalf("the %s's token released: %d %v", name, code, out)
+		}
 	}
 	resp = req(t, "GET", f.srv.URL+"/api/projects/held?project="+remote, f.robin, nil)
 	raw, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if !strings.Contains(string(raw), `"held":0`) {
-		t.Fatalf("still held after the release: %s", raw)
+	if !strings.Contains(string(raw), `"held":1`) {
+		t.Fatalf("a token released the entry: %s", raw)
 	}
 }
 

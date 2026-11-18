@@ -41,7 +41,7 @@ var orgFormRights = map[string]store.Right{
 	"/ui/orgs/follow": store.RightOrgProjects, "/ui/handover": store.RightOrgProjects,
 	"/ui/orgs/takeover": store.RightOrgProjects, "/ui/orgs/assign": store.RightOrgProjects,
 	"/ui/orgs/create": store.RightOrgCreate, "/ui/orgs/project/create": store.RightOrgProjectCreate,
-	"/ui/orgs/rename": store.RightOrgManage, "/ui/orgs/workflows": store.RightOrgManage,
+	"/ui/orgs/rename": store.RightOrgManage, "/ui/orgs/workflows": store.RightOrgAI,
 	"/ui/orgs/project/visibility": store.RightProjectShare,
 	"/ui/orgs/garden":             store.RightOrgAI, "/ui/orgs/workflow-policy": store.RightOrgAI,
 	"/ui/gardener/undo": store.RightKnowledgeVerify,
@@ -55,4 +55,19 @@ func (a *app) mayDecide(w http.ResponseWriter, r *http.Request, d idea.Decision)
 		return false
 	}
 	return true
+}
+
+// requireSignedIn lets only a session from a sign-in through: a session from a
+// pasted or device token is an agent. Used where the right is a project right
+// whose use still belongs to a person, such as reading and releasing entries
+// held after a project moved: they are texts of other authors that the new
+// organization must not see before a person looked at them.
+func (a *app) requireSignedIn(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !fromSignIn(r) {
+			a.notInteractive(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

@@ -242,7 +242,7 @@ var rightCatalog = []RightInfo{
 
 	{RightRolesGrant, ScopeProject, RoleLead, true, "Mitglied- und Gastrollen vergeben", "Give member and guest roles"},
 	{RightRolesGrantAny, ScopeProject, RoleOwner, true, "Jede Projektrolle vergeben", "Give any project role"},
-	{RightProjectShare, ScopeProject, RoleOwner, false, "Projekt mit der Organisation teilen", "Share the project with the organization"},
+	{RightProjectShare, ScopeProject, RoleOwner, true, "Projekt mit der Organisation teilen", "Share the project with the organization"},
 
 	{RightOrgManage, ScopeOrg, OrgOwner, false, "Organisation umbenennen und einstellen", "Rename and set up the organization"},
 	{RightOrgMembers, ScopeOrg, OrgOwner, true, "Mitglieder einladen, Rollen ändern, entfernen", "Invite members, change roles, remove"},
@@ -255,7 +255,7 @@ var rightCatalog = []RightInfo{
 	{RightInstanceOrgRename, ScopeInstance, "admin", true, "Fremde Organisationen umbenennen", "Rename organizations of others"},
 	{RightInstanceAI, ScopeInstance, "admin", true, "KI-Schlüssel der Instanz", "AI keys of the instance"},
 
-	{RightOrgCreate, ScopeAccount, "", false, "Organisationen anlegen", "Create organizations"},
+	{RightOrgCreate, ScopeAccount, "", true, "Organisationen anlegen", "Create organizations"},
 	{RightAccountSecurity, ScopeAccount, "", true, "Anmeldung, E-Mail, Passwort und Geräte", "Sign-in, email, password and devices"},
 }
 

@@ -222,7 +222,9 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		for _, n := range notices {
 			v.Moved = append(v.Moved, l.msg("adm.notice.slug_yielded", n.OldSlug, n.NewSlug))
 		}
-		{
+		// Only the person reading it marks a notice as seen, not an agent
+		// that opened the page with a token.
+		if fromSignIn(r) {
 			_ = a.store.MarkNamespaceNoticesSeen(me)
 		}
 	}

@@ -430,31 +430,12 @@ func (a *api) listHeldEntries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"project": project, "held": len(list), "kinds": kinds})
 }
 
-// decideHeldEntry releases or discards a held entry: whoever holds
-// knowledge.verify in its project, the same right as in the web (DEC-50).
-// Anything else, an unknown entry included, answers as unknown.
+// decideHeldEntry: releasing or discarding an entry held after a project moved
+// is a person's decision in the web. The entries are texts of other authors that
+// the new organization must not see before a person looked at them, so an agent
+// neither reads nor releases them (review of PR #315).
 func (a *api) decideHeldEntry(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Kind    string `json:"kind"`
-		ID      int64  `json:"id"`
-		Release *bool  `json:"release"`
-	}
-	if !readOrgJSON(w, r, &body) {
-		return
-	}
-	if body.ID <= 0 || body.Release == nil {
-		writeCoded(w, http.StatusBadRequest, "invalid_input", "name kind, id and release (true or false)")
-		return
-	}
-	a.access(r).Filtered()
-	switch err := a.st.DecideHeldEntry(principalOf(r).ID, body.Kind, body.ID, *body.Release); {
-	case errors.Is(err, store.ErrHeldNotFound), errors.Is(err, store.ErrNotReviewer):
-		denyAccess(w, store.ErrAccessNotFound)
-	case err != nil:
-		writeStoreError(w, http.StatusInternalServerError, err)
-	default:
-		writeJSON(w, http.StatusOK, map[string]any{"kind": body.Kind, "id": body.ID, "released": *body.Release})
-	}
+	webSessionOnly(w, "releasing or discarding held entries")
 }
 
 // moveProject: ein Projekt in eine andere Organisation zu legen ändert, wer
