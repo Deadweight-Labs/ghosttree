@@ -8,9 +8,24 @@ import (
 	"os"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"github.com/Deadweight-Labs/ghosttree/internal/termsafe"
 )
 
 var version = "0.1.0-dev"
+
+// rawOutput says whether a command owns its output: a protocol on stdout (hooks,
+// MCP, the channel), the terminal interface, or a program the command starts on
+// the same terminal. Everything else prints text a server wrote, and that goes
+// through termsafe.
+func rawOutput(cmd string, rest []string) bool {
+	switch cmd {
+	case "serve", "watch", "mcp", "channel", "claude", "hook", "tui", "run":
+		return true
+	case "garden":
+		return len(rest) > 0 && rest[0] == "git-mcp"
+	}
+	return false
+}
 
 func run(args []string, stdout io.Writer) int {
 	client.ClientVersion = version
@@ -23,6 +38,9 @@ func run(args []string, stdout io.Writer) int {
 		return 2
 	}
 	cmd, rest := args[0], args[1:]
+	if !rawOutput(cmd, rest) {
+		stdout = termsafe.Writer(stdout)
+	}
 	switch cmd {
 	case "serve":
 		return cmdServe(rest, stdout)

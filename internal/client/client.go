@@ -30,6 +30,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"github.com/Deadweight-Labs/ghosttree/internal/termsafe"
 	"github.com/Deadweight-Labs/ghosttree/internal/version"
 )
 
@@ -101,14 +102,14 @@ type ConflictError struct {
 }
 
 func (e *ConflictError) Error() string {
-	return fmt.Sprintf("revision conflict: head is %d by %s at %s", e.HeadRevision, e.Person, e.At)
+	return termsafe.Strip(fmt.Sprintf("revision conflict: head is %d by %s at %s", e.HeadRevision, e.Person, e.At))
 }
 
 // HTTPStatus ist der Statuscode der Antwort.
 func (e *APIError) HTTPStatus() int { return e.Status }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("HTTP %d: %s: %s", e.Status, e.Code, e.Message)
+	return termsafe.Strip(fmt.Sprintf("HTTP %d: %s: %s", e.Status, e.Code, e.Message))
 }
 
 // StatusError ist eine Fehlerantwort ohne strukturierten APIError-Körper.
@@ -124,7 +125,7 @@ func (e *StatusError) HTTPStatus() int { return e.Status }
 
 func (e *StatusError) Error() string {
 	if !isHTML(e.Body) {
-		return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, e.Body)
+		return termsafe.Strip(fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, e.Body))
 	}
 	// An error page comes from a proxy in front of the server, not from the
 	// server: the reader is an agent, and the markup tells it nothing.

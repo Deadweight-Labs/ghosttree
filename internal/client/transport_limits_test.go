@@ -48,3 +48,17 @@ func TestAnswerOverTheLimitIsRefused(t *testing.T) {
 		t.Fatalf("an endless answer was read: %v (%d bytes)", err, len(out))
 	}
 }
+
+// An error text the server wrote reaches stderr of channel and claude as it is;
+// it must not carry an escape sequence.
+func TestServerErrorTextCarriesNoTerminalEscapes(t *testing.T) {
+	for _, err := range []error{
+		&APIError{Status: 400, Code: "bad", Message: "x\x1b]0;owned\x07y"},
+		&StatusError{Method: "GET", Path: "/api/x", Status: 500, Body: "boom\x1b[2J"},
+		&ConflictError{Person: "mia\x1b[31m"},
+	} {
+		if strings.ContainsRune(err.Error(), 0x1b) || strings.ContainsRune(err.Error(), 7) {
+			t.Errorf("%T: %q", err, err.Error())
+		}
+	}
+}
