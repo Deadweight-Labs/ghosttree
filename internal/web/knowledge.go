@@ -119,6 +119,9 @@ type knowledgeCard struct {
 	Proof      *proofView
 	CanApprove bool
 	CanReject  bool
+	// Need says, beside the missing buttons of an entry that still waits for a
+	// verdict, which role decides and whom to ask (N-C).
+	Need string
 	// Retire: the same action as Reject, on an entry that was already decided.
 	Retire     bool
 	CanRestore bool
@@ -372,6 +375,9 @@ func (a *app) cardFor(r *http.Request, pa *store.ProjectAccess, k store.Knowledg
 		Token: csrfOf(r), Next: next, Filter: filter,
 	}
 	capabilities(pa, k, &card)
+	if decisionOpen(k) && !card.CanApprove && !card.CanReject {
+		card.Need = roleNeededShort(l, roleNeededOf(pa.CheckKnowledge(k, store.ActVerify)))
+	}
 	if card.CanEdit {
 		card.RawBody = k.Body
 	}

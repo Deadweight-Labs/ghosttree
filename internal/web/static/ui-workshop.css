@@ -27,6 +27,10 @@
   & .ws .ws-rn { color: var(--fg-muted); font-size: 12px; line-height: 20px; text-align: right; font-variant-numeric: tabular-nums; }
   & .ws .ws-rn::after { content: "."; }
   & .ws .ws-rs { font-size: 12px; line-height: 20px; color: var(--fg-muted); white-space: nowrap; }
+  & .ws .ws-ans { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+  & .ws .ws-ans li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 13px; }
+  & .ws .ws-ansv { color: var(--fg-muted); }
+  & .ws .ws-ansv::before { content: "→ "; }
   & .ws .ws-rs.ok { color: var(--success-fg); }
   & .ws .ws-rs.warn { color: var(--attention-fg); }
 

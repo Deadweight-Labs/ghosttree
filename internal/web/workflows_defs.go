@@ -477,6 +477,10 @@ func (a *app) wfResultRows(r *http.Request, pa *store.ProjectAccess, remote stri
 		}
 		row.CanUndo = canUndo && res.State == store.ResultAuto
 		row.Waiting = res.State == store.ResultProposed
+		row.State = res.State
+		if res.State == store.ResultRejected && res.Reason == store.ResultExists {
+			row.State = "linked"
+		}
 		out = append(out, row)
 	}
 	return out

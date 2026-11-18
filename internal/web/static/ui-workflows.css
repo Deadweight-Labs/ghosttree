@@ -101,6 +101,8 @@
   & .wfwhy .box-r { display: grid; gap: 8px; }
   & .wfwhy p { margin: 0; }
   & .wfwhyt { font-weight: 600; }
+  & .wfactive .box-r { display: flex; align-items: center; gap: 10px; }
+  & .wfspin { flex: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-muted); border-top-color: var(--accent-fg); animation: wfspin 1s linear infinite; }
   & .wfwho { font-size: 13px; }
   & .wfraw { border-top: 1px solid var(--border-muted); }
   & .wfraw > summary { padding: 8px 16px; font-size: 12px; color: var(--fg-muted); cursor: pointer; }
@@ -122,3 +124,6 @@
   & .wfblk { display: flex; align-items: flex-start; gap: 6px; margin-top: 2px; color: var(--attention-fg); font-size: 12px; overflow-wrap: anywhere; }
   & .wfblk .i, & .wfblk svg { width: 14px; height: 14px; flex: none; margin-top: 1px; }
 }
+
+@keyframes wfspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { :is(.g2.wf) .wfspin { animation: none; border-top-color: var(--accent-fg); } }

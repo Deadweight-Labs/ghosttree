@@ -50,6 +50,9 @@ type workflowsView struct {
 	// Waiting counts the proposals of runs that wait on the review page (S12).
 	Waiting    int
 	ReviewHref string
+	// ReviewNeed is, for a reader who may not review, the role it takes and
+	// whom to ask, beside the proposals that wait (N-C).
+	ReviewNeed string
 	// Need is, for a reader without the right, the role it takes and whom to
 	// ask (REQ-704); the button stays visible but disabled.
 	Need string
@@ -90,9 +93,15 @@ type workflowRunView struct {
 	// Waiting counts the results of this run that wait on the review page.
 	Waiting    int
 	ReviewHref string
+	ReviewNeed string
 	Duration   string
 	// NoCall: the run reached no model, so there is no cost to show.
 	NoCall bool
+	// Active: the run is queued or running; the page says so and reloads by
+	// itself until it ends (N-E).
+	Active bool
+	// Summary words how the results stand now (N-G), not as the run left them.
+	Summary string
 }
 
 // wfToolRow is one tool call of the loop of an own prompt: the round, the
@@ -149,6 +158,8 @@ type wfResultRow struct {
 	CanUndo           bool
 	// Waiting: the result waits for a person on the review page.
 	Waiting bool
+	// State is the stored state, for the summary of the run.
+	State string
 }
 
 var wfStateLook = map[string]struct{ icon, tone, key string }{
@@ -290,6 +301,10 @@ func (a *app) workflowsPage(w http.ResponseWriter, r *http.Request) {
 	v.Empty = len(v.Rows) == 0 && len(v.Defs) == 0
 	if v.Waiting = a.store.WorkflowProposalsWaiting(rv.Project); v.Waiting > 0 && reviews(pa.Role(rv.Project)) {
 		v.ReviewHref = rv.Href + "/review"
+	} else if v.Waiting > 0 && interactive(r) {
+		if v.ReviewNeed = reviewNeedLine(l, pa, rv.Project); v.ReviewNeed == "" {
+			v.Waiting = 0
+		}
 	} else {
 		v.Waiting = 0
 	}
@@ -337,8 +352,19 @@ func (a *app) workflowRunPage(w http.ResponseWriter, r *http.Request, remote, id
 			v.Waiting++
 		}
 	}
-	if v.Waiting > 0 && reviews(pa.Role(remote)) {
-		v.ReviewHref = view.Href + "/review"
+	v.Summary = wfResultSummary(l, v.Results)
+	v.Active = run.State == store.RunQueued || run.State == store.RunRunning
+	refresh := 0
+	if v.Active {
+		refresh = wfActiveRefreshSeconds
+	}
+	a.wfInvalidWhy(l, pa, remote, run, v)
+	if v.Waiting > 0 {
+		if reviews(pa.Role(remote)) {
+			v.ReviewHref = view.Href + "/review"
+		} else {
+			v.ReviewNeed = reviewNeedLine(l, pa, remote)
+		}
 	}
 	switch {
 	case text != nil:
@@ -348,7 +374,7 @@ func (a *app) workflowRunPage(w http.ResponseWriter, r *http.Request, remote, id
 	default:
 		v.NoText = true
 	}
-	a.renderBrowser(w, r2, "workflowrun", pageData{Title: run.Workflow + " #" + id, Project: remote, WorkflowRunV: v})
+	a.renderBrowser(w, r2, "workflowrun", pageData{Title: run.Workflow + " #" + id, Project: remote, WorkflowRunV: v, Refresh: refresh})
 }
 
 // pullWorkflowRuns are the runs a pull request started, for the side of its
