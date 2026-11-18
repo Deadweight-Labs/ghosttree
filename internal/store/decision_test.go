@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -47,6 +48,11 @@ func TestAnAgentDecidesWhatIsReversibleLocalAndConventional(t *testing.T) {
 	if d.Way != idea.WayAgent || d.State != idea.DecisionOpen || d.NeedsHuman() {
 		t.Fatalf("rule: %+v", d)
 	}
+	// The aspects that kept it with the agent are the agent's own word, and the
+	// record says so.
+	if !slices.Contains(d.WayWhy, idea.AspectsDeclaredNote) {
+		t.Fatalf("the reason does not name the aspects as self-declared: %v", d.WayWhy)
+	}
 	if _, err := w.pa["mia"].CloseDecision(CloseDecisionInput{ID: d.ID, Outcome: idea.DecisionDecided, Answer: "decision_events", Actor: w.agent("mia")}); ruleCode(err) != "reason_required" {
 		t.Fatalf("a decision needs its reason: %v", err)
 	}
@@ -56,7 +62,7 @@ func TestAnAgentDecidesWhatIsReversibleLocalAndConventional(t *testing.T) {
 	}
 	k := knowledgeOf(t, w, got.KnowledgeID)
 	if k.Type != "decision" || !strings.HasPrefix(k.Title, "vom Agenten: ") || !strings.Contains(k.Body, "so heißen die anderen Tabellen auch") ||
-		!strings.Contains(k.Body, "overturn") || k.Scope.Project != roleProject || k.Status != "active" || k.Confidence != "trusted" {
+		!strings.Contains(k.Body, "overturn") || !strings.Contains(k.Body, "Aspects as the agent declared them (not checked): none.") || k.Scope.Project != roleProject || k.Status != "active" || k.Confidence != "trusted" {
 		t.Fatalf("knowledge: %+v", k)
 	}
 	// Der Agent hat nichts blockiert: die Idee läuft weiter, und der Mensch sieht den Hinweis.

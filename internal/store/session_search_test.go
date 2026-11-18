@@ -561,7 +561,7 @@ func TestSessionSearchFacetCountIsWhatTheListHoldsAfterTheClick(t *testing.T) {
 	// Six more of the first project that come near the query, less than the ones of
 	// the second: another account's, and old.
 	for i := range 6 {
-		addSession(t, st, fmt.Sprintf("An%d", i), 2, alpha, "m1", "", userChunks(fmt.Sprintf("s1 s2 s3 s4 and number %d of the neighbours here", i)))
+		addSession(t, st, fmt.Sprintf("An%d", i), 2, alpha, "m1", VisProject, userChunks(fmt.Sprintf("s1 s2 s3 s4 and number %d of the neighbours here", i)))
 	}
 	for i := range 6 {
 		addSession(t, st, fmt.Sprintf("Bn%d", i), 1, beta, "m2", "", userChunks(fmt.Sprintf("s1 s1 s1 s1 s1 s1 near %d", i)))

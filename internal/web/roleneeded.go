@@ -26,7 +26,7 @@ func init() {
 	add("adm.roles_of", "Roles of %s in the projects", "Rollen von %s in den Projekten")
 	add("adm.role_change", "Change", "Ändern")
 	add("adm.invite.past", "Earlier invitations (%d)", "Frühere Einladungen (%d)")
-	add("adm.invite.guest_off_enforce", "Only when the server enforces roles (GHOSTTREE_ENFORCE_ACCESS=1)", "Erst wenn der Server Rollen durchsetzt (GHOSTTREE_ENFORCE_ACCESS=1)")
+	add("adm.invite.guest_off_enforce", "Only when the server enforces roles (not with GHOSTTREE_ENFORCE_ACCESS=0)", "Erst wenn der Server Rollen durchsetzt (nicht mit GHOSTTREE_ENFORCE_ACCESS=0)")
 	add("adm.invite.guest_off_project", "Needs a project first", "Braucht zuerst ein Projekt")
 }
 

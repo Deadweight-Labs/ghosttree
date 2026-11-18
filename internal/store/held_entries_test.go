@@ -223,3 +223,42 @@ func TestHeldRequestFilterForViewersWithoutAccount(t *testing.T) {
 		t.Fatal("without enforcement the filter hides")
 	}
 }
+
+// The review flag counts from member up: a guest that a lead marked as reviewer
+// neither lists, reads nor decides what is held (the flag adds nothing to a guest).
+func TestAGuestWithTheReviewFlagReviewsNothing(t *testing.T) {
+	st := orgStore(t, "robin", "anna", "carl")
+	st.SetAccessMode(AccessMode{Enforce: true})
+	o := mustOrg(t, st, "person:1", "Alpha", "alpha")
+	code, _, _ := st.CreateInvitation("person:1", o.ID, "", OrgMember, 0)
+	if _, err := st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
+	}
+	const remote = "github.com/alpha/app"
+	planted, err := st.InsertKnowledge(Knowledge{Type: "note", Title: "planted", Body: "secret text", Scope: scope.Axes{Project: remote}, Person: "carl", AuthorID: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ConnectSourceWithInstallation("person:1", o.ID, SourceGitHub, "alpha", 9, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ClaimPrefix("person:1", o.ID, "github.com/alpha/*", VisibilityShared); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.EnsureProject("person:2", remote); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProjectRole("person:1", remote, "person:2", RoleGuest, true, RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	anna := st.Access(Principal{ID: "person:2", Label: "anna", TokenKind: WebSessionKind})
+	if _, err := anna.HeldEntries(remote, false); err == nil {
+		t.Error("a guest with the review flag lists held entries")
+	}
+	if _, err := anna.PreviewHeld(HeldKnowledge, planted); err == nil {
+		t.Error("a guest with the review flag reads a held entry")
+	}
+	if err := st.DecideHeldEntry("person:2", HeldKnowledge, planted, true); !errors.Is(err, ErrNotReviewer) {
+		t.Errorf("a guest with the review flag decides a held entry: %v", err)
+	}
+}

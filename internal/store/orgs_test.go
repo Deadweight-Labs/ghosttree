@@ -205,12 +205,17 @@ func TestProjectAssignmentRule(t *testing.T) {
 	if p, err := st.ClaimContested("person:1", "gitlab.com/x/y", "alpha"); err != nil || p.Org != "alpha" {
 		t.Fatalf("the admin decides: %+v %v", p, err)
 	}
-	// Ausdrücklich in eine Org: Mitglieder ja (sie werden Projekt-Owner), Fremde nicht.
-	if p, err := st.ClaimProject("person:2", "gitlab.com/x/member", "alpha"); err != nil || p.Org != "alpha" {
-		t.Fatalf("explicit claim by a member: %+v %v", p, err)
+	// Ausdrücklich in eine Org: für eine Adresse bei einem anderen Host als
+	// GitHub nur ein Owner der Org (nichts beweist, dass der Anfragende sie
+	// besitzt), ein Mitglied nicht, ein Fremder auch nicht.
+	if _, err := st.ClaimProject("person:2", "gitlab.com/x/member", "alpha"); !errors.Is(err, ErrNotOrgOwner) {
+		t.Fatalf("explicit claim of an address by a member: %v", err)
 	}
-	if role := st.ProjectRole("gitlab.com/x/member", "person:2"); role.Role != RoleOwner || role.Implicit {
-		t.Fatalf("the member who created it = %+v", role)
+	if _, ok := st.ProjectByRemote("gitlab.com/x/member"); ok {
+		t.Fatal("a refused claim left a project")
+	}
+	if p, err := st.ClaimProject("person:1", "gitlab.com/x/member", "alpha"); err != nil || p.Org != "alpha" {
+		t.Fatalf("explicit claim by an owner: %+v %v", p, err)
 	}
 	if _, err := st.ClaimProject("person:4", "gitlab.com/x/mine", "alpha"); !errors.Is(err, ErrNotOrgMember) {
 		t.Fatalf("claim into a foreign org: %v", err)

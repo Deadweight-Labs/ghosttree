@@ -223,11 +223,24 @@ func TestTwoPeopleKnowledgePatchShowsBothAuthorAndLastEditor(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	alice, _ := st.AddPerson("alice")
 	bob, _ := st.AddPerson("bob")
+	// Zwei Mitglieder derselben Org teilen ein Projekt: fremde Einträge ändert
+	// nur, wer zur Org gehört.
+	org, err := st.CreateOrg("person:1", "Team", "team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)
+	if _, err := st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := claimInOrg(st, "person:1", "github.com/team/notes"); err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 
-	created := req(t, "POST", srv.URL+"/api/knowledge", alice, map[string]string{
-		"type": "note", "title": "Alice writes", "body": "b",
+	created := req(t, "POST", srv.URL+"/api/knowledge", alice, map[string]any{
+		"type": "note", "title": "Alice writes", "body": "b", "scope": map[string]string{"project": "github.com/team/notes"},
 	})
 	var entry store.Knowledge
 	if err := json.NewDecoder(created.Body).Decode(&entry); err != nil {

@@ -44,7 +44,7 @@ func roomsOf(t *testing.T, f *accessAPIFixture, who string) []store.CoordRoom {
 func TestOrgMemberWithoutRoleCannotJoinProjectRoom(t *testing.T) {
 	f := roomGateFixture(t, true)
 	room := store.RoomKeyForProject(accProject)
-	for who, want := range map[string]int{"robin": 200, "lena": 200, "mia": 200, "gus": 200, "nora": 404} {
+	for who, want := range map[string]int{"robin": 200, "lena": 200, "mia": 200, "gus": 403, "nora": 404} {
 		if got := registerAgent(t, f, who, room); got != want {
 			t.Errorf("%s registers in the project room: %d, want %d", who, got, want)
 		}

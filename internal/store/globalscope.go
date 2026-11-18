@@ -133,15 +133,12 @@ func (a *ProjectAccess) ownsRequest(id int64) bool {
 }
 
 // RestrictKnowledgeWindow begrenzt eine Wissensabfrage der Startseite auf das,
-// was der Aufrufer lesen darf. Nur unter Durchsetzung; globale Einträge bleiben
-// darin die eigenen.
+// was der Aufrufer lesen darf; globale Einträge bleiben darin die eigenen. Ohne
+// Durchsetzung bleiben die Projekte der eigenen Orgs offen, fremde Orgs nie.
 func (a *ProjectAccess) RestrictKnowledgeWindow(w KnowledgeWindow) KnowledgeWindow {
 	a.Filtered()
-	if !a.st.AccessEnforced() {
-		return w
-	}
-	w.Restrict, w.Projects = true, a.Projects()
-	w.UnclaimedAuthor, w.UnclaimedAll = a.principal.Label, a.IsAdmin()
+	w.Restrict, w.Projects = true, a.prefilterProjects()
+	w.UnclaimedAuthor, w.UnclaimedAll = a.principal.Label, a.IsAdmin() || !a.st.AccessEnforced()
 	w.GlobalAccount, w.GlobalOwner = a.account, a.IsInstanceOwner()
 	return w
 }

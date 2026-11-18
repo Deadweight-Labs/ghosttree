@@ -472,6 +472,21 @@ func (s *Store) updateKnowledge(id int64, patch map[string]string, editor string
 	_, newBody := patch["body"]
 	_, newType := patch["type"]
 	if newTitle || newBody || newType {
+		// A text nobody has reviewed does not carry the review of the one it
+		// replaces: verified goes back to staged, unless the editor is the one who
+		// confirmed it or the patch sets the judgement itself.
+		if _, judges := patch["confidence"]; !judges {
+			var cur struct{ title, body, typ, confidence, confirmedBy string }
+			if err := tx.QueryRow(`SELECT title, body, type, confidence, confirmed_by FROM knowledge WHERE id=?`, id).
+				Scan(&cur.title, &cur.body, &cur.typ, &cur.confidence, &cur.confirmedBy); err != nil {
+				return err
+			}
+			changed := (newTitle && patch["title"] != cur.title) || (newBody && patch["body"] != cur.body) || (newType && patch["type"] != cur.typ)
+			if changed && cur.confidence == "verified" && (editor == "" || editor != cur.confirmedBy) {
+				sets = append(sets, "confidence = ?", "confirmed_by = ''")
+				args = append(args, "staged")
+			}
+		}
 		if web {
 			originID, err := insertOriginTx(tx, &originctx.Context{Via: originctx.ViaWeb})
 			if err != nil {

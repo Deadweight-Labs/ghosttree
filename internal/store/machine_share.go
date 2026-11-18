@@ -218,6 +218,17 @@ func deleteMachineSharesTx(tx txExec, host string) error {
 	return err
 }
 
+// dropMachineSharesOfTx nimmt die Freigaben zurück, die ein Konto mit seinen
+// eigenen Maschinen an eine Org gegeben hat (beim Austritt oder Entfernen).
+func dropMachineSharesOfTx(tx txExec, orgID, account int64) error {
+	own := `SELECT hostname FROM machines WHERE account_id=? AND owner_org_id=0`
+	if _, err := tx.Exec(`DELETE FROM machine_entry_shares WHERE org_id=? AND hostname IN (`+own+`)`, orgID, account); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`DELETE FROM machine_shares WHERE org_id=? AND hostname IN (`+own+`)`, orgID, account)
+	return err
+}
+
 // managerOf lädt die Maschine und prüft, dass der Aufrufer sie verwaltet.
 // Wer sie gar nicht sehen darf, bekommt "gibt es nicht", ein Mitglied, das sie
 // nur lesen darf, "verboten".

@@ -16,7 +16,7 @@ const (
 
 // ErrGuestLinkNeedsEnforcement: Gast-Links gibt es nur, wenn die
 // Sichtbarkeit durchgesetzt wird (GHOSTTREE_ENFORCE_ACCESS=1).
-var ErrGuestLinkNeedsEnforcement = errors.New("guest links need access enforcement (GHOSTTREE_ENFORCE_ACCESS=1); without it a guest would see more than the page promises")
+var ErrGuestLinkNeedsEnforcement = errors.New("guest links need access enforcement (the server runs with GHOSTTREE_ENFORCE_ACCESS=0); without it a guest would see more than the page promises")
 
 // InvitePreview ist alles, was ein Inhaber des Codes vor der Anmeldung sieht.
 // Bewusst klein: keine Ids, keine Zähler, keine Namen anderer Personen; der Name

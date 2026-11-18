@@ -36,8 +36,10 @@ command is public.
 
 - **Access rules are enforced.** From this version on the server refuses what a
   role does not allow. Only `GHOSTTREE_ENFORCE_ACCESS=0` switches to a log mode
-  that merely logs what it would refuse; that mode is for migrating an existing
-  instance and is not a setup for people who must be kept apart.
+  that, inside an organization, merely logs what it would refuse; that mode is
+  for a server with a single user and is not a setup for people who must be kept
+  apart. The border between organizations, private transcripts and project
+  snapshots hold in both modes.
 - **Put the server behind TLS.** Run it on loopback or a private network behind a
   reverse proxy that terminates TLS, set `GHOSTTREE_PUBLIC_URL` to its https
   address (it decides the address in invitations, mails and the join command) and

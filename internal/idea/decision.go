@@ -3,6 +3,7 @@ package idea
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -125,6 +126,10 @@ func DecideWho(aspects []string) (way string, why []string) {
 	return WayAgent, []string{"reversible, local and within existing conventions"}
 }
 
+// AspectsDeclaredNote steht an der Begründung einer Entscheidung, die der Agent
+// nach der Regel selbst trifft: die Aspekte sind seine Selbstauskunft.
+const AspectsDeclaredNote = "aspects as the agent declared them, not checked"
+
 // Policy je Projekt: "rule" (Vorgabe) oder "human" (jede Entscheidung wartet auf
 // einen Menschen).
 const (
@@ -144,6 +149,11 @@ func ChooseWay(requested string, aspects []string, policy string, byAgent bool) 
 	switch requested {
 	case "":
 		if byAgent {
+			if ruleWay == WayAgent && policy != PolicyHuman {
+				// The aspects are what the agent says about its own question; the
+				// server cannot check them, and the record says so.
+				ruleWhy = append(slices.Clone(ruleWhy), AspectsDeclaredNote)
+			}
 			return ruleWay, ruleWhy, nil
 		}
 		// Wer als Mensch fragt, will in der Regel selbst entscheiden.

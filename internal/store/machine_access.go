@@ -180,7 +180,7 @@ func (a *ProjectAccess) machineLevel(machine string, shared []int64) int {
 	}
 	best := levelNone
 	for _, org := range shared {
-		if _, member := ix.member[org]; !member {
+		if _, member := ix.member[org]; !member || !a.sharerStillIn(rec, org) {
 			continue
 		}
 		switch ix.grantRole(name, org) {
@@ -240,7 +240,16 @@ func (a *ProjectAccess) authorEntitled(machine string, author int64, shared []in
 // schreiben: Schreib-Freigabe der Maschine an diese Org und er ist dort Mitglied
 // (kein Gast). Eine Schreib-Freigabe an eine andere Org zählt nicht.
 func (a *ProjectAccess) authorWritesVia(machine string, author, org int64) bool {
-	return a.index().grantRole(canonicalMachine(machine), org) == ShareWrite && a.orgRoleOf(author, org) != ""
+	name := canonicalMachine(machine)
+	rec := a.index().recs[name]
+	return a.index().grantRole(name, org) == ShareWrite && a.orgRoleOf(author, org) != "" && a.sharerStillIn(rec, org)
+}
+
+// sharerStillIn: der Besitzer einer Maschine, die einer Person gehört, ist noch
+// Mitglied der Org, an die er sie freigegeben hat. Eine Freigabe, die beim
+// Austritt nicht zurückgenommen wurde (Altbestand), wirkt damit nicht weiter.
+func (a *ProjectAccess) sharerStillIn(rec machineRec, org int64) bool {
+	return rec.org > 0 || a.orgRoleOf(rec.account, org) != ""
 }
 
 // entitledSharedOrgs: die Orgs, an die der Eintrag wirksam freigegeben ist und

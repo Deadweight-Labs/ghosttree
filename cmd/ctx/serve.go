@@ -85,8 +85,11 @@ const (
 	envOIDCRedirectURL      = "GHOSTTREE_OIDC_REDIRECT_URL"
 	envOIDCName             = "GHOSTTREE_OIDC_NAME"
 	envOIDCSignup           = "GHOSTTREE_OIDC_SIGNUP"
-	// envEnforceAccess schaltet die Sichtbarkeit nach Rolle scharf. Ohne "1"
-	// wird nur protokolliert, was verweigert würde ("access: would deny").
+	// envEnforceAccess: die Rollen werden durchgesetzt, solange nichts anderes
+	// dasteht. Nur der ausdrückliche Wert "0" schaltet in den Log-Modus, in dem
+	// innerhalb der Org nur protokolliert wird ("access: would deny"), für
+	// Instanzen mit einem einzigen Nutzer. Org-Rand, private Transkripte und
+	// Snapshots gelten in beiden Modi.
 	envEnforceAccess = "GHOSTTREE_ENFORCE_ACCESS"
 	// envPublicURL and envTrustedProxies describe the TLS/proxy boundary; see
 	// the section "Running behind TLS or a reverse proxy" in docs/operations.md.
@@ -428,8 +431,13 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	}
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
 	fmt.Fprintln(stdout, mailStartLine(cfg))
-	slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", accessEnforcedByEnv(), "env", envEnforceAccess,
-		"note", "without enforcement only 'access: would deny' is logged, nothing is refused")
+	if accessEnforcedByEnv() {
+		slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", true, "env", envEnforceAccess)
+	} else {
+		fmt.Fprintln(stderr, accessLogModeWarning)
+		slog.New(slog.NewJSONHandler(stderr, nil)).Warn("access_mode", "enforce", false, "env", envEnforceAccess,
+			"note", accessLogModeWarning)
+	}
 	if note := proxyConfigWarning(cfg); note != "" {
 		slog.New(slog.NewJSONHandler(stderr, nil)).Warn("proxy_config", "public_url", cfg.PublicURL, "note", note)
 	}
@@ -559,7 +567,11 @@ func mailStartLine(cfg serveConfig) string {
 	return line
 }
 
-func accessEnforcedByEnv() bool { return os.Getenv(envEnforceAccess) == "1" }
+// accessEnforcedByEnv: Durchsetzen ist der Standard; nur "0" nimmt es zurück.
+func accessEnforcedByEnv() bool { return strings.TrimSpace(os.Getenv(envEnforceAccess)) != "0" }
+
+const accessLogModeWarning = "WARNING: GHOSTTREE_ENFORCE_ACCESS=0: roles inside an organization are only logged (\"access: would deny\"), " +
+	"not enforced. Only use this on a server with a single user. Organization borders, private transcripts and snapshots are enforced anyway."
 
 func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http.Handler {
 	root := http.NewServeMux()

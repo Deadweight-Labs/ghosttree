@@ -85,12 +85,15 @@ func TestOrgCLICreateInviteAcceptAndMembers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c, o := f.as(t, "anna", "org", "accept", "wrong"); c == 0 || !strings.Contains(o, "invalid_code") {
-		t.Fatalf("wrong code: %d %s", c, o)
+	// Mitglied wird man im Browser; ein Token nimmt keine Einladung an, mit
+	// keinem Code, und die CLI weist darauf hin.
+	for _, c := range []string{"wrong", code} {
+		if n, o := f.as(t, "anna", "org", "accept", c); n == 0 || !strings.Contains(o, "web_session_required") || !strings.Contains(o, f.url+"/ui/orgs") {
+			t.Fatalf("accept over the token (%q): %d %s", c, n, o)
+		}
 	}
-	f.ok(t, "anna", "org", "accept", code)
-	if c, _ := f.as(t, "anna", "org", "accept", code); c == 0 {
-		t.Fatal("a code must work once")
+	if _, err := f.st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
 	}
 	if out := f.ok(t, "anna", "org", "members", "alpha"); !strings.Contains(out, "robin") || !strings.Contains(out, "anna") {
 		t.Fatalf("members: %s", out)

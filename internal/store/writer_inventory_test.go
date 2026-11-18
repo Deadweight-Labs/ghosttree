@@ -62,6 +62,7 @@ var writerMethodClasses = map[string]string{
 	"GardenRunModel":                "read",
 	"AIRunUsageOf":                  "read",
 	"AICostReportOf":                "read",
+	"AICostReportFor":               "read",
 	"RecordWorkflowEvent":           "write",
 	"SaveWorkflowDef":               "write",
 	"SetWorkflowDefEnabled":         "write",

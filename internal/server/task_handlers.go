@@ -83,7 +83,15 @@ func (a *api) getHumanTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, task)
 }
 
+// markTasksDone: "erledigt" ist die Aussage eines Menschen. Ein Token liegt in
+// der Konfiguration jedes Agenten und sagt nicht, wer ihn führt; also gilt die
+// Meldung nur aus einer Websitzung, nie über die API.
 func (a *api) markTasksDone(w http.ResponseWriter, r *http.Request) {
+	if principalOf(r).TokenKind != store.WebSessionKind {
+		writeCoded(w, http.StatusForbidden, "web_session_required",
+			"only a person marks a task done: open the task in the web interface and mark it there")
+		return
+	}
 	var body struct {
 		IDs       []int64 `json:"ids"`
 		Note      string  `json:"note"`
