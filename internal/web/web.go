@@ -557,10 +557,7 @@ func (a *app) access(r *http.Request) *store.ProjectAccess {
 }
 
 func (a *app) overfetch(limit int) int {
-	if a.store.AccessEnforced() {
-		return limit * 4
-	}
-	return limit
+	return limit * 4
 }
 
 // accessDenied antwortet auf einen Zugriffsfehler mit 404 oder 403.

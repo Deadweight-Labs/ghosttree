@@ -714,7 +714,7 @@ func (a *app) knowledgeWindowFor(pa *store.ProjectAccess, project string) store.
 	switch {
 	case project != "":
 		w.Restrict, w.Projects = true, []string{project}
-	case a.store.AccessEnforced():
+	default:
 		w = pa.RestrictKnowledgeWindow(w)
 	}
 	return w

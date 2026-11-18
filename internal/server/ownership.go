@@ -68,11 +68,11 @@ func ownerFilter(r *http.Request) string {
 }
 
 func (a *api) listMachines(w http.ResponseWriter, r *http.Request) {
-	// Maschinennamen sind Metadaten ihres Besitzers: mit Durchsetzung sieht jedes
-	// Konto die eigenen, die seiner Orgs und die an seine Orgs freigegebenen,
-	// der Instanz-Admin alle.
+	// Maschinennamen sind Metadaten ihres Besitzers: jedes Konto sieht die
+	// eigenen, die seiner Orgs und die an seine Orgs freigegebenen, der
+	// Instanz-Admin alle. Das gilt in jedem Modus.
 	pa := a.access(r)
-	if a.st.AccessEnforced() && !pa.IsAdmin() {
+	if !pa.IsAdmin() {
 		machines, err := a.st.MachinesFor(principalOf(r).ID)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)

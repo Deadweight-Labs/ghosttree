@@ -344,7 +344,7 @@ func TestServeRejectsStaleSnapshotSchemaWithoutChangingCounts(t *testing.T) {
 }
 
 func TestServeAccessEnforcementFollowsTheEnvironment(t *testing.T) {
-	for value, want := range map[string]bool{"": false, "0": false, "true": false, "1": true} {
+	for value, want := range map[string]bool{"": true, "0": false, "true": true, "1": true} {
 		t.Setenv(envEnforceAccess, value)
 		st, err := store.Open(":memory:")
 		if err != nil {

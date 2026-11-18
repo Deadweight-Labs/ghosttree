@@ -129,9 +129,12 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   longer marks tasks done, not even one assigned to them.
 - `ctx person add` is deprecated; use `ctx account add`. Existing person tokens
   keep working and are migrated on startup.
-- Per-project roles and visibility are only enforced with
-  `GHOSTTREE_ENFORCE_ACCESS=1`. Without it the server logs what it would have
-  refused (`access: would deny`) and refuses nothing.
+- Per-project roles and visibility are now enforced by default. Only the
+  explicit value `GHOSTTREE_ENFORCE_ACCESS=0` keeps the old log mode
+  (`access: would deny`, nothing refused inside an organization) and prints a
+  warning at start; use it only on a server with a single user. In both modes an
+  account of another organization sees and changes nothing, private transcripts
+  stay with their owner, and project snapshots need the member role.
 - Hybrid search is off unless `GHOSTTREE_EMBED_URL` is set. Sessions are only
   sent to the embedding server when `session` is named in
   `GHOSTTREE_EMBED_KINDS` (`all` does not include it; `all,session` does).

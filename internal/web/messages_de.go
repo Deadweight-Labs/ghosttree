@@ -1025,7 +1025,7 @@ var messagesDE = map[string]string{
 	"adm.err.no_role":            "Dieses Konto hat keine Rolle in diesem Projekt.",
 	"adm.err.project":            "Projekt nicht gefunden.",
 	"adm.err.input":              "Prüf das Formular und versuch es nochmal.",
-	"adm.err.guest_link":         "Gast-Links brauchen durchgesetzte Projektsichtbarkeit auf diesem Server (GHOSTTREE_ENFORCE_ACCESS=1).",
+	"adm.err.guest_link":         "Gast-Links brauchen durchgesetzte Projektsichtbarkeit auf diesem Server (er läuft mit GHOSTTREE_ENFORCE_ACCESS=0).",
 	"adm.err.too_many":           "Zu viele offene Einladungen; widerruf zuerst ein paar.",
 	"adm.err.code":               "Der Code ist ungültig, abgelaufen oder schon benutzt.",
 	"adm.err.email":              "Die Einladung ist an eine andere E-Mail-Adresse gebunden.",

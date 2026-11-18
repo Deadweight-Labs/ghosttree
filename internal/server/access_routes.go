@@ -323,10 +323,7 @@ func (a *api) overfetch(limit int) int {
 	if limit <= 0 {
 		limit = 20
 	}
-	if a.st.AccessEnforced() {
-		return limit * 4
-	}
-	return limit
+	return limit * 4
 }
 
 // filterTo behält die Einträge, die keep zulässt, höchstens limit viele.

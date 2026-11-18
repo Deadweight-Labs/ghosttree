@@ -22,8 +22,11 @@ migration or operational step is required.
 
 The server is intended for loopback or a trusted private network. Its bearer
 tokens identify an account. Per-project roles (owner, lead, member, guest) and
-project visibility exist, but the server enforces them only when it runs with
-`GHOSTTREE_ENFORCE_ACCESS=1`; by default it merely logs what it would refuse.
+project visibility exist, and the server enforces them by default. Only the
+explicit value `GHOSTTREE_ENFORCE_ACCESS=0` switches to a log mode for servers
+with a single user: inside an organization it then only logs what it would
+refuse (the start log carries a warning). The border between organizations,
+private transcripts and project snapshots hold in both modes.
 Do not expose the server directly to the public internet. Use a private network
 or a properly configured TLS reverse proxy, protect backups, and rotate a token
 if it may have leaked.

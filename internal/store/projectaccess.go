@@ -579,8 +579,32 @@ func (a *ProjectAccess) IsAuthor(person string) bool {
 	return person != "" && person == a.principal.Label
 }
 
-// Decide wertet die Matrix aus, ohne den Modus anzuwenden.
+// Decide wertet die Matrix aus, ohne den Modus anzuwenden. Die Grenzen, die
+// nicht an der Rollenmatrix hängen (Org-Rand, private Transkripte, Snapshots),
+// gelten in jedem Modus: ihre Ablehnung ist immer strikt.
 func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Object) Decision {
+	d := a.decide(project, res, act, obj)
+	if !d.Allowed && !d.Strict && (res == ResTranscript || res == ResSnapshot || a.foreignOrg(strings.TrimSpace(project))) {
+		d.Strict = true
+	}
+	return d
+}
+
+// foreignOrg: das Projekt ist beansprucht und gehört einer Organisation, in der
+// das Konto kein Mitglied ist. AccountRoles führt jedes Projekt der eigenen
+// Orgs, auch ohne Rolle; was dort fehlt, liegt hinter dem Org-Rand.
+func (a *ProjectAccess) foreignOrg(project string) bool {
+	if !a.valid || project == "" {
+		return false
+	}
+	a.loadRoles()
+	if _, inOrg := a.roles[project]; inOrg {
+		return false
+	}
+	return !a.Unclaimed(project)
+}
+
+func (a *ProjectAccess) decide(project string, res Resource, act Action, obj Object) Decision {
 	a.checks.Add(1)
 	if !a.valid {
 		return Decision{Hidden: true, Reason: "no account"}
@@ -601,9 +625,9 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 		case level > levelNone:
 			if !shareAllows(level, res, act, obj) {
 				if act == ActRead {
-					return Decision{Hidden: true, Reason: "machine-axis knowledge is not shared with you in this state"}
+					return Decision{Hidden: true, Strict: true, Reason: "machine-axis knowledge is not shared with you in this state"}
 				}
-				return Decision{Reason: "machine share does not allow " + string(act)}
+				return Decision{Strict: true, Reason: "machine share does not allow " + string(act)}
 			}
 		default:
 			// Der Autor liest und pflegt seine eigene Notiz auch ohne Zugang. Ist
@@ -611,7 +635,7 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 			// ehemaliges Mitglied bearbeitet nichts, was andere noch lesen.
 			note = a.ownNoteOnUnclaimedMachine(obj, act) && !(act == ActEdit && len(obj.SharedOrgs) > 0)
 			if !note {
-				return Decision{Hidden: true, Reason: "machine-axis knowledge of another account"}
+				return Decision{Hidden: true, Strict: true, Reason: "machine-axis knowledge of another account"}
 			}
 		}
 		switch {
@@ -700,7 +724,7 @@ func (a *ProjectAccess) decideGlobal(res Resource, act Action, obj Object) Decis
 		if act == ActCreate || obj.Own {
 			return Decision{Allowed: true}
 		}
-		return Decision{Hidden: true, Reason: "global runbook of another author"}
+		return Decision{Hidden: true, Strict: true, Reason: "global runbook of another author"}
 	case ResKnowledge, ResRequest, ResDocument:
 		if act == ActCreate {
 			return Decision{Allowed: true}
@@ -708,7 +732,7 @@ func (a *ProjectAccess) decideGlobal(res Resource, act Action, obj Object) Decis
 		if a.ownsGlobal(obj) {
 			return Decision{Allowed: true}
 		}
-		return Decision{Hidden: true, Reason: "global entry of another author"}
+		return Decision{Hidden: true, Strict: true, Reason: "global entry of another author"}
 	case ResSessionMeta, ResTranscript:
 		if res == ResSessionMeta && act == ActCreate {
 			return Decision{Allowed: true}
@@ -716,7 +740,7 @@ func (a *ProjectAccess) decideGlobal(res Resource, act Action, obj Object) Decis
 		if (act == ActRead || act == ActShare) && obj.Own {
 			return Decision{Allowed: true}
 		}
-		return Decision{Hidden: true, Reason: "session without project of another account"}
+		return Decision{Hidden: true, Strict: true, Reason: "session without project of another account"}
 	}
 	return Decision{Hidden: true, Reason: "no project"}
 }
@@ -856,7 +880,7 @@ func (a *ProjectAccess) CheckKnowledgeCreate(k Knowledge) error {
 // CanSeeSessionMeta: Metadaten (wer arbeitet wo).
 func (a *ProjectAccess) CanSeeSessionMeta(s Session) bool {
 	// Eine private Session erscheint nur ihrem Besitzer, auch nicht als Zeile.
-	if !s.Shared && s.Visibility != VisGuests && !a.OwnsSession(s) && a.st.AccessEnforced() {
+	if !s.Shared && s.Visibility != VisGuests && !a.OwnsSession(s) {
 		return false
 	}
 	return a.Allow(s.Scope.Project, ResSessionMeta, ActRead, Object{Own: a.OwnsSession(s), Guests: s.Visibility == VisGuests})
@@ -895,19 +919,34 @@ func (a *ProjectAccess) CanReadProjectRoom(project string) bool {
 // wie sie ist, und NoteRequestHits protokolliert, was verweigert würde.
 func (a *ProjectAccess) RequestFilter(f requestdomain.SearchFilter) requestdomain.SearchFilter {
 	a.Filtered()
-	if !a.st.AccessEnforced() {
-		return f
-	}
-	f.Restrict, f.Projects = true, a.Projects()
+	f.Restrict, f.Projects = true, a.prefilterProjects()
 	f.GlobalAccount, f.GlobalOwner = a.account, a.IsInstanceOwner()
-	f.UnclaimedAuthor, f.UnclaimedAll = a.principal.Label, a.IsAdmin()
+	f.UnclaimedAuthor, f.UnclaimedAll = a.principal.Label, a.IsAdmin() || !a.st.AccessEnforced()
 	// Distillierte, nicht übernommene Requests aus fremden privaten Sessions
 	// bleiben dem Besitzer dieser Session vorbehalten.
 	a.loadMachines()
 	f.HideHeld, f.HeldViewer, f.HeldInstanceOwner = true, a.account, a.owner
-	// Entries held since the project came into existence: only their author.
-	f.HideHeldEntries = true
+	if a.st.AccessEnforced() {
+		// Entries held since the project came into existence: only their author.
+		f.HideHeldEntries = true
+	}
 	return f
+}
+
+// prefilterProjects: die Projekte, aus denen eine Abfrage lesen darf. Unter
+// Durchsetzung die mit eigener Rolle; im Log-Modus alle Projekte der eigenen
+// Organisationen, denn die Rollenmatrix innerhalb der Org wird dort nur
+// protokolliert. Fremde Orgs sind in beiden Modi draußen.
+func (a *ProjectAccess) prefilterProjects() []string {
+	if a.st.AccessEnforced() {
+		return a.Projects()
+	}
+	a.loadRoles()
+	out := make([]string, 0, len(a.roles))
+	for remote := range a.roles {
+		out = append(out, remote)
+	}
+	return out
 }
 
 // NoteRequestHits läuft im Log-Modus über die Treffer einer Auftragssuche, damit
@@ -1052,9 +1091,6 @@ func (a *ProjectAccess) GateList(project string, res Resource, perEntry bool) er
 // Viewer beschreibt den Betrachter für Abfragen, die private Sessions anderer
 // Konten selbst ausschließen.
 func (a *ProjectAccess) Viewer() SessionViewer {
-	if !a.st.AccessEnforced() {
-		return SessionViewer{}
-	}
 	a.loadMachines()
 	return SessionViewer{Enforced: true, Account: a.account, Owner: a.owner}
 }

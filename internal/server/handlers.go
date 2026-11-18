@@ -877,14 +877,13 @@ func (a *api) searchSessions(st *store.Store, pa *store.ProjectAccess, q string,
 	// läuft über den ganzen Index, die Laufzeit hängt also von den Treffern
 	// verborgener Sessions mit ab.
 	var readable func(store.Session) bool
-	var pre store.SessionPrefilter
+	pre := pa.TranscriptPrefilter()
 	if a.st.AccessEnforced() {
 		fetchSessions = limit
-		pre = pa.TranscriptPrefilter()
-		if !pre.Exact || viewFilter.Machine != "" || viewFilter.Branch != "" {
-			readable = func(sess store.Session) bool {
-				return pa.CanSeeTranscript(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
-			}
+	}
+	if !pre.Exact || viewFilter.Machine != "" || viewFilter.Branch != "" {
+		readable = func(sess store.Session) bool {
+			return pa.CanSeeTranscript(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
 		}
 	}
 	hits, err := st.SearchSessionsWith(q, store.SessionSearch{

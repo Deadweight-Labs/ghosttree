@@ -129,7 +129,7 @@ func TestInviteAsksForTheRoleAndSaysWhatItAllows(t *testing.T) {
 	// Without enforced visibility the guest stays in the choice, switched off
 	// and with the reason (REQ-704, R12): a person sees that guests exist.
 	if roles := pageSpan(t, page, `<fieldset class="irole">`, "</fieldset>"); !strings.Contains(roles, "Works in the shared projects of the organization") ||
-		!strings.Contains(roles, `value="guest" data-role disabled`) || !strings.Contains(roles, "GHOSTTREE_ENFORCE_ACCESS=1") || strings.Contains(roles, `name="project"`) {
+		!strings.Contains(roles, `value="guest" data-role disabled`) || !strings.Contains(roles, "GHOSTTREE_ENFORCE_ACCESS=0") || strings.Contains(roles, `name="project"`) {
 		t.Errorf("without enforced visibility the guest is offered switched off, with the reason: %s", roles)
 	}
 

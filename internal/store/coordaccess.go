@@ -1869,7 +1869,7 @@ func (a CoordAccess) RoomThreads(roomKey string) ([]RoomThread, error) {
 	if err := a.roomAccessTx(tx, actor, roomKey, ActRead); err != nil {
 		return nil, err
 	}
-	viewer := SessionViewer{Enforced: a.Store.AccessEnforced(), Owner: instanceOwnerID(tx)}
+	viewer := SessionViewer{Enforced: true, Owner: instanceOwnerID(tx)}
 	viewer.Account, _ = accountNumericID(a.Principal.ID)
 	all, err := roomThreadsTx(tx, roomKey, viewer)
 	if err != nil {

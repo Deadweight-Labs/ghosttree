@@ -530,33 +530,29 @@ func TestCoordinationFollowsProjectRolesOverTheAPI(t *testing.T) {
 	f.expect(t, "mia", 200, "GET", "/api/coord/messages?destination_id="+dm.Key+"&agent_external_id=claude:mia", nil)
 }
 
-func TestLogModeRefusesNothingButLogsWouldDeny(t *testing.T) {
+func TestLogModeLogsRolesInsideTheOrgButRefusesNothingThere(t *testing.T) {
 	f := accessAPI(t, false)
 	var buf bytes.Buffer
 	f.st.SetAccessMode(store.AccessMode{Logger: slog.New(slog.NewTextHandler(&buf, nil))})
 	staged := f.id["k-robin-staged"]
-	// Alles, was die Durchsetzung verweigern würde, geht durch.
+	// Alles, was die Durchsetzung innerhalb der Org verweigern würde, geht durch.
 	f.expect(t, "gus", 200, "GET", idPath("/api/knowledge/%d", staged), nil)
-	f.expect(t, "nora", 200, "GET", idPath("/api/knowledge/%d", staged), nil)
 	f.expect(t, "mia", 204, "PATCH", idPath("/api/knowledge/%d", staged), map[string]string{"body": "x"})
-	f.expect(t, "mia", 200, "GET", idPath("/api/sessions/%d", f.id["s-rex"]), nil)
-	f.expect(t, "nora", 200, "GET", idPath("/api/requests/%d", f.id["r-mia"]), nil)
+	f.expect(t, "gus", 200, "GET", idPath("/api/requests/%d", f.id["r-mia"]), nil)
 	// Ausnahmen, die auch im Log-Modus gelten (strictDenial): Freigeben ohne
 	// Prüfrecht, und ein Gast schreibt nichts.
 	f.expect(t, "mia", 403, "PATCH", idPath("/api/knowledge/%d", f.id["k-mia"]), map[string]string{"confidence": "verified"})
 	f.expect(t, "gus", 403, "PATCH", idPath("/api/knowledge/%d", f.id["k-mia"]), map[string]string{"body": "x"})
-	f.expect(t, "robin", 200, "GET", idPath("/api/knowledge/%d", f.id["k-machine"]), nil)
-	if out := f.expect(t, "nora", 200, "GET", "/api/requests", nil); !strings.Contains(out, "mia request") {
-		t.Errorf("log mode must not filter the request search: %s", out)
+	if out := f.expect(t, "gus", 200, "GET", "/api/requests", nil); !strings.Contains(out, "mia request") {
+		t.Errorf("log mode must not filter the request search inside the org: %s", out)
 	}
-	if out := f.expect(t, "nora", 200, "GET", "/api/context/bootstrap?project="+accProject, nil); !strings.Contains(out, "mia pitfall") {
-		t.Errorf("log mode must not filter the bootstrap: %s", out)
+	if out := f.expect(t, "gus", 200, "GET", "/api/context/bootstrap?project="+accProject, nil); !strings.Contains(out, "mia pitfall") {
+		t.Errorf("log mode must not filter the bootstrap inside the org: %s", out)
 	}
 	logged := buf.String()
 	for _, want := range []string{
-		"access: would deny", "account=person:6", "account=person:5", "account=person:3",
-		"resource=knowledge", "resource=session", "resource=transcript", "resource=request",
-		"action=read", "action=edit", "project=" + accProject,
+		"access: would deny", "account=person:5", "account=person:3",
+		"resource=knowledge", "action=read", "action=edit", "project=" + accProject,
 	} {
 		if !strings.Contains(logged, want) {
 			t.Errorf("log lacks %q:\n%s", want, logged)
@@ -571,6 +567,53 @@ func TestLogModeRefusesNothingButLogsWouldDeny(t *testing.T) {
 	if would, denied := f.st.AccessCounters(); would == 0 || denied != 2 {
 		t.Errorf("counters would=%d denied=%d", would, denied)
 	}
+}
+
+// Die Grenzen, die nicht an der Rollenmatrix hängen, gelten im Log-Modus wie
+// unter Durchsetzung: ein Konto einer fremden Org sieht und ändert nichts,
+// private Transkripte lesen nur ihre Besitzer, Maschinen- und globales Wissen
+// gehört seinem Autor, und ein Snapshot ist Sache der Mitglieder.
+func TestLogModeKeepsTheOrgBorderAndPrivateTranscripts(t *testing.T) {
+	f := accessAPI(t, false)
+	mia, staged := f.id["k-mia"], f.id["k-robin-staged"]
+	// Fremde Org (nora): 404 auf jede Objekt-ID, in Listen nichts.
+	for _, path := range []string{
+		idPath("/api/knowledge/%d", mia), idPath("/api/requests/%d", f.id["r-mia"]),
+		idPath("/api/sessions/%d", f.id["s-mia"]), idPath("/api/sessions/%d/raw", f.id["s-mia"]),
+		idPath("/api/documents/%d", f.id["d-mia"]),
+	} {
+		f.expect(t, "nora", 404, "GET", path, nil)
+	}
+	f.expect(t, "nora", 404, "PATCH", idPath("/api/knowledge/%d", staged), map[string]string{"body": "x"})
+	f.expect(t, "nora", 404, "PATCH", idPath("/api/requests/%d", f.id["r-mia"]), map[string]any{"patch": map[string]string{"title": "x"}, "reason": "t"})
+	f.expect(t, "nora", 404, "POST", idPath("/api/requests/%d/drop", f.id["r-mia"]), map[string]string{"reason": "x"})
+	for _, path := range []string{"/api/requests", "/api/knowledge?q=pitfall", "/api/search?q=pitfall", "/api/sessions"} {
+		if _, out := f.call(t, "nora", "GET", path, nil); strings.Contains(out, "mia ") || strings.Contains(out, "secretterm") || strings.Contains(out, "robin staged") {
+			t.Errorf("nora GET %s lists foreign content: %s", path, out)
+		}
+	}
+	if out := f.expect(t, "nora", 200, "GET", "/api/context/bootstrap?project="+accProject, nil); strings.Contains(out, "mia pitfall") {
+		t.Errorf("nora's bootstrap carries the other org's knowledge: %s", out)
+	}
+	// Private Transkripte: weder Mitglied noch Lead noch Gast, nur der Besitzer.
+	for _, who := range []string{"robin", "lena", "rex", "gus"} {
+		f.expect(t, who, 404, "GET", idPath("/api/sessions/%d/raw", f.id["s-mia"]), nil)
+	}
+	f.expect(t, "mia", 200, "GET", idPath("/api/sessions/%d/raw", f.id["s-mia"]), nil)
+	for _, who := range []string{"robin", "rex"} {
+		if _, out := f.call(t, who, "GET", "/api/search?q=secretterm&kind=sessions", nil); strings.Contains(out, "secretterm mia") {
+			t.Errorf("%s finds the private transcript of mia: %s", who, out)
+		}
+	}
+	// Wissen von einer Maschine und ohne Projekt gehört seinem Autor.
+	f.expect(t, "robin", 404, "GET", idPath("/api/knowledge/%d", f.id["k-machine"]), nil)
+	f.expect(t, "mia", 404, "GET", idPath("/api/knowledge/%d", f.id["k-global"]), nil)
+	// Maschinenliste: nur die eigenen und die der eigenen Orgs.
+	if _, out := f.call(t, "nora", "GET", "/api/machines", nil); strings.Contains(out, "mia-box") {
+		t.Errorf("nora lists the machine of another account: %s", out)
+	}
+	// Der Org-Rand gilt auch im Log-Modus nur einmal: die Mitglieder selbst bleiben unberührt.
+	f.expect(t, "mia", 200, "GET", idPath("/api/knowledge/%d", mia), nil)
 }
 
 // ------------------------------------------------------------ Routentabelle
@@ -925,9 +968,10 @@ func TestGlobalDocumentsAndRegressionCountStayVisible(t *testing.T) {
 	}
 }
 
-// Im Log-Modus sind die Antworten der Listen-Routen für jedes Konto dieselben wie
-// die des Stores ohne Prüfung.
-func TestLogModeListsEqualTheUnfilteredStore(t *testing.T) {
+// Im Log-Modus sind die Antworten der Listen-Routen für die Mitglieder der Org
+// dieselben wie die des Stores ohne Prüfung, soweit es nicht private Transkripte
+// und globales Wissen anderer sind; ein Konto einer fremden Org bekommt nichts.
+func TestLogModeListsEqualTheUnfilteredStoreInsideTheOrg(t *testing.T) {
 	f := accessAPI(t, false)
 	p := scope.Axes{Project: accProject}
 	asJSON := func(v any) string { b, _ := json.Marshal(v); return strings.TrimSpace(string(b)) }
@@ -938,24 +982,46 @@ func TestLogModeListsEqualTheUnfilteredStore(t *testing.T) {
 		}
 		return asJSON(v)
 	}
+	inProject := func(ks []store.Knowledge, who string) []store.Knowledge {
+		out := []store.Knowledge{}
+		for _, k := range ks {
+			if k.Scope.Project != "" || k.Person == who {
+				out = append(out, k)
+			}
+		}
+		return out
+	}
 	ctxK, _ := f.st.KnowledgeForContext(p)
 	allK, _ := f.st.KnowledgeForProject(accProject)
 	reqs, _ := f.st.SearchRequests(requestdomain.SearchFilter{Scope: p, Limit: 10})
-	sess, _ := f.st.ListSessionsOwned(p, 50, "")
 	docs, _ := f.st.Documents(accProject, "", false)
-	want := map[string]string{
-		"/api/knowledge?project=" + accProject:                    asJSON(ctxK),
-		"/api/knowledge?include_archived=1&project=" + accProject: asJSON(allK),
-		"/api/requests?project=" + accProject:                     asJSON(reqs),
-		"/api/sessions?project=" + accProject:                     asJSON(sess),
-		"/api/documents?project=" + accProject:                    asJSON(docs),
-	}
-	for _, who := range []string{"robin", "mia", "gus", "nora"} {
+	for _, who := range []string{"robin", "mia", "gus"} {
+		want := map[string]string{
+			"/api/knowledge?project=" + accProject:                    asJSON(inProject(ctxK, who)),
+			"/api/knowledge?include_archived=1&project=" + accProject: asJSON(inProject(allK, who)),
+			"/api/requests?project=" + accProject:                     asJSON(reqs),
+			"/api/documents?project=" + accProject:                    asJSON(docs),
+		}
 		for path, exp := range want {
 			_, out := f.call(t, who, "GET", path, nil)
 			if norm(out) != norm(exp) {
 				t.Errorf("%s GET %s differs from the unfiltered store:\n got %s\nwant %s", who, path, norm(out), norm(exp))
 			}
+		}
+	}
+	// Sessions: jeder sieht seine eigenen privaten.
+	for who, ext := range map[string]string{"robin": "s-robin", "mia": "s-mia"} {
+		_, out := f.call(t, who, "GET", "/api/sessions?project="+accProject, nil)
+		if !strings.Contains(out, ext) || strings.Count(out, `"external_id"`) != 1 {
+			t.Errorf("%s lists %s", who, out)
+		}
+	}
+	for _, path := range []string{
+		"/api/knowledge?project=" + accProject, "/api/knowledge?include_archived=1&project=" + accProject,
+		"/api/requests?project=" + accProject, "/api/documents?project=" + accProject,
+	} {
+		if code, _ := f.call(t, "nora", "GET", path, nil); code != 404 {
+			t.Errorf("nora GET %s = %d, want 404", path, code)
 		}
 	}
 }

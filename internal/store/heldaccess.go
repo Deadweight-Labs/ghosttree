@@ -16,12 +16,10 @@ var originSessionPattern = regexp.MustCompile(`^session:(\d+)`)
 
 // heldOrigin prüft einen session_ref: held sagt, dass der Betrachter den
 // Eintrag nicht sehen darf, owner, dass er der Besitzer der privaten
-// Herkunfts-Session ist. Ohne Durchsetzung gilt nichts davon; eine unbekannte
-// oder geteilte Herkunfts-Session hält nichts zurück.
+// Herkunfts-Session ist. Das gilt in jedem Modus (Vertraulichkeit privater
+// Transkripte); eine unbekannte oder geteilte Herkunfts-Session hält nichts
+// zurück.
 func (a *ProjectAccess) heldOrigin(ref string) (held, owner bool) {
-	if !a.st.AccessEnforced() {
-		return false, false
-	}
 	m := originSessionPattern.FindStringSubmatch(ref)
 	if m == nil {
 		return false, false
@@ -145,9 +143,6 @@ func (a *ProjectAccess) CheckWrittenSessionRef(ref string) error {
 // aus der privaten Session eines anderen Kontos. Ein Thread darf ihn nicht
 // verlinken; die Antwort ist dieselbe wie für eine unbekannte Nummer.
 func (a CoordAccess) requestHeldTx(tx rowQuerier, reqID string) bool {
-	if !a.Store.AccessEnforced() {
-		return false
-	}
 	n, err := strconv.ParseInt(strings.TrimPrefix(reqID, "REQ-"), 10, 64)
 	if err != nil {
 		return false
@@ -159,7 +154,7 @@ func (a CoordAccess) requestHeldTx(tx rowQuerier, reqID string) bool {
 	// A request without a project belongs to its author alone: linking it, or
 	// finding out that it exists, is for him only. Everybody else gets the
 	// answer for a request that is not there.
-	if strings.TrimSpace(project) == "" && !a.ownsGlobalRequestTx(tx, n) {
+	if strings.TrimSpace(project) == "" && a.Store.AccessEnforced() && !a.ownsGlobalRequestTx(tx, n) {
 		return true
 	}
 	if origin != "distilled" || person != "" {
