@@ -25,6 +25,16 @@ type fakeSystem struct {
 	running  bool
 	// failBackup makes db backup fail.
 	failBackup bool
+
+	// Docker: the project directory (as the commands name it) and what the
+	// "registry" and the "images" do.
+	dockerDir    string
+	brokenImages map[string]bool // versions whose server never answers
+	badSchema    map[string]bool // versions whose upgrade-schema fails
+	pullFails    map[string]bool // images that cannot be pulled
+	images       map[string]bool // pulled
+	// networkIDs and networkSubnets are what docker network ls -q and inspect answer.
+	networkIDs, networkSubnets string
 }
 
 func newFakeSystem(t *testing.T, prefix string) *fakeSystem {
@@ -97,6 +107,8 @@ func hasFlag(path, flag string) bool {
 func (f *fakeSystem) Run(ctx context.Context, name string, args ...string) (string, error) {
 	f.log(name + " " + strings.Join(args, " "))
 	switch name {
+	case "docker":
+		return f.docker(args)
 	case "systemctl":
 		switch args[0] {
 		case "start", "restart":
@@ -142,9 +154,96 @@ func (f *fakeSystem) Run(ctx context.Context, name string, args ...string) (stri
 	return "", fmt.Errorf("fake: unexpected command %s", name)
 }
 
+// dockerVersion is the version the .env of the project names.
+func (f *fakeSystem) dockerVersion() string {
+	b, err := os.ReadFile(filepath.Join(f.prefix, f.dockerDir, ".env"))
+	if err != nil {
+		return ""
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(l, "GHOSTTREE_IMAGE="); ok {
+			return imageVersion(v)
+		}
+	}
+	return ""
+}
+
+func (f *fakeSystem) docker(args []string) (string, error) {
+	if len(args) >= 2 && args[0] == "compose" && args[1] == "version" {
+		return "Docker Compose version v2.30.0\n", nil
+	}
+	if len(args) >= 2 && args[0] == "network" {
+		if args[1] == "ls" {
+			return f.networkIDs, nil
+		}
+		return f.networkSubnets, nil
+	}
+	if len(args) >= 2 && args[0] == "image" && args[1] == "inspect" {
+		if f.images[args[2]] {
+			return "[]\n", nil
+		}
+		return "no such image\n", fmt.Errorf("exit status 1")
+	}
+	if len(args) >= 2 && args[0] == "pull" {
+		if f.pullFails[args[1]] {
+			return "manifest unknown\n", fmt.Errorf("exit status 1")
+		}
+		if f.images == nil {
+			f.images = map[string]bool{}
+		}
+		f.images[args[1]] = true
+		return "pulled\n", nil
+	}
+	if len(args) < 4 || args[0] != "compose" || args[1] != "--project-directory" {
+		return "", fmt.Errorf("fake docker: unexpected %v", args)
+	}
+	f.dockerDir = args[2]
+	rest := args[3:]
+	ver := f.dockerVersion()
+	switch rest[0] {
+	case "up":
+		f.running = true
+		return "", nil
+	case "stop":
+		f.running = false
+		return "", nil
+	case "ps":
+		if f.running {
+			return "ghosttree\nbackup\n", nil
+		}
+		return "", nil
+	case "exec":
+		// exec -T ghosttree /usr/local/bin/ctx <args>
+		return f.dockerCtx(ver, rest[4:])
+	case "run":
+		// run --rm --no-deps <service> <args...>
+		return f.dockerCtx(ver, rest[4:])
+	}
+	return "", fmt.Errorf("fake docker: unexpected compose %v", rest)
+}
+
+// dockerCtx runs a ctx command "inside" the image of version ver.
+func (f *fakeSystem) dockerCtx(ver string, args []string) (string, error) {
+	if len(args) >= 1 && args[0] == "upgrade-schema" {
+		if f.badSchema[ver] {
+			return "upgrade failed\n", fmt.Errorf("exit status 1")
+		}
+		return "schema already current, nothing to do\n", nil
+	}
+	if len(args) >= 2 && args[0] == "db" && args[1] == "backup" && !f.failBackup {
+		f.log("backup written by " + ver)
+		return "backup\n", nil
+	}
+	return f.ctxCommandAs(ver, "", args)
+}
+
 func (f *fakeSystem) ctxCommand(bin string, args []string) (string, error) {
 	ver, _ := versionOf(bin)
-	badSchema := hasFlag(bin, "badschema")
+	return f.ctxCommandAs(ver, bin, args)
+}
+
+func (f *fakeSystem) ctxCommandAs(ver, bin string, args []string) (string, error) {
+	badSchema := bin != "" && hasFlag(bin, "badschema")
 	switch strings.Join(args[:min(len(args), 2)], " ") {
 	case "account list":
 		return f.accounts, nil
@@ -206,7 +305,12 @@ func (f *fakeSystem) Get(ctx context.Context, url string) ([]byte, error) {
 		return nil, fmt.Errorf("connection refused")
 	}
 	v := f.binVersion()
-	if hasFlag(filepath.Join(f.prefix, BinPath), "broken") {
+	if f.dockerDir != "" {
+		v = f.dockerVersion()
+		if f.brokenImages[v] {
+			return nil, fmt.Errorf("HTTP 500")
+		}
+	} else if hasFlag(filepath.Join(f.prefix, BinPath), "broken") {
 		return nil, fmt.Errorf("HTTP 500")
 	}
 	if strings.HasSuffix(url, "/api/version") {

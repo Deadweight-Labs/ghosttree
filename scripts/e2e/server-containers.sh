@@ -13,7 +13,6 @@
 set -eu
 
 cd "$(dirname "$0")/../.."
-root=$(pwd)
 [ "$#" -gt 0 ] || set -- debian:12 ubuntu:24.04 fedora:42
 
 work=$(mktemp -d)
