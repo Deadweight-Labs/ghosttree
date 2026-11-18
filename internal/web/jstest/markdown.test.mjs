@@ -405,7 +405,7 @@ test("the SVG that comes back is only the address of an image, never a node of t
   const host = d.text("```mermaid\n" + FLOW + "\n```");
   d.arrive();
   d.ready();
-  const svg = svgOf(648, 210, '<a href="javascript:alert(1)"><text>x</text></a><script>alert(2)</script><foreignObject><div onclick="alert(3)">x</div></foreignObject>');
+  const svg = svgOf(648, 210, '<a href="javascript:alert(1)"><text>x</text></a><foreignObject><div>x</div></foreignObject>');
   d.say({ t: "svg", id: d.frame.posted[0].m.id, svg });
   const box = host.querySelector(".mmd");
   assert.equal(box.getAttribute("data-state"), "ok");
@@ -421,6 +421,25 @@ test("the SVG that comes back is only the address of an image, never a node of t
   assert.deepEqual(tagsOf(box), ["img", "pre", "code"]);
 });
 const p = (d) => d.document.querySelector("main");
+
+// What carries a script or an event handler is not kept at all, though an image would not run it.
+test("an SVG with a script or an event handler is refused, and so is one over the size limit", () => {
+  for (const extra of ["<script>alert(2)</script>", '<foreignObject><div onclick="alert(3)">x</div></foreignObject>', '<rect onload="x()" width="1" height="1"/>']) {
+    const d = diagrams();
+    const host = d.text("```mermaid\n" + FLOW + "\n```");
+    d.arrive();
+    d.ready();
+    d.say({ t: "svg", id: d.frame.posted[0].m.id, svg: svgOf(10, 10, extra) });
+    assert.equal(host.querySelector(".mmd").getAttribute("data-state"), "err", extra);
+    assert.equal(host.querySelector("img.mmd-img"), null);
+  }
+  const d = diagrams();
+  const host = d.text("```mermaid\n" + FLOW + "\n```");
+  d.arrive();
+  d.ready();
+  d.say({ t: "svg", id: d.frame.posted[0].m.id, svg: svgOf(10, 10, "<!--" + "x".repeat(5 << 20) + "-->") });
+  assert.equal(host.querySelector(".mmd").getAttribute("data-state"), "err");
+});
 
 test("what is not an SVG, and what does not come from the frame, is not shown", () => {
   const d = diagrams();
@@ -469,9 +488,14 @@ test("a diagram that takes too long ends as an error and the next one is drawn",
   d.arrive();
   d.ready();
   assert.equal(d.frame.posted.length, 1, "one at a time");
+  const old = d.iframe();
   d.timers.at(-1).fn();
   const boxes = all(host, ".mmd");
   assert.equal(boxes[0].getAttribute("data-state"), "err");
+  // The frame that kept computing is gone; the next diagram waits for a fresh one.
+  assert.notEqual(d.iframe(), old);
+  assert.equal(d.frame.posted.length, 1);
+  d.ready();
   assert.equal(d.frame.posted.length, 2);
   d.say({ t: "svg", id: d.frame.posted[1].m.id, svg: svgOf(40, 20) });
   assert.equal(boxes[1].getAttribute("data-state"), "ok");
@@ -625,4 +649,33 @@ test("the frame gives back nothing that is not an SVG", async () => {
   f.send({ t: "draw", id: 1, src: "x", dark: false });
   await f.settled();
   assert.equal(f.posted.at(-1).m.t, "err");
+});
+
+// XSS: a link whose text looks like an address of one place and leads to another shows where it
+// leads, so that the text cannot stand in for the address (phishing in a trusted page).
+test("a link text that looks like another site shows the real target", () => {
+  const p = open();
+  const host = render(p, "[https://ghosttree.example/ui/login](https://evil.example/login) and [Weiter zur Freigabe](https://evil.example/x) and [ghosttree.example](https://evil.example)");
+  const links = all(host, "a");
+  assert.equal(links.length, 3);
+  // The text that looks like an address gets the host of the target beside it.
+  assert.match(links[0].parentNode.textContent, /evil\.example/);
+  assert.equal(all(host, ".md-target").length, 2, "the first and the third are marked, the plain words are not");
+  assert.match(all(host, ".md-target")[0].textContent, /evil\.example/);
+  for (const a of links) {
+    assert.equal(a.getAttribute("rel"), "noopener noreferrer");
+    assert.equal(a.getAttribute("target"), "_blank");
+  }
+});
+
+test("a link text with the same host as the target needs no note", () => {
+  const p = open();
+  const host = render(p, "[evil.example/login](https://www.evil.example/login) and [docs](https://docs.example/a)");
+  assert.equal(all(host, ".md-target").length, 0);
+});
+
+test("a look-alike in the link text is read as the address it looks like", () => {
+  const p = open();
+  const host = render(p, "[ghosttree.example。com](https://evil.example/)");
+  assert.equal(all(host, ".md-target").length, 1);
 });

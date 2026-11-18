@@ -136,10 +136,28 @@
     }
     return u.slice(0, end);
   }
+  // A link whose text reads like an address of one site and leads to another (the text stands
+  // in for the address): the host it leads to is shown beside it. Dots that read as a dot
+  // (the ideographic full stop and the like) count as one.
+  var RE_SHOWN_HOST = /(?:https?:\/\/)?((?:[\p{L}\d-]+\.)+\p{L}{2,})(?=[\/:?#\s]|$)/iu;
+  function hostOf(u) {
+    try { return new URL(u, window.location.href).hostname.toLowerCase().replace(/^www\./, ""); } catch (e) { return ""; }
+  }
+  function targetNote(a, url) {
+    var text = (a.textContent || "").normalize("NFKC").replace(/[\u3002\uff61\u2024\ufe52\u00b7]/g, ".");
+    var m = RE_SHOWN_HOST.exec(text);
+    if (!m) return null;
+    var shown = m[1].toLowerCase().replace(/^www\./, ""), target = hostOf(url);
+    if (!target || shown === target) return null;
+    var note = el("span");
+    note.className = "md-target";
+    note.textContent = " (" + target + ")";
+    return note;
+  }
   function link(url, parent) {
     var a = el("a");
     a.setAttribute("href", url);
-    if (/^https?:/i.test(url)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
+    if (/^https?:/i.test(url)) { a.setAttribute("target", "_blank"); a.setAttribute("rel", "noopener noreferrer"); }
     parent.appendChild(a);
     return a;
   }
@@ -288,10 +306,13 @@
               flush();
               var a = el("a");
               a.setAttribute("href", url);
-              if (/^https?:/i.test(url)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
+              if (/^https?:/i.test(url)) { a.setAttribute("target", "_blank"); a.setAttribute("rel", "noopener noreferrer"); }
               if (m[2] || m[3]) a.title = m[2] || m[3];
               inline(src.slice(i + 1, e1), a, { d: deep, noLink: true });
-              parent.appendChild(a); i = e2 + 1; continue;
+              parent.appendChild(a);
+              var note = targetNote(a, url);
+              if (note) parent.appendChild(note);
+              i = e2 + 1; continue;
             }
             // Address not allowed: stays as text, nothing is linked
             buf += src.slice(i, e2 + 1); i = e2 + 1; continue;
