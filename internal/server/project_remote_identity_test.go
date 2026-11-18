@@ -12,7 +12,7 @@ func TestAgentInACloneLandsInTheProjectMadeFromItsRemote(t *testing.T) {
 		inv := f.invite(t, "person:1", "alpha", "", "member")
 		f.accept(t, tok, inv["code"])
 	}
-	f.mustCall(t, 200, "POST", "/api/projects/claim", f.anna, map[string]any{"remote": "https://gitlab.com/werkstatt/deploy-hook.git", "org": "alpha"})
+	f.mustCall(t, 200, "POST", "/api/projects/claim", f.robin, map[string]any{"remote": "https://gitlab.com/werkstatt/deploy-hook.git", "org": "alpha"})
 	count := func() int {
 		var n int
 		if err := f.st.DB().QueryRow(`SELECT COUNT(*) FROM projects`).Scan(&n); err != nil {

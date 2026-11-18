@@ -252,11 +252,16 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 	}
 	// Jedes Mitglied legt in seiner Org an und wird Owner des Projekts (17 A,
 	// #4376); wer nicht Mitglied ist, nicht.
-	if out := f.mustCall(t, 200, "POST", "/api/projects/claim", f.anna, map[string]any{"remote": "https://gitlab.com/x/annas.git", "org": "alpha"}); out["org"] != "alpha" {
-		t.Fatalf("claim by a plain member: %v", out)
+	// A repository address on a host other than GitHub is claimed by an owner of
+	// the organization: nothing proves that the one who asks owns it.
+	if code, out := f.call(t, "POST", "/api/projects/claim", f.anna, map[string]any{"remote": "https://gitlab.com/x/annas.git", "org": "alpha"}); code != 403 || out["code"] != "not_org_owner" {
+		t.Fatalf("claim of an address by a plain member: %d %v", code, out)
 	}
-	if role := f.st.ProjectRole("gitlab.com/x/annas", "person:2"); role.Role != "owner" {
-		t.Fatalf("the member who created it: %+v", role)
+	if _, ok := f.st.ProjectByRemote("gitlab.com/x/annas"); ok {
+		t.Fatal("a refused claim left a project")
+	}
+	if out := f.mustCall(t, 200, "POST", "/api/projects/claim", f.robin, map[string]any{"remote": "https://gitlab.com/x/annas.git", "org": "alpha"}); out["org"] != "alpha" {
+		t.Fatalf("claim by an owner: %v", out)
 	}
 	if code, out := f.call(t, "POST", "/api/projects/claim", f.carl, map[string]any{"remote": "https://gitlab.com/x/three.git", "org": "alpha"}); code != 403 || out["code"] != "not_org_member" {
 		t.Fatalf("claim by a non-member: %d %v", code, out)

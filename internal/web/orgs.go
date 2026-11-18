@@ -960,11 +960,13 @@ func (a *app) orgAssign(w http.ResponseWriter, r *http.Request) {
 	orgRedirect(w, r, p.Org, "assigned")
 }
 
-// orgProjectCreate legt ein Projekt der Organisation an. Das darf jedes Mitglied;
-// wer es anlegt, wird sein Owner. Das Feld nimmt einen Namen (ein Projekt ohne
-// Git) oder die Adresse eines Repos (https, ssh, github.com/owner/repo): dann
-// ist die Remote die ID des Projekts, und jeder Agent in einem Klon mit dieser
-// Remote arbeitet in genau diesem Projekt, ohne dass ein zweites entsteht.
+// orgProjectCreate legt ein Projekt der Organisation an. Einen Namen (ein
+// Projekt ohne Git) darf jedes Mitglied anlegen und wird sein Owner; die Adresse
+// eines Repos (https, ssh, github.com/owner/repo) nimmt der Store bei einem
+// anderen Host als GitHub nur von einem Owner der Org an, bei GitHub nur mit dem
+// bestätigten Login. Dann ist die Remote die ID des Projekts, und jeder Agent in
+// einem Klon mit dieser Remote arbeitet in genau diesem Projekt, ohne dass ein
+// zweites entsteht.
 func (a *app) orgProjectCreate(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
 	if err != nil {

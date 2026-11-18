@@ -667,7 +667,8 @@ func (s *Store) ProjectByRemote(remote string) (Project, bool) {
 // Schreibende Mitglied ist, oder über sein eigenes, von GitHub bestätigtes
 // Login; sonst bleibt die Remote unbeansprucht (leeres Project, kein Fehler).
 // Ausdrücklich (orgID 0 = eigener Namensraum) nur, wenn kein anderes Konto
-// Einträge darunter hat. Gäste, Dienste und Wegwerf-Remotes bekommen nichts.
+// Einträge darunter hat, und bei einem anderen Host als github.com nur ein Owner
+// der Org (dort lässt sich der Besitz nicht beweisen). Gäste, Dienste und Wegwerf-Remotes bekommen nichts.
 func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64, explicit bool) (Project, error) {
 	if p, ok := projectTx(tx, remote); ok {
 		if orgRoleTx(tx, p.OrgID, account) == "" {
@@ -729,6 +730,13 @@ func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64, e
 	kind := orgViewerKindTx(tx, orgID, account)
 	if kind != OrgViewerOwner && kind != OrgViewerMember {
 		return Project{}, ErrNotOrgMember
+	}
+	// Only a GitHub login can be proven (above). For any other host, a repository
+	// address is claimed by whoever asks first, so only an owner of the
+	// organization does it on its behalf, not every member: the owners answer for
+	// which addresses the organization stands for.
+	if explicit && remoteGitHubOwner(remote) == "" && kind != OrgViewerOwner {
+		return Project{}, ErrNotOrgOwner
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, created_at) VALUES(?,?,?)`, remote, orgID, now()); err != nil {
 		return Project{}, err
