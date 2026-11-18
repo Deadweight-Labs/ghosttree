@@ -1470,6 +1470,29 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   (`ap2-<id>`) counts as a placeholder.
 - Dependency updates: MCP Go SDK 1.8.0, `modernc.org/sqlite` 1.60, `golang.org/x/sys`,
   GoReleaser action and CodeQL action.
+- The client no longer follows a link in a repository when it writes `.ghosttree/`:
+  a checkout that brings `.ghosttree` or a level below it as a symbolic link
+  makes the mirror and the tree stop with a message, and nothing is written or
+  removed outside the checkout. Path parts a server sends (type, state) cannot
+  leave the mirror. The mirror is private to the user (directories `0700`, files
+  `0600`, older ones are tightened at the next write), also the document
+  worktrees `.ghosttree/edit` and `.ghosttree/workflows`.
+- Prompts and shell commands go to the server with secrets blacked out, as the
+  collector already did, and the prompt of the relevance hook travels in the body
+  of a `POST /api/context/relevant` instead of the address (older servers still
+  get the `GET` form). The client reads at most 64 MB of an answer, refuses a
+  token over plain `http` to another machine (`GHOSTTREE_ALLOW_HTTP=1` allows it
+  where the network is encrypted otherwise) and a redirect from https to http.
+- Server text printed by `ctx` commands passes a filter that removes control
+  characters except line breaks and tabs, so it cannot steer the terminal.
+- `ctx run --run` shows the argument lists and asks for `yes` at a terminal;
+  without a terminal it needs `--yes`. It applies the rules of a runbook again to
+  what the server sent.
+- `idea_attach`, `pain_attach` and `request_attach` read a file by path only
+  when it is an image (extension, content, not in a hidden folder of the home
+  directory); `ctx ... attach` sends a file only when its content is an image.
+- Git calls of the client run with `core.fsmonitor`, `core.hooksPath` and
+  `diff.external` switched off, whatever `.git/config` says.
 
 ## 0.1.0-rc.3 — 2026-08-29
 
