@@ -2,12 +2,28 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/knref"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
+
+// memberProposeText also reads the open issues, which members wrote.
+const memberProposeText = "---\non: pr.merged\ninputs: [pr.title, requests.open]\nuses: ghosttree/echo\nresults:\n  knowledge: 1\n  issue: 1\n---\n"
+
+// seedMemberText opens an issue whose title holds the text that the pull
+// requests of these tests quote: the one source of a quote the automatic
+// approval accepts here (the open issues are text of members). It is REQ-1.
+func seedMemberText(t *testing.T, st *store.Store) {
+	t.Helper()
+	if _, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "Anmeldung per Link ist nötig", Scope: scope.Axes{Project: project}, Person: "robin"}, AuthorID: 1}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 const proposeText = "---\non: pr.merged\ninputs: [pr.title]\nuses: ghosttree/echo\nresults:\n  knowledge: 1\n  issue: 1\n---\n"
 
@@ -136,6 +152,7 @@ func TestARunProposesOnlyDeclaredKindsWithEvidenceAndAPersonAccepts(t *testing.T
 // of the same run still waits for a person.
 func TestAutomaticApprovalForOneKindIsLoggedAndCanBeUndone(t *testing.T) {
 	st := engineStore(t)
+	seedMemberText(t, st)
 	p, _ := st.ProjectByRemote(project)
 	if err := st.SetWorkflowPolicy("person:1", p.OrgID, store.WorkflowPolicy{AutoKinds: []string{"issue"}}); err != nil {
 		t.Fatal(err)
@@ -144,7 +161,7 @@ func TestAutomaticApprovalForOneKindIsLoggedAndCanBeUndone(t *testing.T) {
 		in.Propose(Result{Kind: ResultIssue, Title: "Ablaufzeit einstellbar", Evidence: []string{"Anmeldung per Link"}})
 		in.Propose(Result{Kind: ResultKnowledge, Title: "Links laufen ab", Evidence: []string{"Anmeldung per Link"}})
 	})
-	saveDefAs(t, st, "melden", proposeText, 0)
+	saveDefAs(t, st, "melden", memberProposeText, 0)
 	mergedTitled(t, st, "2", "feat: Anmeldung per Link")
 	if _, err := e.Tick(context.Background()); err != nil {
 		t.Fatal(err)
@@ -153,13 +170,13 @@ func TestAutomaticApprovalForOneKindIsLoggedAndCanBeUndone(t *testing.T) {
 	if len(results) != 2 || results[0].State != store.ResultAuto || !strings.HasPrefix(results[0].Ref, "REQ-") || results[1].State != store.ResultProposed {
 		t.Fatalf("results: %+v", results)
 	}
-	if d, err := st.RequestByID(1); err != nil || d.Request.State != "open" || results[0].Ref != "REQ-1" {
+	if d, err := st.RequestByID(2); err != nil || d.Request.State != "open" || results[0].Ref != "REQ-2" {
 		t.Fatalf("auto issue: %+v %v", d.Request, err)
 	}
 	if err := UndoAuto(st, results[0].ID, 1, "robin"); err != nil {
 		t.Fatal(err)
 	}
-	if d, _ := st.RequestByID(1); d.Request.State != "dropped" {
+	if d, _ := st.RequestByID(2); d.Request.State != "dropped" {
 		t.Fatalf("undone issue is not dropped: %+v", d.Request)
 	}
 	if got, _ := st.WorkflowResultByID(results[0].ID); got.State != store.ResultUndone || got.UndoneAt == "" {
@@ -241,5 +258,78 @@ func TestAnEditedProposalIsNotApplied(t *testing.T) {
 	}
 	if _, err := st.RequestByID(1); err == nil {
 		t.Fatal("the edited proposal was applied")
+	}
+}
+
+// The right to act for a run is checked again when a person accepts one of its
+// proposals: the lead who saved the workflow may be a member by then, and an
+// issue is not written in that account's name.
+func TestAProposalOfADemotedAuthorIsNotApplied(t *testing.T) {
+	st := engineStore(t)
+	if _, err := st.AddAccount("lena", "", false); err != nil {
+		t.Fatal(err)
+	}
+	code, _, err := st.CreateInvitation("person:1", 1, "", store.OrgMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProjectRole("person:1", project, "person:2", store.RoleLead, false, store.RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	d, rep := Check(proposeText, Env{Catalog: catalogWithResults()})
+	if !rep.OK() {
+		t.Fatal(rep.Errors)
+	}
+	if _, err := st.SaveWorkflowDef("person:2", store.WorkflowDefSave{Project: project, Name: "melden", Text: proposeText, Event: d.On, Uses: d.Uses}); err != nil {
+		t.Fatal(err)
+	}
+	e := proposeEngine(t, st, func(in Input) {
+		in.Propose(Result{Kind: ResultIssue, Title: "Ablaufzeit einstellbar", Evidence: []string{"Anmeldung per Link"}})
+	})
+	mergedTitled(t, st, "4", "feat: Anmeldung per Link")
+	if _, err := e.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	results, _ := st.WorkflowResultsOf(lastRun(t, st).ID)
+	if len(results) == 0 || results[0].NoteID == 0 {
+		t.Fatalf("no proposal: %+v", results)
+	}
+	if err := st.SetProjectRole("person:1", project, "person:2", store.RoleMember, false, store.RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptProposal(st, results[0].NoteID, 1); !errors.Is(err, ErrProposalAuthorGone) {
+		t.Fatalf("accepting the proposal of a demoted author: %v", err)
+	}
+	if _, err := st.RequestByID(1); err == nil {
+		t.Fatal("an issue was written in the name of an account that no longer holds the right")
+	}
+}
+
+// A result whose quote stands only in text that a stranger may have written (the
+// title of a pull request from GitHub) does not apply by itself, whatever the
+// owner's automatic approval says: it waits for a person like any other.
+func TestAutomaticApprovalDoesNotCoverAQuoteFromForeignText(t *testing.T) {
+	st := engineStore(t)
+	p, _ := st.ProjectByRemote(project)
+	if err := st.SetWorkflowPolicy("person:1", p.OrgID, store.WorkflowPolicy{AutoKinds: []string{"issue"}}); err != nil {
+		t.Fatal(err)
+	}
+	e := proposeEngine(t, st, func(in Input) {
+		in.Propose(Result{Kind: ResultIssue, Title: "Ablaufzeit einstellbar", Evidence: []string{"Anmeldung per Link"}})
+	})
+	saveDefAs(t, st, "melden", proposeText, 0)
+	mergedTitled(t, st, "2", "feat: Anmeldung per Link")
+	if _, err := e.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	results, _ := st.WorkflowResultsOf(lastRun(t, st).ID)
+	if len(results) != 1 || results[0].State != store.ResultProposed {
+		t.Fatalf("results: %+v", results)
+	}
+	if _, err := st.RequestByID(1); err == nil {
+		t.Fatal("an issue was written from a quote of the pull request title")
 	}
 }

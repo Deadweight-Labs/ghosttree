@@ -35,27 +35,31 @@ type InputSpec struct {
 	Summary string
 	// Assembled: the machine reads it from the project, not from the event.
 	Assembled bool
+	// Foreign: the text is written by someone who need not be a member of the
+	// project (the author of a pull request, of a commit, the internet). A
+	// result that rests on it never applies by itself.
+	Foreign bool
 }
 
 // Inputs is the catalogue of inputs of stage E2: what the event carries. Later
 // stages add assembled inputs (the diff, the sessions of a pull request, the
 // related ideas).
 var Inputs = []InputSpec{
-	{Name: "event", Summary: "the event as JSON"},
+	{Name: "event", Summary: "the event as JSON", Foreign: true},
 	{Name: "pr.number", Events: []string{store.EventPRMerged}, Summary: "number of the pull request"},
-	{Name: "pr.title", Events: []string{store.EventPRMerged}, Summary: "title of the pull request"},
-	{Name: "pr.base", Events: []string{store.EventPRMerged}, Summary: "branch it was merged into"},
-	{Name: "pr.head", Events: []string{store.EventPRMerged}, Summary: "branch it came from"},
+	{Name: "pr.title", Events: []string{store.EventPRMerged}, Summary: "title of the pull request", Foreign: true},
+	{Name: "pr.base", Events: []string{store.EventPRMerged}, Summary: "branch it was merged into", Foreign: true},
+	{Name: "pr.head", Events: []string{store.EventPRMerged}, Summary: "branch it came from", Foreign: true},
 	{Name: "pr.merge_sha", Events: []string{store.EventPRMerged}, Summary: "commit of the merge"},
 	{Name: "idea.number", Events: ideaEvents, Summary: "number of the idea"},
 	{Name: "idea.title", Events: ideaEvents, Summary: "title of the idea"},
 	{Name: "schedule.slot", Events: []string{store.EventSchedule}, Summary: "the period of the schedule"},
 	// Assembled from the project (stage E3), bounded in size, with the rights
 	// of the account the run acts for.
-	{Name: "pr.text", Events: []string{store.EventPRMerged}, Summary: "title and description of the pull request", Assembled: true},
-	{Name: "pr.commits", Events: []string{store.EventPRMerged}, Summary: "its commits with their messages", Assembled: true},
-	{Name: "pr.files", Events: []string{store.EventPRMerged}, Summary: "the files it changed", Assembled: true},
-	{Name: "pr.diff", Events: []string{store.EventPRMerged}, Summary: "its diff where the server can read it, else the changed files", Assembled: true},
+	{Name: "pr.text", Events: []string{store.EventPRMerged}, Summary: "title and description of the pull request", Assembled: true, Foreign: true},
+	{Name: "pr.commits", Events: []string{store.EventPRMerged}, Summary: "its commits with their messages", Assembled: true, Foreign: true},
+	{Name: "pr.files", Events: []string{store.EventPRMerged}, Summary: "the files it changed", Assembled: true, Foreign: true},
+	{Name: "pr.diff", Events: []string{store.EventPRMerged}, Summary: "its diff where the server can read it, else the changed files", Assembled: true, Foreign: true},
 	{Name: "pr.knowledge", Events: []string{store.EventPRMerged}, Summary: "the knowledge entries written on its commits", Assembled: true},
 	{Name: "pr.sessions.user_messages", Events: []string{store.EventPRMerged}, Summary: "what people typed in the sessions of its commits, nothing the agents wrote", Assembled: true},
 	{Name: "knowledge.related", Events: []string{store.EventPRMerged}, Summary: "knowledge of the project its title finds", Assembled: true},
