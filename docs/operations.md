@@ -316,9 +316,9 @@ that no mail went out.
 ### What the server shows without a sign-in
 
 - `/api/health` answers `{"ok":true}`.
-- `/api/version` tells a client without a token only what it needs to see whether
-  it fits this server (protocol, oldest client, capabilities). Version, channel
-  and commit come only with a token, or to the machine the server runs on.
+- `/api/version` answers without a token: a client reads it before it can sign
+  in, and `ctx server update` waits for the new version there. It names what
+  `/dist/` shows in its file names anyway.
 - `/metrics` is for the machine itself: a request is served when the client
   address, read through the trusted proxies, is loopback. Anyone else gets 404.
   A scraper on another host sends a bearer token that you set in

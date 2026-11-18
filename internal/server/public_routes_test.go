@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -64,52 +63,20 @@ func TestMetricsAreForLoopbackOrTheMetricsToken(t *testing.T) {
 	}
 }
 
-// Without a token the version says only what a client needs to see whether it fits.
-func TestVersionForTheUnknownHasNoBuildDetails(t *testing.T) {
-	h, tok := publicRouteHandler(t, WithBuildVersion("0.1.0-dev+b0cd1b9"), WithCapabilities("github_app"))
-	var anon version.Info
+// /api/version stays open: a client reads it before it has a working token, the
+// installer waits for the new version after an update (from the host of a
+// container too), and /dist/ names the version in its file names anyway.
+func TestVersionAnswersWithoutAToken(t *testing.T) {
+	h, _ := publicRouteHandler(t, WithBuildVersion("0.1.0-dev+b0cd1b9"))
+	var info version.Info
 	w := fetch(h, "/api/version", "203.0.113.9:5000", "", "")
 	if w.Code != 200 {
 		t.Fatalf("status %d", w.Code)
 	}
-	if strings.Contains(w.Body.String(), "b0cd1b9") {
-		t.Fatalf("the build leaks to the unknown: %s", w.Body.String())
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &anon); err != nil {
+	if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
 		t.Fatal(err)
 	}
-	if anon.Version != "" || anon.Commit != "" || anon.Protocol != version.Protocol || anon.MinClient != version.MinClient {
-		t.Fatalf("info for the unknown = %+v", anon)
-	}
-	var known version.Info
-	w = fetch(h, "/api/version", "203.0.113.9:5000", "", tok)
-	if err := json.Unmarshal(w.Body.Bytes(), &known); err != nil {
-		t.Fatal(err)
-	}
-	if known.Version != "0.1.0-dev+b0cd1b9" || known.Commit != "b0cd1b9" {
-		t.Fatalf("info for a signed-in client = %+v", known)
-	}
-}
-
-// The machine the server runs on reads its version without a token: the
-// installer waits for it after an update.
-func TestVersionForThisMachineNamesTheBuild(t *testing.T) {
-	h, _ := publicRouteHandler(t, WithBuildVersion("0.1.0-dev+b0cd1b9"))
-	var local version.Info
-	w := fetch(h, "/api/version", "127.0.0.1:5000", "", "")
-	if err := json.Unmarshal(w.Body.Bytes(), &local); err != nil {
-		t.Fatal(err)
-	}
-	if local.Version != "0.1.0-dev+b0cd1b9" {
-		t.Errorf("loopback does not read the version: %+v", local)
-	}
-	// Behind the local proxy the address that counts is the forwarded one.
-	var far version.Info
-	w = fetch(h, "/api/version", "127.0.0.1:5000", "203.0.113.9", "")
-	if err := json.Unmarshal(w.Body.Bytes(), &far); err != nil {
-		t.Fatal(err)
-	}
-	if far.Version != "" {
-		t.Errorf("a forwarded stranger reads the version: %+v", far)
+	if info.Version != "0.1.0-dev+b0cd1b9" || info.Protocol != version.Protocol {
+		t.Fatalf("info = %+v", info)
 	}
 }
