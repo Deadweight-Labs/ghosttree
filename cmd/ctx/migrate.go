@@ -107,7 +107,7 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 		if !migrate.ShouldDistill(artifact) {
 			continue
 		}
-		raw, readErr := os.ReadFile(artifact.Path)
+		raw, _, readErr := readArtifact(artifact)
 		if readErr != nil {
 			fmt.Fprintf(stdout, "read %s: %v\n", artifact.Rel, readErr)
 			return 1
@@ -145,7 +145,7 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 	var pendingArtifacts []migrate.Artifact
 	var documentArtifacts []migrate.Artifact
 	for _, artifact := range artifacts {
-		raw, err := os.ReadFile(artifact.Path)
+		raw, _, err := readArtifact(artifact)
 		if err != nil {
 			fmt.Fprintf(stdout, "read %s: %v\n", artifact.Rel, err)
 			return 1
@@ -273,7 +273,7 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 		}
 	}
 	for _, artifact := range documentArtifacts {
-		raw, err := os.ReadFile(artifact.Path)
+		raw, _, err := readArtifact(artifact)
 		if err != nil {
 			fmt.Fprintf(stdout, "read %s: %v\n", artifact.Rel, err)
 			return 1
@@ -338,7 +338,7 @@ func validateDocumentArtifacts(artifacts []migrate.Artifact) error {
 		if artifact.Kind == "rules" {
 			continue
 		}
-		raw, err := os.ReadFile(artifact.Path)
+		raw, _, err := readArtifact(artifact)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", artifact.Rel, err)
 		}
@@ -385,7 +385,7 @@ func cleanMigrated(repo, project string, artifacts []migrate.Artifact, api *clie
 	}
 	var missing []string
 	for _, a := range artifacts {
-		raw, err := os.ReadFile(a.Path)
+		raw, _, err := readArtifact(a)
 		if err != nil {
 			fmt.Fprintf(stdout, "verify %s: %v\n", a.Rel, err)
 			return 1
@@ -413,21 +413,17 @@ func cleanMigrated(repo, project string, artifacts []migrate.Artifact, api *clie
 	}
 	for _, a := range artifacts {
 		dst := filepath.Join(backup, filepath.FromSlash(a.Rel))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		// Das Backup liegt neben dem Repo und gehört nur dem Nutzer.
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			fmt.Fprintf(stdout, "backup failed: %v\n", err)
 			return 1
 		}
-		raw, err := os.ReadFile(a.Path)
+		raw, perm, err := readArtifact(a)
 		if err != nil {
 			fmt.Fprintf(stdout, "backup failed: %v\n", err)
 			return 1
 		}
-		info, err := os.Stat(a.Path)
-		if err != nil {
-			fmt.Fprintf(stdout, "backup failed: %v\n", err)
-			return 1
-		}
-		if err := os.WriteFile(dst, raw, info.Mode().Perm()); err != nil {
+		if err := os.WriteFile(dst, raw, perm&0o700); err != nil {
 			fmt.Fprintf(stdout, "backup failed: %v\n", err)
 			return 1
 		}

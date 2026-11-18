@@ -51,9 +51,19 @@ func cmdDBBackup(args []string, stdout io.Writer) int {
 	// A path ending in .db is a file; anything else is a directory, made if needed.
 	if fi, err := os.Stat(*out); (err == nil && fi.IsDir()) || !strings.HasSuffix(*out, ".db") {
 		dir = strings.TrimRight(*out, "/")
+		_, statErr := os.Stat(dir)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			fmt.Fprintf(stdout, "backup directory: %v\n", err)
 			return 1
+		}
+		if statErr != nil {
+			// MkdirAll gives 0700 minus the umask; a directory made here is
+			// private whatever the umask. One that exists stays as it is, but a
+			// copy of everything the server knows should not sit in a directory
+			// others can list.
+			_ = os.Chmod(dir, 0o700)
+		} else if fi, err := os.Stat(dir); err == nil && fi.Mode().Perm()&0o077 != 0 {
+			fmt.Fprintf(stdout, "note: %s is accessible to others (mode %04o); the copy is readable by its owner only, but chmod 700 the directory\n", dir, fi.Mode().Perm())
 		}
 		target = filepath.Join(dir, backupName(time.Now().UTC()))
 	} else if *keep > 0 {
