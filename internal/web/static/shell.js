@@ -56,15 +56,33 @@
       for (const menu of menus) if (menu.open && !menu.contains(event.target)) menu.open = false;
     });
   }
-  const themeButton = document.querySelector("[data-theme-toggle]");
-  if (themeButton) {
-    themeButton.addEventListener("click", () => {
-      const root = document.documentElement;
-      const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-      const next = dark ? "light" : "dark";
-      root.dataset.theme = next;
-      try { localStorage.setItem("gt-theme", next); } catch (_) {}
-    });
+  // The theme is a choice of three: light, dark, or what the system says (no stored value).
+  const themeSet = [...document.querySelectorAll("[data-theme-set]")];
+  if (themeSet.length) {
+    const chosen = () => {
+      try {
+        const t = localStorage.getItem("gt-theme");
+        return t === "light" || t === "dark" ? t : "system";
+      } catch (_) { return "system"; }
+    };
+    const showTheme = () => {
+      const now = chosen();
+      for (const b of themeSet) b.setAttribute("aria-checked", String(b.dataset.themeSet === now));
+    };
+    showTheme();
+    for (const b of themeSet) {
+      b.addEventListener("click", () => {
+        const next = b.dataset.themeSet;
+        if (next === "system") {
+          delete document.documentElement.dataset.theme;
+          try { localStorage.removeItem("gt-theme"); } catch (_) {}
+        } else {
+          document.documentElement.dataset.theme = next;
+          try { localStorage.setItem("gt-theme", next); } catch (_) {}
+        }
+        showTheme();
+      });
+    }
   }
   // The greeting follows the visitor's clock, so the server renders a neutral
   // text and the browser picks the time of day and the date.

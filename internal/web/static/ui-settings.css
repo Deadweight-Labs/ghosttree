@@ -17,7 +17,9 @@
   & .sh2 .acts { display: flex; gap: 8px; }
   & .setlayout > div > [hidden] { display: none !important; }
   & .ist { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; color: var(--attention-fg); }
-  & .ist.is-done { color: var(--success-fg); }
+  & .ist.is-done, & .ist.is-accepted { color: var(--success-fg); }
+  & .ist.is-revoked { color: var(--danger-fg); }
+  & .ist.is-expired { color: var(--fg-muted); }
   & .setlayout > div > .sh2:not(:first-child):not(.is-first) { margin-top: 32px; }
   & .setlayout > div > .box + .box { margin-top: 16px; }
   & .wrap > .box + .sh2 { margin-top: 32px; }
@@ -31,6 +33,25 @@
   & .flash.err > .i { color: var(--danger-fg); }
   & .flash.info { border-color: var(--accent-muted); background: var(--accent-subtle); }
   & .flash.info > .i { color: var(--accent-fg); }
+  /* The row an action changed. */
+  & .wrap > .box:has(+ .setlayout) { margin-bottom: 16px; }
+  & .row.hit { background: var(--success-subtle); box-shadow: inset 3px 0 0 var(--success-fg); }
+  /* Which organization is shown: a choice with a check, not a primary button. */
+  & .orgsw { display: inline-flex; justify-self: start; width: fit-content; flex-wrap: wrap; gap: 2px; max-width: 100%; padding: 2px; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; }
+  & .orgsw a { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 4px; color: var(--fg-default); font-size: 14px; white-space: nowrap; }
+  & .orgsw a:hover { background: var(--neutral-muted); text-decoration: none; }
+  & .orgsw a[aria-current] { background: var(--canvas-default); font-weight: 600; box-shadow: 0 0 0 1px var(--border-default); }
+  & .orgsw a[aria-current] .i { color: var(--success-fg); }
+  /* Role of an invitation: one line each says what it allows. */
+  & .invite { flex-wrap: wrap; }
+  & .invite .irole { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 24px; margin: 0; padding: 4px 0 0; border: 0; min-width: 0; }
+  & .invite .irole legend { float: left; margin-right: 12px; padding: 0; font-size: 12px; font-weight: 600; color: var(--fg-muted); line-height: 20px; }
+  & .invite .irc { display: flex; align-items: flex-start; gap: 8px; max-width: 320px; font-size: 14px; cursor: pointer; }
+  & .invite .irc input { margin-top: 3px; }
+  & .invite .irc > span { display: flex; flex-direction: column; }
+  & .invite .irc .muted { font-size: 12px; }
+  & .invite .irproj { display: none; align-items: center; gap: 8px; }
+  & .invite:has(input[value="guest"]:checked) .irproj { display: flex; }
   & .flash.att { border-color: var(--attention-muted); background: var(--attention-subtle); }
   & .flash.att > .i { color: var(--attention-fg); }
   & .flash code, & .callout code { font: 12px var(--ui-mono); padding: 1px 4px; background: var(--neutral-muted); border-radius: 4px; }
@@ -43,28 +64,61 @@
   & .mrow .acts select.gfield { max-width: 100%; }
   /* The role menus of all rows are equally wide, and the field, the tick and the button stay on one line */
   & .mrow .acts .selx { flex: none; width: 176px; }
+  /* Every project role of a person, below the name in the member list (REQ-704). */
+  & .mprojs { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  & .mproj { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 4px 8px; margin: 0 -8px; border-radius: 6px; }
+  & .mproj.hit { background: var(--success-subtle); box-shadow: inset 3px 0 0 var(--success-fg); }
+  & .mproj .mpname { display: inline-flex; align-items: center; gap: 6px; min-width: 8rem; color: var(--fg-muted); font-size: 13px; }
+  & .mproj .mpname .mono { color: var(--fg-default); }
+  & .mproj form { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; max-width: 100%; }
+  & .mproj .selx { flex: none; width: 220px; max-width: 100%; }
+  & .mprole { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+  & .invite .irc.off { cursor: default; }
+  & .invite .irc.off b { color: var(--fg-muted); }
+  & .invite .irc .needrole { margin-top: 2px; }
+  & .box > details.ipast > summary { font-weight: 400; color: var(--fg-muted); font-size: 14px; border-top: 1px solid var(--border-muted); }
   & .ghrow .gav.org, & .mrow .gav.org { border-radius: 6px; background: var(--canvas-default); color: var(--fg-default); }
   & .invite { display: flex; gap: 8px; align-items: center; padding: 12px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-default); border-radius: 6px 6px 0 0; }
   /* The name field grows to a sensible width and the role pill sits right behind it, not at the far edge */
   & .prow.pname { grid-template-columns: 120px minmax(0, 28rem) auto; justify-content: start; }
   & .prow.pname .inline-form { display: flex; min-width: 0; }
+  /* The retention of workflow runs is a number of days: a short field, the unit and the button right behind it */
+  & .prow.wfret { grid-template-columns: 240px 7rem auto auto; justify-content: start; }
+  /* The policy of the workflows: three cards, each with its heading; a choice names the workflows it concerns */
+  & .wfpol { display: grid; gap: 12px; }
+  & .wfcards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
+  & .wfcard { margin: 0; padding: 12px 16px 16px; min-width: 0; display: grid; gap: 10px; }
+  & .wfcard legend { font-weight: 600; font-size: 14px; padding: 0 4px; margin-left: -4px; }
+  & .wfchk { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; }
+  & .wfchk input { margin-top: 3px; flex: none; }
+  & .wfchk small { display: block; font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+  & .wfwarn { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0 0; font-size: 12px; color: var(--fg-muted); }
+  & .wfwarn svg { flex: none; margin-top: 1px; }
+  & .wfwarn.on { color: var(--attention-fg); }
+  & .wfpolact { display: flex; justify-content: flex-end; }
   & .inline-form .grow { flex: 1; }
   & .invite .gfield:first-child, & .invite .grow { flex: 1; }
   & .invite select.gfield { width: auto; }
   & .lnew { display: flex; gap: 8px; align-items: center; padding: 12px 16px; background: var(--canvas-subtle); }
   & .lnew .gfield:first-child, & .lnew .grow { flex: 1; }
+  /* The field to make a project has its label above it, the button stands on the line of the field. */
+  & .lnew.pnew { align-items: flex-end; }
+  /* .lnew stretches its fields along the row; inside the label column the field keeps its own height. */
+  & .lnew.pnew .fl .gfield { flex: none; }
   & .prow { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 8px 16px; }
   & .prow code, & .prow .mono { font: 12px var(--ui-mono); }
   & .trow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 24px; align-items: center; padding: 12px 16px; }
   & .mono.m { font-size: 13px; }
   & .row .nm { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
-  & .row .mt { display: flex; flex-wrap: wrap; gap: 0 12px; margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
-  & .row .mt > span + span::before { content: "·"; margin-right: 12px; color: var(--fg-subtle); }
+  & .row .mt, & .box-body .mt { display: flex; flex-wrap: wrap; gap: 0 12px; margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
+  & .row .mt > span + span::before, & .box-body .mt > span + span::before { content: "·"; margin-right: 12px; color: var(--fg-subtle); }
+  /* A pill is its own separator: the dot would stand inside it. */
+  & .row .mt > span.lb::before, & .box-body .mt > span.lb::before { content: none; }
   & .chk-l { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--fg-muted); white-space: nowrap; }
   & .chk-l input { width: 16px; height: 16px; accent-color: var(--accent-emphasis); }
   & .qs .chk-l { font-size: 14px; color: var(--fg-default); }
   & .fl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-  & .fl > span:first-child { font-size: 14px; font-weight: 600; color: var(--fg-default); }
+  & .fl > span:first-child, & .fl > label:first-child { font-size: 14px; font-weight: 600; color: var(--fg-default); }
   & .fl small { font-size: 12px; color: var(--fg-muted); }
   & .fl .gfield, & .fl select.gfield { width: 100%; background: var(--canvas-default); }
   & .box-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
@@ -209,10 +263,14 @@
 @media (max-width: 767px) {
   :is(.g2.set) {
     & .prow { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    & .prow.wfret { grid-template-columns: 7rem auto; }
+    & .prow.wfret > label, & .prow.wfret > button { grid-column: 1 / -1; }
     & .lrow { grid-template-columns: minmax(0, 1fr) auto; }
     & .lrow .mono { display: none; }
     & .trow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
     & .invite, & .lnew { flex-wrap: wrap; }
+    & .lnew.pnew .fl { flex: 1 1 100%; }
+    & .lnew.pnew .gbtn { flex: 1 1 100%; min-height: 44px; }
     & .snav a { min-height: 44px; }
     & .mrow, & .ghrow { grid-template-columns: 32px minmax(0, 1fr); }
     & .mrow .acts, & .ghrow .acts { grid-column: 2; justify-content: flex-start; }
@@ -232,6 +290,23 @@
 
 /* Profile as in the mock: a card at the left, agents and devices at the right */
 :is(.g2.pf) {
+  /* the answer to an action stands at its form; inside a box it keeps the box's margins */
+  & .pfnote { padding: 12px 16px 0; }
+  & .pfnote .flash, & .pwform > .flash { margin-bottom: 0; }
+  /* the password form is one left-aligned column under the address, not a row of the grid */
+  & .pfmail > * { box-sizing: border-box; width: 100%; max-width: none; }
+  & .pfmail > .row + .row, & .pfmail > .pfnote + .row, & .pfmail > .row + .pwform { border-top: 1px solid var(--border-muted); }
+  & .pfmail > .pend { grid-template-columns: minmax(0, 1fr) auto; }
+  & .pfmail > .inline-form { grid-template-columns: minmax(0, 28rem) auto; justify-content: start; }
+  & .pfmail > .pwform { gap: 12px; padding: 16px; border-top: 1px solid var(--border-muted); }
+  & .pfmail > .pwform > * { max-width: 28rem; }
+  & .pwform .ph3 { margin: 0; }
+  & .pwform .fl > span:first-child { display: block; margin-bottom: 4px; font-weight: 600; font-size: 14px; }
+  & .devnote > div { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  & .devnote p { margin: 0; }
+  & .devnote form { margin: 0; }
+  & .prow .lb.ok { display: inline-flex; align-items: center; gap: 4px; }
+  & .prow .lb.ok .i { width: 12px; height: 12px; }
   & .pgrid { display: grid; grid-template-columns: 296px minmax(0, 1fr); gap: 32px; align-items: start; }
   & .pav .gav { width: 296px; height: 296px; font-size: 104px; border-radius: 50%; }
   & .pn { margin: 16px 0; font-size: 24px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; }
@@ -252,7 +327,12 @@
   & .trow form { margin: 0; }
   /* the switch is a button, so it works without scripts: a click posts the other state */
   & button.tog { padding: 0; border: 0; background: none; color: var(--fg-default); font: inherit; font-size: 14px; font-weight: 500; }
-  & button.tog:disabled { cursor: default; opacity: .6; }
+  /* a switch a device session cannot move looks switched off, whatever its state */
+  & button.tog:disabled { cursor: not-allowed; opacity: 1; color: var(--fg-muted); }
+  & button.tog:disabled .tr { background: var(--canvas-subtle); border-color: var(--border-default); }
+  & button.tog:disabled .tr::after { background: var(--fg-subtle); }
+  & button.tog:disabled[aria-checked="true"] .tr { background: var(--canvas-subtle); border-color: var(--border-default); }
+  & button.tog:disabled[aria-checked="true"] .tr::after { background: var(--fg-subtle); transform: translateX(16px); }
   & button.tog[aria-checked="true"] .tr { background: var(--accent-emphasis); border-color: var(--accent-emphasis); }
   & button.tog[aria-checked="true"] .tr::after { transform: translateX(16px); background: #fff; }
   & button.tog:focus-visible .tr { outline: 2px solid var(--accent-emphasis); outline-offset: 2px; }
@@ -263,5 +343,107 @@
   :is(.g2.pf) {
     & .pgrid { grid-template-columns: minmax(0, 1fr); }
     & .pav .gav { width: 96px; height: 96px; font-size: 32px; }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) { :is(.g2.set) .flash.fly { animation-duration: .01s; } }
+
+/* AI connections (REQ-694): connections with their models and spend, the
+   forms to add or edit one, aliases, caps and the costs of the month. */
+:is(.g2.set) {
+  & .aih { margin: 24px 0 8px; font-size: 16px; font-weight: 600; }
+  & .aih .muted { font-weight: 400; font-size: 14px; }
+  & .aiconn { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 16px; }
+  & .aiconn .aitop { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  & .aiconn .mt { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; margin-top: 2px; }
+  & .aiconn .aiurl { overflow-wrap: anywhere; }
+  & .aimodels { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  & .ailoan { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; font-size: 14px; }
+  & .ailend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  & .ailend .gfield { max-width: 14rem; }
+  & .aiedit, & .ainew { margin-top: 8px; }
+  & .aiedit > summary, & .ainew > summary { list-style: none; display: inline-flex; gap: 6px; }
+  & .aiedit > summary::-webkit-details-marker, & .ainew > summary::-webkit-details-marker { display: none; }
+  & .aiedit form, & .ainew form { margin-top: 12px; }
+  & .ainew .flash { margin: 12px 0 0; }
+  & .aifoot { padding: 12px 16px; background: var(--canvas-subtle); }
+  & .aifoot .ainew { margin-top: 0; width: 100%; }
+  & .aigrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+  & .aigrid .aiwide { grid-column: 1 / -1; }
+  & .aigrid textarea.gfield { min-height: 72px; resize: vertical; font: 12px var(--ui-mono); padding: 6px 8px; }
+  & .aiact { display: flex; justify-content: flex-end; margin-top: 12px; }
+  & .aitab td, & .aitab th { vertical-align: middle; }
+  & .aitab .aiend { text-align: right; width: 1%; white-space: nowrap; }
+  & .aitab + .aitab { margin-top: 12px; }
+  & .aicost { table-layout: fixed; }
+  & .aicost th:first-child { width: 52%; }
+  & .aicost td:first-child { overflow-wrap: anywhere; }
+  & .aicost td:not(:first-child), & .aicost th:not(:first-child) { text-align: right; white-space: nowrap; }
+  & .aialias, & .aicaps { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; padding: 12px 16px; border-top: 1px solid var(--border-muted); background: var(--canvas-subtle); }
+  & .aialias .fl, & .aicaps .fl { flex: 1 1 9rem; }
+  & .aicaps:first-child { border-top: 0; }
+  & .airelease { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 16px; }
+  & .airelease fieldset { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; padding: 0; border: 0; min-width: 0; flex: 1; }
+  & .airelease .irc { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
+  & .box > .aitab { margin: 0; }
+  /* Reasons at the fields of the connection form */
+  & .fl small.bad { color: var(--danger-fg); font-size: 12px; }
+  & .gfield:has([aria-invalid="true"]) { border-color: var(--danger-emphasis); }
+  & .gfield:has([aria-invalid="true"]:focus) { box-shadow: inset 0 0 0 1px var(--danger-emphasis); }
+  & .gfield input[aria-invalid="true"], & .gfield input[aria-invalid="true"]:focus { border: 0; box-shadow: none; }
+  & .aimrows { display: grid; gap: 8px; }
+  & .aimhead, & .aimrow { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) 32px; gap: 8px; align-items: center; }
+  & .aimhead { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .aimrow .gfield { min-width: 0; }
+  & .aimrow .aimerr { grid-column: 1 / -1; }
+  & .aimrow.bad .gfield { border-color: var(--danger-emphasis); }
+  & .aimodels-f > div:has(> [data-addrow]) { margin-top: 2px; }
+  /* The outcome of "Test connection" on the card of a connection */
+  & .aitest { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border-default); border-radius: 6px; font-size: 14px; }
+  & .aitest > svg { flex: none; margin-top: 2px; }
+  & .aitest.ok { background: var(--success-subtle); border-color: var(--success-muted); }
+  & .aitest.ok > svg { color: var(--success-fg); }
+  & .aitest.bad { background: var(--danger-subtle); border-color: var(--danger-muted); }
+  & .aitest.bad > svg { color: var(--danger-fg); }
+  & .aitest .aidetail { margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; }
+  & .aitest .aiat { font-size: 12px; margin-top: 2px; }
+  & .aiconn .acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: flex-start; }
+  /* Release of the server's connections: one cap per organization */
+  & .aigrantcap { display: flex; gap: 8px; align-items: center; }
+  & .aigrantcap .gfield { width: 10rem; }
+  & .aigrants th:nth-child(2), & .aigrants td:nth-child(2) { width: 1%; white-space: nowrap; }
+}
+@media (max-width: 767px) {
+  :is(.g2.set) {
+    /* One column: the edit form of a connection lives in the first one, and beside the buttons it was 170 px wide. */
+    & .aiconn { grid-template-columns: minmax(0, 1fr); }
+    & .aiconn .acts { justify-content: flex-start; }
+    & .aiconn > .gav { display: none; }
+    & .aigrid { grid-template-columns: minmax(0, 1fr); }
+    & .wfcards { grid-template-columns: minmax(0, 1fr); }
+    & .aimhead { display: none; }
+    /* Without the column heads the price fields name themselves, in the field, like "To:" in the composer. */
+    & .aimrow > .gfield[data-l]::before { content: attr(data-l); flex: none; margin-right: 6px; color: var(--fg-muted); font-size: 13px; }
+    & .aimrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
+    & .aimrow > .gfield:first-child { grid-column: 1 / -1; }
+    & .aimrow > button { grid-column: 3; grid-row: 2; }
+    & .airelease fieldset { flex: 1 1 100%; flex-direction: column; }
+    & .airelease .fl { flex: 1 1 100%; }
+    & .box > .aitab:not(.aigrants) { display: block; overflow-x: auto; }
+    & .aigrants, & .aigrants tbody { display: block; }
+    & .aigrants thead { display: none; }
+    & .aigrants tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 12px 16px; border-top: 1px solid var(--border-muted); }
+    & .aigrants td { display: block; padding: 0; width: auto; border: 0; white-space: normal; }
+    & .aigrants td:nth-child(1) { grid-column: 1; grid-row: 1; }
+    & .aigrants td:nth-child(2) { grid-column: 1 / -1; grid-row: 2; width: auto; }
+    & .aigrants td:nth-child(3) { grid-column: 1 / -1; grid-row: 3; }
+    & .aigrants td:nth-child(4) { grid-column: 2; grid-row: 1; }
+    & .aigrantcap { flex-wrap: wrap; }
+    & .aigrantcap .gfield { flex: 1 1 8rem; width: auto; }
+    & .aitest { padding: 8px; }
+    & .aialias .fl, & .aicaps .fl { flex: 1 1 100%; }
+    & .aialias .gbtn, & .aicaps .gbtn, & .airelease .gbtn { flex: 1 1 100%; min-height: 44px; }
+    & .aicost th:nth-child(3), & .aicost td:nth-child(3) { display: none; }
+    & .aicost th:first-child { width: 60%; }
   }
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -36,6 +37,13 @@ func (a *app) refsLookup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
+	}
+	// "issue:12" is the issue 12 of the project of the page and no other: the numbers of issues are
+	// those of the whole server, a #12 in the text of a repository means its own.
+	for i, raw := range refs {
+		if i < len(list) && list[i].Gefunden && strings.HasPrefix(strings.ToLower(raw), "issue:") && !a.requestIn(list[i].Nummer, project) {
+			list[i] = links.Missing(raw)
+		}
 	}
 	found := false
 	for i := range list {
@@ -81,4 +89,13 @@ type refEntry struct {
 	links.Info
 	Status string `json:"status,omitempty"`
 	Label  string `json:"label,omitempty"`
+}
+
+// requestIn says whether the issue n lies in the project (the lookup has read it as the viewer already).
+func (a *app) requestIn(n int64, project string) bool {
+	if project == "" {
+		return false
+	}
+	d, err := a.store.RequestByID(n)
+	return err == nil && d.Request.Scope.Project == project
 }

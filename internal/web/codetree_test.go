@@ -219,7 +219,13 @@ func TestCodeTabOfAHiddenProjectAnswersLikeAnUnknownOne(t *testing.T) {
 		for _, tail := range []string{"", "/tree/main", "/tree/main/internal", "/blob/main/internal/store/gitanchor.go", "/tree/feat/git-native/internal"} {
 			hs, hp := fetchPage(t, c, e.Base+"/ui/x/hidden"+tail)
 			us, up := fetchPage(t, c, e.Base+"/ui/x/nothere"+tail)
-			if hs != http.StatusNotFound || us != http.StatusNotFound || hp != up {
+			// A member of the organization is told why (403); a guest cannot tell the
+			// project from one that does not exist.
+			wantHidden := http.StatusNotFound
+			if name == "member" {
+				wantHidden = http.StatusForbidden
+			}
+			if hs != wantHidden || us != http.StatusNotFound || (name == "guest" && hp != up) {
 				t.Errorf("%s: %q hidden=%d unknown=%d same=%v", name, tail, hs, us, hp == up)
 			}
 			if strings.Contains(hp, "gitanchor") || strings.Contains(hp, "server code") {
@@ -262,7 +268,7 @@ func TestCodeTabShowsWhoWorkedOnAPathAsFarAsTheViewerMaySee(t *testing.T) {
 	// The session is private to its owner, the instance owner: nobody else sees a
 	// row for it, not even a member.
 	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/blob/main/internal/store/gitanchor.go")
-	if !strings.Contains(owner, "Last worked on here") || !strings.Contains(owner, "claude@laptop") {
+	if !strings.Contains(owner, "Last worked on here") || !strings.Contains(owner, "Claude@laptop") {
 		t.Errorf("owner does not see the work:\n%s", owner)
 	}
 	_, member := fetchPage(t, e.Member, e.Base+"/ui/x/shell/blob/main/internal/store/gitanchor.go")

@@ -84,7 +84,7 @@ type agentRow struct {
 	ProjectTitle string
 	// Owner is the account name of whoever runs the agent, as far as the viewer
 	// may know it. Presence is the one state the row shows, text and dot alike:
-	// work, wait_you, wait_other, stuck, idle or off. PresenceText is its words.
+	// work, wait_you, wait_other, wait_reply, stuck, idle, ended or off. PresenceText is its words.
 	Owner, Presence, PresenceText string
 	// RequestID and RequestRef name the request the agent works on, only where
 	// the viewer may read it (AgentWorkFor).
@@ -208,7 +208,7 @@ func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/inbox", http.StatusFound)
 		return
 	}
-	data := pageData{Title: l.msg("overview.title")}
+	data := pageData{Title: l.msg("overview.title"), Welcome: a.welcomeCards(r, l)}
 	if r.URL.Query().Get("connect") == "" {
 		data.Refresh = setupRefreshSeconds
 	}
@@ -310,15 +310,18 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 		var life time.Time
 		activity, flag, neutral := "", "", ""
 		workState, workAt := "", time.Time{}
+		reach := ""
 		if p := peer.Presence; p != nil {
 			workState, workAt = p.WorkState.Value, parseTime(p.WorkState.At)
+			reach = p.Reachability.Value
 			// Only evidence that the agent itself is there counts as a sign of
 			// life: a poll, or tool calls seen in its transcript. A message
-			// sent to or from it, or a wait derived from one, does not.
+			// sent to or from it, or a wait derived from one, does not. A turn
+			// that ended a moment ago counts too: the agent is there and waits.
 			if p.Reachability.Value == store.ReachConnected {
 				life = parseTime(p.Reachability.At)
 			}
-			if p.WorkState.Value == store.WorkWorking || p.WorkState.Value == store.WorkPaused {
+			if p.WorkState.Value == store.WorkWorking || p.WorkState.Value == store.WorkPaused || p.WorkState.Value == store.WorkAwaitingReply {
 				if t := parseTime(p.WorkState.At); t.After(life) {
 					life = t
 				}
@@ -357,10 +360,10 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 		if life.After(signal) {
 			signal = life
 		}
-		presence := agentPresence(state, flag, workState)
+		presence := agentPresence(state, flag, workState, reach)
 		out = append(out, ranked{agentRow{Owner: store.NormalizeAccountName(peer.Owner), Presence: presence, PresenceText: agentStateText(l, presence, workState, now, workAt), Name: peerName(l, peer), BareName: peerName(l, peer), Flag: flag, Project: coordShortRoomName(store.RoomProject, remote), ProjectTitle: remote,
 			Activity: activity, State: state, StateText: stateLabel(l, state), Age: shortAge(l, now, signal),
-			ExternalID: peer.ExternalID, RoomKey: store.RoomKeyForProject(remote), Machine: hostUnlessNamed(peerName(l, peer), agentMachine(peer.ExternalID)), Branch: peer.Branch, Provider: peer.Provider, WorkNote: peer.WorkNote}, signal})
+			ExternalID: peer.ExternalID, RoomKey: store.RoomKeyForProject(remote), Machine: peerMachine(peer), Branch: peer.Branch, Provider: peer.Provider, WorkNote: peer.WorkNote}, signal})
 	}
 	access := a.browserCoord(r)
 	remotes := slices.Sorted(slices.Values(pa.Projects()))
@@ -463,12 +466,15 @@ func agentShortTag(externalID string) string {
 	return b.String()
 }
 
-// hostUnlessNamed drops the host when the name already carries it.
-func hostUnlessNamed(name, host string) string {
-	if strings.Contains(name, host) {
-		return ""
+// peerMachine is the machine an agent runs on: the name it reported when it
+// signed in (the one of ctx login --machine), else the host in its id. The name
+// of the agent carrying the machine too is no reason to leave it out, or a
+// profile files the agent under "unknown machine".
+func peerMachine(peer store.CoordAgent) string {
+	if m := store.CleanMachine(peer.Machine); m != "" {
+		return m
 	}
-	return host
+	return agentMachine(peer.ExternalID)
 }
 
 // peerName is how a person reads an agent: "Claude · Robin · mainex" (tool,
@@ -573,8 +579,11 @@ func providerLabel(l lang, provider, externalID string) string {
 // agentPresence is the one state a home row shows. The dot and the words both
 // come from it, so they cannot disagree: a row that says "Waiting on you" never
 // carries the green dot of "working".
-func agentPresence(state, flag, workState string) string {
+func agentPresence(state, flag, workState, reach string) string {
 	switch {
+	case reach == store.ReachEnded:
+		// The session said goodbye: whatever was open before no longer gets an answer.
+		return "ended"
 	case flag == store.WorkWaitingUser:
 		return "wait_you"
 	case flag == store.WorkStuck:
@@ -586,6 +595,8 @@ func agentPresence(state, flag, workState string) string {
 		switch workState {
 		case store.WorkWaitingUser, store.WorkWaitingPeer, store.WorkBlocked:
 			return "wait_other"
+		case store.WorkAwaitingReply:
+			return "wait_reply"
 		}
 		return "work"
 	case state == "idle":
@@ -614,6 +625,10 @@ func agentStateText(l lang, presence, workState string, now, at time.Time) strin
 			return l.msg("ov.work.stuck")
 		}
 		return l.msg("home.state.stuck_since", shortAge(l, now, at))
+	case "wait_reply":
+		return l.msg("ov.work.awaiting_reply")
+	case "ended":
+		return l.msg("ov.state.ended")
 	case "idle":
 		return l.msg("ov.state.idle")
 	}
@@ -654,6 +669,8 @@ func workLabel(l lang, v string) string {
 		return l.msg("ov.work.blocked")
 	case store.WorkPaused:
 		return l.msg("ov.work.paused")
+	case store.WorkAwaitingReply:
+		return l.msg("ov.work.awaiting_reply")
 	case store.WorkStuck:
 		return l.msg("ov.work.stuck")
 	}
@@ -845,6 +862,8 @@ func (a *app) deviceTokens(r *http.Request) ([]store.TokenInfo, error) {
 // from recently, otherwise the time it was last seen.
 type machineRow struct {
 	Name, State, StateText, Age string
+	// Href is the page of the machine; it is the viewer's own device.
+	Href string
 }
 
 // ownMachines folds the viewer's device tokens to one row per machine, newest
@@ -880,7 +899,7 @@ func ownMachines(l lang, tokens []store.TokenInfo, now time.Time) []machineRow {
 	})
 	rows := make([]machineRow, 0, len(list))
 	for _, m := range list {
-		row := machineRow{Name: m.name, State: "active", StateText: l.msg("machine.connected"), Age: shortAge(l, now, m.at)}
+		row := machineRow{Name: m.name, Href: machineHrefOf(m.name), State: "active", StateText: l.msg("machine.connected"), Age: shortAge(l, now, m.at)}
 		if now.Sub(m.at) > agentActiveWithin {
 			row.State, row.StateText = "idle", l.msg("machine.last_seen", shortAgo(l, now, m.at))
 		}

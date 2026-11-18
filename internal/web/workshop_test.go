@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -54,8 +55,15 @@ func TestIdeaWithoutWorkshopShowsNoWorkshop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, page := fetchPage(t, e.Owner, e.Base+ideaPath(i)); strings.Contains(page, `id="workshop"`) {
-		t.Error("an idea nobody worked out shows a workshop")
+	// The guest reads only: nothing to work with, so no workshop. Whoever may work gets one line and the way in (REQ-709).
+	if _, page := fetchPage(t, e.Guest, e.Base+ideaPath(i)); strings.Contains(page, `id="workshop"`) {
+		t.Error("an idea nobody worked out shows a workshop to a guest")
+	}
+	_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+	for _, want := range []string{`id="workshop"`, "Nothing worked out yet.", "Write the concept", "Open a decision", "Add raw text", "Write a summary", "?panel=concept#ws-panel"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("a plain idea gives the owner no way in: lacks %q", want)
+		}
 	}
 }
 
@@ -70,9 +78,15 @@ func TestWorkshopShowsTheConceptAndTheVariantsSideBySideWithTheRightFormsPerRole
 		"A spoken answer shows up as text in the thread", "Summary", "Answer questions by speaking", "Raw version, 1 in all", "Meeting 2026-11-08",
 		"DEC-" + strconv.FormatInt(d.ID, 10), "Where does the speech turn into text?", "Privacy and cost differ.", "A person decides", "1 open", "On the device", "On the server", "Nothing leaves the machine.", "Quality depends on the browser.", "For", "Against",
 		`class="ws-vars"`, `type="radio" name="variant" value="A"`, `type="radio" name="variant" value="B"`, `action="/ui/decisions/` + strconv.FormatInt(d.ID, 10) + `/close"`,
-		`formaction="/ui/decisions/` + strconv.FormatInt(d.ID, 10) + `/vote"`, "Decide", "Vote", "Start the discussion", `action="/ui/ideas/` + strconv.FormatInt(i.ID, 10) + `/phase"`, "Approve version 1", "Raw idea", "In discussion"} {
+		`formaction="/ui/decisions/` + strconv.FormatInt(d.ID, 10) + `/vote"`, "Decide", "Vote", "Start the discussion", `action="/ui/ideas/` + strconv.FormatInt(i.ID, 10) + `/phase"`, "Raw idea", "In discussion"} {
 		if !strings.Contains(owner, want) {
 			t.Errorf("owner's workshop lacks %q", want)
+		}
+	}
+	// Only the step that fits the phase is offered (S11): in the concept phase the discussion starts, it is neither closed nor approved.
+	for _, not := range []string{`value="close"`, `value="approve"`, "Approve version"} {
+		if strings.Contains(owner, not) {
+			t.Errorf("the concept phase offers %q", not)
 		}
 	}
 	// A member may vote but not decide; nobody who may not work gets a form at all.
@@ -89,7 +103,7 @@ func TestWorkshopShowsTheConceptAndTheVariantsSideBySideWithTheRightFormsPerRole
 	if !strings.Contains(guest, "On the device") || !strings.Contains(guest, "On the server") {
 		t.Error("a guest cannot compare the variants")
 	}
-	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/ideas/"+strconv.FormatInt(i.ID, 10)); code != http.StatusNotFound {
+	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/ideas/"+strconv.FormatInt(i.ID, 10)); code != http.StatusForbidden {
 		t.Errorf("idea under a foreign project = %d", code)
 	}
 }
@@ -242,6 +256,16 @@ func TestOwnerStartsTheDiscussionApprovesTheConceptAndTakesItBack(t *testing.T) 
 	if _, failed := fetchPage(t, e.Owner, e.Base+ideaPath(i)+"?wfail=concept_changed"); !strings.Contains(failed, "The concept changed while you were reading.") {
 		t.Error("the stale approval is not told")
 	}
+	// Closing the discussion with a question open asks first; the answer closes it, and only then is approving offered.
+	if resp := post(e.Owner, url.Values{"mode": {"close"}}); !strings.Contains(resp.Header.Get("Location"), "wask=close") {
+		t.Fatalf("closing with an open question -> %q, want the question first", resp.Header.Get("Location"))
+	}
+	if got, _ := pa.IdeaView(i.ID); got.Phase != idea.PhaseDiscussion {
+		t.Fatalf("the question did not hold the close: %s", got.Phase)
+	}
+	if resp := post(e.Owner, url.Values{"mode": {"close"}, "confirm": {"1"}}); !strings.Contains(resp.Header.Get("Location"), "wdone=close") {
+		t.Fatalf("close -> %q", resp.Header.Get("Location"))
+	}
 	_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
 	if !strings.Contains(page, `name="revision" value="2"`) || !strings.Contains(page, "Approve version 2") {
 		t.Error("the form does not offer the newest version")
@@ -263,5 +287,168 @@ func TestOwnerStartsTheDiscussionApprovesTheConceptAndTakesItBack(t *testing.T) 
 	}
 	if got, _ := pa.IdeaView(i.ID); got.Phase != idea.PhaseDiscussion {
 		t.Errorf("phase after withdrawing = %s", got.Phase)
+	}
+}
+
+// REQ-688 AC-3 (N14): Decide answers at the decision, in the page's language, and without the
+// browser's own bubble; once a person decided, the card says who and not "The agent decides";
+// voting on a closed question explains itself.
+func TestDecideAnswersAtTheDecisionAndSaysWhoDecided(t *testing.T) {
+	e, pa := listEnv(t)
+	i, d := workedIdea(t, pa, shellProject)
+	id := strconv.FormatInt(d.ID, 10)
+	post := func(c *http.Client, path string, form url.Values) *http.Response {
+		form.Set("csrf_token", renderedCSRFToken(t, c, e.Base+"/ui/overview"))
+		resp := sameOriginPostForm(t, c, e.Base+path, form)
+		resp.Body.Close()
+		return resp
+	}
+	_, open := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+	if strings.Contains(open, `name="reason" maxlength="500" required`) {
+		t.Error("the reason field has the browser's own bubble (required), which says nothing in the page's language")
+	}
+	if !strings.Contains(open, "The agent decides") && !strings.Contains(open, "A person decides") {
+		t.Errorf("an open decision names how it is decided")
+	}
+	// A refusal stands at the decision.
+	resp := post(e.Owner, "/ui/decisions/"+id+"/close", url.Values{"variant": {"B"}, "reason": {""}})
+	loc := resp.Header.Get("Location")
+	if !strings.Contains(loc, "wfail=reason_required") || !strings.HasSuffix(loc, "#decision-"+id) || !strings.Contains(loc, "wdec="+id) {
+		t.Fatalf("no reason -> %q, want the refusal at the decision", loc)
+	}
+	_, failed := fetchPage(t, e.Owner, e.Base+strings.TrimSuffix(loc, "#decision-"+id))
+	card := failed[strings.Index(failed, `id="decision-`+id+`"`):]
+	if !strings.Contains(card[:strings.Index(card, "</article>")], "Say why.") {
+		t.Errorf("the refusal is not inside the card of the decision")
+	}
+	// A decision is confirmed at the card as well, and names the person.
+	resp = post(e.Owner, "/ui/decisions/"+id+"/close", url.Values{"variant": {"B"}, "reason": {"Same quality everywhere"}})
+	loc = resp.Header.Get("Location")
+	_, done := fetchPage(t, e.Owner, e.Base+strings.TrimSuffix(loc, "#decision-"+id))
+	card = done[strings.Index(done, `id="decision-`+id+`"`):]
+	card = card[:strings.Index(card, "</article>")]
+	for _, want := range []string{"Decision saved.", "Decided by alice"} {
+		if !strings.Contains(card, want) {
+			t.Errorf("the closed card lacks %q", want)
+		}
+	}
+	if strings.Contains(card, "The agent decides") {
+		t.Errorf("a decision a person made still says the agent decides")
+	}
+	if !strings.Contains(card, "Voting ended with the decision") {
+		t.Errorf("a member who can no longer vote is not told why")
+	}
+}
+
+// The vote an agent casts for a person is that person's vote: the card opens with it picked, and a vote
+// the person casts themselves wins over it (REQ-700).
+func TestWorkshopPreselectsTheVoteOfThePersonOrOfTheirAgent(t *testing.T) {
+	e, pa := listEnv(t)
+	i, d := workedIdea(t, pa, shellProject)
+	checked := func() string {
+		_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+		start := strings.Index(page, `class="ws-vars`)
+		cards := page[start : start+strings.Index(page[start:], `id="ws-f-`)]
+		var got []string
+		for _, m := range regexp.MustCompile(`value="([A-Z])" checked`).FindAllStringSubmatch(cards, -1) {
+			got = append(got, m[1])
+		}
+		return strings.Join(got, ",")
+	}
+	if got := checked(); got != "" {
+		t.Fatalf("without a vote %q is picked", got)
+	}
+	if _, err := pa.VoteDecision(d.ID, "B", "Same quality everywhere", idea.Actor{AccountID: 1, Person: "alice", Agent: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := checked(); got != "B" {
+		t.Errorf("the vote of the person's agent picks %q, want B", got)
+	}
+	if _, err := pa.VoteDecision(d.ID, "A", "Nothing leaves the machine", humanActor); err != nil {
+		t.Fatal(err)
+	}
+	if got := checked(); got != "A" {
+		t.Errorf("the person's own vote picks %q, want A", got)
+	}
+	// Somebody else's vote picks nothing for the owner.
+	if _, err := pa.VoteDecision(d.ID, "B", "Cheaper", idea.Actor{AccountID: 2, Person: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := checked(); got != "A" {
+		t.Errorf("a vote of another person changes the pick to %q", got)
+	}
+}
+
+// Four variants stand one below the other, three side by side; the picture of a variant is attached in its
+// card; the anchor of the decision stays once on the page (REQ-700).
+func TestWorkshopStacksFourVariantsAndAttachesPicturesInTheCard(t *testing.T) {
+	e, pa := listEnv(t)
+	i, d := workedIdea(t, pa, shellProject)
+	id := strconv.FormatInt(d.ID, 10)
+	_, three := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+	if !strings.Contains(three, `class="ws-vars"`) || strings.Contains(three, "ws-vars stack") {
+		t.Error("two variants must stay side by side")
+	}
+	for _, title := range []string{"Hybrid", "Ask each time"} {
+		if _, err := pa.AddVariant(d.ID, idea.VariantInput{Title: title, Text: "Another way.", Pro: "Fast.", Contra: "Costly."}, humanActor); err != nil {
+			t.Fatal(err)
+		}
+		_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+		if title == "Hybrid" && strings.Contains(page, "ws-vars stack") {
+			t.Error("three variants must stay side by side")
+		}
+		if title == "Ask each time" && !strings.Contains(page, `class="ws-vars stack"`) {
+			t.Error("four variants must stand one below the other")
+		}
+	}
+	_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+	cards := page[strings.Index(page, `class="ws-vars stack"`):]
+	cards = cards[:strings.Index(cards, `id="ws-f-`+id+`"`)]
+	if n := strings.Count(cards, `class="ws-up"`); n != 4 {
+		t.Errorf("%d forms that attach a picture inside the cards, want one per variant (4)", n)
+	}
+	if n := strings.Count(cards, `<label class="ws-pick">`); n != 4 {
+		t.Errorf("%d clickable cards, want 4", n)
+	}
+	// Under the cards: why, own answer, vote and decide, without a picker for a picture.
+	panel := page[strings.Index(page, `id="ws-f-`+id+`"`):]
+	panel = panel[:strings.Index(panel, "</form>")]
+	for _, want := range []string{"Why this one?", "Or give your own answer", ">Vote<", ">Decide<"} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("the choice panel lacks %q", want)
+		}
+	}
+	if strings.Contains(panel, "<select") || strings.Contains(panel, `type="file"`) {
+		t.Error("the choice panel carries the picture picker")
+	}
+	if n := strings.Count(page, `id="decision-`+id+`"`); n != 1 {
+		t.Errorf("%d anchors for the decision, want 1", n)
+	}
+}
+
+// The top of the workshop says what the idea brings (the summary) and where things stand (REQ-700).
+func TestWorkshopTopShowsSummaryAndStand(t *testing.T) {
+	e, pa := listEnv(t)
+	i, d := workedIdea(t, pa, shellProject)
+	_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+	top := page[strings.Index(page, `class="box-r ws-sec ws-tldr"`):]
+	top = top[:strings.Index(top, "</dl>")]
+	for _, want := range []string{"Answer questions by speaking", "1 of 1 decisions open", `href="#decision-` + strconv.FormatInt(d.ID, 10) + `"`, "Where does the speech turn into text?"} {
+		if !strings.Contains(top, want) {
+			t.Errorf("the top of the workshop lacks %q: %s", want, top)
+		}
+	}
+	// Nothing made up: no summary, no text of it; the stand stays.
+	j, err := pa.CreateIdea(store.CreateIdeaInput{Project: shellProject, Title: "No summary yet", Actor: humanActor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pa.OpenDecision(store.OpenDecisionInput{Subject: idea.SubjectIdea, SubjectID: j.ID, Question: "Which one?", Aspects: []string{idea.AspectProduct}, Actor: agentActor,
+		Variants: []idea.VariantInput{{Title: "One"}, {Title: "Two"}}}); err != nil {
+		t.Fatal(err)
+	}
+	_, bare := fetchPage(t, e.Owner, e.Base+ideaPath(j))
+	if !strings.Contains(bare, "1 of 1 decisions open") || strings.Contains(bare, ">Summary<") {
+		t.Errorf("an idea without a summary shows a summary or lacks the stand")
 	}
 }

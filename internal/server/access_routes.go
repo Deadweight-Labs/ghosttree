@@ -46,6 +46,7 @@ var accessRoutes = map[string]routeClass{
 	"GET /metrics":                                classPublic,
 	"GET /api/whoami":                             classAccount,
 	"DELETE /api/tokens/self":                     classAccount,
+	"POST /api/auth/web-login":                    classAccount,
 	"POST /api/auth/device":                       classPublic,
 	"POST /api/auth/device/token":                 classPublic,
 	"POST /api/join/claim":                        classPublic,
@@ -304,6 +305,11 @@ func denyAccess(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, store.ErrAccessNotFound):
 		writeCoded(w, http.StatusNotFound, "not_found", "not found")
 	case errors.Is(err, store.ErrAccessForbidden):
+		var need *store.RoleNeeded
+		if errors.As(err, &need) {
+			writeRoleNeeded(w, need)
+			return true
+		}
 		writeCoded(w, http.StatusForbidden, "forbidden", "your role in this project does not allow that")
 	default:
 		return false

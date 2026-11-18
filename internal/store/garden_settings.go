@@ -61,8 +61,11 @@ type GardenSettings struct {
 	BudgetRun float64  `json:"budget_run_usd"`
 	BudgetMon float64  `json:"budget_month_usd"`
 	Rules     []string `json:"rules"`
-	UpdatedBy int64    `json:"updated_by,omitempty"`
-	UpdatedAt string   `json:"updated_at,omitempty"`
+	// ModelAlias is the model alias of the owner the gardener's runs use
+	// (REQ-695); empty keeps the server's model.
+	ModelAlias string `json:"model_alias,omitempty"`
+	UpdatedBy  int64  `json:"updated_by,omitempty"`
+	UpdatedAt  string `json:"updated_at,omitempty"`
 }
 
 // DefaultGardenSettings is what a namespace gets when the gardener is first
@@ -86,6 +89,8 @@ type GardenRun struct {
 	Proposals  int     `json:"proposals"`
 	CostUSD    float64 `json:"cost_usd"`
 	Note       string  `json:"note,omitempty"`
+	// WorkflowRunID is the same run in the tab Workflows (REQ-695).
+	WorkflowRunID int64 `json:"workflow_run_id,omitempty"`
 }
 
 // GardenJob is a namespace whose gardener is due, with what the run may do.
@@ -98,7 +103,42 @@ type GardenJob struct {
 	// SpentMon is what the namespace's runs reported this month so far; the
 	// runner checks the rest of the month before each repository.
 	SpentMon float64 `json:"spent_month_usd"`
+	// ModelAlias is the alias the owner chose for the gardener (REQ-695).
+	ModelAlias string `json:"model_alias,omitempty"`
 }
+
+// GardenAI is how a run of the gardener reaches its model through the model
+// proxy (REQ-695): the proxy's address on this machine, a token that holds
+// only while the run is running, the alias the owner chose, and the prices of
+// the model the alias stands for (USD per million tokens), which the runner
+// enforces its budget with.
+type GardenAI struct {
+	BaseURL    string  `json:"base_url"`
+	Token      string  `json:"token"`
+	Model      string  `json:"model"`
+	Connection string  `json:"connection"`
+	InUSD      float64 `json:"in_usd_per_mtok"`
+	OutUSD     float64 `json:"out_usd_per_mtok"`
+}
+
+// GardenRunStart is the answer to the start of a gardener run: its id and,
+// when the namespace has a model for the gardener behind the proxy, the way to
+// it. Without one Fallback says why, and the runner uses its llm.json.
+type GardenRunStart struct {
+	ID       int64     `json:"id"`
+	AI       *GardenAI `json:"ai,omitempty"`
+	Fallback string    `json:"ai_fallback,omitempty"`
+}
+
+// The reasons a gardener run falls back to llm.json.
+const (
+	GardenAIProxyOff    = "proxy_off"
+	GardenAINoAlias     = "no_alias"
+	GardenAIUnavailable = "unavailable"
+	GardenAIBudget      = "budget"
+	GardenAIFormat      = "format"
+	GardenAINoPrice     = "no_price"
+)
 
 // GardenAuto is one automatic approval: which rule, which proposal, what it
 // changed (before and after), on whose authority, and whether it was undone.
@@ -156,15 +196,22 @@ CREATE TRIGGER IF NOT EXISTS garden_auto_log_no_delete BEFORE DELETE ON garden_a
 `
 
 func ensureGardenSettings(db *sql.DB) error {
-	_, err := db.Exec(gardenSettingsSchema)
-	return err
+	if _, err := db.Exec(gardenSettingsSchema); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "garden_runs", "workflow_run_id", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	// The model alias the gardener's runs use (REQ-695); empty keeps the
+	// server's model.
+	return addColumnIfMissing(db, "garden_settings", "model_alias", "TEXT NOT NULL DEFAULT ''")
 }
 
 func scanGardenSettings(r rowScanner) (GardenSettings, error) {
 	var g GardenSettings
 	var enabled int
 	var repos, rules string
-	if err := r.Scan(&g.OrgID, &enabled, &g.Frequency, &g.AtMinute, &g.Weekday, &repos, &g.BudgetRun, &g.BudgetMon, &rules, &g.UpdatedBy, &g.UpdatedAt); err != nil {
+	if err := r.Scan(&g.OrgID, &enabled, &g.Frequency, &g.AtMinute, &g.Weekday, &repos, &g.BudgetRun, &g.BudgetMon, &rules, &g.UpdatedBy, &g.UpdatedAt, &g.ModelAlias); err != nil {
 		return GardenSettings{}, err
 	}
 	g.Enabled = enabled == 1
@@ -182,7 +229,7 @@ func gardenLines(s string) []string {
 	return out
 }
 
-const gardenSettingsCols = `org_id, enabled, frequency, at_minute, weekday, repos, budget_run_usd, budget_month_usd, rules, updated_by, updated_at`
+const gardenSettingsCols = `org_id, enabled, frequency, at_minute, weekday, repos, budget_run_usd, budget_month_usd, rules, updated_by, updated_at, model_alias`
 
 func gardenSettingsTx(q rowQuerier, orgID int64) (GardenSettings, bool) {
 	g, err := scanGardenSettings(q.QueryRow(`SELECT `+gardenSettingsCols+` FROM garden_settings WHERE org_id=?`, orgID))
@@ -229,12 +276,12 @@ func (s *Store) SetGardenSettings(actorPrincipal string, in GardenSettings) erro
 	if old, ok := gardenSettingsTx(tx, in.OrgID); ok && old.Enabled {
 		before = old.Repos
 	}
-	_, err = tx.Exec(`INSERT INTO garden_settings(`+gardenSettingsCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+	_, err = tx.Exec(`INSERT INTO garden_settings(`+gardenSettingsCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(org_id) DO UPDATE SET enabled=excluded.enabled, frequency=excluded.frequency, at_minute=excluded.at_minute,
 		weekday=excluded.weekday, repos=excluded.repos, budget_run_usd=excluded.budget_run_usd, budget_month_usd=excluded.budget_month_usd,
-		rules=excluded.rules, updated_by=excluded.updated_by, updated_at=excluded.updated_at`,
+		rules=excluded.rules, updated_by=excluded.updated_by, updated_at=excluded.updated_at, model_alias=excluded.model_alias`,
 		in.OrgID, boolInt(in.Enabled), in.Frequency, in.AtMinute, in.Weekday, strings.Join(in.Repos, "\n"), in.BudgetRun, in.BudgetMon,
-		strings.Join(in.Rules, "\n"), actor, now())
+		strings.Join(in.Rules, "\n"), actor, now(), in.ModelAlias)
 	if err != nil {
 		return err
 	}
@@ -346,6 +393,15 @@ func checkGardenSettingsTx(q rowQuerier, in *GardenSettings) error {
 		}
 	}
 	in.Rules = rules
+	if in.ModelAlias = strings.TrimSpace(in.ModelAlias); in.ModelAlias != "" {
+		// The alias has to be one the owner's runs can use: its own, or the
+		// server's.
+		var n int
+		_ = q.QueryRow(`SELECT COUNT(*) FROM ai_aliases WHERE alias=? AND ((level='owner' AND org_id=?) OR level='server')`, in.ModelAlias, in.OrgID).Scan(&n)
+		if n == 0 {
+			return fmt.Errorf("%w: unknown model alias %q", ErrGardenSettings, in.ModelAlias)
+		}
+	}
 	var repos []string
 	for _, r := range in.Repos {
 		var orgID int64
@@ -426,7 +482,7 @@ func (s *Store) GardenDue(t time.Time) ([]GardenJob, error) {
 		if err != nil {
 			continue
 		}
-		job := GardenJob{OrgID: g.OrgID, Slug: o.Slug, BudgetRun: g.BudgetRun, BudgetMon: g.BudgetMon, SpentMon: spent}
+		job := GardenJob{OrgID: g.OrgID, Slug: o.Slug, BudgetRun: g.BudgetRun, BudgetMon: g.BudgetMon, SpentMon: spent, ModelAlias: g.ModelAlias}
 		gardener := s.GardenerAccountID()
 		rr, err := s.db.Query(`SELECT remote FROM projects WHERE org_id=? AND archived_at='' ORDER BY remote LIMIT ?`, g.OrgID, maxListRows)
 		if err != nil {
@@ -501,12 +557,67 @@ func (s *Store) StartGardenRun(accountPrincipal string, orgID int64, project str
 	if s.db.QueryRow(`SELECT org_id FROM projects WHERE remote=?`, project).Scan(&owner) != nil || owner != orgID {
 		return 0, ErrProjectNotFound
 	}
-	res, err := s.db.Exec(`INSERT INTO garden_runs(org_id, project, started_at, state) VALUES(?,?,?,'running')`, orgID, project, now())
+	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	defer tx.Rollback()
+	ts := now()
+	res, err := tx.Exec(`INSERT INTO garden_runs(org_id, project, started_at, state) VALUES(?,?,?,'running')`, orgID, project, ts)
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	// The same run is a run of the block ghosttree/garden-ghosts (REQ-695,
+	// DEC-41): the tab Workflows lists it and the gardener's tab links it. Its
+	// event is dispatched already (nothing else may start from it), and its
+	// trigger -1 marks a block that runs outside the engine.
+	ev, err := tx.Exec(`INSERT INTO workflow_events(kind,project,org_id,subject_kind,subject_id,data,origin_kind,origin_person,chain_depth,dedupe_key,created_at,dispatched_at)
+		VALUES('schedule',?,?,'garden',?,'{}','system','gardener',0,?,?,?)`, project, orgID, strconv.FormatInt(id, 10), "garden-run:"+strconv.FormatInt(id, 10), ts, ts)
+	if err != nil {
+		return 0, err
+	}
+	evID, _ := ev.LastInsertId()
+	wr, err := tx.Exec(`INSERT INTO workflow_runs(org_id,project,workflow,workflow_version,trigger_id,event_id,chain_depth,state,created_at,started_at)
+		VALUES(?,?,?,?,-1,?,1,'running',?,?)`, orgID, project, GardenBlock, "builtin", evID, ts, ts)
+	if err != nil {
+		return 0, err
+	}
+	wrID, _ := wr.LastInsertId()
+	if _, err := tx.Exec(`UPDATE garden_runs SET workflow_run_id=? WHERE id=?`, wrID, id); err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
 }
+
+// GardenRunModel is what a running gardener run needs to reach a model
+// through the proxy: the workflow run it is, and the alias its owner chose
+// for the gardener ("" when none). Only the gardener's account asks.
+func (s *Store) GardenRunModel(accountPrincipal string, gardenRunID int64) (WorkflowRun, string, error) {
+	if s.reader != nil {
+		return s.reader.GardenRunModel(accountPrincipal, gardenRunID)
+	}
+	if err := s.requireGardener(accountPrincipal); err != nil {
+		return WorkflowRun{}, "", err
+	}
+	var orgID, wrID int64
+	if err := s.db.QueryRow(`SELECT org_id, workflow_run_id FROM garden_runs WHERE id=? AND state='running'`, gardenRunID).Scan(&orgID, &wrID); err != nil || wrID == 0 {
+		return WorkflowRun{}, "", ErrGardenAutoGone
+	}
+	run, err := scanWorkflowRun(s.db.QueryRow(`SELECT `+workflowRunCols+workflowRunFrom+` WHERE r.id=? AND r.state='running'`, wrID))
+	if err != nil {
+		return WorkflowRun{}, "", ErrGardenAutoGone
+	}
+	g, _ := gardenSettingsTx(s.db, orgID)
+	return run, g.ModelAlias, nil
+}
+
+// GardenBlock is the block of the gardener's descriptions in the catalogue of
+// workflows; its runs are the gardener's runs.
+const GardenBlock = "ghosttree/garden-ghosts"
 
 // FinishGardenRun records how a run ended. The number of proposals is counted
 // here from what the gardener filed in that repository since the start, not
@@ -532,8 +643,30 @@ func (s *Store) FinishGardenRun(accountPrincipal string, runID int64, state stri
 	}
 	var proposals int
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM knowledge WHERE project=? AND harness=? AND created_at>=?`, project, GardenerHarness, started).Scan(&proposals)
-	_, err := s.db.Exec(`UPDATE garden_runs SET finished_at=?, state=?, proposals=?, cost_usd=?, note=? WHERE id=?`, now(), state, proposals, costUSD, note, runID)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	ts := now()
+	if _, err := tx.Exec(`UPDATE garden_runs SET finished_at=?, state=?, proposals=?, cost_usd=?, note=? WHERE id=?`, ts, state, proposals, costUSD, note, runID); err != nil {
+		return err
+	}
+	// The workflow run of the same run ends with it. The note is the runner's
+	// own line, not model text; it stays as the reason of a failed run only.
+	reason := ""
+	if state != "done" {
+		reason = cutRunes(note, 200)
+	}
+	if _, err := tx.Exec(`UPDATE workflow_runs SET state=?, reason=?, cost_usd=?, result=?, finished_at=? WHERE state='running' AND id=(SELECT workflow_run_id FROM garden_runs WHERE id=?)`,
+		state, reason, costUSD, fmt.Sprintf("%d proposals", proposals), ts, runID); err != nil {
+		return err
+	}
+	// Its token for the model proxy ends with it.
+	if err := revokeRunTokensTx(tx, `id=(SELECT workflow_run_id FROM garden_runs WHERE id=?)`, runID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GardenRuns are the latest runs of a namespace, newest first.
@@ -544,7 +677,7 @@ func (s *Store) GardenRuns(orgID int64, limit int) ([]GardenRun, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	rows, err := s.db.Query(`SELECT id, org_id, project, started_at, finished_at, state, proposals, cost_usd, note FROM garden_runs WHERE org_id=? ORDER BY id DESC LIMIT ?`, orgID, limit)
+	rows, err := s.db.Query(`SELECT id, org_id, project, started_at, finished_at, state, proposals, cost_usd, note, workflow_run_id FROM garden_runs WHERE org_id=? ORDER BY id DESC LIMIT ?`, orgID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +685,7 @@ func (s *Store) GardenRuns(orgID int64, limit int) ([]GardenRun, error) {
 	var out []GardenRun
 	for rows.Next() {
 		var g GardenRun
-		if err := rows.Scan(&g.ID, &g.OrgID, &g.Project, &g.StartedAt, &g.FinishedAt, &g.State, &g.Proposals, &g.CostUSD, &g.Note); err != nil {
+		if err := rows.Scan(&g.ID, &g.OrgID, &g.Project, &g.StartedAt, &g.FinishedAt, &g.State, &g.Proposals, &g.CostUSD, &g.Note, &g.WorkflowRunID); err != nil {
 			return nil, err
 		}
 		out = append(out, g)

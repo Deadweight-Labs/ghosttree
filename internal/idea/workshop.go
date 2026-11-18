@@ -21,14 +21,17 @@ const (
 	PhaseRaw        = "raw"        // Rohidee
 	PhaseConcept    = "concept"    // Konzept liegt vor
 	PhaseDiscussion = "discussion" // in Diskussion
-	PhaseApproved   = "approved"   // freigegeben: „so wollen wir es“
-	PhaseBuilding   = "building"   // in Umsetzung: Issues laufen
-	PhaseDone       = "done"       // umgesetzt
-	PhaseDismissed  = "dismissed"  // verworfen
+	// PhaseDiscussed: die Diskussion ist beendet (DEC-46). Eine Person sagt damit
+	// „alles Nötige wurde diskutiert“; das löst idea.discussion_closed aus.
+	PhaseDiscussed = "discussed"
+	PhaseApproved  = "approved"  // freigegeben: „so wollen wir es“
+	PhaseBuilding  = "building"  // in Umsetzung: Issues laufen
+	PhaseDone      = "done"      // umgesetzt
+	PhaseDismissed = "dismissed" // verworfen
 )
 
 // Phases sind alle Phasen in der Reihenfolge des Ablaufs.
-var Phases = []string{PhaseRaw, PhaseConcept, PhaseDiscussion, PhaseApproved, PhaseBuilding, PhaseDone, PhaseDismissed}
+var Phases = []string{PhaseRaw, PhaseConcept, PhaseDiscussion, PhaseDiscussed, PhaseApproved, PhaseBuilding, PhaseDone, PhaseDismissed}
 
 // ValidPhase sagt, ob s eine Phase ist.
 func ValidPhase(s string) bool {
@@ -56,12 +59,13 @@ func EffectivePhase(state, phase string) string {
 // openRequests, ob davon noch welche offen sind. Verwerfen und Wiederöffnen
 // laufen über den Zustand (SetIdeaState), nicht hierüber.
 //
-// Vor- und Rückwärts: raw, concept und discussion wechseln frei untereinander;
+// Vor- und Rückwärts: raw, concept, discussion und discussed wechseln frei
+// untereinander, nur discussed braucht ein Konzept;
 // freigegeben wird nur mit Konzept; ab Umsetzung führt kein Weg zurück, denn aus
 // der Idee entstand Arbeit; umgesetzt gilt erst, wenn alle Issues zu sind.
 func ValidatePhase(from, to string, hasConcept, hasRequests, openRequests bool) error {
 	if !ValidPhase(to) || to == PhaseDismissed {
-		return requestdomain.NewRuleError("invalid_phase", fmt.Sprintf("unknown phase %q", to), "use raw, concept, discussion, approved, building or done; dismiss with the state", nil)
+		return requestdomain.NewRuleError("invalid_phase", fmt.Sprintf("unknown phase %q", to), "use raw, concept, discussion, discussed, approved, building or done; dismiss with the state", nil)
 	}
 	if from == to {
 		return requestdomain.NewRuleError("invalid_phase", fmt.Sprintf("the idea is already in phase %s", from), "nothing to do", nil)
@@ -99,7 +103,10 @@ func ValidatePhase(from, to string, hasConcept, hasRequests, openRequests bool) 
 	if to == PhaseConcept && !hasConcept {
 		return requestdomain.NewRuleError("concept_required", "the phase concept needs a concept", "write the concept first (idea action=concept)", nil)
 	}
-	if hasRequests && (to == PhaseRaw || to == PhaseConcept || to == PhaseDiscussion) {
+	if to == PhaseDiscussed && !hasConcept {
+		return requestdomain.NewRuleError("concept_required", "a discussion is closed on a concept", "write the concept first (idea action=concept)", nil)
+	}
+	if hasRequests && (to == PhaseRaw || to == PhaseConcept || to == PhaseDiscussion || to == PhaseDiscussed) {
 		return requestdomain.NewRuleError("invalid_phase", "issues already came out of this idea", "an approved idea with issues does not go back", nil)
 	}
 	return nil
@@ -379,3 +386,38 @@ func (c RequirementCoverage) Covered() bool { return c.State == CoverMet || c.St
 // der galt, als das Issue entstand; ändert jemand den Text später, ist die
 // Anforderung wieder unabgedeckt, bis ein Kriterium zu ihr passt.
 func RequirementKey(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+
+// MaxHumanSaid bounds what an agent quotes of its person when it closes a
+// discussion on their behalf.
+const MaxHumanSaid = 500
+
+// DiscussionClosure is who closed the discussion of an idea (DEC-46): a person
+// in the web interface, or an agent on the explicit word of its person, which it
+// quotes or points to in Said.
+type DiscussionClosure struct {
+	Person     string `json:"person"`
+	ByAgent    bool   `json:"by_agent,omitempty"`
+	SessionRef string `json:"session_ref,omitempty"`
+	Said       string `json:"human_said,omitempty"`
+	At         string `json:"at"`
+}
+
+// CleanSaid checks what an agent gives as its person's word to close a
+// discussion: required, one paragraph of plain text, at most MaxHumanSaid
+// characters.
+func CleanSaid(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", requestdomain.NewRuleError("human_said_required", "an agent closes a discussion only when its person said so",
+			"quote what your person said (or where they said it) in human_said; without that, ask them or leave it to the button in the web interface", nil)
+	}
+	if !utf8.ValidString(s) || utf8.RuneCountInString(s) > MaxHumanSaid {
+		return "", requestdomain.NewRuleError("human_said_invalid", fmt.Sprintf("human_said has at most %d characters", MaxHumanSaid), "quote the sentence, not the conversation", nil)
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) && r != '\n' {
+			return "", requestdomain.NewRuleError("human_said_invalid", "human_said is plain text", "remove control characters", nil)
+		}
+	}
+	return s, nil
+}

@@ -41,7 +41,7 @@ var (
 	requestDoneMsg = map[string]string{
 		"added": "requests.done.added", "met": "requests.done.met", "waived": "requests.done.waived",
 		"corrected": "requests.done.corrected", "completed": "requests.done.completed", "dropped": "requests.done.dropped",
-		"moved": "requests.done.moved",
+		"moved": "requests.done.moved", "image": "ideas.result.image",
 	}
 )
 
@@ -148,7 +148,9 @@ type requestView struct {
 	Relations []relationLine
 	Pains     []requestPainLine
 	// Ideas are the ideas the issue came out of; the issue page shows them as its source.
-	Ideas                    []ideaFact
+	Ideas []ideaFact
+	// Decisions are the questions asked of the issue; each has a page of its own.
+	Decisions                []ideaFact
 	Tasks                    []requestTaskLine
 	Threads                  []coordThreadView
 	Activity                 []activityLine
@@ -161,6 +163,8 @@ type requestView struct {
 	EditOpen                 bool
 	Back                     string
 	Token                    string
+	// Attach is the box of the pictures on the issue and the form that adds one (issue page only).
+	Attach *attachBox
 	// ProjectRemote ist das ganze Projekt, Repo das Ziel der Rücklinks.
 	ProjectRemote string
 	// Nur die Issue-Seite füllt diese Felder (fillIssue).
@@ -185,8 +189,8 @@ type requestView struct {
 	Live []liveAgent
 	// LabelBox is the block "Labels" of the sidebar (issue page only).
 	LabelBox *labelBoxView
-	// MoveProjects sind die Projekte, in die der Betrachter den Auftrag legen
-	// darf; leer heißt: kein Formular.
+	// MoveProjects sind die anderen Projekte, in die der Betrachter den Auftrag
+	// legen darf; leer heißt: kein Formular und kein Knopf.
 	MoveProjects []filterOption
 }
 
@@ -330,6 +334,10 @@ func evidenceLabel(l lang, kind string) string { return label(l, evidenceKeys, k
 // viewer can open leads on to its page in the repository; the old page stays
 // for the others (requests without a project).
 func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
+	if r.PathValue("id") == "new" {
+		a.requestNew(w, r)
+		return
+	}
 	if remote := a.requestRepo(r); remote != "" {
 		target := repoHref(remote) + "/issues/" + url.PathEscape(r.PathValue("id"))
 		if r.URL.RawQuery != "" {
@@ -339,6 +347,23 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.issueGlobal(w, r)
+}
+
+// requestNew is /ui/requests/new, the address the old "New issue" led to: the form
+// of the repository the viewer is in or has chosen, else the first one they can
+// write to. Without any repository there is nothing to write an issue into, and the
+// way on is to make one.
+func (a *app) requestNew(w http.ResponseWriter, r *http.Request) {
+	target := "/ui/orgs"
+	if m := a.newMenuFor(r, a.shellBaseFor(r), a.pickOrg(r, a.orgsOf(r))); m != nil && m.Issue != "" {
+		target = m.Issue
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+	} else if m != nil && m.Repo != "" {
+		target = m.Repo
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // requestRepo is the project a request belongs to when the viewer can read the
@@ -410,7 +435,7 @@ func (a *app) buildRequestView(w http.ResponseWriter, r *http.Request) (*request
 	v.EditOpen = v.CanEdit && r.URL.Query().Get("edit") == "1"
 	if v.CanEdit {
 		v.Priorities = a.knownPriorities(pa, project, req.Priority)
-		v.MoveProjects = writableOptions(pa, project)
+		v.MoveProjects = otherProjectOptions(pa, project)
 	}
 	open := 0
 	humans := map[int64]string{}
@@ -496,9 +521,15 @@ func (a *app) knownPriorities(pa *store.ProjectAccess, project, current string) 
 // if a caller ever passes an unfiltered detail.
 func (a *app) workLines(l lang, pa *store.ProjectAccess, work []requestdomain.Work, now time.Time) []workLine {
 	var out []workLine
+	ended := a.endedWorkSessions(work)
 	for _, wk := range work {
 		line := workLine{Role: label(l, roleKeys, wk.Role), State: wk.State, StateLabel: label(l, workKeys, wk.State),
 			Summary: wk.Summary, Active: wk.State == "active", Age: shortAge(l, now, parseTime(firstNonEmpty(wk.EndedAt, wk.StartedAt)))}
+		// The work stays "active" in the ledger until the agent finishes it; when its session is over
+		// nobody works on the issue any more, and the page must not say so (G1).
+		if line.Active && ended[wk.SessionPublicID] {
+			line.State, line.StateLabel, line.Active = "ended", l.msg("requests.work.ended"), false
+		}
 		line.Title = l.msg("requests.private_session")
 		if wk.SessionPublicID != "" {
 			line.Href = "/ui/sessions/" + wk.SessionPublicID
@@ -531,6 +562,34 @@ func (a *app) workLines(l lang, pa *store.ProjectAccess, work []requestdomain.Wo
 		}
 		return 0
 	})
+	return out
+}
+
+// endedWorkSessions are the public ids of the sessions behind the active work lines whose agents said
+// that the session is over (SessionEnd) and have not started it again.
+func (a *app) endedWorkSessions(work []requestdomain.Work) map[string]bool {
+	ids := map[int64]string{}
+	var sessions []int64
+	for _, wk := range work {
+		if wk.State != "active" || wk.SessionPublicID == "" {
+			continue
+		}
+		if raw, err := a.store.SessionByPublicID(wk.SessionPublicID); err == nil {
+			ids[raw.ID] = wk.SessionPublicID
+			sessions = append(sessions, raw.ID)
+		}
+	}
+	out := map[string]bool{}
+	if len(sessions) == 0 {
+		return out
+	}
+	if states, err := a.store.SessionRunStates(sessions); err == nil {
+		for id, st := range states {
+			if st.Ended {
+				out[ids[id]] = true
+			}
+		}
+	}
 	return out
 }
 
@@ -710,8 +769,20 @@ func activityLines(l lang, acts []requestdomain.Activity, humans map[int64]strin
 func (a *app) requestResult(r *http.Request, d requestdomain.Detail) *requestResult {
 	l := a.langFor(r)
 	q := r.URL.Query()
+	if res := labelAssignResult(r, l); res != nil {
+		return res
+	}
 	if fail := q.Get("fail"); fail == "open_criteria" && d.Request.State == "open" {
 		return &requestResult{Text: l.msg("requests.fail.open_criteria"), Kind: "failed", Fail: true}
+	} else if strings.HasPrefix(fail, "img_") {
+		if key := ideaFailKey(fail); key != "ideas.result.failed" {
+			return &requestResult{Text: l.msg(key), Kind: "failed", Fail: true}
+		}
+	} else if fail == "labels" {
+		// The new issue exists; the step after creating it failed (new_issue.go).
+		return &requestResult{Text: l.msg("newissue.fail.labels"), Kind: "failed", Fail: true}
+	} else if fail == "package" {
+		return &requestResult{Text: l.msg("newissue.fail.package"), Kind: "failed", Fail: true}
 	}
 	kind := q.Get("done")
 	key, ok := requestDoneMsg[kind]
@@ -743,6 +814,9 @@ func (a *app) requestResult(r *http.Request, d requestdomain.Detail) *requestRes
 			return nil
 		}
 		res.Text = l.msg(key)
+	case "moved":
+		// The page the move leads to says where the issue is now.
+		res.Text = l.msg(key, deniedProjectName(d.Request.Scope.Project))
 	default:
 		res.Text = l.msg(key)
 	}

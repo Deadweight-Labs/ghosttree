@@ -76,6 +76,11 @@ func (a *app) deviceDecide(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// The answer names the device it is about (S23); the request is read before it is decided.
+	machine := ""
+	if req, err := a.store.Device().Lookup(code, browserPrincipal(r).ID); err == nil {
+		machine = req.Machine
+	}
 	if err := a.store.Device().Decide(code, browserPrincipal(r).ID, approve); err != nil {
 		a.deviceError(w, r, err, code)
 		return
@@ -84,7 +89,7 @@ func (a *app) deviceDecide(w http.ResponseWriter, r *http.Request) {
 	if approve {
 		title = l.msg("adm.device.approved")
 	}
-	a.renderBrowser(w, r, "devicedone", pageData{Title: title, Approved: approve})
+	a.renderBrowser(w, r, "devicedone", pageData{Title: title, Approved: approve, DeviceMachine: machine})
 }
 
 func (a *app) deviceError(w http.ResponseWriter, r *http.Request, err error, code string) {

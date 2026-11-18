@@ -27,17 +27,16 @@ func init() {
 	refKinds["decision"] = refKind{"DEC", "k-dec", "ref.kind.decision", mockIcons["decide"]}
 }
 
-// decisionHref is the page a decision lives on: the idea or issue it is asked
-// of, anchored at the decision on an idea (the issue page has no anchor for it).
+// decisionHref is the page a decision lives on: the workshop of its idea, anchored at the
+// decision, or for a decision of an issue the page of the decision (decision_page.go).
 func decisionHref(d idea.Decision) string {
 	if d.Project == "" {
 		return ""
 	}
-	id := strconv.FormatInt(d.SubjectID, 10)
 	if d.Subject == idea.SubjectRequest {
-		return repoHref(d.Project) + "/issues/" + id
+		return decisionPageHref(d)
 	}
-	return repoHref(d.Project) + "/ideas/" + id + "#decision-" + strconv.FormatInt(d.ID, 10)
+	return repoHref(d.Project) + "/ideas/" + strconv.FormatInt(d.SubjectID, 10) + "#decision-" + strconv.FormatInt(d.ID, 10)
 }
 
 // inboxDecisions turns the decisions that wait for a person, and that the viewer
@@ -55,7 +54,7 @@ func (a *app) inboxDecisions(l lang, pa *store.ProjectAccess, project string, no
 				continue
 			}
 			created := parseTime(d.CreatedAt)
-			row := forYouRow{Mark: "decision", Tone: "ask", Title: d.Question, Brief: links.Clean(d.Detail, 220), Href: decisionHref(d),
+			row := forYouRow{Mark: "decision", Tone: "ask", Title: d.Question, Brief: links.Clean(plainSnippet(l, d.Detail, 220), 0), Href: decisionHref(d),
 				Rest: l.msg("inbox.dec.of", lastSegment(d.Project)), Action: l.msg("inbox.act.open"), rank: rankBlocks, at: created, decisionID: d.ID}
 			if !created.IsZero() {
 				row.Age = shortAgo(l, now, created)

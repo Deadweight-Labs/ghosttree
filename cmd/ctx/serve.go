@@ -12,15 +12,18 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/forge"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
+	"github.com/Deadweight-Labs/ghosttree/internal/mail"
 	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/secretbox"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshotmirror"
@@ -47,10 +50,22 @@ type serveConfig struct {
 	DistDir        string
 	TrustedProxies proxytrust.Set
 	Explain        ExplainConfig
+	// AIBox seals the keys of AI connections; nil when the server has no key.
+	AIBox *secretbox.Box
+	// AIProxyURL is the model proxy on loopback; the gardener's runs get it.
+	AIProxyURL string
+	// AITester tests a connection with one minimal call; nil without one.
+	AITester web.AITester
 	// GardenLimits are shown to administrators; the gardener itself runs as a command.
 	GardenLimits llmusage.Limits
 	// Embed configures hybrid search; without a URL it is off.
 	Embed embedSettings
+	// Mail is how the server sends mail (SMTP or a file mailbox); empty means no
+	// mail. Mailer is the sender built from it. PasswordLogin switches on e-mail +
+	// password sign-in (it needs mail). REQ-676.
+	Mail          mail.Config
+	Mailer        mail.Sender
+	PasswordLogin bool
 }
 
 const (
@@ -71,6 +86,17 @@ const (
 	// envDistDir names a directory with the ctx release archives and
 	// checksums.txt; the server then serves /install.sh and /dist/.
 	envDistDir = "GHOSTTREE_DIST_DIR"
+	// Mail and password sign-in (REQ-676). The SMTP password is read from a file,
+	// never from a flag or the environment: both show in the process list or in
+	// /proc.
+	envSMTPHost         = "GHOSTTREE_SMTP_HOST"
+	envSMTPPort         = "GHOSTTREE_SMTP_PORT"
+	envSMTPSecurity     = "GHOSTTREE_SMTP_SECURITY"
+	envSMTPFrom         = "GHOSTTREE_SMTP_FROM"
+	envSMTPUser         = "GHOSTTREE_SMTP_USER"
+	envSMTPPasswordFile = "GHOSTTREE_SMTP_PASSWORD_FILE"
+	envMailDir          = "GHOSTTREE_MAIL_DIR"
+	envPasswordLogin    = "GHOSTTREE_PASSWORD_LOGIN"
 	// envLanguage picks the language of the web interface: en (default) or de.
 	envLanguage = "GHOSTTREE_LANGUAGE"
 
@@ -153,6 +179,22 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
 	fs.StringVar(&cfg.CheckPublicURL, "check-public-url", os.Getenv(envCheckPublicURL), "base URL for the links in the GitHub check run of a pull request; empty writes no links, because the check run is readable by everyone who reads the pull request (env "+envCheckPublicURL+")")
 	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
+	smtpPort := 0
+	if v := os.Getenv(envSMTPPort); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return serveConfig{}, fmt.Errorf("%s: %q is not a port number", envSMTPPort, v)
+		}
+		smtpPort = n
+	}
+	fs.StringVar(&cfg.Mail.Host, "smtp-host", os.Getenv(envSMTPHost), "SMTP server for sign-in codes and confirmations; empty sends no mail (env "+envSMTPHost+")")
+	fs.IntVar(&cfg.Mail.Port, "smtp-port", smtpPort, "SMTP port; default 587 (starttls), 465 (tls) or 25 (none) (env "+envSMTPPort+")")
+	fs.StringVar(&cfg.Mail.Security, "smtp-security", os.Getenv(envSMTPSecurity), "starttls (default), tls or none; none only for a relay on this host (env "+envSMTPSecurity+")")
+	fs.StringVar(&cfg.Mail.From, "smtp-from", os.Getenv(envSMTPFrom), "sender address of the mails, e.g. ghosttree <noreply@example.com> (env "+envSMTPFrom+")")
+	fs.StringVar(&cfg.Mail.User, "smtp-user", os.Getenv(envSMTPUser), "SMTP user (env "+envSMTPUser+")")
+	fs.StringVar(&cfg.Mail.PasswordFile, "smtp-password-file", os.Getenv(envSMTPPasswordFile), "file with the SMTP password, one line; there is no flag for the password itself (env "+envSMTPPasswordFile+")")
+	fs.StringVar(&cfg.Mail.Dir, "mail-dir", os.Getenv(envMailDir), "write every mail as an .eml file into this directory instead of sending it, for tests and local instances; needs --smtp-from (env "+envMailDir+")")
+	fs.BoolVar(&cfg.PasswordLogin, "password-login", os.Getenv(envPasswordLogin) == "1", "offer sign-in with e-mail and password besides the mail code; needs mail (env "+envPasswordLogin+"=1)")
 	sessionText := fs.String("session-text", os.Getenv(envSessionText), "text of transcript chunks: stored (default) writes it next to the line, derived leaves it out and reads derive it from the line; see ctx db slim-text (env "+envSessionText+")")
 	fs.StringVar(&cfg.Language, "language", os.Getenv(envLanguage), "language of the web interface: en (default) or de (env "+envLanguage+")")
 	explainMode := os.Getenv(envExplain)
@@ -175,6 +217,18 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	}
 	if err := cfg.OIDC.Validate(); err != nil {
 		return serveConfig{}, err
+	}
+	var mailErr error
+	if cfg.Mailer, mailErr = mail.New(cfg.Mail); mailErr != nil {
+		return serveConfig{}, fmt.Errorf("mail: %w", mailErr)
+	}
+	// A link in a mail to someone else's address is built from the configured public
+	// address, never from the Host header of whoever asked for the mail.
+	if cfg.Mail.Host != "" && cfg.PublicURL == "" {
+		return serveConfig{}, fmt.Errorf("--smtp-host needs --public-url (%s): the links in the mails are built from it", envPublicURL)
+	}
+	if cfg.PasswordLogin && cfg.Mailer == nil {
+		return serveConfig{}, fmt.Errorf("--password-login needs mail (--smtp-host or --mail-dir): a password is set and reset through a confirmed address")
 	}
 	lang, err := web.ParseLanguage(cfg.Language)
 	if err != nil {
@@ -326,7 +380,21 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	if ctx.Err() != nil {
 		return 0
 	}
+	// AI connections (REQ-694): the server key, llm.json as the server
+	// connection, and the model proxy on loopback for runs.
+	aiCtx, stopAI := context.WithCancel(ctx)
+	defer stopAI()
+	ai, err := startAI(aiCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)))
+	if err != nil {
+		fmt.Fprintf(stdout, "ai connections: %v\n", err)
+		return 1
+	}
+	cfg.AIBox, cfg.AIProxyURL = ai.Box, ai.BaseURL
+	if ai.Tester != nil {
+		cfg.AITester = ai.Tester
+	}
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
+	fmt.Fprintln(stdout, mailStartLine(cfg))
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", accessEnforcedByEnv(), "env", envEnforceAccess,
 		"note", "without enforcement only 'access: would deny' is logged, nothing is refused")
 	if note := proxyConfigWarning(cfg); note != "" {
@@ -413,7 +481,13 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	waitMirror := startOrgMirror(mirrorCtx, st, mirrorApp, mirrorApp.Configured(), slog.New(slog.NewJSONHandler(stderr, nil)))
 	judgeCtx, stopJudge := context.WithCancel(ctx)
 	waitJudge := startUsageJudge(judgeCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)))
-	err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)))
+	workflowCtx, stopWorkflows := context.WithCancel(ctx)
+	waitWorkflows := startWorkflows(workflowCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)), ai)
+	err = serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)))
+	stopWorkflows()
+	waitWorkflows()
+	stopAI()
+	ai.Wait()
 	stopJudge()
 	waitJudge()
 	stopMirror()
@@ -430,6 +504,19 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	return 0
 }
 
+// mailStartLine tells the operator which way mail takes at this start, and what
+// is switched off when there is none.
+func mailStartLine(cfg serveConfig) string {
+	if cfg.Mailer == nil {
+		return "mail: off (no sign-in by email, no confirmation of addresses; ways back in: login link from an owner, ctx web; set --smtp-host or --mail-dir)"
+	}
+	line := "mail: " + cfg.Mailer.Mode() + ", from " + cfg.Mail.From
+	if cfg.PasswordLogin {
+		line += "; sign-in with email and password: on"
+	}
+	return line
+}
+
 func accessEnforcedByEnv() bool { return os.Getenv(envEnforceAccess) == "1" }
 
 func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http.Handler {
@@ -440,6 +527,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 		server.WithLogger(logger),
 		server.WithBuildVersion(version),
 		server.WithTrustedProxies(cfg.TrustedProxies),
+		server.WithAIProxy(cfg.AIProxyURL),
 	}
 	if forge.NewGitHubApp(forge.AppConfigFromOS()).Configured() {
 		options = append(options, server.WithCapabilities("github_app"))
@@ -464,11 +552,15 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	if cfg.OIDC.Enabled() {
 		webOptions = append(webOptions, web.WithOIDC(cfg.OIDC))
 	}
+	if cfg.Mailer != nil {
+		webOptions = append(webOptions, web.WithMail(cfg.Mailer), web.WithPasswordLogin(cfg.PasswordLogin))
+	}
 	webOptions = append(webOptions, web.WithLanguage(cfg.Language), web.WithAvatarCache(filepath.Join(filepath.Dir(cfg.DB), "avatars")), web.WithBuildVersion(version))
 	explainCfg := cfg.Explain
 	explainCfg.Language = cfg.Language
 	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))
 	webOptions = append(webOptions, web.WithGardenLimits(cfg.GardenLimits))
+	webOptions = append(webOptions, web.WithAIConnections(cfg.AIBox), web.WithAITester(cfg.AITester))
 	// Automatic approvals of the gardener (REQ-624), for the namespaces whose
 	// owners switched rules on. They run in the server because they act through
 	// the same plans as the review page; the loop lives as long as the process.

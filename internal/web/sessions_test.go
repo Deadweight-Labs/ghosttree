@@ -207,7 +207,7 @@ func TestSessionEmptyStatesAreNeutral(t *testing.T) {
 	env := shellWebAll(t)
 	_, owner := fetchPage(t, env.Owner, env.Base+"/ui/sessions")
 	_, guest := fetchPage(t, env.Guest, env.Base+"/ui/sessions")
-	if !strings.Contains(owner, "No sessions yet.") || !strings.Contains(owner, "Connect an agent") {
+	if !strings.Contains(owner, "Sessions of your agents appear here.") || !strings.Contains(owner, "Connect an agent") {
 		t.Errorf("empty owner page: %s", owner)
 	}
 	if !strings.Contains(guest, "Nothing here yet.") || strings.Contains(guest, "Connect an agent") {
@@ -607,7 +607,7 @@ func TestNumericAddressesAreGone(t *testing.T) {
 func postShare(t *testing.T, e sessEnv, c *http.Client, name, level string) *http.Response {
 	t.Helper()
 	token := renderedCSRFToken(t, c, e.Base+"/ui/sessions")
-	form := url.Values{"csrf_token": {token}, "level": {level}}
+	form := url.Values{"csrf_token": {token}, "level": {level}, "confirm": {"1"}}
 	resp := sameOriginPostForm(t, c, e.Base+"/ui/sessions/"+e.pid[name]+"/share", form)
 	return resp
 }

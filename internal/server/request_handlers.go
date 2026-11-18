@@ -60,6 +60,10 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 	if body.Origin == "human" && principalOf(r).TokenKind != store.WebSessionKind {
 		body.Origin = "agent"
 	}
+	if !a.gateWorkflowRunRef(w, r, body.SessionRef) {
+		return
+	}
+	body.SessionRef = runRefOf(r, body.SessionRef)
 	links, err := a.access(r).ResolveRequestLinks(scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project, body.Parent, body.DerivedFrom)
 	if err != nil {
 		if denyAccess(w, err) {
@@ -447,7 +451,7 @@ func writeRequestError(w http.ResponseWriter, err error) {
 			status = http.StatusConflict
 		}
 		switch rule.ErrorCode {
-		case "package_not_found", "label_not_found", "idea_not_found", "origin_not_found", "comment_not_found", "comment_target_not_found", "preset_not_found",
+		case "package_not_found", "label_not_found", "idea_not_found", "pain_not_found", "knowledge_not_found", "origin_not_found", "comment_not_found", "comment_target_not_found", "preset_not_found",
 			"decision_not_found", "attachment_not_found", "text_not_found", "variant_not_found", "thread_not_found",
 			"feature_not_found", "version_not_found", "reaction_target_not_found":
 			status = http.StatusNotFound

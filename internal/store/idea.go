@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -313,6 +314,11 @@ func (s *Store) commitIdea(in CreateIdeaInput) (int64, error) {
 	if _, err := tx.Exec(`UPDATE ideas SET anchor_id=?, origin_id=? WHERE id=?`, anchorID, originID, id); err != nil {
 		return 0, err
 	}
+	ref := strconv.FormatInt(id, 10)
+	if _, _, err := recordWorkflowEventTx(tx, WorkflowEventInput{Kind: EventIdeaCreated, Project: in.Project, SubjectKind: "idea", SubjectID: ref,
+		Data: map[string]string{"title": in.Title}, Origin: OriginOfActor(in.Actor.Person, in.Actor.SessionRef, in.Actor.Agent), DedupeKey: EventIdeaCreated + ":" + ref}); err != nil {
+		return 0, err
+	}
 	return id, tx.Commit()
 }
 
@@ -464,7 +470,7 @@ func (a *ProjectAccess) checkIdeaLinkable(i idea.Idea) error {
 	if err := a.CheckIdea(i, ActEdit); err != nil {
 		return err
 	}
-	if i.Phase == idea.PhaseConcept || i.Phase == idea.PhaseDiscussion {
+	if i.Phase == idea.PhaseConcept || i.Phase == idea.PhaseDiscussion || i.Phase == idea.PhaseDiscussed {
 		return requestdomain.NewRuleError("not_approved", "this idea is being worked out and is not approved yet", "approve it first; only its owner or a maintainer can", nil)
 	}
 	return nil

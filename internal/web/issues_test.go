@@ -217,7 +217,11 @@ func TestIssuePagesHideWhatTheViewerMayNotSee(t *testing.T) {
 	pub := rqMake(t, e.St, rqSpec{Title: "Visible request"})
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
 		for _, path := range []string{"/ui/x/hidden/issues", "/ui/x/hidden/issues/" + itoa(secret.Request.ID), "/ui/x/shell/issues/" + itoa(secret.Request.ID), "/ui/requests/" + itoa(secret.Request.ID)} {
-			if status, page := fetchPage(t, c, e.Base+path); status != http.StatusNotFound || strings.Contains(page, "SECRET-REQ") {
+			want := http.StatusNotFound
+			if name == "member" {
+				want = memberStatusFor(path)
+			}
+			if status, page := fetchPage(t, c, e.Base+path); status != want || strings.Contains(page, "SECRET-REQ") {
 				t.Errorf("%s: GET %s = %d", name, path, status)
 			}
 		}
@@ -249,10 +253,16 @@ func TestRepoTabsAreCodeIssuesPullsKnowledgeRunbooksAndAMenu(t *testing.T) {
 		}
 	}
 	menu := page[strings.Index(page, `class="tsep"`):]
-	for _, key := range []string{"rooms", "sessions", "commits"} {
-		if !strings.Contains(menu, `data-ic="`+key+`"`) {
-			t.Errorf("the second group lacks %s as icon", key)
+	last = -1
+	for _, key := range []string{"rooms", "sessions", "features", "commits", "tasks", "packages"} {
+		i := strings.Index(menu, `data-tab="`+key+`"`)
+		if i < last || i < 0 {
+			t.Errorf("the second group lacks %s or has it out of order", key)
 		}
+		last = i
+	}
+	if strings.Contains(page, `data-ic=`) {
+		t.Error("a tab shrinks to an icon")
 	}
 	if status, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/runbooks"); status != http.StatusOK || !strings.Contains(page, `data-tab="runbooks"`) || !strings.Contains(page, "ui-runbooks.css") {
 		t.Errorf("runbooks tab: status=%d or not its own page", status)

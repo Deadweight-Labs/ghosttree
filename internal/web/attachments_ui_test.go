@@ -47,6 +47,13 @@ func webpBytes(w, h int) []byte {
 // token as a field. claimed is the type the "browser" says the file has.
 func upload(t *testing.T, e shellEnv, c *http.Client, path string, fields map[string]string, data []byte, claimed string, withToken bool) *http.Response {
 	t.Helper()
+	resp, _ := uploadAsking(t, e, c, path, fields, data, claimed, withToken, "")
+	return resp
+}
+
+// uploadAsking is upload with an Accept header (the script of the page asks for JSON) and the body of the answer.
+func uploadAsking(t *testing.T, e shellEnv, c *http.Client, path string, fields map[string]string, data []byte, claimed string, withToken bool, accept string) (*http.Response, string) {
+	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	if withToken {
@@ -72,13 +79,16 @@ func upload(t *testing.T, e shellEnv, c *http.Client, path string, fields map[st
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Origin", e.Base)
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
 	resp, err := c.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	io.Copy(io.Discard, resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	return resp
+	return resp, string(body)
 }
 
 var attachSrcRE = regexp.MustCompile(`src="(/ui/attachments/\d+)"`)
@@ -107,7 +117,7 @@ func TestImagesOnTheIdeaAndOnAVariantAreUploadedShownSideBySideAndEnlargeable(t 
 	for _, want := range []string{
 		"The image was attached.", `id="images"`, `alt="Sketch of the button"`, `alt="Variant A mock"`, `alt="Variant B mock"`,
 		`<dialog class="ws-lb" id="ws-lb"`, `data-zoom`, `/static/ui-workshop.js`, `enctype="multipart/form-data"`, `type="file"`, `accept="image/png,image/jpeg,image/webp"`,
-		`name="owner" value="variant"`, `<option value="` + varA + `">A`, `title="Enlarge image"`,
+		`name="owner" value="variant"`, `<input type="hidden" name="variant" value="` + varA + `">`, `title="Enlarge image"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the idea page lacks %q", want)
@@ -122,6 +132,14 @@ func TestImagesOnTheIdeaAndOnAVariantAreUploadedShownSideBySideAndEnlargeable(t 
 	}
 	if strings.Index(vars, `alt="Variant A mock"`) > strings.Index(vars, "On the server") {
 		t.Error("the picture of variant A is not in the card of variant A")
+	}
+	// Attaching a picture happens in the card of its variant (REQ-700): the form of A stands before the card
+	// of B, and no select under the cards looks like the decision.
+	if i, j := strings.Index(vars, `name="variant" value="`+varA+`"`), strings.Index(vars, "On the server"); i < 0 || i > j {
+		t.Error("the form that attaches a picture to variant A is not in its card")
+	}
+	if strings.Contains(page, `<select class="gfield" id="ws-up-`) || strings.Contains(page, "Attach to variant") {
+		t.Error("a select that attaches a picture stands under the cards")
 	}
 	// Every picture is a link that works without script, and the script is one file of the page.
 	if n := strings.Count(page, `class="ws-zoom"`); n != 3 {

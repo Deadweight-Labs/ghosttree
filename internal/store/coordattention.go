@@ -54,10 +54,13 @@ type AttentionItem struct {
 	Sequence        int64  `json:"sequence,omitempty"`
 	Body            string `json:"body,omitempty"`
 	AuthorID        string `json:"author_id,omitempty"`
-	SenderID        string `json:"sender_id,omitempty"`
-	HomeRoomKey     string `json:"home_room_key,omitempty"`
-	IsRecipient     bool   `json:"is_recipient,omitempty"`
-	CanWithdraw     bool   `json:"can_withdraw,omitempty"`
+	// AuthorName is the account name of a person who wrote the message, for the
+	// viewer who may see names; empty for an agent's message and for a guest's view.
+	AuthorName  string `json:"author_name,omitempty"`
+	SenderID    string `json:"sender_id,omitempty"`
+	HomeRoomKey string `json:"home_room_key,omitempty"`
+	IsRecipient bool   `json:"is_recipient,omitempty"`
+	CanWithdraw bool   `json:"can_withdraw,omitempty"`
 }
 
 func attentionReasonForIntent(intent string) (string, bool) {
@@ -94,29 +97,29 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 	rows, err := tx.Query(`SELECT attention.id,attention.recipient_principal_id,
 		m.destination_kind,m.destination_id,attention.reason,attention.state,
 		attention.created_at,attention.resolved_at,attention.message_id,m.sequence,
-		m.body,m.author_principal_id,m.sender_external_id,COALESCE(m.expires_at,'')
+		m.body,m.author_principal_id,m.sender_external_id,COALESCE(m.expires_at,''),
+		CASE WHEN m.author_kind='human' THEN COALESCE(p.name,'') ELSE '' END
 		FROM coord_attention attention JOIN coord_messages m ON m.id=attention.message_id
+		LEFT JOIN persons p ON ('person:' || p.id)=m.author_principal_id
 		WHERE attention.recipient_principal_id=? OR m.sender_external_id=? OR m.author_principal_id=?
 		ORDER BY attention.created_at DESC, attention.message_id DESC, attention.id DESC`, actor, actor, a.Principal.ID)
 	if err != nil {
 		return nil, err
 	}
-	var candidates []struct {
-		item      AttentionItem
-		sender    string
-		expiresAt string
+	type attentionCandidate struct {
+		item       AttentionItem
+		sender     string
+		expiresAt  string
+		authorName string
 	}
+	var candidates []attentionCandidate
 	for rows.Next() {
-		var candidate struct {
-			item      AttentionItem
-			sender    string
-			expiresAt string
-		}
+		var candidate attentionCandidate
 		if err := rows.Scan(&candidate.item.ID, &candidate.item.RecipientID,
 			&candidate.item.DestinationKind, &candidate.item.DestinationID,
 			&candidate.item.Reason, &candidate.item.State, &candidate.item.CreatedAt,
 			&candidate.item.ResolvedAt, &candidate.item.MessageID, &candidate.item.Sequence,
-			&candidate.item.Body, &candidate.item.AuthorID, &candidate.sender, &candidate.expiresAt); err != nil {
+			&candidate.item.Body, &candidate.item.AuthorID, &candidate.sender, &candidate.expiresAt, &candidate.authorName); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -159,8 +162,9 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 		candidate.item.CanWithdraw = candidate.item.AuthorID == a.Principal.ID || candidate.sender == actor
 		// Gastsicht (nur eigene Empfängerzeilen kommen hier an): das Konto
 		// hinter einem fremden Agenten bleibt verborgen.
+		candidate.item.AuthorName = NormalizeAccountName(candidate.authorName)
 		if candidate.item.AuthorID != a.Principal.ID && a.guestViewForMessageTx(tx, candidate.item.DestinationKind, candidate.item.DestinationID) {
-			candidate.item.AuthorID = ""
+			candidate.item.AuthorID, candidate.item.AuthorName = "", ""
 		}
 		if candidate.item.State == AttentionOpen && expiredAt(candidate.expiresAt, nowTS) {
 			candidate.item.State = AttentionExpired
@@ -258,6 +262,66 @@ func (a CoordAccess) ResolveAttention(id int64, action string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// answerOpenQuestionsTx closes the open questions the sender was asked when the
+// message they just wrote answers them (REQ-679): a reply to the question itself,
+// or a post in the thread the question lives in or is anchored to. A plain room
+// message does not count: nothing says which question it meets, so the card keeps
+// its own "mark as answered". Only the recipient's own entries close, and only
+// questions; an approval or a blocker has its own verdict.
+func answerOpenQuestionsTx(tx *sql.Tx, actor string, m CoordMessage, newID int64) error {
+	if newID == 0 || (m.ReplyTo == 0 && m.DestinationKind != DestinationDiscussion) {
+		return nil
+	}
+	// A counter-question, approval request, blocker or handoff is not an answer:
+	// two agents that ask each other still wait for each other (wait cycles).
+	if _, asks := attentionReasonForIntent(m.Intent); asks {
+		return nil
+	}
+	var anchor int64
+	if m.DestinationKind == DestinationDiscussion {
+		if threadID, err := parseThreadDestination(m.DestinationID); err == nil {
+			if home, found, err := threadHomeTx(tx, threadID); err != nil {
+				return err
+			} else if found {
+				anchor = home.AnchorMessageID
+			}
+		}
+	}
+	rows, err := tx.Query(`SELECT attention.id
+		FROM coord_attention attention JOIN coord_messages m ON m.id=attention.message_id
+		WHERE attention.recipient_principal_id=? AND attention.reason=? AND attention.state=?
+		AND m.id<>? AND (m.id=? OR m.id=? OR (m.destination_kind=? AND m.destination_id=?))`,
+		actor, AttentionQuestion, AttentionOpen, newID, nullableCoordID(m.ReplyTo), nullableCoordID(anchor), m.DestinationKind, m.DestinationID)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.Exec(`UPDATE coord_attention SET state=?,resolved_at=? WHERE id=? AND state=?`, AttentionResolved, now(), id, AttentionOpen); err != nil {
+			return err
+		}
+	}
+	if len(ids) > 0 {
+		return reconcileWaitCyclesSafeTx(tx, messageRoomKeyTx(tx, m.DestinationKind, m.DestinationID), time.Now().UTC())
+	}
+	return nil
 }
 
 func validAttentionAction(action string) bool {

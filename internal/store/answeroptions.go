@@ -532,7 +532,8 @@ func (a *ProjectAccess) quickAnswerAttention(ca CoordAccess, id int64, key strin
 	if err := a.st.commitQuickMark(AnswerOnAttention, item.ID, opt.Key, opt.Text, a.account, cleanLine(a.principal.Label, 100)); err != nil {
 		return QuickAnswerResult{}, err
 	}
-	if err := ca.ResolveAttention(item.ID, AttentionActionAnswer); err != nil {
+	// The reply itself already closed the question (answerOpenQuestionsTx).
+	if err := ca.ResolveAttention(item.ID, AttentionActionAnswer); err != nil && !errors.Is(err, ErrAttentionClosed) {
 		return QuickAnswerResult{}, err
 	}
 	return QuickAnswerResult{Kind: "attention", ID: item.ID, Option: opt, MessageID: replyID}, nil
@@ -596,4 +597,31 @@ func (a *ProjectAccess) quickAnswerDecision(id int64, key, reason string) (Quick
 		return QuickAnswerResult{}, err
 	}
 	return QuickAnswerResult{Kind: AnswerOnDecision, ID: id, Option: opt}, nil
+}
+
+// AttentionOptions gives the proposed answers of the open questions the viewer was
+// asked, by attention number: the buttons a card in the room shows next to the ones
+// in the inbox. items come from CoordAccess.Attention, so they are already the ones
+// the viewer may read; only an open question addressed to the viewer carries options.
+func (a *ProjectAccess) AttentionOptions(items []AttentionItem) (map[int64][]AnswerOption, error) {
+	var ids []int64
+	for _, it := range items {
+		if it.IsRecipient && it.State == AttentionOpen && it.Reason == AttentionQuestion {
+			ids = append(ids, it.MessageID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	byMessage, err := a.st.answerOptionsFor(AnswerOnMessage, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int64][]AnswerOption{}
+	for _, it := range items {
+		if it.IsRecipient && it.State == AttentionOpen && it.Reason == AttentionQuestion && len(byMessage[it.MessageID]) > 0 {
+			out[it.ID] = byMessage[it.MessageID]
+		}
+	}
+	return out, nil
 }

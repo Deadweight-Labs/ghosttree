@@ -163,6 +163,8 @@
   & .box-r { padding: 8px 16px; }
   & .box > .box-r + .box-r { border-top: 1px solid var(--border-muted); }
   & .box > .row + .row, & .box > details + details { border-top: 1px solid var(--border-muted); }
+  /* a row that only says the list is empty: the same inset as a filled row */
+  & .row.erow { padding: 12px 16px; }
   & .box > .row:hover { background: var(--row-hover); }
   & .box > :last-child { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
   /* Empty state: one line and, if there is something to do, one action. */
@@ -186,6 +188,7 @@
   & .pop .ph { padding: 4px 16px 8px; font-size: 12px; font-weight: 600; color: var(--fg-muted); border-bottom: 1px solid var(--border-muted); margin-bottom: 4px; }
   & .pop .opt { display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 0 8px; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-default); text-align: left; cursor: pointer; font-size: 14px; text-decoration: none; }
   & .pop .opt:hover { background: var(--neutral-muted); text-decoration: none; }
+  & .pop .opt:focus-visible { background: var(--neutral-muted); outline: 2px solid var(--accent-fg); outline-offset: -2px; text-decoration: none; }
   & .pop .opt small { margin-left: auto; color: var(--fg-muted); font-size: 12px; }
   & .pop .opt .chk { display: inline-flex; width: 16px; color: var(--fg-default); }
   & .pop .opt .chk.off { visibility: hidden; }
@@ -227,8 +230,9 @@
   & input[type="file"]::file-selector-button:hover { background: var(--btn-hover); }
   /* The browser's own clear cross is heavy and white in dark mode; Escape clears a search field too */
   & input[type="search"]::-webkit-search-cancel-button { display: none; -webkit-appearance: none; }
-  /* Typed text and placeholder share font, size and line: the placeholder does not sit higher than the text */
-  & .gfield.mono-in input, & .gfield.mono-in input::placeholder { font-family: var(--ui-mono); font-size: 13px; line-height: 20px; }
+  /* Typed text and placeholder share font, size and line: the placeholder does not sit higher than the text.
+     A search or filter field is prose, not code: the interface font (P46); code stands in code boxes and chips. */
+  & .gfield.mono-in input, & .gfield.mono-in input::placeholder { font-family: var(--ui-font); font-size: 14px; line-height: 20px; }
   & input.gfield, & select.gfield { padding: 0 12px; color: var(--fg-default); }
   & select.gfield { color-scheme: inherit; }
 
@@ -277,3 +281,6 @@
     & .gfield input, & input.gfield, & select.gfield { font-size: 16px; }
   }
 }
+
+/* The page keeps the room of the scrollbar, so it does not jump sideways when a page grows past the window (P45). */
+html { scrollbar-gutter: stable; }

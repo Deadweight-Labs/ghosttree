@@ -2,6 +2,19 @@
 // that are on the page, and the field of the member list filters the people and
 // agents. No inline script, no inline style.
 (() => {
+  // "New group" in the empty state of the rooms opens the menu of the room list. It opens one
+  // turn later, after the click that closes menus has run (shell.js).
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest ? event.target.closest("[data-open-new]") : null;
+    const menu = button ? document.querySelector("details.rstart") : null;
+    if (!menu) return;
+    event.preventDefault();
+    setTimeout(() => {
+      menu.open = true;
+      const field = menu.querySelector("input.gfield, select.gfield");
+      if (field) field.focus();
+    }, 0);
+  });
   const norm = (s) => s.toLocaleLowerCase();
   // What a search reads of a message: head, second line, quote, text, card. Not
   // the hidden forms and buttons that belong to it.
@@ -88,6 +101,18 @@
   }, true);
   window.addEventListener("scroll", closeFloating, { passive: true });
   window.addEventListener("resize", closeFloating);
+  // The options of the reply field (to whom, what kind, the status) open in the flow, above the field. At the end
+  // of the page the history moves up by what they take, so the last messages stay in view instead of under the panel.
+  document.addEventListener("toggle", (event) => {
+    const opts = event.target;
+    if (!(opts instanceof HTMLDetailsElement) || !opts.classList.contains("cx-opts") || !opts.open) return;
+    const panel = opts.querySelector(":scope > .cx-optpop");
+    const page = document.scrollingElement;
+    if (!panel || !page) return;
+    const taken = panel.offsetHeight;
+    const below = page.scrollHeight - page.scrollTop - window.innerHeight;
+    if (below - taken < 48) page.scrollBy({ top: taken });
+  }, true);
   // Where a tap is what a hover is elsewhere, the tools of the touched message unfold
   // under it (CSS, :focus-within); the list brings them into view.
   const touchLike = window.matchMedia("(hover: none), (max-width: 767px)");

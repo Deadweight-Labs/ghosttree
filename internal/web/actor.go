@@ -80,6 +80,26 @@ func possessive(l lang, name string) string {
 	return name + "’s"
 }
 
+// authorAgentName is the one way a page names an agent that wrote something: "Robin’s
+// Claude", "Robin’s Agent" when the harness is not known, only "Claude" when the
+// page does not know the person. A transport ("mcp") is never a name.
+func authorAgentName(l lang, person, harness string) string {
+	family := actor.Family(harness)
+	if strings.TrimSpace(person) == "" {
+		return family
+	}
+	return possessive(l, person) + " " + family
+}
+
+// byAgentActor is the view of an entry that says by itself (not through a stamp) that an agent wrote it, as the
+// text of an idea does: the agent of the person, without a harness the page does not know.
+func byAgentActor(l lang, person string, agent bool) actorView {
+	if !agent || person == "" {
+		return actorView{Person: person, Label: person, Kind: avHuman}
+	}
+	return actorView{Person: person, Agent: true, Kind: harnessKind(""), Label: authorAgentName(l, person, "")}
+}
+
 // actorViewOf builds the view of one entry for the person the page shows.
 // Without a stamp the entry shows its person as before (unknown is never
 // guessed into an agent). detail asks for model, machine and session, which
@@ -102,7 +122,7 @@ func (a *app) actorViewOf(l lang, pa *store.ProjectAccess, kind string, id int64
 		return v
 	}
 	v.Agent, v.Kind = true, harnessKind(ea.Harness)
-	v.Label = possessive(l, person) + " " + actor.Family(ea.Harness)
+	v.Label = authorAgentName(l, person, ea.Harness)
 	if !detail {
 		return v
 	}
@@ -167,7 +187,7 @@ func (a *app) rowActors(l lang, rows []issueRow) {
 			continue
 		}
 		rows[i].Actor = actorView{Person: r.Person, Agent: true, Kind: harnessKind(ea.Harness),
-			Label: possessive(l, r.Person) + " " + actor.Family(ea.Harness)}
+			Label: authorAgentName(l, r.Person, ea.Harness)}
 	}
 }
 
@@ -194,7 +214,7 @@ func (a *app) stampedActors(l lang, kind string, persons map[int64]string) map[i
 			switch {
 			case ea.IsAgent():
 				v.Agent, v.Kind = true, harnessKind(ea.Harness)
-				v.Label = possessive(l, person) + " " + actor.Family(ea.Harness)
+				v.Label = authorAgentName(l, person, ea.Harness)
 			default:
 				v.Terminal = ea.Via == actor.ViaTerminal
 			}

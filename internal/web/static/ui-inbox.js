@@ -38,25 +38,61 @@
   });
 
   // Proposed answers: a click sends the form in the background. When the server
-  // took the answer the row says what it was answered with and its numbers go
-  // down by one; when anything fails the form is sent the plain way, which ends
-  // on the inbox with the entry as the server has it.
+  // took the answer the question leaves the list, as it does after a reload, and a
+  // line says what it was answered with; the numbers go down by one. When anything
+  // fails the form is sent the plain way, which ends on the inbox with the entry as
+  // the server has it.
   const countDown = (el) => {
     const n = el ? parseInt(el.textContent, 10) : 0;
     if (n > 0) el.textContent = String(n - 1);
   };
+  // The bell in the header counts the same rows as the chip "All": it goes down with it, and without
+  // a reload; at zero the number leaves.
+  const bellDown = () => {
+    const bell = $('a[data-top="inbox"]');
+    const badge = bell && $(".top-count", bell);
+    if (!badge) return;
+    const n = Math.max(0, parseInt(badge.textContent, 10) - 1);
+    if (n === 0) {
+      badge.remove();
+      bell.removeAttribute("title");
+      return;
+    }
+    badge.textContent = String(n);
+    const text = n === 1 ? bell.dataset.tOne : (bell.dataset.tMany || "").replace(/\d+/, String(n));
+    if (text) bell.setAttribute("title", text);
+  };
+  // What the click did floats over the page for a moment, with the way to the place it went to; it
+  // does not move the list.
+  const announce = (text, href, view) => {
+    for (const old of $$("[data-answered-note]")) old.remove();
+    const note = document.createElement("div");
+    note.className = "ibtoast";
+    note.setAttribute("role", "status");
+    note.setAttribute("data-answered-note", "");
+    const line = document.createElement("span");
+    line.className = "tt";
+    line.textContent = text;
+    note.appendChild(line);
+    if (href && view) {
+      const link = document.createElement("a");
+      link.href = href;
+      link.textContent = view;
+      note.appendChild(link);
+    }
+    document.body.appendChild(note);
+    setTimeout(() => note.remove(), 9000);
+  };
   const settle = (row, opts, text) => {
-    const line = document.createElement("div");
-    line.className = "sub qa";
-    line.textContent = (opts.dataset.answered || "") + " " + text;
-    opts.replaceWith(line);
-    row.classList.toggle("open", false);
-    row.classList.toggle("answered", true);
-    row.classList.toggle("is-done", true);
     const box = row.closest(".box");
+    const link = $("a.lnk", row);
     if (box) countDown($(".box-h .counter", box));
     const cats = (row.dataset.cat || "").split(" ").filter(Boolean).concat("alle");
     for (const cat of cats) countDown($('.ifilter [data-f="' + cat + '"] .counter'));
+    bellDown();
+    announce((opts.dataset.answered || "") + " " + text, link && link.getAttribute("href"), opts.dataset.view);
+    row.remove();
+    if (box && !$(".nrow", box)) box.remove();
   };
   document.addEventListener("submit", async (event) => {
     const form = event.target;

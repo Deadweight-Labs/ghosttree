@@ -301,3 +301,54 @@ func roomVisibleInSummarySnapshot(tx *sql.Tx, room CoordRoom, actor, principalID
 		return false, nil
 	}
 }
+
+// ThreadMention is an unread message in a thread of a room that mentions the viewer.
+type ThreadMention struct {
+	ThreadID, MessageID, Sequence int64
+}
+
+// UnreadThreadMentions lists, newest first, the messages in the threads of the room that mention
+// the viewer and that they have not read, in the threads they may see. The room summary counts
+// them in its mentions, but reading the room does not read them: a thread has its own read mark
+// (MarkRead on its discussion), so the inbox has to find them here.
+func (a CoordAccess) UnreadThreadMentions(roomKey string) ([]ThreadMention, error) {
+	actor, err := a.actor()
+	if err != nil {
+		return nil, err
+	}
+	if actor == "" {
+		return nil, ErrCoordForbidden
+	}
+	if err := a.canRead(DestinationRoom, roomKey); err != nil {
+		return nil, err
+	}
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	rows, err := reader.db.Query(`SELECT m.id, m.sequence, home.thread_id FROM coord_messages m
+		JOIN thread_homes home ON CAST(home.thread_id AS TEXT)=m.destination_id
+		JOIN coord_message_mentions mention ON mention.message_id=m.id
+		LEFT JOIN coord_read_state read ON read.principal_id=?
+		  AND read.destination_kind='discussion' AND read.destination_id=m.destination_id
+		WHERE m.destination_kind='discussion' AND home.room_key=?
+		  AND m.sender_external_id<>? AND mention.mentioned_external_id=?
+		  AND (m.sequence>COALESCE(read.read_through_sequence,0)
+		       OR (COALESCE(read.manual_unread_from_sequence,0)>0
+		           AND m.sequence>=read.manual_unread_from_sequence))
+		  AND `+homeVisibleToSQL+`
+		ORDER BY m.id DESC`, actor, roomKey, actor, actor, actor)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ThreadMention
+	for rows.Next() {
+		var t ThreadMention
+		if err := rows.Scan(&t.MessageID, &t.Sequence, &t.ThreadID); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}

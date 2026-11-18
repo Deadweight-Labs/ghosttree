@@ -119,6 +119,9 @@ type knowledgeCard struct {
 	Proof      *proofView
 	CanApprove bool
 	CanReject  bool
+	// Need says, beside the missing buttons of an entry that still waits for a
+	// verdict, which role decides and whom to ask (N-C).
+	Need string
 	// Retire: the same action as Reject, on an entry that was already decided.
 	Retire     bool
 	CanRestore bool
@@ -229,16 +232,12 @@ type knowledgeItemView struct {
 // ----------------------------------------------------------------- Textblöcke
 
 // excerpt ist der erste Absatz, gekürzt; fehlt er, die erste Zeile Code.
-func excerpt(s string) string {
+func excerpt(l lang, s string) string {
 	blocks := bodyBlocks(s, 0)
 	text := ""
 	for _, b := range blocks {
 		if b.Kind == "" || b.Kind == "h" || b.Kind == "list" || b.Kind == "quote" {
-			lines := strings.Split(b.Text, "\n")
-			for i, l := range lines {
-				lines[i] = mdPlain(l)
-			}
-			text = strings.Join(lines, " ")
+			text = stripMarkdown(l, b.Src, nil)
 			break
 		}
 	}
@@ -303,7 +302,7 @@ func (a *app) knowledgeRowFor(l lang, pa *store.ProjectAccess, raw store.Knowled
 	row := KnowledgeRow{
 		ID: strconv.FormatInt(k.ID, 10), Href: knowledgeHref(k.Scope.Project, k.ID), Title: k.Title,
 		Type: k.Type, TypeLabel: typeLabel(l, k.Type), Level: k.Confidence, LevelLabel: levelLabel(l, k.Confidence), LevelTitle: levelTitle(l, k.Confidence), TypeTitle: typeLabel(l, k.Type),
-		Stale: k.Status == "stale", Excerpt: excerpt(k.Body), Age: shortAge(l, overviewNow().UTC(), parseTime(firstNonEmpty(k.ObservedAt, k.CreatedAt))),
+		Stale: k.Status == "stale", Excerpt: excerpt(l, k.Body), Age: shortAge(l, overviewNow().UTC(), parseTime(firstNonEmpty(k.ObservedAt, k.CreatedAt))),
 		Old: olderThan(firstNonEmpty(k.ObservedAt, k.CreatedAt), overviewNow().UTC(), reviewOldAfter),
 		Num: k.ID, Person: k.Person, Tone: knowledgeTones[k.Type], Stamp: firstNonEmpty(k.ObservedAt, k.CreatedAt),
 	}
@@ -376,6 +375,9 @@ func (a *app) cardFor(r *http.Request, pa *store.ProjectAccess, k store.Knowledg
 		Token: csrfOf(r), Next: next, Filter: filter,
 	}
 	capabilities(pa, k, &card)
+	if decisionOpen(k) && !card.CanApprove && !card.CanReject {
+		card.Need = roleNeededShort(l, roleNeededOf(pa.CheckKnowledge(k, store.ActVerify)))
+	}
 	if card.CanEdit {
 		card.RawBody = k.Body
 	}
@@ -416,7 +418,7 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 		level = ""
 	}
 	project := a.projectParam(r)
-	r = a.repoScoped(r, project, "knowledge")
+	r = a.repoScopedChosen(r, project, "knowledge")
 	pa := a.access(r)
 	hidden, stop := a.gateList(w, r, pa, project, store.ResKnowledge)
 	if stop {
@@ -742,7 +744,7 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	pa := a.access(r)
 	project := a.projectParam(r)
-	r = a.repoScoped(r, project, "knowledge")
+	r = a.repoScopedChosen(r, project, "knowledge")
 	hidden, stop := a.gateList(w, r, pa, project, store.ResKnowledge)
 	if stop {
 		return
@@ -966,6 +968,10 @@ func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nothing to change", http.StatusConflict)
 		return
 	}
+	if err := a.settleWorkflowProposal(r, k, plan); err != nil {
+		http.Error(w, "could not apply the proposal", http.StatusConflict)
+		return
+	}
 	if err := a.store.UpdateKnowledgeFromWeb(k.ID, plan.patch, personOf(r)); err != nil {
 		if a.secretRefused(w, r, err, "") {
 			return
@@ -1033,6 +1039,10 @@ func (a *app) reviewBulk(w http.ResponseWriter, r *http.Request) {
 		todo = append(todo, decision{k, plan})
 	}
 	for _, d := range todo {
+		if err := a.settleWorkflowProposal(r, d.k, d.plan); err != nil {
+			http.Error(w, "could not apply the proposal", http.StatusConflict)
+			return
+		}
 		if err := a.store.UpdateKnowledgeFromWeb(d.k.ID, d.plan.patch, person); err != nil {
 			http.Error(w, "could not save", http.StatusBadRequest)
 			return

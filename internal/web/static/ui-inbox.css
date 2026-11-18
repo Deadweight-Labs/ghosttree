@@ -76,3 +76,8 @@
     & .ntools .sp { display: none; }
   }
 }
+
+/* An empty inbox says so and offers the next step; the answer toast is the shared one (ui-parts.css). */
+:is(.g2) {
+  & .ib-empty-acts { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+}

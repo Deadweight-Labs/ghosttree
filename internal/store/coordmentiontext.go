@@ -76,6 +76,9 @@ type mentionCandidate struct {
 	id      string
 	label   string
 	handles []string
+	// provider and owner are the tool and the person of an agent, for a label
+	// when the agent has no name of its own.
+	provider, owner string
 }
 
 func (c mentionCandidate) has(handle string) bool {
@@ -201,6 +204,7 @@ func (a CoordAccess) mentionCandidatesTx(tx *sql.Tx, actor, roomKey string) ([]m
 		if c.label == id && ownerName != "" {
 			c.label = id + " (" + ownerName + ")"
 		}
+		c.provider, c.owner = provider, ownerName
 		out = append(out, c)
 	}
 	return withoutHijackedHandles(out), nil

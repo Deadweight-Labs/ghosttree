@@ -38,7 +38,10 @@ type Task struct {
 	StateNote   string `json:"state_note,omitempty"`
 	// Steps is the walk-through for the human (REQ-603): numbered, each with an
 	// optional link. The interface shows it as a checklist.
-	Steps       []Step `json:"steps,omitempty"`
+	Steps []Step `json:"steps,omitempty"`
+	// Notes are what the person wrote to the agent without reporting the task
+	// done, oldest first (REQ-679).
+	Notes       []Note `json:"notes,omitempty"`
 	ConfirmedAt string `json:"confirmed_at,omitempty"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
@@ -53,6 +56,13 @@ type Task struct {
 	// Account columns decide visibility and never leave the server.
 	AssigneeAccount  int64 `json:"-"`
 	CreatedByAccount int64 `json:"-"`
+}
+
+// Note is a line from the person to the agent on a task that stays open.
+type Note struct {
+	By   string `json:"by,omitempty"`
+	Text string `json:"text"`
+	At   string `json:"at"`
 }
 
 func (t Task) HumanID() string { return fmt.Sprintf("TASK-%d", t.ID) }

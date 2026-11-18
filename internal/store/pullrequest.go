@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -368,6 +369,20 @@ func (s *Store) RecordPullRequest(c PullRequestChange) (PullRequestResult, error
 	var storedDefault, storedSHA, storedTitle string
 	if err := tx.QueryRow(`SELECT default_branch, merge_sha, title FROM git_pull_requests WHERE project=? AND number=?`, remote, c.Number).Scan(&storedDefault, &storedSHA, &storedTitle); err != nil {
 		return res, err
+	}
+	// The merge goes into the event log in the same transaction; the dedupe key
+	// keeps a second delivery from making a second event (REQ-693). A merge
+	// that ctx github sync catches up on (action "sync") is history, not news:
+	// it starts no workflow.
+	merged := map[string]string{"pr": strconv.FormatInt(c.Number, 10), "base": base, "head": head, "title": storedTitle, "merge_sha": storedSHA}
+	if storedDefault != "" && base == storedDefault {
+		merged["default_branch"] = "1"
+	}
+	if c.Action != "sync" {
+		if _, _, err := recordWorkflowEventTx(tx, WorkflowEventInput{Kind: EventPRMerged, Project: remote, SubjectKind: "pr", SubjectID: strconv.FormatInt(c.Number, 10),
+			Data: merged, Origin: EventOrigin{Kind: OriginSystem, Person: "github"}, DedupeKey: EventPRMerged + ":" + remote + "#" + strconv.FormatInt(c.Number, 10)}); err != nil {
+			return res, err
+		}
 	}
 	res.GhostsPromoted, res.GhostsKeptNewer, err = promoteGhostBranchTx(tx, remote, head, base, storedDefault, c.Number, storedSHA, ts)
 	if err != nil {

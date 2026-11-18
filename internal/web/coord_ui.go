@@ -94,13 +94,33 @@ type coordComposer struct {
 	StateLabel, StateWas string
 }
 
+// coordStateOptions are the three states of a thread in words, the current one marked.
+func coordStateOptions(l lang, current string) []coordStateOption {
+	var out []coordStateOption
+	for _, st := range []struct{ value, label, button, buttonText string }{
+		{"open", "coord.state.open", "coord.state_btn.open", "coord.state_btn_text.open"},
+		{"resolved", "coord.state.resolved", "coord.state_btn.resolved", "coord.state_btn_text.resolved"},
+		{"deferred", "coord.state.deferred", "coord.state_btn.deferred", "coord.state_btn_text.deferred"},
+	} {
+		out = append(out, coordStateOption{Value: st.value, Label: l.msg(st.label), Current: st.value == current,
+			Button: l.msg(st.button), ButtonText: l.msg(st.buttonText)})
+	}
+	return out
+}
+
 // coordComposerFor builds the composer for the active room.
 func coordComposerFor(l lang, d *coordRoomDetailView, id string, thread bool) coordComposer {
 	placeholder := l.msg("coord.placeholder", d.Room.Name)
 	if thread {
 		placeholder = l.msg("coord.thread_reply")
 	}
-	c := coordComposer{composerView: composerView{ID: id, Placeholder: placeholder, Value: d.Draft}, People: d.Participants, Thread: thread, CanDirect: d.CanDirect, Zone: d.Zone, More: !thread, SendLabel: l.msg("coord.send")}
+	// A thread offers the people and agents of the thread first and an agent once;
+	// the room offers everybody it knows.
+	people := d.Participants
+	if thread && d.Thread != nil {
+		people = d.Thread.Addressees
+	}
+	c := coordComposer{composerView: composerView{ID: id, Placeholder: placeholder, Value: d.Draft}, People: people, Thread: thread, CanDirect: d.CanDirect, Zone: d.Zone, More: !thread, SendLabel: l.msg("coord.send")}
 	everyone := l.msg("room.compose.all")
 	if thread {
 		everyone = l.msg("room.compose.all_thread")
@@ -111,9 +131,14 @@ func coordComposerFor(l lang, d *coordRoomDetailView, id string, thread bool) co
 	if d.Broadcast {
 		to.Options = append(to.Options, composerOption{Value: "all-agents", Label: l.msg("coord.broadcast")})
 	}
-	for _, p := range d.Participants {
-		if !p.Current && !p.ListOnly {
-			to.Options = append(to.Options, composerOption{Value: p.ID, Label: p.Label, Selected: p.ID == d.ToDefault})
+	// People first, then agents: whoever has a role in the project can be asked,
+	// whether or not they ever joined the room (REQ-688, N06). Only a guest's
+	// viewer lacks the list, and then there is nothing to add here.
+	for _, wantPeople := range []bool{true, false} {
+		for _, p := range people {
+			if !p.Current && p.Human == wantPeople {
+				to.Options = append(to.Options, composerOption{Value: p.ID, Label: p.Label, Selected: p.ID == d.ToDefault})
+			}
 		}
 	}
 	c.To = to
@@ -131,20 +156,15 @@ func coordComposerFor(l lang, d *coordRoomDetailView, id string, thread bool) co
 	}
 	if thread && d.Thread != nil && d.Thread.CanSetState {
 		c.StateLabel, c.StateWas = l.msg("coord.thread_state"), d.Thread.State
-		for _, st := range []struct{ value, label, button, buttonText string }{
-			{"open", "coord.state.open", "coord.state_btn.open", "coord.state_btn_text.open"},
-			{"resolved", "coord.state.resolved", "coord.state_btn.resolved", "coord.state_btn_text.resolved"},
-			{"deferred", "coord.state.deferred", "coord.state_btn.deferred", "coord.state_btn_text.deferred"},
-		} {
-			c.States = append(c.States, coordStateOption{Value: st.value, Label: l.msg(st.label), Current: st.value == d.Thread.State,
-				Button: l.msg(st.button), ButtonText: l.msg(st.buttonText)})
-		}
+		c.States = coordStateOptions(l, d.Thread.State)
 	}
 	kind := &composerSelect{Name: "intent", Label: l.msg("coord.kind")}
-	kind.Options = []composerOption{{Value: "", Label: l.msg("coord.mode.message"), Selected: true}}
+	kind.Options = []composerOption{{Value: "", Label: l.msg("coord.mode.message"), Hint: l.msg("coord.kind.hint.message"), Selected: true}}
 	for _, k := range []composerOption{
-		{Value: "question", Label: l.msg("coord.reason.question")}, {Value: "approval", Label: l.msg("coord.reason.approval")},
-		{Value: "blocker", Label: l.msg("coord.reason.blocker")}, {Value: "handoff", Label: l.msg("coord.reason.handoff")},
+		{Value: "question", Label: l.msg("coord.reason.question"), Hint: l.msg("coord.kind.hint.question")},
+		{Value: "approval", Label: l.msg("coord.reason.approval"), Hint: l.msg("coord.kind.hint.approval")},
+		{Value: "blocker", Label: l.msg("coord.reason.blocker"), Hint: l.msg("coord.kind.hint.blocker")},
+		{Value: "handoff", Label: l.msg("coord.reason.handoff"), Hint: l.msg("coord.kind.hint.handoff")},
 	} {
 		kind.Options = append(kind.Options, k)
 	}
@@ -234,6 +254,10 @@ type coordRequestActions struct {
 	RoomKey, CSRFToken string
 	// Note is set for an approval: it only keeps the answer in the room.
 	Note bool
+	// Quick are the proposed answers of the question; QuickID is its attention number.
+	Quick     []inboxOption
+	QuickID   int64
+	QuickKind string
 }
 
 // Merged joins the actions of all items of the card, each action once. The first
@@ -257,6 +281,9 @@ func (r coordRequestView) Merged() *coordRequestActions {
 	for _, item := range r.Items {
 		if item.CoordinationOnlyApproval && item.Incoming {
 			out.Note = true
+		}
+		if len(item.Options) > 0 && out.QuickID == 0 {
+			out.Quick, out.QuickID, out.QuickKind = item.Options, item.ID, store.AnswerOnAttention
 		}
 		if item.Primary != nil {
 			add(item.ID, *item.Primary)

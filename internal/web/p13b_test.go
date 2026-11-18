@@ -93,20 +93,20 @@ func pain13(t *testing.T, e shellEnv) pain.Pain {
 	return p.Pain
 }
 
-// The head of a pain has "Edit" and "Issue from this"; a guest has neither. The
+// The head of a pain has "Edit" and "Make an issue of it"; a guest has neither. The
 // correction needs a reason, changes the title, and the history says so.
 func TestThePainHeadEditsTheTitleWithAReasonAndLeadsToAnIssue(t *testing.T) {
 	e := ovEnv(t)
 	p := pain13(t, e)
 	path := "/ui/x/shell/pains/" + itoa(p.ID)
 	_, page := fetchPage(t, e.Owner, e.Base+path)
-	for _, want := range []string{`action="/ui/pains/` + itoa(p.ID) + `/correct"`, "Issue from this", "/issues/new?derived_from=PAIN-" + itoa(p.ID)} {
+	for _, want := range []string{`action="/ui/pains/` + itoa(p.ID) + `/correct"`, "Make an issue of it", "/issues/new?derived_from=PAIN-" + itoa(p.ID)} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the pain page lacks %q", want)
 		}
 	}
 	_, guest := fetchPage(t, e.Guest, e.Base+path)
-	if strings.Contains(guest, "/correct") || strings.Contains(guest, "Issue from this") {
+	if strings.Contains(guest, "/correct") || strings.Contains(guest, "Make an issue of it") {
 		t.Error("a guest gets the buttons of the head")
 	}
 	post := "/ui/pains/" + itoa(p.ID) + "/correct"

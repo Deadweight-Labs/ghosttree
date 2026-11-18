@@ -31,7 +31,7 @@
     <section class="coord-conversation rmain box" id="coord-conversation" aria-label="{{t "coord.conversation"}}">
       {{with .Coord.Active}}{{if .Thread}}{{template "coord-thread-main" $}}{{else}}{{template "coord-room-main" $}}{{end}}
       {{else}}
-      <div class="coord-welcome box-empty"><p>{{t "coord.no_rooms"}}</p><a class="gbtn pri" href="/ui/overview?connect=1">{{t "ov.start"}}</a></div>
+      <div class="coord-welcome box-empty empty-act"><p>{{t "coord.no_rooms"}}</p>{{if .Coord.Recipients}}<a class="gbtn pri" href="#coord-rooms" data-open-new>{{t "coord.group_create"}}</a>{{end}}<a class="gbtn{{if not .Coord.Recipients}} pri{{end}}" href="/ui/overview?connect=1">{{t "ov.connect"}}</a></div>
       {{end}}
     </section>
 
@@ -61,7 +61,7 @@
       </header>
       <nav class="coord-paging" aria-label="{{t "coord.history"}}">{{if .HasOlder}}<a class="gbtn sm" href="{{.OlderURL}}">{{t "coord.older"}}</a>{{end}}{{if .HasNewer}}<a class="gbtn sm" href="{{.NewerURL}}">{{t "coord.newer"}}</a>{{end}}</nav>
       <div class="rbody">
-        <p class="coord-action-status callout" data-coord-action-status role="status" hidden></p>
+        {{if not .CanPost}}<p class="coord-action-status callout" data-coord-action-status role="status" hidden></p>{{end}}
         <ol class="coord-messages" data-chat data-unread-from="{{.UnreadFrom}}" tabindex="-1" aria-label="{{t "coord.conversation"}}">
           {{range .Messages}}{{template "coord-message" .}}{{else}}<li class="coord-empty"><span>{{t "coord.empty_room"}}</span></li>{{end}}
         </ol>
@@ -77,9 +77,27 @@
       </form>{{end}}
 {{end}}{{end}}
 
-{{define "coord-composer"}}<div class="cx rm-compose-box">
+{{define "coord-composer"}}{{if .Thread}}{{template "coord-composer-thread" .}}{{else}}{{template "coord-composer-room" .}}{{end}}{{end}}
+
+{{define "coord-composer-thread"}}<div class="cx cx-slim rm-compose-box">
+  <div class="cx-line">
+    <details class="dd top-menu cx-opts" data-coord-draft-key="thread-opts-{{.ID}}"><summary class="gbtn quiet icon" aria-label="{{t "coord.compose_options"}}" title="{{t "coord.compose_options"}}" data-coord-focus-key="thread-opts-summary-{{.ID}}">{{mi "sliders"}}</summary>
+      <div class="pop cx-optpop" data-nofilter>
+        <div class="cx-h"><nav class="utabs-nav" aria-label="{{t "ui.cx.tabs"}}"><ul class="utabs"><li class="sel"><a href="#" data-wtab="w" aria-current="true"><span>{{t "ui.cx.write"}}</span></a></li><li><a href="#" data-wtab="p"><span>{{t "ui.cx.preview"}}</span></a></li></ul></nav><span class="sp"></span><span class="wtools js-only" role="toolbar" aria-label="{{t "ui.cx.tools"}}">{{range $i, $tool := .Tools}}<button type="button" class="gbtn sm icon quiet" data-tool="{{index $tool 0}}" aria-label="{{t (index $tool 1)}}" title="{{t (index $tool 1)}}"{{if $i}} tabindex="-1"{{end}}>{{mi (index $tool 0)}}</button>{{end}}</span></div>
+        {{if .States}}<div class="cx-st cx-state"><span class="cx-sl" id="{{.ID}}-st">{{.StateLabel}}</span><div class="cx-seg" role="radiogroup" aria-labelledby="{{.ID}}-st">{{range .States}}<label class="cx-opt{{if .Current}} cur{{end}}"><input type="radio" name="state" value="{{.Value}}" data-state-input data-label="{{.Button}}" data-label-text="{{.ButtonText}}"{{if .Current}} checked{{end}}><span class="sl">{{if .Current}}<span class="cdot" aria-hidden="true"></span>{{end}}{{.Label}}{{if .Current}}<span class="sr"> {{t "ui.cx.current"}}</span>{{end}}</span></label>{{end}}</div><input type="hidden" name="state_was" value="{{.StateWas}}"></div>{{end}}
+        <div class="cx-f">{{with .To}}{{template "uipick" .}}{{end}}{{with .HiddenTo}}<input type="hidden" name="mentions" value="{{.}}">{{end}}{{with .Kind}}{{template "uipick" .}}{{end}}<span class="sp"></span><button class="gbtn rm-ask" name="intent" value="question" data-needs-to>{{t "room.send_ask"}}</button></div>
+      </div>
+    </details>
+    <div class="cx-b"><div class="cx-w"><label class="sr" for="{{.ID}}">{{.Placeholder}}</label><textarea id="{{.ID}}" name="{{.FieldName}}" class="comp-in" rows="1" placeholder="{{.Placeholder}}" autocomplete="off">{{.Value}}</textarea>{{template "coord-suggest" .People}}</div><div class="cx-pv prose" data-empty="{{t "ui.cx.empty_preview"}}" hidden></div></div>
+    <button class="gbtn pri comp-send comp-send-message" data-send-label="{{.SendLabel}}">{{mi "send"}}<span class="comp-send-t">{{.SendLabel}}</span></button>
+  </div>
+  <p class="coord-action-status callout" data-coord-action-status role="status" hidden></p>
+</div>{{end}}
+
+{{define "coord-composer-room"}}<div class="cx rm-compose-box">
   <div class="cx-h"><nav class="utabs-nav" aria-label="{{t "ui.cx.tabs"}}"><ul class="utabs"><li class="sel"><a href="#" data-wtab="w" aria-current="true"><span>{{t "ui.cx.write"}}</span></a></li><li><a href="#" data-wtab="p"><span>{{t "ui.cx.preview"}}</span></a></li></ul></nav><span class="sp"></span>{{if .More}}<details class="dd top-menu comp-more rm-more coord-compose-options"><summary class="gbtn sm icon quiet" aria-label="{{t "coord.more"}}" title="{{t "coord.more"}}">{{mi "kebab"}}</summary><div class="pop r coord-option-panel">{{template "coord-expiry-field" .Zone}}<button class="gbtn sm rm-directive" formaction="/ui/coord/standing/create" name="confirm_scope" value="1">{{mi "pin"}}<span>{{if .CanDirect}}{{t "coord.set_directive"}}{{else}}{{t "coord.set_standing_request"}}{{end}}</span></button></div></details>{{end}}<span class="wtools js-only" role="toolbar" aria-label="{{t "ui.cx.tools"}}">{{range $i, $tool := .Tools}}<button type="button" class="gbtn sm icon quiet" data-tool="{{index $tool 0}}" aria-label="{{t (index $tool 1)}}" title="{{t (index $tool 1)}}"{{if $i}} tabindex="-1"{{end}}>{{mi (index $tool 0)}}</button>{{end}}</span></div>
   <div class="cx-b"><div class="cx-w"><label class="sr" for="{{.ID}}">{{.Placeholder}}</label><textarea id="{{.ID}}" name="{{.FieldName}}" class="comp-in" rows="2"{{if not .Thread}} required{{end}} placeholder="{{.Placeholder}}" autocomplete="off">{{.Value}}</textarea>{{template "coord-suggest" .People}}</div><div class="cx-pv prose" data-empty="{{t "ui.cx.empty_preview"}}" hidden></div></div>
+  <p class="coord-action-status callout" data-coord-action-status role="status" hidden></p>
   {{if .States}}<div class="cx-st cx-state"><span class="cx-sl" id="{{.ID}}-st">{{.StateLabel}}</span><div class="cx-seg" role="radiogroup" aria-labelledby="{{.ID}}-st">{{range .States}}<label class="cx-opt{{if .Current}} cur{{end}}"><input type="radio" name="state" value="{{.Value}}" data-state-input data-label="{{.Button}}" data-label-text="{{.ButtonText}}"{{if .Current}} checked{{end}}><span class="sl">{{if .Current}}<span class="cdot" aria-hidden="true"></span>{{end}}{{.Label}}{{if .Current}}<span class="sr"> {{t "ui.cx.current"}}</span>{{end}}</span></label>{{end}}</div><input type="hidden" name="state_was" value="{{.StateWas}}"></div>{{end}}
   <div class="cx-f"><span class="cx-hint">{{mi "md"}}<span>{{t "coord.hint"}}</span></span>{{with .To}}{{template "uipick" .}}{{end}}{{with .HiddenTo}}<input type="hidden" name="mentions" value="{{.}}">{{end}}{{with .Kind}}{{template "uipick" .}}{{end}}<span class="sp"></span>
     <button class="gbtn rm-ask" name="intent" value="question" data-needs-to>{{t "room.send_ask"}}</button><button class="gbtn pri comp-send comp-send-message" data-send-label="{{.SendLabel}}">{{.SendLabel}}</button></div>
@@ -87,7 +105,7 @@
 
 {{define "coord-room-side"}}{{with .Coord.Active}}{{if or .Standing .Threads .CanManage .CanLeave .CanPost}}
       <div class="rctx box">
-        <div data-coord-standing-list>{{if .Standing}}<section class="coord-standing-section sblk"><h3>{{t "coord.directives"}}</h3>{{range .Standing}}<article class="coord-standing"><span class="coord-standing-pin" aria-hidden="true">{{mi "pin"}}</span><div><p>{{.Body}}</p><small class="muted"><span>{{.Person}}</span> · <span>{{.Scope}}</span></small></div>{{if .CanEnd}}<form method="post" action="/ui/coord/standing/end"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{$.Coord.Active.Room.Key}}"><input type="hidden" name="message_id" value="{{.MessageID}}"><button class="gbtn sm quiet" data-coord-focus-key="standing-end-list-{{.MessageID}}">{{t "coord.end"}}</button></form>{{end}}</article>{{end}}</section>{{end}}</div>
+        <div data-coord-standing-list>{{if .Standing}}<section class="coord-standing-section sblk"><h3>{{t "coord.directives"}}</h3>{{range .Standing}}<article class="coord-standing"><span class="coord-standing-pin" aria-hidden="true">{{mi "pin"}}</span><div><div class="coord-standing-t">{{md .Body}}</div><small class="muted"><span>{{.Person}}</span> · <span>{{.Scope}}</span></small></div>{{if .CanEnd}}<form method="post" action="/ui/coord/standing/end"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{$.Coord.Active.Room.Key}}"><input type="hidden" name="message_id" value="{{.MessageID}}"><button class="gbtn sm quiet" data-coord-focus-key="standing-end-list-{{.MessageID}}">{{t "coord.end"}}</button></form>{{end}}</article>{{end}}</section>{{end}}</div>
         <section class="coord-threads sblk"><h3>{{t "coord.threads"}}{{if .Threads}}<span class="counter">{{len .Threads}}</span>{{end}}</h3>
           <ul data-coord-thread-list class="tlist">{{range .Threads}}<li>{{mi "chat"}}<div><a href="{{.URL}}">{{.Title}}</a><small class="muted"><span class="tstate {{.StateTone}}">{{.StateText}}</span>{{if .RequestID}}{{keyPill .RequestID .RequestURL}}{{end}}</small></div></li>{{else}}<li class="tnone muted">{{t "coord.no_threads"}}</li>{{end}}</ul>
           {{if .CanPost}}<details class="coord-new-thread dd top-menu"><summary class="gbtn sm">{{mi "plus"}}<span>{{t "coord.new_thread"}}</span></summary><form method="post" action="/ui/coord/thread/create" class="pop r pform"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{.Room.Key}}"><label class="pfield"><span>{{t "coord.thread_title"}}</span><input class="gfield" name="title" required></label><label class="pfield"><span>{{t "coord.thread_question"}}</span><input class="gfield" name="question"></label><label class="pfield"><span>{{t "coord.thread_request"}}</span><input class="gfield" name="request_id" placeholder="{{t "coord.thread_request_ph"}}"></label><div class="wf"><button class="gbtn sm pri">{{t "coord.thread_create"}}</button></div></form></details>{{end}}
@@ -97,16 +115,25 @@
       </div>{{end}}{{end}}{{end}}
 
 {{define "coord-thread-main"}}{{with .Coord.Active}}{{with .Thread}}<section id="coord-thread" class="coord-thread-detail rthread" aria-labelledby="coord-thread-title">
+      {{$back := $.Coord.Active.Room.Label}}{{if and $.Repo (eq $.Coord.Active.Room.Kind "project")}}{{$back = t "coord.general"}}{{end}}
       <header class="rthead">
-        <a class="coord-back rback" href="{{$.Coord.Active.Room.URL}}">{{mi "chev"}}<span>{{if and $.Repo (eq $.Coord.Active.Room.Kind "project")}}{{t "coord.general"}}{{else}}{{$.Coord.Active.Room.Label}}{{end}}</span></a>
-        <div class="rttl"><h3 id="coord-thread-title">{{.Title}}</h3><a class="rskip" href="#coord-thread-body">{{t "coord.skip_to_composer"}}</a><form class="rsearch" role="search"><label class="gfield">{{mi "search"}}<input type="search" data-room-filter placeholder="{{t "coord.search_thread"}}" aria-label="{{t "coord.search_thread"}}" autocomplete="off"></label></form></div>
-        <p class="coord-thread-meta rtmeta"><span class="state {{.StateTone}} sm">{{template "threadstate" .State}}{{.StateText}}</span>{{if .RequestID}}{{keyPill .RequestID .RequestURL}}{{end}}{{if .AnchorURL}}<a class="rtanchor" href="{{.AnchorURL}}">{{mi "chat"}}<span>{{t "coord.anchor"}}</span></a>{{end}}</p>
-        {{if .Question}}<div class="rlead"><b>{{t "coord.lead_question"}}</b><p class="coord-thread-question">{{.Question}}</p></div>{{end}}
+        <div class="rtbar">
+          <a class="coord-back rback gbtn icon quiet" href="{{$.Coord.Active.Room.URL}}" aria-label="{{$back}}" title="{{$back}}">{{mi "chev"}}</a>
+          <h3 id="coord-thread-title">{{.Title}}</h3>
+          <a class="rskip" href="#coord-thread-body">{{t "coord.skip_to_composer"}}</a>
+          {{template "coord-thread-state" $}}
+          {{template "coord-thread-who" .}}
+          {{template "coord-thread-menu" $}}
+        </div>
+        {{if or .RequestID .Question}}<div class="rtlead">
+          {{if .RequestID}}<p class="coord-thread-meta rtmeta">{{keyPill .RequestID .RequestURL}}</p>{{end}}
+          {{if .Question}}<details class="rlead" data-coord-draft-key="thread-lead-{{.ID}}"><summary><b>{{t "coord.lead_question"}}</b><p class="coord-thread-question">{{.Question}}</p>{{if gt (len .Question) 80}}<span class="rlead-c">{{mi "chev"}}</span>{{end}}</summary></details>{{end}}
+        </div>{{end}}
       </header>
       <nav class="coord-paging coord-thread-paging" aria-label="{{t "coord.thread_history"}}">{{if .HasOlder}}<a class="gbtn sm" href="{{.OlderURL}}">{{t "coord.older_replies"}}</a>{{end}}{{if .HasNewer}}<a class="gbtn sm" href="{{.NewerURL}}">{{t "coord.newer_replies"}}</a>{{end}}</nav>
       <div class="rbody">
-        <p class="coord-action-status callout" data-coord-action-status role="status" hidden></p>
-        <ol class="coord-thread-messages coord-messages" data-chat tabindex="-1" aria-label="{{t "coord.thread_history"}}">{{with .Anchor}}{{template "coord-message" .}}{{end}}{{range .Messages}}{{template "coord-message" .}}{{else}}<li class="coord-empty">{{t "coord.no_replies"}}</li>{{end}}</ol>
+        {{if not $.Coord.Active.CanPost}}<p class="coord-action-status callout" data-coord-action-status role="status" hidden></p>{{end}}
+        <ol class="coord-thread-messages coord-messages" data-chat tabindex="-1" aria-label="{{t "coord.thread_history"}}">{{with .Anchor}}{{template "coord-message" .}}{{end}}{{range .Messages}}{{template "coord-message" .}}{{else}}{{if not .AnsweredElsewhere}}<li class="coord-empty">{{t "coord.no_replies"}}</li>{{end}}{{end}}{{range .Events}}<li class="coord-thread-event cte-{{.State}}" role="note"><span class="cte-dot" aria-hidden="true"></span><span>{{.Text}}</span><time datetime="{{.At}}">{{.When}}</time></li>{{end}}{{range .WaitLines}}<li class="coord-thread-wait" role="status">{{mi "clock"}}<span>{{.}}</span></li>{{end}}</ol>
         <p class="rnone muted" hidden>{{t "room.search_none"}}</p>
         <button type="button" class="rnew gbtn sm" data-chat-new hidden>{{mi "chev"}}<span>{{t "coord.new_messages"}}</span></button>
       </div>
@@ -115,20 +142,30 @@
       </form>{{end}}
     </section>{{end}}{{end}}{{end}}
 
+{{define "coord-thread-state"}}{{with .Coord.Active.Thread}}{{if .States}}<details class="dd top-menu rtstate" data-coord-draft-key="thread-state-{{.ID}}"><summary class="state {{.StateTone}} sm" aria-label="{{t "coord.thread_state"}}" title="{{t "coord.thread_state"}}" data-coord-focus-key="thread-state-summary-{{.ID}}">{{template "threadstate" .State}}<span>{{.StateText}}</span>{{mi "chev"}}</summary>
+  <form class="pop r rtstate-pop" method="post" action="/ui/coord/thread/state"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="thread_id" value="{{.ID}}">{{range .States}}<button class="opt{{if .Current}} cur{{end}}" name="state" value="{{.Value}}"{{if .Current}} aria-current="true"{{end}}>{{template "threadstate" .Value}}<span>{{.Label}}</span>{{if .Current}}<span class="chk">{{mi "check"}}</span>{{end}}</button>{{end}}</form></details>
+{{- else}}<span class="state {{.StateTone}} sm" title="{{t "coord.thread_state_lock"}}" tabindex="0">{{template "threadstate" .State}}<span>{{.StateText}}</span></span>{{end}}{{end}}{{end}}
+
+{{define "coord-thread-who"}}{{if .Who}}<details class="dd top-menu rwho rtwho" data-coord-draft-key="thread-who-{{.ID}}"><summary class="wstack-btn" aria-label="{{t "coord.participants"}}" title="{{t "coord.participants"}}" data-coord-focus-key="thread-who-summary-{{.ID}}"><span class="stackav">{{range $i, $h := .Who}}{{if lt $i 4}}{{template "coord-here-av" $h}}{{end}}{{end}}{{if gt (len .Who) 4}}<span class="stackmore">{{more (len .Who) 4}}</span>{{end}}</span></summary>
+  <div class="pop r rwho-pop"><div class="ph">{{t "coord.participants"}}</div>{{if gt (len .Who) 7}}<form class="rsearch rwho-find" role="search"><label class="gfield">{{mi "search"}}<input type="search" data-here-filter placeholder="{{t "room.who_filter"}}" aria-label="{{t "room.who_filter"}}" autocomplete="off"></label></form>{{end}}<ul class="coord-participants rm-here">{{range .Who}}{{template "coord-thread-who-row" .}}{{end}}</ul><p class="rwho-none muted" hidden>{{t "room.who_none"}}</p></div></details>{{end}}{{end}}
+
+{{define "coord-thread-who-row"}}<li class="coord-participant rm-here-item {{if .Human}}is-human{{else}}is-agent{{end}}"{{with .Tip}} title="{{.}}"{{end}}><div class="pp-row"><span class="pp-av">{{template "coord-here-av" .}}</span><span class="pp-text"><strong class="pp-title">{{if .Human}}{{.Person.Label}}{{else}}{{.Title}}{{end}}</strong>{{with .Sub}}<small class="pp-sub muted">{{.}}</small>{{end}}</span></div></li>{{end}}
+
+{{define "coord-thread-menu"}}{{with .Coord.Active}}<details class="dd top-menu rtmenu" data-coord-draft-key="thread-menu-{{.Thread.ID}}"><summary class="gbtn icon quiet" aria-label="{{t "coord.more"}}" title="{{t "coord.more"}}" data-coord-focus-key="thread-menu-summary-{{.Thread.ID}}">{{mi "kebab"}}</summary>
+  <div class="pop r rtmenu-pop">
+    <form class="rsearch" role="search"><label class="gfield">{{mi "search"}}<input type="search" data-room-filter placeholder="{{t "coord.search_thread"}}" aria-label="{{t "coord.search_thread"}}" autocomplete="off"></label></form>
+    {{if .Thread.AnchorURL}}<a class="opt rtanchor" href="{{.Thread.AnchorURL}}">{{mi "chat"}}<span>{{t "coord.anchor"}}</span></a>{{end}}
+    {{if .Standing}}<div class="rtmenu-sec" data-coord-standing-list><h4>{{t "coord.directives"}}</h4>{{range .Standing}}<article class="coord-standing"><div><div class="coord-standing-t">{{md .Body}}</div><small class="muted"><span>{{.Person}}</span> · <span>{{.Scope}}</span></small></div>{{if .CanEnd}}<form method="post" action="/ui/coord/standing/end"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{$.Coord.Active.Room.Key}}"><input type="hidden" name="message_id" value="{{.MessageID}}"><button class="gbtn sm quiet" data-coord-focus-key="standing-end-list-{{.MessageID}}">{{t "coord.end"}}</button></form>{{end}}</article>{{end}}</div>{{end}}
+  </div></details>{{end}}{{end}}
+
 {{define "threadstate"}}<svg class="i" viewBox="0 0 16 16" aria-hidden="true">{{if eq . "open"}}<circle cx="8" cy="8" r="6.25"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/>{{else if eq . "resolved"}}<circle cx="8" cy="8" r="6.25"/><path d="m5.2 8.3 2 2 3.6-4"/>{{else}}<circle cx="8" cy="8" r="6.25"/><path d="M6.4 5.6v4.8M9.6 5.6v4.8"/>{{end}}</svg>{{end}}
 
-{{define "coord-thread-side"}}{{with .Coord.Active}}{{with .Thread}}
-      <div class="rtside rctx box">
-      <div class="sblk"><h3>{{t "coord.participants"}}</h3>{{if gt (len $.Coord.Active.Here) 7}}<form class="rsearch rwho-find" role="search"><label class="gfield">{{mi "search"}}<input type="search" data-here-filter placeholder="{{t "room.who_filter"}}" aria-label="{{t "room.who_filter"}}" autocomplete="off"></label></form>{{end}}<ul class="coord-participants rm-here">{{range $.Coord.Active.Here}}{{template "coord-here" .}}{{end}}</ul><p class="rwho-none muted" hidden>{{t "room.who_none"}}</p></div>
-      {{if $.Coord.Active.WaitCycles}}<div class="sblk"><section class="coord-wait-cycles callout" role="alert"><div><strong>{{t "coord.wait_cycles"}}</strong><ul>{{range $.Coord.Active.WaitCycles}}<li>{{.}}</li>{{end}}</ul></div></section></div>{{end}}
-      {{if $.Coord.Active.Standing}}<div class="sblk" data-coord-standing-list><h3>{{t "coord.directives"}}</h3>{{range $.Coord.Active.Standing}}<article class="coord-standing"><div><p>{{.Body}}</p><small class="muted"><span>{{.Person}}</span> · <span>{{.Scope}}</span></small></div>{{if .CanEnd}}<form method="post" action="/ui/coord/standing/end"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{$.Coord.Active.Room.Key}}"><input type="hidden" name="message_id" value="{{.MessageID}}"><button class="gbtn sm quiet" data-coord-focus-key="standing-end-list-{{.MessageID}}">{{t "coord.end"}}</button></form>{{end}}</article>{{end}}</div>{{end}}
-      </div>
-{{end}}{{end}}{{end}}
+{{define "coord-thread-side"}}{{end}}
 
 {{define "room-ask-icon"}}{{mi "ask"}}{{end}}
 {{define "room-fold"}}{{with .}}{{if .Pending}}{{template "explain" .}}{{else}}<details class="rm-fold"><summary><span class="rm-fold-t">{{.Title}}</span><span class="rm-fold-p">{{.RoomLead}}</span></summary><div class="rm-fold-b">{{template "explain" .}}</div></details>{{end}}{{end}}{{end}}
 
-{{define "coord-suggest"}}<ul class="comp-suggest" role="listbox" aria-label="{{t "coord.mention"}}" hidden>{{range .}}{{if .Handle}}<li role="option" data-handle="{{.Handle}}" aria-selected="false"><span class="comp-suggest-name">{{.Label}}</span>{{if .Provider}}<small>{{.Provider}}</small>{{end}}</li>{{end}}{{end}}</ul>{{end}}
+{{define "coord-suggest"}}<ul class="comp-suggest" role="listbox" aria-label="{{t "coord.mention"}}" hidden>{{range .}}{{if .Handle}}<li role="option" data-handle="{{.Handle}}"{{if not .Human}} data-agent="1" data-owner="{{.Person}}"{{end}} aria-selected="false"><span class="comp-suggest-name">{{.Label}}</span>{{if not .Human}}<small>{{if .Person}}{{t "coord.mention.agent_of" .Person}}{{else}}{{t "coord.mention.agent"}}{{end}}</small>{{end}}</li>{{end}}{{end}}</ul>{{end}}
 
 {{define "coord-room-link"}}<a class="rl{{if .Active}} on{{end}}" href="{{.URL}}"{{if .Active}} aria-current="page"{{end}}>{{if eq .Kind "group"}}{{mi "people"}}{{else if eq .Kind "direct"}}{{avatarOf .Label}}{{else}}{{mi "chat"}}{{end}}<span class="coord-room-name" title="{{.Label}}">{{.Name}}</span>{{if and (not .Active) (or .Attention .Mentions .Unread)}}<span class="counter{{if .Mentions}} att{{end}}" aria-hidden="true">{{.Badge}}</span>{{end}}<span class="coord-room-counts sr">{{if .Attention}}<strong>{{t "coord.count.open" .Attention}}</strong>{{end}}{{if .Mentions}}<strong>{{t "coord.count.mentions" .Mentions}}</strong>{{end}}{{if .Unread}}<strong>{{t "coord.count.unread" .Unread}}</strong>{{end}}</span></a>{{end}}
 
@@ -142,15 +179,16 @@
 
 {{define "coord-head"}}<header class="rm-head"><strong class="rm-name"{{with .MetaTitle}} title="{{.}}"{{end}}>{{if .Own}}{{t "coord.you"}}{{else}}{{.ShortName}}{{end}}</strong>{{if eq .AuthorKind "agent"}}<span class="sr">{{t "coord.agent"}}</span>{{end}}<time class="cm-time" datetime="{{.Timestamp}}" data-local="clock" title="{{.TimeTitle}}">{{.Clock}}</time>{{with .To}}<span class="rm-to">{{.}}</span>{{end}}{{if .MentionsViewer}}<span class="coord-mention-you">{{t "coord.mentions_you"}}</span>{{end}}{{with .ExpiredText}}<span class="cm-note">{{.}}</span>{{end}}</header>{{end}}
 
-{{define "coord-request-foot"}}{{with .Merged}}<div class="rq4-f">{{if .Note}}<p class="rq4-n">{{t "coord.approval_note"}}</p>{{end}}<span class="sp"></span>
+{{define "coord-request-foot"}}{{with .Merged}}{{if .Quick}}<div class="rq4-opts" role="group" aria-label="{{t "inbox.suggest"}}">{{$m := .}}{{range .Quick}}<form method="post" action="/ui/inbox/answer"><input type="hidden" name="csrf_token" value="{{$m.CSRFToken}}"><input type="hidden" name="kind" value="{{$m.QuickKind}}"><input type="hidden" name="id" value="{{$m.QuickID}}"><input type="hidden" name="option" value="{{.Key}}"><input type="hidden" name="room" value="{{$m.RoomKey}}"><input type="hidden" name="next" value="1"><button class="gbtn" title="{{.Text}}">{{with .Lead}}<b class="ok">{{.}}</b>{{end}}<span>{{.Body}}</span></button></form>{{end}}</div>{{end}}{{if or .Note .Main .Menu}}<div class="rq4-f">{{if .Note}}<p class="rq4-n">{{t "coord.approval_note"}}</p>{{end}}<span class="sp"></span>
         {{- with .Main}}<form method="post" action="/ui/coord/attention/action"><input type="hidden" name="csrf_token" value="{{$.Merged.CSRFToken}}"><input type="hidden" name="room" value="{{$.Merged.RoomKey}}">{{range .IDs}}<input type="hidden" name="attention_id" value="{{.}}">{{end}}<button class="gbtn sm pri" name="action" value="{{.Value}}">{{.Label}}</button></form>{{end}}
-        {{- if .Menu}}<details class="dd top-menu rq4-menu" data-float><summary class="gbtn sm icon quiet" aria-label="{{t "coord.actions"}}" title="{{t "coord.actions"}}">{{mi "kebab"}}</summary><div class="pop r">{{range .Menu}}<form method="post" action="/ui/coord/attention/action"><input type="hidden" name="csrf_token" value="{{$.Merged.CSRFToken}}"><input type="hidden" name="room" value="{{$.Merged.RoomKey}}">{{range .IDs}}<input type="hidden" name="attention_id" value="{{.}}">{{end}}<button class="opt" name="action" value="{{.Value}}">{{.Label}}</button></form>{{end}}</div></details>{{end}}</div>{{end}}{{end}}
+        {{- if and .Menu (not .Main)}}{{range .Menu}}<form method="post" action="/ui/coord/attention/action"><input type="hidden" name="csrf_token" value="{{$.Merged.CSRFToken}}"><input type="hidden" name="room" value="{{$.Merged.RoomKey}}">{{range .IDs}}<input type="hidden" name="attention_id" value="{{.}}">{{end}}<button class="gbtn sm quiet" name="action" value="{{.Value}}">{{.Label}}</button></form>{{end}}
+        {{- else if .Menu}}<details class="dd top-menu rq4-menu" data-float><summary class="gbtn sm icon quiet" aria-label="{{t "coord.actions"}}" title="{{t "coord.actions"}}">{{mi "kebab"}}</summary><div class="pop r">{{range .Menu}}<form method="post" action="/ui/coord/attention/action"><input type="hidden" name="csrf_token" value="{{$.Merged.CSRFToken}}"><input type="hidden" name="room" value="{{$.Merged.RoomKey}}">{{range .IDs}}<input type="hidden" name="attention_id" value="{{.}}">{{end}}<button class="opt" name="action" value="{{.Value}}">{{.Label}}</button></form>{{end}}</div></details>{{end}}</div>{{end}}{{end}}{{end}}
 
 {{define "coord-message"}}{{if .NewFrom}}<li class="cm-new" role="separator" data-from="{{.Sequence}}"><span>{{t "coord.new_divider"}}</span></li>{{end}}<li class="coord-message coord-message-group{{if .MentionsViewer}} coord-message-mentioned{{end}} {{if .GroupStart}}coord-message-group-start{{else}}coord-message-continuation{{end}}{{if and .Own (not .Directive) (not .Request)}} is-own{{end}}{{if .Directive}} is-directive{{else if .Request}} is-request{{else if .System}} is-system{{end}}{{if .ThreadAnchor}} is-anchor{{end}}" id="{{.DOMID}}" data-seq="{{.Sequence}}">
 {{- if .System}}<p class="cm-event"><span>{{.Body}}</span><time datetime="{{.Timestamp}}" data-local="clock" title="{{.Timestamp}}">{{.Clock}}</time></p>
 {{- else if .Directive}}<article class="slab{{if not .Directive.Active}} is-ended{{end}}">
   <div class="slab-k"><span class="slab-pin" aria-hidden="true">{{mi "pin"}}</span><span class="lb warn"><span>{{if .Directive.Request}}{{t "coord.standing_request"}}{{else}}{{t "coord.directive"}}{{end}}</span></span><span class="slab-by">{{.Name}}</span>{{if .SenderRole}}<span class="cm-role" title="{{.SenderRoleTitle}}">{{.SenderRoleLabel}}</span>{{end}}<time class="cm-time" datetime="{{.Timestamp}}" data-local="clock" title="{{.Timestamp}}">{{.Clock}}</time></div>
-  <p class="slab-t">{{.Body}}</p>
+  <div class="slab-t">{{.BodyHTML}}</div>
   <div class="slab-s"><span class="muted">{{.Directive.Scope}}</span>{{if .Directive.Active}}{{if .Directive.CanEnd}}<form method="post" action="/ui/coord/standing/end"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="room" value="{{.Directive.RoomKey}}"><input type="hidden" name="message_id" value="{{.Directive.MessageID}}"><button class="gbtn sm quiet slab-end" data-coord-focus-key="standing-end-{{.Directive.MessageID}}">{{t "coord.end"}}</button></form>{{end}}{{else}}<span class="slab-ended lb neu">{{t "coord.ended"}}</span>{{end}}</div>
 </article>
 {{- else if .Request}}<article tabindex="-1" class="rm-msg is-ask">{{msgAvatar . "xl"}}
@@ -158,7 +196,7 @@
     {{template "coord-head" .}}
     {{template "coord-quote" .}}
     <div class="rq4 rq-{{.Intent}}">
-      <div class="rq4-h"><span class="lb rqk-{{.Intent}}">{{template "room-ask-icon"}}{{.Request.Title}}</span><span class="sp"></span>{{if .Request.State}}<span class="ask-state">{{.Request.State}}</span>{{else if .Request.Items}}<span class="rq-open">{{if .Request.Waiting}}{{.Request.Waiting}}{{else}}{{t "coord.open_state"}}{{end}}</span>{{end}}</div>
+      <div class="rq4-h"><span class="lb rqk-{{.Intent}}">{{template "room-ask-icon"}}{{.Request.Title}}</span><span class="sp"></span>{{if .Request.State}}<span class="ask-state">{{if .Request.StateHref}}<a href="{{.Request.StateHref}}">{{.Request.State}}</a>{{else}}{{.Request.State}}{{end}}</span>{{else if .Request.Items}}<span class="rq-open">{{if .Request.Waiting}}{{.Request.Waiting}}{{else}}{{t "coord.open_state"}}{{end}}</span>{{end}}</div>
       <div class="ask-t">{{.BodyHTML}}</div>
       {{template "room-fold" .Request.Explain}}
       {{template "coord-request-foot" .Request}}
@@ -179,7 +217,7 @@
 </article>
 {{- end}}</li>{{end}}
 
-{{define "coord-message-links"}}{{if .ThreadURL}}<a class="cm-thread" href="{{.ThreadURL}}">{{mi "chat"}}<b>{{if .ReplyCount}}{{t "coord.replies" .ReplyCount}}{{else}}{{.ThreadTitle}}{{end}}</b>{{if .ThreadMeta}}<small class="muted">{{.ThreadMeta}}</small>{{end}}</a>{{else if .ReplyCount}}<small class="coord-reply-count muted">{{mi "chat"}}{{t "coord.replies" .ReplyCount}}</small>{{end}}{{end}}
+{{define "coord-message-links"}}{{if .ThreadURL}}<a class="cm-thread" href="{{.ThreadURL}}">{{mi "chat"}}<b>{{if .ReplyCount}}{{t "coord.replies" .ReplyCount}}{{else}}{{.ThreadTitle}}{{end}}</b>{{if .ThreadMeta}}<small class="muted">{{.ThreadMeta}}</small>{{end}}</a>{{else if .ReplyCount}}<small class="coord-reply-count muted" title="{{t "coord.replies_in_room"}}">{{mi "reply"}}{{t "coord.replies" .ReplyCount}}</small>{{end}}{{end}}
 
 {{define "coord-here-av"}}{{if .Human}}{{avatarOf .Person.Label}}{{else}}{{avatarX "" (agentKindOf .Provider) .Title .Owner false}}{{end}}{{end}}
 

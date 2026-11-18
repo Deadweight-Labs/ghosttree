@@ -45,3 +45,21 @@ Root-level files such as `CONTRIBUTING.md` remain visible exclusions; review the
 and use `ctx doc import <file> --kind other` for documents you choose to preserve.
 Normal migration and cleanup print the same coverage report. Cleanup remains a
 separate `ctx migrate --clean <repo>` operation requiring stored source evidence.
+
+## Editing workflows as files
+
+A workflow is a file that lives on the server, not in the repository. To edit
+one with an editor or an agent, pull it into `.ghosttree/workflows/`, which
+Ghosttree also keeps out of Git and never writes except through `ctx workflow`:
+
+```bash
+ctx workflow pull                 # all workflows, or: ctx workflow pull <name>
+ctx workflow new my-check --template wissen-nach-merge
+ctx workflow push my-check -m "Only on release branches"
+ctx workflow diff my-check --remote
+```
+
+A push is checked like a save in the web interface or over MCP and becomes the
+next version. If the workflow changed on the server since you pulled it, the
+push is refused and shows what changed; `ctx workflow pull <name> --force`
+takes the server's version over your file.

@@ -107,6 +107,9 @@ var excludeLines = []string{
 	".ghosttree/knowledge/", ".ghosttree/knowledge" + tmpSuffix + "/",
 	".ghosttree/docs/", ".ghosttree/docs" + tmpSuffix + "/",
 	".ghosttree/edit/", ".ghosttree/edit" + tmpSuffix + "/",
+	// The worktree of workflows (ctx workflow pull/push), written by people and
+	// never by the mirror, so there is no building directory beside it.
+	".ghosttree/workflows/",
 	".ghosttree/requests/", ".ghosttree/requests" + tmpSuffix + "/",
 	".ghosttree/snapshots/INDEX.md", ".ghosttree/snapshots/.INDEX.md.tmp-*",
 	".ghosttree/INDEX.md",

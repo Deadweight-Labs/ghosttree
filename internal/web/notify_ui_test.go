@@ -54,9 +54,8 @@ func TestProfileSwitchesTurnAKindOffInTheInboxAndAtTheBell(t *testing.T) {
 		t.Errorf("all five kinds start on, %d are", n)
 	}
 	mustNotContain(t, "profile", profile, "E-mail", "Browser")
-	// Mentions are only in the inbox, the bell never counts them: the switch must not claim the bell.
-	mustContain(t, "profile", profile, `aria-label="Mentions in the inbox"`)
-	mustNotContain(t, "profile", profile, "Mentions in the inbox and at the bell")
+	// The bell counts the rows of the inbox, mentions included: every switch names both.
+	mustContain(t, "profile", profile, `aria-label="Mentions in the inbox and at the bell"`)
 	_, inbox := fetchPage(t, e.Member, e.Base+"/ui/inbox")
 	if !bell.MatchString(inbox) || !strings.Contains(inbox, "First thing") {
 		t.Fatal("the tasks wait before anything is switched off")

@@ -29,8 +29,15 @@ import (
 // stay single files because they are not deferred.
 var assetBundles = map[string][]string{
 	"bundle-base.css": {"ui-tokens.css", "ui-explain.css", "ui-base.css", "ui-shell.css", "ui-parts.css", "ui-pages.css", "ui-refs.css", "ui-rows.css"},
-	"bundle-base.js":  {"live.js", "ui-tabs.js", "ui-pill.js", "ui-md.js", "ui-parts.js", "ui-select.js", "ui-refs.js", "ui-search.js", "ui-suggest.js", "ui-flash.js"},
+	"bundle-base.js":  {"live.js", "ui-tabs.js", "ui-pill.js", "ui-md.js", "ui-parts.js", "ui-select.js", "ui-refs.js", "ui-search.js", "ui-suggest.js", "ui-flash.js", "ui-toast.js", "ui-mentions.js"},
 }
+
+// vendorDir holds the third-party files (static/vendor/, see
+// THIRD_PARTY_NOTICES.md). They are named "vendor/<file>" in the set and in the
+// address, and they are the only static files that are not read at start in full:
+// a file that big (Mermaid is 5.5 MB) is compressed when it is first asked for
+// with gzip, not by every process that only starts.
+const vendorDir = "vendor"
 
 // asset is one file as it is sent: raw, and gzip when that is smaller.
 type asset struct {
@@ -39,6 +46,17 @@ type asset struct {
 	ctype   string
 	hash    string // the full content hash, hex
 	version string // the short form that goes into the address
+	// lazyGz: gz is made by gzipped() on first use instead of by newAsset.
+	lazyGz bool
+	gzOnce sync.Once
+}
+
+// gzipped is the compressed body, or nil when compression does not make the file smaller.
+func (a *asset) gzipped() []byte {
+	if a.lazyGz {
+		a.gzOnce.Do(func() { a.gz = gzipSmaller(a.body, a.ctype) })
+	}
+	return a.gz
 }
 
 type assetSet map[string]*asset
@@ -58,6 +76,21 @@ var loadAssets = sync.OnceValue(func() assetSet {
 			panic("web: static file " + e.Name() + ": " + err.Error())
 		}
 		set[e.Name()] = newAsset(e.Name(), raw)
+	}
+	vendor, err := fs.ReadDir(files, "static/"+vendorDir)
+	if err != nil {
+		panic("web: static/" + vendorDir + ": " + err.Error())
+	}
+	for _, e := range vendor {
+		if e.IsDir() {
+			continue
+		}
+		raw, err := fs.ReadFile(files, path.Join("static", vendorDir, e.Name()))
+		if err != nil {
+			panic("web: static file " + vendorDir + "/" + e.Name() + ": " + err.Error())
+		}
+		a := newLazyAsset(vendorDir+"/"+e.Name(), raw)
+		set[vendorDir+"/"+e.Name()] = a
 	}
 	for name, parts := range assetBundles {
 		var joined bytes.Buffer
@@ -83,19 +116,33 @@ var loadAssets = sync.OnceValue(func() assetSet {
 })
 
 func newAsset(name string, raw []byte) *asset {
-	sum := sha256.Sum256(raw)
-	a := &asset{body: raw, ctype: assetType(name), hash: hex.EncodeToString(sum[:])}
-	a.version = a.hash[:12]
-	if compressible(a.ctype) {
-		var buf bytes.Buffer
-		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-		zw.Write(raw)
-		zw.Close()
-		if buf.Len() < len(raw) {
-			a.gz = buf.Bytes()
-		}
-	}
+	a := newLazyAsset(name, raw)
+	a.lazyGz = false
+	a.gz = gzipSmaller(raw, a.ctype)
 	return a
+}
+
+// newLazyAsset hashes the file but leaves its compression to gzipped.
+func newLazyAsset(name string, raw []byte) *asset {
+	sum := sha256.Sum256(raw)
+	a := &asset{body: raw, ctype: assetType(name), hash: hex.EncodeToString(sum[:]), lazyGz: compressible(assetType(name))}
+	a.version = a.hash[:12]
+	return a
+}
+
+// gzipSmaller is the gzip of a text file, or nil when the type is not text or the result is not smaller.
+func gzipSmaller(raw []byte, ctype string) []byte {
+	if !compressible(ctype) {
+		return nil
+	}
+	var buf bytes.Buffer
+	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	zw.Write(raw)
+	zw.Close()
+	if buf.Len() < len(raw) {
+		return buf.Bytes()
+	}
+	return nil
 }
 
 func assetType(name string) string {
@@ -178,11 +225,14 @@ func (a *app) staticFiles() http.Handler {
 			h.Set("Cache-Control", "no-cache")
 		}
 		body, etag := f.body, `"`+f.hash+`"`
-		if f.gz != nil {
+		// Vary is set before the compression is made: a client that does not ask for gzip costs none.
+		if f.lazyGz || f.gz != nil {
 			h.Set("Vary", "Accept-Encoding")
 			if acceptsGzip(r.Header) {
-				body, etag = f.gz, `"`+f.hash+`-gzip"`
-				h.Set("Content-Encoding", "gzip")
+				if gz := f.gzipped(); gz != nil {
+					body, etag = gz, `"`+f.hash+`-gzip"`
+					h.Set("Content-Encoding", "gzip")
+				}
 			}
 		}
 		h.Set("ETag", etag)

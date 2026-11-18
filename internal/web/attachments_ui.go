@@ -1,6 +1,8 @@
 package web
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,7 +33,38 @@ const maxUploadForm = idea.MaxAttachmentBytes + 256<<10
 // attachImage ist ein Bild für die Seite.
 type attachImage struct {
 	Src, Alt, Who string
-	W, H          int
+	// ID is the number the picture is named by (ATT-n); Desc is the description the person wrote, empty when
+	// there is none (Alt then holds a made-up one for the screen reader).
+	ID   int64
+	Desc string
+	W, H int
+}
+
+// Ref is the name a text writes the picture by: ATT-n.
+func (i attachImage) Ref() string { return "ATT-" + strconv.FormatInt(i.ID, 10) }
+
+// attachBox is the box of the pictures on an idea, an issue or a pain: the pictures,
+// and the form that adds one for whoever may work on the object (CanAttach).
+type attachBox struct {
+	Images    []attachImage
+	CanAttach bool
+	// Action is where the form posts, Owner what the picture belongs to (the object
+	// itself: idea, request or pain).
+	Action, Owner, Token string
+}
+
+// MaxBytes is the size a picture may have, for the script that checks it before the upload.
+func (attachBox) MaxBytes() int { return idea.MaxAttachmentBytes }
+
+// attachBoxFor builds the box of an object: its pictures that belong to the object itself,
+// and the form when the viewer may work on it and the page is an interactive one.
+func (a *app) attachBoxFor(r *http.Request, l lang, pa *store.ProjectAccess, subject string, id int64, action string) *attachBox {
+	box := &attachBox{Action: action, Owner: subject, Token: csrfOf(r)}
+	if metas, err := pa.AttachmentsOf(subject, id); err == nil {
+		box.Images = attachImages(l, metas, func(m idea.AttachmentMeta) bool { return m.Owner == subject })
+	}
+	box.CanAttach = interactive(r) && pa.CanAttach(subject, id)
+	return box
 }
 
 // attachImages macht aus den Anhängen die Bilder, die zu einem Eigentümer gehören.
@@ -45,7 +78,7 @@ func attachImages(l lang, metas []idea.AttachmentMeta, keepOwner func(idea.Attac
 		if alt == "" {
 			alt = l.msg("workshop.img_alt", firstNonEmpty(m.Person, "?"))
 		}
-		out = append(out, attachImage{Src: attachmentSrc(m.ID), Alt: alt, Who: m.Person, W: m.Width, H: m.Height})
+		out = append(out, attachImage{Src: attachmentSrc(m.ID), Alt: alt, Who: m.Person, ID: m.ID, Desc: m.Alt, W: m.Width, H: m.Height})
 	}
 	return out
 }
@@ -127,21 +160,94 @@ func (a *app) ideaAttach(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
+	a.attachUpload(w, r, pa, store.AttachInput{Subject: idea.SubjectIdea, SubjectID: id, Owner: owner, VariantID: variantID}, back)
+}
+
+// requestAttach ist POST /ui/requests/{id}/attach (file, alt): hängt ein Bild an das
+// Issue selbst (REQ-671). Wer daran mitarbeiten darf, darf es; ein Gast bekommt 403,
+// ein Issue, das er nicht lesen darf, ist 404.
+func (a *app) requestAttach(w http.ResponseWriter, r *http.Request) {
+	detail, ok := a.lookupRequest(w, r, store.ActWork)
+	if !ok {
+		return
+	}
+	back := requestURL(detail.Request.ID)
+	if detail.Request.Scope.Project != "" {
+		back = repoHref(detail.Request.Scope.Project) + "/issues/" + strconv.FormatInt(detail.Request.ID, 10)
+	}
+	a.attachUpload(w, r, a.access(r), store.AttachInput{Subject: idea.SubjectRequest, SubjectID: detail.Request.ID, Owner: idea.OwnerRequest}, back)
+}
+
+// painAttach ist POST /ui/pains/{id}/attach (file, alt): hängt ein Bild an den Pain
+// (REQ-671). Wie beim Issue: Mitarbeit nötig, ein verborgener Pain ist 404.
+func (a *app) painAttach(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	pa := a.access(r)
+	p, err := a.store.PainByID(id)
+	if err != nil {
+		pa.Filtered()
+		http.NotFound(w, r)
+		return
+	}
+	if err := pa.CheckPain(p, store.ActRead); err != nil {
+		a.painFail(w, r, err)
+		return
+	}
+	a.attachUpload(w, r, pa, store.AttachInput{Subject: idea.SubjectPain, SubjectID: id, Owner: idea.OwnerPain}, repoHref(p.Project)+"/pains/"+strconv.FormatInt(id, 10))
+}
+
+// attachMessages are the texts of a refused picture for the script that uploads in the
+// background (the page shows the same words after a redirect, from ?fail=img_*).
+var attachMessages = map[string]string{
+	"img_none": "ideas.result.img_none", "img_type": "ideas.result.img_type", "img_size": "ideas.result.img_size",
+	"img_bad": "ideas.result.img_bad", "img_other": "ideas.result.img_other",
+}
+
+// writeAttachJSON answers the upload that ui-attach.js sends in the background (wantsJSON, joinpair.go):
+// the new picture or the reason it was refused, instead of a redirect to a page that would be loaded
+// again and take a begun comment with it.
+func writeAttachJSON(w http.ResponseWriter, status int, v map[string]any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// attachRefused answers a refused picture: the redirect with fail=img_* for the form, the
+// words for the script.
+func (a *app) attachRefused(w http.ResponseWriter, r *http.Request, back, short string) {
+	if wantsJSON(r) {
+		writeAttachJSON(w, http.StatusUnprocessableEntity, map[string]any{"ok": false, "message": a.langFor(r).msg(attachMessages[short])})
+		return
+	}
+	http.Redirect(w, r, back+"?fail="+url.QueryEscape(short)+"#images", http.StatusSeeOther)
+}
+
+// attachUpload reads the file of the form, hands it to Attach (which checks the right
+// to work on the object and the image itself) and goes back to the page: with done=image
+// when it worked, with fail=img_* when the picture was refused. The type is the one the
+// bytes show, never the one the browser names. Asked for JSON (the script of the page),
+// it answers with the markup of the new picture instead, and the page stays as it is.
+func (a *app) attachUpload(w http.ResponseWriter, r *http.Request, pa *store.ProjectAccess, in store.AttachInput, back string) {
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		http.Redirect(w, r, back+"?fail=img_none#images", http.StatusSeeOther)
+		a.attachRefused(w, r, back, "img_none")
 		return
 	}
 	defer file.Close()
 	// One byte more than allowed, so that a file over the limit is told from one at it.
 	data, err := io.ReadAll(io.LimitReader(file, idea.MaxAttachmentBytes+1))
 	if err != nil {
-		http.Redirect(w, r, back+"?fail=img_bad#images", http.StatusSeeOther)
+		a.attachRefused(w, r, back, "img_bad")
 		return
 	}
 	// DeclaredType stays empty on purpose: what the browser says the file is does not count.
-	_, err = pa.Attach(store.AttachInput{Subject: idea.SubjectIdea, SubjectID: id, Owner: owner, VariantID: variantID, Data: data,
-		Alt: r.FormValue("alt"), Actor: store.IdeaActorFor(browserPrincipal(r), "")})
+	in.Data, in.Alt, in.Actor = data, r.FormValue("alt"), store.IdeaActorFor(browserPrincipal(r), "")
+	meta, err := pa.Attach(in)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrAccessForbidden):
@@ -151,15 +257,31 @@ func (a *app) ideaAttach(w http.ResponseWriter, r *http.Request) {
 		default:
 			code := requestdomain.Code(err)
 			if short, ok := attachFailCodes[code]; ok {
-				http.Redirect(w, r, back+"?fail="+url.QueryEscape(short)+"#images", http.StatusSeeOther)
+				a.attachRefused(w, r, back, short)
+				return
+			}
+			if code == "pain_not_found" || code == "request_not_found" {
+				http.NotFound(w, r)
 				return
 			}
 			if code != "" {
-				http.Redirect(w, r, back+"?fail=img_other#images", http.StatusSeeOther)
+				a.attachRefused(w, r, back, "img_other")
 				return
 			}
 			http.Error(w, "could not save", http.StatusInternalServerError)
 		}
+		return
+	}
+	if wantsJSON(r) {
+		l := a.langFor(r)
+		var img bytes.Buffer
+		for _, im := range attachImages(l, []idea.AttachmentMeta{meta}, func(idea.AttachmentMeta) bool { return true }) {
+			if err := l.page().ExecuteTemplate(&img, "wsimage", im); err != nil {
+				http.Error(w, "could not render", http.StatusInternalServerError)
+				return
+			}
+		}
+		writeAttachJSON(w, http.StatusOK, map[string]any{"ok": true, "id": meta.ID, "owner": meta.Owner, "html": img.String()})
 		return
 	}
 	http.Redirect(w, r, back+"?done=image#images", http.StatusSeeOther)

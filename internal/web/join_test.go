@@ -594,8 +594,10 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp, _ := alice.Get(base + "/ui/orgs")
-	if page := body(t, resp); strings.Contains(page, `<option value="guest">`) || strings.Contains(page, "GHOSTTREE_ENFORCE_ACCESS") {
-		t.Fatalf("guest option offered without enforcement: %s", page)
+	// The guest stays visible in the choice, switched off with the reason
+	// (REQ-704); it cannot be chosen.
+	if page := body(t, resp); strings.Contains(page, `<option value="guest">`) || !strings.Contains(page, `value="guest" data-role disabled`) || !strings.Contains(page, "GHOSTTREE_ENFORCE_ACCESS") {
+		t.Fatalf("guest option without enforcement is not switched off with its reason: %s", page)
 	}
 	resp = postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
 	if page := body(t, resp); resp.StatusCode != http.StatusConflict || !strings.Contains(page, "GHOSTTREE_ENFORCE_ACCESS") {
@@ -607,7 +609,7 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`data-select>http://127\.0\.0\.1:[0-9]+/join/[0-9a-f]{64}<`).MatchString(page) {
 		t.Fatalf("link: %d %s", resp.StatusCode, page)
 	}
-	if !strings.Contains(page, `<b class="ov-name">`+joinProject+`</b><div class="mt muted"><span>Pending</span><span>guest</span>`) {
+	if !strings.Contains(page, `<b class="ov-name">`+joinProject+`</b><div class="mt muted"><span class="lb neu">Open</span><span>guest</span>`) {
 		t.Fatalf("the invitation list does not show project and role: %s", page)
 	}
 }

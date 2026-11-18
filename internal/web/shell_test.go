@@ -311,13 +311,14 @@ func TestShellFooterShowsThePublicHostNotTheRequestHost(t *testing.T) {
 	defer srv.Close()
 	c := loginInteractive(t, srv, st, "alice")
 	_, page := fetchPage(t, c, srv.URL+"/ui/knowledge")
-	if !strings.Contains(page, `<p class="shell-host">gt.example.test</p>`) {
+	if !strings.Contains(page, `<span class="shell-host">gt.example.test</span>`) {
 		t.Errorf("footer does not show the public host: %s", page)
 	}
 	srv2, _, tok := testWeb(t)
 	_, page = fetchPage(t, login(t, srv2, tok), srv2.URL+"/ui/knowledge")
-	if !strings.Contains(page, `<p class="shell-host">`+strings.TrimPrefix(srv2.URL, "http://")+`</p>`) {
-		t.Error("without a public URL the footer shows the request host")
+	// Without a public URL the menu shows no host at all on a loopback address: 127.0.0.1 says nothing about the server (P49).
+	if strings.Contains(page, `shell-host`) || strings.Contains(page, strings.TrimPrefix(srv2.URL, "http://")+`</span>`) {
+		t.Error("the account menu shows the loopback address of the request")
 	}
 }
 
@@ -461,4 +462,49 @@ func mustStore(t *testing.T) *store.Store {
 	}
 	t.Cleanup(func() { st.Close() })
 	return st
+}
+
+// PAIN-83: on a page without a project (the inbox) the "+" menu took the first
+// project in alphabetical order. A remote the repository pages cannot address
+// (ai//opt/assistant sorts before github.com) made every entry a 404.
+func TestTheNewMenuOutsideARepositoryLeadsToAFormThatExists(t *testing.T) {
+	e := ovEnv(t)
+	for _, odd := range []string{"ai//opt/assistant", "nurrobin/infra"} {
+		if _, err := e.St.ClaimProject("person:1", odd, "alpha"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/inbox?project=")
+	for _, kind := range []string{"idea", "issue", "pain"} {
+		_, after, ok := strings.Cut(page, `data-new="`+kind+`" href="`)
+		if !ok {
+			t.Fatalf("no %s entry in the + menu", kind)
+		}
+		href, _, _ := strings.Cut(after, `"`)
+		href = strings.ReplaceAll(href, "&amp;", "&")
+		resp, err := e.Owner.Get(e.Base + href)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s: %s answers %d", kind, href, resp.StatusCode)
+		}
+	}
+}
+
+func TestRepoAddressable(t *testing.T) {
+	for remote, want := range map[string]bool{
+		"github.com/x/shell":          true,
+		"gitlab.winehq.org/wine/wine": true,
+		"github.com/inbox/thing":      true,
+		// A project without a host has its own repository page since REQ-675:
+		// /ui/-/nurrobin/infra.
+		"nurrobin/infra":    true,
+		"ai//opt/assistant": false,
+	} {
+		if got := repoAddressable(remote); got != want {
+			t.Errorf("%s: %v, want %v", remote, got, want)
+		}
+	}
 }

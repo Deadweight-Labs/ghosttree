@@ -169,3 +169,23 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 		t.Fatalf("mode = %04o, want %04o", got, want)
 	}
 }
+
+// PAIN-86: with CLAUDE_CONFIG_DIR set, Claude Code reads settings.json, CLAUDE.md
+// and skills from that directory as well as .claude.json. One install puts every
+// part there and nothing under ~/.claude.
+func TestInstallClaudeFollowsClaudeConfigDirForEveryPart(t *testing.T) {
+	home := t.TempDir()
+	configDir := filepath.Join(home, "custom-claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"settings.json", "CLAUDE.md", ".claude.json", filepath.Join("skills", "ghost", "SKILL.md")} {
+		if _, err := os.Stat(filepath.Join(configDir, want)); err != nil {
+			t.Errorf("%s is not in CLAUDE_CONFIG_DIR: %v", want, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
+		t.Errorf("the install also wrote under ~/.claude (%v)", err)
+	}
+}

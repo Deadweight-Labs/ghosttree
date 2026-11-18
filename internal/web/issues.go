@@ -502,16 +502,14 @@ func (a *app) issueCounts(pa *store.ProjectAccess, project string) (issues, pain
 
 func painOpen(state string) bool { return state == "active" || state == "mitigated" }
 
-// firstLineCut is the first line of a text, cut to n runes.
-func firstLineCut(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = strings.TrimSpace(s[:i])
+// firstLineCut is the first line of a text of a person as plain words, cut to n runes; a text
+// whose first line says nothing (a fence, a rule) is read as a whole.
+func firstLineCut(l lang, s string, n int) string {
+	first, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	if plain := plainSnippet(l, first, n); plain != "" {
+		return plain
 	}
-	if r := []rune(s); len(r) > n {
-		return strings.TrimSpace(string(r[:n])) + "…"
-	}
-	return s
+	return plainSnippet(l, s, n)
 }
 
 // hasLabel says whether the named label is among the labels of an object.
@@ -558,12 +556,12 @@ func (a *app) issuePainRows(l lang, pa *store.ProjectAccess, project string, iq 
 		case pain.Mitigated:
 			row.Tone, row.Pill, row.PillTone = "warn", row.StateLabel, "p-warn"
 			if p.Remaining != "" {
-				row.ExLead, row.Excerpt = l.msg("pains.stays_open"), firstLineCut(p.Remaining, 160)
+				row.ExLead, row.Excerpt = l.msg("pains.stays_open"), firstLineCut(l, p.Remaining, 160)
 			}
 		case pain.Accepted:
 			row.Tone, row.Pill, row.PillTone = "drop", row.StateLabel, "p-mute"
 			if p.AcceptedReason != "" {
-				row.ExLead, row.Excerpt = l.msg("pains.why"), firstLineCut(p.AcceptedReason, 160)
+				row.ExLead, row.Excerpt = l.msg("pains.why"), firstLineCut(l, p.AcceptedReason, 160)
 			}
 		case pain.Resolved:
 			row.Tone, row.Pill, row.PillTone = "closed", row.StateLabel, "p-done"
@@ -614,7 +612,7 @@ func (a *app) issueIdeaRows(l lang, pa *store.ProjectAccess, project string, iq 
 			continue
 		}
 		row := issueRow{Kind: "idea", N: i.ID, Href: base + "/ideas/" + strconv.FormatInt(i.ID, 10), Title: i.Title, State: i.State, StateLabel: label(l, ideaStateKeys, i.State),
-			Person: i.Person, Age: shortAge(l, now, parseTime(i.UpdatedAt)), Icon: "idea", Tone: "idea", Labels: rowLabels(labels, v.Base), Excerpt: firstLineCut(i.Body, 160)}
+			Person: i.Person, Age: shortAge(l, now, parseTime(i.UpdatedAt)), Icon: "idea", Tone: "idea", Labels: rowLabels(labels, v.Base), Excerpt: firstLineCut(l, i.Body, 160)}
 		switch i.State {
 		case idea.Open:
 			// The "open" tab already says it; only a mixed list needs the word on each row.

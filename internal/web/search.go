@@ -147,8 +147,20 @@ type searchView struct {
 	SessionsHref string
 }
 
+// requestStateMark is the icon of a request hit: the sign of its state, as in the issue list, so a finished issue
+// does not carry the sign of an open one (S22).
+func requestStateMark(state string) string {
+	switch state {
+	case "done":
+		return "done"
+	case "dropped":
+		return "drop"
+	}
+	return searchKindMark["requests"]
+}
+
 // searchKindMark is the icon of each kind of hit.
-var searchKindMark = map[string]string{"docs": "file", "requests": "issue", "ideas": "idea", "knowledge": "book", "sessions": "term", "tasks": "pin", "pains": "pain"}
+var searchKindMark = map[string]string{"docs": "file", "requests": "issue", "ideas": "idea", "knowledge": "book", "sessions": "term", "tasks": "pin", "pains": "pain", "decisions": "decide"}
 
 // searchPage searches requests, ideas, knowledge, documents, sessions, tasks
 // and pains in a fixed order, one group each. The line is the search language of REQ-600
@@ -286,7 +298,7 @@ func (a *app) planSearch(r *http.Request) *searchPlan {
 	v.AllHref = p.href("")
 	p.kinds = []string{"requests", "ideas", "knowledge", "docs"}
 	if !guest {
-		p.kinds = append(p.kinds, "sessions", "tasks", "pains")
+		p.kinds = append(p.kinds, "sessions", "tasks", "pains", "decisions")
 	}
 	if k := r.URL.Query().Get("kind"); slices.Contains(p.kinds, k) {
 		p.kind, p.shown = k, searchKindPage
@@ -508,6 +520,8 @@ func (a *app) searchOneKind(ctx context.Context, l lang, st *store.Store, pa *st
 		return a.searchTasks(l, st, pa, sl, now)
 	case "pains":
 		return a.searchPains(l, st, pa, sl, now)
+	case "decisions":
+		return a.searchDecisions(l, st, pa, sl, now)
 	}
 	return searchGroup{Key: key}
 }
@@ -598,7 +612,7 @@ func (a *app) searchRequests(ctx context.Context, l lang, st *store.Store, pa *s
 		h := pa.RequestHitView(raw)
 		o := originOf(l, now, h.Request.CreatedAt, facts[raw.Request.ID])
 		g.Hits = append(g.Hits, searchHit{Title: h.Request.Title, Sub: requestStateLabel(l, h.Request.State), Project: lastSegment(h.Request.Scope.Project), RefKind: "request", RefN: h.Request.ID,
-			Href: requestURL(h.Request.ID), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
+			Href: requestURL(h.Request.ID), Date: o.Date, Stamp: o.Stamp, Area: o.Area, Mark: requestStateMark(h.Request.State)})
 	}
 	g.Full = a.issueListHref(pa, sl, line, "")
 	return g
@@ -797,6 +811,48 @@ func (a *app) searchTasks(l lang, st *store.Store, pa *store.ProjectAccess, sl s
 	return g
 }
 
+// searchDecisions lists the decisions of the projects the viewer may read: the question and its detail
+// carry the words, for: names the person an open decision waits for (the viewer, when the decision is
+// one a person has to take and the viewer may close it).
+func (a *app) searchDecisions(l lang, st *store.Store, pa *store.ProjectAccess, sl searchLine, now time.Time) searchGroup {
+	g := searchGroup{Key: "decisions", Label: l.msg("search.group.decisions"), Icon: "decide"}
+	if !sl.wants(query.KindDecision) {
+		return g
+	}
+	words := strings.Fields(strings.ToLower(sl.text))
+	for _, p := range visibleProjects(pa, sl.project) {
+		list, err := pa.SearchDecisions(store.DecisionFilter{Project: p, State: "all", Limit: tasksShown})
+		if err != nil {
+			continue
+		}
+		g.Capped = g.Capped || len(list) >= tasksShown
+		for _, d := range list {
+			hay := strings.ToLower(d.Question + " " + d.Detail)
+			ok := true
+			for _, w := range words {
+				ok = ok && strings.Contains(hay, strings.Trim(w, `"`))
+			}
+			if !ok {
+				continue
+			}
+			assignee := ""
+			if d.NeedsHuman() && pa.CanCloseDecision(d) {
+				assignee = sl.person
+			}
+			if sl.qualified && !sl.q.Match(factsOf(pa, query.KindDecision, d.ID, d.State, "", p, d.Person, assignee, d.CreatedAt, d.UpdatedAt, store.ObjectFacts{})) {
+				continue
+			}
+			sub := label(l, workshopDecisionKeys, d.State)
+			if assignee != "" {
+				sub = l.msg("search.decision.waits")
+			}
+			o := originOf(l, now, d.CreatedAt, store.ObjectFacts{})
+			g.Hits = append(g.Hits, searchHit{Title: d.Question, Sub: sub, Project: lastSegment(p), RefKind: "decision", RefN: d.ID, Href: decisionHref(d), Date: o.Date, Stamp: o.Stamp, Mark: "decide"})
+		}
+	}
+	return g
+}
+
 func (a *app) searchPains(l lang, st *store.Store, pa *store.ProjectAccess, sl searchLine, now time.Time) searchGroup {
 	g := searchGroup{Key: "pains", Label: l.msg("nav.tab_pains"), Icon: "warn"}
 	projects := visibleProjects(pa, sl.project)
@@ -853,7 +909,9 @@ func markHits(g *searchGroup, text string) {
 	}
 	for i := range g.Hits {
 		h := &g.Hits[i]
-		h.Mark = searchKindMark[g.Key]
+		if h.Mark == "" {
+			h.Mark = searchKindMark[g.Key]
+		}
 		h.Marked = markWords(h.Title, words)
 		if h.Snip != "" {
 			h.SnipHTML = markWords(h.Snip, words)

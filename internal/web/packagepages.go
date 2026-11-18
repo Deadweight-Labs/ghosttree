@@ -33,6 +33,11 @@ type packagesView struct {
 	EmptyKey string
 	// Branch is the branch the list is narrowed to (empty: all); ClearHref leaves it.
 	Branch, ClearHref string
+	// Bar holds the button that makes a package, Form the form behind it (lead only).
+	Bar       manageBar
+	Form      *packageForm
+	PanelOpen bool
+	NewHref   string
 }
 
 type packageSessionLine struct {
@@ -54,11 +59,23 @@ type packageView struct {
 	Done, Total, Percent   int
 	RequiredOpen, Required int
 	Sessions               []packageSessionLine
+	// Bar holds the lead buttons; Open says whether the package still takes issues.
+	Bar        manageBar
+	Open       bool
+	Panel      string
+	Result     *requestResult
+	PRValue    string
+	Addable    []issueChoice
+	AddHref    string
+	EditHref   string
+	NoneToAdd  bool
+	RawName    string
+	StateOther string
 }
 
 func init() {
-	pageAssets["packages"] = struct{ CSS, JS []string }{CSS: []string{"ui-labels.css", "ui-issues.css"}}
-	pageAssets["package"] = struct{ CSS, JS []string }{CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css", "ui-pulls.css"}}
+	pageAssets["packages"] = struct{ CSS, JS []string }{CSS: []string{"ui-labels.css", "ui-issues.css", "ui-manage.css"}}
+	pageAssets["package"] = struct{ CSS, JS []string }{CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css", "ui-pulls.css", "ui-manage.css"}}
 }
 
 // repoPackagesPage ist /ui/{org}/{repo}/packages[?state=closed][&branch=…].
@@ -127,6 +144,12 @@ func (a *app) repoPackagesPage(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, p := range shown {
 		v.Rows = append(v.Rows, packageRowOf(l, pa, view, p))
+	}
+	v.Bar = a.leadBar(r, l, pa, project, store.ResRequest)
+	v.NewHref = base + "?panel=new#new"
+	if v.Bar.Can {
+		v.Form = a.packageFormFor(r, pa, project)
+		v.PanelOpen = r.URL.Query().Get("panel") == "new"
 	}
 	if len(v.Rows) == 0 && state == requestdomain.PackageClosed && v.Branch == "" {
 		v.EmptyKey = "packages.empty_closed"
@@ -264,6 +287,28 @@ func (a *app) packageDetail(w http.ResponseWriter, r *http.Request, remote, id s
 	}
 	if v.Total > 0 {
 		v.Percent = v.Done * 100 / v.Total
+	}
+	v.Open = full.State == requestdomain.PackageOpen
+	v.StateOther = requestdomain.PackageClosed
+	if !v.Open {
+		v.StateOther = requestdomain.PackageOpen
+	}
+	v.Result = packageResult(r, l)
+	v.Bar = a.leadBar(r2, l, pa, remote, store.ResRequest)
+	if v.Bar.Can {
+		v.RawName, v.EditHref, v.AddHref = full.Name, v.Base+"/"+strconv.FormatInt(v.ID, 10)+"?panel=edit#edit", v.Base+"/"+strconv.FormatInt(v.ID, 10)+"#add"
+		v.Panel = r.URL.Query().Get("panel")
+		if full.PR > 0 {
+			v.PRValue = strconv.FormatInt(full.PR, 10)
+		}
+		if v.Open {
+			inside := map[int64]bool{}
+			for _, m := range full.Members {
+				inside[m.RequestID] = true
+			}
+			v.Addable = a.openIssueChoices(pa, remote, inside, packageChoicesMax)
+			v.NoneToAdd = len(v.Addable) == 0
+		}
 	}
 	a.renderBrowser(w, r2, "package", pageData{Title: v.Name, Project: remote, PackageV: v})
 }

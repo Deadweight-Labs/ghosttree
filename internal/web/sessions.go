@@ -171,12 +171,15 @@ type sessionsView struct {
 	SortHref       string
 	Next           string
 	Empty          bool // keine Sitzung, nichts gefiltert
-	NoMatch        bool // Filter ohne Zeilen
-	NoResults      bool
-	ClearHref      string
-	ClearFilters   string
-	Indexing       string
-	FiltersOn      bool
+	// EmptyHint says, for an empty list, what is missing: nothing is connected,
+	// or a machine is, and its transcripts have not arrived.
+	EmptyHint    emptyHint
+	NoMatch      bool // Filter ohne Zeilen
+	NoResults    bool
+	ClearHref    string
+	ClearFilters string
+	Indexing     string
+	FiltersOn    bool
 	// HasLinked: at least one listed session links a request or knowledge entry;
 	// without any, the column is left out.
 	HasLinked bool
@@ -243,6 +246,8 @@ type blockView struct {
 
 type shareConfirm struct {
 	Action, Level, Text, Back string
+	// Secrets: the transcript looks like it holds credentials; the button then says "anyway".
+	Secrets bool
 }
 
 type levelForm struct {
@@ -677,8 +682,13 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 		areas := a.store.SessionAreas(readable, listAreas)
 		machineLink := a.machineLinker(r)
 		var lastDay string
+		rowIDs := make([]int64, len(page.Rows))
+		for i, row := range page.Rows {
+			rowIDs[i] = row.Session.ID
+		}
+		ended := a.endedSessions(rowIDs)
 		for _, row := range page.Rows {
-			lr := a.listRow(l, row, links[row.Session.ID], now)
+			lr := a.listRow(l, row, links[row.Session.ID], now, ended)
 			lr.Areas = areas[row.Session.ID]
 			lr.MachineHref = machineLink(lr.Machine)
 			v.HasLinked = v.HasLinked || len(lr.Linked) > 0
@@ -693,6 +703,9 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 			v.Next = linkURL(url.Values{"cursor": {page.Next}})
 		}
 		v.Empty = len(page.Rows) == 0 && !v.FiltersOn && cursor == ""
+		if v.Empty && !guest {
+			v.EmptyHint = a.sessionsEmptyHint(r, pa, l, now)
+		}
 		v.NoMatch = len(page.Rows) == 0 && v.FiltersOn
 		v.ClearFilters = "/ui/sessions"
 	}
@@ -735,7 +748,23 @@ func foundText(l lang, matches, sessions int) string {
 	return m + " " + s
 }
 
-func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, now time.Time) listRow {
+// endedSessions names the sessions among ids that an agent closed (the SessionEnd hook): the transcript of such a
+// run keeps arriving for a minute or two, which the age of the last upload alone would read as "running".
+func (a *app) endedSessions(ids []int64) map[int64]bool {
+	out := map[int64]bool{}
+	states, err := a.store.SessionRunStates(ids)
+	if err != nil {
+		return out
+	}
+	for id, st := range states {
+		if st.Ended {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, now time.Time, ended map[int64]bool) listRow {
 	s := row.Session
 	lr := listRow{
 		Meta:     sessionMeta(s),
@@ -746,7 +775,7 @@ func (a *app) listRow(l lang, row store.SessionRow, links []store.SessionLink, n
 		Kind:     harnessKind(s.Harness), Machine: s.Scope.Machine, Branch: s.Scope.Branch, Project: projectName(s.Scope.Project),
 		Owner: s.Owner,
 	}
-	if t := parseStamp(s.LastSeenAt); !t.IsZero() && now.Sub(t) < liveWindow {
+	if t := parseStamp(s.LastSeenAt); !t.IsZero() && now.Sub(t) < liveWindow && !ended[s.ID] {
 		lr.Live = true
 		lr.Time = l.msg("sessions.live")
 	}
@@ -930,7 +959,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	v.Owner = view.Owner
 	v.Duration, v.Messages = formatDuration(l, sess.StartedAt, sess.LastSeenAt), sess.Messages
 	v.MachineHref = a.machineLinker(r)(v.Machine)
-	if t := parseStamp(sess.LastSeenAt); !t.IsZero() && time.Since(t) < liveWindow {
+	if t := parseStamp(sess.LastSeenAt); !t.IsZero() && time.Since(t) < liveWindow && !a.endedSessions([]int64{sess.ID})[sess.ID] {
 		v.Live = true
 	}
 	v.Meta = detailMeta(l, view)
@@ -997,17 +1026,21 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 
 	// Rückfrage vor dem Teilen mit Gästen, wenn das Transkript Zugangsdaten
 	// zu enthalten scheint; nur dem, der teilen darf.
-	if qv.Get("confirm") == store.VisGuests && v.Share != nil && sess.Visibility != store.VisGuests {
-		if n := a.countSecrets(sess.ID); n > 0 {
-			text := l.msg("sessions.secrets_many", n)
-			if n == 1 {
-				text = l.msg("sessions.secrets_one")
-			}
-			back := "/ui/sessions/" + sess.PublicID
-			a.renderBrowser(w, r, "session", pageData{Title: l.msg("nav.sessions"), SessionV: &sessionView{
-				PID: sess.PublicID, Confirm: &shareConfirm{Action: back + "/share", Level: store.VisGuests, Text: text, Back: back}}})
-			return
+	if level := qv.Get("confirm"); (level == store.VisGuests || level == store.VisProject) && v.Share != nil && shareWidens(sess.Visibility, level) {
+		text := l.msg("sessions.share_ask_project")
+		if level == store.VisGuests {
+			text = l.msg("sessions.share_ask_guests")
 		}
+		n := a.countSecrets(sess.ID)
+		switch {
+		case n == 1:
+			text += " " + l.msg("sessions.secrets_one")
+		case n > 1:
+			text += " " + l.msg("sessions.secrets_many", n)
+		}
+		// The question stands over the session itself, as a dialog; the session is not replaced by it (S17).
+		back := "/ui/sessions/" + sess.PublicID
+		v.Confirm = &shareConfirm{Action: back + "/share", Level: level, Text: text, Back: back, Secrets: n > 0}
 	}
 
 	// Verknüpfungen: nur Ziele, die der Betrachter sehen darf.
@@ -1121,7 +1154,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	}
 	allPrompts := qv.Get("prompts") == "all"
 	for i, p := range outline {
-		pv := promptView{N: i + 1, Text: ellipsize(p.Text, 140), Time: clock(p.Time), Tools: l.msg("sessions.tool_calls", p.ToolCalls)}
+		pv := promptView{N: i + 1, Text: plainSnippet(l, p.Text, 140), Time: clock(p.Time), Tools: l.msg("sessions.tool_calls", p.ToolCalls)}
 		if p.ToolCalls == 1 {
 			pv.Tools = l.msg("sessions.tool_call_one")
 		}
@@ -1200,16 +1233,14 @@ func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown level", http.StatusBadRequest)
 		return
 	}
-	// Vor der Stufe "mit Gästen" fragt die Seite nach, wenn das Transkript
-	// aussieht, als enthielte es Zugangsdaten. Die Frage kommt nur dem, der
-	// teilen darf.
-	if level == store.VisGuests && sess.Visibility != store.VisGuests && r.FormValue("confirm") != "1" && pa.CanShareSession(sess) {
-		if a.countSecrets(sess.ID) > 0 {
-			// Post/Redirect/Get: die Frage ist eine Seite für sich, die man
-			// neu laden kann, ohne den Wechsel erneut zu senden.
-			http.Redirect(w, r, "/ui/sessions/"+sess.PublicID+"?confirm="+store.VisGuests, http.StatusSeeOther)
-			return
-		}
+	// Wer mehr Leute lesen lässt, wird vorher gefragt (REQ-688): eine Session ist alles, was
+	// der Agent und der Mensch darin gesagt und getan haben. Die Frage kommt nur dem, der
+	// teilen darf; weniger Leute lesen zu lassen geht ohne Frage.
+	if shareWidens(sess.Visibility, level) && sess.Scope.Project != "" && r.FormValue("confirm") != "1" && pa.CanShareSession(sess) {
+		// Post/Redirect/Get: die Frage ist eine Seite für sich, die man
+		// neu laden kann, ohne den Wechsel erneut zu senden.
+		http.Redirect(w, r, "/ui/sessions/"+sess.PublicID+"?confirm="+level, http.StatusSeeOther)
+		return
 	}
 	if err := a.store.SetSessionVisibility(sess.ID, pa, level); err != nil {
 		switch {
@@ -1225,6 +1256,15 @@ func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/ui/sessions/"+sess.PublicID, http.StatusSeeOther)
+}
+
+// shareWidens says whether the level lets more people read than the session has now.
+func shareWidens(current, level string) bool {
+	rank := map[string]int{store.VisPrivate: 0, store.VisProject: 1, store.VisGuests: 2}
+	if current == "" {
+		current = store.VisPrivate
+	}
+	return rank[level] > rank[current]
 }
 
 // countSecrets zählt mögliche Zugangsdaten im Rohtranskript. Es ist dieselbe

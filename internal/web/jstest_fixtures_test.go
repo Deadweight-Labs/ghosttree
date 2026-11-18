@@ -73,4 +73,36 @@ func TestJSFixturesAreWhatTheTemplatesRender(t *testing.T) {
 		}
 		goldenFixture(t, "suggest-list-"+list+".html", []byte(bar+"\n"))
 	}
+
+	// The form that takes a picture on the idea, issue and pain pages (REQ-671): the script
+	// ui-attach.js finds it by data-attach and sends a pasted or dropped picture through it.
+	var attach bytes.Buffer
+	if err := langEN.page().ExecuteTemplate(&attach, "attachbox", &attachBox{CanAttach: true, Action: "/ui/pains/7/attach", Owner: "pain", Token: "tok-1"}); err != nil {
+		t.Fatal(err)
+	}
+	goldenFixture(t, "attach-box.html", attach.Bytes())
+
+	// The tile of a picture (REQ-687): its name ATT-n and the button that writes ![description](ATT-n)
+	// into a field of the page (static/ui-parts.js).
+	var tile bytes.Buffer
+	if err := langEN.page().ExecuteTemplate(&tile, "wsimage", attachImage{Src: "/ui/attachments/7", Alt: "The broken button", Desc: "The broken button", ID: 7, W: 40, H: 30}); err != nil {
+		t.Fatal(err)
+	}
+	goldenFixture(t, "attach-tile.html", tile.Bytes())
+
+	// The reply field of a thread and the field of a room (REQ-706): both send with the button .comp-send,
+	// and Ctrl+Enter in the field has to find it (static/ui-parts.js).
+	for name, thread := range map[string]bool{"thread": true, "room": false} {
+		d := &coordRoomDetailView{Room: coordRoomView{Name: "General"}}
+		if thread {
+			d.Thread = &coordThreadDetailView{CanSetState: true}
+			d.Thread.State = "open"
+			d.Thread.States = coordStateOptions(langEN, "open")
+		}
+		var field bytes.Buffer
+		if err := langEN.page().ExecuteTemplate(&field, "coord-composer", coordComposerFor(langEN, d, "coord-"+name+"-body", thread)); err != nil {
+			t.Fatal(err)
+		}
+		goldenFixture(t, "coord-composer-"+name+".html", field.Bytes())
+	}
 }

@@ -1,0 +1,15 @@
+Task: a new idea was recorded. Compare it with the ideas and features the
+project already has (idea.related, features.related) and with research, if
+there is any.
+
+Write one comment for the idea, at most 200 words: what exists already, what
+overlaps, what would be new, and two or three ways to go about it. Name the
+source of every statement (IDEA-n, FEAT-n, or the address from research).
+Propose a link "the idea affects FEAT-n" only for a feature the idea would
+clearly change, never for one marked as already linked.
+
+Answer:
+{"comment": {"body": "the comment", "evidence": ["exact quote from the inputs"]},
+ "relations": [{"feature": "FEAT-3", "evidence": ["exact quote from the inputs"]}]}
+
+Leave comment out (null) when there is nothing related to say.

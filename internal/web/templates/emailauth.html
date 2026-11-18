@@ -1,0 +1,38 @@
+{{define "authcode"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox{{if eq .EmailV.Purpose "join"}} wide{{end}}">{{template "loginbrand"}}
+{{with .EmailV}}<h1>{{.Title}}</h1>
+{{if .Error}}{{template "autherr" .Error}}{{end}}
+<section class="auth-card"><p class="lead">{{.Sent}}</p>
+<form class="login-form" method="post" action="/ui/mail/{{.Purpose}}/code"><input type="hidden" name="email" value="{{.Email}}">
+<label class="pfield"><span>{{t "mail.code_label"}}</span><span class="gfield"><input class="mono" name="code" autocomplete="one-time-code" inputmode="text" autocapitalize="characters" spellcheck="false" maxlength="16" required autofocus placeholder="ABCD-EFGH"></span><small class="muted">{{t "mail.code_hint"}}</small></label>
+{{if .NeedsPassword}}{{template "newpassword"}}{{end}}
+<button class="gbtn pri blk">{{.Button}}</button></form>
+{{if .Resend}}<form class="again" method="post" action="{{.Resend}}"><input type="hidden" name="email" value="{{.Email}}"><button class="linkbtn">{{t "mail.resend"}}</button></form>{{end}}
+</section><p class="auth-back"><a href="{{if eq .Purpose "confirm"}}/ui/inbox{{else}}/ui/login{{end}}">{{t "login.back"}}</a></p>{{end}}
+{{template "authfoot"}}</div>{{template "foot" .}}{{end}}
+
+{{define "newpassword"}}<label class="pfield"><span>{{t "mail.new_password"}}</span><span class="gfield"><input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></span><small class="muted">{{t "mail.password_hint"}}</small></label><label class="pfield"><span>{{t "mail.new_password_again"}}</span><span class="gfield"><input name="password2" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></span></label>{{end}}
+
+{{define "authlink"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox{{if eq .EmailV.Purpose "join"}} wide{{end}}">{{template "loginbrand"}}
+{{with .EmailV}}<h1>{{.LinkTitle}}</h1>
+{{if .Error}}{{template "autherr" .Error}}{{end}}
+<section class="auth-card"><p class="lead">{{.LinkText}}</p>
+<form class="login-form" method="post" action="/ui/mail/{{.Purpose}}/link"><input type="hidden" name="t" value="{{.Token}}">
+{{if .NeedsPassword}}{{template "newpassword"}}{{end}}
+<button class="gbtn pri blk" autofocus>{{.Button}}</button></form></section>{{end}}
+{{template "authfoot"}}</div>{{template "foot" .}}{{end}}
+
+{{define "authdone"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox">{{template "loginbrand"}}
+{{with .EmailV}}<div class="ico ok">{{mi "check"}}</div><h1>{{.Heading}}</h1>
+<section class="auth-card center"><p class="lead">{{.Body}}</p><a class="gbtn pri blk" href="{{.Next}}">{{t "mail.confirm.done_go"}}</a></section>{{end}}
+{{template "authfoot"}}</div>{{template "foot" .}}{{end}}
+
+{{define "forgot"}}{{template "head" .}}<main class="g2 auth"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"><div class="authbox">{{template "loginbrand"}}
+<h1>{{t "mail.reset.forgot_title"}}</h1>
+{{if .Error}}{{template "autherr" .Error}}{{end}}
+<section class="auth-card"><p class="lead">{{t "mail.reset.forgot_text"}}</p><form class="login-form" method="post" action="/ui/mail/reset/request"><label class="pfield"><span>{{t "mail.email_label"}}</span><span class="gfield"><input name="email" type="email" inputmode="email" value="{{.Code}}" maxlength="320" autocomplete="email" spellcheck="false" placeholder="{{t "mail.email_placeholder"}}" required autofocus></span></label><button class="gbtn pri blk">{{t "mail.reset.send"}}</button></form></section>
+<p class="auth-back"><a href="/ui/login">{{t "login.back"}}</a></p>
+{{template "authfoot"}}</div>{{template "foot" .}}{{end}}
+
+{{define "welcome"}}{{$tok := .CSRF}}{{range .Cards}}<section class="welcome" aria-labelledby="welcome-{{.OrgID}}"><div class="wtop"><h2 id="welcome-{{.OrgID}}">{{t "welcome.title" .OrgName}}</h2><form method="post" action="/ui/welcome/dismiss"><input type="hidden" name="csrf_token" value="{{$tok}}"><input type="hidden" name="org" value="{{.OrgID}}"><button class="gbtn sm icon" aria-label="{{t "welcome.dismiss"}}" title="{{t "welcome.dismiss"}}">{{mi "x"}}</button></form></div>
+<ul class="wsteps">{{if .Pending}}<li><span class="wk">{{mi "mail"}}</span><span>{{t "welcome.confirm_mail" .Pending}}</span><a class="gbtn sm" href="/ui/email/confirm">{{t "welcome.confirm_go"}}</a></li>{{end}}
+{{range .Steps}}<li{{if .Done}} class="is-done"{{end}}><span class="wk">{{if .Done}}{{mi "check"}}{{else}}{{mi "plus"}}{{end}}</span><a href="{{.Href}}">{{.Label}}</a></li>{{end}}</ul></section>{{end}}{{end}}

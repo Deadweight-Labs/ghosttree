@@ -4,18 +4,24 @@ package web
 // Start in die Routentabelle, damit web.go dafür nichts ändern muss.
 func init() {
 	for pattern, class := range map[string]webClass{
-		"GET /ui/f/{n}":                  webProject,
-		"GET /ui/m/{machine}":            webAccount,
-		"POST /ui/m/{machine}/share":     webAdmin,
-		"POST /ui/m/{machine}/unshare":   webAdmin,
-		"POST /ui/m/{machine}/owner":     webAdmin,
-		"POST /ui/m/{machine}/entry":     webAdmin,
-		"POST /ui/ideas/{id}/phase":      webAdmin,
-		"POST /ui/ideas/{id}/attach":     webAdmin,
-		"GET /ui/attachments/{id}":       webProject,
-		"POST /ui/decisions/{id}/vote":   webAdmin,
-		"POST /ui/decisions/{id}/close":  webAdmin,
-		"POST /ui/decisions/{id}/reopen": webAdmin,
+		"GET /ui/f/{n}":                   webProject,
+		"GET /ui/m/{machine}":             webAccount,
+		"POST /ui/m/{machine}/share":      webAdmin,
+		"POST /ui/m/{machine}/unshare":    webAdmin,
+		"POST /ui/m/{machine}/owner":      webAdmin,
+		"POST /ui/m/{machine}/entry":      webAdmin,
+		"POST /ui/ideas/{id}/phase":       webAdmin,
+		"POST /ui/ideas/{id}/attach":      webAdmin,
+		"POST /ui/requests/{id}/attach":   webAdmin,
+		"POST /ui/pains/{id}/attach":      webAdmin,
+		"GET /ui/attachments/{id}":        webProject,
+		"POST /ui/decisions/{id}/vote":    webAdmin,
+		"POST /ui/decisions/{id}/close":   webAdmin,
+		"POST /ui/decisions/{id}/reopen":  webAdmin,
+		"POST /ui/decisions/{id}/variant": webAdmin,
+		"POST /ui/ideas/{id}/text":        webAdmin,
+		"POST /ui/ideas/{id}/concept":     webAdmin,
+		"POST /ui/ideas/{id}/decisions":   webAdmin,
 	} {
 		webRoutes[pattern] = class
 	}

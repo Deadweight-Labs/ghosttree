@@ -52,16 +52,33 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .gh-header .hplus .opt svg.i { color: var(--fg-muted); }
 .gh-header .me { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; cursor: pointer; }
 .gh-header .me .gav { width: 32px; height: 32px; font-size: 12px; }
-.gh-header .account-menu { min-width: 240px; }
+/* The menu is as high as its content and at most as high as the window below the header, so a
+   window of 600 px shows it whole, "Sign out" included. The five entries stand in two columns, the
+   host sits in the head, light/dark and sign out share a row, and a long list of organizations
+   scrolls in itself (three rows high) instead of the whole menu. */
+.gh-header .account-menu { min-width: 280px; max-height: calc(100vh - 64px); max-height: calc(100dvh - 64px); }
+.gh-header .account-menu .shell-nav { display: grid; grid-template-columns: 1fr 1fr; }
+.gh-header .account-menu .shell-nav .opt { width: auto; margin: 0 4px; padding-inline: 8px; }
+.gh-header .account-menu .org-list { max-height: 104px; overflow-y: auto; }
+.gh-header .account-menu .theme-pick { display: flex; gap: 2px; margin: 4px 8px; padding: 2px; background: var(--neutral-muted); border-radius: 8px; }
+.gh-header .account-menu .theme-pick .opt { flex: 1 1 0; width: auto; min-width: 0; margin: 0; padding: 4px 6px; justify-content: center; gap: 4px; font-size: 13px; }
+.gh-header .account-menu .theme-pick .opt span { flex: 0 1 auto; }
+.gh-header .account-menu .theme-pick .opt[aria-checked="true"] { background: var(--canvas-default); box-shadow: 0 0 0 1px var(--border-default); font-weight: 600; }
+.gh-header .account-menu .theme-pick .opt[aria-checked="true"] svg.i { color: var(--fg-default); }
+.gh-header .account-menu .account-foot { display: flex; margin: 0 8px; }
+.gh-header .account-menu .account-foot > .opt, .gh-header .account-menu .account-foot > form { flex: 1 1 0; min-width: 0; margin: 0; }
+.gh-header .account-menu .account-foot .opt { width: 100%; margin: 0; }
+.gh-header .account-menu hr { margin: 4px 0; }
 .gh-header .account-menu .opt svg.i { color: var(--fg-muted); }
 .gh-header .account-menu .opt span { flex: 1; min-width: 0; }
 .gh-header .account-menu .ph { border-bottom: 0; padding-bottom: 4px; }
 .gh-header .account-menu form { margin: 0; }
-.gh-header .account-menu .account-signout { width: calc(100% - 16px); }
+.gh-header .account-menu .opt span.ck { flex: none; display: inline-flex; margin-left: auto; }
+.gh-header .account-menu .opt span.ck svg.i { color: var(--success-fg); }
 .gh-header .account-menu .shell-badge { display: inline-block; min-width: 20px; margin-left: auto; padding: 0 6px; border-radius: 2em; background: var(--neutral-muted); color: var(--fg-default); font-size: 12px; font-weight: 500; line-height: 18px; text-align: center; }
-.gh-header .account-menu .shell-host { margin: 4px 16px 0; padding: 0; color: var(--fg-subtle); font-size: 12px; }
+.gh-header .account-menu .who .shell-host { display: block; margin: 0; color: var(--fg-subtle); }
 .gh-header .account-menu .who .account-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-.gh-header .account-menu .who .account-role { font-size: 12px; color: var(--fg-muted); }
+.gh-header .account-menu .who .account-role { display: block; font-size: 12px; color: var(--fg-muted); }
 
 /* Band of a repository or organisation: tabs only, no title row (the header
    carries the breadcrumb). */
@@ -76,8 +93,11 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
    scrolling row and are not cut off. */
 .rband .utabs-box { position: relative; flex: 1 1 auto; min-width: 0; }
 .rband .utabs-nav { position: relative; margin: 0 -12px -1px; padding: 0 12px 1px; }
-.rband .band-ext, .rband .band-wait { position: relative; z-index: 2; align-self: center; margin-bottom: 4px; flex: none; }
-.rband .band-wait { display: inline-flex; border-radius: 2em; }
+.rband .band-ext { position: relative; z-index: 2; align-self: center; margin-bottom: 4px; flex: none; }
+/* That open tasks wait for someone is a red dot behind the number of the Tasks tab; the names are in its title. No faces in the
+   row of tabs: they are other people's, and the tabs need the room. */
+.rband .band-wait { display: inline-flex; align-items: center; margin-left: 2px; }
+.rband .band-wait .wdot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger-fg); }
 .utabs-nav.scroll { overflow: auto hidden; scrollbar-width: none; overscroll-behavior-x: contain; scroll-padding-inline: 24px; scroll-snap-type: x mandatory; }
 .utabs-nav.scroll .utabs > li { scroll-snap-align: start; }
 .utabs-nav.scroll::-webkit-scrollbar { display: none; }
@@ -88,31 +108,29 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .utabs-fade[hidden] { display: none; }
 .utabs-fade.l { left: -12px; width: 40px; background: linear-gradient(to right, var(--canvas-subtle) 30%, transparent); }
 .utabs-fade.r { right: -12px; justify-content: flex-end; padding-right: 12px; background: linear-gradient(to left, var(--canvas-subtle) 60%, transparent); }
-.rband .utabs-more { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border: 1px solid var(--border-default); border-radius: 2em; background: var(--canvas-default); color: var(--fg-default); font: 600 12px/22px var(--ui-font); cursor: pointer; pointer-events: auto; }
+.rband .utabs-more { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border-default); border-radius: 2em; background: var(--canvas-default); color: var(--fg-default); cursor: pointer; pointer-events: auto; }
 .rband .utabs-more:hover { background: var(--neutral-muted); }
 .utabs { display: flex; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .utabs li { position: relative; padding: 8px 0; flex: none; }
 .utabs li > a, .utabs li button { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; color: var(--fg-default); font-size: 14px; font-weight: 400; line-height: 30px; background: transparent; border: 0; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+/* The "More" at the end of a row that did not fit: it looks like a tab, its menu opens under it. */
+.utabs li.tmore > details > summary { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 8px; color: var(--fg-muted); font-size: 14px; line-height: 30px; border-radius: 6px; cursor: pointer; list-style: none; white-space: nowrap; }
+.utabs li.tmore > details > summary::-webkit-details-marker { display: none; }
+.utabs li.tmore > details > summary:hover, .utabs li.tmore > details[open] > summary { background: var(--neutral-muted); color: var(--fg-default); }
+.utabs li.tmore .pop { top: calc(100% + 6px); min-width: 180px; }
+.utabs li.tmore .pop a.opt .i { color: var(--fg-muted); }
 .utabs li > a:hover, .utabs li button:hover { background: var(--neutral-muted); text-decoration: none; }
 .utabs li > a .i, .utabs li button .i { color: var(--fg-muted); }
 .utabs li.sel > a { font-weight: 600; }
 .utabs li.sel > a .i { color: var(--fg-default); }
 .utabs li > a .counter { margin-left: 0; }
-/* Behind the thin separator: tabs promoted by "active" or "mention", then icon-only tabs */
+/* Behind the thin separator: the second group, with its names like the first, a little quieter */
 .utabs li.tsep { align-self: center; width: 1px; height: 20px; padding: 0; margin: 0 2px; background: var(--border-default); }
 .utabs li.aux > a { color: var(--fg-muted); }
 .utabs li.aux.sel > a, .utabs li.aux.att > a { color: var(--fg-default); }
-.utabs li.icx > a, .utabs li.ico > a { position: relative; gap: 4px; min-width: 36px; justify-content: center; padding: 0 8px; color: var(--fg-muted); }
-.utabs li.icx > a .i, .utabs li.ico > a .i { color: inherit; }
-.utabs li.icx > a:hover, .utabs li.icx > a:focus-visible, .utabs li.ico > a:hover, .utabs li.ico > a:focus-visible { color: var(--fg-default); }
-.utabs li.icx.att > a, .utabs li.ico.att > a { color: var(--fg-default); }
-/* the name of an icon tab stays for screen readers and is shown by the tooltip (ui-tabs.js) */
-.utabs li.ico > a > .tl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* The label reserves the room of its bold form, so the neighbours do not move when a tab opens. */
 .tl { display: inline-flex; flex-direction: column; align-items: center; }
 .tl::after { content: attr(data-t); height: 0; overflow: hidden; visibility: hidden; font-weight: 600; white-space: nowrap; user-select: none; pointer-events: none; }
-.utip { position: fixed; z-index: 200; padding: 4px 8px; border-radius: 6px; background: var(--fg-default); color: var(--canvas-default); font: 500 12px/16px var(--ui-font); white-space: nowrap; pointer-events: none; }
-.utip[hidden] { display: none; }
 
 /* The active tab of a band is a borderless folder card: 2 px accent edge on top,
    elliptical corner radius, soft side shadow (light .07, dark .45) and a 6 px
@@ -160,13 +178,16 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
   .gh-header .hsf.sg-host { position: static; }
   .gh-header .sg-list { position: fixed; top: 64px; left: 16px; right: 16px; width: auto; min-width: 0; max-width: none; }
   .gh-header .hcrumb { flex: 1 1 0; }
-  .gh-header .hplus { display: none; }
+  /* "New …" stays: on a phone it is the only way to start an issue, an idea or a repository. Icon only, without the chevron. */
+  .gh-header .hplus > summary.iconbtn { width: 44px; padding: 0; justify-content: center; }
+  .gh-header .hplus > summary.iconbtn svg:nth-child(2) { display: none; }
   .gh-header .hcrumb .org, .gh-header .hcrumb .org + .sl { display: none; }
   .gh-header .sp { display: none; }
   .gh-header .shell-brand { min-width: 44px; min-height: 44px; align-items: center; justify-content: center; }
   .gh-header .iconbtn { width: 44px; height: 44px; }
   .gh-header .me { min-width: 44px; min-height: 44px; }
   .rband .utabs li > a, .rband .utabs li button { height: 44px; }
+  .rband .utabs-more { width: 44px; height: 44px; }
   .rband .wrap { padding: 0 16px; }
   .rband .band-ext { width: 44px; padding: 0; }
   .rband .band-ext .band-ext-t { display: none; }

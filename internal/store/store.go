@@ -1085,6 +1085,10 @@ func openWithOptions(path string, options OpenOptions, seed bool) (*Store, error
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureEmailAuth(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	// Right after the accounts: every later step may read accounts, orgs and
 	// projects through the shared column lists, which name the new columns.
 	if err := ensureOwnerNamespaces(db); err != nil {
@@ -1246,6 +1250,10 @@ func openWithOptions(path string, options OpenOptions, seed bool) (*Store, error
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureTextMentions(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureReactions(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1311,6 +1319,22 @@ func openWithOptions(path string, options OpenOptions, seed bool) (*Store, error
 		return nil, err
 	}
 	if err := ensureFeatures(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureWorkflows(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureWorkflowDefs(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureWorkflowResults(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureAIConnections(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

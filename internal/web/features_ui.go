@@ -42,7 +42,23 @@ type featuresView struct {
 	Empty, NoMatch bool
 	EmptyKey       string
 	ClearHref      string
+	// Gap lists the done issues no feature mentions (PAIN-89); nil for anyone
+	// who is not a lead. A lead with nothing to list gets the one empty line.
+	Gap *featureGap
+	// Bar holds the button that makes a feature, Form the form behind it (lead only).
+	Bar     manageBar
+	Form    *featureForm
+	NewHref string
 }
+
+// featureGap is the short list under the features of a lead.
+type featureGap struct {
+	Rows  []uiRow
+	Count int
+}
+
+// featureGapShown is how many of those issues the tab lists.
+const featureGapShown = 8
 
 // featureAreaLine is one area of a feature: a folder or a single file. Icon is
 // the folder or the file icon, Href the tree or the blob page of the code.
@@ -68,8 +84,20 @@ type featureView struct {
 	Reason              string
 	Items               []tlItem
 	Ideas, Origin, Reqs []featureRef
+	Knowledge, Pains    []featureRef
 	PRs                 []featurePR
 	People              []string
+	// Bar, Form and the rest are the lead's part: edit, link and unlink (REQ-712).
+	Bar      manageBar
+	Form     *featureForm
+	Result   *requestResult
+	Unlinks  []featureLinkOption
+	EditHref string
+	// LinkHref opens the link panel, Self is the page, Panel the panel the address asks for.
+	LinkHref, Self, Panel string
+	Base                  string
+	// RelAffects and RelOrigin are the two relations the link form offers.
+	RelAffects, RelOrigin string
 }
 
 type featureUsageLine struct {
@@ -154,6 +182,26 @@ func (a *app) featuresPage(w http.ResponseWriter, r *http.Request) {
 	case state == feature.Retired:
 		v.EmptyKey = "features.empty_retired"
 	}
+	if q == "" && state == feature.Active && pa.Allow(project, store.ResFeature, store.ActEdit, store.Object{}) {
+		v.Gap = &featureGap{}
+		list := pa.UncoveredFeatureIssues(project)
+		v.Gap.Count = len(list)
+		for i, c := range list {
+			if i == featureGapShown {
+				break
+			}
+			v.Gap.Rows = append(v.Gap.Rows, uiRow{Icon: "done", Tone: "closed", StateLabel: l.msg("requests.state.done"), Num: "#" + strconv.FormatInt(c.ID, 10),
+				Title: c.Title, Href: view.Href + "/issues/" + strconv.FormatInt(c.ID, 10), Age: shortAge(l, now, parseTime(c.UpdatedAt)), AgeTitle: l.dateTime(parseTime(c.UpdatedAt).Local())})
+		}
+	}
+	v.Bar = a.leadBar(r, l, pa, project, store.ResFeature)
+	v.NewHref = base + "?panel=new#new"
+	if v.Bar.Can {
+		form := newFeatureForm(v.Bar.Token, project)
+		form.Action, form.Anchor, form.Title, form.Submit, form.Close = "/ui/features/create", "new", "features.new", "features.create", base
+		form.Open = r.URL.Query().Get("panel") == "new"
+		v.Form = form
+	}
 	a.renderBrowser(w, r, "features", pageData{Title: l.msg("repo.tab.features"), Project: project, FeaturesV: v})
 }
 
@@ -203,7 +251,7 @@ func (a *app) featureRowOf(l lang, pa *store.ProjectAccess, view *repoView, f fe
 	row := uiRow{Icon: "feature", Tone: "feat", StateLabel: label(l, featureStateKeys, f.State), Num: "#" + strconv.FormatInt(f.ID, 10),
 		Title: f.Name, Href: view.Href + "/features/" + strconv.FormatInt(f.ID, 10), Kind: l.msg("features.rev", f.Revision),
 		Age: shortAge(l, now, parseTime(f.UpdatedAt)), AgeTitle: l.dateTime(parseTime(f.UpdatedAt).Local()), Person: f.Person,
-		Excerpt: ellipsize(f.Summary, 180)}
+		Excerpt: plainSnippet(l, f.Summary, 180)}
 	for _, ref := range f.Affects {
 		if ref.Kind != feature.KindIdea {
 			continue
@@ -296,6 +344,15 @@ func (a *app) featureDetail(w http.ResponseWriter, r *http.Request, remote, id s
 			v.Origin = append(v.Origin, reqRef(ref))
 		}
 	}
+	for _, ref := range f.Related {
+		if ref.Kind == feature.KindKnowledge {
+			v.Knowledge = append(v.Knowledge, featureRef{Num: "KN-" + strconv.FormatInt(ref.ID, 10), Title: ref.Title,
+				Href: view.Href + "/knowledge/" + strconv.FormatInt(ref.ID, 10), Brief: label(l, typeKeys, ref.State)})
+		} else {
+			v.Pains = append(v.Pains, featureRef{Num: "PAIN-" + strconv.FormatInt(ref.ID, 10), Title: ref.Title,
+				Href: view.Href + "/pains/" + strconv.FormatInt(ref.ID, 10), Brief: label(l, painStateKeys, ref.State)})
+		}
+	}
 	versions, _ := pa.FeatureVersions(n, false)
 	pkgs := a.featurePackages(l, pa, remote)
 	for _, pr := range featurePRs(versions) {
@@ -320,6 +377,40 @@ func (a *app) featureDetail(w http.ResponseWriter, r *http.Request, remote, id s
 		if ver.Person != "" && !seen[ver.Person] {
 			seen[ver.Person] = true
 			v.People = append(v.People, ver.Person)
+		}
+	}
+	v.Base, v.RelAffects, v.RelOrigin = view.Href+"/features", feature.RelAffects, feature.RelOrigin
+	v.Result = featureResult(r, l)
+	if v.Bar = a.leadBar(r2, l, pa, remote, store.ResFeature); v.Bar.Can {
+		here := featureLink(remote, f.ID)
+		form := newFeatureForm(v.Bar.Token, remote)
+		form.ID, form.Revision, form.Action, form.Anchor, form.Title, form.Submit, form.Close = f.ID, f.Revision, "/ui/features/"+strconv.FormatInt(f.ID, 10)+"/edit", "edit", "features.edit", "features.save", here
+		form.Name, form.Summary, form.Behavior, form.Limits = f.Name, f.Summary, f.Behavior, f.Limits
+		form.CLI, form.MCP, form.API, form.UI = f.CLI, f.MCP, f.API, f.UI
+		form.Areas = strings.Join(f.Areas, "\n")
+		form.UsageOpen = f.CLI+f.MCP+f.API+f.UI != ""
+		form.Open = r.URL.Query().Get("panel") == "edit"
+		v.Form, v.EditHref, v.LinkHref, v.Self, v.Panel = form, here+"?panel=edit#edit", here+"?panel=link#link", here, r.URL.Query().Get("panel")
+		for _, ref := range f.Affects {
+			kind, key, num := feature.KindRequest, "REQ", ref.ID
+			if ref.Kind == feature.KindIdea {
+				kind, key = feature.KindIdea, "IDEA"
+			}
+			v.Unlinks = append(v.Unlinks, featureLinkOption{Value: kind + ":" + strconv.FormatInt(num, 10) + ":" + feature.RelAffects, Label: key + "-" + strconv.FormatInt(num, 10) + " " + ref.Title})
+		}
+		for _, ref := range f.Origin {
+			kind, key := feature.KindRequest, "REQ"
+			if ref.Kind == feature.KindIdea {
+				kind, key = feature.KindIdea, "IDEA"
+			}
+			v.Unlinks = append(v.Unlinks, featureLinkOption{Value: kind + ":" + strconv.FormatInt(ref.ID, 10) + ":" + feature.RelOrigin, Label: key + "-" + strconv.FormatInt(ref.ID, 10) + " " + ref.Title})
+		}
+		for _, ref := range f.Related {
+			kind, key := feature.KindPain, "PAIN"
+			if ref.Kind == feature.KindKnowledge {
+				kind, key = feature.KindKnowledge, "KN"
+			}
+			v.Unlinks = append(v.Unlinks, featureLinkOption{Value: kind + ":" + strconv.FormatInt(ref.ID, 10) + ":", Label: key + "-" + strconv.FormatInt(ref.ID, 10) + " " + ref.Title})
 		}
 	}
 	a.renderBrowser(w, r2, "feature", pageData{Title: f.Name, Project: remote, FeatureV: v})

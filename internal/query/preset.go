@@ -167,9 +167,10 @@ var Builtin = []Preset{
 	},
 	{
 		Name:        "fuer-mich",
-		Description: "Was wartet auf mich: offene Aufgaben an mich und meine offenen Requests, Pains und Ideen",
+		Description: "Was wartet auf mich: offene Aufgaben und Entscheidungen an mich und meine offenen Requests, Pains und Ideen",
 		Queries: []string{
 			"kind:task is:open for:@me",
+			"kind:decision is:open for:@me",
 			"kind:request,pain,idea is:open author:@me",
 		},
 	},

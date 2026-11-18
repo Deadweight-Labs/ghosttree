@@ -13,7 +13,7 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 ### Before you upgrade
 
 - Run `ctx install` again on every machine after upgrading: it adds the
-  SubagentStart hook and rewrites the rule section in `CLAUDE.md` and
+  SessionEnd and SubagentStart hooks and rewrites the rule section in `CLAUDE.md` and
   `AGENTS.md`, which now names the twelve core tools.
 
 - Existing instances move to owners with `ctx db migrate-owners --db <path>`
@@ -160,6 +160,52 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   to 217 MiB.
 
 ### Added
+
+- Pains and issues carry images, like ideas: the page shows them and has a
+  button for whoever may work on the object, Ctrl+V with a screenshot on the
+  clipboard adds one, and so does dropping an image file on the page (also on
+  an idea). Agents attach one with `ctx pain attach <id> <file>`,
+  `ctx request attach <id> <file>` or the actions `attach` of the `pain` and
+  `request` tools. An image on a pain or an issue has the rights of the pain or
+  issue; whoever may not read it gets the answer of a number that does not
+  exist. The table `attachments` is rebuilt once on start to take the new
+  subject (all rows stay).
+- Signing in by email (REQ-676, v0.1 work package 3). The sign-in page takes an
+  address and mails an eight-character code and a magic link; either signs in,
+  once, within ten minutes. The page answers the same for an unknown address,
+  asks are rate limited per address and per sender, and a link opens only a page
+  with a button, so a mail preview cannot use it up. New to `ctx serve`: mail
+  through SMTP (needs `--public-url`, the links in mails are built from it;
+  `--smtp-host`, `--smtp-port`, `--smtp-security`, `--smtp-from`,
+  `--smtp-user`, `--smtp-password-file`; the password comes from a file, never
+  from a flag) or a file mailbox (`--mail-dir`, every mail as an `.eml` file) for
+  tests and local instances; the start line says which. Without mail nothing
+  changes for the instance, and the sign-in page names the ways back in.
+  Everything is also available as `GHOSTTREE_SMTP_*`, `GHOSTTREE_MAIL_DIR` and
+  `GHOSTTREE_PASSWORD_LOGIN`; see `docs/operations.md`.
+- An address on the account, confirmed by mail: the first account, a joiner and
+  the profile name one, and it signs in only once confirmed. An invitation bound
+  to an address now works on an instance with mail (the confirmation of that
+  address is what joins); on an instance without mail the invitation page and
+  the refused-invitation page name the masked address and say to ask the inviter
+  for a new link, instead of leading in a circle, and the invitation form offers
+  no address binding there.
+- Optional per instance, `--password-login`: email and password. A password is
+  set in the profile (argon2id), changed with the current one, and reset by
+  mail; a reset ends every session of the account. Wrong password and unknown
+  address give the same answer, at the same cost, and tries are limited.
+- Ways back in without mail: an organization owner makes a one-time login link
+  for a member who belongs to no other organization (Members page, ten minutes,
+  once), and `ctx web` signs in the web interface from a connected machine (two
+  minutes, once, tied to the account and the device token that asked; a revoked
+  token voids it, and only a device token may ask). A session that started from
+  such a link cannot change the address or password. It is the core of REQ-609
+  AC-1.
+- A welcome card after the first account and after joining an organization:
+  the organization's name and the next steps (confirm the address, invite people,
+  connect a device, open a repo). It goes away when the steps are done or when
+  clicked away. The setup page of an empty instance labels its button "Create
+  account".
 
 - The `http_request` log line of `/api/context/relevant` and
   `/api/context/bootstrap` carries the group `phases`: the milliseconds spent
@@ -675,6 +721,18 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   hover cards on every reference, a Markdown preview, machine pages with their
   knowledge and sharing, and the idea workshop with its decisions. The previous
   interface is gone; its addresses redirect.
+- Texts of every kind (comments, descriptions, notes, room messages, documents
+  and the preview while writing) read more Markdown: a `mermaid` code block is
+  drawn as a diagram, in the light or dark colours of the page; `> [!NOTE]`,
+  `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` and `[!CAUTION]` quotes become note
+  boxes; `<details><summary>…</summary> … </details>` is a section that opens
+  and closes; `![alt](ATT-5)` shows the attachment of an idea in the text when
+  the reader may see it and its alt text when not. The diagrams come from the
+  library inside the server (Mermaid 12.3.0, see `THIRD_PARTY_NOTICES.md`),
+  loaded only for a text that has one and drawn in a sandboxed frame of its own,
+  so the content security policy of the pages stays as strict as it was (the
+  only addition is `frame-src 'self'`). Without the script every block stays
+  readable as a code block, a quote or paragraphs.
 - Guests see neither machine names nor branch names other than the default
   branch, and filters on branches are not offered to them.
 - Every entry links its Git anchor (commit, pull request, branch, or "web"); the
@@ -1122,6 +1180,105 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- The inbox names the right sender and keeps the whole question (REQ-689). A
+  question from one person to another shows the person's name instead of
+  "Someone", in the row and in "Reply sent to …". The answer to a question that
+  has a thread is a post in that thread, and "Answered" leads to it (a thread
+  started after the answer leads to the reply in the room, and does not say "No
+  replies yet"). A name typed out after the handle ("@Mara Keller") is said once
+  and the addressee does not stand in the title; a long question keeps its first
+  word, "z. B." does not end a sentence, and the whole text unfolds under
+  "Full text". A proposal that answers a question takes it out of "Waiting for
+  you" and the numbers of the tabs follow the list. The preview drops the marks of
+  note boxes, quotes and task lists, and the tick says "Done" or "Read".
+- A `claude -p` run is bound to its session, quick fixes of the usability run 3
+  (REQ-690). `start_work` knows the session of its Claude Code process by the
+  harness id and registers it on the server when the collector has not uploaded
+  it yet (it sweeps every 30 seconds, an agent calls `start_work` in its first
+  seconds); the collector then fills the same row. Without a harness id the work
+  goes to the newest session of the machine and the answer says so, otherwise
+  the failure says what to do. Setting a criterion twice with the same evidence
+  is a repetition, and the MCP tool repeats it after a timeout and checks the
+  state. The collector repeats an upload that timed out and writes a report that
+  `ctx status` shows. The ghosttree view of a session shows the closing answer of
+  the agent. Menus work by keyboard (arrows, Home, End), a label picked is set
+  at once and the page says whether it worked. Descriptions in the code tree
+  lose the "Synopsis:" and "Context:" labels and are shortened at a word. The
+  theme is a choice of light, dark and system, "New …" is in the header on a
+  phone, an organization's header does not carry a repository of another page,
+  and the toast floats under the tabs.
+
+- Agent tools without detours, readable sessions, answers where the question
+  was asked (REQ-688). `human_task` needs no request any more: without one it
+  hangs on the session's request, else on a standing "Agent tasks" request per
+  project and person, and its recipient is the person `@named` in the text, else
+  the human the session belongs to. A question from an agent that names nobody
+  goes to the person it works for, and nobody ever addresses themselves. The
+  "To" menu of a room lists the people of the project before the agents, and an
+  `@name` in the words is a recipient for "Send as an ask". The quick answer to a
+  mention in a comment is a comment on the same object, and a resolved thread
+  says who resolved it. In the workshop, Decide answers at the decision (also
+  without a reason, in the page's language), a decided question says "Decided
+  by" the person, and a closed question explains why it takes no vote. The
+  ghosttree view of a session shows the tool calls of the run by kind and, for a
+  run without anything, leads to the raw history; the title is the first typed
+  request (not a skill's text or an "Ok"; sessions stored before keep theirs),
+  and sharing asks before more people may read.
+
+- Invitations are honest and complete, and the right organization is active
+  (REQ-683). An invitation with an address sends a mail with the link (guest
+  links too); without an address, without mail on the server, or when sending
+  fails, the page says that no mail went out and that the link has to be passed
+  on. After inviting you stay at the members, every open invitation stays in the
+  list with link, role, expiry and whether a mail went out, and an accepted one
+  names the person who joined with their role. A guest lands in the shared
+  project after joining, the organization page names the guest membership, and
+  empty states show a guest no agent command. After signing in or joining, an
+  organization you made or joined is active instead of the empty standard
+  organization; the welcome card names it and lists only the steps still to do,
+  and the account menu names your role in the active organization.
+- One project per repository, and a missing right is said instead of hidden
+  (REQ-675). The project form (Organization, Projects) takes the address of a
+  repository in any form git knows (`https://…`, `git@host:owner/repo.git`,
+  `github.com/owner/repo`) as well as a plain name. The normalized address is the
+  identity of the project, so an agent in a clone of that repository works in
+  exactly that project and no second one appears; the usual ownership check of
+  `ctx project claim` still applies, and a refusal now comes as a sentence. A
+  project without a remote has a repository page (`/ui/-/{org}/{name}`) with an
+  empty state, a project shared with the organization opens its room for every
+  member (the room exists before the first message), and the role choice of a
+  member who only has the default role reads "Default (Member)" instead of
+  showing Owner. A member of the organization who has no role in a project gets a
+  403 page that names the project, the reason and whom to ask; for anyone else the
+  project still looks like one that does not exist. Writing in such a room shows
+  that sentence instead of "Failed (HTTP 404)". After moving an issue the page
+  says where it went, and the old address and `/ui/r/{n}` lead there;
+  `/ui/requests/new` opens the form of the current repository. Lists tell two
+  projects with the same name apart by their owner.
+
+- Agents, sessions and machines show what really runs (REQ-678). An agent
+  whose turn ended no longer reads "Working": it reads "Waiting for reply"
+  (the Stop hook), and a run that said goodbye reads "Ended" and moves to the
+  inactive agents (new SessionEnd hook; run `ctx install` again, and
+  `claude --resume` brings the session back). The machine named by
+  `ctx login --machine` is the one the profile, the devices, the agents and
+  the sessions show, each as a link to `/ui/m/<name>`, which offers "Share with
+  org"; an organization's Machines tab points at the own machines it could
+  get, and a device's requests keep the machine's "last seen" current.
+  Empty lists of agents and sessions say what is missing (no agent working; a
+  connected machine whose transcripts have not arrived, which come in through
+  `ctx watch`) instead of asking to connect an agent that is connected.
+- Writing never loses what was typed (REQ-685). A picture added with the button,
+  with Ctrl+V or by dropping goes up in the background and shows in the row of
+  pictures; the page is not loaded again, so a comment that was begun stays in its
+  field. "Report anyway" on a task sends the note that was typed along with the
+  report. An agent run that is over, or whose turn is finished, no longer reads
+  "working on this right now" or "Live", and an issue that is done never does.
+  A device that talks reads "used a minute ago" instead of ten, the number on an
+  organization's Machines tab is the number of rows under it, and the inactive
+  agents are open when nobody works. An agent that reopened a requirement or
+  wrote the text of an idea is named as its owner's agent in the history, not as
+  the person.
 - The two hook routes are faster (PAIN-76). On a test database of the size of a
   production one (4,500 entries, 3 million chunks, `cmd/hookbench`) the
   briefing at session start takes 25 ms instead of 150 ms (p50), 28 ms instead

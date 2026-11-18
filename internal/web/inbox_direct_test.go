@@ -120,8 +120,8 @@ func TestInboxReplyPostsInTheRoomAndReadsIt(t *testing.T) {
 	}
 	resp := tpPost(t, e, e.Member, "/ui/inbox/reply", url.Values{"room": {room}, "reply_to": {itoa(id)}, "body": {"Yes, on it."}})
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/inbox" {
-		t.Fatalf("reply -> %d %q, want 303 /ui/inbox", resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/inbox?sent=1" {
+		t.Fatalf("reply -> %d %q, want 303 /ui/inbox?sent=1 (the inbox says it was sent)", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	anna := e.St.CoordinationFor(store.Principal{ID: "person:2", Label: "anna", TokenKind: store.WebSessionKind}, "")
 	msgs, err := anna.Messages(store.DestinationRoom, room, 0, 10)

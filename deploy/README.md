@@ -766,6 +766,189 @@ sudo systemctl enable --now ghosttree-distill.timer
 Generated knowledge remains quarantined until review. The bill does not, so
 start with a small limit and inspect the results.
 
+## AI connections and the model proxy
+
+Workflow runs reach models through named AI connections (REQ-694): the
+server's own, kept by the instance admin under Settings, "AI connections of
+the server", and those of each organization and profile, kept by their owners.
+A key is sealed with AES-256-GCM before it reaches the database and is never
+shown again; pages show its last four characters. Runs never get a key: the
+server starts a model proxy on loopback, gives each run a token that ends with
+the run, puts the key in, passes the request on (also streaming), books tokens
+and cost on the run and stops a run at its cap.
+
+**The server key.** Keys in the database need a 32-byte server key, which never
+lives in the database. Make one and hand it to the unit as a systemd credential:
+
+```sh
+sudo install -d -m 0700 /etc/ghosttree
+head -c 32 /dev/urandom | base64 | sudo tee /etc/ghosttree/secret-key >/dev/null
+sudo chmod 0600 /etc/ghosttree/secret-key
+sudo systemctl edit ghosttree.service    # add the two lines below
+#   [Service]
+#   LoadCredential=ghosttree-secret-key:/etc/ghosttree/secret-key
+sudo systemctl restart ghosttree
+```
+
+Outside systemd, `GHOSTTREE_SECRET_KEY_FILE=/path/to/secret-key` names the
+file (base64 or hex, 32 bytes). A key that is configured but cannot be read
+stops the server at start. Without any key the server runs, and the settings
+say that no key can be stored. Keep a copy of the key with the backups of the
+database: without it the stored keys are lost (owners enter them again).
+
+**llm.json.** The provider in `llm.json` (the top-level entry, else the
+gardener's) becomes the server connection `standard` at every start, with the
+aliases `klein`, `mittel` and `gründlich` on its model the first time. Its key
+stays in the file and is only held in memory. The gardener's own unit keeps its
+entry of `llm.json` as the fallback (see "The gardener over the proxy" below).
+
+**Keys are bound to their row.** A sealed key opens only for the owner and the
+connection it was saved for; a copy in another row does not open. Keys saved
+before that are sealed again at the first start with the server key (the log
+says `ai_keys resealed=N`). A key that opens neither way (another server key)
+is counted as `unusable`; its owner enters it again.
+
+**The proxy.** `GHOSTTREE_AI_PROXY_ADDR` sets where it listens, by default
+`127.0.0.1` on a free port; only loopback addresses are accepted, `off`
+switches it off. Connections of organizations and profiles must use https to a
+public address (no loopback, private or link-local targets); the server's own
+may also use plain http to this machine, as `llm.json` always could.
+
+**Release.** The server's connections serve no organization until the admin
+releases them: to all, to selected ones with a monthly cap each, or to none.
+"All" needs a cap per organization and month (profiles count as
+organizations); a grant with a cap of its own decides for its organization.
+A release "all" saved before there was such a cap releases nothing until the
+admin saves it again with one.
+
+**Caps.** Before a call goes out, the proxy books the most it can cost (the
+request as input, the largest output limit it names, or 8192 tokens, which it
+then sets) against every cap at once, so calls in parallel, of one run or of
+several, cannot pass a cap together; the real cost replaces the estimate when
+the answer is in. A stream that breaks off before its final usage, an answer
+without usage, and a call that was sent and got no answer stay booked at the
+estimate. When a run ends, its calls still under way are stopped and booked
+before its cost is read. A monthly cap that only other runs' open calls fill
+refuses the call and leaves the run alone; the run ends in the state budget
+when its own cap, or a monthly cap used up by settled calls, is reached. Calls
+still open when the server starts (their process died) are booked at their
+estimate with that start.
+
+**Loans.** A connection a person lent to an organization stops serving it when
+the person points it at another address or format, and when the person leaves
+the organization; the aliases the organization set on it go with the loan. The
+organization's owners see the host a lent connection sends their calls to.
+
+## Workflows (REQ-695)
+
+Workflows are files kept on the server, one set per repository, edited in the
+tab "Workflows", over MCP or the API (`ctx workflow check <file>` checks one
+without a model call). Every saved change is a version; the next run takes it.
+Leads and owners of a project create and change them, members read them.
+
+**What the operator has to do: nothing.** The tables are added at start. The
+gardener's unit, its timer and `ctx garden run-due` are unchanged: the gardener
+keeps running exactly as before, with its schedule, repositories, budgets,
+rules and undo log from the settings. What changes is that every run it
+reports is also a run of the block `ghosttree/garden-ghosts`: the tab
+Workflows of the repository lists it and the gardener's tab links it. The sweep
+of interrupted workflow runs leaves these runs alone (they may take hours);
+they end with the gardener's own report.
+
+The model alias an owner picks for the gardener decides the gardener's model:
+see "The gardener over the proxy" below.
+
+**Results and proposals.** What a workflow creates (knowledge, issues,
+criteria, relations) is a staged entry on the review page until a person
+accepts it, unless the owner switched on the automatic approval for exactly
+that kind (Settings, Workflows). Every result, refused or not, stands on the
+run page; an automatic approval can be undone there. The owner's policy can
+forbid instructions (stage 2), own prompts (stage 3), research on the net and
+single kinds; a workflow against it does not run and is listed as skipped.
+
+**The token of a run** names the account the run acts for (the author of the
+version it runs) and the run, at `GET /api/whoami`, and reaches nothing else
+of the API; what a run creates goes through the check of its results.
+
+**Own prompts (stage 3, REQ-698)** run in the server's own loop: the model
+calls the read tools the file names (`tools:`), each reading only what every
+member of the project may read, until it hands in its results or reaches its
+rounds (`rounds:`, 12 by default, at most 24), eight minutes, or a cap. Every
+tool call, refused ones included, stands with its input and a shortened result
+in the run's full text and goes with it after the retention.
+
+**Research on the net** needs a search service the operator names; the server
+ships none. Set `GHOSTTREE_RESEARCH_URL` to an address that answers like
+SearXNG (`GET <address>?q=…&format=json`, a list `results` of `url`, `title`,
+`content`), for example `http://127.0.0.1:8888/search` for a SearXNG on the
+same machine (plain http only to this machine, else https). Without it no
+workflow searches and `ctx workflow check` says so for a file with
+`research: true`. Pages are read as text only, from public addresses only
+(also after a redirect), and only addresses a search of the same run returned.
+A query may only use words of the declared inputs, of the prompt and of earlier
+search hits, so that nothing a read tool returned leaves the server in it.
+
+### The gardener over the proxy
+
+When the owner of an organization or profile picks a model alias for the
+gardener (Settings, Gardener), the gardener's runs there call the model through
+the server's model proxy with that alias, on the connection behind it, under
+the caps of the owner, and the calls stand in the cost overview under the
+workflow `ghosttree/garden-ghosts`. With the start of each run
+(`POST /api/garden/runs`) the server gives `ctx garden run-due` the proxy's
+address, a token that holds only while that run is running (at most four
+hours) and the prices of the model; Claude Code in the sessions gets them as
+`ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, with the alias as its model.
+The budget of the run is enforced with the prices of the connection: at the
+proxy the cap of a gardener's run is the budget per run in the gardener's
+settings (not the owner's cap per run); the owner's cap for the month holds
+as for any run.
+
+The proxy is used only when the alias resolves for that organization to a
+connection in the Anthropic format with prices, and no cap is reached. In every
+other case (no alias, proxy off, connection not usable, not Anthropic, no
+prices, cap reached) the run uses the gardener's entry of `llm.json` exactly as
+before, and run-due prints why. The proxy must run on the machine of the
+gardener's unit (it listens on loopback only).
+
+**What the operator does on the server host:**
+
+1. Give the proxy a fixed loopback port in the server's environment
+   (`/etc/ghosttree/server.env`), so that the address the gardener gets stays
+   the same when the server restarts during a run:
+
+   ```sh
+   GHOSTTREE_AI_PROXY_ADDR=127.0.0.1:8791
+   ```
+
+   Any free loopback port will do; `ss -ltn | grep 8791` shows whether it is
+   taken. Then `sudo systemctl restart ghosttree` and check the log for
+   `ai_proxy listen=127.0.0.1:8791`.
+
+   A restart during a gardener run (the nightly run starts at 03:05 UTC) does
+   not take the model away from it: the run's token is kept in the database and
+   the server's start leaves the gardener's runs alone. The fixed port is what
+   makes that work, because the address in `ANTHROPIC_BASE_URL` was fixed when
+   the run started. For the seconds the server is down, calls of Claude Code to
+   the proxy fail and are retried by it; a run that is cut off by a hard kill of
+   its unit is ended as interrupted once its token has run out, four hours
+   after its start.
+2. Install the new `ctx` for the server and for the gardener's unit (both run
+   the same binary) and restart `ghosttree`.
+3. The gardener's unit needs no change: it allows loopback only
+   (`IPAddressAllow=localhost`), which covers the proxy. If that line was
+   replaced by an allowlist for api.anthropic.com, add `localhost` back to it.
+4. In the web interface: release the server's connection `standard` (from
+   `llm.json`) to the organization, or have the owner add a connection of the
+   organization in the Anthropic format; the owner sets an alias on it and
+   picks that alias in the gardener's settings.
+5. After the next run, `journalctl -u ghosttree-garden` says
+   `model <alias> over the server's model proxy (connection <name>)`, and the
+   organization's cost overview lists `ghosttree/garden-ghosts`.
+
+Until step 4 is done for an organization, its gardener runs as before on
+`llm.json`.
+
 ## Gardener in the sandbox
 
 `ghosttree-garden.service` runs the gardener (`ctx garden check-knowledge`) as a
@@ -780,7 +963,8 @@ session is treated as untrusted:
   `--claude-dir` (also `GHOSTTREE_GARDEN_CLAUDE_DIR`), which is its
   `CLAUDE_CONFIG_DIR` and `HOME`, and is removed afterwards. Without
   `--claude-dir` the agent mode does not start. The proxy and the token come
-  from the `garden` entry of `llm.json`, not from a settings file.
+  from the server with the start of the run (the model proxy, see above), else
+  from the `garden` entry of `llm.json`, never from a settings file.
 - **Small environment.** The session sees `PATH`, locale, certificate paths and
   the one value that assigns it to its account. Nothing else of the unit's
   environment reaches it.

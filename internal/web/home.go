@@ -7,7 +7,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -48,6 +50,8 @@ type forYouRow struct {
 	// question), RequestID the issue it hangs on (0 for none).
 	Actor     string
 	RequestID int64
+	// Full is the whole text of a question when Title shows only a part of it ("" when Title is all).
+	Full string
 	// Primary fills the action: the one next thing for an agent that waits.
 	Primary bool
 	// Open: the first row is unfolded and carries "Kurz erklärt".
@@ -73,6 +77,8 @@ type forYouRow struct {
 	Brief      string
 	// steps are the walk-through of a task, for the inbox row.
 	steps []humantask.Step
+	// actorKind and actorOwner draw the avatar of an agent that asked (authorship).
+	actorKind, actorOwner string
 	// explainStored: the text is shown only when an agent wrote it.
 	explainStored bool
 }
@@ -164,21 +170,24 @@ func (a *app) homeTasks(l lang, r *http.Request, pa *store.ProjectAccess, projec
 				}
 				titles[t.RequestID] = title
 			}
+			// Who asked leads the line ("Robin’s Claude"); "for X" would read as the one it is
+			// for, so the issue it hangs on is named with "on".
+			by := a.actorViewOf(l, pa, actor.Task, t.ID, t.CreatedBy, false)
 			rest := l.msg("home.task", lastSegment(t.Project))
 			if title != "" {
-				rest = l.msg("home.task_for", title)
+				rest = l.msg("home.task_on", title)
 			}
 			if foreign {
 				rest += agentLabelSep + store.NormalizeAccountName(t.Assignee)
 			}
 			created := parseTime(t.CreatedAt)
 			row := forYouRow{
-				Mark: t.Kind, Title: t.Title, Rest: rest, Action: l.msg("home.act.task"), Href: taskHref(t),
+				Mark: t.Kind, Title: t.Title, Lead: by.Label, Rest: rest, Action: l.msg("home.act.task"), Href: taskHref(t),
 				rank: rankTask, at: created, explainKind: explain.KindTask, explainID: t.ID,
-				taskID: t.ID, num: t.HumanID(), Actor: t.CreatedBy, RequestID: t.RequestID, steps: t.Steps,
+				taskID: t.ID, num: t.HumanID(), Actor: by.Label, actorKind: by.Kind, actorOwner: by.Owner(), RequestID: t.RequestID, steps: t.Steps,
 			}
 			if !created.IsZero() {
-				row.Age = l.msg("home.open_since", shortAge(l, now, created))
+				row.Age = openSince(l, now, created)
 				row.AgeOld = olderThan(t.CreatedAt, now, taskOldAfter)
 			}
 			out = append(out, homeTask{row: row, person: t.AssigneeAccount, canDone: pa.CheckTask(t, store.ActWork) == nil})
@@ -225,8 +234,11 @@ func (a *app) homeAttention(r *http.Request, now time.Time) ([]forYouRow, error)
 		item := byID[v.ID]
 		room := coordShortRoomName(coordRoomKindOf(item.HomeRoomKey), coordRoomLabel(l, store.CoordRoom{Key: item.HomeRoomKey}, "", labels))
 		created := parseTime(item.CreatedAt)
+		names := mentionNamesOf(a.access(r), roomProject(item.HomeRoomKey), item.Body)
+		asked := withoutAddressee(item.Body, names)
+		title := previewText(l, asked, 110, names)
 		row := forYouRow{
-			Title: questionTitle(v.Preview, 110), Href: v.URL, at: created, Tone: "ask", Actor: coordSenderLabel(l, item, labels),
+			Title: title, Full: fullIfCut(l, asked, title, names), Href: v.URL, at: created, Tone: "ask", Actor: coordSenderLabel(l, item, labels),
 			Rest:        coordSenderLabel(l, item, labels) + agentLabelSep + room,
 			explainKind: explain.KindQuestion, explainID: item.MessageID, explainStored: item.Reason != store.AttentionQuestion,
 			attentionID: item.ID, messageID: item.MessageID,
@@ -306,7 +318,7 @@ func questionTitle(s string, limit int) string {
 	}
 	start := 0
 	for i, c := range rs {
-		end := i == len(rs)-1 || ((c == '.' || c == '!' || c == '?') && rs[i+1] == ' ')
+		end := i == len(rs)-1 || ((c == '.' || c == '!' || c == '?') && rs[i+1] == ' ' && (c != '.' || !abbreviationDot(rs, i)))
 		if !end {
 			continue
 		}
@@ -319,6 +331,29 @@ func questionTitle(s string, limit int) string {
 		}
 	}
 	return shortWords(s, limit)
+}
+
+// abbreviationDot: the full stop at rs[i] belongs to an abbreviation ("z. B.", "ca.", "Nr."), or the
+// word after it goes on in lower case, so no sentence ends there.
+func abbreviationDot(rs []rune, i int) bool {
+	start := i
+	for start > 0 && (unicode.IsLetter(rs[start-1]) || rs[start-1] == '.') {
+		start--
+	}
+	word := strings.ToLower(string(rs[start:i]))
+	if len([]rune(strings.ReplaceAll(word, ".", ""))) <= 1 {
+		return true
+	}
+	switch word {
+	case "ca", "bzw", "usw", "vgl", "nr", "abs", "ggf", "inkl", "evtl", "etc", "approx", "vs", "bspw", "ggü", "mind", "max", "min":
+		return true
+	}
+	for j := i + 1; j < len(rs); j++ {
+		if rs[j] != ' ' {
+			return unicode.IsLower(rs[j])
+		}
+	}
+	return false
 }
 
 // bundleFacts is the oldest creation time and the projects of a set of entries.
@@ -345,4 +380,13 @@ func projectNames(names []string, limit int) string {
 		names = names[:limit]
 	}
 	return strings.Join(names, ", ")
+}
+
+// openSince says how long a task has been open: "open for 5 min", and for the first minute "just now"
+// rather than "open for now".
+func openSince(l lang, now, created time.Time) string {
+	if now.Sub(created) < time.Minute {
+		return l.msg("home.open_new")
+	}
+	return l.msg("home.open_since", shortAge(l, now, created))
 }

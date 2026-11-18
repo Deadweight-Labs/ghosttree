@@ -312,3 +312,25 @@ func TestSquattedNoteOnAFreeNameStaysOutEvenAfterSharing(t *testing.T) {
 		t.Errorf("org member receives the squatted text: %d %v", code, k)
 	}
 }
+
+// A request from a device is a sign of life of its machine: last_seen follows
+// the traffic instead of staying at the day the machine signed in (REQ-678).
+func TestDeviceRequestsKeepTheMachineLastSeenCurrent(t *testing.T) {
+	f := newMachineShareFixture(t)
+	old := "2026-01-01T00:00:00Z"
+	if _, err := f.st.DB().Exec(`UPDATE machines SET last_seen=? WHERE hostname='build-1'`, old); err != nil {
+		t.Fatal(err)
+	}
+	resp := req(t, "GET", f.srv.URL+"/api/whoami", f.robinDevice, nil)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("whoami = %d", resp.StatusCode)
+	}
+	m, err := f.st.MachineFor("person:1", "build-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LastSeen <= old {
+		t.Fatalf("machine last_seen stayed at %q after a request of its device", m.LastSeen)
+	}
+}

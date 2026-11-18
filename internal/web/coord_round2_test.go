@@ -162,3 +162,35 @@ func TestCoordApprovalCardHasOneMainActionAndTheRestInOneMenu(t *testing.T) {
 		t.Errorf("the honest note stands in the foot of the card before the main action: note=%d button=%d", note, button)
 	}
 }
+
+// REQ-702: a question the viewer asked has no verdict to give, only withdrawing.
+// The foot of its card then shows that action as a button with its name, not an
+// empty bar with a lone "…" menu; a card with nothing to do has no foot at all.
+func TestCoordRequestFootShowsNoBareMenuWithoutAMainAction(t *testing.T) {
+	page, _ := coordCompactAttentionFixture(t)
+	at := strings.Index(page, "Ausgehende Frage")
+	if at < 0 {
+		t.Fatal("no outgoing question")
+	}
+	start := strings.LastIndex(page[:at], `<article tabindex="-1" class="rm-msg is-ask">`)
+	card := page[start : start+strings.Index(page[start:], "</article>")]
+	if strings.Contains(card, "rq4-menu") {
+		t.Errorf("a card without a main action hides its only action behind a menu: %s", card)
+	}
+	if !strings.Contains(card, `class="rq4-f"`) || !strings.Contains(card, `value="`+store.AttentionActionWithdraw+`"`) {
+		t.Errorf("the foot shows the withdraw action: %s", card)
+	}
+	if !strings.Contains(card, `class="gbtn sm quiet" name="action"`) {
+		t.Errorf("the action is a button with a label: %s", card)
+	}
+	// Every foot that is drawn holds a button, a note or a menu.
+	for _, c := range strings.Split(page, `class="rq4-f"`)[1:] {
+		end := strings.Index(c, "</article>")
+		if end < 0 {
+			end = len(c)
+		}
+		if !strings.Contains(c[:end], "<button") && !strings.Contains(c[:end], "<summary") && !strings.Contains(c[:end], "rq4-n") {
+			t.Errorf("an empty foot: %s", c[:end])
+		}
+	}
+}

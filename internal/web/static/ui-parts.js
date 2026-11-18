@@ -9,6 +9,8 @@
   // close with Escape (focus goes back to the button) and with a click outside,
   // and both are moved back into the window when they would stick out of it.
   // details.rvk (tokens page) and details.cfm (everywhere else) are the confirmation popovers; they close the same way.
+  // The proof form of a requirement (details.resolve) closes in its own handler below; it is placed here like the others.
+  const POPS = ":scope > .pop, :scope > .rvp, :scope > .cfp, :scope > .resolve-form";
   const OPEN = ".dd.open, details.dd[open], details.rvk[open], details.cfm[open]";
   const trigger = (dd) => $(":scope > [data-dd], :scope > summary", dd);
   const closeMenus = (except) => {
@@ -24,8 +26,10 @@
     }
   };
   const resetPop = (dd) => {
-    const pop = $(":scope > .pop, :scope > .rvp", dd);
+    const pop = $(POPS, dd);
     if (!pop) return null;
+    pop.removeAttribute("data-side");
+    pop.style.removeProperty("--caret-x");
     pop.style.transform = "";
     pop.style.top = "";
     pop.style.bottom = "";
@@ -36,7 +40,7 @@
   // there is one, stays above it). Typing hides the entries that do not contain the text.
   const filterable = (dd) => {
     const pop = $(":scope > .pop", dd);
-    if (!pop || $(".pf", pop)) return;
+    if (!pop || pop.hasAttribute("data-nofilter") || $(".pf", pop)) return;
     const opts = $$(".opt", pop);
     if (opts.length <= 10) return;
     const find = document.createElement("input");
@@ -73,9 +77,18 @@
         pop.style.top = "auto";
         pop.style.bottom = "calc(100% + 4px)";
         pop.style.maxHeight = Math.max(160, Math.min(above, 420)) + "px";
+        pop.setAttribute("data-side", "up");
       } else {
         pop.style.maxHeight = Math.max(160, Math.min(below, 420)) + "px";
       }
+    }
+    // The caret of an anchored popover points at the middle of its button, wherever the box ended up.
+    const t = trigger(dd);
+    if (t) {
+      const from = t.getBoundingClientRect();
+      const now = pop.getBoundingClientRect();
+      const x = from.left + from.width / 2 - now.left;
+      pop.style.setProperty("--caret-x", Math.round(Math.max(14, Math.min(now.width - 14, x))) + "px");
     }
   };
   document.addEventListener("click", (event) => {
@@ -104,7 +117,7 @@
   });
   document.addEventListener("toggle", (event) => {
     const d = event.target;
-    if (!d.matches || !d.matches("details.dd, details.rvk, details.cfm")) return;
+    if (!d.matches || !d.matches("details.dd, details.rvk, details.cfm, details.resolve")) return;
     if (d.open) {
       closeMenus(d);
       filterable(d);
@@ -125,9 +138,55 @@
     if (t) t.focus();
   });
 
-  // Composer: write/preview. The preview renders the Markdown (ui-md.js) into
-  // nodes and takes the height of the text field while that is visible; the
-  // toolbar belongs to writing, so it goes while the preview is open.
+  // Menus by keyboard (R04): on the closed button the arrow keys open the menu and
+  // put the focus on the chosen entry (or the first); in the open menu the arrows, Home
+  // and End move between the entries (the filter field of a long menu is the first stop),
+  // and the page does not scroll along. Enter chooses, since an entry is a button or a
+  // link; Escape and Tab are handled above and by the browser.
+  const stops = (dd) => {
+    const find = $(".pop .pf", dd);
+    return [...(find ? [find] : []), ...$$(".pop .opt", dd).filter((o) => !o.hidden && !o.disabled)];
+  };
+  document.addEventListener("keydown", (event) => {
+    const key = event.key;
+    if (key !== "ArrowDown" && key !== "ArrowUp" && key !== "Home" && key !== "End") return;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const dd = event.target.closest && event.target.closest(".dd");
+    if (!dd) return;
+    const t = event.target;
+    const onButton = t.matches("[data-dd]") || (t.tagName === "SUMMARY" && t.parentNode === dd);
+    if (!onButton && !t.closest(".pop")) return;
+    // Home and End belong to the text of the filter field.
+    if ((key === "Home" || key === "End") && event.target.classList && event.target.classList.contains("pf")) return;
+    const isOpen = dd.classList.contains("open") || (dd.tagName === "DETAILS" && dd.open);
+    if (onButton && !isOpen) {
+      if (key === "Home" || key === "End") return;
+      event.preventDefault();
+      t.click();
+      const list = stops(dd).filter((s) => !s.classList.contains("pf"));
+      const chosen = list.find((o) => o.getAttribute("aria-selected") === "true" && o.dataset.val) || list[0];
+      const first = stops(dd)[0];
+      // A long menu starts in its filter field (the click handler focused it); a short one on an entry.
+      if (first && first.classList.contains("pf")) first.focus(); else if (chosen) chosen.focus();
+      return;
+    }
+    const list = stops(dd);
+    if (!list.length) return;
+    event.preventDefault();
+    const at = list.indexOf(event.target);
+    let next;
+    if (key === "Home") next = 0;
+    else if (key === "End") next = list.length - 1;
+    else if (key === "ArrowDown") next = at < 0 ? 0 : Math.min(at + 1, list.length - 1);
+    else next = at <= 0 ? 0 : at - 1;
+    list[next].focus();
+  });
+
+  // Composer: write/preview. The preview renders the Markdown (ui-md.js) into nodes. It is at
+  // least as tall as the text field it replaces, so the box does not jump, and it grows with its
+  // content, whatever its length (CSS: .cx-pv; only the chat composers have a cap): a table or a
+  // diagram can be checked before sending. The toolbar stays where it is while the preview is
+  // open and is greyed out, because it belongs to writing.
   for (const tab of $$(".cx [data-wtab]")) {
     tab.addEventListener("click", (event) => {
       event.preventDefault();
@@ -137,8 +196,7 @@
       const pv = $(".cx-pv", cx);
       const w = $(".cx-w", cx);
       if (preview) {
-        // The preview has exactly the height of the field it replaces and scrolls inside it, so the box never jumps.
-        if (!w.hidden) pv.style.height = w.offsetHeight + "px";
+        if (!w.hidden) pv.style.minHeight = w.offsetHeight + "px";
         pv.textContent = "";
         if (window.GTMarkdown) {
           pv.appendChild(window.GTMarkdown.render(ta.value, { empty: pv.dataset.empty, done: pv.dataset.done, open: pv.dataset.open }));
@@ -151,7 +209,11 @@
       w.hidden = preview;
       pv.hidden = !preview;
       const tools = $(".wtools", cx);
-      if (tools) tools.hidden = preview;
+      if (tools) {
+        tools.classList.toggle("off", preview);
+        if (preview) tools.setAttribute("aria-disabled", "true"); else tools.removeAttribute("aria-disabled");
+        for (const b of $$("[data-tool]", tools)) b.disabled = preview;
+      }
       for (const x of $$("[data-wtab]", cx)) {
         const li = x.closest("li");
         li.classList.toggle("sel", x === tab);
@@ -252,6 +314,57 @@
     TOOLS[tool](ta);
   });
 
+  // Ctrl+Enter (Cmd+Enter on a Mac) in the field of a composer sends it, the same way its button does: through
+  // the submit of the form, so the checks of the browser (a required text) and the scripts that take the form
+  // over still apply. The button names the keys in its tooltip.
+  const sendKeys = /mac|iphone|ipad/.test(((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "").toLowerCase())
+    ? "⌘ Enter"
+    : (document.documentElement.lang || "").toLowerCase().startsWith("de") ? "Strg+Enter" : "Ctrl+Enter";
+  const withKeys = (tip) => (tip ? tip + " · " : "") + sendKeys;
+  // The button that sends a composer: the comment composers name theirs (data-submit); the composers of the rooms
+  // and threads have the send button of the room (.comp-send), not the request button beside it.
+  const sendButton = (cx) => $("[data-submit]", cx) || $(".comp-send", cx);
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.isComposing) return;
+    const ta = event.target;
+    if (!ta.matches || !ta.matches(".cx textarea")) return;
+    const form = ta.closest("form");
+    const btn = sendButton(ta.closest(".cx"));
+    if (!form || !btn || btn.disabled) return;
+    event.preventDefault();
+    if (typeof form.requestSubmit === "function") form.requestSubmit(btn); else btn.click();
+  });
+  for (const b of $$(".cx [data-submit], .cx .comp-send")) {
+    b.title = withKeys(b.getAttribute("title") || "");
+    b.setAttribute("aria-keyshortcuts", "Control+Enter");
+  }
+
+  // The tile of a picture (ATT-n) puts its line, ![description](ATT-n), into the field of the composer that was
+  // used last (else the first one that is shown), at the cursor, on a line of its own. The buttons are only shown
+  // when the page has such a field (.has-cx).
+  if ($(".cx textarea")) document.documentElement.classList.add("has-cx");
+  let lastField = null;
+  document.addEventListener("focusin", (event) => {
+    if (event.target.matches && event.target.matches(".cx textarea")) lastField = event.target;
+  });
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest && event.target.closest("[data-att-insert]");
+    if (!button) return;
+    // A field is "shown" unless it sits in a closed part of the page (the field itself is hidden while the preview is open).
+    const shown = (t) => { const h = t.closest("[hidden]"); return !h || h.classList.contains("cx-w"); };
+    const ta = lastField && shown(lastField) ? lastField : $$(".cx textarea").find(shown);
+    if (!ta) return;
+    const cx = ta.closest(".cx");
+    const write = cx && $('[data-wtab="w"]', cx);
+    if (write && $(".cx-w", cx) && $(".cx-w", cx).hidden) write.click();
+    const desc = (button.dataset.desc || "").replace(/[\[\]\s]+/g, " ").trim();
+    const line = "![" + desc + "](" + button.dataset.attInsert + ")";
+    const a = ta.selectionStart || 0, b = ta.selectionEnd || 0, v = ta.value;
+    const lead = a > 0 && v[a - 1] !== "\n" ? "\n" : "";
+    const text = lead + line + "\n";
+    put(ta, a, b, text, a + text.length, a + text.length);
+  });
+
   // Composer with a mode (state, signal): the entry that is chosen sets the button label and
   // class, the placeholder, whether the words are required and the fields that belong to it.
   for (const cx of $$(".cx[data-cfg]")) {
@@ -269,7 +382,7 @@
       cx.dataset.mode = mode;
       if (btn) {
         btn.className = "gbtn " + (c.cls === undefined ? "pri" : c.cls);
-        if (c.tip) btn.title = c.tip; else btn.removeAttribute("title");
+        btn.title = withKeys(c.tip || "");
       }
       label();
       if (c.ph) { ta.placeholder = c.ph; ta.setAttribute("aria-label", c.ph); }
@@ -339,6 +452,30 @@
         form.setAttribute("aria-busy", "true");
         if (sendBtn) sendBtn.disabled = true;
       }, 0);
+    });
+  }
+
+  // Reporting a task as done (the button, and "Report anyway" of the question about the steps still open) is a
+  // form of its own; the note that was typed into the field of the page is not part of it. So the note goes along:
+  // at the moment of the report it is copied into a hidden field of that form, and the server writes it as the
+  // note of the report. Nothing that was typed is thrown away by the report. A note that is refused (it looks like
+  // a secret) comes back into the field of the page, the way the draft above keeps it.
+  for (const form of $$(".treport form")) {
+    form.addEventListener("submit", () => {
+      const ta = $$('textarea[name="note"]').find((t) => !form.contains(t));
+      const text = ta ? ta.value.trim() : "";
+      let carry = $('input[type="hidden"][name="note"]', form);
+      if (!text) {
+        if (carry) carry.remove();
+        return;
+      }
+      if (!carry) {
+        carry = document.createElement("input");
+        carry.type = "hidden";
+        carry.name = "note";
+        form.appendChild(carry);
+      }
+      carry.value = text;
     });
   }
 

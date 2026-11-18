@@ -50,6 +50,9 @@ type Server struct {
 	// Ohne sie könnte eine Suche den gerade hochgeladenen Prompt als Beleg für
 	// sich selbst zurückgeben.
 	sessionRef string
+	// sessionHarness gehört zu sessionRef: so legt ownSession die Session an, wenn der
+	// Sammler sie noch nicht hochgeladen hat.
+	sessionHarness string
 	// coordOverride ersetzt sessionRef ausschließlich in coordRef().
 	coordOverride string
 	// agentRole ist die beim Start per ctx claude --role angeforderte Rolle.
@@ -99,6 +102,10 @@ func (s *Server) knowledgeChanged() {
 func (s *Server) SetAfterSnapshot(f func(context.Context, string) error) { s.afterSnapshot = f }
 
 func (s *Server) SetSessionRef(ref string) { s.sessionRef = ref }
+
+// SetSessionHarness nennt den Harness der Sitzung (claude-code, codex), wie ihn der
+// Sammler in der Session-Zeile führt. Ohne ihn gilt claude-code.
+func (s *Server) SetSessionHarness(harness string) { s.sessionHarness = harness }
 
 // SetCoordRef setzt die Koordinationsidentität, wenn sie von der
 // Harness-Session abweicht (ctx claude). Suche, unterbrochene Arbeit und
@@ -307,6 +314,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	s.registerPackageTools(srv)
 	s.registerQueryTools(srv)
 	s.registerRunbookTools(srv)
+	s.registerWorkflowTools(srv)
 	s.registerLinkTools(srv)
 	s.registerFeatureTools(srv)
 	s.registerMachineTools(srv)

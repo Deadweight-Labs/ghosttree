@@ -132,7 +132,7 @@ func TestPullListShowsTabsRowsProgressAndFilters(t *testing.T) {
 	} else if strings.Contains(guest, "compare") {
 		t.Error("a guest gets the button for a new pull request")
 	}
-	if code, hidden := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/pulls"); code != http.StatusNotFound || strings.Contains(hidden, "SECRET") {
+	if code, hidden := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/pulls"); code != http.StatusForbidden || strings.Contains(hidden, "SECRET") {
 		t.Errorf("pulls of a hidden project = %d", code)
 	}
 }
@@ -194,6 +194,9 @@ func TestPullPageIsUnknownForWhatTheViewerMayNotRead(t *testing.T) {
 			if name == "owner" && p == "/ui/x/hidden/pulls/99" {
 				want = http.StatusOK
 			}
+			if name == "member" {
+				want = memberStatusFor(p)
+			}
 			if code != want {
 				t.Errorf("%s: %s = %d, want %d", name, p, code, want)
 			}
@@ -237,7 +240,7 @@ func TestCommitListGroupsByDayFiltersByBranchAndPages(t *testing.T) {
 		t.Fatalf("guest commit list = %d", code)
 	}
 	mustNotContain(t, "guest commit list", guest, "feat/x")
-	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/commits"); code != http.StatusNotFound {
+	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/commits"); code != http.StatusForbidden {
 		t.Errorf("commits of a hidden project = %d", code)
 	}
 }
@@ -261,7 +264,7 @@ func TestCommitPageShowsWhatWasSaidAndAcceptsAPrefix(t *testing.T) {
 			t.Errorf("commit %q = %d, want 404", p, code)
 		}
 	}
-	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/commits/"+pullShaA); code != http.StatusNotFound {
+	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/x/hidden/commits/"+pullShaA); code != http.StatusForbidden {
 		t.Errorf("commit under a hidden repository = %d", code)
 	}
 }

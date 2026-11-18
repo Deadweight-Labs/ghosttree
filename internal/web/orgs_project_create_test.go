@@ -50,7 +50,7 @@ func TestCreatingAProjectInTheWebValidatesAndNeedsMembership(t *testing.T) {
 	}{
 		{"not a member", anna, "alpha", "infra", http.StatusNotFound},
 		{"bad name", alice, "alpha", "Not Valid!", http.StatusBadRequest},
-		{"remote-like", alice, "alpha", "github.com/a/b", http.StatusBadRequest},
+		{"not an address", alice, "alpha", "a b/c", http.StatusBadRequest},
 		{"empty", alice, "alpha", " ", http.StatusBadRequest},
 		{"valid", alice, "alpha", "sky-go", http.StatusSeeOther},
 		{"taken", alice, "alpha", "sky-go", http.StatusConflict},

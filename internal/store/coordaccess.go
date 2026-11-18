@@ -265,6 +265,14 @@ func (a CoordAccess) rawRoom(roomKey string) (CoordRoom, error) {
 	err := reader.db.QueryRow(`SELECT room_key,kind,label,created_at FROM coord_rooms WHERE room_key=?`, roomKey).
 		Scan(&room.Key, &room.Kind, &room.Label, &room.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
+		// The room of a project exists with the project: the row appears when somebody
+		// first writes (roomAccessTx), and a project nobody has written in is an empty
+		// room, not "does not exist". Every project page links to it.
+		if project, ok := strings.CutPrefix(roomKey, "project:"); ok {
+			if _, known := projectTx(reader.db, project); known {
+				return CoordRoom{Key: roomKey, Kind: RoomProject}, nil
+			}
+		}
 		return CoordRoom{}, ErrCoordNotFound
 	}
 	if err != nil {
@@ -842,7 +850,27 @@ func (a CoordAccess) requireRoomAccessTx(tx *sql.Tx, actor, roomKey string) erro
 func (a CoordAccess) roomAccessTx(tx *sql.Tx, actor, roomKey string, via Action) error {
 	var kind string
 	if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, roomKey).Scan(&kind); errors.Is(err, sql.ErrNoRows) {
-		return ErrCoordNotFound
+		// The first write into the room of a project nobody has used yet makes the row
+		// (see rawRoom); the gate below still decides whether the writer may.
+		project, ok := strings.CutPrefix(roomKey, "project:")
+		if _, known := projectTx(tx, project); !ok || !known {
+			return ErrCoordNotFound
+		}
+		kind = RoomProject
+		if err := a.projectRoomGate(kind, roomKey, ResRoom, tx); err != nil {
+			return err
+		}
+		if !a.roleOpensProjectRoom(roomKey, tx, via) {
+			return noMembershipError(kind)
+		}
+		if via != ActPost {
+			// A read runs on a read-only handle and finds an empty room.
+			return nil
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_rooms(room_key,kind,label,created_at) VALUES(?,?,?,?)`, roomKey, RoomProject, "", now()); err != nil {
+			return err
+		}
+		return nil
 	} else if err != nil {
 		return err
 	}
@@ -992,6 +1020,13 @@ func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 	}
 	message.Mentions = append(append([]string(nil), message.Mentions...), textIDs...)
 	message.IsBroadcast = textRoom != "" && !guestRoom && BodyHasBroadcast(message.Body)
+	// Nobody addresses themselves: an agent that names its own id, or an @name that
+	// resolves to the sender, reaches the others only (REQ-688). A guest keeps the
+	// item for their own question: it is how they find it again without seeing
+	// who else is in the room.
+	if !guestRoom {
+		message.Mentions = withoutSender(message.Mentions, actor)
+	}
 	if _, actionable := attentionReasonForIntent(message.Intent); actionable && len(normalizeMembers(message.Mentions)) == 0 && len(typedMentions) == 0 {
 		if message.DestinationKind == DestinationRoom {
 			var roomKind string
@@ -1019,6 +1054,12 @@ func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 				if err := rows.Close(); err != nil {
 					return 0, false, err
 				}
+			}
+		}
+		if len(normalizeMembers(message.Mentions)) == 0 {
+			// A question from an agent that names nobody goes to the person it works for.
+			if owner, ok := a.defaultAgentRecipient(actor); ok {
+				message.Mentions = append(message.Mentions, owner)
 			}
 		}
 		if len(normalizeMembers(message.Mentions)) == 0 {
@@ -1091,6 +1132,11 @@ func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 	}
 	if err := insertRawMentionsTx(tx, id, rawMentions); err != nil {
 		return 0, false, err
+	}
+	if created {
+		if err := answerOpenQuestionsTx(tx, actor, message, id); err != nil {
+			return 0, false, err
+		}
 	}
 	if err := recordSenderRoleTx(tx, message, id); err != nil {
 		return 0, false, err
@@ -1864,7 +1910,7 @@ func (a CoordAccess) requireThreadMutation(threadID int64) (Thread, error) {
 	if err != nil {
 		return Thread{}, err
 	}
-	thread, err := a.requireThreadStateTx(tx, actor, threadID)
+	thread, err := a.requireThreadSettleTx(tx, actor, threadID)
 	if err != nil {
 		return Thread{}, err
 	}
@@ -1897,17 +1943,24 @@ func (a CoordAccess) CanSetThreadState(threadID int64) bool {
 }
 
 func (a CoordAccess) requireThreadMutationTx(tx *sql.Tx, actor string, threadID int64) (Thread, error) {
-	return a.requireThreadChangeTx(tx, actor, threadID, false)
+	return a.requireThreadChangeTx(tx, actor, threadID, false, false)
 }
 
 // requireThreadStateTx is requireThreadMutationTx plus the project lead and up:
 // only changing the state and archiving open to them, never links, summaries,
 // outcomes or touching.
 func (a CoordAccess) requireThreadStateTx(tx *sql.Tx, actor string, threadID int64) (Thread, error) {
-	return a.requireThreadChangeTx(tx, actor, threadID, true)
+	return a.requireThreadChangeTx(tx, actor, threadID, true, false)
 }
 
-func (a CoordAccess) requireThreadChangeTx(tx *sql.Tx, actor string, threadID int64, leadMay bool) (Thread, error) {
+// requireThreadSettleTx is requireThreadStateTx plus whoever answered in the
+// thread: the rule for changing the state alone (resolve, defer, open again),
+// not for archiving.
+func (a CoordAccess) requireThreadSettleTx(tx *sql.Tx, actor string, threadID int64) (Thread, error) {
+	return a.requireThreadChangeTx(tx, actor, threadID, true, true)
+}
+
+func (a CoordAccess) requireThreadChangeTx(tx *sql.Tx, actor string, threadID int64, leadMay, participantMay bool) (Thread, error) {
 	if a.publicOnly {
 		return Thread{}, ErrCoordForbidden
 	}
@@ -1939,6 +1992,20 @@ func (a CoordAccess) requireThreadChangeTx(tx *sql.Tx, actor string, threadID in
 			return Thread{}, err
 		}
 		if manager > 0 {
+			return thread, nil
+		}
+	}
+	// Whoever took part in the thread may say it is settled, put it aside or
+	// open it again: a person who answered in it is no stranger to it. Only the
+	// state opens to them, never links, summaries, outcomes or the archive.
+	if participantMay && a.AgentExternalID == "" && a.Principal.TokenKind == WebSessionKind && a.Principal.ID != "" {
+		var wrote int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_messages
+			WHERE destination_kind='discussion' AND destination_id=? AND author_kind='human' AND author_principal_id=?`,
+			ThreadDestinationID(threadID), a.Principal.ID).Scan(&wrote); err != nil {
+			return Thread{}, err
+		}
+		if wrote > 0 {
 			return thread, nil
 		}
 	}
@@ -2067,7 +2134,7 @@ func (a CoordAccess) SetThreadState(threadID int64, state string, anchor ...*git
 	if err != nil {
 		return err
 	}
-	if _, err := a.requireThreadStateTx(tx, actor, threadID); err != nil {
+	if _, err := a.requireThreadSettleTx(tx, actor, threadID); err != nil {
 		return err
 	}
 	ts := now()
@@ -3044,3 +3111,29 @@ func validateRequestLinkTx(tx *sql.Tx, roomKey, linkID string) error {
 // that belongs to another project, so a link cannot probe which request ids
 // exist elsewhere.
 var errLinkedRequestNotFound = errors.New("linked request not found")
+
+// withoutSender drops the sender from a list of addressees: asking yourself is
+// no question, and an attention item for the asker would only pile up in their
+// own inbox.
+func withoutSender(members []string, sender string) []string {
+	var out []string
+	for _, m := range members {
+		if strings.TrimSpace(m) != sender {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// defaultAgentRecipient is whom a question of an agent reaches when it names
+// nobody: the person the agent works for. A human sender gets none, there the
+// composer asks who it is for.
+func (a CoordAccess) defaultAgentRecipient(actor string) (string, bool) {
+	if a.authorKind() != AuthorAgent || a.Principal.ID == actor {
+		return "", false
+	}
+	if _, err := parsePersonPrincipalID(a.Principal.ID); err != nil {
+		return "", false
+	}
+	return a.Principal.ID, true
+}

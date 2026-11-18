@@ -220,7 +220,7 @@ func coordHookSender(meta map[string]string) string {
 	id := safeToken(meta["sender"])
 	switch meta["sender_kind"] {
 	case store.AuthorHuman:
-		if name := store.NormalizeAccountName(meta["sender_name"]); name != "" {
+		if name := store.PromptSafeName(meta["sender_name"]); name != "" {
 			return name + " (" + id + ", human)"
 		}
 		return id + " (human)"
@@ -355,6 +355,23 @@ func turnEnd(stdin io.Reader, harness string, stdout io.Writer) int {
 	if reminder != "" {
 		_ = json.NewEncoder(stdout).Encode(stopReminderOutput(reminder))
 		return 0
+	}
+	_, _ = io.WriteString(stdout, "{}\n")
+	return 0
+}
+
+// sessionEnd is the SessionEnd hook: the session is over, not only its turn.
+// It tells the server so, which is what separates "finished" from "waiting for
+// the next prompt". It delivers nothing to the model and always answers with an
+// empty, well-formed object: a hook that fails costs the person their flow.
+func sessionEnd(stdin io.Reader, harness string, stdout io.Writer) int {
+	if os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
+		if harness == "claude" || harness == "codex" {
+			_ = hookstate.Record(harness, "SessionEnd")
+		}
+		if raw, err := io.ReadAll(io.LimitReader(stdin, 4<<20)); err == nil {
+			registerHookSession(raw, harness, true, store.HookSessionEnd)
+		}
 	}
 	_, _ = io.WriteString(stdout, "{}\n")
 	return 0

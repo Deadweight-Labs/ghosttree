@@ -16,13 +16,18 @@ import (
 func TestRepoSettingsTabAndLabels(t *testing.T) {
 	e := ovEnv(t)
 	settings := e.Base + "/ui/x/shell/settings"
-	if _, page := fetchPage(t, e.Lead, e.Base+"/ui/x/shell"); !strings.Contains(page, `data-ic="settings"`) {
+	if _, page := fetchPage(t, e.Lead, e.Base+"/ui/x/shell"); !strings.Contains(page, `data-tab="settings"`) {
 		t.Error("a lead has no settings tab")
 	}
+	// A member may make a label (REQ-687: the way from "Create a label" on an issue leads here), so the page is theirs
+	// to open, without the access section and without the controls that change or delete a label; a guest gets neither.
+	if code, page := fetchPage(t, e.Member, settings); code != http.StatusOK || !strings.Contains(page, `action="/ui/labels/create"`) || strings.Contains(page, `id="access"`) || strings.Contains(page, "/update") {
+		t.Errorf("member on the settings: %d", code)
+	}
+	if code, _ := fetchPage(t, e.Guest, settings); code != http.StatusNotFound {
+		t.Errorf("guest opens the settings: %d", code)
+	}
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
-		if code, _ := fetchPage(t, c, settings); code != http.StatusNotFound {
-			t.Errorf("%s opens the settings: %d", name, code)
-		}
 		if _, page := fetchPage(t, c, e.Base+"/ui/x/shell"); strings.Contains(page, `data-ic="settings"`) {
 			t.Errorf("%s sees the settings tab", name)
 		}
@@ -32,7 +37,7 @@ func TestRepoSettingsTabAndLabels(t *testing.T) {
 		v.Set("project", shellProject)
 		return sameOriginPostForm(t, c, e.Base+path, v)
 	}
-	if resp := form(e.Lead, "/ui/labels/create", url.Values{"name": {"ui"}, "color": {"0969da"}}); resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "done=created") {
+	if resp := form(e.Lead, "/ui/labels/create", url.Values{"name": {"ui"}, "color": {"0969da"}}); resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "note=") {
 		t.Fatalf("create = %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if resp := form(asBrowser(e.Lead), "/ui/labels/create", url.Values{"name": {"UI"}, "color": {"#0969da"}}); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/x/shell/settings#labels" {
@@ -54,13 +59,13 @@ func TestRepoSettingsTabAndLabels(t *testing.T) {
 		t.Fatalf("labels = %v %v", list, err)
 	}
 	id := list[0].ID
-	if resp := form(e.Lead, "/ui/labels/"+strconv.FormatInt(id, 10)+"/update", url.Values{"name": {"design"}, "color": {"#fbca04"}, "description": {"Aussehen"}}); !strings.Contains(resp.Header.Get("Location"), "done=updated") {
+	if resp := form(e.Lead, "/ui/labels/"+strconv.FormatInt(id, 10)+"/update", url.Values{"name": {"design"}, "color": {"#fbca04"}, "description": {"Aussehen"}}); !strings.Contains(resp.Header.Get("Location"), "note=") {
 		t.Errorf("update: %s", resp.Header.Get("Location"))
 	}
-	if resp := form(asBrowser(e.Member), "/ui/labels/"+strconv.FormatInt(id, 10)+"/delete", url.Values{}); resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "done=") {
+	if resp := form(asBrowser(e.Member), "/ui/labels/"+strconv.FormatInt(id, 10)+"/delete", url.Values{}); resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "note=") {
 		t.Errorf("a member deleting a label: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if resp := form(e.Lead, "/ui/labels/"+strconv.FormatInt(id, 10)+"/delete", url.Values{}); !strings.Contains(resp.Header.Get("Location"), "done=deleted") {
+	if resp := form(e.Lead, "/ui/labels/"+strconv.FormatInt(id, 10)+"/delete", url.Values{}); !strings.Contains(resp.Header.Get("Location"), "note=") {
 		t.Errorf("delete: %s", resp.Header.Get("Location"))
 	}
 }

@@ -1,16 +1,31 @@
 {{define "features"}}{{template "head" .}}{{template "nav" .}}<main class="g2 is ft"><div class="wrap">
 {{with .FeaturesV}}<div class="ilayout"><div class="imain">
-<div class="sbarrow"><form class="sbar" method="get" action="{{.Base}}" role="search"><label class="gfield mono-in">{{mi "search"}}<input type="search" name="q" value="{{.Q}}" placeholder="{{t "features.search_hint"}}" aria-label="{{t "features.search_label"}}" autocomplete="off" spellcheck="false"></label><button class="sr">{{t "issues.search_go"}}</button></form></div>
+<div class="sbarrow"><form class="sbar" method="get" action="{{.Base}}" role="search"><label class="gfield mono-in">{{mi "search"}}<input type="search" name="q" value="{{.Q}}" placeholder="{{t "features.search_hint"}}" aria-label="{{t "features.search_label"}}" autocomplete="off" spellcheck="false"></label><button class="sr">{{t "issues.search_go"}}</button></form>{{if or .Bar.Can .Bar.Need}}{{template "mgbtn" (dict "Can" .Bar.Can "Need" .Bar.Need "ID" "ft-need" "Href" .NewHref "Icon" "plus" "Label" "features.new" "Primary" true)}}{{end}}</div>
+{{with .Form}}{{template "featureform" .}}{{end}}
 <div class="box"><div class="box-h lh">{{range .Tabs}}<a class="tab{{if .On}} on{{end}}" href="{{.Href}}">{{mi .Icon}}<span><span class="n">{{.Count}}</span> {{t .Label}}</span></a>{{end}}</div>
 {{if .Rows}}{{range .Rows}}{{template "uirow" .}}
 {{end}}{{else if .NoMatch}}<div class="empty"><span>{{t "features.no_matches"}}</span><a class="gbtn sm" href="{{.ClearHref}}">{{t "requests.clear"}}</a></div>
-{{else}}<div class="empty"><span>{{t .EmptyKey}}</span></div>{{end}}</div>
+{{else if eq .EmptyKey "features.empty"}}{{if .Bar.Can}}{{template "emptyact" (dict "Class" "empty" "Text" (t "features.empty") "Action" (t "features.new") "Href" .NewHref "Primary" true)}}{{else}}{{template "emptyact" (dict "Class" "empty" "Text" (t "features.empty"))}}{{end}}
+{{else}}{{template "emptyact" (dict "Class" "empty" "Text" (t .EmptyKey) "Action" (t "features.show_active") "Href" (index .Tabs 0).Href)}}{{end}}</div>
+{{with .Gap}}<section class="box fgap" aria-labelledby="fgap-h"><div class="box-h"><h2 class="t" id="fgap-h">{{t "features.gap.title"}}</h2>{{if .Count}}<span class="counter">{{.Count}}</span>{{end}}</div>
+{{range .Rows}}{{template "uirow" .}}
+{{else}}<div class="empty"><span>{{t "features.gap.none"}}</span></div>{{end}}</section>{{end}}
 </div></div>
 {{end}}</div>{{template "foot" .}}{{end}}
 
 {{define "feature"}}{{template "head" .}}{{template "nav" .}}<main class="g2 id ft"><div class="wrap">
-{{with .FeatureV}}<div class="dhead"><div class="dtitle"><h1>{{.Name}}<span class="n">#{{.ID}}</span></h1></div>
+{{with .FeatureV}}<div class="dhead"><div class="dtitle"><h1>{{.Name}}<span class="n">#{{.ID}}</span></h1>{{if or .Bar.Can .Bar.Need}}<div class="gacts">{{template "mgbtn" (dict "Can" .Bar.Can "Need" .Bar.Need "ID" "ft-need" "Href" .EditHref "Icon" "pencil" "Label" "features.edit")}}{{if .Bar.Can}}<a class="gbtn" href="{{.LinkHref}}">{{mi "plus"}}{{t "features.link.title"}}</a>{{else if .Bar.Need}}<button type="button" class="gbtn" disabled aria-describedby="ft-need">{{mi "plus"}}{{t "features.link.title"}}</button>{{end}}</div>{{end}}</div>
 <div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "feature"}}{{.StateLabel}}</span>{{if .Person}}<span><span class="person">{{avatarOf .Person}}{{.Person}}</span> {{t "features.updated" .Age}}</span>{{end}}</div></div>
+{{template "resultbanner" (dict "R" .Result "Strip" "done fail")}}
+{{with .Form}}{{template "featureform" .}}{{end}}
+{{if .Bar.Can}}<details class="panel box newbox" id="link"{{if eq .Panel "link"}} open{{end}}><summary class="box-h"><span class="t">{{t "features.link.title"}}</span><span class="sp"></span><a class="gbtn sm icon quiet" href="{{.Self}}" aria-label="{{t "issue.close_panel"}}">{{mi "x"}}</a></summary><div class="cb write">
+<form class="pform" method="post" action="/ui/features/{{.ID}}/link"><input type="hidden" name="csrf_token" value="{{.Bar.Token}}"><input type="hidden" name="project" value="{{.Bar.Project}}">
+<label class="pfield"><span>{{t "features.link.entry"}}</span><input class="gfield mono" name="ref" required maxlength="40" autocomplete="off" spellcheck="false" placeholder="{{t "features.link.ref"}}"></label>
+<label class="pfield"><span>{{t "features.link.rel"}}</span><select class="gfield" name="rel"><option value="{{.RelAffects}}">{{t "features.link.affects"}}</option><option value="{{.RelOrigin}}">{{t "features.link.origin"}}</option></select></label>
+<div class="wf"><button class="gbtn pri">{{t "features.link.add"}}</button></div></form>
+{{if .Unlinks}}<form class="pform" method="post" action="/ui/features/{{.ID}}/unlink"><input type="hidden" name="csrf_token" value="{{.Bar.Token}}"><input type="hidden" name="project" value="{{.Bar.Project}}">
+<label class="pfield"><span>{{t "features.link.linked"}}</span><select class="gfield" name="link" required><option value="" selected disabled hidden>{{t "features.link.pick"}}</option>{{range .Unlinks}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select></label>
+<div class="wf"><button class="gbtn">{{t "features.link.remove"}}</button></div></form>{{end}}</div></details>{{end}}
 <div class="dgrid"><div class="dmain">
 <div class="tlx tl0">{{template "firstopen" .First}}
 <div class="cb prose"><p class="fsum">{{.Summary}}</p>{{template "knbody" .Blocks}}</div>
@@ -25,6 +40,8 @@
 {{if .Ideas}}<div class="sblk"><h3>{{t "features.side.ideas"}}</h3><div class="v">{{range .Ideas}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
 {{if .Origin}}<div class="sblk"><h3>{{t "features.side.origin"}}</h3><div class="v">{{range .Origin}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
 {{if .Reqs}}<div class="sblk"><h3>{{t "features.side.issues"}}</h3><div class="v">{{range .Reqs}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
+{{if .Knowledge}}<div class="sblk"><h3>{{t "features.side.knowledge"}}</h3><div class="v">{{range .Knowledge}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
+{{if .Pains}}<div class="sblk"><h3>{{t "features.side.pains"}}</h3><div class="v">{{range .Pains}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}
 {{if .PRs}}<div class="sblk"><h3>{{t "features.side.pulls"}}</h3><div class="v">{{range .PRs}}{{pillx "pr" .Text .Href .Title ""}}{{end}}</div></div>{{end}}
 {{if .People}}<div class="sblk"><h3>{{t "pains.side.people"}}</h3><div class="v">{{range .People}}<span class="person">{{avatarOf .}}<span>{{.}}</span></span>{{end}}</div></div>{{end}}
 </aside></div>

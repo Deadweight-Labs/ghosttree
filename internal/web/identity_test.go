@@ -10,14 +10,19 @@ import (
 
 var identityTagRE = regexp.MustCompile(`<[^>]*>`)
 
-// The text a person reads of an identifier is the number; the prefix is only
-// in the title attribute (decision #4310).
-func TestRefShowsNoPrefixInVisibleText(t *testing.T) {
-	for kind, prefix := range map[string]string{"request": "REQ-", "pain": "PAIN-", "idea": "IDEA-", "task": "TASK-"} {
+// The text a person reads of an identifier: an issue is "#599" as on a code host, every
+// other kind carries its prefix (PAIN-599, IDEA-599, TASK-599, DEC-599), so that a chip says what
+// it points at (REQ-684, decision #4310 only left the prefix out).
+func TestRefShowsItsKindInVisibleText(t *testing.T) {
+	for kind, prefix := range map[string]string{"request": "REQ-", "pain": "PAIN-", "idea": "IDEA-", "task": "TASK-", "decision": "DEC-", "feature": "FEAT-"} {
 		out := string(refHTML(langDE, kind, 599, "/ui/x"))
 		visible := identityTagRE.ReplaceAllString(out, "")
-		if visible != "#599" {
-			t.Errorf("%s: visible text %q, want #599", kind, visible)
+		want := prefix + "599"
+		if kind == "request" {
+			want = "#599"
+		}
+		if visible != want {
+			t.Errorf("%s: visible text %q, want %s", kind, visible, want)
 		}
 		if strings.Contains(out, `title="`) || !strings.Contains(out, `data-ref="`+prefix+"599") {
 			t.Errorf("%s: the card key lacks %s599 or a tooltip stands next to the card: %s", kind, prefix, out)

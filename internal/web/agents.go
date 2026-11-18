@@ -66,12 +66,14 @@ func (a *app) agentsPage(w http.ResponseWriter, r *http.Request) {
 	now := overviewNow().UTC()
 	pa := a.access(r)
 	who := a.shellBaseFor(r).who
-	shell := a.shellFor(r, "agents")
+	// The repository the list is narrowed to (the chosen one) gets its band, and the list follows the same project.
+	project := a.projectParam(r)
+	r = a.repoScopedChosen(r, project, "sessions")
 	view := agentsView{CSRFToken: csrfOf(r)}
 	view.Guest = who.kind == viewerGuest
 	if !view.Guest {
 		view.CanAdd, view.Connect = true, "/ui/overview?connect=1"
-		rows, err := a.listAgents(r, pa, selectedProject(shell), now, agentsMax)
+		rows, err := a.listAgents(r, pa, project, now, agentsMax)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -151,7 +153,7 @@ func (a *app) lastPosts(r *http.Request, rows []agentRow, now time.Time) map[str
 			if m.AuthorKind != store.AuthorAgent || m.SenderExternalID == "" || strings.TrimSpace(m.Body) == "" {
 				continue
 			}
-			out[m.SenderExternalID] = agentPost{shortWords(m.Body, agentPostLength), shortAge(l, now, parseTime(m.CreatedAt))}
+			out[m.SenderExternalID] = agentPost{plainSnippet(l, m.Body, agentPostLength), shortAge(l, now, parseTime(m.CreatedAt))}
 		}
 	}
 	return out
@@ -166,8 +168,8 @@ type agentSections struct {
 }
 
 // sectionAgents sorts cards (already ordered by listAgents) into the sections:
-// "wait_you" is waiting on the viewer, "work", "wait_other" and "stuck" are
-// active, "idle" and "off" are inactive. Rows that wait carry the form of the
+// "wait_you" is waiting on the viewer, "work", "wait_other", "wait_reply" and
+// "stuck" are active, "idle", "ended" and "off" are inactive. Rows that wait carry the form of the
 // check "seen" (token and the page to return to).
 func sectionAgents(cards []agentCard, token, back string) agentSections {
 	var s agentSections
@@ -176,7 +178,7 @@ func sectionAgents(cards []agentCard, token, back string) agentSections {
 		case "wait_you":
 			c.CSRFToken, c.Back = token, back
 			s.Waiting = append(s.Waiting, c)
-		case "idle", "off":
+		case "idle", "off", "ended":
 			s.Inactive = append(s.Inactive, c)
 		default:
 			s.Active = append(s.Active, c)

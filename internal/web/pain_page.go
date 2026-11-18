@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
 	"net/http"
@@ -111,6 +112,7 @@ func (a *app) painItems(l lang, pa *store.ProjectAccess, p pain.Pain, events []p
 		switch e.Kind {
 		case "created":
 			it.Icon, it.Head = "pain", sentence("pains.ev.created")
+			it.withActor(a.stampedActors(l, actor.Pain, map[int64]string{p.ID: e.Person})[p.ID])
 		case "state":
 			it.Icon = "pain"
 			pill := `<span class="lb ` + painStateTone[e.ToState] + `">` + html.EscapeString(label(l, painStateKeys, e.ToState)) + `</span>`

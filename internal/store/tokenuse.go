@@ -6,8 +6,11 @@ import (
 )
 
 // tokenTouchEvery is how often at most a token's last use is written. A token
-// that calls every second costs one write per interval, not one per call.
-const tokenTouchEvery = 10 * time.Minute
+// that calls every second costs one write per interval, not one per call. The
+// interval is the one the machine's last sight is written at (a minute) and a
+// little more than the beat of a collector (30 s): the account page and the
+// machine row read "used 1 min ago" for a device that is talking, not "12 min".
+const tokenTouchEvery = time.Minute
 
 // tokenUseSinceKey is the org_state key holding when the first token use was
 // recorded. Tokens used before that moment have no last use although they were

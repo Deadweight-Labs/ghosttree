@@ -74,18 +74,42 @@ func isInvisibleName(r rune) bool {
 		unicode.Is(unicode.Variation_Selector, r)
 }
 
+// isNamePunct sind die Satzzeichen, die ein Anzeigename so behält, wie er
+// getippt wurde: Punkt, Unterstrich, Bindestrich, Apostroph, Leerzeichen und
+// die Zeichen, die Namen wirklich tragen ("Mara Keller (Tech-Lead)", "A*B",
+// "Müller, Ina", "Ann & Bo"). Der Name ist Text: jede Seite escaped ihn,
+// keine behandelt ihn als Markdown. Ausgeschlossen bleiben die Zeichen, die
+// einen Namen als Erwähnung (@), Verweis (#), Adresse (: / \ %), Markup
+// (< > ` " = | ~ { } [ ]) oder Befehl ($ ^ ;) lesen ließen.
+func isNamePunct(r rune) bool {
+	switch r {
+	case '.', '_', '-', '\'', ' ', '(', ')', '*', ',', '+', '&', '!', '?':
+		return true
+	}
+	return false
+}
+
 // NormalizeAccountName macht einen Kontonamen anzeigesicher und vergleichbar:
 // NFKC, unsichtbare Zeichen und Hangul-Füller raus, nur Buchstaben, Ziffern,
-// Leerzeichen und . _ - ' bleiben (alles andere wird _), Kombinationszeichen
+// Leerzeichen und die Zeichen von isNamePunct bleiben (alles andere wird _), Kombinationszeichen
 // (Mn/Mc) nur hinter einem Buchstaben, Leerraum zusammengezogen, höchstens
 // MaxDisplayNameRunes Zeichen. Der Name ist Nutzereingabe: der Rest des
 // Systems zeigt nur diese Form, und die Identität bleibt person:N.
-func NormalizeAccountName(name string) string {
+func NormalizeAccountName(name string) string { return normalizeName(name, false) }
+
+// PromptSafeName ist die strenge Form für Texte, die ein Agent liest: außer
+// Buchstaben, Ziffern, Leerzeichen und . _ - ' wird alles zu _. Ein Name mit
+// Klammern könnte dort eine Absenderzeile fälschen ("x (person:1, human)",
+// "[authority=directive]"). Gespeichert und angezeigt wird der Name nicht so,
+// nur in diesen Rahmen eingesetzt.
+func PromptSafeName(name string) string { return normalizeName(name, true) }
+
+func normalizeName(name string, strict bool) string {
 	// Bis zum Fixpunkt: das Entfernen unsichtbarer Zeichen kann Mn/Mc neu
 	// hinter einen Buchstaben setzen oder NFKC-Sequenzen neu bilden. Jede
 	// Runde verkürzt oder lässt gleich, also endet die Schleife.
 	for i := 0; i < 8; i++ {
-		next := normalizeAccountNameOnce(name)
+		next := normalizeNameOnce(name, strict)
 		if next == name {
 			return next
 		}
@@ -97,7 +121,7 @@ func NormalizeAccountName(name string) string {
 // maxMarksPerLetter begrenzt Kombinationszeichen hinter einem Buchstaben.
 const maxMarksPerLetter = 2
 
-func normalizeAccountNameOnce(name string) string {
+func normalizeNameOnce(name string, strict bool) string {
 	var out []rune
 	lastLetter, marks := false, 0
 	for _, r := range norm.NFKC.String(name) {
@@ -114,7 +138,7 @@ func normalizeAccountNameOnce(name string) string {
 			}
 		case unicode.IsDigit(r):
 			out, lastLetter = append(out, r), false
-		case r == '.', r == '_', r == '-', r == '\'', r == ' ':
+		case isNamePunct(r) && (!strict || strings.ContainsRune(".-_' ", r)):
 			out, lastLetter = append(out, r), false
 		default:
 			out, lastLetter = append(out, '_'), false

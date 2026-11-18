@@ -49,18 +49,18 @@ func TestTaskPageShowsStepsCheckHintAndTheFormThatMarksItDone(t *testing.T) {
 	mustContain(t, "task page", page, "Upload the vendor key", "The key is needed for the build.", "vault item vendor-key",
 		"How the agent checks it", "The file exists at the location and is not empty.",
 		"Steps", "Open the vault", `href="https://vault.example.org/items"`, "Copy the file name", "0 of 2 done",
-		`action="/ui/tasks/done"`, `name="back" value="task"`, `name="note"`, "Mark as done", `href="/ui/x/shell/issues/`)
+		`action="/ui/tasks/done"`, `name="back" value="task"`, `name="note"`, "Report task as done", `href="/ui/x/shell/issues/`)
 	if strings.Contains(page, `name="value"`) {
 		t.Error("a task form must not carry a value field")
 	}
 	// The form on the page leads back to the page.
-	resp := tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {itoa(task.ID)}, "note": {"it is there"}, "back": {"task"}})
+	resp := tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {itoa(task.ID)}, "note": {"it is there"}, "back": {"task"}, "confirm_open": {"1"}})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != path {
 		t.Fatalf("done from the page -> %d %q, want 303 %s", resp.StatusCode, resp.Header.Get("Location"), path)
 	}
 	_, after := fetchPage(t, e.Member, e.Base+path)
-	mustContain(t, "task page after", after, "Done", "it is there")
+	mustContain(t, "task page after", after, "Waiting for check", "it is there")
 	if strings.Contains(after, `action="/ui/tasks/done"`) {
 		t.Error("a task that is done still offers the form")
 	}
@@ -96,18 +96,19 @@ func TestTaskRightsStrangerGuestMemberAndForeignNumbers(t *testing.T) {
 	var want string
 	for _, path := range []string{hiddenPath, "/ui/x/shell/tasks/" + itoa(foreign.ID), "/ui/t/" + itoa(foreign.ID), "/ui/x/hidden/tasks", "/ui/x/shell/tasks/999999"} {
 		status, body := fetchPage(t, e.Member, e.Base+path)
-		if status != http.StatusNotFound {
-			t.Errorf("member at %s: %d, want 404", path, status)
+		if status != memberStatusFor(path) {
+			t.Errorf("member at %s: %d, want %d", path, status, memberStatusFor(path))
 		}
 		if strings.Contains(body, "SECRET") {
 			t.Errorf("member at %s sees the foreign task", path)
 		}
-		if want == "" {
+		if want == "" && status == http.StatusNotFound {
 			want = body
 		}
 	}
 	// The same answer as for a repository that does not exist.
-	if _, unknown := fetchPage(t, e.Member, e.Base+"/ui/x/nothere/tasks/"+itoa(foreign.ID)); stripCSRF(unknown) != stripCSRF(want) {
+	_, want = fetchPage(t, e.Guest, e.Base+hiddenPath)
+	if _, unknown := fetchPage(t, e.Guest, e.Base+"/ui/x/nothere/tasks/"+itoa(foreign.ID)); stripCSRF(unknown) != stripCSRF(want) {
 		t.Error("a foreign task answers differently from an unknown address")
 	}
 
@@ -188,7 +189,7 @@ func TestStepsOfATaskAreTickedFromThePageWithOneClick(t *testing.T) {
 	e, task, foreign := taskFixture(t)
 	path := "/ui/x/shell/tasks/" + itoa(task.ID)
 	_, page := fetchPage(t, e.Member, e.Base+path)
-	mustContain(t, "task page", page, `action="/ui/tasks/`+itoa(task.ID)+`/steps/1"`, `action="/ui/tasks/`+itoa(task.ID)+`/steps/2"`, `name="done" value="1"`, "Mark done", "0 of 2 done")
+	mustContain(t, "task page", page, `action="/ui/tasks/`+itoa(task.ID)+`/steps/1"`, `action="/ui/tasks/`+itoa(task.ID)+`/steps/2"`, `name="done" value="1"`, "Check off", "0 of 2 done")
 
 	resp := tpPost(t, e, e.Member, "/ui/tasks/"+itoa(task.ID)+"/steps/1", url.Values{"done": {"1"}})
 	resp.Body.Close()
@@ -225,7 +226,7 @@ func TestStepsOfATaskAreTickedFromThePageWithOneClick(t *testing.T) {
 	// A task that is done keeps its ticks and shows no button.
 	tick := tpPost(t, e, e.Member, "/ui/tasks/"+itoa(task.ID)+"/steps/2", url.Values{"done": {"1"}})
 	tick.Body.Close()
-	tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {itoa(task.ID)}, "back": {"task"}}).Body.Close()
+	tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {itoa(task.ID)}, "back": {"task"}, "confirm_open": {"1"}}).Body.Close()
 	_, closed := fetchPage(t, e.Member, e.Base+path)
 	mustContain(t, "closed task", closed, "1 of 2 done")
 	if strings.Contains(closed, `/steps/`) {

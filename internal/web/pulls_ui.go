@@ -601,6 +601,8 @@ type pullView struct {
 	First  firstHead
 	// KnowEmptyKey is the sentence of an empty knowledge tab: it says what was looked at.
 	KnowEmptyKey string
+	// Runs are the workflow runs the pull request started (REQ-693).
+	Runs []wfRunRow
 }
 
 // pullDetail ist /ui/{org}/{repo}/pulls/{n}.
@@ -666,6 +668,7 @@ func (a *app) pullDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 	v.DoneHref = pathWith("/ui/search", "project", remote, "preset", "pr-ergebnis", "pr", strconv.FormatInt(n, 10))
 
 	v.Sess = pullSessionBlock(l, pa, remote, n)
+	v.Runs = pullWorkflowRuns(l, a, pa, view.Href, remote, n)
 	v.HasPackage = d.Checklist.HasPackage
 	a.pullChecklist(l, pa, view, d, v)
 	v.Checks = pullChecks(l, d, v)

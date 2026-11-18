@@ -56,6 +56,9 @@ type newIssueView struct {
 	Criteria                   []string
 	Types                      []newTypeOption
 	Labels                     []newLabelOption
+	// CanMakeLabel: the viewer may make a label, so the form has a field for new ones; NewLabels is what they typed.
+	CanMakeLabel               bool
+	NewLabels                  string
 	Packages                   []newPackageOption
 	PackageChoice              string
 	PackageName, PackageBranch string
@@ -171,6 +174,7 @@ func (a *app) newIssueDefaults(r *http.Request, pa *store.ProjectAccess, remote 
 			v.Labels = append(v.Labels, newLabelOption{Name: lb.Name, Class: labelClass(lb.Color)})
 		}
 	}
+	v.CanMakeLabel = newLabelHref(pa, remote) != ""
 	if v.HasPackage {
 		if pkgs, err := pa.PackagesOfProject(remote, requestdomain.PackageOpen); err == nil {
 			for _, p := range pkgs {
@@ -234,6 +238,13 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 	for _, n := range r.Form["label"] {
 		picked[n] = true
 	}
+	// Labels typed into the form are made with the issue (S19): the ones the project has
+	// are used as they are. They are made before the issue so that a refusal keeps the form.
+	v.NewLabels = strings.TrimSpace(r.FormValue("new_label"))
+	var madeLabels []string
+	if v.CanMakeLabel {
+		madeLabels = formNames(strings.Split(v.NewLabels, ","))
+	}
 	for i := range v.Labels {
 		v.Labels[i].Checked = picked[v.Labels[i].Name]
 	}
@@ -244,6 +255,19 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 	fail := func(key, detail string) {
 		v.Error, v.ErrorDetail = key, detail
 		a.renderNewIssue(w, r, remote, v, http.StatusUnprocessableEntity)
+	}
+	if len(madeLabels) > 0 {
+		if len(madeLabels) > 5 {
+			fail("newissue.err.labels_many", "")
+			return
+		}
+		if err := makeLabels(pa, remote, madeLabels); err != nil {
+			fail("newissue.err.label", requestdomain.Code(err))
+			return
+		}
+		for _, n := range madeLabels {
+			picked[n] = true
+		}
 	}
 	var criteria []string
 	var links requestdomain.Links
@@ -325,7 +349,12 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 			names = append(names, n)
 		}
 		slices.Sort(names)
-		_, _ = pa.SetLabels(kind, id, names, nil)
+		if _, err := pa.SetLabels(kind, id, names, nil); err != nil {
+			// The object exists; only its labels failed. Lead to it and say so, instead of
+			// leaving it unlabelled without a word.
+			http.Redirect(w, r, v.Base+"/"+object+"/"+strconv.FormatInt(id, 10)+"?fail=labels", http.StatusSeeOther)
+			return
+		}
 	}
 	if v.Again {
 		next := v.Base + "/issues/new?again=1&made=" + strconv.FormatInt(id, 10)
@@ -335,7 +364,11 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, next, http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, v.Base+"/"+object+"/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+	target := v.Base + "/" + object + "/" + strconv.FormatInt(id, 10)
+	if note := unreachedParam(pa.UnreachedTextMentions(remote, v.Body)); note != "" {
+		target += "?comment=created" + note
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 // newIssueError shows a refusal of the store on the form: an access refusal as

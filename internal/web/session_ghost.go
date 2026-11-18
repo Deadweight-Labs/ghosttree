@@ -35,6 +35,29 @@ type sessionGhost struct {
 	Started, StartedAt string
 	Areas, Issues      []template.HTML
 	Made               []madeLine
+	// Quiet: the run left nothing in ghosttree and used no tool; its conversation is in the raw history.
+	Quiet bool
+}
+
+// answerRunes is how much of the closing message of an agent the ghosttree view shows; the rest is in the raw history.
+const answerRunes = 4000
+
+// toolsBody is the line under "made N tool calls": the calls by kind.
+func toolsBody(l lang, a store.SessionActivity) template.HTML {
+	if !a.Detailed {
+		return ""
+	}
+	var parts []string
+	for _, p := range []struct {
+		n   int
+		key string
+	}{{a.Commands, "sessions.tools.commands"}, {a.Reads, "sessions.tools.reads"}, {a.Edits, "sessions.tools.edits"},
+		{a.Searches, "sessions.tools.searches"}, {a.Ghost, "sessions.tools.ghost"}, {a.Other, "sessions.tools.other"}} {
+		if p.n > 0 {
+			parts = append(parts, html.EscapeString(l.msg(p.key, p.n)))
+		}
+	}
+	return template.HTML(strings.Join(parts, " · "))
 }
 
 // sessionAgentLabel is how the page names the agent of a session: "Robins Claude", and
@@ -94,7 +117,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 		if c.State == "waived" {
 			it = entry(c.At, "drop", "", sentence("sessions.ev.criterion_waived", string(crit), string(req)), "")
 		}
-		it.Body = template.HTML(html.EscapeString(ellipsize(c.Text, 200)))
+		it.Body = template.HTML(html.EscapeString(plainSnippet(l, c.Text, 200)))
 		if c.Commit != "" {
 			commits[c.Commit] = true
 			href := ""
@@ -149,7 +172,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 		}
 		questions++
 		room := `<a href="` + html.EscapeString(coordRoomURL(q.RoomKey, "", 0)) + `">#` + html.EscapeString(coordShortRoomName(store.RoomProject, remote)) + `</a>`
-		items = append(items, entry(q.At, "chat", "", sentence("sessions.ev.question", room), template.HTML(html.EscapeString(ellipsize(q.Body, 240)))))
+		items = append(items, entry(q.At, "chat", "", sentence("sessions.ev.question", room), template.HTML(html.EscapeString(plainSnippet(l, q.Body, 240)))))
 	}
 
 	for _, r := range res.Requests {
@@ -167,6 +190,29 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 	if len(files) > 0 {
 		items = append(items, a.filesEntry(l, entry, files, sess))
 	}
+
+	// What the run did with its tools stands in as one entry, so a run that left nothing in
+	// ghosttree is not an empty page (REQ-688).
+	if view.ExternalID != "" {
+		if act := a.store.SessionActivity(sess); act.Total > 0 {
+			at := act.At
+			if at == "" {
+				at = sess.LastSeenAt
+			}
+			items = append(items, entry(at, "code", "", template.HTML(html.EscapeString(l.msg("sessions.ev.tools", act.Total))), toolsBody(l, act)))
+		}
+	}
+	// The closing message of the agent, where its text was captured: the run that
+	// only used tools and then reported back is not just "10 tool calls" (N10).
+	if view.ExternalID != "" {
+		if answer, at := a.store.SessionAnswer(sess); answer != "" {
+			if at == "" {
+				at = sess.LastSeenAt
+			}
+			items = append(items, entry(at, "chat", "", template.HTML(html.EscapeString(l.msg("sessions.ev.answer"))), `<div class="answer">`+mdBlocks(bodyBlocks(answer, answerRunes))+`</div>`))
+		}
+	}
+	g.Quiet = len(items) == 0
 
 	items = append(items, entry(sess.StartedAt, "play", "acc", template.HTML(html.EscapeString(l.msg("sessions.ev.started"))), ""))
 	sort.SliceStable(items, func(i, j int) bool { return items[i].at.After(items[j].at) })

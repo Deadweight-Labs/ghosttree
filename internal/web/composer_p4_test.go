@@ -79,7 +79,7 @@ func TestTaskReportIsTheComposerAndARefusalGoesBackToTheTask(t *testing.T) {
 	e, task, _ := taskFixture(t)
 	path := "/ui/x/shell/tasks/" + itoa(task.ID)
 	_, page := fetchPage(t, e.Member, e.Base+path)
-	mustContain(t, "task page", page, `class="cmt cx-cmt"`, `name="note"`, `data-wtab="p"`, `data-submit>Mark as done</button>`, `name="back" value="task"`, "A note for the agent")
+	mustContain(t, "task page", page, `class="cmt cx-cmt"`, `name="note"`, `data-wtab="p"`, `data-submit>Send note</button>`, `action="/ui/tasks/`+itoa(task.ID)+`/note"`, `name="back" value="task"`, "A note for the agent")
 	if strings.Contains(page, `tdone`) {
 		t.Error("the one-line form is still there")
 	}
@@ -88,7 +88,7 @@ func TestTaskReportIsTheComposerAndARefusalGoesBackToTheTask(t *testing.T) {
 	navPost := func(back string) *http.Response {
 		form := url.Values{"id": {itoa(task.ID)}, "back": {back}, "note": {"token ghp_" + strings.Repeat("Ab1", 5)}}
 		form.Set("csrf_token", renderedCSRFToken(t, e.Member, e.Base+"/ui/overview"))
-		req, err := http.NewRequest(http.MethodPost, e.Base+"/ui/tasks/done", strings.NewReader(form.Encode()))
+		req, err := http.NewRequest(http.MethodPost, e.Base+"/ui/tasks/"+itoa(task.ID)+"/note", strings.NewReader(form.Encode()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -136,12 +136,12 @@ func TestRequirementActionStandsInItsOwnCellOfTheRow(t *testing.T) {
 	e := ovEnv(t)
 	open := rqMake(t, e.St, rqSpec{Title: "Still open", Criteria: []string{"One"}})
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/issues/"+itoa(open.Request.ID))
-	body := strings.Index(page, `<div class="tx">One</div>`)
+	body := strings.Index(page, `<div class="tx"><div class="kn-body prose" data-md="One"><p>One</p></div></div>`)
 	resolve := strings.Index(page, `<details class="resolve"><summary class="gbtn sm quiet">Mark as met</summary>`)
 	if body < 0 || resolve < body {
 		t.Fatalf("the action is not after the text of the requirement (text %d, action %d)", body, resolve)
 	}
-	row := page[body+len(`<div class="tx">One</div>`) : resolve]
+	row := page[body+len(`<div class="tx"><div class="kn-body prose" data-md="One"><p>One</p></div></div>`) : resolve]
 	if !strings.HasSuffix(strings.TrimSpace(row), "</div>") {
 		t.Error("the action is inside the body of the requirement, not in a cell of the row")
 	}

@@ -20,7 +20,7 @@
 <form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1"><button class="gbtn blk">{{template "authprov" .Provider}}{{if .Provider}}{{t "join.with" .Provider}}{{else}}{{t "join.sign_in_join"}}{{end}}</button></form>
 {{else}}<form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1"><button class="gbtn pri blk">{{template "authprov" .Provider}}{{if .Provider}}{{t "join.with_join" .Provider}}{{else}}{{t "join.sign_in_join"}}{{end}}</button></form>{{end}}</section>
 <p class="auth-alt boxed">{{t "register.have_account"}} <a href="/join/{{.Code}}/login">{{t "register.sign_in"}}</a></p>
-{{else}}<form class="login-form" method="post" action="/ui/login/code"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1">{{template "invname" .}}<button class="gbtn pri blk">{{t "join.create_join"}}</button></form></section>
+{{else}}<form class="login-form" method="post" action="/ui/login/code"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1">{{template "invname" .}}{{template "invemail" .}}<button class="gbtn pri blk">{{t "join.create_join"}}</button></form></section>
 <p class="auth-alt boxed">{{t "register.have_account"}} <a href="/join/{{.Code}}/login">{{t "register.sign_in"}}</a></p>
 {{end}}{{template "joinfoot"}}{{end}}
 

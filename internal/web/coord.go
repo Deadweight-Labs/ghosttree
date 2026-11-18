@@ -135,7 +135,34 @@ func (a *app) roomPageError(w http.ResponseWriter, r *http.Request, err error) {
 	l := a.langFor(r)
 	var status int
 	v := &errorView{BackHref: "/ui/inbox", BackLabel: l.msg("err.back_inbox")}
+	// A member of the organization the project belongs to is told why they may
+	// not use its room; for anyone else the room does not exist.
+	var denied *denial
+	if errors.Is(err, store.ErrCoordNotFound) || errors.Is(err, store.ErrCoordForbidden) {
+		room := r.URL.Query().Get("room")
+		if r.Method != http.MethodGet {
+			room = r.FormValue("room")
+		}
+		if remote, ok := strings.CutPrefix(room, "project:"); ok {
+			denied = a.denialFor(r, remote)
+		}
+	}
+	if r.Method != http.MethodGet && (errors.Is(err, store.ErrCoordNotFound) || errors.Is(err, store.ErrCoordForbidden)) {
+		// The composer shows the sentence it is given instead of the bare status.
+		switch {
+		case denied != nil:
+			http.Error(w, a.deniedText(r, denied), http.StatusForbidden)
+		case errors.Is(err, store.ErrCoordForbidden):
+			http.Error(w, l.msg("err.form.forbidden"), http.StatusForbidden)
+		default:
+			http.Error(w, l.msg("err.form.gone"), http.StatusNotFound)
+		}
+		return
+	}
 	switch {
+	case denied != nil:
+		status = http.StatusForbidden
+		v = a.deniedView(r, denied)
 	case errors.Is(err, store.ErrCoordForbidden):
 		status = http.StatusForbidden
 		v.Icon, v.Title, v.Text = "lock", l.msg("coord.forbidden.title"), l.msg("coord.forbidden.body")
@@ -216,6 +243,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	sidebar := buildCoordSidebar(l, summaries, humanMember(r), room, labels)
 	annotateCoordAttention(l, incomingAttention, attention, sidebar, attentionLabels)
 	annotateCoordAttention(l, outgoingAttention, attention, sidebar, attentionLabels)
+	a.attachAnswerOptions(r, incomingAttention, attention)
 	a.explainAttention(l, incomingAttention, attention)
 	a.explainAttention(l, outgoingAttention, attention)
 	// Badge und Aufmerksamkeit zählen alle Räume; nur die Liste folgt dem Projekt.
@@ -405,6 +433,12 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			detail.Messages[i].CanPromote = detail.CanPost
 		}
 	}
+	for i := range detail.Messages {
+		// The threads are known only now: an answered question leads to its thread.
+		if rq := detail.Messages[i].Request; rq != nil && rq.State != "" && rq.StateHref == "" {
+			rq.StateHref = answerHref(detail.Messages, i)
+		}
+	}
 	if selectedText := strings.TrimSpace(r.URL.Query().Get("thread")); selectedText != "" {
 		selectedID, parseErr := strconv.ParseInt(selectedText, 10, 64)
 		if parseErr != nil || selectedID <= 0 {
@@ -451,6 +485,21 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			HighWater: threadPage.HighWater, HasOlder: threadPage.HasOlder, HasNewer: threadPage.HasNewer,
 			ClearReplyURL: coordThreadComposerURL(room, selectedID),
 		}
+		threadDetail.Events = a.threadStateEvents(l, selectedID)
+		// Who is in the thread is who wrote in it, not who is in the room.
+		authors, loadErr := access.ThreadAuthors(selectedID)
+		if loadErr != nil {
+			coordHTTPError(l, w, loadErr)
+			return
+		}
+		threadDetail.Who = buildThreadWho(l, authors, detail.Participants, labels)
+		cycles, loadErr := access.ThreadWaitCycles(selectedID)
+		if loadErr != nil {
+			coordHTTPError(l, w, loadErr)
+			return
+		}
+		threadDetail.WaitLines = buildThreadWaitLines(l, cycles, detail.Participants, labels)
+		threadDetail.Addressees = threadAddressees(l, threadDetail.Who, detail.Participants, detail.ToDefault)
 		markViewerMentions(threadDetail.Messages, presentations, current.ID)
 		applyMessageRoles(l, a.store, activeRoom.Key, current.ID, threadDetail.Messages, presentations)
 		allAttention := append(append([]coordAttentionView{}, incomingAttention...), outgoingAttention...)
@@ -462,6 +511,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			threadDetail.Messages[i].CSRFToken = csrfOf(r)
 		}
 		threadDetail.Anchor = a.coordThreadAnchor(r, l, access, room, selected, detail, labels, attention, attentionLabels, allAttention, roleRoom)
+		linkAnsweredAnchor(threadDetail, room, detail.Messages)
 		threadDetail.ReplyTo, threadDetail.ReplyTarget, parseErr = coordReplyTarget(l, presentations, r.URL.Query().Get("thread_reply_to"))
 		if parseErr != nil {
 			http.Error(w, parseErr.Error(), http.StatusBadRequest)
@@ -506,6 +556,9 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		for _, item := range roomThreads {
 			if item.Thread.ID == detail.Thread.ID {
 				detail.Thread.CanSetState = a.browserCoord(r).CanSetThreadState(item.Thread.ID)
+				if detail.Thread.CanSetState {
+					detail.Thread.States = coordStateOptions(l, detail.Thread.State)
+				}
 			}
 		}
 	}
@@ -1011,12 +1064,34 @@ func (a *app) coordSetReadState(w http.ResponseWriter, r *http.Request, unread b
 		err = access.MarkUnread(store.DestinationRoom, room, sequence)
 	} else {
 		err = access.MarkRead(store.DestinationRoom, room, sequence)
+		if err == nil && r.FormValue("threads") == "1" {
+			err = markThreadMentionsRead(access, room)
+		}
 	}
 	if err != nil {
 		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, backTo(r, "/ui/coord?room="+url.QueryEscape(room)), http.StatusSeeOther)
+}
+
+// markThreadMentionsRead reads the threads of the room in which the viewer has unread mentions, each
+// through its last mention: the inbox row of a room stands for the mentions in its threads too.
+func markThreadMentionsRead(access store.CoordAccess, room string) error {
+	list, err := access.UnreadThreadMentions(room)
+	if err != nil {
+		return err
+	}
+	through := map[int64]int64{}
+	for _, tm := range list {
+		through[tm.ThreadID] = max(through[tm.ThreadID], tm.Sequence)
+	}
+	for thread, seq := range through {
+		if err := access.MarkRead(store.DestinationDiscussion, store.ThreadDestinationID(thread), seq); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // coordEndStanding beendet eine Vorgabe. Ausdrücklich und von einem

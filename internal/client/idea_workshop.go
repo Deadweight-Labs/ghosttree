@@ -77,8 +77,21 @@ func (c *Client) PutIdeaConcept(id int64, patch idea.ConceptPatch, message strin
 
 // SetIdeaPhase wechselt die Phase (approved nur durch Owner oder Maintainer).
 func (c *Client) SetIdeaPhase(id int64, phase string, conceptRevision int) (idea.Idea, error) {
+	return c.SetIdeaPhaseSaid(id, phase, conceptRevision, "", 0)
+}
+
+// SetIdeaPhaseSaid ist SetIdeaPhase mit dem Wort des Menschen: ein Agent beendet
+// die Diskussion (discussed) nur damit (DEC-46).
+func (c *Client) SetIdeaPhaseSaid(id int64, phase string, conceptRevision int, humanSaid string, sessionID int64) (idea.Idea, error) {
 	var out idea.Idea
-	err := c.do("POST", idPathOf("/api/ideas/", id, "/phase"), nil, map[string]any{"phase": phase, "concept_revision": conceptRevision}, &out)
+	body := map[string]any{"phase": phase, "concept_revision": conceptRevision}
+	if humanSaid != "" {
+		body["human_said"] = humanSaid
+	}
+	if sessionID > 0 {
+		body["session_id"] = sessionID
+	}
+	err := c.do("POST", idPathOf("/api/ideas/", id, "/phase"), nil, body, &out)
 	return out, err
 }
 

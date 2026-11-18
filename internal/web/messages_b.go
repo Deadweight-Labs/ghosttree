@@ -93,7 +93,7 @@ var messagesB = map[string]string{
 	"agents.no_machine": "Unknown machine",
 	// Abläufe
 	"runbooks.search":         "Search runbooks",
-	"runbooks.empty":          "No runbooks yet.",
+	"runbooks.empty":          "A runbook is a procedure an agent runs step by step.",
 	"runbooks.n":              "%d runbooks",
 	"runbooks.n_one":          "1 runbook",
 	"runbooks.last_ok":        "last successful run",
@@ -145,7 +145,7 @@ var messagesB = map[string]string{
 	"org.vis_shared":     "Shared with the org",
 	"org.vis_restricted": "Restricted",
 	"org.no_repos":       "No repositories yet.",
-	"org.no_agents":      "No agents at the repositories of this organisation.",
+	"org.no_agents":      "No agents at the repositories of this organization.",
 	"org.no_rooms":       "No rooms yet.",
 	// Anmelden und Registrieren
 	"register.title":            "Create an account",
@@ -248,11 +248,11 @@ var messagesBDE = map[string]string{
 	"agent.reply":               "Antworten",
 	// Agenten, Liste
 	"agents.no_machine": "Maschine unbekannt",
-	// Abläufe
-	"runbooks.search":         "Abläufe suchen",
-	"runbooks.empty":          "Noch keine Abläufe.",
-	"runbooks.n":              "%d Abläufe",
-	"runbooks.n_one":          "1 Ablauf",
+	// Runbooks
+	"runbooks.search":         "Runbooks suchen",
+	"runbooks.empty":          "Ein Runbook ist eine Anleitung, die ein Agent Schritt für Schritt ausführt.",
+	"runbooks.n":              "%d Runbooks",
+	"runbooks.n_one":          "1 Runbook",
 	"runbooks.last_ok":        "zuletzt erfolgreicher Lauf",
 	"runbooks.last_run":       "Lauf %s",
 	"runbooks.run_n":          "Lauf %s",
@@ -260,7 +260,7 @@ var messagesBDE = map[string]string{
 	"runbooks.approved_by":    "Freigabe von %s",
 	"runbooks.needs_approval": "Freigabe nötig",
 	"runbooks.give":           "An Agent geben",
-	"runbooks.draft":          "Bitte führe den Ablauf %s aus.",
+	"runbooks.draft":          "Bitte führe das Runbook %s aus.",
 	"runbooks.execute":        "Ausführen",
 	"runbooks.dry_run":        "Probelauf",
 	"runbooks.run":            "Ausführen",
@@ -273,7 +273,7 @@ var messagesBDE = map[string]string{
 	"runbooks.steps":          "Schritte",
 	"runbooks.rollback":       "Rückweg",
 	"runbooks.check":          "Prüfung",
-	"runbooks.about":          "Zum Ablauf",
+	"runbooks.about":          "Zum Runbook",
 	"runbooks.last_run_h":     "Letzter Lauf",
 	"runbooks.approval":       "Freigabe",
 	"runbooks.version":        "Fassung %d",

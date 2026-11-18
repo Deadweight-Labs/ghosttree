@@ -106,7 +106,7 @@ func TestKnowledgeEmptyIsOneLineAndOneAction(t *testing.T) {
 		t.Error("guest empty state offers an action or lacks the line")
 	}
 	_, review := fetchPage(t, e.Owner, e.Base+"/ui/review")
-	if !strings.Contains(review, "Nothing to review.") {
+	if !strings.Contains(review, "Proposals from agents appear here to be reviewed.") {
 		t.Error("empty review queue lacks its line")
 	}
 }
@@ -537,7 +537,7 @@ func TestBodyBlocksSplitParagraphsAndCode(t *testing.T) {
 	if p := bodyBlocks("run `ls` now", 0)[0].Parts; len(p) != 3 || !p[1].Code || p[1].Text != "ls" {
 		t.Errorf("inline code = %+v", p)
 	}
-	if excerpt("```\ncode only\n```") != "code only" {
+	if excerpt(langEN, "```\ncode only\n```") != "code only" {
 		t.Error("code-only excerpt")
 	}
 }

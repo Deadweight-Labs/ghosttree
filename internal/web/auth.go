@@ -29,6 +29,10 @@ type browserSession struct {
 	principal store.Principal
 	csrf      string
 	expires   time.Time
+	// link: the session came from a one-time login link (an owner's, or ctx web).
+	// Whoever holds such a link must not be able to change how the account signs
+	// in, so the profile refuses address and password changes in it.
+	link bool
 }
 type sessions struct {
 	mu     sync.Mutex
@@ -50,6 +54,26 @@ func (s *sessions) create(principal store.Principal) (string, error) {
 	s.mu.Unlock()
 	return id, nil
 }
+func (s *sessions) markLink(id string) {
+	s.mu.Lock()
+	if v, ok := s.values[id]; ok {
+		v.link = true
+		s.values[id] = v
+	}
+	s.mu.Unlock()
+}
+
+// linkSession says whether the request's session started from a login link.
+func (a *app) linkSession(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return false
+	}
+	a.sessions.mu.Lock()
+	defer a.sessions.mu.Unlock()
+	return a.sessions.values[c.Value].link
+}
+
 func (s *sessions) get(id string) (browserSession, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -75,6 +99,20 @@ func (s *sessions) relabel(accountID, label string) {
 	}
 }
 func (s *sessions) remove(id string) { s.mu.Lock(); delete(s.values, id); s.mu.Unlock() }
+
+// dropAccount ends every session of an account (a new password, a reset).
+func (s *sessions) dropAccount(accountID string) { s.dropAccountExcept(accountID, "") }
+
+// dropAccountExcept ends every session of an account but the one named keep.
+func (s *sessions) dropAccountExcept(accountID, keep string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, v := range s.values {
+		if v.principal.ID == accountID && id != keep {
+			delete(s.values, id)
+		}
+	}
+}
 func browserPrincipal(r *http.Request) store.Principal {
 	v, _ := r.Context().Value(personKey{}).(store.Principal)
 	return v
@@ -140,6 +178,20 @@ func (a *app) notInteractive(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusForbidden)
 	a.renderBrowser(w, r, "interactive", pageData{Title: l.msg("adm.login.title"), OIDC: a.oidc != nil})
+}
+
+// requireCredentialSession refuses a session that started from a one-time login
+// link (an owner's, or ctx web) on every route that hands out or approves a
+// credential: pairing and approving a device. Such a session would otherwise turn
+// a link of minutes into a token that lasts.
+func (a *app) requireCredentialSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.linkSession(r) {
+			http.Error(w, a.langFor(r).msg("mail.error_link_session"), http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (a *app) requireCSRF(next http.Handler) http.Handler { return a.csrfGate(next, false) }
@@ -247,10 +299,15 @@ func (a *app) pasteLoginAllowed() bool {
 }
 
 func (a *app) loginData(title, errMsg string) pageData {
-	return pageData{
+	d := pageData{
 		Title: title, Error: errMsg, OIDC: a.oidc != nil, Paste: a.pasteLoginAllowed(),
 		ProviderName: a.oidcName, Bootstrap: a.oidc == nil && a.bootstrapPending(),
+		Mail: a.mailAvailable(), PasswordLogin: a.passwordsOn(),
 	}
+	// Without a mail setup (and without an identity provider) the page names the
+	// ways back in that exist: a login link from an owner, or ctx web.
+	d.NoMailHint = !d.Mail && !d.OIDC && !d.Bootstrap
+	return d
 }
 
 // bootstrapPending sagt, ob die Instanz noch auf ihren ersten Anmeldecode
@@ -276,6 +333,11 @@ type authView struct {
 	// Linked: der Code stammt aus der Adresse (Login-Link); das Feld bleibt dann
 	// verborgen, die Person bestätigt nur noch.
 	Linked bool
+	// Who is the person a login link opens; Device says a device asked for it
+	// (ctx web) and Machine names that device.
+	Who     string
+	Device  bool
+	Machine string
 }
 
 // loginRejected zeigt die Anmeldeseite mit dem Fehler über der Karte. Ein
@@ -324,7 +386,12 @@ func (a *app) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, a.takeNext(w, r, "/ui/inbox"), http.StatusSeeOther)
 		return
 	}
-	a.render(l, w, "login", a.loginData(l.msg("login.tab"), ""))
+	data := a.loginData(l.msg("login.tab"), "")
+	// After signing out the page says so; the note leaves the address with the first view.
+	if r.URL.Query().Get("notice") == "signed_out" {
+		data.Notice = l.msg("login.signed_out")
+	}
+	a.render(l, w, "login", data)
 }
 func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
@@ -361,7 +428,10 @@ func (a *app) finishLoginTo(w http.ResponseWriter, r *http.Request, account stor
 // Seite danach zeigt den Paarungscode und später die Freigabe des Geräts.
 func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account store.Account) {
 	next := "/ui/inbox"
-	if _, err := a.store.Join().Create(account.ID); err == nil {
+	if land := a.guestLanding(account.ID); land != "" {
+		// A guest has no computer to pair: they go to the project shared with them.
+		next = land
+	} else if _, err := a.store.Join().Create(account.ID); err == nil {
 		next = "/join/pair"
 	}
 	a.startSessionAt(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, next)
@@ -374,6 +444,10 @@ func (a *app) startSession(w http.ResponseWriter, r *http.Request, principal sto
 }
 
 func (a *app) startSessionAt(w http.ResponseWriter, r *http.Request, principal store.Principal, next string) {
+	a.startSessionLink(w, r, principal, next, false)
+}
+
+func (a *app) startSessionLink(w http.ResponseWriter, r *http.Request, principal store.Principal, next string, link bool) {
 	if old, err := r.Cookie(sessionCookie); err == nil {
 		a.sessions.remove(old.Value)
 	}
@@ -381,6 +455,9 @@ func (a *app) startSessionAt(w http.ResponseWriter, r *http.Request, principal s
 	if err != nil {
 		http.Error(w, "could not create secure session", http.StatusInternalServerError)
 		return
+	}
+	if link {
+		a.sessions.markLink(id)
 	}
 	http.SetCookie(w, a.sessionCookieFor(r, id, 30*24*60*60))
 	http.Redirect(w, r, next, http.StatusSeeOther)
@@ -410,6 +487,10 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 			data.Error = l.msg("login.error_link")
 		} else {
 			data.Auth.Linked = true
+			if name, machine, device, ok := a.store.LoginLinkPreview(code); ok {
+				data.Auth.Who, data.Auth.Device = name, device
+				data.Auth.Machine = firstNonEmpty(machine, l.msg("adm.this_device"))
+			}
 		}
 	}
 	if data.Invite {
@@ -419,10 +500,13 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 }
 
 // orgInviteView ist die Vorschau einer Einladung in eine Organisation, oder nil,
-// wenn sie sich nicht zeigen lässt.
+// wenn sie sich nicht zeigen lässt. Eine an eine Adresse gebundene Einladung
+// zeigt sich auch dann, wenn diese Instanz keine Adresse bestätigen kann: dann
+// mit Blocked und der maskierten Adresse, damit die Seite den Weg nennt statt
+// eines Kreislaufs (P05).
 func (a *app) orgInviteView(r *http.Request, l lang, code string) *joinView {
-	p, err := a.store.PreviewOrgInvitation(code, a.store.AccessEnforced(), a.oidc != nil)
-	if err != nil {
+	p, err := a.store.PreviewJoin(code, a.store.AccessEnforced(), a.oidc != nil || a.mailAvailable())
+	if err != nil && !errors.Is(err, store.ErrInvitationEmail) {
 		return nil
 	}
 	target := p.Project
@@ -431,11 +515,25 @@ func (a *app) orgInviteView(r *http.Request, l lang, code string) *joinView {
 	}
 	v := &joinView{Inviter: p.Inviter, Target: target, Short: shortName(target), Org: p.Org, ExpiresAt: p.ExpiresAt,
 		ExpiresIn: expiresIn(l, p.ExpiresAt), Code: code, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context()),
-		Provider: a.oidcName, OIDC: a.oidc != nil, OrgMark: initialOf(firstNonEmpty(p.Org, shortName(target)))}
+		Provider: a.oidcName, OIDC: a.oidc != nil, OrgMark: initialOf(firstNonEmpty(p.Org, shortName(target))),
+		Mail: a.oidc == nil && a.mailAvailable(), Bound: store.MaskEmail(p.BoundEmail), Blocked: err != nil}
 	if p.Project == "" {
 		v.Org = ""
 	}
 	return v
+}
+
+// invitationEmailRejected is the page for an invitation that is bound to an
+// address the person cannot show: it names the masked address and the way on.
+func (a *app) invitationEmailRejected(l lang, w http.ResponseWriter, code string) {
+	p, _ := a.store.PreviewJoin(code, a.store.AccessEnforced(), true)
+	masked := store.MaskEmail(p.BoundEmail)
+	inviter := firstNonEmpty(p.Inviter, l.msg("join.the_inviter"))
+	if masked == "" {
+		a.loginMessage(l, w, http.StatusForbidden, "auth.invitation_email.title", "auth.invitation_email.text")
+		return
+	}
+	a.loginMessage(l, w, http.StatusForbidden, "auth.invitation_email.title", "auth.invitation_email.bound", masked, inviter)
 }
 
 func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
@@ -467,6 +565,11 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	var account store.Account
 	var err error
+	// restrictedLink: an owner or a device made this login link. Its session may not
+	// change how the account signs in or hand out credentials.
+	restrictedLink := false
+	// device: the device token that asked for this link (ctx web), if any.
+	var device store.Principal
 	kind := a.store.CodeKindFor(code)
 	switch kind {
 	case store.CodeBootstrap:
@@ -476,9 +579,14 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 		if account, err = a.store.BootstrapLocal(code, r.FormValue("name")); err == nil {
 			a.dropBootstrapFile()
+			// The first account also gets an address to sign in with, confirmed by mail.
+			if a.mailAvailable() {
+				a.confirmFirstAddress(r, l, account)
+			}
 		}
 	case store.CodeLogin:
-		account, err = a.store.RedeemLoginLink(code)
+		restrictedLink = a.store.LoginLinkRestricted(code)
+		account, device, err = a.store.RedeemLoginLinkDevice(code)
 	case store.CodeClaim:
 		// Ein Claim-Code gehört zum Anbieter-Ablauf; ohne OIDC gibt es ihn nicht.
 		if a.oidc == nil {
@@ -490,6 +598,16 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	case store.CodeInvitation:
 		if a.oidc != nil {
 			a.beginOIDC(w, r, code)
+			return
+		}
+		if a.mailAvailable() {
+			a.joinByMail(w, r, l, code, r.FormValue("join") == "1")
+			return
+		}
+		// Eine an eine Adresse gebundene Einladung geht ohne Mail nicht: die
+		// Seite sagt, an welche Adresse sie gebunden ist und was zu tun ist.
+		if _, perr := a.store.PreviewJoin(code, a.store.AccessEnforced(), false); errors.Is(perr, store.ErrInvitationEmail) {
+			a.invitationEmailRejected(l, w, code)
 			return
 		}
 		// Die Namensprüfung verrät, welche Konten es gibt. Darum zählt jeder Aufruf
@@ -537,6 +655,16 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		a.finishLoginTo(w, r, account, "/ui/overview")
 		return
 	}
+	if kind == store.CodeLogin && device.TokenID != 0 {
+		// ctx web: the session has the rights of the device token that asked for
+		// the link (reading and ordinary work), never those of a person signing in.
+		a.startSessionLink(w, r, device, a.takeNext(w, r, "/ui/inbox"), true)
+		return
+	}
+	if kind == store.CodeLogin && restrictedLink {
+		a.startSessionLink(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, a.takeNext(w, r, "/ui/inbox"), true)
+		return
+	}
 	a.finishLogin(w, r, account)
 }
 
@@ -571,7 +699,7 @@ func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, a.sessionCookieFor(r, "", -1))
 	http.SetCookie(w, a.projectCookieFor(r, "", -1))
-	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/login?notice=signed_out", http.StatusSeeOther)
 }
 
 // codeFromInput nimmt den Code aus dem Feld "Code or login link": der Code
@@ -594,4 +722,17 @@ func codeFromInput(raw string) (code, joinCode string) {
 		return c, ""
 	}
 	return raw, ""
+}
+
+// confirmFirstAddress sends the confirmation of the address the first account
+// typed on the setup page; a missing or broken address leaves the account as is
+// (it can add one on its profile).
+func (a *app) confirmFirstAddress(r *http.Request, l lang, account store.Account) {
+	typed := strings.TrimSpace(r.FormValue("email"))
+	if typed == "" || len(typed) > 320 {
+		return
+	}
+	if ch, err := a.store.IssueConfirmChallenge(account.ID, typed); err == nil {
+		a.sendChallengeMail(r, l, ch)
+	}
 }

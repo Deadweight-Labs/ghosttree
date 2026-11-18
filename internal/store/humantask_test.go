@@ -68,6 +68,54 @@ func TestHumanTaskCreateRules(t *testing.T) {
 	}
 }
 
+// REQ-688 (N15): an agent without any request asks a human for something and
+// gets it on the first try: the task hangs on one standing request per project
+// and person instead of failing with request_required.
+func TestHumanTaskWithoutRequestHangsOnTheStandingRequest(t *testing.T) {
+	w := newPainWorld(t)
+	pa := w.pa["mia"]
+	first, err := pa.CreateHumanTask(humantask.CreateInput{Project: roleProject, Kind: "input", Title: "Token besorgen"}, humantask.Actor{AccountID: 3, Person: "mia"})
+	if err != nil {
+		t.Fatalf("task without request: %v", err)
+	}
+	second, err := pa.CreateHumanTask(humantask.CreateInput{Project: roleProject, Kind: "input", Title: "Noch etwas"}, humantask.Actor{AccountID: 3, Person: "mia"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.RequestID == 0 || first.RequestID != second.RequestID {
+		t.Fatalf("both tasks must share one standing request: %d, %d", first.RequestID, second.RequestID)
+	}
+	if first.AssigneeAccount != 3 {
+		t.Errorf("no recipient named: the task is for the human of the session, got %d", first.AssigneeAccount)
+	}
+	var requests int
+	w.st.DB().QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&requests)
+	if requests != 1 {
+		t.Errorf("one request for two tasks, got %d", requests)
+	}
+	// Someone else's standing request is never reused.
+	other, err := w.pa["lena"].CreateHumanTask(humantask.CreateInput{Project: roleProject, Kind: "input", Title: "Von Lena"}, humantask.Actor{AccountID: 2, Person: "lena"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.RequestID == first.RequestID {
+		t.Errorf("lena's task landed in mia's standing request")
+	}
+	// A closed standing request is replaced by the next one.
+	w.st.DB().Exec(`UPDATE requests SET state='dropped' WHERE id=?`, first.RequestID)
+	third, err := pa.CreateHumanTask(humantask.CreateInput{Project: roleProject, Kind: "input", Title: "Danach"}, humantask.Actor{AccountID: 3, Person: "mia"})
+	if err != nil {
+		t.Fatalf("after the standing request closed: %v", err)
+	}
+	if third.RequestID == first.RequestID || third.RequestID == 0 {
+		t.Errorf("a new standing request was expected, got %d", third.RequestID)
+	}
+	// A guest still may not create tasks, and without a project there is nothing to hang it on.
+	if _, err := w.pa["gus"].CreateHumanTask(humantask.CreateInput{Project: roleProject, Kind: "input", Title: "x"}, humantask.Actor{}); err == nil {
+		t.Errorf("guest without request must still be refused")
+	}
+}
+
 func TestHumanTaskBindsToWorkAndToTheSessionsActiveWork(t *testing.T) {
 	w := newPainWorld(t)
 	rid := w.request(t, "Migration")

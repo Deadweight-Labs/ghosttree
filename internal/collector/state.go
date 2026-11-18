@@ -34,6 +34,9 @@ type State struct {
 	// gitScans hält je Transkript die Git-Aufrufe, die auf ihr Ergebnis warten
 	// (nur im Speicher, siehe gitScan).
 	gitScans map[string]*gitScan
+	// failures hält je Transkript, was der Server nicht nahm (nur im Speicher, für
+	// den Gesundheitsbericht, siehe health.go).
+	failures map[string]*syncFailure
 	// saved ist der zuletzt geschriebene Inhalt; unverändert wird nicht geschrieben.
 	saved []byte
 	// lastWrite und dirty bündeln das Speichern während einer aktiven Session

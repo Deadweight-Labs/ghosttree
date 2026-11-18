@@ -250,8 +250,9 @@ func TestCoordReplyQuoteEscapesNameAndText(t *testing.T) {
 			t.Errorf("the quote carries unescaped %q: %s", raw, quote)
 		}
 	}
-	if !strings.Contains(quote, "&lt;script&gt;") {
-		t.Errorf("the quoted words are shown escaped: %s", quote)
+	// The quote is plain words (REQ-705): a tag is not shown at all, so it cannot be markup either.
+	if !strings.Contains(quote, "alert(1)") {
+		t.Errorf("the quoted words are shown: %s", quote)
 	}
 	// The name comes from the label of the author: rendered on its own with markup in it.
 	var sb strings.Builder
@@ -259,7 +260,7 @@ func TestCoordReplyQuoteEscapesNameAndText(t *testing.T) {
 	if err := langEN.page().ExecuteTemplate(&sb, "coord-quote", view); err != nil {
 		t.Fatal(err)
 	}
-	if out := sb.String(); strings.Contains(out, `<b id="pwn">`) || strings.Contains(out, "<i>words") || !strings.Contains(out, "&lt;b id=") || !strings.Contains(out, "&lt;i&gt;words") {
+	if out := sb.String(); strings.Contains(out, `<b id="pwn">`) || strings.Contains(out, "<i>words") || !strings.Contains(out, "&lt;b id=") || !strings.Contains(out, "<span>words</span>") {
 		t.Errorf("name and words of a quote are escaped: %s", out)
 	}
 }

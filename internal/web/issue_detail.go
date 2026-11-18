@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -64,6 +65,19 @@ func (a *app) issueDetail(w http.ResponseWriter, r *http.Request, remote, id str
 		return
 	}
 	if v.ProjectRemote != remote {
+		// The issue was moved: its number is the same in the project it lives in now.
+		// The old address leads there when the viewer can open that project, with
+		// what the address carried (a notice, a panel).
+		if home := a.requestRepo(r2); home != "" && home != remote {
+			target := repoHref(home) + "/issues/" + url.PathEscape(id)
+			rq := r.URL.Query()
+			rq.Del("project")
+			if len(rq) > 0 {
+				target += "?" + rq.Encode()
+			}
+			http.Redirect(w, r, target, http.StatusFound)
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}
@@ -95,6 +109,7 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 		current = append(current, rowLabel{Text: lb.Name, Class: labelClass(lb.Color), Href: base + "?q=" + url.QueryEscape("label:"+lb.Name)})
 	}
 	v.LabelBox = a.labelBox(r, pa, remote, store.CommentOnRequest, req.ID, current)
+	v.Attach = a.attachBoxFor(r, l, pa, idea.SubjectRequest, req.ID, requestURL(req.ID)+"/attach")
 	v.Back = v.Base
 	v.Panel = r.URL.Query().Get("panel")
 	if r.URL.Query().Get("edit") == "1" {
@@ -110,6 +125,13 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 	}
 	for _, i := range detail.Ideas {
 		v.Ideas = append(v.Ideas, ideaFact{Num: "#" + strconv.FormatInt(i.ID, 10), Title: i.Title, Brief: l.msg("ref.kind.idea"), Href: repo + "/ideas/" + strconv.FormatInt(i.ID, 10)})
+	}
+	if repo != "" {
+		if list, err := pa.DecisionsOf(idea.SubjectRequest, req.ID); err == nil {
+			for _, d := range list {
+				v.Decisions = append(v.Decisions, ideaFact{Num: d.HumanID(), Title: d.Question, Brief: label(l, workshopDecisionKeys, d.State), Href: repo + "/decisions/" + strconv.FormatInt(d.ID, 10)})
+			}
+		}
 	}
 	// A commit proof leads to the commit on GitHub when the project lives there.
 	if rest, ok := strings.CutPrefix(remote, "github.com/"); ok {
@@ -209,7 +231,10 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 		v.Reactions = a.reactionsFor(r, l, store.ReactOnRequest, req.ID, s)
 	}
 	v.Composer = a.issueComposer(r, l, pa, v)
-	v.Live = a.liveAgents(pa, v.Work, now, l)
+	// A request that is done or dropped has no one working on it right now, whatever the work lines still say.
+	if req.State == "open" {
+		v.Live = a.liveAgents(pa, v.Work, now, l)
+	}
 	for i := range v.Work {
 		for _, la := range v.Live {
 			if la.Live && la.External == v.Work[i].External && v.Work[i].External != "" {
@@ -258,7 +283,9 @@ func (a *app) issueComposer(r *http.Request, l lang, pa *store.ProjectAccess, v 
 				composerField{Name: "evidence_kind", Label: l.msg("requests.field_evidence_kind"), Kind: "select", Show: "complete", Options: kinds},
 				composerField{Name: "evidence_ref", Label: l.msg("requests.field_evidence"), Kind: "text", Show: "complete", Wide: true})
 		} else {
-			done.Disabled, done.Hint = true, l.msg("issue.cx.complete_blocked")
+			// The reason stands beside the row, in words (a tip on a greyed-out entry is not seen, and not on a phone).
+			note := l.msg("issue.cx.complete_open", v.Total-v.Done, v.Total)
+			done.Disabled, done.Hint, cv.ModeNote = true, note, note
 		}
 		drop := composerMode{Value: "drop", Label: l.msg("requests.state.dropped"), Submit: l.msg("issue.cx.drop_btn"), SubmitText: l.msg("issue.cx.drop_text"), Class: "dangerf",
 			Placeholder: l.msg("issue.cx.drop_placeholder"), NeedsText: true}
@@ -295,7 +322,7 @@ func (a *app) requestClose(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.stampActor(r, actor.Comment, c.ID)
-		http.Redirect(w, r, commentPage(c)+"?comment=added#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
+		http.Redirect(w, r, commentAddedURL(pa, c), http.StatusSeeOther)
 	case "complete":
 		if strings.TrimSpace(r.Form.Get("evidence_ref")) == "" {
 			r.Form.Set("evidence_ref", r.Form.Get("reason"))
@@ -354,6 +381,21 @@ func (a *app) stampEvents(l lang, events []issueEvent, requestID int64) {
 	}
 	for i := range events {
 		events[i].StampKind, events[i].StampID = stampOf(events[i], requestID)
+	}
+	// Reopening the last open requirement of a done issue reopens the issue in the same step: that entry has
+	// the maker of the requirement's, whoever the stamps say.
+	for i := range events {
+		if events[i].Act != "request.reopened" {
+			continue
+		}
+		for _, o := range events {
+			if o.Act == "criterion.reopened" && o.StampID > 0 && o.By == events[i].By && o.At == events[i].At {
+				events[i].StampKind, events[i].StampID = o.StampKind, o.StampID
+				break
+			}
+		}
+	}
+	for i := range events {
 		add(events[i].StampKind, events[i].StampID, events[i].By)
 	}
 	views := map[string]map[int64]actorView{}
@@ -375,7 +417,7 @@ func stampOf(e issueEvent, requestID int64) (kind string, id int64) {
 		return actor.Request, requestID
 	case "request.done":
 		return actor.RequestDone, requestID
-	case "criterion.met", "criterion.waived":
+	case "criterion.met", "criterion.waived", "criterion.reopened":
 		return actor.Criterion, e.CriterionID
 	case "task.created":
 		return actor.Task, e.TaskID

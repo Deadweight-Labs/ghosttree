@@ -221,7 +221,15 @@ func (a *app) commentFail(w http.ResponseWriter, r *http.Request, back string, e
 func commentResult(r *http.Request, l lang) *requestResult {
 	switch r.URL.Query().Get("comment") {
 	case "added":
+		if note := coordUnreachedNote(l, r.URL.Query().Get("unreached"), false); note != "" {
+			return &requestResult{Text: l.msg("comments.result.added_unreached", note), Kind: "done"}
+		}
 		return &requestResult{Text: l.msg("comments.result.added"), Kind: "done"}
+	case "created":
+		if note := coordUnreachedNote(l, r.URL.Query().Get("unreached"), false); note != "" {
+			return &requestResult{Text: l.msg("comments.result.created_unreached", note), Kind: "done"}
+		}
+		return nil
 	case "edited":
 		return &requestResult{Text: l.msg("comments.result.edited"), Kind: "done"}
 	case "deleted":
@@ -234,6 +242,12 @@ func commentResult(r *http.Request, l lang) *requestResult {
 		return &requestResult{Text: l.msg("comments.result.failed"), Kind: "failed", Fail: true}
 	}
 	return nil
+}
+
+// commentAddedURL is where a comment just written leads: its place on the page of
+// its object, and the @names of the text that reached nobody, so the page can say so.
+func commentAddedURL(pa *store.ProjectAccess, c store.Comment) string {
+	return commentPage(c) + "?comment=added" + unreachedParam(pa.UnreachedTextMentions(c.Project, c.Body)) + "#comment-" + strconv.FormatInt(c.ID, 10)
 }
 
 // commentEdit is POST /ui/comments/{id}/edit: a new version of the text.
@@ -300,7 +314,7 @@ func (a *app) knowledgeComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.stampActor(r, actor.Comment, c.ID)
-	http.Redirect(w, r, commentPage(c)+"?comment=added#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
+	http.Redirect(w, r, commentAddedURL(pa, c), http.StatusSeeOther)
 }
 
 // fillKnowledgeComments gives the page of an entry what the page of an issue has:

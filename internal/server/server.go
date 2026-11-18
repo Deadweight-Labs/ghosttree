@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,6 +53,11 @@ func WithLogger(logger *slog.Logger) Option {
 // (loopback is always included).
 func WithTrustedProxies(s proxytrust.Set) Option { return func(a *api) { a.proxies = s } }
 
+// WithAIProxy names the address of the model proxy on this machine
+// (REQ-694); the gardener's runs get it with their token. Empty: the proxy is
+// off and the gardener keeps its llm.json.
+func WithAIProxy(baseURL string) Option { return func(a *api) { a.aiProxyURL = baseURL } }
+
 // WithPublicURL fixes the externally visible base URL (scheme://host, no path).
 func WithPublicURL(raw string) Option {
 	return func(a *api) { a.publicURL = strings.TrimRight(raw, "/") }
@@ -79,7 +85,9 @@ func withSnapshotErrorLogger(logger snapshotErrorLogger) Option {
 type api struct {
 	proxies              proxytrust.Set
 	publicURL            string
+	aiProxyURL           string
 	st                   *store.Store
+	machineSeen          sync.Map
 	snapshotLimits       snapshot.Limits
 	snapshotMirror       SnapshotMirror
 	operationIDGenerator OperationIDGenerator
@@ -117,6 +125,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "POST /api/join/token", a.exchangeJoin)
 	a.routeFunc(mux, "POST /api/join/status", a.statusJoin)
 	a.routeFunc(mux, "DELETE /api/tokens/self", a.revokeOwnToken)
+	a.routeFunc(mux, "POST /api/auth/web-login", a.webLoginLink)
 	a.routeFunc(mux, "GET /api/orgs", a.listOrgs)
 	a.routeFunc(mux, "POST /api/orgs", a.createOrg)
 	a.routeFunc(mux, "PATCH /api/orgs/{org}", a.renameOrg)
@@ -184,6 +193,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.registerIdeaWorkshopRoutes(mux)
 	a.registerFeatureRoutes(mux)
 	a.registerRunbookRoutes(mux)
+	a.registerWorkflowRoutes(mux)
 	a.registerDeliveryLogRoutes(mux)
 	a.routeFunc(mux, "POST /api/knowledge", a.createKnowledge)
 	a.routeFunc(mux, "GET /api/knowledge", a.listKnowledge)
@@ -321,19 +331,56 @@ func fallbackOperationID() string {
 	return fmt.Sprintf("fallback-%x-%x", time.Now().UnixNano(), fallbackOperationIDCounter.Add(1))
 }
 
+// machineSeenEvery is how often the traffic of one device writes its machine's
+// last_seen.
+const machineSeenEvery = 30 * time.Second
+
+type machineSeenKey struct{ machine, principal string }
+
+// machineSeenDue says whether the device of principal is due to record a sign
+// of life of its machine, and counts it as done.
+func (a *api) machineSeenDue(p store.Principal) bool {
+	key := machineSeenKey{strings.ToLower(p.Machine), p.ID}
+	if last, ok := a.machineSeen.Load(key); ok && time.Since(last.(time.Time)) < machineSeenEvery {
+		return false
+	}
+	a.machineSeen.Store(key, time.Now())
+	return true
+}
+
 func (a *api) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/health" || r.URL.Path == "/api/version" || r.URL.Path == "/metrics" || (r.Method == http.MethodPost && isDevicePath(r.URL.Path)) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		principal, ok := a.st.AuthenticatePrincipal(strings.TrimSpace(token))
+		token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		var principal store.Principal
+		var ok bool
+		if strings.HasPrefix(token, store.AIRunTokenPrefix) {
+			// The token of a running workflow run (REQ-695): it names the
+			// account the run acts for and the run, and reaches nothing else
+			// through the API. What a run creates goes through the engine's
+			// check of its results; what it may read comes as its declared
+			// inputs and, for an own prompt, through read tools that run in
+			// the engine, never through this API.
+			if principal, ok = a.st.PrincipalOfRunToken(token); ok && !(r.Method == http.MethodGet && r.URL.Path == "/api/whoami") {
+				writeCoded(w, http.StatusForbidden, "forbidden", "a workflow run reaches the API only to say who it is")
+				return
+			}
+		} else {
+			principal, ok = a.st.AuthenticatePrincipal(token)
+		}
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		a.st.TouchToken(principal.TokenID)
+		if principal.Machine != "" && a.machineSeenDue(principal) {
+			// A device that talks is a machine that was just seen: without it the
+			// machine page reads "last seen 20 min ago" next to an agent at work.
+			_ = a.st.NoteMachineSeen(principal.Machine, principal.ID)
+		}
 		if record := requestRecordFromContext(r.Context()); record != nil {
 			record.actor = principal.Label
 		}

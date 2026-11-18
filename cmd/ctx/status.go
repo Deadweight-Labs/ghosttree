@@ -51,10 +51,17 @@ func cmdStatus(args []string, stdout io.Writer) int {
 	if err == nil {
 		fmt.Fprintf(stdout, "transcripts %d tracked\n", len(st.Files))
 	}
+	// Was der Sammler nicht hochladen konnte, steht sonst nur im Journal (REQ-690).
+	if h, fresh := collector.ReadHealth(collector.DefaultStatePath()); fresh {
+		fmt.Fprintf(stdout, "uploads     %s\n", h.Describe())
+		if len(h.Failing) > 0 {
+			ok = false
+		}
+	}
 
 	claudeCfg := installer.ClaudeUserConfigPath(home)
 	claudeOK := fileContains(claudeCfg, `"ghosttree"`) &&
-		fileContains(filepath.Join(home, ".claude", "settings.json"), "hook session-start")
+		fileContains(installer.ClaudeSettingsPath(home), "hook session-start")
 	fmt.Fprintf(stdout, "claude      %s\n", installedLabel(claudeOK))
 	codexOK := fileContains(filepath.Join(home, ".codex", "config.toml"), "[mcp_servers.ghosttree]") &&
 		installer.HasMarker(filepath.Join(home, ".codex", "AGENTS.md"))

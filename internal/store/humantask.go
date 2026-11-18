@@ -52,6 +52,9 @@ func (s *Store) TaskByID(id int64) (humantask.Task, error) {
 	if len(list) == 0 {
 		return humantask.Task{}, sql.ErrNoRows
 	}
+	if err := s.attachTaskNotes(list[:1]); err != nil {
+		return humantask.Task{}, err
+	}
 	return list[0], nil
 }
 
@@ -111,8 +114,15 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 		}
 	}
 	if requestID == 0 {
-		return humantask.Task{}, requestdomain.NewRuleError("request_required", "a human task hangs on a request: request action=start_work first, or give request_id",
-			"request action=start_work first, or give request_id", nil)
+		// Neither request nor work nor a session with active work: the task hangs on
+		// the standing request of the writer in this project instead of failing.
+		if id, ok := a.standingTaskRequest(strings.TrimSpace(in.Project), actor); ok {
+			requestID = id
+		}
+	}
+	if requestID == 0 {
+		return humantask.Task{}, requestdomain.NewRuleError("request_required", "a human task hangs on a request: name the project, or give request_id",
+			"give request_id or the project", nil)
 	}
 	ref, err := st.RequestRef(RefRequest, requestID)
 	if err != nil {
@@ -147,7 +157,12 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 				"assign to a member of the project or leave it open", nil)
 		}
 		assignee = id
-	} else if !in.Everyone && a.valid && a.account != 0 && RoleRank(st.ProjectRole(project, principalOfID(a.account)).Role) >= 1 {
+	} else if in.Everyone {
+		assignee = 0
+	} else if mentioned := a.mentionedAssignee(project, in, actor); mentioned != 0 {
+		// No recipient named, but the text addresses a member with @name.
+		assignee = mentioned
+	} else if a.valid && a.account != 0 && RoleRank(st.ProjectRole(project, principalOfID(a.account)).Role) >= 1 {
 		// No recipient named: it is for the human this session belongs to.
 		assignee = a.account
 	}
@@ -480,6 +495,9 @@ func (s *Store) ListHumanTasks(pa *ProjectAccess, f TaskFilter) ([]humantask.Tas
 				break
 			}
 		}
+	}
+	if err := s.attachTaskNotes(out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

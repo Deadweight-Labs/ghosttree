@@ -41,7 +41,15 @@ const (
 const (
 	KindIdea    = "idea"
 	KindRequest = "request"
+	// KindKnowledge and KindPain (PAIN-88) belong to a feature without a
+	// direction: the pitfall or decision about it, the problem it touches. They
+	// carry no relation and show in Feature.Related.
+	KindKnowledge = "knowledge"
+	KindPain      = "pain"
 )
+
+// Related reports whether a kind of reference is one of the undirected ones.
+func Related(kind string) bool { return kind == KindKnowledge || kind == KindPain }
 
 // Maße. Eine Fassung wird gelesen, nicht geschrieben wie ein Handbuch; was darüber
 // hinausgeht, gehört in ein Dokument.
@@ -73,6 +81,9 @@ type Feature struct {
 	// Ideas und Requests sind die Verweise des Features, getrennt nach Beziehung.
 	Origin  []Ref `json:"origin,omitempty"`
 	Affects []Ref `json:"affects,omitempty"`
+	// Related are the knowledge entries (KN-n) and pains (PAIN-n) tied to the
+	// feature, as far as the viewer may read them.
+	Related []Ref `json:"related,omitempty"`
 	// Versions zählt die Fassungen.
 	Versions  int    `json:"versions"`
 	Person    string `json:"person,omitempty"`
@@ -137,10 +148,15 @@ type Ref struct {
 	Advanced bool `json:"advanced,omitempty"`
 }
 
-// HumanID ist IDEA-n oder REQ-n.
+// HumanID ist IDEA-n, REQ-n, KN-n oder PAIN-n.
 func (r Ref) HumanID() string {
-	if r.Kind == KindIdea {
+	switch r.Kind {
+	case KindIdea:
 		return fmt.Sprintf("IDEA-%d", r.ID)
+	case KindKnowledge:
+		return fmt.Sprintf("KN-%d", r.ID)
+	case KindPain:
+		return fmt.Sprintf("PAIN-%d", r.ID)
 	}
 	return fmt.Sprintf("REQ-%d", r.ID)
 }

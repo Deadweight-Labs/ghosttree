@@ -17,7 +17,23 @@ type inviteLink struct {
 	code    string
 	project bool // the code belongs to a project invitation (/join/<code>)
 	until   time.Time
+	// mail says whether a mail with the link went out, and to which address: kept
+	// beside the link, for its creator, so that the page can say it at any time.
+	mail inviteMail
 }
+
+// inviteMail is the outcome of sending the mail of one invitation.
+type inviteMail struct {
+	State string // inviteMailSent, inviteMailFailed, inviteMailOff or inviteMailNone
+	To    string
+}
+
+const (
+	inviteMailSent   = "sent"   // the mail left the server
+	inviteMailFailed = "failed" // an address was given and sending failed
+	inviteMailOff    = "off"    // the server cannot send mail
+	inviteMailNone   = "none"   // no address was given
+)
 
 // inviteLinks keeps the links of open invitations for the account that
 // created them, in memory only. The store holds nothing but the hash of a code,
@@ -54,6 +70,16 @@ func (l *inviteLinks) put(id int64, account, code string, project bool, until ti
 	for len(l.order) > maxInviteLinks {
 		delete(l.links, l.order[0])
 		l.order = l.order[1:]
+	}
+}
+
+// setMail records what became of the mail of invitation id.
+func (l *inviteLinks) setMail(id int64, m inviteMail) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if link, ok := l.links[id]; ok {
+		link.mail = m
+		l.links[id] = link
 	}
 }
 

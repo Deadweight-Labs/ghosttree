@@ -8,6 +8,7 @@ import (
 	"html"
 	"html/template"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -31,7 +32,7 @@ import (
 var taskPageStates = map[string]string{humantask.Open: "tasks.state.open", humantask.Done: "tasks.state.done",
 	humantask.Confirmed: "tasks.state.confirmed", humantask.Dropped: "tasks.state.dropped"}
 
-var taskPageTone = map[string]string{humantask.Open: "p-ok", humantask.Done: "p-warn", humantask.Confirmed: "p-done", humantask.Dropped: "p-mute"}
+var taskPageTone = map[string]string{humantask.Open: "p-ok", humantask.Done: "p-ok", humantask.Confirmed: "p-done", humantask.Dropped: "p-mute"}
 
 var taskRowTone = map[string]string{humantask.Open: "open", humantask.Done: "open", humantask.Confirmed: "closed", humantask.Dropped: "drop"}
 
@@ -52,6 +53,11 @@ type taskStepView struct {
 	// By and Age say who ticked the step and when; Action is the form that ticks it.
 	By, Age string
 	Action  string
+}
+
+// taskNoteView is one note of the person to the agent.
+type taskNoteView struct {
+	By, Age, Text string
 }
 
 type taskPageView struct {
@@ -75,8 +81,17 @@ type taskPageView struct {
 	CanDone    bool
 	DoneAction string
 	Token      string
-	// Composer is the field that reports the task as done: what is written is the note for the agent.
+	// Composer is the field for a note to the agent; it does not report the task done.
 	Composer *composerView
+	// Notes are the lines already sent to the agent. Report is the button that
+	// reports the task done; OpenSteps is how many steps are still open, and
+	// ReportAsk opens the question about them at once (a one-click report from
+	// the inbox that was sent here).
+	Notes     []taskNoteView
+	Report    bool
+	OpenSteps int
+	Question  string
+	ReportAsk bool
 	// Result is the line after a refused report (?fail=).
 	Result *requestResult
 }
@@ -91,6 +106,7 @@ func init() {
 		"GET /ui/r/{n}":    webProject,
 		// Ticking a step of a task: only from the web, with the right to do the task.
 		"POST /ui/tasks/{id}/steps/{n}": webAdmin,
+		"POST /ui/tasks/{id}/note":      webAdmin,
 	} {
 		webRoutes[pattern] = class
 	}
@@ -103,6 +119,31 @@ func (a *app) registerTaskPages(mux *http.ServeMux) {
 	a.handle(mux, "GET /ui/t/{n}", a.requirePerson(http.HandlerFunc(a.taskShort)))
 	a.handle(mux, "GET /ui/r/{n}", a.requirePerson(http.HandlerFunc(a.requestShort)))
 	a.handle(mux, "POST /ui/tasks/{id}/steps/{n}", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.taskStepSet))))))
+	a.handle(mux, "POST /ui/tasks/{id}/note", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.taskNoteAdd))))))
+}
+
+// taskNoteAdd is POST /ui/tasks/{id}/note: a line to the agent on a task that stays
+// open. It does not report the task done (REQ-679); the page of the task is where it
+// returns, with the text still in its field when it was refused.
+func (a *app) taskNoteAdd(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	note := r.FormValue("note")
+	back := a.taskBack(r, []int64{id}, url.Values{"f": {"aufgaben"}})
+	if tooLong(note, taskNoteChars) {
+		a.tooLongForm(w, r, back, "note", note, taskNoteChars)
+		return
+	}
+	accountID, _ := store.AccountNumericID(browserPrincipal(r).ID)
+	actor := humantask.Actor{AccountID: accountID, Person: personOf(r), Web: interactive(r)}
+	if err := a.access(r).AddTaskNote(id, note, actor); err != nil {
+		a.taskFail(w, r, back, err)
+		return
+	}
+	http.Redirect(w, r, back+"#notes", http.StatusSeeOther)
 }
 
 // canOpenRepo sagt, ob der Betrachter die Repository-Seite des Projekts öffnen darf.
@@ -156,7 +197,7 @@ func (a *app) myIssuesPage(w http.ResponseWriter, r *http.Request) {
 func taskRowOf(l lang, t humantask.Task, now time.Time, withRepo bool) uiRow {
 	row := uiRow{Icon: "tasks", Tone: taskRowTone[t.State], StateLabel: label(l, taskPageStates, t.State), Num: "#" + strconv.FormatInt(t.ID, 10),
 		Title: t.Title, Href: taskHrefOf(t), Kind: label(l, taskKindKeys, t.Kind), Person: firstNonEmpty(t.Assignee, t.CreatedBy),
-		Excerpt: ellipsize(oneLineText(firstNonEmpty(t.Location, t.Description)), 160)}
+		Excerpt: plainSnippet(l, firstNonEmpty(t.Location, t.Description), 160)}
 	if at := parseTime(t.CreatedAt); !at.IsZero() {
 		row.Age, row.AgeTitle = shortAge(l, now, at), l.dateTime(at.Local())
 	}
@@ -292,9 +333,24 @@ func (a *app) taskDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 	a.taskSteps(r2, l, pa, t, v)
 	v.First = firstOf(l, a.actorViewOf(l, pa, actor.Task, t.ID, t.CreatedBy, true), t.CreatedBy, l.msg("tasks.asked_ch"), v.Age, "", "")
 	if interactive(r) && t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil {
-		v.CanDone, v.DoneAction = true, "/ui/tasks/done"
-		v.Composer = &composerView{Action: v.DoneAction, Token: v.Token, Name: "note", Avatar: browserPrincipal(r).Label, Placeholder: l.msg("tasks.note_placeholder"),
-			Submit: l.msg("tasks.mark_done"), MaxLen: taskNoteChars, Hidden: []hiddenField{{"id", strconv.FormatInt(t.ID, 10)}, {"back", "task"}}}
+		v.CanDone, v.DoneAction, v.Report = true, "/ui/tasks/done", true
+		v.Composer = &composerView{Action: "/ui/tasks/" + strconv.FormatInt(t.ID, 10) + "/note", Token: v.Token, Name: "note", Avatar: browserPrincipal(r).Label,
+			Placeholder: l.msg("tasks.note_placeholder"), Submit: l.msg("tasks.note_send"), Required: true, MaxLen: taskNoteChars, Hidden: []hiddenField{{"back", "task"}}}
+		if open := len(v.Steps) - v.StepsDone; open > 0 {
+			v.OpenSteps = open
+			v.Question = l.msg("tasks.open_steps", open)
+			if open == 1 {
+				v.Question = l.msg("tasks.open_steps_one")
+			}
+			v.ReportAsk = r.URL.Query().Get("ask") == "done"
+		}
+	}
+	for _, n := range t.Notes {
+		view := taskNoteView{By: n.By, Text: n.Text}
+		if at := parseTime(n.At); !at.IsZero() {
+			view.Age = shortAgo(l, now, at)
+		}
+		v.Notes = append(v.Notes, view)
 	}
 	if code := r.URL.Query().Get("fail"); code != "" {
 		v.Result = &requestResult{Text: l.msg(taskFailKey(code)), Kind: "failed", Fail: true}

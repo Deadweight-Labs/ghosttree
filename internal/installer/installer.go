@@ -56,7 +56,9 @@ What ghosttree knows about this repository is also on disk, under ` + "`.ghosttr
 ` + "`.ghosttree/knowledge/`" + ` holds the pitfalls, decisions and notes a session here
 would be given, ` + "`.ghosttree/requests/`" + ` holds the work ledger split into open
 and done, ` + "`.ghosttree/docs/`" + ` holds the generated document projection, and
-` + "`.ghosttree/edit/`" + ` is the writable document worktree. Start at ` + "`.ghosttree/INDEX.md`" + `, which also names what
+` + "`.ghosttree/edit/`" + ` is the writable document worktree, and
+` + "`.ghosttree/workflows/`" + ` the writable worktree of the workflows (the truth is on the
+server). Start at ` + "`.ghosttree/INDEX.md`" + `, which also names what
 is deliberately NOT mirrored there. Reading it with ls, cat and grep costs no
 tool call and is the cheapest way into an unfamiliar part of the codebase —
 ` + "`grep -ril \"topic\" .ghosttree/knowledge/`" + ` before ` + "`context_search`" + `. It is a
@@ -67,6 +69,10 @@ Long-form specifications, plans, investigations and reports belong in the
 document worktree. Create or import them with ` + "`ctx doc new`" + ` and
 ` + "`ctx doc import`" + `, publish revisions with ` + "`ctx doc push`" + `, and keep
 the source tree clean; never commit specs or plans as internal working files.
+Workflows (what the server runs on an event) are edited the same way: ` + "`ctx workflow pull`" + `,
+change the file under ` + "`.ghosttree/workflows/`" + `, then ` + "`ctx workflow push <name> -m \"...\"`" + `
+(` + "`ctx workflow new <name>`" + ` starts one). A push that finds the workflow changed on the
+server since the pull is refused; never commit these files.
 
 For substantial feature, architecture, migration, or multi-session work, use
 ` + "`request action=search`" + ` before implementation. Continue a matching request and

@@ -1,9 +1,11 @@
 package web
 
 import (
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -52,6 +54,7 @@ type rvRow struct {
 	Warn                    string
 	CanApprove              bool
 	CanReject               bool
+	Need                    string
 	Retire                  bool
 	CanEdit                 bool
 	Act                     *gardenAct
@@ -85,13 +88,13 @@ func reviewRows(l lang, garden *gardenView, cards []knowledgeCard) []rvRow {
 		row := rvRow{ID: c.ID, Href: c.Href, Label: c.TypeLabel, Tone: c.Tone, Title: c.Title, Num: num, Who: c.Person, Age: c.Age, Old: c.Old, Why: c.Excerpt,
 			Level: c.Level, LevelLabel: c.LevelLabel, LevelTitle: c.LevelTitle,
 			Blocks: c.Blocks, Evidence: c.Evidence, Proof: c.Proof, From: c.From, Explain: c.Explain,
-			CanApprove: c.CanApprove, CanReject: c.CanReject, Retire: c.Retire, CanEdit: c.CanEdit, Token: c.Token, Next: c.Next, Filter: c.Filter}
+			CanApprove: c.CanApprove, CanReject: c.CanReject, Need: c.Need, Retire: c.Retire, CanEdit: c.CanEdit, Token: c.Token, Next: c.Next, Filter: c.Filter}
 		if c.Stale {
 			row.Label, row.Tone = l.msg("knowledge.stale"), "warn"
 		}
 		// A ready explanation leads the row: it speaks before the original text.
 		if c.Explain != nil && !c.Explain.Pending && c.Explain.Text != "" {
-			row.Why = leadSentence(c.Explain.Text, 160)
+			row.Why = leadSentence(l, c.Explain.Text, 160)
 		}
 		rows = append(rows, row)
 	}
@@ -232,7 +235,10 @@ func (a *app) fillKnowledgeItem(l lang, k store.Knowledge, v *knowledgeItemView)
 		v.Timeline = append(v.Timeline, tlItem{Who: v.Closure.By, Icon: "drop", Tone: "don", Head: template.HTML(head), Age: v.Closure.Age, Body: mdText(v.Closure.Reason)})
 	}
 	if c.Person != "" {
-		v.Timeline = append(v.Timeline, tlItem{Who: c.Person, Icon: "book", Tone: "warn", Head: template.HTML(html.EscapeString(l.msg("knowledge.tl.created")) + sha), Age: c.Age})
+		created := tlItem{Who: c.Person, Icon: "book", Tone: "warn", Head: template.HTML(html.EscapeString(l.msg("knowledge.tl.created")) + sha), Age: c.Age}
+		// The entry says "Robin’s Claude" at its head; its line in the history says the same.
+		created.withActor(a.stampedActors(l, actor.Knowledge, map[int64]string{k.ID: c.Person})[k.ID])
+		v.Timeline = append(v.Timeline, created)
 	}
 }
 
@@ -251,20 +257,66 @@ type contextView struct {
 	Segs    []knSeg
 	// DeliveredHref and PreviewHref are the two views, Review the page behind "n to review".
 	DeliveredHref, PreviewHref, ReviewHref string
+	// Described are the newest descriptions of files and folders of the project (the ghosts an agent gets with a
+	// path), DescribedN how many there are, CodeHref the tree they belong to.
+	Described  []contextDesc
+	DescribedN int
+	CodeHref   string
+}
+
+// contextDesc is one described path of the project: where it lives and what is said of it.
+type contextDesc struct{ Path, Href, Text string }
+
+// contextDescribedShown is how many described paths the context page lists.
+const contextDescribedShown = 8
+
+// describedPaths are the newest descriptions of the project's files and folders that the viewer may read, on the
+// default branch, and their number. The context an agent is given at the start does not hold them (they come with
+// the path an agent works on), so the page names them here instead of leaving them out of sight.
+func (a *app) describedPaths(r *http.Request, pa *store.ProjectAccess, project string) ([]contextDesc, int) {
+	_, def := a.codeBranches(r, pa, project)
+	ghosts, err := a.ghostsOnBranch(project, def, def)
+	if err != nil {
+		return nil, 0
+	}
+	ghosts = keep(ghosts, 0, func(g store.GhostFile) bool {
+		return g.Path != "" && strings.TrimSpace(g.Description) != "" && pa.CanSeeGhost(g)
+	})
+	sort.SliceStable(ghosts, func(i, j int) bool { return ghosts[i].UpdatedAt > ghosts[j].UpdatedAt })
+	links := codeLinks{base: repoHref(project), def: def}
+	var out []contextDesc
+	for _, g := range ghosts {
+		if len(out) == contextDescribedShown {
+			break
+		}
+		href := links.blob(def, g.Path)
+		if g.Kind == "dir" {
+			href = links.tree(def, g.Path)
+		}
+		out = append(out, contextDesc{Path: g.Path, Href: href, Text: plainLine(g.Description, 160)})
+	}
+	return out, len(ghosts)
 }
 
 func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	project := a.projectParam(r)
-	r = a.repoScoped(r, project, "knowledge")
+	r = a.repoScopedChosen(r, project, "knowledge")
 	preview := r.URL.Query().Get("preview") == "1"
 	view := &contextView{Project: project, Preview: preview}
 	if project == "" {
 		view.Choices = a.shellFor(r, "context").Projects
-		// Wer nur ein Projekt sieht, braucht keine Auswahl.
+		// Wer nur ein Projekt sieht, braucht keine Auswahl; wer von der Seite eines Repos kommt, hat das Repo
+		// schon gewählt: die Ansicht steht auf diesem Repo, nicht auf einer Liste.
+		pick := ""
 		if len(view.Choices) == 1 {
+			pick = view.Choices[0].Remote
+		} else if len(view.Choices) > 1 {
+			pick = refererProject(r, view.Choices)
+		}
+		if pick != "" {
 			q := r.URL.Query()
-			q.Set("project", view.Choices[0].Remote)
+			q.Set("project", pick)
 			http.Redirect(w, r, "/ui/context?"+q.Encode(), http.StatusSeeOther)
 			return
 		}
@@ -317,6 +369,8 @@ func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
 	view.PreviewHref = withQuery(r, map[string]string{"preview": "1"})
 	view.ReviewHref = knowledgeSub(r, project, "/ui/review", "/review")
 	view.Segs = a.knowledgeSegs(r, pa, l, project, "context", a.knowledgeCountText(pa, project))
+	view.Described, view.DescribedN = a.describedPaths(r, pa, project)
+	view.CodeHref = repoHref(project)
 	a.renderBrowser(w, r, "context", pageData{Title: l.msg("context.title"), ContextV: view})
 }
 

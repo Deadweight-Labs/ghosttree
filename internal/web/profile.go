@@ -10,9 +10,13 @@ import (
 
 // profileView is what the profile page shows: the name as the store has it.
 type profileView struct {
-	Name   string
-	Notice string
-	Locked bool // guests cannot rename themselves
+	Name string
+	// Notice and Err are what became of the last action, and NoticeAt and ErrAt
+	// the part of the page it belongs to (profileName, profileMailSection,
+	// profilePasswordSection, profileGitHubSection): the answer stands at its form.
+	Notice, NoticeAt string
+	Err, ErrAt       string
+	Locked           bool // guests cannot rename themselves
 	// Agents are the agents of this account, by machine.
 	Agents     []agentGroup
 	AgentCount int
@@ -24,16 +28,46 @@ type profileView struct {
 	Notify []profileNotify
 }
 
-type profileDevice struct{ Name, Seen string }
+// profileDevice is a machine the account signed in on: the name of ctx login
+// --machine, the same one the agents, the sessions and the machine page carry.
+type profileDevice struct{ Name, Href, Seen string }
+
+// The parts of the profile page an answer can belong to.
+const (
+	profileName            = "name"
+	profileMailSection     = "mail"
+	profilePasswordSection = "password"
+	profileGitHubSection   = "github"
+)
+
+// profileNote is an answer shown at its form; Bad is a refusal.
+type profileNote struct {
+	Text string
+	Bad  bool
+}
+
+// At is the answer that belongs to a part of the page, a refusal before a
+// confirmation, or nil when the part has none.
+func (v profileView) At(section string) *profileNote {
+	switch {
+	case v.Err != "" && v.ErrAt == section:
+		return &profileNote{Text: v.Err, Bad: true}
+	case v.Notice != "" && v.NoticeAt == section:
+		return &profileNote{Text: v.Notice}
+	}
+	return nil
+}
 
 // profilePage shows the account's display name and, in an interactive session,
 // the form to change it.
 func (a *app) profilePage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	a.renderProfile(w, r, http.StatusOK, "", "")
+	a.renderProfile(w, r, http.StatusOK, "", "", "")
 }
 
-func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, typed, errMsg string) {
+// renderProfile draws the profile. errMsg is a refusal and errAt the part of the
+// page it belongs to; what an earlier action confirmed comes with ?notice=.
+func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, typed, errAt, errMsg string) {
 	l := a.langFor(r)
 	me := browserPrincipal(r)
 	acct, err := a.store.AccountByPrincipalID(me.ID)
@@ -53,15 +87,20 @@ func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, 
 		if tokens, err := a.deviceTokens(r); err == nil {
 			now := overviewNow().UTC()
 			for _, t := range tokens {
-				name := t.Label
-				if name == "" {
-					name = t.Machine
+				// The machine, as ctx login --machine named it, the same name the
+				// agents, sessions and the machine page carry; the label of the
+				// token ("ctx login on <machine>") only for a device without one.
+				name, href := strings.TrimSpace(t.Machine), ""
+				if name != "" {
+					href = machineHrefOf(name)
+				} else {
+					name = t.Label
 				}
 				at := parseTime(t.LastUsedAt)
 				if at.IsZero() {
 					at = parseTime(t.CreatedAt)
 				}
-				v.Devices = append(v.Devices, profileDevice{Name: name, Seen: shortAgo(l, now, at)})
+				v.Devices = append(v.Devices, profileDevice{Name: name, Href: href, Seen: shortAgo(l, now, at)})
 			}
 		}
 	}
@@ -71,22 +110,34 @@ func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, 
 	}
 	switch r.URL.Query().Get("notice") {
 	case "saved":
-		v.Notice = l.msg("profile.saved")
+		v.Notice, v.NoticeAt = l.msg("profile.saved"), profileName
 	case "renamed":
-		v.Notice = l.msg("profile.saved_as", v.Name)
+		v.Notice, v.NoticeAt = l.msg("profile.saved_as", v.Name), profileName
 	case "github_linked":
-		v.Notice = l.msg("profile.gh.linked")
+		v.Notice, v.NoticeAt = l.msg("profile.gh.linked"), profileGitHubSection
 	case "github_unlinked":
-		v.Notice = l.msg("profile.gh.unlinked")
+		v.Notice, v.NoticeAt = l.msg("profile.gh.unlinked"), profileGitHubSection
+	case "email_confirmed":
+		v.Notice, v.NoticeAt = l.msg("mail.profile.confirmed"), profileMailSection
+	case "password_saved":
+		v.Notice, v.NoticeAt = l.msg("mail.profile.password_saved"), profilePasswordSection
+	case "password_reset":
+		v.Notice, v.NoticeAt = l.msg("mail.profile.password_reset"), profilePasswordSection
 	case "github_failed":
 		if errMsg == "" {
-			errMsg = l.msg("profile.gh.failed")
+			errMsg, errAt = l.msg("profile.gh.failed"), profileGitHubSection
 		}
+	}
+	if errMsg != "" {
+		if errAt == "" {
+			errAt = profileName
+		}
+		v.Err, v.ErrAt = errMsg, errAt
 	}
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}
-	a.renderBrowser(w, r, "profile", pageData{Title: l.msg("profile.title"), Error: errMsg, Profile: v})
+	a.renderBrowser(w, r, "profile", pageData{Title: l.msg("profile.title"), Profile: v, ProfileMail: a.profileMail(r, acct)})
 }
 
 // profileSave changes the display name. The store cleans and checks it; a
@@ -138,5 +189,9 @@ func (a *app) ownAgentGroups(r *http.Request, name string) []agentGroup {
 	if err != nil {
 		return nil
 	}
-	return groupAgents(cards, nil)
+	var machines []machineRow
+	if tokens, err := a.deviceTokens(r); err == nil {
+		machines = ownMachines(a.langFor(r), tokens, now)
+	}
+	return groupAgents(cards, machines)
 }

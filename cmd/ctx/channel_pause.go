@@ -108,7 +108,7 @@ func (p *pauseSyncer) announceResume(c *store.AgentControl) error {
 	if !p.notifier.Ready() {
 		return nil
 	}
-	by := store.NormalizeAccountName(c.ResumedByLabel)
+	by := store.PromptSafeName(c.ResumedByLabel)
 	if by == "" {
 		by = "einem Menschen"
 	}

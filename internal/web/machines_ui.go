@@ -208,6 +208,33 @@ func (a *app) orgMachines(r *http.Request, org store.Org) []store.Machine {
 	return out
 }
 
+// orgMachineOffers are the viewer's own machines that this org does not have yet: the way to give them to it starts
+// at the machine's own page, so the tab lists them instead of reading "0" with nothing to do about it. The page
+// and the number on the tab both come from here, so the number is the number of rows the tab shows.
+func (a *app) orgMachineOffers(r *http.Request, org store.Org) []store.Machine {
+	if org.IsUser() {
+		return nil
+	}
+	list, err := a.store.MachinesFor(browserPrincipal(r).ID)
+	if err != nil {
+		return nil
+	}
+	var out []store.Machine
+	for _, m := range list {
+		if (m.Relation != store.RelOwner && m.Relation != store.RelMaintainer) || machineOfOrg(m, org) || m.OwnerOrg != "" {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// orgMachineCount is the number on the tab "Machines": what the org has, what is shared with it, and the machines
+// of the viewer that wait to be shared. Each is a row of the list under the tab.
+func (a *app) orgMachineCount(r *http.Request, org store.Org) int {
+	return len(a.orgMachines(r, org)) + len(a.orgMachineOffers(r, org))
+}
+
 // orgMachinesPage ist der Reiter „Maschinen“ einer Org.
 func (a *app) orgMachinesPage(w http.ResponseWriter, r *http.Request, org store.Org) {
 	l := a.langFor(r)
@@ -225,13 +252,18 @@ func (a *app) orgMachinesPage(w http.ResponseWriter, r *http.Request, org store.
 			v.Shared = append(v.Shared, row)
 		}
 	}
+	for _, m := range a.orgMachineOffers(r, org) {
+		v.Offer = append(v.Offer, uiRow{Icon: "server", Tone: "feat", StateLabel: l.msg("machine.title"), Title: m.Name, Href: machineHrefOf(m.Name) + "#shares",
+			Kind: label(l, machineRelationKeys, m.Relation), Pill: l.msg("machine.offer_share"), PillTone: "p-ok"})
+	}
 	a.renderBrowser(w, r, "orgmachines", pageData{Title: l.msg("ui.org.tab.machines"), OrgName: org.Name, OrgBand: a.orgBandFor(r, org, "machines"), OrgMachinesV: v})
 }
 
 // orgMachinesView: User is a person's page, which has only their own machines.
+// Offer are the viewer's own machines that could be shared with this org.
 type orgMachinesView struct {
-	Own, Shared []uiRow
-	User        bool
+	Own, Shared, Offer []uiRow
+	User               bool
 }
 
 // ownerPill nennt, in welchem Verhältnis die Maschine zur Org steht.
@@ -338,11 +370,12 @@ func (a *app) machinePage(w http.ResponseWriter, r *http.Request, m store.Machin
 			}
 		}
 		links, _ := a.store.SessionLinks(pa, ids)
+		ended := a.endedSessions(ids)
 		for _, row := range page.Rows {
 			if !row.Readable || len(v.Sessions) >= machineSessionsMax {
 				continue
 			}
-			lr := a.listRow(l, row, links[row.Session.ID], time.Now().UTC())
+			lr := a.listRow(l, row, links[row.Session.ID], time.Now().UTC(), ended)
 			lr.Machine = ""
 			v.Sessions = append(v.Sessions, lr)
 		}

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -46,9 +47,8 @@ type shellMemo struct {
 	// review is the number of proposals waiting for the viewer's review.
 	review    int
 	reviewSet bool
-	// waiting are the rows of "Waiting for you", read once for the inbox count.
-	waiting    []forYouRow
-	waitingSet bool
+	// inbox is what the inbox lists, by repo filter, read once per request: the bell counts it.
+	inbox map[string]*inboxData
 }
 
 // shellBaseFor liefert Betrachter und Projektliste. Ohne gültige Wahl gilt für
@@ -87,11 +87,16 @@ type shellView struct {
 	ProjectAction string
 	Initial       string
 	RoleKey       string
-	Host          string
+	// Guest: the viewer is a guest; empty states show them no agent command.
+	Guest bool
+	Host  string
 	// Tabs sit under the page title: Requests | Tasks | Pains, Agents | Sessions,
 	// Search | Review | Agent context, Team | Devices. TabsLabel names them.
 	Tabs      []navItem
 	TabsLabel string
+	// KeepTabs shows the tabs also under the band of a repository (Agents | Sessions | Models, which the band does not
+	// carry); the other pages of a repository have their own segments or tabs.
+	KeepTabs bool
 	// Team is the account menu entry "Team & devices"; empty for a guest.
 	Team string
 	// Inbox is the number of rows waiting for the viewer, 0 shows nothing.
@@ -122,7 +127,7 @@ type newMenu struct {
 func (m *newMenu) Any() bool { return m != nil && (m.Issue != "" || m.Repo != "" || m.Org != "") }
 
 // newMenuFor builds the "+" menu for the viewer on this request.
-func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
+func (a *app) newMenuFor(r *http.Request, base shellBase, work store.Org) *newMenu {
 	if base.who.kind == viewerGuest {
 		return nil
 	}
@@ -132,7 +137,7 @@ func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
 		repo = rv.Href
 	} else {
 		for _, p := range base.projects {
-			if repo == "" || p.Selected {
+			if (repo == "" || p.Selected) && repoAddressable(p.Remote) {
 				repo = repoHref(p.Remote)
 			}
 		}
@@ -145,13 +150,10 @@ func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
 	if interactive(r) {
 		m.Org = newOrgHref
 	}
-	if orgs, err := a.store.ListOrgs(browserPrincipal(r).ID); err == nil {
-		for _, o := range orgs {
-			// Every member creates projects in the organization (17 A, #4376).
-			if !o.Guest && !o.IsUser() && m.Repo == "" {
-				m.Repo = "/ui/orgs?org=" + url.QueryEscape(o.Slug) + "#projects"
-			}
-		}
+	// Every member creates projects in the organization (17 A, #4376): in the one
+	// the viewer works in.
+	if work.ID != 0 {
+		m.Repo = orgSettingsHref(work, "#projects")
 	}
 	if !m.Any() {
 		return nil
@@ -163,7 +165,9 @@ func (a *app) newMenuFor(r *http.Request, base shellBase) *newMenu {
 // has chosen as default (else the first) is the label.
 type orgSwitch struct {
 	Current string
-	Items   []orgSwitchItem
+	// CurrentHref is the page of the organization the viewer works in, for the header of the inbox.
+	CurrentHref string
+	Items       []orgSwitchItem
 	// New leads to the form for a new organization; empty when the viewer
 	// cannot create one from here.
 	New string
@@ -213,7 +217,7 @@ func (a *app) viewerOf(r *http.Request, pa *store.ProjectAccess) viewer {
 	reviewer := flag || rank >= store.RoleRank(store.RoleLead) || pa.IsAdmin() || orgOwner
 	switch {
 	case orgOwner || rank >= store.RoleRank(store.RoleOwner):
-		return viewer{viewerOwner, "role.owner", true}
+		return viewer{viewerOwner, a.activeRoleKey(r, pa, "role.owner"), true}
 	case pa.IsAdmin():
 		return viewer{viewerOwner, "role.admin", true}
 	case rank == store.RoleRank(store.RoleLead):
@@ -222,6 +226,39 @@ func (a *app) viewerOf(r *http.Request, pa *store.ProjectAccess) viewer {
 		return viewer{viewerGuest, "role.guest", false}
 	}
 	return viewer{viewerMember, "role.member", reviewer}
+}
+
+// activeRoleKey is the role the account menu names: the one in the organization
+// the viewer works in, not the highest anywhere. Someone who owns a side project
+// in a namespace of their own is still a member of the organization they work
+// in (REQ-683). fallback is the broad role; it stays when the viewer works in no
+// organization.
+func (a *app) activeRoleKey(r *http.Request, pa *store.ProjectAccess, fallback string) string {
+	orgs := a.orgsOf(r)
+	work := a.pickOrg(r, orgs)
+	if work.ID == 0 {
+		return fallback
+	}
+	if work.Role == store.OrgOwner {
+		return "role.owner"
+	}
+	rank := 0
+	for _, remote := range pa.Projects() {
+		if p, ok := a.store.ProjectByRemote(remote); ok && p.OrgID == work.ID {
+			rank = max(rank, store.RoleRank(pa.Role(remote).Role))
+		}
+	}
+	switch {
+	case rank >= store.RoleRank(store.RoleOwner):
+		return "role.owner"
+	case rank == store.RoleRank(store.RoleLead):
+		return "role.lead"
+	case rank == store.RoleRank(store.RoleGuest):
+		return "role.guest"
+	case pa.IsAdmin():
+		return "role.admin"
+	}
+	return "role.member"
 }
 
 // projectAware sind die Seiten, die ?project= auswerten.
@@ -261,7 +298,7 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 	item := func(key, label, href string) navItem {
 		return navItem{Key: key, Label: label, Href: href, Current: key == current}
 	}
-	v := shellView{On: true, RoleKey: who.roleKey, Host: a.publicHost(r), CanAll: kind == viewerOwner || len(base.projects) > 1}
+	v := shellView{On: true, RoleKey: who.roleKey, Guest: kind == viewerGuest, Host: a.publicHost(r), CanAll: kind == viewerOwner || len(base.projects) > 1}
 	if label := strings.TrimSpace(browserPrincipal(r).Label); label != "" {
 		v.Initial = strings.ToUpper(string([]rune(label)[:1]))
 	}
@@ -293,8 +330,14 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 	switch name {
 	case "agents", "sessions", "agentmodels":
 		if kind != viewerGuest {
-			v.Tabs = []navItem{tab("agents", "nav.tab_agents", "/ui/agents", name == "agents"), tab("sessions", "nav.sessions", "/ui/sessions", name == "sessions"),
-				tab("models", "nav.tab_models", "/ui/agents/models", name == "agentmodels")}
+			// Under the band of a repository the tabs keep that repository.
+			to := func(href string) string { return href }
+			if rv := repoFrom(r); rv != nil && rv.Project != "" {
+				v.KeepTabs = true
+				to = func(href string) string { return pathWith(href, "project", rv.Project) }
+			}
+			v.Tabs = []navItem{tab("agents", "nav.tab_agents", to("/ui/agents"), name == "agents"), tab("sessions", "nav.sessions", to("/ui/sessions"), name == "sessions"),
+				tab("models", "nav.tab_models", to("/ui/agents/models"), name == "agentmodels")}
 			v.TabsLabel = "nav.agents"
 		}
 	case "knowledge", "review", "context":
@@ -310,14 +353,26 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 			v.TabsLabel = "nav.team_devices"
 		}
 	}
-	// Organization and devices are one entry in the account menu.
+	// Organization and devices are one entry in the account menu; it opens the
+	// organization the viewer works in.
+	orgs := a.orgsOf(r)
+	work := a.pickOrg(r, orgs)
 	if kind != viewerGuest {
 		v.Team = "/ui/orgs"
+		if work.ID != 0 {
+			v.Team = orgSettingsHref(work, "")
+		}
+		for i := range v.Tabs {
+			if v.Tabs[i].Key == "team" {
+				v.Tabs[i].Href = v.Team
+			}
+		}
 	}
 
-	v.Inbox = len(a.waitingFor(r, selectedProjectOf(base)))
-	v.Orgs = a.orgSwitchFor(r)
-	v.New = a.newMenuFor(r, base)
+	// The bell leads to the inbox, which lists every repo unless one is named in its address.
+	v.Inbox = a.inboxFor(r, "").Count()
+	v.Orgs = a.orgSwitchFor(r, orgs, work)
+	v.New = a.newMenuFor(r, base, work)
 
 	v.ProjectAction = "/ui/knowledge"
 	if projectAware[name] {
@@ -338,35 +393,20 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 
 // orgSwitchFor lists the organizations of the viewer for the header. Each entry
 // leads to the organization's page.
-func (a *app) orgSwitchFor(r *http.Request) *orgSwitch {
-	all, err := a.store.ListOrgs(browserPrincipal(r).ID)
-	if err != nil {
-		return nil
-	}
-	// A guest's organizations are not in the menu: guests see their project
-	// only (14 A, #4376).
-	var orgs []store.Org
-	for _, o := range all {
-		if !o.Guest {
-			orgs = append(orgs, o)
-		}
-	}
+func (a *app) orgSwitchFor(r *http.Request, orgs []store.Org, work store.Org) *orgSwitch {
 	if len(orgs) == 0 {
 		return nil
 	}
-	current := 0
-	for i, o := range orgs {
-		if o.Default {
-			current = i
-			break
-		}
-	}
-	sw := &orgSwitch{Current: orgs[current].Name}
+	sw := &orgSwitch{Current: work.Name}
 	if interactive(r) {
 		sw.New = newOrgHref
 	}
-	for i, o := range orgs {
-		sw.Items = append(sw.Items, orgSwitchItem{Label: o.Name, Href: "/ui/" + url.PathEscape(o.Slug), Current: i == current})
+	for _, o := range orgs {
+		item := orgSwitchItem{Label: o.Name, Href: "/ui/" + url.PathEscape(o.Slug), Current: o.ID == work.ID}
+		if item.Current {
+			sw.CurrentHref = item.Href
+		}
+		sw.Items = append(sw.Items, item)
 	}
 	return sw
 }
@@ -432,15 +472,28 @@ func (a *app) reviewCount(r *http.Request, project string) int {
 	return n
 }
 
-// publicHost ist der Host, den die Fußzeile zeigt: der der öffentlichen URL,
-// sonst der der Anfrage. Ein Proxy-Host aus Headern wird nie gezeigt.
+// publicHost ist der Host, den das Kontomenü zeigt: der der öffentlichen URL,
+// sonst der der Anfrage. Ein Proxy-Host aus Headern wird nie gezeigt. Eine
+// Adresse dieses Rechners (127.0.0.1, localhost, ::1) sagt nichts darüber, auf
+// welchem Server man ist, und bleibt weg (P49).
 func (a *app) publicHost(r *http.Request) string {
 	if a.publicOrigin != "" {
 		if u, err := url.Parse(a.publicOrigin); err == nil && u.Host != "" {
 			return u.Host
 		}
 	}
+	if hostOnly(r.Host) == "localhost" || net.ParseIP(hostOnly(r.Host)).IsLoopback() {
+		return ""
+	}
 	return r.Host
+}
+
+// hostOnly is the host of a "host:port" without the port and without the brackets of an IPv6 address.
+func hostOnly(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return strings.Trim(hostport, "[]")
 }
 
 // projectCookie hält die Projektauswahl für die Browsersitzung, damit sie beim
@@ -473,6 +526,11 @@ func resolveProject(r *http.Request, visible []string) string {
 	chosen, explicit := chosenProject(r)
 	if explicit && (chosen == "" || slices.Contains(visible, chosen)) {
 		return chosen
+	}
+	// The inbox is the one list for the whole account: a repo browsed earlier does not narrow it. It
+	// narrows only when the address names a repo, and the bell leads there without one.
+	if r.URL.Path == "/ui/inbox" {
+		return ""
 	}
 	if c, err := r.Cookie(projectCookie); err == nil {
 		if remote := scope.NormalizeRemote(c.Value); slices.Contains(visible, remote) {

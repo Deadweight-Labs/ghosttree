@@ -112,11 +112,33 @@
   // The chat is a scroll area of its own with the composer fixed beneath it. It
   // opens at the newest message (or at the one a link names).
   const chatOf = () => document.querySelector(".coord-messages");
+  // In a room the messages scroll in a box of their own; in a thread the page scrolls
+  // (the messages are part of it), and what is said of "the chat" holds for the page.
+  const flowScrolls = (flow) => !!flow && /(auto|scroll)/.test(getComputedStyle(flow).overflowY);
+  const scrollerOf = (flow) => (flowScrolls(flow) ? flow : (document.scrollingElement || document.documentElement));
+  const scrollEnd = (flow) => {
+    const scroller = scrollerOf(flow);
+    scroller.scrollTop = scroller.scrollHeight;
+  };
+  // The page grows after its first paint (the Markdown is drawn, the fonts arrive): until the reader
+  // scrolls on their own, the end of a thread stays the end.
+  const stickToEnd = (flow) => {
+    if (!flow || flowScrolls(flow) || typeof ResizeObserver === "undefined") return;
+    let moved = false;
+    const stop = () => { moved = true; };
+    for (const name of ["wheel", "touchstart", "keydown", "mousedown"]) addEventListener(name, stop, {once: true, passive: true});
+    const observer = new ResizeObserver(() => { if (!moved) scrollEnd(flow); });
+    observer.observe(flow);
+    setTimeout(() => observer.disconnect(), 3000);
+  };
   const scrollFlowToEnd = () => {
     const flow = chatOf();
     const target = location.hash && document.getElementById(location.hash.slice(1));
     if (target && flow && flow.contains(target)) target.scrollIntoView({block: "center"});
-    else if (flow) flow.scrollTop = flow.scrollHeight;
+    else if (flow) {
+      scrollEnd(flow);
+      stickToEnd(flow);
+    }
   };
   // The page itself does not scroll: the shell gets the height of what is left of the window.
   const fitShell = () => {
@@ -141,24 +163,31 @@
   addEventListener("resize", fitShell);
   scrollFlowToEnd();
   const newPill = () => document.querySelector("[data-chat-new]");
-  const nearEnd = (flow) => flow.scrollHeight - flow.scrollTop - flow.clientHeight < 80;
+  const nearEnd = (flow) => {
+    const scroller = scrollerOf(flow);
+    return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+  };
   const lastSeq = (flow) => {
     const items = flow ? flow.querySelectorAll(":scope > li[data-seq]") : [];
     return items.length ? Number(items[items.length - 1].dataset.seq) : 0;
   };
   const syncFlowFade = (flow) => {
-    flow.classList.toggle("is-scrolled", flow.scrollTop > 2);
+    flow.classList.toggle("is-scrolled", scrollerOf(flow).scrollTop > 2);
     const pill = newPill();
     if (pill && nearEnd(flow)) pill.hidden = true;
   };
   document.addEventListener("scroll", (event) => {
     if (event.target instanceof Element && event.target.matches(".coord-messages")) syncFlowFade(event.target);
+    else if (event.target === document && chatOf() && !flowScrolls(chatOf())) syncFlowFade(chatOf());
   }, true);
   document.addEventListener("click", (event) => {
     const pill = event.target.closest?.("[data-chat-new]");
     if (!pill) return;
     const flow = chatOf();
-    if (flow) flow.scrollTo({top: flow.scrollHeight, behavior: "smooth"});
+    if (flow) {
+      const scroller = scrollerOf(flow);
+      scroller.scrollTo({top: scroller.scrollHeight, behavior: "smooth"});
+    }
     pill.hidden = true;
   });
   // The divider "New" stays where it was drawn while the room is open: the
@@ -311,18 +340,16 @@
     if (liveStatus) liveStatus.textContent = label;
     if (announcement && announce) announce.textContent = announcement;
   };
-  let actionTimer = null;
+  // What went wrong with a send stands at the composer, where the words are (the element is in
+  // the composer; a room that cannot be written in has one over the history). Progress and
+  // confirmations are not drawn at all: a bar over the history hid the messages, the button is
+  // busy and disabled while it works, and screen readers are told through the live region.
   const setActionStatus = (message, error = false) => {
     const actionStatus = actionStatusEl();
     if (actionStatus) {
-      actionStatus.textContent = message;
-      actionStatus.hidden = !message;
+      actionStatus.textContent = error ? message : "";
+      actionStatus.hidden = !(message && error);
       actionStatus.dataset.error = error ? "true" : "false";
-      clearTimeout(actionTimer);
-      // Progress and confirmations fade; errors stay until the next action.
-      if (message && !error) {
-        actionTimer = setTimeout(() => { const el = actionStatusEl(); if (el) el.hidden = true; }, 3000);
-      }
     }
     if (message && announce) announce.textContent = message;
   };
@@ -350,25 +377,33 @@
     const messages = document.querySelector(".coord-messages");
     const context = document.getElementById("coord-context");
     const container = threadAround ? context : messages;
+    // The page scrolls with the messages: then the place of a message is its place in the window.
+    const pageFlow = !!messages && !flowScrolls(messages);
     return {
       id,
       threadKey: threadKey(),
-      top: element && container
+      pageFlow,
+      top: element && (pageFlow || container)
         ? element.getBoundingClientRect().top -
-          container.getBoundingClientRect().top
+          (pageFlow ? 0 : container.getBoundingClientRect().top)
         : null,
       container,
       messages,
-      messageScrollTop: messages ? messages.scrollTop : 0,
-      messageNearBottom: messages
-        ? messages.scrollHeight - messages.scrollTop - messages.clientHeight <
-          80
-        : false,
+      messageScrollTop: messages ? scrollerOf(messages).scrollTop : 0,
+      messageNearBottom: messages ? nearEnd(messages) : false,
       context,
       contextScrollTop: context ? context.scrollTop : 0,
     };
   };
   const restoreAnchor = (state) => {
+    if (state.pageFlow) {
+      const element = state.id ? document.getElementById(state.id) : null;
+      const flow = chatOf();
+      if (element && state.top !== null) window.scrollBy(0, element.getBoundingClientRect().top - state.top);
+      else if (state.messageNearBottom && flow) scrollEnd(flow);
+      else window.scrollTo(0, state.messageScrollTop);
+      return;
+    }
     if (state.id && state.top !== null && state.container) {
       const element = document.getElementById(state.id);
       if (element) {
@@ -588,7 +623,10 @@
     if (oldRoom === newRoom && sameThread && !options.toEnd) restoreAnchor(scroll);
     else {
       const messages = chatOf();
-      if (messages) messages.scrollTop = messages.scrollHeight;
+      if (messages) {
+        scrollEnd(messages);
+        stickToEnd(messages);
+      }
     }
     if (oldRoom !== newRoom || !sameThread) rememberDivider();
     else applyDivider();
@@ -752,6 +790,12 @@
       if (result === coordPageLoadOffline) location.assign(target.href);
     });
   });
+  document.addEventListener("change", (event) => {
+    const pick = event.target.closest?.("[data-pick].invalid");
+    if (!pick) return;
+    pick.classList.remove("invalid");
+    pick.querySelector("[data-dd]")?.removeAttribute("aria-invalid");
+  });
   document.addEventListener("submit", (event) => stampCoordExpiryOffset(event.target), true);
   document.addEventListener("submit", (event) => {
     const form = event.target;
@@ -759,11 +803,16 @@
     if (!target) return;
     event.preventDefault();
     // A request goes to someone: say so before anything is sent.
+    // An @name in the words is an addressee too: the server resolves it.
     if (event.submitter?.matches?.("[data-needs-to]")) {
       const to = form.querySelector('input[name="mentions"]');
-      if (!to || !to.value) {
+      const named = /(^|[^\p{L}\p{N}@._-])@[\p{L}\p{N}]/u.test(form.querySelector('textarea[name="body"]')?.value || "");
+      const pick = to?.closest?.("[data-pick]");
+      if (pick && !to.value && !named) {
+        pick.classList.add("invalid");
+        pick.querySelector("[data-dd]")?.setAttribute("aria-invalid", "true");
         setActionStatus(text("need_to"), true);
-        form.querySelector("[data-pick] [data-dd]")?.focus();
+        pick.querySelector("[data-dd]")?.focus();
         return;
       }
     }
@@ -781,9 +830,13 @@
     const was = form.querySelector("input[name='state_was']")?.value;
     const changed = picked.value !== was;
     area.required = !changed;
-    button.textContent = changed
+    // The word is in an element of its own when the button has a mark before it; a changed
+    // status shows it, so the button says what it will do.
+    const word = button.querySelector(".comp-send-t") || button;
+    word.textContent = changed
       ? (area.value.trim() ? picked.dataset.labelText : picked.dataset.label)
       : button.dataset.sendLabel;
+    button.classList.toggle("has-label", changed);
   };
   const syncThreadSends = () => document.querySelectorAll("form.coord-thread-composer").forEach(syncThreadSend);
   document.addEventListener("change", (event) => {
@@ -935,7 +988,7 @@
           const flowAfter = chatOf();
           // At the end the chat goes along with what comes; elsewhere a pill says there is more.
           if (flowAfter && lastSeq(flowAfter) > seenBefore) {
-            if (wasAtEnd) flowAfter.scrollTop = flowAfter.scrollHeight;
+            if (wasAtEnd) scrollEnd(flowAfter);
             else if (newPill()) newPill().hidden = false;
           }
           restoreDrafts(drafts);

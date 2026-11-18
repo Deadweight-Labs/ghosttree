@@ -173,6 +173,8 @@ func (a *ProjectAccess) CreatePain(in CreatePainInput) (pain.Detail, error) {
 	if err != nil {
 		return pain.Detail{}, err
 	}
+	_, _ = a.st.recordTextMentions(textMentionSource{Project: in.Project, SourceKind: MentionInPain, SourceID: id,
+		ObjectKind: CommentOnPain, ObjectID: id, AuthorAccount: a.account, Author: in.Actor.Person}, in.Title+"\n"+in.Body)
 	return a.st.painDetail(a, id)
 }
 

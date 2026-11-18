@@ -1,0 +1,129 @@
+/* Workflows of a repository (REQ-693): the list of runs, the page of a run and
+   the block of runs at the side of a pull request. */
+
+:is(.g2.wf) {
+  & .wfrow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 16px; }
+  & .wfrow > .st { display: inline-flex; align-items: center; height: 24px; }
+  & .wfname { font-size: 14px; line-height: 24px; font-weight: 600; color: var(--accent-fg); }
+  & .wfsub { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--fg-muted); margin-top: 2px; }
+  & .wfres { color: var(--fg-default); min-width: 0; overflow-wrap: anywhere; }
+  & .wfmeta { display: flex; align-items: center; gap: 16px; align-self: center; }
+  & .wfcost { font-size: 12px; }
+  & .dhead h1 .mono { font-size: 28px; font-weight: 400; overflow-wrap: anywhere; }
+  & .sec { margin: 24px 0 8px; }
+  & .sec:first-child { margin-top: 0; }
+  & pre.wftext { margin: 0; padding: 12px 16px; max-height: 480px; overflow: auto; font: 12px/18px var(--ui-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+}
+:is(.g2.wf, .g2.pr, .g2.id) {
+  & .wfstate { display: inline-flex; align-items: center; gap: 4px; }
+  & .wfstate .i { width: 12px; height: 12px; }
+  & .st.ok { color: var(--success-fg); }
+  & .st.dan { color: var(--danger-fg); }
+  & .st.warn { color: var(--attention-fg); }
+  & .st.out { color: var(--fg-muted); }
+  & .wftrig { display: inline-flex; gap: 4px; align-items: baseline; }
+  & .wfline { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  & .wfline .mono { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+@media (max-width: 767px) {
+  :is(.g2.wf) {
+    & .wfrow { grid-template-columns: 16px minmax(0, 1fr); }
+    & .wfmeta { grid-column: 2; flex-wrap: wrap; gap: 4px 12px; }
+  }
+}
+
+/* The workflows themselves (REQ-695): the list with switches, the page of a
+   workflow with its file, runs and versions, and the form. */
+:is(.g2.wf) {
+  & .wfdefs { margin-bottom: 16px; }
+  & .wfdef { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 16px; }
+  & .wfdef + .wfdef { border-top: 1px solid var(--border-muted); }
+  & .wfsum { color: var(--fg-muted); overflow-wrap: anywhere; }
+  & .wflast { display: inline-flex; color: inherit; text-decoration: none; }
+  & .wfsw { display: inline-flex; margin: 0; }
+  & .wfsw button.tog { padding: 0; border: 0; background: none; color: var(--fg-default); font: inherit; font-size: 14px; font-weight: 500; }
+  & .dmeta .wfsw .tog { font-size: 12px; }
+  & .wfdesc { margin: 0 0 16px; color: var(--fg-muted); }
+  & pre.wffile { max-height: none; font-size: 13px; line-height: 20px; }
+  & .wfform { display: grid; gap: 16px; max-width: 880px; }
+  & .wfform .pfield { display: grid; gap: 4px; font-size: 14px; }
+  & .wfform .pfield > span { font-weight: 600; font-size: 13px; }
+  & .wfedit { min-height: 360px; font: 13px/20px var(--ui-mono); tab-size: 2; resize: vertical; }
+  & .wfblocks { margin: -8px 0 0; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+  & .wfprobs { margin: 4px 0 0; padding-left: 20px; }
+  & .wfprobs li { overflow-wrap: anywhere; }
+  & .rbact { display: flex; gap: 8px; flex-wrap: wrap; }
+}
+@media (max-width: 767px) {
+  :is(.g2.wf) {
+    & .wfdef { grid-template-columns: minmax(0, 1fr); }
+    & .wfdef .wfmeta { grid-column: 1; flex-wrap: wrap; gap: 4px 12px; }
+  }
+}
+:is(.g2.wf) {
+  & .wfresrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 16px; }
+  & .wfresrow + .wfresrow { border-top: 1px solid var(--border-muted); }
+  & .wfresrow form { margin: 0; }
+  & .wftool + .wftool { border-top: 1px solid var(--border-muted); }
+  & .wftool > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 16px; cursor: pointer; list-style: none; }
+  & .wftool > summary::-webkit-details-marker { display: none; }
+  & .wftool > summary:hover { background: var(--row-hover); }
+  & .wftool[open] > summary { border-bottom: 1px solid var(--border-muted); }
+  & .wfround { font-size: 12px; font-variant-numeric: tabular-nums; }
+  & .wftn { font-size: 13px; overflow-wrap: anywhere; min-width: 0; }
+  & .wftool.is-refused .wftn { color: var(--danger-fg); }
+  & .wftoolh { padding: 8px 16px 0; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .wftoolbody pre.wftext { max-height: 240px; padding-top: 4px; }
+  & .wfreskind { font-weight: 600; }
+}
+
+/* One click from a template (REQ-696): the choice and its button beside the
+   button for a new workflow; on a phone they wrap below the title. */
+:is(.g2.wf) {
+  & .wfnew { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+  & .wftpl { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+  & .wftpl select.gfield { height: 28px; padding-block: 0; font-size: 12px; }
+}
+@media (max-width: 767px) {
+  :is(.g2.wf) {
+    & .wfdefs > .box-h { flex-wrap: wrap; row-gap: 8px; }
+    & .wfnew { justify-content: flex-start; width: 100%; }
+    & .wftpl { width: 100%; }
+    & .wftpl > .selx { flex: 1 1 auto; min-width: 0; }
+    & .wftpl > button { flex: none; }
+  }
+}
+
+/* How a run ended, in words (S02, usability run 5): the sentence, who fixes
+   it and where, and the raw message folded; the input folded below the
+   output; proposals waiting in review. */
+:is(.g2.wf) {
+  & .wfwhy .box-r { display: grid; gap: 8px; }
+  & .wfwhy p { margin: 0; }
+  & .wfwhyt { font-weight: 600; }
+  & .wfactive .box-r { display: flex; align-items: center; gap: 10px; }
+  & .wfspin { flex: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-muted); border-top-color: var(--accent-fg); animation: wfspin 1s linear infinite; }
+  & .wfwho { font-size: 13px; }
+  & .wfraw { border-top: 1px solid var(--border-muted); }
+  & .wfraw > summary { padding: 8px 16px; font-size: 12px; color: var(--fg-muted); cursor: pointer; }
+  & .wfraw[open] > summary { border-bottom: 1px solid var(--border-muted); }
+  & .wfin { margin-top: 16px; }
+  & .wfin > summary { cursor: pointer; list-style: none; gap: 8px; }
+  & .wfin > summary::-webkit-details-marker { display: none; }
+  & .wfin > summary .car { display: inline-flex; transition: transform .12s; }
+  & .wfin[open] > summary .car { transform: rotate(90deg); }
+  & .wfin:not([open]) > summary { border-bottom: 0; }
+  & .sec { display: flex; align-items: center; gap: 8px; }
+  & .wfwait { margin-bottom: 16px; }
+  & .wfwait .row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
+}
+
+/* A workflow that is switched on but no longer passes the check (REQ-708). */
+:is(.g2.wf) {
+  & .wftpl-l { font-size: 12px; white-space: nowrap; }
+  & .wfblk { display: flex; align-items: flex-start; gap: 6px; margin-top: 2px; color: var(--attention-fg); font-size: 12px; overflow-wrap: anywhere; }
+  & .wfblk .i, & .wfblk svg { width: 14px; height: 14px; flex: none; margin-top: 1px; }
+}
+
+@keyframes wfspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { :is(.g2.wf) .wfspin { animation: none; border-top-color: var(--accent-fg); } }

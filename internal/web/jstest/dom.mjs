@@ -34,14 +34,29 @@ class Node {
     this.parentNode = null;
   }
   get nextSibling() { const p = this.parentNode; return p ? p.childNodes[p.childNodes.indexOf(this) + 1] || null : null; }
+  get firstChild() { return this.childNodes[0] || null; }
+  get lastChild() { return this.childNodes[this.childNodes.length - 1] || null; }
+  // The node takes the place of this one (a Text has no ownerDocument, so the parent does it).
+  replaceWith(...n) {
+    const p = this.parentNode;
+    if (!p) return;
+    const at = p.childNodes.indexOf(this);
+    this.remove();
+    insert(p, n, at);
+  }
 }
 
 class Text extends Node {
   constructor(data) { super(); this.data = data; }
   get textContent() { return this.data; }
+  get nodeType() { return 3; }
+  get nodeValue() { return this.data; }
+  set nodeValue(v) { this.data = String(v); }
 }
 
 class Fragment extends Node {
+  append(...n) { insert(this, n, this.childNodes.length); }
+  appendChild(n) { insert(this, [n], this.childNodes.length); return n; }
   get children() { return this.childNodes.filter((n) => n instanceof Element); }
   get firstElementChild() { return this.children[0] || null; }
   get textContent() { return this.childNodes.map((n) => n.textContent).join(""); }
@@ -76,6 +91,11 @@ export class Element extends Node {
     this.listeners = new Map();
     this.content = tag.toLowerCase() === "template" ? new Fragment() : null;
     this.style = {};
+    // setProperty and removeProperty are how a script sets a custom property (--x); they stay out of the keys.
+    Object.defineProperties(this.style, {
+      setProperty: { value(k, v) { this[k] = String(v); } },
+      removeProperty: { value(k) { delete this[k]; } },
+    });
     const self = this;
     this.dataset = new Proxy({}, {
       get: (_, k) => (typeof k === "string" && self.attrs.has(dashed(k)) ? self.attrs.get(dashed(k)) : undefined),
@@ -87,6 +107,12 @@ export class Element extends Node {
     });
   }
   get localName() { return this.tagName.toLowerCase(); }
+  cloneNode(deep) {
+    const copy = new this.constructor(this.tagName, this.ownerDocument);
+    for (const [n, v] of this.attrs) copy.attrs.set(n, v);
+    if (deep) for (const child of this.childNodes) copy.appendChild(child.cloneNode ? child.cloneNode(true) : child);
+    return copy;
+  }
   getAttribute(n) { return this.attrs.has(n) ? this.attrs.get(n) : null; }
   setAttribute(n, v) { this.attrs.set(n, String(v)); }
   hasAttribute(n) { return this.attrs.has(n); }
@@ -148,6 +174,8 @@ export class Element extends Node {
   }
   append(...n) { insert(this, n, this.childNodes.length); }
   appendChild(n) { insert(this, [n], this.childNodes.length); return n; }
+  insertBefore(n, ref) { insert(this, [n], ref ? this.childNodes.indexOf(ref) : this.childNodes.length); return n; }
+  get isConnected() { return this.ownerDocument.html.contains(this); }
   before(...n) { insert(this.parentNode, n, this.parentNode.childNodes.indexOf(this)); }
   after(...n) { insert(this.parentNode, n, this.parentNode.childNodes.indexOf(this) + 1); }
   contains(n) { for (let x = n; x; x = x.parentNode) if (x === this) return true; return false; }
@@ -208,6 +236,7 @@ export class Event {
   }
   preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
   stopPropagation() { this.stopped = true; }
+  stopImmediatePropagation() { this.stopped = true; }
 }
 
 // ---------------------------------------------------------------- HTML
@@ -261,18 +290,22 @@ function compounds(sel) {
   });
 }
 
+// :scope is the element querySelector was called on (set for the length of one query).
+let scopeRoot = null;
+
 function simple(piece) {
   const checks = [];
   let rest = piece;
   const tag = /^[a-zA-Z][\w-]*/.exec(rest);
   if (tag) { checks.push((el) => el.localName === tag[0].toLowerCase()); rest = rest.slice(tag[0].length); }
-  const re = /^(?:\.([\w-]+)|\[([\w-]+)(?:="([^"]*)")?\]|:not\(([^)]*)\))/;
+  const re = /^(?:\.([\w-]+)|\[([\w-]+)(?:=(?:"([^"]*)"|([\w-]+)))?\]|:not\(([^)]*)\)|(:scope))/;
   while (rest) {
     const m = re.exec(rest);
     if (!m) throw new Error("selector not supported by the test DOM: " + piece);
     if (m[1]) checks.push((el) => el.classList.contains(m[1]));
-    else if (m[2]) checks.push((el) => el.hasAttribute(m[2]) && (m[3] === undefined || el.getAttribute(m[2]) === m[3]));
-    else { const inner = simple(m[4]); checks.push((el) => !inner(el)); }
+    else if (m[2]) checks.push((el) => el.hasAttribute(m[2]) && ((m[3] ?? m[4]) === undefined || el.getAttribute(m[2]) === (m[3] ?? m[4])));
+    else if (m[6]) checks.push((el) => el === scopeRoot);
+    else { const inner = simple(m[5]); checks.push((el) => !inner(el)); }
     rest = rest.slice(m[0].length);
   }
   return (el) => checks.every((c) => c(el));
@@ -291,6 +324,7 @@ const matchesAny = (el, sel) => compounds(sel).some((tokens) => matchChain(el, t
 function queryAll(root, sel) {
   const list = compounds(sel);
   const out = [];
+  scopeRoot = root;
   const walk = (n) => {
     for (const c of n.childNodes) {
       if (!(c instanceof Element)) continue;
@@ -311,8 +345,9 @@ class Document extends Node {
     this.readyState = "complete";
     this.cookie = "";
     this.html = this.createElement("html");
+    this.head = this.createElement("head");
     this.body = this.createElement("body");
-    this.html.append(this.body);
+    this.html.append(this.head, this.body);
     this.activeElement = this.body;
     this.documentElement = this.html;
     this.windowListeners = new Map();
@@ -322,6 +357,8 @@ class Document extends Node {
     return new (t === "form" ? HTMLFormElement : t === "input" ? HTMLInputElement : Element)(t, this);
   }
   createTextNode(s) { return new Text(s); }
+  createDocumentFragment() { return new Fragment(); }
+  contains(n) { return this.html.contains(n); }
   getElementById(id) { return queryAll(this.html, `[id="${id}"]`)[0] || null; }
   querySelectorAll(sel) { return queryAll(this.html, sel); }
   querySelector(sel) { return queryAll(this.html, sel)[0] || null; }

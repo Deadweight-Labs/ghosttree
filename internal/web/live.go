@@ -79,11 +79,21 @@ func (a *app) liveOf(pa *store.ProjectAccess, publicID string, started, now time
 	if seen := parseTime(raw.LastSeenAt); !seen.IsZero() && seen.After(fresh) && !seen.After(now.Add(time.Minute)) {
 		la.Live, la.At = true, seen
 	}
+	// The run is over when an agent said so (SessionEnd), and an agent that finished its turn waits for
+	// the next prompt: the transcript that is still arriving, or the last file it touched a moment ago,
+	// is no sign that it works right now.
+	over := false
+	if states, err := a.store.SessionRunStates([]int64{raw.ID}); err == nil {
+		over = states[raw.ID].Ended || states[raw.ID].Idle
+	}
+	if over {
+		la.Live = false
+	}
 	// The last file the session touched, within the last day, however old.
 	if acts, err := a.store.SessionPathActivity(raw.ExternalID, raw.AccountID, now.Add(-24*time.Hour).Format(time.RFC3339), 1); err == nil && len(acts) > 0 {
 		at := parseTime(acts[0].At)
 		if !at.IsZero() {
-			if at.After(fresh) && !at.After(now.Add(time.Minute)) {
+			if !over && at.After(fresh) && !at.After(now.Add(time.Minute)) {
 				la.Live = true
 			}
 			la.At = at

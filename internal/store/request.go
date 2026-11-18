@@ -102,6 +102,12 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 	if err := tx.Commit(); err != nil {
 		return requestdomain.Detail{}, err
 	}
+	// An @name in the description reaches the person in their inbox; the
+	// request exists either way, so a failure here is not the author's.
+	if r.Scope.Project != "" {
+		_, _ = s.recordTextMentions(textMentionSource{Project: r.Scope.Project, SourceKind: MentionInRequest, SourceID: id,
+			ObjectKind: CommentOnRequest, ObjectID: id, AuthorAccount: author, Author: r.Person}, r.Description)
+	}
 	return s.RequestByID(id)
 }
 
@@ -430,6 +436,16 @@ func (s *Store) SetCriterionState(id int64, state string, evidence requestdomain
 		return terminalRequestError(requestID, requestState)
 	}
 	if criterionState != "open" {
+		// Derselbe Übergang mit demselben Nachweis ist eine Wiederholung, kein Fehler:
+		// nach einem Timeout weiß der Aufrufer nicht, ob der erste Versuch ankam
+		// (REQ-690). Ein anderer Nachweis oder Zustand bleibt abgelehnt.
+		if criterionState == state {
+			var kind, ref string
+			err := tx.QueryRow(`SELECT kind, ref FROM request_evidence WHERE criterion_id=? ORDER BY id DESC LIMIT 1`, id).Scan(&kind, &ref)
+			if err == nil && kind == evidence.Kind && ref == evidence.Ref {
+				return nil
+			}
+		}
 		return requestdomain.NewRuleError("criterion_terminal", "acceptance criterion is already resolved", "do not record the same transition twice", nil)
 	}
 	ts := now()

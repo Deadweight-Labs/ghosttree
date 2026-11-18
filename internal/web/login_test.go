@@ -181,7 +181,7 @@ func TestLoginPageForAFreshInstanceAsksForBootstrapCodeAndName(t *testing.T) {
 	srv := httptest.NewServer(New(st, WithBootstrapFile(file)))
 	defer srv.Close()
 	page := loginPageOf(t, srv)
-	for _, want := range []string{"Setup code", "Your name", `name="name"`, `name="code"`, `action="/ui/login/code"`, `placeholder="e.g. robin"`} {
+	for _, want := range []string{"Setup code", "Your name", `name="name"`, `name="code"`, `action="/ui/login/code"`, `placeholder="Shown to your team"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("bootstrap login lacks %q", want)
 		}

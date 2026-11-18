@@ -23,6 +23,9 @@ func blockedEnv(t *testing.T) shellEnv {
 
 var waitsForAnna = regexp.MustCompile(`class="waits[^"]*"[^>]*aria-label="[^"]*anna`)
 
+// bandWaitsForAnna is the mark in the Tasks tab: a dot without faces, the names in its title (REQ-711, N22).
+var bandWaitsForAnna = regexp.MustCompile(`class="band-wait"[^>]*aria-label="[^"]*anna`)
+
 // REQ-599 AC-9: whoever is waited for shows on the branch and at the repository,
 // as the same red-ringed picture as on the issue and the pull request.
 func TestBlockerShowsOnTheBranchTheRepositoryTheIssueAndThePullRequest(t *testing.T) {
@@ -50,7 +53,8 @@ func TestBlockerShowsOnTheBranchTheRepositoryTheIssueAndThePullRequest(t *testin
 	_, code := fetchPage(t, e.Owner, e.Base+"/ui/x/shell")
 	band := code[strings.Index(code, `class="rband`):]
 	band = band[:strings.Index(band, "<main")]
-	if !strings.Contains(band, `class="band-wait" href="/ui/x/shell/tasks"`) || !waitsForAnna.MatchString(band) {
+	// The stack stands in the Tasks tab, behind its number, and not loose at the end of the row (REQ-687).
+	if tab := regexp.MustCompile(`(?s)<li data-tab="tasks".*?</li>`).FindString(band); !strings.Contains(tab, `class="band-wait"`) || !bandWaitsForAnna.MatchString(tab) || strings.Contains(tab, `class="ring"`) {
 		t.Errorf("the repository band does not show who is waited for:\n%s", band)
 	}
 	// The same on every page of the repository, not only on the code page.
@@ -87,13 +91,13 @@ func TestBlockerIsNotShownWhereNothingWaitsOrTheViewerMayNotSee(t *testing.T) {
 				t.Errorf("%q: a guest is told who is waited for (%s)", path, leak)
 			}
 		}
-		if waitsForAnna.MatchString(page) {
+		if waitsForAnna.MatchString(page) || bandWaitsForAnna.MatchString(page) {
 			t.Errorf("%q: a guest sees the stack of anna", path)
 		}
 	}
 	// A member who is not the one waited for sees the stack, so the guest's page is
 	// empty because of the rights and not because nothing is drawn at all.
-	if _, page := fetchPage(t, e.Member, e.Base+"/ui/x/shell"); !waitsForAnna.MatchString(page) {
+	if _, page := fetchPage(t, e.Member, e.Base+"/ui/x/shell"); !bandWaitsForAnna.MatchString(page) {
 		t.Error("the member does not see who is waited for either; the guest check proves nothing")
 	}
 }

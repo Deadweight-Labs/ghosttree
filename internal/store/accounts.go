@@ -624,7 +624,11 @@ func createBootstrapAccount(tx *sql.Tx, name, email, source string) (int64, erro
 		return 0, err
 	}
 	// Eine leere Instanz bekommt mit ihrem ersten Konto die Default-Organisation.
-	if _, err := createOrgTx(tx, "Default", "default", id); err != nil {
+	org, err := createOrgTx(tx, "Default", "default", id)
+	if err != nil {
+		return 0, err
+	}
+	if err := startWelcomeTx(tx, id, org.ID); err != nil {
 		return 0, err
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO account_migrations(version, migrated_at) VALUES(1,?)`, now()); err != nil {
@@ -804,23 +808,58 @@ func (s *Store) RedeemLoginLink(code string) (Account, error) {
 			return d.RedeemLoginLink(p[0].(string))
 		})
 	}
+	a, _, err := s.RedeemLoginLinkDevice(code)
+	return a, err
+}
+
+// RedeemLoginLinkDevice ist RedeemLoginLink und nennt zusätzlich das Gerät, das
+// den Link ausgestellt hat (ctx web). Für einen Link ohne Gerät ist device leer.
+// Eine Sitzung aus einem Geräte-Link hat die Rechte des Gerätetokens, nicht die
+// eines Menschen: das Token liegt auf jedem Rechner, auf dem ein Agent läuft.
+func (s *Store) RedeemLoginLinkDevice(code string) (Account, Principal, error) {
+	type out struct {
+		a Account
+		p Principal
+	}
+	if s.writer != nil {
+		o, err := queueValue(s, []any{code}, func(d *Store, p []any) (out, error) {
+			a, dev, err := d.RedeemLoginLinkDevice(p[0].(string))
+			return out{a, dev}, err
+		})
+		return o.a, o.p, err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return Account{}, err
+		return Account{}, Principal{}, err
 	}
 	defer tx.Rollback()
 	id, err := consumeCode(tx, code, CodeLogin)
 	if err != nil {
-		return Account{}, err
+		return Account{}, Principal{}, err
+	}
+	// Ein Link, den ein Gerät für sein Konto ausgestellt hat (ctx web), gilt nur,
+	// solange das Token dieses Geräts gilt.
+	if !loginCodeTokenValidTx(tx, hashToken(code)) {
+		return Account{}, Principal{}, ErrCodeInvalid
 	}
 	a, err := accountState(tx, id)
 	if err != nil {
-		return Account{}, err
+		return Account{}, Principal{}, err
 	}
 	if a.State != "active" {
-		return Account{}, ErrAccountDisabled
+		return Account{}, Principal{}, ErrAccountDisabled
 	}
-	return a, tx.Commit()
+	var dev Principal
+	err = tx.QueryRow(`SELECT t.id, t.kind, t.machine FROM account_codes c JOIN api_tokens t ON t.id = c.token_id
+		WHERE c.code_hash = ? AND c.token_id <> 0`, hashToken(code)).Scan(&dev.TokenID, &dev.TokenKind, &dev.Machine)
+	switch {
+	case err == nil:
+		dev.ID, dev.Label = a.ID, a.Name
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return Account{}, Principal{}, err
+	}
+	return a, dev, tx.Commit()
 }
 
 // CodeKindFor sagt, welche Art ein noch gültiger Code hat, ohne ihn zu
@@ -841,6 +880,23 @@ func (s *Store) CodeKindFor(code string) string {
 		return ""
 	}
 	return kind
+}
+
+// LoginLinkPreview says, without using it up, whose account an open login link
+// opens and whether a device asked for it (ctx web): the page that waits for the
+// click names the person and, for a device, the machine and what the session may do.
+func (s *Store) LoginLinkPreview(code string) (name, machine string, device, ok bool) {
+	if s.reader != nil {
+		return s.reader.LoginLinkPreview(code)
+	}
+	var token int64
+	err := s.db.QueryRow(`SELECT p.name, c.token_id, COALESCE(t.machine, '') FROM account_codes c
+		JOIN persons p ON p.id = c.account_id LEFT JOIN api_tokens t ON t.id = c.token_id
+		WHERE c.code_hash=? AND c.kind=? AND c.used_at='' AND c.expires_at>?`, hashToken(code), CodeLogin, now()).Scan(&name, &token, &machine)
+	if err != nil {
+		return "", "", false, false
+	}
+	return name, machine, token != 0, true
 }
 
 // HasIdentities sagt, ob irgendein Konto schon eine IdP-Identität hat. Solange

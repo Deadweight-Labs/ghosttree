@@ -67,7 +67,7 @@ func TestProjectRoomStaysClosedToStrangersAndOtherProjects(t *testing.T) {
 		who  string
 		c    *http.Client
 		room string
-	}{{"stranger", stranger, room}, {"stranger in hidden", stranger, hidden}, {"member of project A in room B", e.Member, hidden}, {"lead of project A in room B", e.Lead, hidden}}
+	}{{"stranger", stranger, room}, {"stranger in hidden", stranger, hidden}}
 	for _, tc := range cases {
 		status, page := fetchPage(t, tc.c, e.Base+"/ui/coord?room="+url.QueryEscape(tc.room))
 		if status != http.StatusNotFound || strings.Contains(page, "migrating") || strings.Contains(page, "SECRET") {
@@ -81,12 +81,27 @@ func TestProjectRoomStaysClosedToStrangersAndOtherProjects(t *testing.T) {
 			t.Errorf("%s: not the designed not-found page", tc.who)
 		}
 	}
-	// Writing is closed the same way.
-	form := url.Values{"room": {hidden}, "body": {"hi"}, "csrf_token": {renderedCSRFToken(t, e.Member, e.Base+"/ui/overview")}}
-	resp := sameOriginPostForm(t, e.Member, e.Base+"/ui/coord/send", form)
+	// A member of the organization who has no role in the project is told so, and no
+	// content comes with it.
+	for who, c := range map[string]*http.Client{"member": e.Member, "lead of project A": e.Lead} {
+		status, page := fetchPage(t, c, e.Base+"/ui/coord?room="+url.QueryEscape(hidden))
+		if status != http.StatusForbidden || strings.Contains(page, "SECRET") || !strings.Contains(visibleText(page), "x/hidden") {
+			t.Errorf("%s: the room of a project without a role: %d", who, status)
+		}
+	}
+	// Writing is closed the same way: for a stranger as unknown, for a member of the
+	// organization with the reason, which the composer shows as it is.
+	form := url.Values{"room": {hidden}, "body": {"hi"}, "csrf_token": {renderedCSRFToken(t, stranger, e.Base+"/ui/overview")}}
+	resp := sameOriginPostForm(t, stranger, e.Base+"/ui/coord/send", form)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("post into a hidden room: %d", resp.StatusCode)
+		t.Errorf("a stranger posts into a hidden room: %d", resp.StatusCode)
+	}
+	form = url.Values{"room": {hidden}, "body": {"hi"}, "csrf_token": {renderedCSRFToken(t, e.Member, e.Base+"/ui/overview")}}
+	resp = sameOriginPostForm(t, e.Member, e.Base+"/ui/coord/send", form)
+	text := body(t, resp)
+	if resp.StatusCode != http.StatusForbidden || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") || !strings.Contains(text, "x/hidden") || !strings.Contains(text, "no role") {
+		t.Errorf("a member posts into a project room without a role: %d %q %q", resp.StatusCode, resp.Header.Get("Content-Type"), text)
 	}
 }
 

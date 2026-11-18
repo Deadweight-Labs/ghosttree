@@ -1,14 +1,15 @@
 // Completes @names in the message boxes of a room. The list of names is in the
 // page next to each box (.comp-suggest); the server decides what is in it.
 (() => {
+  if (window.__gtMentionsLoaded) return;
+  window.__gtMentionsLoaded = true;
   const trigger = /(^|[^\p{L}\p{N}_.@:-])@([\p{L}\p{N}._:-]*)$/u;
   const limit = 6;
   let current = null;
 
   const fold = (value) => value.toLowerCase().replace(/\s+/g, "-");
-  const listOf = (area) => area.closest("form")?.querySelector(".comp-suggest");
-  const areaOf = (target) =>
-    target instanceof HTMLTextAreaElement && target.name === "body" && listOf(target) ? target : null;
+  const listOf = (area) => (area.closest(".cx-w") || area.closest("form"))?.querySelector(".comp-suggest");
+  const areaOf = (target) => (target instanceof HTMLTextAreaElement && listOf(target) ? target : null);
 
   const state = (area) => {
     const before = area.value.slice(0, area.selectionStart);
@@ -40,15 +41,32 @@
     });
   };
 
+  // The words of the name an option can be found by: a person by their name, an agent by the person it
+  // works for and its own name, never by the machine or branch that stand in its label.
+  const wordsOf = (item) => {
+    const label = item.querySelector(".comp-suggest-name")?.textContent || "";
+    const text = item.dataset.agent === "1" ? `${item.dataset.owner || ""} ${label.split(" · ")[0]}` : label;
+    return text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  };
+  // A hit is a name that begins with what was typed: its handle, or the name from any of its words on.
+  const hits = (item, query) => {
+    if (!query) return true;
+    if (item.dataset.handle.startsWith(query)) return true;
+    const words = wordsOf(item);
+    return words.some((_, at) => words.slice(at).join("-").startsWith(query));
+  };
+
   const open = (area) => {
     const found = state(area);
     const list = listOf(area);
     if (!found || !list) return close();
     let shown = 0;
-    list.querySelectorAll("[role=option]").forEach((item, at) => {
+    const items = [...list.querySelectorAll("[role=option]")];
+    // People before agents, each in the order the page gave them; the first line is the one Enter takes.
+    items.sort((a, b) => (a.dataset.agent === "1") - (b.dataset.agent === "1")).forEach((item) => list.appendChild(item));
+    items.forEach((item, at) => {
       if (!item.id) item.id = `mention-option-${at}-${Math.random().toString(36).slice(2, 7)}`;
-      const name = fold(item.querySelector(".comp-suggest-name")?.textContent || "");
-      const hit = !found.query || item.dataset.handle.includes(found.query) || name.includes(found.query);
+      const hit = hits(item, found.query);
       item.hidden = !hit || shown >= limit;
       if (hit && !item.hidden) shown += 1;
     });
@@ -93,7 +111,19 @@
     }
   }, true);
 
+  // The name picker leaves a space behind the handle; a comma, full stop or the like typed straight
+  // after it takes that space back, so the pill is followed by the punctuation, not by a gap.
+  const tidyPunctuation = (event) => {
+    const area = event.target;
+    if (!(area instanceof HTMLTextAreaElement) || event.inputType !== "insertText" || !/^[,.;:!?]$/.test(event.data || "")) return;
+    const caret = area.selectionStart;
+    const before = area.value.slice(0, caret - 1);
+    if (!/(^|[^\p{L}\p{N}_.@:-])@[\p{L}\p{N}._:-]+ $/u.test(before)) return;
+    area.value = before.slice(0, -1) + area.value.slice(caret - 1);
+    area.setSelectionRange(caret - 1, caret - 1);
+  };
   document.addEventListener("input", (event) => {
+    tidyPunctuation(event);
     const area = areaOf(event.target);
     if (area) open(area); else close();
   });

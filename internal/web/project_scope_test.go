@@ -39,11 +39,15 @@ func projectCookieOf(resp *http.Response) *http.Cookie {
 // selectedOption is the project a page is narrowed to, as the header names it
 // behind the page title; "" means all projects.
 func selectedOption(page string) string {
-	m := regexp.MustCompile(`<a class="scope"[^>]*title="([^"]*)"`).FindStringSubmatch(page)
-	if m == nil {
-		return ""
+	if m := regexp.MustCompile(`<a class="scope"[^>]*title="([^"]*)"`).FindStringSubmatch(page); m != nil {
+		return m[1]
 	}
-	return m[1]
+	// The pages of one repository (knowledge, agents, review, context) carry its band instead of the crumb, and the
+	// search field of the header names the repository (REQ-687).
+	if m := regexp.MustCompile(`data-suggest-project="([^"]*)"`).FindStringSubmatch(page); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 func TestExplicitProjectIsKeptInAnSessionCookie(t *testing.T) {
@@ -198,5 +202,29 @@ func TestLogoutForgetsTheSelection(t *testing.T) {
 	resp := sameOriginPostForm(t, c, base+"/ui/logout", form)
 	if cookie := projectCookieOf(resp); cookie == nil || cookie.MaxAge >= 0 {
 		t.Errorf("logout must clear the project cookie, got %+v", cookie)
+	}
+}
+
+// REQ-690 AC-4 (R06): the header of an organization's page names the organization and nothing
+// the viewer picked earlier. The repository remembered from another page stood behind the
+// organization ("Default / deploy-hook") although it belongs to another one.
+func TestOrganizationPageDoesNotCarryTheRememberedRepositoryInItsHeader(t *testing.T) {
+	base, owner, _, _ := shellWeb(t)
+	c := remembering(t, base, owner)
+	_, page := fetchPage(t, c, base+"/ui/knowledge?project="+shellProject)
+	if selectedOption(page) != shellProject {
+		t.Fatalf("the repository is not remembered on a global page: %q", selectedOption(page))
+	}
+	status, org := fetchPage(t, c, base+"/ui/alpha")
+	if status != http.StatusOK {
+		t.Fatalf("organization page = %d", status)
+	}
+	head := org[strings.Index(org, `class="hcrumb"`):]
+	head = head[:strings.Index(head, "</div>")]
+	if !strings.Contains(head, `<span class="cur">Alpha</span>`) {
+		t.Fatalf("the header does not name the organization: %s", head)
+	}
+	if strings.Contains(head, `class="scope"`) {
+		t.Errorf("the header of the organization still carries the remembered repository: %s", head)
 	}
 }

@@ -118,10 +118,18 @@ func TestEnsureExcludedIsIdempotentAndNarrow(t *testing.T) {
 			t.Fatalf("%q muss genau einmal dastehen, war %d mal:\n%s", want, n, b)
 		}
 	}
-	for _, want := range []string{".ghosttree/edit/", ".ghosttree/edit" + tmpSuffix + "/"} {
+	for _, want := range []string{".ghosttree/edit/", ".ghosttree/edit" + tmpSuffix + "/", ".ghosttree/workflows/"} {
 		if countLines(string(b), want) != 1 {
-			t.Fatalf("document worktree exclusion %q missing:\n%s", want, b)
+			t.Fatalf("worktree exclusion %q missing:\n%s", want, b)
 		}
+	}
+	if !IsGeneratedPath(".ghosttree/workflows/melden.md") || !IsGeneratedPath(".ghosttree/workflows/.state.json") {
+		t.Fatal("the workflow worktree is not hidden from git status")
+	}
+	// It is written by people, so the mirror's fingerprint never counts it as
+	// regenerable.
+	if IsFingerprintGeneratedPath(".ghosttree/workflows/melden.md") {
+		t.Fatal("a workflow file is not something ghosttree can regenerate")
 	}
 	for _, want := range []string{
 		".ghosttree/snapshots/INDEX.md",

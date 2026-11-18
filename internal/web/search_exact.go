@@ -43,7 +43,7 @@ func (a *app) exactHits(l lang, pa *store.ProjectAccess, term links.NumberTerm, 
 			}
 			o := originOf(l, now, d.Request.CreatedAt, factsFor(a.store, "request", []int64{n})[n])
 			out = append(out, searchHit{Title: d.Request.Title, Sub: requestStateLabel(l, d.Request.State), Project: lastSegment(d.Request.Scope.Project), RefKind: "request", RefN: n,
-				Href: requestURL(n), Date: o.Date, Stamp: o.Stamp, Area: o.Area, Facet: "requests", Mark: searchKindMark["requests"]})
+				Href: requestURL(n), Date: o.Date, Stamp: o.Stamp, Area: o.Area, Facet: "requests", Mark: requestStateMark(d.Request.State)})
 		case links.KindIdea:
 			i, err := rd.GetIdea(n)
 			if err != nil || !inScope(i.Project) {
@@ -72,6 +72,14 @@ func (a *app) exactHits(l lang, pa *store.ProjectAccess, term links.NumberTerm, 
 			o := originOf(l, now, d.Pain.CreatedAt, factsFor(a.store, "pain", []int64{n})[n])
 			out = append(out, searchHit{Title: d.Pain.Title, Sub: label(l, painStateKeys, d.Pain.State), Project: lastSegment(d.Pain.Project), RefKind: "pain", RefN: n,
 				Href: painURL(n), Date: o.Date, Stamp: o.Stamp, Area: o.Area, Facet: "pains", Mark: searchKindMark["pains"]})
+		case links.KindDecision:
+			d, err := rd.GetDecision(n)
+			if err != nil || !inScope(d.Project) {
+				continue
+			}
+			o := originOf(l, now, d.CreatedAt, store.ObjectFacts{})
+			out = append(out, searchHit{Title: d.Question, Sub: label(l, workshopDecisionKeys, d.State), Project: lastSegment(d.Project), RefKind: "decision", RefN: n,
+				Href: decisionHref(d), Date: o.Date, Stamp: o.Stamp, Mark: "decide"})
 		case links.KindKnowledge:
 			k, err := rd.KnowledgeByID(n)
 			// The same rule as the knowledge search: a hit is an entry in force.

@@ -58,6 +58,10 @@ const (
 	// ResComment ist ein Kommentar an einem Issue, einer Idee oder einem Pain. Wer
 	// das Objekt lesen darf, liest ihn; geprüft wird zusätzlich das Objekt.
 	ResComment Resource = "comment"
+	// ResWorkflow are the workflows of a project and their runs (REQ-693):
+	// what ran, on which event, at what cost, with which full text. Members and
+	// up read them; guests never (costs and texts stay inside the team).
+	ResWorkflow Resource = "workflow"
 )
 
 // Action ist, was getan werden soll.
@@ -270,6 +274,13 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 			// Freigabe.
 			return rank >= 2
 		case ActApprove:
+			return rank >= 3
+		}
+	case ResWorkflow:
+		switch act {
+		case ActRead:
+			return rank >= 2
+		case ActEdit:
 			return rank >= 3
 		}
 	case ResSnapshot:
@@ -641,7 +652,7 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	if obj.HeldAuthor && act == ActRead {
 		return Decision{Allowed: true, Reason: "own entry, held in the project"}
 	}
-	d := Decision{Hidden: rank == 0 || act == ActRead, Strict: strictDenial(rank, act)}
+	d := Decision{Hidden: rank == 0 || act == ActRead, Strict: strictDenial(rank, res, act)}
 	if rank == 0 {
 		d.Reason = "not a member"
 	} else {
@@ -660,10 +671,14 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 //   - Wissen freigeben (verified) ohne Prüfrecht. Die Freigabe ist wie die eines
 //     Ablaufs ein Sicherheitsmerkmal: freigegebenes Wissen bekommen Agenten als
 //     geprüft geliefert.
+//   - Workflows ändern, anlegen und schalten (REQ-704): das Speichern selbst
+//     verlangt im Store immer Lead (SaveWorkflowDef). Ohne diese Zeile zeigte
+//     die Seite einem Mitglied im Log-Modus die Knöpfe, und erst das Speichern
+//     lehnte ab.
 //
 // Lesen bleibt im Log-Modus offen, wie bisher.
-func strictDenial(rank int, act Action) bool {
-	if act == ActVerify {
+func strictDenial(rank int, res Resource, act Action) bool {
+	if act == ActVerify || (res == ResWorkflow && act != ActRead) {
 		return true
 	}
 	return rank == 1 && act != ActRead
@@ -717,7 +732,7 @@ func (a *ProjectAccess) Check(project string, res Resource, act Action, obj Obje
 	if d.Hidden {
 		return ErrAccessNotFound
 	}
-	return ErrAccessForbidden
+	return a.roleNeeded(project, res, act, obj)
 }
 
 // -------- Hilfen je Ressource

@@ -28,7 +28,9 @@ import (
 type ideaFact struct{ Num, Title, Brief, Href string }
 
 type ideaPageView struct {
-	ID                 int64
+	ID int64
+	// Runs are the workflow runs the idea started (S02, usability run 5).
+	Runs               []wfRunRow
 	Title, Person, Age string
 	Actor              actorView
 	// First is the head of the bubble that opens the timeline.
@@ -53,10 +55,10 @@ type ideaPageView struct {
 	Edit *editPanel
 	// Workshop is the idea workshop (workshop.go); nil until someone worked the idea out.
 	Workshop *workshopView
-	// Images are the pictures on the idea itself (and on answers); CanAttach shows
-	// the form that adds one.
-	Images    []attachImage
-	CanAttach bool
+	// Attach is the box of the pictures on the idea itself (and on answers) with
+	// the form that adds one; HasImages says that the page has pictures to enlarge
+	// (also on the variants), so it carries the dialog.
+	Attach    *attachBox
 	HasImages bool
 }
 
@@ -119,14 +121,15 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 		v.Reactions = a.reactionsFor(r, l, store.ReactOnIdea, i.ID, s)
 	}
 	a.attachWorkshop(l, r, pa, ws, v)
-	v.Images = attachImages(l, ws.Attachments, func(m idea.AttachmentMeta) bool { return m.Owner != idea.OwnerVariant })
+	v.Attach = &attachBox{Images: attachImages(l, ws.Attachments, func(m idea.AttachmentMeta) bool { return m.Owner != idea.OwnerVariant }),
+		Action: "/ui/ideas/" + strconv.FormatInt(i.ID, 10) + "/attach", Owner: idea.OwnerIdea, Token: v.Token}
 	if ph := idea.EffectivePhase(i.State, i.Phase); interactive(r) && ph != idea.PhaseDismissed && ph != idea.PhaseDone && pa.CheckIdea(i, store.ActWork) == nil {
-		v.CanAttach = true
+		v.Attach.CanAttach = true
 	}
 	for _, m := range ws.Attachments {
 		v.HasImages = v.HasImages || m.Owner == idea.OwnerVariant
 	}
-	v.HasImages = v.HasImages || len(v.Images) > 0
+	v.HasImages = v.HasImages || len(v.Attach.Images) > 0
 	seen := map[string]bool{}
 	for _, p := range append([]string{i.Person}, peopleOf(ws)...) {
 		if p != "" && !seen[p] {
@@ -144,6 +147,8 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 	switch {
 	case commentResult(r, l) != nil:
 		v.Result = commentResult(r, l)
+	case labelAssignResult(r, l) != nil:
+		v.Result = labelAssignResult(r, l)
 	case r.URL.Query().Get("fail") != "":
 		v.Result = &requestResult{Text: l.msg(ideaFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
 	case r.URL.Query().Get("done") == "corrected":
@@ -155,6 +160,7 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 	case r.URL.Query().Get("done") == "state":
 		v.Result = &requestResult{Text: l.msg("ideas.result.state"), Kind: "done"}
 	}
+	v.Runs = subjectWorkflowRuns(l, a, pa, view.Href, remote, "idea", i.ID)
 	a.renderBrowser(w, r2, "idea", pageData{Title: i.Title, Project: remote, IdeaV: v})
 }
 
@@ -178,20 +184,29 @@ func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, edits []store.IdeaEdit, a
 	sentence := func(key string, args ...any) template.HTML {
 		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
 	}
+	// An agent that wrote a text is named as its owner's agent ("Pia’s Claude"), a person by name.
+	byWho := func(it tlItem, person string, agent bool) tlItem {
+		it.Who = person
+		if agent && person != "" {
+			it.withActor(byAgentActor(l, person, agent))
+		}
+		return it
+	}
 	for _, t := range ws.Raw {
 		if t.Revision <= 1 {
 			continue
 		}
-		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-raw-" + strconv.Itoa(t.Revision), Act: "idea.raw", Who: t.Person, Icon: "pencil", Head: sentence("ideas.ev.raw", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}})
+		all = append(all, datedItem{t.CreatedAt, byWho(tlItem{ID: "text-raw-" + strconv.Itoa(t.Revision), Act: "idea.raw", Icon: "pencil", Head: sentence("ideas.ev.raw", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}, t.Person, t.ByAgent)})
 	}
 	if s := ws.Summary; s != nil {
-		all = append(all, datedItem{s.CreatedAt, tlItem{ID: "text-summary", Act: "idea.summary", Who: s.Person, Icon: "list", Head: sentence("ideas.ev.summary"), Age: age(s.CreatedAt), Body: mdText(s.Message)}})
+		all = append(all, datedItem{s.CreatedAt, byWho(tlItem{ID: "text-summary", Act: "idea.summary", Icon: "list", Head: sentence("ideas.ev.summary"), Age: age(s.CreatedAt), Body: mdText(s.Message)}, s.Person, s.ByAgent)})
 	}
 	for _, t := range ws.ConceptRevs {
-		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Who: t.Person, Icon: "book", Head: sentence("ideas.ev.concept", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}})
+		all = append(all, datedItem{t.CreatedAt, byWho(tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Icon: "book", Head: sentence("ideas.ev.concept", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}, t.Person, t.ByAgent)})
 	}
 	for _, d := range ws.Decisions {
-		all = append(all, datedItem{d.CreatedAt, tlItem{ID: "decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Who: d.Person, Icon: "chat", Head: sentence("ideas.ev.decision") + " " + longPill(l, "decision", d.ID, "#workshop"), Age: age(d.CreatedAt)}})
+		asked := byWho(tlItem{ID: "asked-decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Icon: "chat", Head: sentence("ideas.ev.decision") + " " + longPill(l, "decision", d.ID, "#decision-"+strconv.FormatInt(d.ID, 10)), Age: age(d.CreatedAt)}, d.Person, d.OpenedByAgent)
+		all = append(all, datedItem{d.CreatedAt, asked})
 	}
 	for n, e := range edits {
 		all = append(all, datedItem{e.CreatedAt, ideaEditItem(l, e, nextTitle(edits, n, ws.Idea.Title), age(e.CreatedAt))})
@@ -347,7 +362,7 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.stampActor(r, actor.Comment, c.ID)
-		http.Redirect(w, r, commentPage(c)+"?comment=added#comment-"+strconv.FormatInt(c.ID, 10), http.StatusSeeOther)
+		http.Redirect(w, r, commentAddedURL(pa, c), http.StatusSeeOther)
 		return
 	}
 	i, err := pa.SetIdeaState(id, to, r.FormValue("reason"))
@@ -380,6 +395,8 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 // or the rule that refused the form).
 func ideaFailKey(code string) string {
 	switch code {
+	case "labels":
+		return "newissue.fail.labels"
 	case "reason_required":
 		return "ideas.result.reason_required"
 	case "pain_link":

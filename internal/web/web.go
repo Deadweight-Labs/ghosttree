@@ -13,8 +13,10 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
+	"github.com/Deadweight-Labs/ghosttree/internal/mail"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/secretbox"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/Deadweight-Labs/ghosttree/internal/version"
 )
@@ -43,6 +45,9 @@ type app struct {
 	oidcName      string           // display name of the identity provider; empty = unnamed
 	language      lang             // server language (GHOSTTREE_LANGUAGE); empty = en
 	explain       *explain.Service // "Kurz erklärt"; nil = off
+	aiBox         *secretbox.Box   // seals the keys of AI connections; nil without a server key
+	aiTester      AITester         // tests a connection with one minimal call; nil: the button is not offered
+	aiTests       aiTestLog        // the last outcome of a test per connection
 	gardenLimits  llmusage.Limits  // caps of the gardener, shown to administrators
 	prover        forge.Prover     // proof behind "connect GitHub"; nil = off
 	sourceFlows   *sourceFlows
@@ -58,6 +63,12 @@ type app struct {
 	logger        *slog.Logger // http_request lines and search failures; nil = slog.Default
 	// What the stored transcript lines take, for administrators.
 	transcripts transcriptStatsCache
+	// Mail and passwords (emailauth.go): the way out of the mail sending, the
+	// switch for e-mail + password sign-in, and the rate limits of both.
+	mailer        mail.Sender
+	mailWG        sync.WaitGroup
+	passwordLogin bool
+	guards        *emailGuards
 }
 type pageData struct {
 	// Flash is the note over the form a rejected form came back to; FormFailed is
@@ -67,72 +78,97 @@ type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
 	OIDC, Paste, NeedsName                                     bool
 	Admin, Approved, Interactive                               bool
-	DeviceMachine, DeviceRemote, DeviceStarted                 string
-	Tokens                                                     []tokenRow
-	UnusedTokens                                               int
-	UnusedForeign                                              bool
-	TokenResult                                                string
-	PullsV                                                     *pullsView
-	PullV                                                      *pullView
-	CommitsV                                                   *commitsView
-	BranchesV                                                  *branchesView
-	CommitV                                                    *commitView
-	IssuesV                                                    *issuesView
-	IssueV                                                     *requestView
-	SearchV                                                    *searchView
-	PainV                                                      *painView
-	KnowledgeV                                                 *knowledgeView
-	KnowledgeItemV                                             *knowledgeItemView
-	AgentModels                                                *agentModelsView
-	ReviewV                                                    *reviewView
-	HeldV                                                      *heldRow
-	ContextV                                                   *contextView
-	Sessions                                                   []store.Session
-	Chunks                                                     []store.Chunk
-	SessionID                                                  int64
-	SessionsV                                                  *sessionsView
-	SessionV                                                   *sessionView
-	Project, Preview                                           string
-	Coord                                                      coordPageView
-	Orgs                                                       orgsView
-	Invite                                                     bool
-	InviteV                                                    *joinView
-	ProviderName                                               string
-	Auth                                                       authView
-	Bootstrap, TokenOpen                                       bool
-	Shell                                                      shellView
-	Overview                                                   overviewView
-	Agents                                                     agentsView
-	Profile                                                    profileView
-	InboxV                                                     *inboxView
-	NewIssueV                                                  *newIssueView
-	IdeaV                                                      *ideaPageView
-	CodeV                                                      *repoCodeView
-	AgentV                                                     *agentPageView
-	OrgName                                                    string
-	OrgBand                                                    *bandView
-	OrgV                                                       *orgPageView
-	ErrV                                                       *errorView
-	RunbooksV                                                  *runbooksView
-	RunbookV                                                   *runbookPageView
-	DocsV                                                      *docsView
-	DocV                                                       *docPageView
-	RunbookFormV                                               *runbookFormView
-	SettingsV                                                  *repoSettingsView
-	FeaturesV                                                  *featuresView
-	FeatureV                                                   *featureView
-	MachineV                                                   *machinePageView
-	OrgMachinesV                                               *orgMachinesView
-	GardenTabV                                                 *gardenTabView
-	TasksV                                                     *tasksView
-	TaskV                                                      *taskPageView
-	PackagesV                                                  *packagesView
-	PackageV                                                   *packageView
+	// Notice is a note over the card of a page without a shell (the sign-in page).
+	Notice string
+	// DeviceSession: the session belongs to a device (ctx web or a pasted token),
+	// not to a person who signed in; DeviceName is its machine, when it has one.
+	DeviceSession                              bool
+	DeviceName                                 string
+	DeviceMachine, DeviceRemote, DeviceStarted string
+	Tokens                                     []tokenRow
+	UnusedTokens                               int
+	UnusedForeign                              bool
+	TokenResult                                string
+	PullsV                                     *pullsView
+	PullV                                      *pullView
+	CommitsV                                   *commitsView
+	BranchesV                                  *branchesView
+	CommitV                                    *commitView
+	IssuesV                                    *issuesView
+	IssueV                                     *requestView
+	SearchV                                    *searchView
+	PainV                                      *painView
+	KnowledgeV                                 *knowledgeView
+	KnowledgeItemV                             *knowledgeItemView
+	AgentModels                                *agentModelsView
+	ReviewV                                    *reviewView
+	HeldV                                      *heldRow
+	ContextV                                   *contextView
+	Sessions                                   []store.Session
+	Chunks                                     []store.Chunk
+	SessionID                                  int64
+	SessionsV                                  *sessionsView
+	SessionV                                   *sessionView
+	Project, Preview                           string
+	// MentionRepo is the project an @name in a text of this page is read in (ui-mentions.js).
+	MentionRepo string
+	// HashStrict: a #n in a text of this page is the issue or pull request of its repository, never a
+	// knowledge entry (the rooms, where nobody wrote the old #1970 for knowledge).
+	HashStrict           bool
+	Coord                coordPageView
+	Orgs                 orgsView
+	Invite               bool
+	InviteV              *joinView
+	ProviderName         string
+	Auth                 authView
+	Bootstrap, TokenOpen bool
+	Shell                shellView
+	Overview             overviewView
+	Agents               agentsView
+	Profile              profileView
+	InboxV               *inboxView
+	NewIssueV            *newIssueView
+	IdeaV                *ideaPageView
+	DecisionV            *decisionPageView
+	CodeV                *repoCodeView
+	AgentV               *agentPageView
+	OrgName              string
+	OrgBand              *bandView
+	OrgV                 *orgPageView
+	ErrV                 *errorView
+	RunbooksV            *runbooksView
+	RunbookV             *runbookPageView
+	WorkflowsV           *workflowsView
+	WorkflowRunV         *workflowRunView
+	WorkflowDefV         *workflowDefView
+	WorkflowFormV        *workflowFormView
+	DocsV                *docsView
+	DocV                 *docPageView
+	RunbookFormV         *runbookFormView
+	SettingsV            *repoSettingsView
+	FeaturesV            *featuresView
+	FeatureV             *featureView
+	MachineV             *machinePageView
+	OrgMachinesV         *orgMachinesView
+	GardenTabV           *gardenTabView
+	TasksV               *tasksView
+	TaskV                *taskPageView
+	PackagesV            *packagesView
+	PackageV             *packageView
 	// Styles and Scripts are the files of pageAssets for this page.
 	Styles, Scripts []string
 	// Repo is set on the pages of a repository (/ui/{org}/{repo}/…): the
 	// breadcrumb and the tab row above the page.
 	Repo *repoView
+	// Sign-in by mail (emailauth.go): Mail says the instance sends mail,
+	// PasswordLogin that e-mail + password is on, NoMailHint that the page names
+	// the ways back without mail. EmailV is the page "mail is on its way", EmailValue
+	// the address typed before a refusal.
+	Mail, PasswordLogin, NoMailHint bool
+	EmailV                          *emailAuthView
+	EmailValue                      string
+	ProfileMail                     *profileMailView
+	Welcome                         []welcomeView
 	// ServerVersion: Version dieses Servers (vX.Y.Z bzw. 0.1.0-dev+sha), leer = unbekannt.
 	ServerVersion string
 	// Refresh: Sekunden bis zum automatischen Neuladen (0 = nie).
@@ -160,9 +196,11 @@ func (h *appHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // uiHeaders: Skripte, Stile, Schriften und Bilder nur von dieser Herkunft,
 // keine fremden Ressourcen, nicht einbettbar. form-action bleibt offen, weil der
-// Weg zum Identitätsanbieter eine Weiterleitung ist.
+// Weg zum Identitätsanbieter eine Weiterleitung ist. frame-src 'self' erlaubt
+// den einen unsichtbaren Rahmen, in dem Mermaid zeichnet (mermaid_frame.go);
+// sonst bliebe die Richtlinie wie sie war, ohne 'unsafe-inline' und ohne fremden Host.
 func uiHeaders(h http.Header) {
-	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'self'; base-uri 'none'; frame-ancestors 'none'")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "strict-origin")
 	h.Set("Cache-Control", "no-store")
@@ -174,10 +212,12 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	for _, opt := range opts {
 		opt(a)
 	}
+	a.guards = newEmailGuards()
 	a.avatars = newAvatarCache(st, a.avatarClient, a.avatarDir)
 	serverVersionText.Store(version.Label(a.buildVersion))
 	mux := http.NewServeMux()
 	a.handle(mux, "GET /static/", a.staticFiles())
+	a.handle(mux, "GET /ui/mermaid-frame", a.mermaidFrame)
 	a.handle(mux, "GET /{$}", a.rootRedirect)
 	a.handle(mux, "GET /", a.unknownAddress)
 	a.handle(mux, "GET /favicon.ico", a.favicon)
@@ -187,6 +227,17 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/login/oidc/callback", a.oidcCallback)
 	a.handle(mux, "GET /ui/register", a.registerPage)
 	a.handle(mux, "POST /ui/register", a.requireSameOrigin(http.HandlerFunc(a.registerSubmit)))
+	a.handle(mux, "POST /ui/login/password", a.requireSameOrigin(http.HandlerFunc(a.passwordLoginSubmit)))
+	a.handle(mux, "GET /ui/password/forgot", a.forgotPage)
+	a.handle(mux, "POST /ui/mail/{purpose}/request", a.requireSameOrigin(http.HandlerFunc(a.mailRequest)))
+	a.handle(mux, "POST /ui/mail/{purpose}/code", a.requireSameOrigin(http.HandlerFunc(a.mailCode)))
+	a.handle(mux, "GET /ui/mail/{purpose}/link", a.mailLinkPage)
+	a.handle(mux, "POST /ui/mail/{purpose}/link", a.requireSameOrigin(http.HandlerFunc(a.mailLinkSubmit)))
+	a.handle(mux, "GET /ui/email/confirm", a.requirePerson(http.HandlerFunc(a.confirmPending)))
+	a.handle(mux, "POST /ui/email/confirm", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.confirmResend))))))
+	a.handle(mux, "POST /ui/profile/email", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileEmail))))))
+	a.handle(mux, "POST /ui/profile/password", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profilePassword))))))
+	a.handle(mux, "POST /ui/welcome/dismiss", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.welcomeDismiss))))))
 	a.handle(mux, "GET /ui/login/code", a.codePage)
 	a.handle(mux, "POST /ui/login/code", a.requireSameOrigin(http.HandlerFunc(a.codeSubmit)))
 	a.handle(mux, "GET /install.sh", a.installSh)
@@ -200,8 +251,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	})
 	a.handle(mux, "GET /join/pair", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairPage))))
 	a.handle(mux, "GET /join/pair/state", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairState))))
-	a.handle(mux, "POST /join/pair", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairCreate))))))
-	a.handle(mux, "POST /join/pair/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairDecide))))))
+	a.handle(mux, "POST /join/pair", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairCreate)))))))
+	a.handle(mux, "POST /join/pair/decide", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairDecide)))))))
 	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
 	a.handle(mux, "POST /join/{code}/signout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.joinSignOut)))))
 	a.handle(mux, "POST /ui/logout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.logout)))))
@@ -213,7 +264,10 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/reactions", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reactionToggle))))))
 	a.handle(mux, "POST /ui/comments/{id}/delete", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.commentDelete))))))
 	a.handle(mux, "GET /ui/refs", a.requirePerson(http.HandlerFunc(a.refsLookup)))
+	a.handle(mux, "GET /ui/mentions", a.requirePerson(http.HandlerFunc(a.mentionsLookup)))
+	a.handle(mux, "POST /ui/inbox/mention-read", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxMentionRead))))))
 	a.handle(mux, "POST /ui/searches", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.searchSave))))))
+	a.handle(mux, "POST /ui/inbox/mention-reply", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxMentionReply))))))
 	a.handle(mux, "POST /ui/inbox/reply", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxReply))))))
 	a.handle(mux, "POST /ui/inbox/done", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxDone))))))
 	a.handle(mux, "GET /ui/overview", a.requirePerson(http.HandlerFunc(a.overviewPage)))
@@ -237,7 +291,25 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	for suffix, h := range map[string]http.HandlerFunc{"create": a.labelCreate, "{id}/update": a.labelUpdate, "{id}/delete": a.labelDelete} {
 		a.handle(mux, "POST /ui/labels/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
+	for suffix, h := range map[string]http.HandlerFunc{
+		"create": a.packageCreate, "{id}/update": a.packageUpdate, "{id}/state": a.packageState, "{id}/add": a.packageAdd, "{id}/remove": a.packageRemove,
+	} {
+		a.handle(mux, "POST /ui/packages/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+	}
+	for suffix, h := range map[string]http.HandlerFunc{
+		"create": a.featureCreate, "{id}/edit": a.featureEdit, "{id}/link": a.featureLinkAdd, "{id}/unlink": a.featureLinkRemove,
+	} {
+		a.handle(mux, "POST /ui/features/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+	}
+	a.handle(mux, "POST /ui/labels/make", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.labelMake))))))
 	a.handle(mux, "POST /ui/runbooks/write", a.requirePerson(a.requireInteractive(limitBodyN(maxRunbookForm, a.requireCSRF(http.HandlerFunc(a.runbookWrite))))))
+	a.handle(mux, "POST /ui/workflows/visual", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowVisual))))))
+	a.handle(mux, "POST /ui/workflows/check", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowCheck))))))
+	a.handle(mux, "POST /ui/workflows/save", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowSave))))))
+	a.handle(mux, "POST /ui/workflows/template", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowFromTemplate))))))
+	a.handle(mux, "POST /ui/workflows/enabled", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowEnable))))))
+	a.handle(mux, "POST /ui/workflows/undo", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowUndo))))))
+	a.handle(mux, "POST /ui/workflows/rerun", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowRerun))))))
 	a.handle(mux, "POST /ui/labels/assign", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.labelAssign))))))
 	a.registerPainTaskPages(mux)
 	a.handle(mux, "GET /ui/search", a.requirePerson(http.HandlerFunc(a.searchPage)))
@@ -282,8 +354,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/coord/group/leave", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordLeaveGroup)))))
 	a.handle(mux, "POST /ui/coord/agent/control", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.coordAgentControl))))))
 	a.handle(mux, "GET /ui/device", a.requirePerson(http.HandlerFunc(a.devicePage)))
-	a.handle(mux, "POST /ui/device", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceLookup))))))
-	a.handle(mux, "POST /ui/device/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceDecide))))))
+	a.handle(mux, "POST /ui/device", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceLookup)))))))
+	a.handle(mux, "POST /ui/device/decide", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceDecide)))))))
 	a.handle(mux, "GET /ui/account/tokens", a.requirePerson(http.HandlerFunc(a.tokensPage)))
 	a.handle(mux, "POST /ui/account/tokens/revoke", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokenRevoke)))))
 	a.handle(mux, "POST /ui/account/tokens/revoke-unused", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokensRevokeUnused)))))
@@ -305,11 +377,18 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		"/ui/orgs/source/connect": a.orgSourceConnect, "/ui/orgs/source/add": a.orgSourceAdd,
 		"/ui/orgs/source/remove": a.orgSourceRemove, "/ui/orgs/source/import": a.orgSourceImport,
 		"/ui/orgs/prefix/visibility": a.orgPrefixVisibility, "/ui/orgs/follow": a.orgFollowGitHub,
-		"/ui/orgs/garden": a.orgGardenSave, "/ui/gardener/undo": a.gardenAutoUndo,
+		"/ui/orgs/garden": a.orgGardenSave, "/ui/orgs/workflows": a.orgWorkflowsSave, "/ui/orgs/workflow-policy": a.orgWorkflowPolicySave, "/ui/gardener/undo": a.gardenAutoUndo,
 		"/ui/handover": a.handoverConsent, "/ui/orgs/takeover": a.handoverTakeOver,
-		"/ui/orgs/assign": a.orgAssign,
+		"/ui/orgs/assign": a.orgAssign, "/ui/orgs/member/login-link": a.orgMemberLoginLink,
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+	}
+	// AI connections (REQ-694): only from an interactive session, like the rest of the settings.
+	for path, h := range a.aiPOST() {
+		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+		// A refused form is drawn at the address it was sent to; reloading that
+		// page (or opening the address) leads back to the section, not to an error.
+		a.handle(mux, "GET "+path, a.requirePerson(http.HandlerFunc(aiSectionRedirect)))
 	}
 	for path, h := range map[string]http.HandlerFunc{
 		"/ui/orgs/accept": a.orgAccept,
@@ -351,11 +430,17 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	l := a.langFor(r)
 	principal := browserPrincipal(r)
 	data.Person = principal.Label
+	a.rememberRepoOrg(w, r)
 	data.CSRFToken = csrfOf(r)
 	data.Interactive = interactive(r)
+	if !data.Interactive && principal.TokenID != 0 {
+		data.DeviceSession, data.DeviceName = true, principal.Machine
+	}
 	data.ServerVersion = version.Label(a.buildVersion)
 	data.Shell = a.shellFor(r, name)
 	data.Repo = repoFrom(r)
+	data.MentionRepo = mentionRepoOf(data)
+	data.HashStrict = name == "coord"
 	data.Styles, data.Scripts = pageAssets[name].CSS, pageAssets[name].JS
 	switch name {
 	case "inbox":
@@ -479,6 +564,13 @@ func (a *app) accessDenied(w http.ResponseWriter, r *http.Request, err error) bo
 	case err == nil:
 		return false
 	case errors.Is(err, store.ErrAccessForbidden):
+		// The page or the form says which role it needs and whom to ask
+		// (REQ-704); the wrapper (errorPageWriter) takes the sentence over.
+		if need := roleNeededOf(err); need != nil {
+			w.Header().Set(rejectHeader, rejectRole)
+			http.Error(w, roleNeededText(a.langFor(r), need), http.StatusForbidden)
+			return true
+		}
 		http.Error(w, "forbidden", http.StatusForbidden)
 	default:
 		http.NotFound(w, r)
@@ -536,6 +628,12 @@ const (
 	webAdmin webClass = "admin"
 )
 
+func init() {
+	for path := range (&app{}).aiPOST() {
+		webRoutes["GET "+path] = webAccount
+	}
+}
+
 var webRoutes = map[string]webClass{
 	"GET /static/":                          webPublic,
 	"GET /install.sh":                       webPublic,
@@ -557,6 +655,18 @@ var webRoutes = map[string]webClass{
 	"GET /ui/register":                      webPublic,
 	"POST /ui/register":                     webPublic,
 	"POST /ui/login/code":                   webPublic,
+	"POST /ui/login/password":               webPublic,
+	"GET /ui/password/forgot":               webPublic,
+	"POST /ui/mail/{purpose}/request":       webPublic,
+	"POST /ui/mail/{purpose}/code":          webPublic,
+	"GET /ui/mail/{purpose}/link":           webPublic,
+	"POST /ui/mail/{purpose}/link":          webPublic,
+	"GET /ui/email/confirm":                 webAccount,
+	"POST /ui/email/confirm":                webAdmin,
+	"POST /ui/profile/email":                webAdmin,
+	"POST /ui/profile/password":             webAdmin,
+	"POST /ui/welcome/dismiss":              webAdmin,
+	"POST /ui/orgs/member/login-link":       webAdmin,
 	"GET /{$}":                              webPublic,
 	"GET /":                                 webPublic,
 	"GET /favicon.ico":                      webPublic,
@@ -564,11 +674,14 @@ var webRoutes = map[string]webClass{
 	"GET /ui/inbox":                         webAccount,
 	"POST /ui/searches":                     webProject,
 	"GET /ui/refs":                          webProject,
+	"GET /ui/mentions":                      webProject,
+	"POST /ui/inbox/mention-read":           webProject,
 	"POST /ui/comments/{id}/edit":           webProject,
 	"POST /ui/comments/{id}/delete":         webProject,
 	"POST /ui/reactions":                    webProject,
 	"POST /ui/ideas/{id}/state":             webProject,
 	"POST /ui/issues/create":                webProject,
+	"POST /ui/inbox/mention-reply":          webProject,
 	"POST /ui/inbox/reply":                  webCoord,
 	"POST /ui/inbox/done":                   webCoord,
 	"GET /ui/{a}":                           webAccount,
@@ -663,6 +776,18 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/follow":                  webAdmin,
 	"POST /ui/orgs/assign":                  webAdmin,
 	"POST /ui/orgs/garden":                  webAdmin,
+	"POST /ui/orgs/workflows":               webAdmin,
+	"POST /ui/orgs/workflow-policy":         webAdmin,
+	"POST /ui/orgs/ai/connection":           webAdmin,
+	"POST /ui/orgs/ai/connection/delete":    webAdmin,
+	"POST /ui/orgs/ai/connection/test":      webAdmin,
+	"POST /ui/orgs/ai/alias":                webAdmin,
+	"POST /ui/orgs/ai/alias/delete":         webAdmin,
+	"POST /ui/orgs/ai/cap":                  webAdmin,
+	"POST /ui/orgs/ai/lend":                 webAdmin,
+	"POST /ui/orgs/ai/loan/revoke":          webAdmin,
+	"POST /ui/orgs/ai/release":              webAdmin,
+	"POST /ui/orgs/ai/grant":                webAdmin,
 	"POST /ui/gardener/undo":                webAdmin,
 	"POST /ui/handover":                     webAdmin,
 	"POST /ui/orgs/takeover":                webAdmin,
@@ -681,11 +806,28 @@ var webRoutes = map[string]webClass{
 	"POST /ui/pains/{id}/correct": webAdmin,
 	"POST /ui/ideas/{id}/correct": webProject,
 
-	"POST /ui/labels/create":      webAdmin,
-	"POST /ui/labels/{id}/update": webAdmin,
-	"POST /ui/labels/{id}/delete": webAdmin,
-	"POST /ui/labels/assign":      webAdmin,
-	"POST /ui/runbooks/write":     webAdmin,
+	"POST /ui/labels/create":        webAdmin,
+	"POST /ui/labels/{id}/update":   webAdmin,
+	"POST /ui/labels/{id}/delete":   webAdmin,
+	"POST /ui/labels/assign":        webAdmin,
+	"POST /ui/packages/create":      webAdmin,
+	"POST /ui/labels/make":          webAdmin,
+	"POST /ui/features/create":      webAdmin,
+	"POST /ui/features/{id}/edit":   webAdmin,
+	"POST /ui/features/{id}/link":   webAdmin,
+	"POST /ui/features/{id}/unlink": webAdmin,
+	"POST /ui/packages/{id}/update": webAdmin,
+	"POST /ui/packages/{id}/state":  webAdmin,
+	"POST /ui/packages/{id}/add":    webAdmin,
+	"POST /ui/packages/{id}/remove": webAdmin,
+	"POST /ui/runbooks/write":       webAdmin,
+	"POST /ui/workflows/save":       webAdmin,
+	"POST /ui/workflows/visual":     webAdmin,
+	"POST /ui/workflows/check":      webProject,
+	"POST /ui/workflows/enabled":    webAdmin,
+	"POST /ui/workflows/template":   webAdmin,
+	"POST /ui/workflows/undo":       webAdmin,
+	"POST /ui/workflows/rerun":      webAdmin,
 }
 
 // handle registriert eine Route und bricht ab, wenn sie nicht klassifiziert ist.

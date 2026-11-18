@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -20,16 +21,45 @@ type orgMemberRow struct {
 	// down nor leave. NoProject: a member without a role in any project of the
 	// organization, shown to owners with a way to add one.
 	SoleOwner, NoProject bool
+	// LoginLink is the one-time sign-in link an owner made for this member, still
+	// to copy (REQ-676); CanLoginLink says the owner may make one.
+	LoginLink    string
+	CanLoginLink bool
 	// Service: an account that is no person (a background account set up
 	// for the organization); the list says so.
 	Service bool
+	// Projects are the person's roles in the projects of the organization the
+	// viewer sees, each with the form to change it where the viewer may
+	// (REQ-704): the member list is the one place for every role of a person.
+	Projects []memberProjectRole
+}
+
+// memberProjectRole is one project role in a member's row.
+type memberProjectRole struct {
+	projectRoleRow
+	Remote, Short string
 }
 
 // inviteRow is an invitation with, for its creator while it is open, the link.
 type inviteRow struct {
 	store.Invitation
 	URL string
+	// Mail is what became of the mail of an invitation whose link is still held;
+	// Subject is whom it is for (address, project or "single-use link").
+	Mail    inviteMail
+	Subject string
+	// Named: the row names the person who accepted, not the target.
+	Named string
 }
+
+// guestOrgRow is an organization the viewer is a guest of, with the projects
+// shared with them.
+type guestOrgRow struct {
+	Name     string
+	Projects []guestProjectRow
+}
+
+type guestProjectRow struct{ Remote, Href string }
 
 // projectRoleRow ist ein Organisationsmitglied mit seiner Rolle in einem Projekt.
 // Grantable sind die Rollen, die der Betrachter ihm geben darf; leer heißt,
@@ -42,6 +72,7 @@ type projectRoleRow struct {
 	Inherited          bool
 	Grantable          []string
 	Self               bool
+	RowID              string
 }
 
 type projectRolesView struct {
@@ -56,6 +87,11 @@ type projectRolesView struct {
 
 // orgsView sammelt, was die Org-Seite zeigt.
 type orgsView struct {
+	// Retention is how many days the full text of workflow runs stays; set
+	// only for an owner, who alone may change it (REQ-693).
+	Retention int
+	// Policy is the owner's policy for the workflows (REQ-695).
+	Policy    *wfPolicyView
 	Orgs      []store.Org
 	Selected  store.Org
 	Owner     bool
@@ -66,7 +102,18 @@ type orgsView struct {
 	Claimable []string // eigene, unbeanspruchte Remotes; nur für Owner
 	Roles     []projectRolesView
 	NewExpiry string
-	NewURL    string // Link der eben erstellten Einladung (?new=), nur für ihren Ersteller
+	// CanBind: an invitation can be bound to an address, because this server can
+	// confirm one (mail or an identity provider). Without it the form says so.
+	CanBind bool
+	NewURL  string // Link der eben erstellten Einladung (?new=), nur für ihren Ersteller
+	// NewMail is what became of its mail; NewNotice the sentence about it, empty
+	// when the mail went out.
+	NewMail   inviteMail
+	NewNotice string
+	// Open names the section that opens when the address names none ("members").
+	Open string
+	// GuestOf are the organizations the viewer is a guest of.
+	GuestOf []guestOrgRow
 	// InviteProjects are the projects an invitation can be for (those of the
 	// organization plus the owner's unclaimed ones); DefaultProject is the
 	// one preselected: the last one invited to, else the first.
@@ -81,6 +128,11 @@ type orgsView struct {
 	Notice      string
 	// NoticeBad: the notice reports a failure and is shown as one.
 	NoticeBad bool
+	// HitRow is the id of the row the last action changed (marked on the page);
+	// OpenRemote the project whose roles stay open after it.
+	HitRow, OpenRemote string
+	// NewFor is whom the invitation just made is for.
+	NewFor string
 	// NewOrg: the page shows only the form for a new organization.
 	NewOrg bool
 	// Explain is the administrator's block on "Kurz erklärt"; nil for anyone else.
@@ -89,6 +141,12 @@ type orgsView struct {
 	Garden *gardenAdminView
 	// Transcripts is the same for the stored transcripts; nil for anyone else.
 	Transcripts *transcriptsAdminView
+	// AI is the section "AI connections" of the namespace (REQ-694); AIServer
+	// the server's, for the instance admin.
+	AI       *aiView
+	AIServer *aiServerView
+	// AIForm is a connection form a refusal sends back, with what it found.
+	AIForm *aiFormView
 	// GardenSet is the gardener's settings section, for the owner (REQ-624).
 	GardenSet *gardenSettingsView
 	// Moved: the viewer's namespaces that had to yield their address to its
@@ -98,6 +156,27 @@ type orgsView struct {
 	// project is reassigned, an unknown remote decided (contested). Only here,
 	// from an interactive session; the API refuses both.
 	Assign []store.Org
+}
+
+// OpenInvites are the invitations still waiting; PastInvites the accepted,
+// revoked and expired ones, folded away: who accepted stands in the member
+// list already (REQ-704, P27).
+func (v orgsView) OpenInvites() []inviteRow {
+	return keep(v.Invites, 0, func(i inviteRow) bool { return i.Status == "pending" })
+}
+func (v orgsView) PastInvites() []inviteRow {
+	return keep(v.Invites, 0, func(i inviteRow) bool { return i.Status != "pending" })
+}
+
+// PastOpen: the last action changed a past invitation (a revoke), so the
+// folded list opens on it.
+func (v orgsView) PastOpen() bool {
+	for _, i := range v.PastInvites() {
+		if "invite-"+strconv.FormatInt(i.ID, 10) == v.HitRow {
+			return true
+		}
+	}
+	return false
 }
 
 // People are the members that are no guests, Guests the others.
@@ -114,7 +193,13 @@ func (a *app) orgsPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	key := r.URL.Query().Get("notice")
-	a.renderOrgs(w, r, http.StatusOK, orgsView{Notice: orgNotice(l, key), NoticeBad: key == "source_failed"}, r.URL.Query().Get("org"), "")
+	v := orgsView{Notice: orgNotice(l, key), NoticeBad: key == "source_failed"}
+	// The note of the action that led here names the person and the object; the
+	// generic text above stays for a link without one.
+	if n, ok := adminNotes.take(r.URL.Query().Get("done"), browserPrincipal(r).ID); ok {
+		v.Notice, v.HitRow, v.OpenRemote = n.Text, n.Row, n.Open
+	}
+	a.renderOrgs(w, r, http.StatusOK, v, r.URL.Query().Get("org"), "")
 }
 
 // orgNewPage is the form for a new organization. The "+" menu and the
@@ -145,12 +230,22 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	for _, o := range orgs {
 		if !o.Guest {
 			v.Orgs = append(v.Orgs, o)
+			continue
 		}
+		// The page says what a guest is in: the organization and the projects shared
+		// with them, each a way in.
+		g := guestOrgRow{Name: o.Name}
+		ps, _ := a.store.ListProjects(me, o.ID)
+		for _, p := range a.access(r).VisibleProjects(ps) {
+			g.Projects = append(g.Projects, guestProjectRow{Remote: p.Remote, Href: repoHref(p.Remote)})
+		}
+		v.GuestOf = append(v.GuestOf, g)
 	}
 	orgs = v.Orgs
 	v.Explain = a.explainAdminFor(r)
 	v.Garden = a.gardenAdminFor(r)
 	v.Transcripts = a.transcriptsAdminFor(r)
+	v.AIServer = a.aiServerFor(r, v.AIForm)
 	if interactive(r) && a.isAdmin(browserPrincipal(r)) {
 		v.Assign, _ = a.store.AllOwners()
 	}
@@ -159,19 +254,22 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			v.Selected = o
 		}
 	}
-	// Without a choice: the first organization, a personal namespace only when
-	// there is nothing else.
-	for _, o := range orgs {
-		if v.Selected.ID == 0 && !o.IsUser() {
-			v.Selected = o
-		}
-	}
+	// Without a choice: the one the viewer works in (the last used), else the first
+	// that holds a project; a personal namespace only when there is nothing else.
 	if v.Selected.ID == 0 && len(orgs) > 0 {
-		v.Selected = orgs[0]
+		v.Selected = a.pickOrg(r, orgs)
+	}
+	if v.Selected.ID != 0 && !v.NewOrg {
+		r = a.enterOrg(w, r, v.Selected.Slug)
 	}
 	if v.Selected.ID != 0 {
 		v.GardenSet = a.gardenSettingsFor(r, v.Selected)
+		v.AI = a.aiViewFor(r, v.Selected, v.AIForm)
 		v.Owner = v.Selected.Role == store.OrgOwner
+		if v.Owner {
+			v.Retention = a.store.WorkflowSettingsFor(v.Selected.ID).RetentionDays
+			v.Policy = a.wfPolicyViewOf(r, v.Selected, a.store.WorkflowPolicyFor(v.Selected.ID))
+		}
 		v.CanRename = v.Owner || a.isAdmin(browserPrincipal(r))
 		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me, a.store.AccessEnforced())
 		v.GuestLinks = a.store.AccessEnforced()
@@ -192,8 +290,15 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				continue
 			}
 			m.Account = store.NormalizeAccountName(m.Account)
-			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me, Initial: initialOf(m.Account),
-				SoleOwner: m.Role == store.OrgOwner && owners == 1, Service: m.Kind == store.AccountKindService})
+			row := orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me, Initial: initialOf(m.Account),
+				SoleOwner: m.Role == store.OrgOwner && owners == 1, Service: m.Kind == store.AccountKindService}
+			// An owner can hand a member a one-time sign-in link: the way back in
+			// when the instance cannot send mail. Not for owners, services or oneself.
+			if v.Owner && interactive(r) && m.Role == store.OrgMember && !row.Service && m.AccountID != me && a.store.LoginLinkAllowed(v.Selected.ID, m.AccountID) {
+				row.CanLoginLink = true
+				row.LoginLink = a.loginLinkFor(r, me, m.AccountID)
+			}
+			v.Members = append(v.Members, row)
 		}
 		var orgAll []store.OrgMemberInfo
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
@@ -237,10 +342,12 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				rv.Rows = append(rv.Rows, projectRoleRow{
 					Account: store.NormalizeAccountName(m.Account), AccountID: m.AccountID, Role: m.Role, CanReview: m.CanReview,
 					Implicit: m.Implicit, Inherited: m.Inherited, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
+					RowID: rowAnchor("pr", p.Remote+"-"+m.AccountID),
 				})
 			}
 			v.Roles = append(v.Roles, rv)
 		}
+		v.Members = attachProjectRoles(v.Members, v.Roles, orgAll, gardener)
 		a.fillSources(r, &v, me)
 		if v.Owner {
 			v.Claimable, _ = a.store.ListClaimableProjects(me, v.Selected.ID)
@@ -270,9 +377,55 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	a.renderBrowser(w, r, "orgs", data)
 }
 
+// attachProjectRoles puts every project role of a person into their row of the
+// member list (REQ-704). A row of another person whose account the list hides
+// (a viewer without the owner role) is found by name. A person the viewer may
+// give a role to but does not find in the list (a lead and an organization
+// member without any role yet) gets a row of their own, from the organization's
+// list the project roles were built from.
+func attachProjectRoles(members []orgMemberRow, roles []projectRolesView, orgAll []store.OrgMemberInfo, gardener string) []orgMemberRow {
+	find := func(row projectRoleRow) int {
+		for i, m := range members {
+			if m.AccountID != "" && m.AccountID == row.AccountID {
+				return i
+			}
+		}
+		for i, m := range members {
+			if m.AccountID == "" && !m.Self && m.Account == row.Account {
+				return i
+			}
+		}
+		return -1
+	}
+	for _, rv := range roles {
+		for _, row := range rv.Rows {
+			i := find(row)
+			if i < 0 && len(row.Grantable) > 0 && row.AccountID != gardener {
+				for _, m := range orgAll {
+					if m.AccountID == row.AccountID && !m.Guest {
+						m.Account = store.NormalizeAccountName(m.Account)
+						members = append(members, orgMemberRow{OrgMemberInfo: m, Initial: initialOf(m.Account), Service: m.Kind == store.AccountKindService})
+						i = len(members) - 1
+						break
+					}
+				}
+			}
+			if i >= 0 {
+				members[i].Projects = append(members[i].Projects, memberProjectRole{projectRoleRow: row, Remote: rv.Remote, Short: shortName(rv.Remote)})
+			}
+		}
+	}
+	return members
+}
+
 // orgError übersetzt Store-Fehler in eine Meldung und einen Statuscode.
 func orgError(l lang, err error) (int, string) {
+	if status, msg, ok := aiError(l, err); ok {
+		return status, msg
+	}
 	switch {
+	case errors.Is(err, store.ErrLoginLinkScope):
+		return http.StatusForbidden, l.msg("adm.err.login_scope")
 	case errors.Is(err, store.ErrNotOrgOwner):
 		return http.StatusForbidden, l.msg("adm.err.owner_only")
 	case errors.Is(err, store.ErrOrgNotFound), errors.Is(err, store.ErrNotOrgMember):
@@ -321,6 +474,16 @@ func orgError(l lang, err error) (int, string) {
 		return http.StatusNotFound, l.msg("adm.err.source_missing")
 	case sourceError(err):
 		return http.StatusConflict, l.msg("adm.err.source_off")
+	case errors.Is(err, store.ErrNotGitHubOwner):
+		return http.StatusForbidden, l.msg("adm.err.github_owner")
+	case errors.Is(err, store.ErrProjectClaimed):
+		return http.StatusConflict, l.msg("adm.err.repo_claimed")
+	case errors.Is(err, store.ErrInvalidRemote):
+		return http.StatusBadRequest, l.msg("adm.err.remote")
+	}
+	var contested *store.ContestedError
+	if errors.As(err, &contested) {
+		return http.StatusConflict, l.msg("adm.err.contested")
 	}
 	return http.StatusInternalServerError, l.msg("adm.err.generic")
 }
@@ -355,6 +518,12 @@ func orgNotice(l lang, key string) string {
 		return l.msg("adm.notice.project")
 	case "garden":
 		return l.msg("gardener.saved")
+	case "workflows":
+		return l.msg("wf.retention.saved")
+	case "workflow_policy":
+		return l.msg("wf.policy.saved")
+	case "ai", "ai_server":
+		return l.msg("ai.saved")
 	case "moved":
 		return l.msg("adm.notice.moved")
 	case "joined":
@@ -393,6 +562,41 @@ func orgRedirect(w http.ResponseWriter, r *http.Request, slug, notice string) {
 	http.Redirect(w, r, "/ui/orgs?"+q.Encode()+noticeAnchor(notice), http.StatusSeeOther)
 }
 
+// orgDone goes back to the settings with the note of what was done: the page
+// shows it once, marks the row that changed and opens its section.
+func (a *app) orgDone(w http.ResponseWriter, r *http.Request, slug, notice string, n doneNote) {
+	q := url.Values{"org": {slug}, "done": {adminNotes.put(browserPrincipal(r).ID, n)}}
+	frag := noticeAnchor(notice)
+	if n.Row != "" {
+		frag = "#" + n.Row
+	}
+	http.Redirect(w, r, "/ui/orgs?"+q.Encode()+frag, http.StatusSeeOther)
+}
+
+// orgMemberName is the shown name of a member of the organization, the account
+// itself when it is none.
+func (a *app) orgMemberName(orgID int64, account string) string {
+	members, _ := a.store.ListOrgMembers(orgID)
+	for _, m := range members {
+		if m.AccountID == account {
+			return store.NormalizeAccountName(m.Account)
+		}
+	}
+	return account
+}
+
+// inviteSubject says whom an invitation is for: the project of a guest link, the
+// address it is bound to, else "single-use link".
+func inviteSubject(l lang, inv store.Invitation) string {
+	switch {
+	case inv.ProjectRemote != "":
+		return inv.ProjectRemote
+	case inv.Email != "":
+		return inv.Email
+	}
+	return l.msg("adm.invite.open_link")
+}
+
 // noticeAnchor names the section of the settings a notice belongs to, so that
 // the page opens there and not on "General".
 func noticeAnchor(notice string) string { return noticeSection[notice] }
@@ -402,24 +606,34 @@ func noticeAnchor(notice string) string { return noticeSection[notice] }
 var noticeSection = map[string]string{
 	"source_added": "#sources", "source_failed": "#sources", "source_proved": "#sources", "source_removed": "#sources", "imported": "#sources", "follow": "#sources", "assigned": "#projects",
 	"visibility": "#projects", "project": "#projects", "moved": "#projects", "project_created": "#projects",
-	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener",
+	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener", "workflows": "#workflows", "workflow_policy": "#workflows", "ai": "#ai", "ai_server": "#ai-server",
 }
 
 // fillInvites lists the organization's invitations with the links their
 // creator may still copy, the projects an invitation can be for, and the
 // freshly created invitation named by ?new=.
 func (a *app) fillInvites(r *http.Request, v *orgsView, me string) {
+	v.CanBind = a.oidc != nil || a.mailAvailable()
 	invs, _ := a.store.ListInvitations(me, v.Selected.ID)
 	newID, _ := strconv.ParseInt(r.URL.Query().Get("new"), 10, 64)
+	l := a.langFor(r)
 	for _, inv := range invs {
 		inv.AcceptedBy = store.NormalizeAccountName(inv.AcceptedBy)
-		row := inviteRow{Invitation: inv}
+		row := inviteRow{Invitation: inv, Subject: inviteSubject(l, inv)}
+		// An accepted invitation is the person who joined, with the role they got.
+		if inv.Status == "accepted" && inv.AcceptedBy != "" {
+			row.Named = inv.AcceptedBy
+		}
 		if inv.Status != "pending" {
 			a.inviteLinks.drop(inv.ID)
 		} else if link, ok := a.inviteLinks.get(inv.ID, me); ok {
-			row.URL = a.inviteURL(r, link.code, link.project)
+			row.URL, row.Mail = a.inviteURL(r, link.code, link.project), link.mail
+			if link.mail.To != "" {
+				row.Subject = link.mail.To
+			}
 			if inv.ID == newID {
-				v.NewURL, v.NewExpiry = row.URL, inv.ExpiresAt
+				v.NewURL, v.NewExpiry, v.NewFor = row.URL, inv.ExpiresAt, row.Subject
+				v.NewMail, v.NewNotice = link.mail, inviteNotice(l, link.mail)
 			}
 		}
 		v.Invites = append(v.Invites, row)
@@ -459,19 +673,38 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
+	// A refusal shows the members again: that is where the person was.
+	refuse := func(err error) {
+		status, msg := orgError(a.langFor(r), err)
+		a.renderOrgs(w, r, status, orgsView{Open: "members"}, o.Slug, msg)
+	}
 	days, _ := strconv.Atoi(r.FormValue("days"))
 	if days < 0 || days > int(store.MaxInvitationTTL/(24*time.Hour)) {
-		a.orgFailure(w, r, store.ErrInvalidInput)
+		refuse(store.ErrInvalidInput)
 		return
+	}
+	// The address is for the mail (and, for a member, binds the invitation): one
+	// that is no address is refused before anything is made, guests included.
+	email := strings.TrimSpace(r.FormValue("email"))
+	if email != "" {
+		if _, err := store.NormalizeEmail(email); err != nil {
+			refuse(store.ErrInvalidInput)
+			return
+		}
 	}
 	ttl := time.Duration(days) * 24 * time.Hour
 	me := browserPrincipal(r).ID
 	var code string
 	var inv store.Invitation
 	link := false
-	if project := strings.TrimSpace(r.FormValue("project")); project != "" {
-		// A project link is for guests only, whatever the form says: people who
-		// work with the organization are invited into it.
+	project := strings.TrimSpace(r.FormValue("project"))
+	if role := r.FormValue("role"); role == store.RoleGuest || (role == "" && project != "") {
+		// A project link is for guests only: people who work with the
+		// organization are invited into it as members.
+		if project == "" {
+			refuse(store.ErrInvalidInput)
+			return
+		}
 		link = true
 		if _, known := a.store.ProjectByRemote(project); known && r.FormValue("claim") != "1" {
 			code, inv, err = a.store.CreateProjectInvitation(me, o.ID, project, store.RoleGuest, ttl)
@@ -481,10 +714,10 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 			code, inv, err = a.store.ClaimAndInviteProject(me, o.ID, project, store.RoleGuest, ttl)
 		}
 	} else {
-		code, inv, err = a.store.CreateInvitation(me, o.ID, r.FormValue("email"), r.FormValue("role"), ttl)
+		code, inv, err = a.store.CreateInvitation(me, o.ID, email, r.FormValue("role"), ttl)
 	}
 	if err != nil {
-		a.orgFailure(w, r, err)
+		refuse(err)
 		return
 	}
 	until, perr := time.Parse(time.RFC3339, inv.ExpiresAt)
@@ -492,63 +725,95 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 		until = time.Now().Add(store.MaxInvitationTTL)
 	}
 	a.inviteLinks.put(inv.ID, me, code, link, until)
+	l := a.langFor(r)
+	target, role := o.Name, roleLabel(l, store.RoleMember)
+	if link {
+		target, role = shortName(inv.ProjectRemote), roleLabel(l, inv.ProjectRole)
+	}
+	a.inviteLinks.setMail(inv.ID, a.sendInviteMail(r, l, email, target, role, code, link, until))
 	// The slug is [a-z0-9-], so it needs no escaping, and the order stays fixed.
-	http.Redirect(w, r, "/ui/orgs?org="+o.Slug+"&new="+strconv.FormatInt(inv.ID, 10), http.StatusSeeOther)
+	// The fragment opens the members: without it the page opens at "General".
+	http.Redirect(w, r, "/ui/orgs?org="+o.Slug+"&new="+strconv.FormatInt(inv.ID, 10)+"#members", http.StatusSeeOther)
 }
 
 func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
+	me := browserPrincipal(r).ID
+	var id int64
+	subject := ""
 	if err == nil {
-		var id int64
 		if id, err = strconv.ParseInt(r.FormValue("id"), 10, 64); err != nil {
 			err = store.ErrInvalidInput
 		} else {
-			err = a.store.RevokeInvitation(browserPrincipal(r).ID, o.ID, id)
+			invs, _ := a.store.ListInvitations(me, o.ID)
+			for _, inv := range invs {
+				if inv.ID == id {
+					subject = inviteSubject(a.langFor(r), inv)
+				}
+			}
+			err = a.store.RevokeInvitation(me, o.ID, id)
 		}
 	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
-	if id, perr := strconv.ParseInt(r.FormValue("id"), 10, 64); perr == nil {
-		a.inviteLinks.drop(id)
-	}
-	orgRedirect(w, r, o.Slug, "revoked")
+	a.inviteLinks.drop(id)
+	a.orgDone(w, r, o.Slug, "revoked", doneNote{Text: a.langFor(r).msg("adm.done.revoked", subject), Row: "invite-" + strconv.FormatInt(id, 10)})
 }
 
 func (a *app) orgMemberRole(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
+	me := browserPrincipal(r).ID
+	account, role := r.FormValue("account"), r.FormValue("role")
+	name := ""
 	if err == nil {
-		err = a.store.SetOrgRole(browserPrincipal(r).ID, o.ID, r.FormValue("account"), r.FormValue("role"))
+		name = a.orgMemberName(o.ID, account)
+		err = a.store.SetOrgRole(me, o.ID, account, role)
 	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "role")
+	l := a.langFor(r)
+	text := l.msg("adm.done.member", name, o.Name)
+	switch {
+	case role == store.OrgOwner:
+		text = l.msg("adm.done.owner", name, o.Name)
+	case account == me:
+		text = l.msg("adm.done.member_self", o.Name)
+	}
+	a.orgDone(w, r, o.Slug, "role", doneNote{Text: text, Row: rowAnchor("m", account)})
 }
 
 func (a *app) orgMemberRemove(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
+	me := browserPrincipal(r).ID
+	account := r.FormValue("account")
+	name := ""
 	if err == nil {
-		err = a.store.RemoveOrgMember(browserPrincipal(r).ID, o.ID, r.FormValue("account"))
+		name = a.orgMemberName(o.ID, account)
+		err = a.store.RemoveOrgMember(me, o.ID, account)
 	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
-	if a.store.OrgRole(o.ID, browserPrincipal(r).ID) == "" {
-		http.Redirect(w, r, "/ui/orgs", http.StatusSeeOther)
+	l := a.langFor(r)
+	if a.store.OrgRole(o.ID, me) == "" {
+		token := adminNotes.put(me, doneNote{Text: l.msg("adm.done.left", o.Name)})
+		http.Redirect(w, r, "/ui/orgs?done="+token, http.StatusSeeOther)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "removed")
+	a.orgDone(w, r, o.Slug, "removed", doneNote{Text: l.msg("adm.done.removed", name, o.Name)})
 }
 
 func (a *app) orgProjectMove(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
 	if err == nil {
-		if _, err = a.store.MoveProject(browserPrincipal(r).ID, r.FormValue("remote"), r.FormValue("to")); err == nil {
-			orgRedirect(w, r, o.Slug, "moved")
+		var p store.Project
+		if p, err = a.store.MoveProject(browserPrincipal(r).ID, r.FormValue("remote"), r.FormValue("to")); err == nil {
+			a.orgDone(w, r, o.Slug, "moved", doneNote{Text: a.langFor(r).msg("adm.done.moved", p.Remote, p.Org)})
 			return
 		}
 	}
@@ -564,6 +829,16 @@ func (a *app) orgAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
+	if errors.Is(err, store.ErrInvitationEmail) {
+		// Say which address the invitation is for (masked) and who can issue a new one.
+		l := a.langFor(r)
+		msg := l.msg("adm.err.email")
+		if p, perr := a.store.PreviewJoin(code, a.store.AccessEnforced(), true); perr == nil && p.BoundEmail != "" {
+			msg = l.msg("auth.invitation_email.bound", store.MaskEmail(p.BoundEmail), firstNonEmpty(p.Inviter, l.msg("join.the_inviter")))
+		}
+		a.renderOrgs(w, r, http.StatusForbidden, orgsView{}, r.FormValue("org"), msg)
+		return
+	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
@@ -581,6 +856,11 @@ func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case !known || p.OrgID != o.ID:
 			err = store.ErrProjectNotFound
+		case r.FormValue("role") == "" && a.store.ProjectRole(p.Remote, r.FormValue("account")).Inherited:
+			// The choice "Member (organization default)" is the role the person has without any row:
+			// setting it changes nothing.
+			orgRedirect(w, r, o.Slug, "")
+			return
 		case r.FormValue("role") == "none":
 			err = a.store.RemoveProjectRole(browserPrincipal(r).ID, p.Remote, r.FormValue("account"), store.RoleViaWeb)
 		default:
@@ -591,7 +871,17 @@ func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "project")
+	l := a.langFor(r)
+	remote, account, role := r.FormValue("remote"), r.FormValue("account"), r.FormValue("role")
+	name := a.orgMemberName(o.ID, account)
+	text := l.msg("adm.done.prole", name, adminLabel(l, "prole", role), remote)
+	switch {
+	case role == "none":
+		text = l.msg("adm.done.prole_none", name, remote)
+	case r.FormValue("review") == "1":
+		text = l.msg("adm.done.prole_review", name, adminLabel(l, "prole", role), remote)
+	}
+	a.orgDone(w, r, o.Slug, "role", doneNote{Text: text, Row: rowAnchor("pr", remote+"-"+account)})
 }
 
 // grantable nennt die wählbaren Rollen, aber nur in einer interaktiven Sitzung:
@@ -660,20 +950,56 @@ func (a *app) orgAssign(w http.ResponseWriter, r *http.Request) {
 	orgRedirect(w, r, p.Org, "assigned")
 }
 
-// orgProjectCreate legt ein Projekt ohne Git an. Das darf jedes Mitglied der
-// Organisation; wer es anlegt, wird sein Owner.
+// orgProjectCreate legt ein Projekt der Organisation an. Das darf jedes Mitglied;
+// wer es anlegt, wird sein Owner. Das Feld nimmt einen Namen (ein Projekt ohne
+// Git) oder die Adresse eines Repos (https, ssh, github.com/owner/repo): dann
+// ist die Remote die ID des Projekts, und jeder Agent in einem Klon mit dieser
+// Remote arbeitet in genau diesem Projekt, ohne dass ein zweites entsteht.
 func (a *app) orgProjectCreate(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
-	name := strings.ToLower(strings.TrimSpace(r.FormValue("name")))
-	if _, err := a.store.CreateNamedProject(browserPrincipal(r).ID, name, o.Slug); err != nil {
+	input := strings.TrimSpace(r.FormValue("name"))
+	me := browserPrincipal(r).ID
+	switch remote, isRemote := projectInputRemote(input, o.Slug); {
+	case isRemote:
+		// Claiming a repository the organization already has is a no-op for the
+		// store; here it is a project that exists, and one of another organization
+		// is not this one's to make.
+		if known, ok := a.store.ProjectByRemote(remote); ok {
+			if known.OrgID != o.ID {
+				err = store.ErrProjectClaimed
+			} else {
+				err = store.ErrProjectNameTaken
+			}
+			break
+		}
+		_, err = a.store.ClaimProject(me, remote, o.Slug)
+	default:
+		_, err = a.store.CreateNamedProject(me, strings.ToLower(remote), o.Slug)
+	}
+	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
 	orgRedirect(w, r, o.Slug, "project_created")
+}
+
+// projectInputRemote reads what was typed into the project field: a repository
+// address (isRemote) or a name. A name that carries the slug of the organization
+// ("alpha/infra" in "alpha") is that name; anything else with a slash, a colon or
+// an at sign is an address.
+func projectInputRemote(input, orgSlug string) (value string, isRemote bool) {
+	if !strings.ContainsAny(input, "/:@") {
+		return input, false
+	}
+	remote := scope.NormalizeRemote(input)
+	if rest, ok := strings.CutPrefix(remote, strings.ToLower(orgSlug)+"/"); ok && scope.IsProjectName(rest) {
+		return rest, false
+	}
+	return remote, true
 }
 
 // orgRename benennt eine Organisation um. Das dürfen ihre Owner und ein

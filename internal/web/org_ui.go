@@ -117,7 +117,7 @@ func (a *app) orgBandFor(r *http.Request, org store.Org, current string) *bandVi
 		counts["services"], showServices = len(services), true
 	}
 	counts["rooms"] = counts["repos"]
-	counts["machines"] = len(a.orgMachines(r, org))
+	counts["machines"] = a.orgMachineCount(r, org)
 	if groups, _ := a.orgAgentGroups(r, org); groups != nil {
 		n := 0
 		for _, g := range groups {
@@ -172,16 +172,15 @@ func (a *app) orgAgentCards(r *http.Request, org store.Org) ([]agentCard, error)
 // orgPage renders one tab of an organisation.
 func (a *app) orgPage(w http.ResponseWriter, r *http.Request, org store.Org, tab string) {
 	l := a.langFor(r)
+	r = a.enterOrg(w, r, org.Slug)
 	v := &orgPageView{Org: org, Tab: tab}
 	switch tab {
 	case "repos":
-		for _, p := range a.orgProjects(r, org) {
-			name := p.Remote
-			if i := strings.LastIndex(name, "/"); i >= 0 {
-				name = name[i+1:]
-			}
+		projects := a.orgProjects(r, org)
+		names := orgProjectNames(projects)
+		for _, p := range projects {
 			pa := a.access(r)
-			row := orgRepoRow{Name: name, Href: repoHref(p.Remote), Shared: p.Shared, Remote: p.Remote, User: org.IsUser(),
+			row := orgRepoRow{Name: names[p.Remote], Href: repoHref(p.Remote), Shared: p.Shared, Remote: p.Remote, User: org.IsUser(),
 				Issues: orZero(a.openIssues(pa, p.Remote)), Knowledge: orZero(a.knowledgeCount(pa, p.Remote))}
 			if row.User {
 				row.Collaborators = a.store.ProjectCollaborators(p.Remote)
@@ -235,12 +234,10 @@ func (a *app) orgPage(w http.ResponseWriter, r *http.Request, org store.Org, tab
 			v.Services = append(v.Services, row)
 		}
 	case "rooms":
-		for _, p := range a.orgProjects(r, org) {
-			name := p.Remote
-			if i := strings.LastIndex(name, "/"); i >= 0 {
-				name = name[i+1:]
-			}
-			v.Rooms = append(v.Rooms, orgRoomRow{Name: l.msg("coord.general"), Repo: name, Href: pathWith("/ui/coord", "room", store.RoomKeyForProject(p.Remote))})
+		projects := a.orgProjects(r, org)
+		names := orgProjectNames(projects)
+		for _, p := range projects {
+			v.Rooms = append(v.Rooms, orgRoomRow{Name: l.msg("coord.general"), Repo: names[p.Remote], Href: pathWith("/ui/coord", "room", store.RoomKeyForProject(p.Remote))})
 		}
 	case "agents":
 		cards, _ := a.orgAgentCards(r, org)
@@ -325,7 +322,7 @@ func (v *orgPageView) fillAgentFilters(canConnect bool) {
 // userBandFor is the band of a person's own namespace, with the person's
 // picture when they linked GitHub.
 func (a *app) userBandFor(r *http.Request, org store.Org, current string) *bandView {
-	counts := map[string]int{"repos": len(a.orgProjects(r, org)), "machines": len(a.orgMachines(r, org))}
+	counts := map[string]int{"repos": len(a.orgProjects(r, org)), "machines": a.orgMachineCount(r, org)}
 	opts := orgBandOpts{Owner: org.Role == store.OrgOwner}
 	if n := a.gardenOpenCount(r, org); n >= 0 {
 		counts["gardener"], opts.Gardener = n, true
@@ -381,4 +378,15 @@ func (a *app) handoverTakeOver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/ui/"+url.PathEscape(p.Org), http.StatusSeeOther)
+}
+
+// orgProjectNames names the projects of one list: the last segment, and owner/name
+// where two of them end alike, so that two projects called deploy-hook (one of the
+// organization, one a repository on GitHub) can be told apart.
+func orgProjectNames(projects []store.Project) map[string]string {
+	remotes := make([]string, len(projects))
+	for i, p := range projects {
+		remotes[i] = p.Remote
+	}
+	return projectLabels(remotes)
 }

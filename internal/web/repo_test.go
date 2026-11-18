@@ -16,7 +16,13 @@ func TestRepoPageShowsBreadcrumbAndTabs(t *testing.T) {
 		if status != http.StatusOK {
 			t.Fatalf("%s: GET /ui/x/shell status=%d", name, status)
 		}
-		for _, want := range []string{`class="hcrumb"`, `class="org" href="/ui/x"`, `<a href="/ui/x/shell">shell</a>`, `data-tab="code" class="sel"><a href="/ui/x/shell" aria-current="page"`,
+		// The head names the organization that holds the project when the viewer is a member of it (REQ-687); a guest of
+		// the organization sees the owner the remote has on its host.
+		orgCrumb := `class="org" href="/ui/alpha">Alpha</a>`
+		if name == "guest" {
+			orgCrumb = `class="org" href="/ui/x">x</a>`
+		}
+		for _, want := range []string{`class="hcrumb"`, orgCrumb, `<a href="/ui/x/shell">shell</a>`, `data-tab="code" class="sel"><a href="/ui/x/shell" aria-current="page"`,
 			`data-tab="issues"><a href="/ui/x/shell/issues"`, `data-tab="knowledge"><a href="/ui/x/shell/knowledge"`, `href="https://github.com/x/shell"`} {
 			if !strings.Contains(page, want) {
 				t.Errorf("%s: repo page lacks %q", name, want)
@@ -77,16 +83,26 @@ func TestRepoRedirectsToDetailPagesAndRooms(t *testing.T) {
 func TestRepoOfAHiddenProjectAnswersLikeAnUnknownOne(t *testing.T) {
 	e := ovEnv(t)
 	rqMake(t, e.St, rqSpec{Title: "SECRET-REQ", Project: shellHiddenProject})
-	for name, c := range map[string]*http.Client{"guest": e.Guest, "member": e.Member} {
-		for _, tab := range []string{"", "/issues", "/pains", "/knowledge", "/sessions", "/rooms", "/issues/1"} {
-			hs, hp := fetchPage(t, c, e.Base+"/ui/x/hidden"+tab)
-			us, up := fetchPage(t, c, e.Base+"/ui/x/nothere"+tab)
-			if hs != http.StatusNotFound || us != http.StatusNotFound {
-				t.Errorf("%s: %q hidden=%d unknown=%d, want 404 for both", name, tab, hs, us)
-			}
-			if hp != up || strings.Contains(hp, "SECRET") || strings.Contains(hp, "x/hidden") || strings.Contains(hp, "/hidden") {
-				t.Errorf("%s: %q hidden and unknown project answer differently: %q vs %q", name, tab, hp, up)
-			}
+	// A guest cannot tell a project it has no role in from one that does not exist.
+	for _, tab := range []string{"", "/issues", "/pains", "/knowledge", "/sessions", "/rooms", "/issues/1"} {
+		hs, hp := fetchPage(t, e.Guest, e.Base+"/ui/x/hidden"+tab)
+		us, up := fetchPage(t, e.Guest, e.Base+"/ui/x/nothere"+tab)
+		if hs != http.StatusNotFound || us != http.StatusNotFound {
+			t.Errorf("guest: %q hidden=%d unknown=%d, want 404 for both", tab, hs, us)
+		}
+		if hp != up || strings.Contains(hp, "SECRET") || strings.Contains(hp, "x/hidden") || strings.Contains(hp, "/hidden") {
+			t.Errorf("guest: %q hidden and unknown project answer differently: %q vs %q", tab, hp, up)
+		}
+	}
+	// A member of the organization is told which project it is, why and whom to ask.
+	for _, tab := range []string{"", "/issues", "/pains", "/knowledge", "/sessions", "/rooms", "/issues/1"} {
+		hs, hp := fetchPage(t, e.Member, e.Base+"/ui/x/hidden"+tab)
+		us, _ := fetchPage(t, e.Member, e.Base+"/ui/x/nothere"+tab)
+		if hs != http.StatusForbidden || us != http.StatusNotFound {
+			t.Errorf("member: %q hidden=%d unknown=%d, want 403 and 404", tab, hs, us)
+		}
+		if strings.Contains(hp, "SECRET") || !strings.Contains(visibleText(hp), "x/hidden") {
+			t.Errorf("member: %q the 403 page leaks content or does not name the project", tab)
 		}
 	}
 	if status, _ := fetchPage(t, e.Owner, e.Base+"/ui/x/hidden"); status != http.StatusOK {

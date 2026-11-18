@@ -62,14 +62,17 @@ func safeRefHref(href string) string {
 	return href
 }
 
-// pillNum is the number a pill shows next to its icon: "#5" for the numbered kinds
-// that read like that on a code host, "KN-5" for knowledge, because a bare #5 means
-// a pull request there.
+// pillNum is the number a pill shows next to its icon: "#5" for an issue, which reads like
+// that on a code host, and the kind in front of every other number (PAIN-5, IDEA-2, DEC-2,
+// TASK-3, FEAT-9, KN-5), so that a chip says what it points at.
 func pillNum(prefix string, n int64) string {
-	if prefix == "KN" {
+	switch prefix {
+	case "KN":
 		return knref.Format(n)
+	case "REQ":
+		return "#" + strconv.FormatInt(n, 10)
 	}
-	return "#" + strconv.FormatInt(n, 10)
+	return prefix + "-" + strconv.FormatInt(n, 10)
 }
 
 // refHTML writes one identifier in its short form: icon and "#5", no frame. It is
@@ -261,6 +264,16 @@ func wrapWaiting(l lang, names, avatars []string) template.HTML {
 	return template.HTML(`<span class="` + cls + `" data-pc="` + html.EscapeString(string(card)) + `" aria-label="` + html.EscapeString(tip) + `" role="group"><span class="wstack">` + rings.String() + `</span><span class="wn">` + html.EscapeString(strings.Join(names, ", ")) + `</span></span>`)
 }
 
+// waitDot is the mark in a tab (the Tasks tab of a repository): a red dot, no face. The faces are other
+// people's and do not belong in the row of tabs; who is waited for stands in the title and for the reader of a screen.
+func waitDot(l lang, names []string) template.HTML {
+	if len(names) == 0 {
+		return ""
+	}
+	tip := html.EscapeString(l.msg("avatar.waiting", strings.Join(names, ", ")))
+	return template.HTML(`<span class="band-wait" role="img" title="` + tip + `" aria-label="` + tip + `"><span class="wdot"></span></span>`)
+}
+
 // avatarsWaiting is the stack for several people waited for.
 func avatarsWaiting(l lang, names []string) template.HTML {
 	avatars := make([]string, len(names))
@@ -278,6 +291,7 @@ func avatarHTML(l lang, kind, name string, waiting bool) template.HTML {
 func identityFuncs(l lang) template.FuncMap {
 	return template.FuncMap{
 		"waitStack": func(names []string) template.HTML { return waitStack(l, names) },
+		"waitDot":   func(names []string) template.HTML { return waitDot(l, names) },
 		"join":      strings.Join,
 		"ref":       func(kind string, n int64, href string) template.HTML { return refHTML(l, kind, n, href) },
 		"avatar":    func(kind, name string) template.HTML { return avatarHTML(l, kind, name, false) },

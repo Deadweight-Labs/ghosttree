@@ -16,7 +16,7 @@
 {{if .Next}}<a class="morelink" href="{{.Next}}">{{t "sessions.show_older"}}</a>{{end}}
 </section>
 {{else}}
-{{if .Empty}}<div class="box"><div class="box-empty">{{if .Guest}}<span>{{t "sessions.empty_guest"}}</span>{{else}}<span>{{t "sessions.empty"}}</span><a class="gbtn pri" href="/ui/overview?connect=1">{{t "sessions.connect"}}</a>{{end}}</div></div>
+{{if .Empty}}<div class="box"><div class="box-empty">{{if .Guest}}<span>{{t "sessions.empty_guest"}}</span>{{else}}<span>{{.EmptyHint.Text}}</span><a class="gbtn pri" href="{{.EmptyHint.Href}}">{{.EmptyHint.Action}}</a>{{end}}</div></div>
 {{else}}
 <form class="box" method="get" action="/ui/sessions"><div class="box-h lh"><span class="t">{{mi "term"}} {{t "sessions.n_sessions" .Total}}</span>{{if .LiveCount}}<span class="tab">{{mi "play"}}{{t "sessions.n_live" .LiveCount}}</span>{{end}}<span class="sp"></span>
 <div class="gfilters">{{range .Selects}}<select class="gfield quiet" name="{{.Name}}" aria-label="{{.Label}}" data-autosubmit><option value="">{{.Label}}</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}
@@ -38,9 +38,9 @@
 {{template "foot" .}}{{end}}
 
 {{define "session"}}{{template "head" .}}{{template "nav" .}}<main class="g2 sess sess-detail"><link rel="stylesheet" href="{{asset "ui-sessions.css"}}"><div class="wrap">
-{{with .SessionV}}{{if .Confirm}}
-<form class="callout sconfirm" method="post" action="{{.Confirm.Action}}">{{mi "tri"}}<div><p>{{.Confirm.Text}}</p><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="level" value="{{.Confirm.Level}}"><input type="hidden" name="confirm" value="1"><div class="gacts"><button class="gbtn pri">{{t "sessions.share_anyway"}}</button><a class="gbtn" href="{{.Confirm.Back}}">{{t "sessions.cancel"}}</a></div></div></form>
-{{else}}
+{{with .SessionV}}{{with .Confirm}}
+<div class="sdlg"><form class="callout sconfirm" method="post" action="{{.Action}}" role="alertdialog" aria-modal="true" aria-label="{{t "sessions.sharing"}}">{{mi "tri"}}<div><p>{{.Text}}</p><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="level" value="{{.Level}}"><input type="hidden" name="confirm" value="1"><div class="gacts"><button class="gbtn pri">{{if .Secrets}}{{t "sessions.share_anyway"}}{{else}}{{t "sessions.share_confirm"}}{{end}}</button><a class="gbtn" href="{{.Back}}">{{t "sessions.cancel"}}</a></div></div></form></div>
+{{end}}
 <div class="dhead"><div class="dtitle"><h1>{{.Title}}{{if .Machine}}{{if .MachineHref}}<a class="n" href="{{.MachineHref}}">{{.Kind}}@{{.Machine}}</a>{{else}}<span class="n">{{.Kind}}@{{.Machine}}</span>{{end}}{{end}}</h1>
 <div class="gacts">{{with .Share}}<form class="share" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><span class="muted">{{t "sessions.sharing"}}</span><nav class="seg" aria-label="{{t "sessions.sharing"}}">{{range .Levels}}<button name="level" value="{{.Value}}" title="{{.Title}}"{{if .Current}} class="on" aria-pressed="true"{{end}}>{{.Label}}</button>{{end}}</nav></form>{{end}}
 {{template "uicopy" copyPage}}</div></div>
@@ -48,7 +48,7 @@
 {{if .BackResults.Href}}<a class="back-results" href="{{.BackResults.Href}}">{{t "sessions.back"}} · {{.BackResults.Text}}</a>{{end}}
 <div class="dgrid"><div class="dmain">
 <div class="seshead"><nav class="utabs-nav plain" aria-label="{{t "sessions.views"}}"><ul class="utabs"><li{{if not .RawView}} class="sel"{{end}}><a href="{{.GhostHref}}"{{if not .RawView}} aria-current="page"{{end}}>{{mi "ghost"}}<span>{{t "sessions.ghost_view"}}</span></a></li><li{{if .RawView}} class="sel"{{end}}><a href="{{.RawHref}}"{{if .RawView}} aria-current="page"{{end}}>{{mi "term"}}<span>{{t "sessions.raw"}}</span><span class="counter">{{.Messages}}</span></a></li></ul></nav></div>
-{{if not .RawView}}{{template "uitimeline" .Side.Items}}{{else}}
+{{if not .RawView}}{{template "uitimeline" .Side.Items}}{{if .Side.Quiet}}<p class="muted ses-quiet">{{t "sessions.quiet"}} <a href="{{.RawHref}}">{{t "sessions.quiet_raw"}}</a></p>{{end}}{{else}}
 <div class="sd-tools">
 <form class="find" method="get" action="{{.FindAction}}" role="search"><label class="gfield">{{mi "search"}}<input id="find-q" type="search" name="q" value="{{.Q}}" placeholder="{{t "sessions.find_placeholder"}}" aria-label="{{t "sessions.find_label"}}" autocomplete="off" data-sessions-search></label>{{range .Hidden}}<input type="hidden" name="{{.Text}}" value="{{.Href}}">{{end}}
 {{if .HasFind}}<span class="find-nav">{{if .FindPos}}<span class="find-pos">{{.FindPos}}</span>{{else}}<span class="find-count">{{.FindCount}}</span>{{end}}{{if .PrevHref}}<a rel="prev" class="gbtn sm icon" href="{{.PrevHref}}" aria-label="{{t "sessions.prev_hit"}}">{{mi "chev"}}</a><a rel="next" class="gbtn sm icon fnav-next" href="{{.NextHref}}" aria-label="{{t "sessions.next_hit"}}">{{mi "chev"}}</a>{{end}}</span>{{end}}</form>
@@ -79,7 +79,7 @@
 {{if .Side.Made}}<div class="sblk"><h3>{{t "sessions.side.made"}}</h3><div class="v made">{{range .Side.Made}}<span>{{mi .Icon}}{{.Text}}</span>{{end}}</div></div>{{end}}
 {{if and .RawView .Prompts}}<div class="sblk prompts"><h3>{{t "sessions.prompts"}}</h3><ol>{{range .Prompts}}<li class="pr{{if .Current}} is-current{{end}}"><a href="{{.Href}}"><span class="pr-n">{{.N}}</span><span class="pr-t">{{.Text}}</span><span class="pr-m"><span>{{.Time}}</span><span>{{.Tools}}</span></span>{{if .Hits}}<span class="pr-hits">{{.Hits}}</span>{{end}}</a></li>{{end}}</ol>{{if .MorePrompts.Href}}<a class="pr-more" href="{{.MorePrompts.Href}}">{{.MorePrompts.Text}}</a>{{end}}</div>{{end}}
 </aside></div>
-{{end}}{{end}}
+{{end}}
 </div><script src="{{asset "sessions.js"}}"></script>
 {{template "foot" .}}{{end}}
 

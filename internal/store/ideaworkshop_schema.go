@@ -1,6 +1,10 @@
 package store
 
-import "database/sql"
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+)
 
 // ideaWorkshopSchema (REQ-611): Texte der Idee mit Fassungen, offene
 // Entscheidungen mit Varianten und Stimmen, Bild-Anhänge, Projekt-Policy. Alles
@@ -32,8 +36,8 @@ import "database/sql"
 // wird der Marker widerrufen (revoked_at), nie gelöscht.
 //
 // attachments: Bild-Anhänge als Blob in der Datenbank (höchstens 5 MB, geprüft),
-// gebunden an Idee oder Issue (subject) und an Idee, Antwort oder Variante
-// (owner). Rechte folgen dem Gegenstand.
+// gebunden an Idee, Issue oder Pain (subject) und an Idee, Antwort, Variante oder
+// den Gegenstand selbst (owner request, pain). Rechte folgen dem Gegenstand.
 const ideaWorkshopSchema = `
 CREATE TABLE IF NOT EXISTS idea_texts(
   idea_id INTEGER NOT NULL REFERENCES ideas(id) ON DELETE RESTRICT,
@@ -112,12 +116,17 @@ CREATE TABLE IF NOT EXISTS decision_policy(
   project TEXT PRIMARY KEY CHECK(project != ''),
   mode TEXT NOT NULL CHECK(mode IN ('rule','human')),
   set_by TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL);
+` + attachmentsSchema
+
+// attachmentsSchema ist die Tabelle der Anhänge samt Index, getrennt, weil
+// allowAttachmentSubjects sie auf einer älteren Datenbank neu baut.
+const attachmentsSchema = `
 CREATE TABLE IF NOT EXISTS attachments(
   id INTEGER PRIMARY KEY,
   project TEXT NOT NULL CHECK(project != ''),
-  subject_kind TEXT NOT NULL CHECK(subject_kind IN ('idea','request')),
+  subject_kind TEXT NOT NULL CHECK(subject_kind IN ('idea','request','pain')),
   subject_id INTEGER NOT NULL,
-  owner_kind TEXT NOT NULL CHECK(owner_kind IN ('idea','reply','variant')),
+  owner_kind TEXT NOT NULL CHECK(owner_kind IN ('idea','reply','variant','request','pain')),
   owner_ref TEXT NOT NULL DEFAULT '',
   mime TEXT NOT NULL CHECK(mime IN ('image/png','image/jpeg','image/webp')),
   bytes INTEGER NOT NULL CHECK(bytes > 0 AND bytes <= 5242880),
@@ -130,6 +139,24 @@ CREATE TABLE IF NOT EXISTS attachments(
 CREATE INDEX IF NOT EXISTS attachments_subject ON attachments(subject_kind, subject_id);
 `
 
+// ideaDiscussionClosureSchema: wer die Diskussion einer Idee beendet hat (DEC-46).
+// Eine Zeile je Abschluss; wird die Diskussion wieder geöffnet und erneut beendet,
+// kommt eine neue dazu, und jede löst ihr eigenes Ereignis idea.discussion_closed
+// aus. Ein Agent schließt nur mit dem Wort seines Menschen (said, Pflicht).
+const ideaDiscussionClosureSchema = `
+CREATE TABLE IF NOT EXISTS idea_discussion_closures(
+  id INTEGER PRIMARY KEY,
+  idea_id INTEGER NOT NULL REFERENCES ideas(id) ON DELETE RESTRICT,
+  person TEXT NOT NULL DEFAULT '',
+  account_id INTEGER NOT NULL DEFAULT 0,
+  by_agent INTEGER NOT NULL DEFAULT 0 CHECK(by_agent IN (0,1)),
+  session_ref TEXT NOT NULL DEFAULT '',
+  said TEXT NOT NULL DEFAULT '',
+  closed_at TEXT NOT NULL,
+  CHECK(by_agent = 0 OR trim(said) != ''));
+CREATE INDEX IF NOT EXISTS idea_discussion_closures_idea ON idea_discussion_closures(idea_id, id);
+`
+
 // ensureIdeaWorkshop legt die Tabellen und die zwei Spalten an, beliebig oft
 // aufrufbar. Er läuft nach ensureLabelsAndIdeas, denn ideas muss da sein.
 func ensureIdeaWorkshop(db *sql.DB) error {
@@ -139,8 +166,47 @@ func ensureIdeaWorkshop(db *sql.DB) error {
 	if _, err := db.Exec(ideaCoverageSchema); err != nil {
 		return err
 	}
+	if _, err := db.Exec(ideaDiscussionClosureSchema); err != nil {
+		return err
+	}
+	if err := allowAttachmentSubjects(db); err != nil {
+		return fmt.Errorf("attachments subjects: %w", err)
+	}
 	if err := ensureColumn(db, "ideas", "phase", `TEXT NOT NULL DEFAULT 'raw'`); err != nil {
 		return err
 	}
 	return ensureColumn(db, "ideas", "hint_shown", `INTEGER NOT NULL DEFAULT 0`)
+}
+
+// allowAttachmentSubjects erweitert die Prüfungen von attachments um den Gegenstand
+// pain und die Eigentümer request und pain (REQ-671). SQLite ändert eine CHECK-
+// Bedingung nicht; die Tabelle wird deshalb neu gebaut: gleiche Spalten, alle Zeilen
+// mit ihren Nummern und Bytes, danach der Index. Auf einer Datenbank, die pain schon
+// kennt, geschieht nichts.
+func allowAttachmentSubjects(db *sql.DB) error {
+	var ddl string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='attachments'`).Scan(&ddl); err != nil {
+		return err
+	}
+	if strings.Contains(ddl, "'pain'") {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`ALTER TABLE attachments RENAME TO attachments_old`,
+		`DROP INDEX IF EXISTS attachments_subject`,
+		attachmentsSchema,
+		`INSERT INTO attachments(id,project,subject_kind,subject_id,owner_kind,owner_ref,mime,bytes,width,height,sha256,alt,person,created_at,data)
+			SELECT id,project,subject_kind,subject_id,owner_kind,owner_ref,mime,bytes,width,height,sha256,alt,person,created_at,data FROM attachments_old`,
+		`DROP TABLE attachments_old`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

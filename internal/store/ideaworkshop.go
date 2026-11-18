@@ -1,10 +1,13 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
@@ -442,9 +445,31 @@ func humanOnly(what string) error {
 // Freigabe in derselben Transaktion ab (concept_changed), und der Marker hält genau
 // diese Fassung samt ihren Anforderungen. Bei anderen Wechseln zählt der Wert nicht.
 func (a *ProjectAccess) SetIdeaPhase(id int64, to string, actor idea.Actor, expectedRevision int) (idea.Idea, error) {
+	return a.SetIdeaPhaseSaid(id, to, actor, expectedRevision, "")
+}
+
+// SetIdeaPhaseSaid ist SetIdeaPhase mit dem Wort des Menschen: Die Diskussion
+// beenden (discussed, DEC-46) darf eine Person im Web, oder ein Agent, wenn sein
+// Mensch es ausdrücklich gesagt hat; humanSaid ist dann Pflicht und hält den
+// Wortlaut oder einen Verweis darauf fest. Der Abschluss nennt Person und, falls
+// so, den Agenten, und löst in derselben Transaktion idea.discussion_closed aus.
+// Bekannte Grenze: Ob der Mensch es wirklich gesagt hat, kann der Server nicht
+// prüfen; humanSaid wird nur auf Länge und Geheimnisse geprüft und steht offen
+// am Abschluss. Darum löst ein Abschluss nur nach einer Änderung an der Idee
+// wieder aus (commitIdeaDiscussed).
+func (a *ProjectAccess) SetIdeaPhaseSaid(id int64, to string, actor idea.Actor, expectedRevision int, humanSaid string) (idea.Idea, error) {
 	i, err := a.ideaFor(id, ActEdit)
 	if err != nil {
 		return idea.Idea{}, err
+	}
+	said := ""
+	if to == idea.PhaseDiscussed && actor.Agent {
+		if said, err = idea.CleanSaid(humanSaid); err != nil {
+			return idea.Idea{}, err
+		}
+		if err := refuseSecrets("human_said", said); err != nil {
+			return idea.Idea{}, err
+		}
 	}
 	if (to == idea.PhaseApproved || to == idea.PhaseDone || i.Phase == idea.PhaseApproved) && actor.Agent {
 		return idea.Idea{}, humanOnly("approving an idea, taking the approval back or marking it done,")
@@ -486,10 +511,128 @@ func (a *ProjectAccess) SetIdeaPhase(id int64, to string, actor idea.Actor, expe
 		}
 		return a.IdeaView(id)
 	}
+	if to == idea.PhaseDiscussed {
+		if err := a.st.commitIdeaDiscussed(id, i.Phase, i.Project, i.Title, actor, said); err != nil {
+			return idea.Idea{}, err
+		}
+		return a.IdeaView(id)
+	}
 	if err := a.st.commitIdeaPhase(id, i.Phase, to); err != nil {
 		return idea.Idea{}, err
 	}
 	return a.IdeaView(id)
+}
+
+// commitIdeaDiscussed beendet die Diskussion: Phase, Abschluss und Ereignis in
+// einer Transaktion. Der Schlüssel des Ereignisses trägt den Stand der
+// Diskussion (ideaDiscussionDigestTx), nicht die Nummer des Abschlusses: Ein
+// erneuter Abschluss löst nur aus, wenn sich die Idee seither geändert hat
+// (Text, Konzept, Entscheidungen, Kommentare). Wiederöffnen und Schließen ohne
+// Änderung startet keinen Lauf auf Kosten des Leads (KN-4825 m5); Phase und
+// Abschluss werden trotzdem festgehalten.
+func (s *Store) commitIdeaDiscussed(id int64, from, project, title string, actor idea.Actor, said string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{id, from, project, title, actor, said}, func(d *Store, p []any) error {
+			return d.commitIdeaDiscussed(p[0].(int64), p[1].(string), p[2].(string), p[3].(string), p[4].(idea.Actor), p[5].(string))
+		})
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	ts := now()
+	res, err := tx.Exec(`UPDATE ideas SET phase=?, updated_at=? WHERE id=? AND phase=? AND state<>'dismissed'`, idea.PhaseDiscussed, ts, id, from)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return requestdomain.NewRuleError("idea_changed", "the idea changed in the meantime", "read it again", nil)
+	}
+	agent := 0
+	if actor.Agent {
+		agent = 1
+	}
+	if _, err := tx.Exec(`INSERT INTO idea_discussion_closures(idea_id, person, account_id, by_agent, session_ref, said, closed_at) VALUES(?,?,?,?,?,?,?)`,
+		id, actor.Person, actor.AccountID, agent, actor.SessionRef, said, ts); err != nil {
+		return err
+	}
+	digest, err := ideaDiscussionDigestTx(tx, id)
+	if err != nil {
+		return err
+	}
+	ref := fmt.Sprintf("IDEA-%d", id)
+	data := map[string]string{"title": title, "closed_by": actor.Person}
+	if actor.Agent {
+		data["by_agent"] = "1"
+	}
+	if _, _, err := recordWorkflowEventTx(tx, WorkflowEventInput{Kind: EventIdeaDiscussionClosed, Project: project, SubjectKind: "idea", SubjectID: strconv.FormatInt(id, 10),
+		Data: data, Origin: OriginOfActor(actor.Person, actor.SessionRef, actor.Agent),
+		DedupeKey: fmt.Sprintf("%s:%s:%s", EventIdeaDiscussionClosed, ref, digest)}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ideaDiscussionDigestTx ist der Stand, über den eine Diskussion beendet wird:
+// Titel und Text der Idee, die neueste Fassung jedes Textteils (Rohtext,
+// Zusammenfassung, Konzept), die Entscheidungen samt Varianten und die
+// Kommentare. Fassungen und Ids wachsen nur, ein früherer Stand kehrt also nicht
+// wieder.
+func ideaDiscussionDigestTx(tx *sql.Tx, id int64) (string, error) {
+	h := sha256.New()
+	var title, body string
+	if err := tx.QueryRow(`SELECT title, body FROM ideas WHERE id=?`, id).Scan(&title, &body); err != nil {
+		return "", err
+	}
+	fmt.Fprintf(h, "idea\x00%s\x00%s\x00", title, body)
+	for _, q := range []string{
+		`SELECT 'text', part, MAX(revision), '', '', '' FROM idea_texts WHERE idea_id=? GROUP BY part ORDER BY part`,
+		`SELECT 'decision', id, state, COALESCE(chosen_variant_id,0), answer || char(0) || reason, updated_at FROM open_decisions WHERE subject_kind='idea' AND subject_id=? ORDER BY id`,
+		`SELECT 'variants', COUNT(*), COALESCE(MAX(v.id),0), '', '', '' FROM decision_variants v JOIN open_decisions d ON d.id=v.decision_id WHERE d.subject_kind='idea' AND d.subject_id=?`,
+		`SELECT 'comment', id, revision, deleted_at, '', '' FROM comments WHERE object_kind='idea' AND object_id=? ORDER BY id`,
+	} {
+		rows, err := tx.Query(q, id)
+		if err != nil {
+			return "", err
+		}
+		for rows.Next() {
+			var cols [6]sql.NullString
+			if err := rows.Scan(&cols[0], &cols[1], &cols[2], &cols[3], &cols[4], &cols[5]); err != nil {
+				rows.Close()
+				return "", err
+			}
+			for _, c := range cols {
+				fmt.Fprintf(h, "%s\x00", c.String)
+			}
+			h.Write([]byte{'\n'})
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))[:24], nil
+}
+
+// IdeaDiscussionClosure ist der letzte Abschluss der Diskussion einer Idee; nil,
+// solange niemand sie beendet hat.
+func (s *Store) IdeaDiscussionClosure(ideaID int64) (*idea.DiscussionClosure, error) {
+	if s.reader != nil {
+		return s.reader.IdeaDiscussionClosure(ideaID)
+	}
+	var c idea.DiscussionClosure
+	var agent int
+	err := s.db.QueryRow(`SELECT person, by_agent, session_ref, said, closed_at FROM idea_discussion_closures WHERE idea_id=? ORDER BY id DESC LIMIT 1`, ideaID).
+		Scan(&c.Person, &agent, &c.SessionRef, &c.Said, &c.At)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	c.ByAgent = agent == 1
+	return &c, nil
 }
 
 // ideaApproval ist der aktive Freigabe-Marker einer Idee.
@@ -649,6 +792,9 @@ type IdeaWorkshop struct {
 	// Affects sind die Features, die die Idee ändert, mit ihrer aktuellen Fassung
 	// (Ist) neben dem Konzept (Soll), soweit der Betrachter sie lesen darf (REQ-612).
 	Affects []IdeaFeature `json:"affects"`
+	// Closed ist, wer die Diskussion beendet hat (DEC-46); nur gesetzt, solange
+	// die Idee nicht wieder in Diskussion oder davor ist.
+	Closed *idea.DiscussionClosure `json:"discussion_closed,omitempty"`
 }
 
 // IdeaWorkshop liest die Idee mit Rohfassungen (ohne Text, eine Zeile je
@@ -687,6 +833,12 @@ func (a *ProjectAccess) IdeaWorkshop(id int64) (IdeaWorkshop, error) {
 	}
 	if w.Affects, err = a.IdeaAffects(id); err != nil {
 		return w, err
+	}
+	switch i.Phase {
+	case idea.PhaseDiscussed, idea.PhaseApproved, idea.PhaseBuilding, idea.PhaseDone:
+		if w.Closed, err = a.st.IdeaDiscussionClosure(id); err != nil {
+			return w, err
+		}
 	}
 	return w, nil
 }

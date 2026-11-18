@@ -16,13 +16,19 @@ import (
 // (TaskID), a mention is marked read with a POST (ReadRoom, ReadSeq); every
 // other action is a link.
 type inboxAction struct {
-	Label, Href string
-	Primary     bool
-	TaskID      int64
+	// Short is the word that stands beside the tick ("Done", "Read"); Label is the longer line
+	// for the tooltip and for screen readers.
+	Label, Short, Href string
+	Primary            bool
+	TaskID             int64
 	// AttentionID closes an open question, approval or blocker as seen.
 	AttentionID int64
-	ReadRoom    string
-	ReadSeq     int64
+	// MentionID marks a mention in a text (comment, issue, pain) as read.
+	MentionID int64
+	ReadRoom  string
+	ReadSeq   int64
+	// ReadThreads: reading the room also reads the mentions in its threads.
+	ReadThreads bool
 	// Token is the CSRF token of the form behind a POST action.
 	Token string
 }
@@ -41,10 +47,14 @@ type inboxRow struct {
 	Forms           bool
 	// Actor is who the row comes from, TaskN the number of its task, RequestID
 	// the issue it hangs on; Live is the agent working on that issue right now.
-	Actor     string
-	TaskN     int64
-	RequestID int64
-	Live      liveAgent
+	Actor string
+	// Full is the whole text of a question whose Title is cut; the row unfolds it.
+	Full string
+	// ActorKind and ActorOwner draw the avatar of an agent (authorship, REQ-677).
+	ActorKind, ActorOwner string
+	TaskN                 int64
+	RequestID             int64
+	Live                  liveAgent
 	// Cats are the filters the row belongs to ("direkt", "fragen", "aufgaben",
 	// "issues"). Href is where a click on the row leads.
 	Cats []string
@@ -151,29 +161,72 @@ type inboxView struct {
 	// days come as a box under the others. ToggleHref turns it on or off, the
 	// filter and the repo stay.
 	// Result is the line after a task could not be ticked off (?fail=).
-	Result     *requestResult
+	Result *requestResult
+	// Elsewhere is how many entries wait in the repos the filter leaves out, and
+	// AllHref the same page without the filter (REQ-679): a filter on a quiet repo
+	// must not look like an empty inbox.
+	Elsewhere  int
+	AllHref    string
 	ShowDone   bool
 	ToggleHref string
 	DoneBox    inboxSection
 	DoneDays   int
 }
 
-// waitingFor is the number of rows in "Waiting for you" for the shell, counted
-// once per request (shellMemo) with the same query as the page itself.
-func (a *app) waitingFor(r *http.Request, project string) []forYouRow {
+// inboxData is what the inbox lists for one repo filter: what waits for the person and what was said
+// to them. The page and the bell in the header both read it, so the number at the bell is the number
+// of rows the page shows under "All".
+type inboxData struct {
+	Waiting []forYouRow
+	Said    []inboxRow
+	// Err is the first error of the sources of Said; the page says so, the bell counts what there is.
+	Err error
+}
+
+// Count is the number of rows under "All".
+func (d *inboxData) Count() int { return len(d.Waiting) + len(d.Said) }
+
+// inboxFor reads the inbox for project ("" for all repos), once per request and filter (shellMemo).
+func (a *app) inboxFor(r *http.Request, project string) *inboxData {
 	memo, _ := r.Context().Value(shellMemoKey{}).(*shellMemo)
-	if memo != nil && memo.waitingSet {
-		return memo.waiting
+	if memo != nil {
+		if d, ok := memo.inbox[project]; ok {
+			return d
+		}
 	}
-	rows, err := a.inboxWaiting(r, a.access(r), a.shellBaseFor(r).who, project, overviewNow().UTC())
+	d := &inboxData{}
+	now := overviewNow().UTC()
+	rows, err := a.inboxWaiting(r, a.access(r), a.shellBaseFor(r).who, project, now)
 	if err != nil {
 		rows = nil
 	}
-	rows = a.notifyKeep(r, rows)
-	if memo != nil {
-		memo.waiting, memo.waitingSet = rows, true
+	d.Waiting = a.notifyKeep(r, rows)
+	// A question that waits for the person stands once, in "Waiting for you": its
+	// message is not said to them again in the second box.
+	asked := map[int64]bool{}
+	for _, f := range d.Waiting {
+		if f.attentionID != 0 && f.messageID != 0 {
+			asked[f.messageID] = true
+		}
 	}
-	return rows
+	mentioned, err := a.inboxMentions(r, project, asked)
+	if err != nil {
+		d.Err = err
+	}
+	direct, err := a.inboxDirect(r, asked)
+	if err != nil && d.Err == nil {
+		d.Err = err
+	}
+	// What was said to the person, in a room or directly: one list, and what fell
+	// out of the two weeks is gone before anything is counted or tested for empty.
+	d.Said = inboxRecent(append(append(slices.Clone(mentioned), direct...), a.inboxTextMentions(r, project)...), now)
+	if memo != nil {
+		if memo.inbox == nil {
+			memo.inbox = map[string]*inboxData{}
+		}
+		memo.inbox[project] = d
+	}
+	return d
 }
 
 // inboxWaiting collects what waits for the viewer: their own open tasks (and
@@ -238,9 +291,15 @@ type inboxMessage struct {
 	Author  string
 	Mine    bool
 	Present bool
+	// Asked is how many of the unread messages of the window already stand in
+	// "Waiting for you" as an open question: they are not said to the person a
+	// second time.
+	Asked int
 }
 
-func (a *app) inboxLatestUnread(r *http.Request, s store.CoordRoomSummary, labels map[string]string, mentionOnly bool) inboxMessage {
+// asked holds the numbers of the messages that wait in the first section as a
+// question, approval, blocker or handoff; they are left out here (REQ-679).
+func (a *app) inboxLatestUnread(r *http.Request, s store.CoordRoomSummary, labels map[string]string, mentionOnly bool, asked map[int64]bool) inboxMessage {
 	l := a.langFor(r)
 	current := browserPrincipal(r)
 	access := a.browserCoord(r)
@@ -254,10 +313,15 @@ func (a *app) inboxLatestUnread(r *http.Request, s store.CoordRoomSummary, label
 	unread := func(m store.CoordMessage) bool {
 		return m.Sequence > s.ReadThrough || (s.ManualUnreadFrom > 0 && m.Sequence >= s.ManualUnreadFrom)
 	}
-	checks := 0
+	checks, hidden := 0, 0
+	for _, m := range page.Messages {
+		if unread(m) && asked[m.ID] {
+			hidden++
+		}
+	}
 	for i := len(page.Messages) - 1; i >= 0; i-- {
 		m := page.Messages[i]
-		if !unread(m) || mine(m) || m.AuthorKind == store.AuthorSystem {
+		if !unread(m) || mine(m) || m.AuthorKind == store.AuthorSystem || asked[m.ID] {
 			continue
 		}
 		if mentionOnly {
@@ -269,15 +333,8 @@ func (a *app) inboxLatestUnread(r *http.Request, s store.CoordRoomSummary, label
 				continue
 			}
 		}
-		out := inboxMessage{Msg: m, Present: true}
-		id := strings.TrimSpace(m.SenderExternalID)
-		if m.AuthorKind == store.AuthorHuman && strings.TrimSpace(m.AuthorPrincipalID) != "" {
-			id = strings.TrimSpace(m.AuthorPrincipalID)
-		}
-		out.Author = readableAuthor(l, strings.TrimSpace(presented[i].AuthorLabel))
-		if out.Author == "" {
-			out.Author = coordIdentityLabel(l, id, labels)
-		}
+		out := inboxMessage{Msg: m, Present: true, Asked: hidden}
+		out.Author = inboxAuthor(l, m, presented[i].AuthorLabel, labels)
 		if m.ReplyTo > 0 {
 			for j := range page.Messages {
 				if q := page.Messages[j]; q.ID == m.ReplyTo && mine(q) {
@@ -287,7 +344,41 @@ func (a *app) inboxLatestUnread(r *http.Request, s store.CoordRoomSummary, label
 		}
 		return out
 	}
-	return inboxMessage{}
+	return inboxMessage{Asked: hidden}
+}
+
+// inboxAuthor is the name of whoever wrote a message, as the room page spells it.
+func inboxAuthor(l lang, m store.CoordMessage, label string, labels map[string]string) string {
+	id := strings.TrimSpace(m.SenderExternalID)
+	if m.AuthorKind == store.AuthorHuman && strings.TrimSpace(m.AuthorPrincipalID) != "" {
+		id = strings.TrimSpace(m.AuthorPrincipalID)
+	}
+	if author := readableAuthor(l, strings.TrimSpace(label)); author != "" {
+		return author
+	}
+	return coordIdentityLabel(l, id, labels)
+}
+
+// inboxThreadMention is the newest unread message in a thread of the room that mentions the viewer,
+// with the thread it stands in. A mention in a thread is counted in the room's mentions but is not
+// among the messages of the room itself, so without this the row had a number and no text.
+func (a *app) inboxThreadMention(r *http.Request, roomKey string, labels map[string]string) (inboxMessage, int64) {
+	access := a.browserCoord(r)
+	list, err := access.UnreadThreadMentions(roomKey)
+	if err != nil || len(list) == 0 {
+		return inboxMessage{}, 0
+	}
+	tm := list[0]
+	page, presented, err := access.MessagePresentationWindow(store.DestinationDiscussion, store.ThreadDestinationID(tm.ThreadID), store.LatestWindow(30))
+	if err != nil || len(presented) != len(page.Messages) {
+		return inboxMessage{}, 0
+	}
+	for i, m := range page.Messages {
+		if m.ID == tm.MessageID {
+			return inboxMessage{Msg: m, Present: true, Author: inboxAuthor(a.langFor(r), m, presented[i].AuthorLabel, labels)}, tm.ThreadID
+		}
+	}
+	return inboxMessage{}, 0
 }
 
 // inboxReplyComposer is the composer that opens under a row: it posts to
@@ -303,6 +394,7 @@ func (a *app) inboxReplyComposer(l lang, token, who string, room string, replyTo
 	ph := l.msg("inbox.reply_placeholder")
 	if who != "" {
 		ph = l.msg("inbox.reply_to", who)
+		hidden = append(hidden, hiddenField{"to", who})
 	}
 	return &composerView{Action: "/ui/inbox/reply", Token: token, Placeholder: ph, Submit: l.msg("inbox.reply_send"), Cancel: l.msg("inbox.reply_cancel"), Hidden: hidden}
 }
@@ -311,7 +403,7 @@ func (a *app) inboxReplyComposer(l lang, token, who string, room string, replyTo
 // viewer has not read yet: one row per room with the message that mentions
 // them, not one per message. Rooms come from CoordAccess.RoomSummaries, so only
 // rooms the viewer may read appear.
-func (a *app) inboxMentions(r *http.Request, project string) ([]inboxRow, error) {
+func (a *app) inboxMentions(r *http.Request, project string, asked map[int64]bool) ([]inboxRow, error) {
 	if a.notifyOff(r)[store.NotifyMention] {
 		return nil, nil
 	}
@@ -342,24 +434,42 @@ func (a *app) inboxMentions(r *http.Request, project string) ([]inboxRow, error)
 		}
 		name := coordShortRoomName(coordRoomKindOf(s.Room.Key), coordRoomLabel(l, s.Room, current.ID, labels))
 		last := parseTime(s.LastMessageAt)
+		m := a.inboxLatestUnread(r, s, labels, true, asked)
+		// A mention in a thread of the room is newer than the last one in the room, or the only one.
+		var thread int64
+		if tmsg, tid := a.inboxThreadMention(r, s.Room.Key, labels); tmsg.Present && (!m.Present || tmsg.Msg.ID > m.Msg.ID) {
+			m, thread = inboxMessage{Msg: tmsg.Msg, Present: true, Author: tmsg.Author, Asked: m.Asked}, tid
+		}
+		// The mentions that are an open question stand in "Waiting for you"; what is
+		// left here is only what was said besides.
+		unread := int(s.MentionUnread) - m.Asked
+		if unread <= 0 {
+			continue
+		}
 		row := inboxRow{Mark: "rooms", Mention: true, Title: name, In: name, InHref: "/ui/coord?room=" + url.QueryEscape(s.Room.Key),
 			Href: "/ui/coord?room=" + url.QueryEscape(s.Room.Key), at: last,
 			Age: shortAgo(l, overviewNow().UTC(), last)}
-		row.Actions = []inboxAction{{Label: l.msg("inbox.act.read"), ReadRoom: s.Room.Key, ReadSeq: s.LastSequence}}
-		if m := a.inboxLatestUnread(r, s, labels, true); m.Present {
-			row.Actor, row.Lead, row.Title, row.Body = m.Author, m.Author, "", questionTitle(m.Msg.Body, 220)
+		row.Actions = []inboxAction{{Label: l.msg("inbox.act.read"), Short: l.msg("inbox.short.read"), ReadRoom: s.Room.Key, ReadSeq: s.LastSequence, ReadThreads: true}}
+		if m.Present {
+			row.Actor, row.Lead, row.Title, row.Body = m.Author, m.Author, "", previewText(l, m.Msg.Body, 220, mentionNamesOf(a.access(r), roomProject(s.Room.Key), m.Msg.Body))
 			row.Age = shortAgo(l, overviewNow().UTC(), parseTime(m.Msg.CreatedAt))
-			if s.MentionUnread > 1 {
-				row.Rest = l.msg("inbox.mentions", s.MentionUnread)
+			if unread > 1 {
+				row.Rest = l.msg("inbox.mentions", unread)
 			}
 			row.Href = coordRoomURL(s.Room.Key, "around", m.Msg.Sequence) + "#message-" + strconv.FormatInt(m.Msg.Sequence, 10)
+			if thread != 0 {
+				row.Href = coordThreadMessageURL(s.Room.Key, thread, m.Msg.Sequence)
+			}
 			if m.Msg.Intent != "" && isAttentionIntent(m.Msg.Intent) {
 				row.Cats = append(row.Cats, "fragen")
 			}
 			row.Reply = a.inboxReplyComposer(l, token, m.Author, s.Room.Key, m.Msg.ID, 0)
+			if thread != 0 {
+				row.Reply.Hidden = append(row.Reply.Hidden, hiddenField{"thread", strconv.FormatInt(thread, 10)})
+			}
 		} else {
-			row.Lead = l.msg("inbox.mentions", s.MentionUnread)
-			if s.MentionUnread == 1 {
+			row.Lead = l.msg("inbox.mentions", unread)
+			if unread == 1 {
 				row.Lead = l.msg("inbox.mentions_one")
 			}
 			row.In, row.InHref = "", ""
@@ -374,7 +484,7 @@ func (a *app) inboxMentions(r *http.Request, project string) ([]inboxRow, error)
 // inboxDirect lists the direct and group conversations with something unread
 // from somebody else: one row per conversation with its newest message. A group
 // row names the group; a message that answers one of the viewer's own quotes it.
-func (a *app) inboxDirect(r *http.Request) ([]inboxRow, error) {
+func (a *app) inboxDirect(r *http.Request, asked map[int64]bool) ([]inboxRow, error) {
 	l := a.langFor(r)
 	summaries, err := a.browserCoord(r).RoomSummaries()
 	if errors.Is(err, store.ErrCoordNotFound) || errors.Is(err, store.ErrCoordForbidden) {
@@ -399,23 +509,23 @@ func (a *app) inboxDirect(r *http.Request) ([]inboxRow, error) {
 	labels := a.inboxLabels(r, keys...)
 	var rows []inboxRow
 	for _, s := range open {
-		m := a.inboxLatestUnread(r, s, labels, false)
+		m := a.inboxLatestUnread(r, s, labels, false, asked)
 		if !m.Present {
 			continue
 		}
 		created := parseTime(m.Msg.CreatedAt)
 		room := "/ui/coord?room=" + url.QueryEscape(s.Room.Key)
-		row := inboxRow{Mark: "rooms", Actor: m.Author, Lead: m.Author, Body: questionTitle(m.Msg.Body, 220), Cats: []string{"direkt"},
+		row := inboxRow{Mark: "rooms", Actor: m.Author, Lead: m.Author, Body: previewText(l, m.Msg.Body, 220, nil), Cats: []string{"direkt"},
 			Age: shortAgo(l, overviewNow().UTC(), created), at: created, Mention: true,
 			Href: coordRoomURL(s.Room.Key, "around", m.Msg.Sequence) + "#message-" + strconv.FormatInt(m.Msg.Sequence, 10)}
 		if s.Room.Kind == store.RoomGroup {
 			row.In, row.InHref = coordRoomLabel(l, s.Room, current.ID, labels), room
 			if m.Quote != nil {
-				row.Quote = &inboxQuote{Who: l.msg("inbox.you"), Text: questionTitle(m.Quote.Body, 140)}
+				row.Quote = &inboxQuote{Who: l.msg("inbox.you"), Text: previewText(l, m.Quote.Body, 140, nil)}
 			}
 		}
 		row.Reply = a.inboxReplyComposer(l, token, m.Author, s.Room.Key, m.Msg.ID, 0)
-		row.Actions = []inboxAction{{Label: l.msg("inbox.act.read"), ReadRoom: s.Room.Key, ReadSeq: s.LastSequence}}
+		row.Actions = []inboxAction{{Label: l.msg("inbox.act.read"), Short: l.msg("inbox.short.read"), ReadRoom: s.Room.Key, ReadSeq: s.LastSequence}}
 		rows = append(rows, row)
 	}
 	sortInboxRows(rows)
@@ -467,13 +577,13 @@ func (a *app) inboxRows(r *http.Request, forYou []forYouRow) []inboxRow {
 	rows := make([]inboxRow, 0, len(forYou))
 	for _, f := range forYou {
 		row := inboxRow{Mark: f.Mark, Tone: f.Tone, Title: f.Title, Lead: f.Lead, Rest: f.Rest, Age: f.Age, AgeOld: f.AgeOld,
-			Token: token, Forms: forms, taskID: f.taskID, TaskN: f.taskID, Actor: f.Actor, RequestID: f.RequestID, Href: f.Href, Cats: inboxCats(f), AttentionID: f.attentionID, DecisionN: f.decisionID, Brief: f.Brief}
+			Token: token, Forms: forms, taskID: f.taskID, TaskN: f.taskID, Actor: f.Actor, ActorKind: f.actorKind, ActorOwner: f.actorOwner, Full: f.Full, RequestID: f.RequestID, Href: f.Href, Cats: inboxCats(f), AttentionID: f.attentionID, DecisionN: f.decisionID, Brief: f.Brief}
 		switch {
 		case f.taskID != 0:
 			row.Num, row.NumHref = f.num, f.Href
 			row.Note = a.taskNoteFor(l, f.taskID, f.steps)
 			if forms {
-				row.Actions = append(row.Actions, inboxAction{Label: l.msg("inbox.act.done"), TaskID: f.taskID, Primary: true})
+				row.Actions = append(row.Actions, inboxAction{Label: l.msg("inbox.act.done"), Short: l.msg("inbox.short.done"), TaskID: f.taskID, Primary: true})
 			} else {
 				row.Actions = append(row.Actions, inboxAction{Label: l.msg("inbox.act.open"), Href: f.Href, Primary: true})
 			}
@@ -482,7 +592,7 @@ func (a *app) inboxRows(r *http.Request, forYou []forYouRow) []inboxRow {
 				if f.roomKey != "" && f.Mark == "ask" {
 					row.Reply = a.inboxReplyComposer(l, token, f.Actor, f.roomKey, f.messageID, f.attentionID)
 				}
-				row.Actions = append(row.Actions, inboxAction{Label: l.msg("inbox.act.done"), AttentionID: f.attentionID})
+				row.Actions = append(row.Actions, inboxAction{Label: l.msg("inbox.act.done"), Short: l.msg("inbox.short.done"), AttentionID: f.attentionID})
 			} else {
 				row.Actions = []inboxAction{{Label: f.Action, Href: f.Href, Primary: true}}
 			}
@@ -526,21 +636,14 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	project := selectedProject(a.shellFor(r, "inbox"))
-	waiting := a.waitingFor(r, project)
-	mentioned, err := a.inboxMentions(r, project)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	data := a.inboxFor(r, project)
+	if data.Err != nil {
+		http.Error(w, data.Err.Error(), http.StatusInternalServerError)
 		return
 	}
-	direct, err := a.inboxDirect(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	waiting := data.Waiting
 	now := overviewNow().UTC()
-	// What was said to the person, in a room or directly: one list, and what fell
-	// out of the two weeks is gone before anything is counted or tested for empty.
-	said := inboxRecent(append(slices.Clone(mentioned), direct...), now)
+	said := slices.Clone(data.Said)
 	v := &inboxView{Waiting: a.inboxRows(r, waiting), Mentioned: said}
 	token, forms := csrfOf(r), interactive(r)
 	if forms {
@@ -582,6 +685,13 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 	v.Projects, v.AllSelected, v.CanAll = base.projects, base.all, base.who.kind == viewerOwner || len(base.projects) > 1
 	v.Empty = len(v.Waiting) == 0 && len(v.Mentioned) == 0
 	v.Filter = inboxFilter(r)
+	if !v.AllSelected && project != "" && v.CanAll {
+		v.Elsewhere = max(0, a.inboxFor(r, "").Count()-data.Count())
+		v.AllHref = "/ui/inbox?project="
+		if v.Filter != "alle" {
+			v.AllHref += "&f=" + v.Filter
+		}
+	}
 	counts := map[string]int{"alle": len(v.Waiting) + len(v.Mentioned)}
 	for _, rows := range [][]inboxRow{v.Waiting, v.Mentioned} {
 		for _, row := range rows {
@@ -614,6 +724,13 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 	v.FilteredEmpty = !v.Empty && len(waitingRows)+len(mentionedRows) == 0
 	if code := r.URL.Query().Get("fail"); code != "" {
 		v.Result = &requestResult{Text: l.msg(inboxFailKey(code)), Kind: "failed", Fail: true}
+	} else if to, ok := r.URL.Query()["sent"]; ok && len(to) > 0 {
+		// A reply was sent from here: say to whom, and that the row it answered is done.
+		text := l.msg("inbox.sent")
+		if name := cleanLineWeb(to[0], 80); name != "" && name != "1" {
+			text = l.msg("inbox.sent_to", name)
+		}
+		v.Result = &requestResult{Text: text, Kind: "done"}
 	}
 	v.ShowDone, v.DoneDays = r.URL.Query().Get("done") == "1", store.InboxDoneDays
 	q := url.Values{}
@@ -633,7 +750,7 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 	if v.ShowDone {
 		v.DoneBox = inboxSection{ID: "done", Title: "inbox.done", None: "inbox.done_none", Rows: inboxKeep(a.inboxDoneRows(r, pa, project, now), v.Filter)}
 	}
-	a.renderBrowser(w, r, "inbox", pageData{Title: l.msg("inbox.title"), InboxV: v})
+	a.renderBrowser(w, r, "inbox", pageData{Title: l.msg("inbox.title"), InboxV: v, Welcome: a.welcomeCards(r, l)})
 }
 
 // backTo is where a form of the inbox returns to: only the inbox itself.

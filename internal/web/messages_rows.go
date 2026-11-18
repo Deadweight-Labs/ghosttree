@@ -14,7 +14,7 @@ var messagesRows = map[string]string{
 var messagesRowsDE = map[string]string{
 	"list.no_match":  "Nichts passt zu „%s“.",
 	"list.clear":     "Filter zurücksetzen",
-	"runbooks.n_one": "1 Ablauf",
+	"runbooks.n_one": "1 Runbook",
 	"docs.n_one":     "1 Dokument",
 }
 

@@ -317,8 +317,26 @@ func (c codeKnow) under(p string) bool {
 	return false
 }
 
-// aboutFile: the entry names this file (or triggers on it) or lies in an area
-// that contains it.
+// ancestor is the folder, named by the entry or an area of its origin, that contains p (the deepest one); "" when
+// the entry names no folder above p. What is written about a folder belongs to the files in it (REQ-687): a pitfall
+// of internal/spool shows at internal/spool/spool.go.
+func (c codeKnow) ancestor(p string) string {
+	best := ""
+	for _, list := range [][]string{c.Named, c.Areas} {
+		for _, d := range list {
+			if d != "" && strings.HasPrefix(p, d+"/") && len(d) > len(best) {
+				best = d
+			}
+		}
+	}
+	return best
+}
+
+// about: the entry is about p itself, something below it, or a folder that contains it.
+func (c codeKnow) about(p string) bool { return c.under(p) || c.ancestor(p) != "" }
+
+// aboutFile: the entry names this file (or triggers on it), or names or lies in a
+// folder that contains it.
 func (c codeKnow) aboutFile(p string) (direct, area bool) {
 	if slices.Contains(c.Named, p) {
 		direct = true
@@ -326,12 +344,7 @@ func (c codeKnow) aboutFile(p string) (direct, area bool) {
 	if len(c.K.Activation.Paths) > 0 && activation.Matches(c.K.Activation, activation.Context{RepoPath: p}) {
 		direct = true
 	}
-	for _, d := range c.Areas {
-		if strings.HasPrefix(p, d+"/") {
-			area = true
-		}
-	}
-	return direct, area
+	return direct, c.ancestor(p) != ""
 }
 
 // Views ------------------------------------------------------------------------
@@ -351,6 +364,11 @@ type repoCodeView struct {
 	// KnowledgeHref is the action of a repository without descriptions.
 	KnowledgeHref string
 	Current       string // path of the page, folder or file
+	// NoRemote: the project has no git remote (a project made in the browser) and no
+	// code was ever connected. The page says so and offers the next step instead of
+	// the empty tree of a repository.
+	NoRemote     bool
+	NewIssueHref string
 }
 
 type codeBranchView struct {
@@ -378,9 +396,9 @@ type codeCommit struct {
 }
 
 type codeRow struct {
-	Name, Href, Desc, Updated string
-	Dir, Missing              bool
-	Pitfalls, Knowledge       int
+	Name, Href, Desc, Full, Updated string
+	Dir, Missing                    bool
+	Pitfalls, Knowledge             int
 }
 
 type codeNavNode struct {
@@ -396,6 +414,9 @@ type codeDesc struct {
 	Cmd                                    cmdLine // what to tell the agent; the page has no editor
 	HTML                                   template.HTML
 	Empty                                  bool
+	// Guest: the viewer is a guest of the project and writes nothing, so the page
+	// shows no command for an agent.
+	Guest bool
 }
 
 type codeBlob struct {
@@ -451,13 +472,11 @@ func shortSHA(s string) string {
 	return s
 }
 
-// actorOf names who wrote a description: the harness when an agent did, else
-// the person.
-func actorOf(person, harness string) (kind, name string) {
+// actorOf names who wrote a description: an agent as "Robin’s Claude" with the
+// avatar of its harness (authorAgentName, the name every page uses), else the person.
+func actorOf(l lang, person, harness string) (kind, name string) {
 	if strings.TrimSpace(harness) != "" {
-		kind = harnessKind(harness)
-		name, _, _ = strings.Cut(strings.ToLower(strings.TrimSpace(harness)), "-")
-		return kind, name
+		return harnessKind(harness), authorAgentName(l, person, harness)
 	}
 	return avHuman, person
 }
@@ -533,6 +552,9 @@ func (a *app) repoCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.codeFolderPage(r, pa, view, v, ix, links, cp)
+	if scope.IsNamedProject(view.Project) && v.Empty && cp.Path == "" {
+		v.NoRemote, v.Readme, v.NewIssueHref = true, nil, view.Href+"/issues/new"
+	}
 	// "Open on GitHub" leads to the same place there: the repository, or the folder.
 	if view.External != "" {
 		v.GitHub = view.External
@@ -559,10 +581,12 @@ func (a *app) codeFolderPage(r *http.Request, pa *store.ProjectAccess, view *rep
 		}
 		if g, ok := ix.byPath[c.Path]; ok && strings.TrimSpace(g.Description) != "" {
 			row.Desc = plainLine(g.Description, 160)
+			// The whole first sentence as the tooltip of the shortened cell.
+			row.Full = plainLine(g.Description, 600)
 		}
 		row.Missing = row.Desc == ""
 		for _, k := range kn {
-			if k.under(c.Path) {
+			if k.about(c.Path) {
 				row.Knowledge++
 				if k.K.Type == "pitfall" {
 					row.Pitfalls++
@@ -575,33 +599,46 @@ func (a *app) codeFolderPage(r *http.Request, pa *store.ProjectAccess, view *rep
 	v.Filter = len(v.Rows) > 0
 	v.Folder = cp.Path
 	if newest != nil {
-		kind, who := actorOf(newest.Person, newest.Harness)
-		c := &codeCommit{AvKind: kind, Who: who, Text: newest.Path, SHA: shortSHA(newest.GitAnchor.Commit), Updated: newest.UpdatedAt}
-		if cp.Path != "" {
-			c.Text = strings.TrimPrefix(newest.Path, cp.Path+"/")
-		}
+		kind, who := actorOf(l, newest.Person, newest.Harness)
+		// The line says who changed the folder last and with which commit. What it adds is the title of that commit
+		// when the server knows it; the name of a file would pass for one (S13).
+		c := &codeCommit{AvKind: kind, Who: who, SHA: shortSHA(newest.GitAnchor.Commit), Updated: newest.UpdatedAt}
 		c.SHAHref = view.Href + "/commits/" + newest.GitAnchor.Commit
 		v.Last = c
 	}
 	// How many commits ghosttree knows for the project: the number beside the
 	// last commit, a link into the commit list.
-	if list, err := pa.Commits(view.Project, "", 1, 0); err == nil && list.Total > 0 {
+	if list, err := pa.Commits(view.Project, "", 100, 0); err == nil && list.Total > 0 {
 		if v.Last == nil {
 			v.Last = &codeCommit{}
 		}
 		v.Last.Commits, v.Last.CommitsHref = list.Total, view.Href+"/commits"
+		if newest != nil && newest.GitAnchor.Commit != "" {
+			for _, ci := range list.Items {
+				if ci.Title != "" && strings.HasPrefix(ci.SHA, newest.GitAnchor.Commit) {
+					v.Last.Text = ci.Title
+					break
+				}
+			}
+		}
 	}
-	v.Readme = a.codeDescription(l, ix, cp.Path)
+	v.Readme = a.codeDescription(l, ix, cp.Path, guestOf(pa, view.Project))
 	v.Readme.Page = true
 	if cp.Path == "" {
 		v.Readme.Label = view.Name + "/"
 	}
 }
 
+// guestOf says whether the viewer is only a guest of the project: they read what
+// was shared and tell no agent anything, so empty states show them no command.
+func guestOf(pa *store.ProjectAccess, remote string) bool {
+	return store.RoleRank(pa.Role(remote).Role) == store.RoleRank(store.RoleGuest)
+}
+
 // codeDescription is the box with the description of a path. Without one it
 // stays a single action: write it.
-func (a *app) codeDescription(_ lang, ix *codeIndex, p string) *codeDesc {
-	d := &codeDesc{Path: p, Label: p, Cmd: cmdLine{Icon: "file", Text: `context_remember action=describe_file path="` + p + `"`}}
+func (a *app) codeDescription(l lang, ix *codeIndex, p string, guest bool) *codeDesc {
+	d := &codeDesc{Path: p, Label: p, Guest: guest, Cmd: cmdLine{Icon: "file", Text: `context_remember action=describe_file path="` + p + `"`}}
 	switch {
 	case p == "":
 		d.Label = "/"
@@ -615,17 +652,28 @@ func (a *app) codeDescription(_ lang, ix *codeIndex, p string) *codeDesc {
 		return d
 	}
 	d.HTML = renderDescription(g.Description)
-	d.AvKind, d.By = actorOf(g.Person, g.Harness)
+	d.AvKind, d.By = actorOf(l, g.Person, g.Harness)
 	d.Updated = g.UpdatedAt
 	if g.OriginContext != nil {
-		d.Area = g.OriginContext.Main()
+		d.Area = areaBelow(g.OriginContext.Main(), p)
 	}
 	return d
 }
 
+// areaBelow is the area of the work that wrote a description, when it adds something to the path the box is
+// about: a part of it. The root, the path itself and an area elsewhere ("Area: internal/config" under the
+// description of the whole repository) say nothing about this path and stay away (S13).
+func areaBelow(area, path string) string {
+	area = strings.Trim(area, "/")
+	if area == "" || area == "." || path == "" || area == path || !strings.HasPrefix(area, path+"/") {
+		return ""
+	}
+	return area
+}
+
 func (a *app) codeBlobPage(r *http.Request, pa *store.ProjectAccess, view *repoView, v *repoCodeView, ix *codeIndex, links codeLinks, cp *codePath) {
 	l := a.langFor(r)
-	b := &codeBlob{Desc: a.codeDescription(l, ix, cp.Path)}
+	b := &codeBlob{Desc: a.codeDescription(l, ix, cp.Path, guestOf(pa, view.Project))}
 	v.Blob = b
 	v.Nav = codeNav(ix, links, cp)
 	if view.External != "" {
@@ -670,7 +718,7 @@ func (a *app) codeBlobPage(r *http.Request, pa *store.ProjectAccess, view *repoV
 	if len(revs) > 1 {
 		for i, rv := range revs {
 			c := codeRev{N: len(revs) - i, At: rv.at, SHA: shortSHA(rv.sha), Note: plainLine(rv.desc, 110)}
-			c.AvKind, c.Who = actorOf(rv.person, rv.harness)
+			c.AvKind, c.Who = actorOf(l, rv.person, rv.harness)
 			if rv.sha != "" {
 				c.SHAHref = view.Href + "/commits/" + rv.sha
 			}
@@ -699,12 +747,7 @@ func (a *app) codeBlobPage(r *http.Request, pa *store.ProjectAccess, view *repoV
 		row := codeKnowRow{Type: k.K.Type, TypeKey: knowTypeKey(k.K.Type), Title: k.K.Title, Href: knowledgeHref(k.K.Scope.Project, k.K.ID),
 			Updated: k.K.CreatedAt, Trigger: len(k.K.Activation.Paths) > 0 && d}
 		if !d {
-			row.Area = k.Areas[0]
-			for _, x := range k.Areas {
-				if strings.HasPrefix(cp.Path, x+"/") {
-					row.Area = x
-				}
-			}
+			row.Area = k.ancestor(cp.Path)
 			areas = append(areas, row)
 			continue
 		}
@@ -716,7 +759,7 @@ func (a *app) codeBlobPage(r *http.Request, pa *store.ProjectAccess, view *repoV
 		all = all[:codeMaxKnow]
 	}
 	b.Know = all
-	b.Work = a.codeWork(pa, view.Project, cp.Path)
+	b.Work = a.codeWork(l, pa, view.Project, cp.Path)
 }
 
 // codeNav is the tree at the left of a file page: the top level, with every
@@ -755,7 +798,7 @@ func codeNav(ix *codeIndex, links codeLinks, cp *codePath) []codeNavNode {
 
 // codeWork lists who worked on the path lately: the sessions behind the
 // activity, as far as the viewer may see them.
-func (a *app) codeWork(pa *store.ProjectAccess, remote, p string) []codeWorkRow {
+func (a *app) codeWork(l lang, pa *store.ProjectAccess, remote, p string) []codeWorkRow {
 	since := overviewNow().UTC().Add(-codeWorkAge).Format(time.RFC3339)
 	acts, err := a.store.PathActivitySince(remote, p, since, "")
 	if err != nil || len(acts) == 0 {
@@ -778,7 +821,7 @@ func (a *app) codeWork(pa *store.ProjectAccess, remote, p string) []codeWorkRow 
 		}
 		seen[s.ExternalID] = true
 		view := pa.MetaView(s)
-		kind, who := actorOf("", s.Harness)
+		kind, who := actorOf(l, "", s.Harness)
 		row := codeWorkRow{AvKind: kind, Who: who, Machine: view.Scope.Machine, Title: view.Title, At: act.At}
 		if pa.HidesMachines(remote) {
 			row.Machine = ""

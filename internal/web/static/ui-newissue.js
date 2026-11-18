@@ -45,6 +45,17 @@
     });
   }
 
+  // Enter in the field of a new label ends the field; it does not send the whole
+  // issue. The label is made when the issue is created.
+  const newLabel = $('input[name="new_label"]');
+  if (newLabel) {
+    newLabel.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.isComposing) return;
+      event.preventDefault();
+      newLabel.blur();
+    });
+  }
+
   const select = $("[data-pkg-select]");
   const fresh = $("[data-pkg-new]");
   if (select && fresh) {

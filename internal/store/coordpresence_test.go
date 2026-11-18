@@ -60,7 +60,21 @@ func TestDerivePresence(t *testing.T) {
 			reach: ReachUnknown, work: WorkUnknown},
 		{name: "a finished turn is never stuck, however long the silence",
 			in:    PresenceInput{LastActivityAt: ago(StuckAfter + time.Hour/2), TurnOpen: false, TurnTracked: true},
-			reach: ReachUnknown, work: WorkUnknown},
+			reach: ReachUnknown, work: WorkAwaitingReply, workOrigin: OriginObserved, workAge: int64((StuckAfter + time.Hour/2) / time.Second)},
+		{name: "the Stop hook a moment ago is no work: the agent waits for a reply",
+			in:    PresenceInput{LastActivityAt: ago(5 * time.Second), TurnOpen: false, TurnTracked: true},
+			reach: ReachUnknown, work: WorkAwaitingReply, workOrigin: OriginObserved, workAge: 5},
+		{name: "a question asked in the turn that ended still waits for its answer",
+			in: PresenceInput{LastActivityAt: ago(5 * time.Second), TurnOpen: false, TurnTracked: true,
+				Waits: []PresenceWait{{Reason: AttentionQuestion, Kind: "user", At: ago(20 * time.Second)}}},
+			reach: ReachUnknown, work: WorkWaitingUser, workOrigin: OriginDerived, workAge: 20},
+		{name: "a new turn is work again",
+			in:    PresenceInput{LastActivityAt: ago(5 * time.Second), TurnOpen: true, TurnTracked: true},
+			reach: ReachUnknown, work: WorkWorking, workOrigin: OriginObserved, workAge: 5},
+		{name: "the SessionEnd hook ends the session, whatever was fresh before",
+			in: PresenceInput{LastPollAt: ago(10 * time.Second), LastActivityAt: ago(5 * time.Second), TurnTracked: true, EndedAt: ago(4 * time.Second),
+				Waits: []PresenceWait{{Reason: AttentionQuestion, Kind: "user", At: ago(20 * time.Second)}}},
+			reach: ReachEnded, reachOrigin: OriginObserved, reachAge: 4, work: WorkUnknown},
 		{name: "without a Stop hook ever seen an open turn proves nothing",
 			in:    PresenceInput{LastActivityAt: ago(StuckAfter + time.Minute), TurnOpen: true},
 			reach: ReachUnknown, work: WorkUnknown},
@@ -666,5 +680,58 @@ func TestStuckFollowsTheTurnEventsOfTheHooks(t *testing.T) {
 	silence(StuckAfter + time.Minute)
 	if got := work(); got == WorkStuck {
 		t.Fatal("a subagent call after the turn end must not reopen the turn")
+	}
+}
+
+// A run that ended is not "working": the Stop hook ends the turn at once, the
+// SessionEnd hook ends the session, and a resumed session is alive again (REQ-678).
+func TestFinishedRunStopsReadingAsWorking(t *testing.T) {
+	st := controlFixture(t)
+	room := RoomKeyForProject(roleProject)
+	register := func(event string) {
+		t.Helper()
+		if _, err := st.RegisterCoordAgent(CoordAgent{ExternalID: controlAgent, Provider: "claude", RoomKey: room,
+			DisplayName: controlAgent, PrincipalID: "person:4", Role: "member", HookActivity: true, HookEvent: event}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := func() (reach, work string) {
+		t.Helper()
+		p := presenceOf(t, st, room, controlAgent)
+		return p.Reachability.Value, p.WorkState.Value
+	}
+
+	register(HookTurnStart)
+	register(HookTool)
+	if _, work := state(); work != WorkWorking {
+		t.Fatalf("a running turn is working, got %s", work)
+	}
+	register(HookTurnEnd)
+	if reach, work := state(); work != WorkAwaitingReply || reach == ReachEnded {
+		t.Fatalf("right after the Stop hook the agent waits for a reply, got %s / %s", reach, work)
+	}
+	register(HookSessionEnd)
+	if reach, work := state(); reach != ReachEnded || work == WorkWorking {
+		t.Fatalf("after SessionEnd the session is ended, got %s / %s", reach, work)
+	}
+	// A subagent's sign of life does not bring an ended session back.
+	register(HookTouch)
+	if reach, _ := state(); reach != ReachEnded {
+		t.Fatalf("a touch must not undo the end, got %s", reach)
+	}
+	// claude --resume starts the same session again.
+	register("")
+	register(HookTurnStart)
+	if reach, work := state(); reach == ReachEnded || work != WorkWorking {
+		t.Fatalf("a resumed session is alive and working, got %s / %s", reach, work)
+	}
+	// A terminal closed in the middle of a turn: ended, not stuck.
+	register(HookSessionEnd)
+	if _, err := st.db.Exec(`UPDATE coord_agents SET last_hook_at=? WHERE external_id=?`,
+		time.Now().UTC().Add(-StuckAfter-time.Minute).Format(time.RFC3339), controlAgent); err != nil {
+		t.Fatal(err)
+	}
+	if reach, work := state(); reach != ReachEnded || work == WorkStuck {
+		t.Fatalf("a session that said goodbye mid-turn is ended, not stuck: %s / %s", reach, work)
 	}
 }

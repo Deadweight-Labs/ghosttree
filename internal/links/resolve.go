@@ -36,6 +36,7 @@ const (
 	KindPackage   = "package"
 	KindBranch    = "branch"
 	KindRunbook   = "runbook"
+	KindWorkflow  = "workflow"
 	KindPreset    = "preset"
 	KindCommit    = "commit"
 	KindPull      = "pull"
@@ -122,6 +123,9 @@ func ParseRef(input string) (Ref, error) {
 		case "pr", "pull":
 			n, err := num()
 			return Ref{Kind: KindPull, ID: n}, err
+		case "issue":
+			n, err := num()
+			return Ref{Kind: KindRequest, ID: n}, err
 		case "commit", "sha":
 			if !hashRE.MatchString(strings.ToLower(first)) || len(fields) != 1 {
 				return Ref{}, fmt.Errorf("commit: needs 7 to 40 hexadecimal characters")
@@ -148,11 +152,17 @@ func ParseRef(input string) (Ref, error) {
 				return Ref{}, errors.New("doc: needs the document name (slug), optionally after its repository: doc:owner/repo/slug")
 			}
 			return Ref{Kind: KindDocument, Text: slug, Project: project}, nil
-		case "runbook":
+		case "runbook", "ablauf":
+			// ablauf: is how the runbooks were called before REQ-695.
 			if !nameRE.MatchString(first) || len(fields) != 1 {
 				return Ref{}, errors.New("runbook: needs the runbook name")
 			}
 			return Ref{Kind: KindRunbook, Text: first}, nil
+		case "workflow":
+			if !nameRE.MatchString(first) || len(fields) != 1 {
+				return Ref{}, errors.New("workflow: needs the workflow name")
+			}
+			return Ref{Kind: KindWorkflow, Text: first}, nil
 		case "branch", "package", "checklist":
 			if rest == "" || strings.ContainsAny(rest, " \t\n") {
 				return Ref{}, fmt.Errorf("%s: needs a branch name", prefix)
@@ -216,6 +226,7 @@ type API interface {
 	Documents(project, kind string, includeArchived bool) ([]store.Document, error)
 	ThreadByID(id int64, agentExternalID string) (store.Thread, error)
 	ListRunbooks(ax scope.Axes) ([]runbook.Summary, error)
+	ListWorkflows(project string) ([]store.WorkflowDef, error)
 	ListPresets(project string) ([]store.SearchPreset, error)
 	GetPackage(id int64, full bool) (requestdomain.PackageDetail, error)
 	Sessions(filter scope.Axes, limit int) ([]store.Session, error)
@@ -355,6 +366,19 @@ func (e Env) Resolve(ref Ref) (Card, error) {
 			}
 		}
 		return Card{}, Unknown("runbook " + Clean(ref.Text, 60))
+	case KindWorkflow:
+		if err := needProject(); err != nil {
+			return Card{}, err
+		}
+		list, err := e.API.ListWorkflows(e.Project)
+		if err == nil {
+			for _, d := range list {
+				if d.Name == ref.Text {
+					return b.fallbackProject(e.Project).WorkflowCard(d), nil
+				}
+			}
+		}
+		return Card{}, Unknown("workflow " + Clean(ref.Text, 60))
 	case KindPreset:
 		return e.resolvePreset(ref)
 	case KindPull:
