@@ -99,6 +99,7 @@ type api struct {
 	metrics              *metricsRegistry
 	registered           []string
 	uncheckedHook        func(route string)
+	writeLimit           *writeLimiter
 }
 
 type personKey struct{}
@@ -301,6 +302,7 @@ func newAPI(st *store.Store, options ...Option) *api {
 	if a.operationIDGenerator == nil {
 		a.operationIDGenerator = randomOperationID
 	}
+	a.writeLimit = newWriteLimiter()
 	if a.snapshotErrorLogger == nil {
 		a.snapshotErrorLogger = func(operationID string, err, generatorErr error) {
 			log.Printf("snapshot_internal_error operation_id=%q error=%q operation_id_error=%q", operationID, err, generatorErr)
@@ -381,6 +383,11 @@ func (a *api) auth(next http.Handler) http.Handler {
 			writeCoded(w, http.StatusForbidden, "forbidden", "this token is bound to one project and to reading")
 			return
 		}
+		release, allowed := a.limitWrites(w, r, principal.ID)
+		if !allowed {
+			return
+		}
+		defer release()
 		a.st.TouchToken(principal.TokenID)
 		if principal.Machine != "" && a.machineSeenDue(principal) {
 			// A device that talks is a machine that was just seen: without it the

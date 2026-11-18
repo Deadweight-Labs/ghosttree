@@ -1129,6 +1129,14 @@ func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 			return 0, false, err
 		}
 	}
+	// Eine Wiederholung einer schon gespeicherten Nachricht zählt nicht.
+	if _, found, err := existingCoordMessage(tx, message.withDefaults()); err != nil {
+		return 0, false, err
+	} else if !found {
+		if err := checkMessageRateTx(tx, message.AuthorPrincipalID, message.SenderExternalID); err != nil {
+			return 0, false, err
+		}
+	}
 	id, created, err := appendCoordMessageNewTx(tx, message)
 	if err != nil {
 		return 0, false, err
@@ -2490,7 +2498,14 @@ func (a CoordAccess) Recipients() ([]CoordRecipient, error) {
 	if actor == "" {
 		return nil, ErrCoordForbidden
 	}
-	roomRows, err := tx.Query(`SELECT room_key FROM coord_rooms ORDER BY room_key`)
+	// Nur Räume, in denen der Akteur selbst Mitglied ist: die Prüfung je Raum
+	// unten entscheidet weiter, aber die Arbeit wächst nicht mit den Räumen der
+	// ganzen Instanz, die ein Konto durch viele Gruppen aufblähen könnte.
+	roomRows, err := tx.Query(`SELECT room_key FROM coord_rooms WHERE room_key IN (
+		SELECT m.room_key FROM coord_room_memberships m
+		LEFT JOIN coord_agents agent ON agent.external_id=m.principal_id
+		WHERE m.left_at='' AND (m.principal_id IN (?,?) OR agent.principal_id=?)) ORDER BY room_key`,
+		actor, a.Principal.ID, a.Principal.ID)
 	if err != nil {
 		return nil, err
 	}

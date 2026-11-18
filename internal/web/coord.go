@@ -105,6 +105,9 @@ func coordHTTPError(l lang, w http.ResponseWriter, err error) {
 		var limited *store.BroadcastLimitedError
 		errors.As(err, &limited)
 		http.Error(w, l.msg("coord.broadcast_limited", int(limited.Wait.Minutes())+1), http.StatusTooManyRequests)
+	case errors.Is(err, store.ErrCoordRateLimited):
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, l.msg("coord.err.rate_limited"), http.StatusTooManyRequests)
 	case errors.Is(err, store.ErrInvalidAttentionAction):
 		http.Error(w, l.msg("coord.err.action_invalid"), http.StatusBadRequest)
 	case errors.Is(err, store.ErrAttentionRecipientRequired):

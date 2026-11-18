@@ -43,6 +43,9 @@ func writeCoordAccessError(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, store.ErrBroadcastLimited):
 		writeErr(w, http.StatusTooManyRequests, err.Error())
+	case errors.Is(err, store.ErrCoordRateLimited):
+		w.Header().Set("Retry-After", "60")
+		writeCoded(w, http.StatusTooManyRequests, "rate_limited", err.Error())
 	case errors.Is(err, store.ErrInvalidAttentionAction), errors.Is(err, store.ErrAttentionRecipientRequired):
 		writeErr(w, http.StatusBadRequest, "invalid coordination attention action")
 	case errors.Is(err, store.ErrAttentionClosed):

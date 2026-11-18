@@ -571,3 +571,35 @@ func insertAttentionTx(tx *sql.Tx, recipient string, messageID int64, reason, st
 	}
 	return errors.New("coordination attention id: no free id after 16 attempts")
 }
+
+// Quote der Nachrichten je Konto: höchstens CoordMessageLimit in
+// CoordMessageWindow. Normale Arbeit (ein Agent, der Fragen stellt und
+// antwortet) schreibt ein paar Nachrichten je Minute; wer mehr schreibt,
+// füllt Räume und Speicher aller anderen.
+const (
+	CoordMessageWindow = 5 * time.Minute
+	CoordMessageLimit  = 300
+)
+
+// ErrCoordRateLimited: das Konto hat sein Kontingent an Nachrichten für das
+// laufende Fenster verbraucht. Nichts wird gespeichert.
+var ErrCoordRateLimited = errors.New("too many coordination messages from this account; wait a few minutes")
+
+// checkMessageRateTx zählt die Nachrichten des Kontos im Fenster. Der
+// Prinzipal ist das Konto: alle Agenten einer Person teilen sich das Kontingent.
+// Ohne Prinzipal (Altbestand) zählt die Absenderkennung.
+func checkMessageRateTx(tx *sql.Tx, principal, sender string) error {
+	col, key := "sender_external_id", sender
+	if principal != "" {
+		col, key = "author_principal_id", principal
+	}
+	cutoff := time.Now().UTC().Add(-CoordMessageWindow).Format(time.RFC3339)
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_messages WHERE `+col+`=? AND created_at>=?`, key, cutoff).Scan(&n); err != nil {
+		return err
+	}
+	if n >= CoordMessageLimit {
+		return ErrCoordRateLimited
+	}
+	return nil
+}
