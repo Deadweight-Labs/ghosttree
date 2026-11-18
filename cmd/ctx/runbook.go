@@ -18,6 +18,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/runbook"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"github.com/Deadweight-Labs/ghosttree/internal/termsafe"
 )
 
 const runbookUsage = `usage: ctx runbook <command>
@@ -48,13 +49,14 @@ machine's owner.
 Run a runbook with: ctx run NAME [param=value ...] [--target T [--dry-run | --run]]`
 
 const runUsage = `usage: ctx run NAME [param=value ...] [--version N] [--project P]
-                 [--target T [--dry-run | --run]]
+                 [--target T [--dry-run | --run [--yes]]]
 
 Without --target: prints the checklist with the parameters filled in.
 With --target: a dry run that shows the exact argument lists. Only --run executes,
 in the foreground of this process, without a shell, and only when the SERVER says
 this exact version (hash) is approved by an owner or lead and allowed on this
-machine by a person. A file on this machine allows nothing.`
+machine by a person. A file on this machine allows nothing. --run shows the argument
+lists first and asks you to type yes; where no terminal is attached it needs --yes.`
 
 // Überschreibbar, damit die Tests Ausführung, Eingabe und Terminal ersetzen.
 var (
@@ -608,7 +610,10 @@ func runbookReport(rest []string, stdout io.Writer, c *client.Client, cfg config
 
 // cmdRun ist ctx run: die Checkliste mit eingesetzten Parametern, der Probelauf
 // eines Ziels, oder mit --run die Ausführung im Vordergrund.
-func cmdRun(args []string, stdout io.Writer) int {
+func cmdRun(args []string, rawStdout io.Writer) int {
+	// What a server wrote (names, argument lists) is printed through termsafe; the
+	// programs of a run keep the terminal as it is.
+	stdout := termsafe.Writer(rawStdout)
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	version := fs.Int("version", 0, "version (default: the newest)")
@@ -616,6 +621,7 @@ func cmdRun(args []string, stdout io.Writer) int {
 	target := fs.String("target", "", "executable target")
 	dry := fs.Bool("dry-run", false, "show what would run (the default for a target)")
 	doRun := fs.Bool("run", false, "execute the target")
+	yes := fs.Bool("yes", false, "with --run: do not ask for confirmation (needed where no terminal is attached)")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil || len(pos) == 0 {
 		fmt.Fprintln(stdout, runUsage)
@@ -678,6 +684,18 @@ func cmdRun(args []string, stdout io.Writer) int {
 	if runbook.Hash(v.Project, v.Machine, v.Name, v.Spec) != v.Hash {
 		blocked = append(blocked, "the content does not match its hash")
 	}
+	// The rules the server enforces when it stores a version are applied again to
+	// what arrived: a server that does not keep them gets no program started.
+	if _, err := runbook.Normalize(v.Spec); err != nil {
+		blocked = append(blocked, "the content breaks the rules of a runbook: "+err.Error())
+	}
+	for _, p := range v.Spec.Params {
+		if p.Default != "" {
+			if _, err := runbook.CheckValue(p, p.Default); err != nil {
+				blocked = append(blocked, "the default of a parameter breaks the rules: "+err.Error())
+			}
+		}
+	}
 	state, err := c.RunbookAllowed(v.ID, v.Version, cfg.Machine)
 	switch {
 	case err != nil:
@@ -707,7 +725,26 @@ func cmdRun(args []string, stdout io.Writer) int {
 		}
 		return 3
 	}
-	_, runErr := runbook.Execute(context.Background(), runbookRunner(stdout), plan, stdout)
+	// What is about to start is shown in full, and a person confirms it. The
+	// server decides what may run, but it does not get to start a program on this
+	// machine unseen: "ctx run X --run" says nothing of the argument lists.
+	fmt.Fprintf(stdout, "About to run %s:%s (version %d, approved by %s) on this machine, each line one program without a shell:\n", v.Name, *target, v.Version, v.ApprovedBy)
+	for i, st := range plan {
+		fmt.Fprintf(stdout, "%d. %s\n", i+1, runbook.QuoteArgv(st.Argv))
+	}
+	if !*yes {
+		if !runbookIsTTY() {
+			fmt.Fprintln(stdout, "\nnot run: without a terminal to confirm at, --run needs --yes")
+			return 3
+		}
+		fmt.Fprint(stdout, "\nRun these programs? Type yes: ")
+		line, _ := bufio.NewReader(runbookStdin).ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(line)); a != "yes" && a != "y" {
+			fmt.Fprintln(stdout, "\nnot run")
+			return 1
+		}
+	}
+	_, runErr := runbook.Execute(context.Background(), runbookRunner(rawStdout), plan, stdout)
 	result := runbook.ResultOK
 	if runErr != nil {
 		result = runbook.ResultFailed
