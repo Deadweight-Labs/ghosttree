@@ -375,6 +375,9 @@ func cmdGardenWith(args []string, stdout io.Writer, ai *store.GardenAI) int {
 				fmt.Fprintln(stdout, err)
 				return 1
 			}
+			if err := hideFromSessions(); err != nil {
+				fmt.Fprintf(stdout, "note: cannot hide this process from the sessions: %v\n", err)
+			}
 			// ctx serves the fixed git tools in every case; --no-mcp only leaves
 			// out the ghosttree tools.
 			cc := garden.ClaudeConfig{Bin: bin, Model: cfg.Model, RepoRoot: repo.Root, ConfigRoot: *claudeDir,

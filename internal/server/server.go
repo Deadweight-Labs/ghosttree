@@ -371,7 +371,7 @@ func (a *api) auth(next http.Handler) http.Handler {
 				return
 			}
 		} else {
-			principal, ok = a.st.AuthenticatePrincipal(token)
+			principal, ok = a.st.AuthenticateScopedPrincipal(token)
 		}
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")

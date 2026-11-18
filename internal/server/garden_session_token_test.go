@@ -49,6 +49,33 @@ func TestGardenSessionTokenIsBoundToOneProjectAndToReading(t *testing.T) {
 	if code, out := f.call(t, "session", "GET", idPath("/api/knowledge/%d", f.id["k-other"]), nil); code != 404 && code != 403 {
 		t.Errorf("an entry of the other project = %d %s", code, out)
 	}
+	// The token logs nobody in on the web and is no full account for anything else.
+	if _, ok := f.st.AuthenticatePrincipal(f.tok["session"]); ok {
+		t.Error("the session token passes AuthenticatePrincipal (web login)")
+	}
+	if p, ok := f.st.AuthenticateScopedPrincipal(f.tok["session"]); !ok || p.ScopeProject != accProject || !p.ReadOnly {
+		t.Errorf("scoped principal = %+v, %v", p, ok)
+	}
+	// Entries without a project (the gardener's own global note) are not
+	// reachable either, and nothing of this depends on the access mode.
+	own, err := f.st.InsertKnowledge(store.Knowledge{Type: "note", Title: "gardener global", Body: "b", Person: "gardener", AuthorID: 7, Confidence: "trusted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, enforce := range []bool{true, false} {
+		f.st.SetAccessMode(store.AccessMode{Enforce: enforce})
+		f.expect(t, "gardener", 200, "GET", idPath("/api/knowledge/%d", own), nil)
+		if code, out := f.call(t, "session", "GET", idPath("/api/knowledge/%d", own), nil); code == 200 {
+			t.Errorf("enforce=%v: the session reads a global entry: %s", enforce, out)
+		}
+		if code, out := f.call(t, "session", "GET", idPath("/api/knowledge/%d", f.id["k-other"]), nil); code == 200 {
+			t.Errorf("enforce=%v: the session reads the other project: %s", enforce, out)
+		}
+		if out := f.expect(t, "session", 200, "GET", "/api/search?q=pitfall", nil); strings.Contains(out, "other project pitfall") || strings.Contains(out, "gardener global") {
+			t.Errorf("enforce=%v: search shows more than the project: %s", enforce, out)
+		}
+	}
+	f.st.SetAccessMode(store.AccessMode{Enforce: true})
 	// No write, no organization, no coordination, no new token.
 	f.expect(t, "session", 403, "POST", "/api/knowledge", map[string]any{"type": "note", "title": "x", "body": "y", "scope": map[string]string{"project": accProject}})
 	f.expect(t, "session", 403, "GET", "/api/orgs", nil)

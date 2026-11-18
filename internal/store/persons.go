@@ -105,10 +105,23 @@ func (s *Store) Authenticate(token string) (string, bool) {
 
 // AuthenticatePrincipal löst ein Token über api_tokens zu seinem Konto auf.
 // Widerrufene, abgelaufene und an deaktivierte Konten gebundene Tokens
-// scheitern wie unbekannte.
+// scheitern wie unbekannte. Ein Token, das der Server an ein Projekt oder ans
+// Lesen gebunden hat (Gärtner-Sitzung), scheitert hier auch: es meldet sich nur
+// an der API an (AuthenticateScopedPrincipal), nie zu einer Websitzung und nie
+// für einen anderen Zweck, der ein volles Konto meint.
 func (s *Store) AuthenticatePrincipal(token string) (Principal, bool) {
+	p, ok := s.AuthenticateScopedPrincipal(token)
+	if !ok || p.ScopeProject != "" || p.ReadOnly {
+		return Principal{}, false
+	}
+	return p, true
+}
+
+// AuthenticateScopedPrincipal is AuthenticatePrincipal for the API, which also
+// accepts the tokens bound to a project and to reading and holds them to that.
+func (s *Store) AuthenticateScopedPrincipal(token string) (Principal, bool) {
 	if s.reader != nil {
-		return s.reader.AuthenticatePrincipal(token)
+		return s.reader.AuthenticateScopedPrincipal(token)
 	}
 	var p Principal
 	var accountID int64

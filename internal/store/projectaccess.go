@@ -587,6 +587,11 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 		return Decision{Hidden: true, Reason: "no account"}
 	}
 	project = strings.TrimSpace(project)
+	if a.principal.ScopeProject != "" && project != a.principal.ScopeProject {
+		// A token bound to one project sees nothing else, entries without a
+		// project (machine, global) included, in every access mode.
+		return Decision{Hidden: true, Strict: true, Reason: "token is bound to another project"}
+	}
 	// Maschinen-Achse: der Besitzer der Maschine (bei Org-Maschinen ein
 	// Maintainer) und Mitglieder einer Org, an die der Eintrag ausdrücklich
 	// freigegeben ist, soweit die Freigabe es erlaubt. Sie gilt nur für Einträge
