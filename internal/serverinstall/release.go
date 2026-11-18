@@ -168,20 +168,9 @@ func (r Release) Fetch(ctx context.Context, tag, dir string) (*Fetched, error) {
 		return nil, fmt.Errorf("unexpected release tag %q (expected v1.2.3 or v1.2.3-rc.1)", tag)
 	}
 	base := r.dl() + "/" + tag
-	sums, err := r.get(ctx, base+"/checksums.txt", maxText)
+	sums, err := r.verifiedChecksums(ctx, tag)
 	if err != nil {
-		return nil, fmt.Errorf("checksums of %s: %w", tag, err)
-	}
-	sig, err := r.get(ctx, base+"/checksums.txt.minisig", maxText)
-	if err != nil {
-		return nil, fmt.Errorf("a release without a signature is not installed: %w", err)
-	}
-	comment, err := minisign.Verify(r.Key, sums, sig)
-	if err != nil {
-		return nil, fmt.Errorf("the signature of checksums.txt does not match the ghosttree release key; nothing was installed (%w)", err)
-	}
-	if comment != "ghosttree "+tag {
-		return nil, fmt.Errorf("the signed checksums.txt belongs to %q, not to ghosttree %s; nothing was installed", comment, tag)
+		return nil, err
 	}
 	version := strings.TrimPrefix(tag, "v")
 	suffix := "_" + r.goos() + "_" + r.goarch() + ".tar.gz"
@@ -202,6 +191,73 @@ func (r Release) Fetch(ctx context.Context, tag, dir string) (*Fetched, error) {
 		return nil, err
 	}
 	return &Fetched{Tag: tag, Version: version, Binary: bin}, nil
+}
+
+// verifiedChecksums downloads checksums.txt of tag and returns it only if its
+// minisign signature is made by r.Key and its trusted comment names this tag.
+func (r Release) verifiedChecksums(ctx context.Context, tag string) ([]byte, error) {
+	if !ValidTag(tag) {
+		return nil, fmt.Errorf("unexpected release tag %q (expected v1.2.3 or v1.2.3-rc.1)", tag)
+	}
+	base := r.dl() + "/" + tag
+	sums, err := r.get(ctx, base+"/checksums.txt", maxText)
+	if err != nil {
+		return nil, fmt.Errorf("checksums of %s: %w", tag, err)
+	}
+	sig, err := r.get(ctx, base+"/checksums.txt.minisig", maxText)
+	if err != nil {
+		return nil, fmt.Errorf("a release without a signature is not installed: %w", err)
+	}
+	comment, err := minisign.Verify(r.Key, sums, sig)
+	if err != nil {
+		return nil, fmt.Errorf("the signature of checksums.txt does not match the ghosttree release key; nothing was installed (%w)", err)
+	}
+	if comment != "ghosttree "+tag {
+		return nil, fmt.Errorf("the signed checksums.txt belongs to %q, not to ghosttree %s; nothing was installed", comment, tag)
+	}
+	return sums, nil
+}
+
+// ImageFile is the file of a release that names its Docker image: one line,
+// sha256:<64 hex>, the digest of the image the release workflow pushed. It is
+// listed in the signed checksums.txt, so the digest is as trustworthy as the
+// archives are; a registry that serves another image for the tag cannot serve
+// another one for the digest.
+const ImageFile = "ghosttree-image.txt"
+
+var imageDigestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// ImageDigest returns the image digest of tag, read from the release's
+// ghosttree-image.txt after the signature of checksums.txt, its trusted comment
+// and the file's SHA-256 have been checked.
+func (r Release) ImageDigest(ctx context.Context, tag string) (string, error) {
+	sums, err := r.verifiedChecksums(ctx, tag)
+	if err != nil {
+		return "", err
+	}
+	want := ""
+	for _, line := range strings.Split(strings.ReplaceAll(string(sums), "\r", ""), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == ImageFile {
+			want = strings.ToLower(f[0])
+		}
+	}
+	if want == "" {
+		return "", fmt.Errorf("the signed checksums of %s do not list %s: that release has no Docker image the signature vouches for", tag, ImageFile)
+	}
+	b, err := r.get(ctx, r.dl()+"/"+tag+"/"+ImageFile, 4096)
+	if err != nil {
+		return "", fmt.Errorf("%s of %s: %w", ImageFile, tag, err)
+	}
+	got := sha256.Sum256(b)
+	if hex.EncodeToString(got[:]) != want {
+		return "", fmt.Errorf("checksum mismatch for %s of %s; nothing was changed", ImageFile, tag)
+	}
+	digest := strings.TrimSpace(string(b))
+	if !imageDigestRE.MatchString(digest) {
+		return "", fmt.Errorf("%s of %s holds %q, not a sha256 digest", ImageFile, tag, digest)
+	}
+	return digest, nil
 }
 
 // archiveEntry finds the single ghosttree_… or ctx_… archive for this platform

@@ -29,6 +29,8 @@ func (s *stubSystem) Run(ctx context.Context, name string, args ...string) (stri
 		return "https://gt.example.com/ui/login/code?code=XYZ\nvalid 15m\n", nil
 	case strings.Contains(line, "db check"):
 		return "ok\n", nil
+	case strings.Contains(line, " ps --status running"):
+		return "ghosttree\nbackup\n", nil
 	case strings.Contains(line, "is-active"):
 		return "active\n", nil
 	case strings.Contains(line, "account add "):
@@ -95,7 +97,7 @@ func withServerSeams(t *testing.T, sys serverinstall.System, term terminal) stri
 
 func TestServerInstallAsksOnlyWhatTheOptionsLeaveOpen(t *testing.T) {
 	// Domain given as an option: not asked. Everything else is answered on the terminal.
-	term := &scriptedTerminal{answers: []string{"2", "ops@example.com", "alex", "de", ""}}
+	term := &scriptedTerminal{answers: []string{"", "2", "ops@example.com", "alex", "de", ""}}
 	prefix := withServerSeams(t, &stubSystem{}, term)
 	var out bytes.Buffer
 	code := cmdServer([]string{"install", "--domain", "gt.example.com"}, &out)
@@ -239,4 +241,50 @@ func TestServerInstallOnAServerThatExistsPointsToUpdateBeforeAskingAnything(t *t
 	if env2, _ := os.ReadFile(filepath.Join(prefix, serverinstall.ServerEnv)); !bytes.Equal(env1, env2) {
 		t.Error("the settings of the running server were changed")
 	}
+}
+
+func TestServerInstallWithDockerWritesTheComposeSetupAndAsksForTheWayFirst(t *testing.T) {
+	term := &scriptedTerminal{answers: []string{"2", "", "alex", "", ""}} // docker; no domain; admin; language; no AI
+	prefix := withServerSeams(t, &stubSystem{}, term)
+	var out bytes.Buffer
+	if code := cmdServer([]string{"install", "--dir", "/opt/gt", "--image", "example.org/gt:1"}, &out); code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out.String())
+	}
+	if !strings.Contains(term.asked[0], "systemd service, 2) with Docker") {
+		t.Errorf("the first question is %q", term.asked[0])
+	}
+	env, err := os.ReadFile(filepath.Join(prefix, "opt/gt/.env"))
+	if err != nil || !strings.Contains(string(env), "GHOSTTREE_IMAGE=example.org/gt:1") {
+		t.Fatalf(".env: %v %s", err, env)
+	}
+	if _, err := os.Stat(filepath.Join(prefix, "opt/gt/compose.yaml")); err != nil {
+		t.Error(err)
+	}
+	if _, err := os.Stat(filepath.Join(prefix, serverinstall.EtcDir)); err == nil {
+		t.Error("the systemd files were written for a Docker setup")
+	}
+	for _, want := range []string{"running with Docker (compose.yaml in /opt/gt)", "Sign in as alex", "ghosttree_backups"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestServerHealthIsWhatTheContainersHealthCheckRuns(t *testing.T) {
+	withServerSeams(t, &stubSystem{}, nil)
+	var out bytes.Buffer
+	if code := cmdServer([]string{"health"}, &out); code != 0 || !strings.Contains(out.String(), "ok") {
+		t.Errorf("%d %s", code, out.String())
+	}
+	serverSystem = &failingGet{}
+	out.Reset()
+	if code := cmdServer([]string{"health", "--url", "http://127.0.0.1:1"}, &out); code != 1 || !strings.Contains(out.String(), "unhealthy") {
+		t.Errorf("%d %s", code, out.String())
+	}
+}
+
+type failingGet struct{ stubSystem }
+
+func (*failingGet) Get(ctx context.Context, url string) ([]byte, error) {
+	return nil, errors.New("refused")
 }

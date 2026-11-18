@@ -64,6 +64,24 @@ type Options struct {
 	AI AIOptions
 	// Force overwrites server.env and the units that exist.
 	Force bool
+	// Docker sets the server up as containers (compose.yaml in Dir) instead of
+	// as a systemd service.
+	Docker bool
+	// Dir is where the Docker setup lives; default /opt/ghosttree for root,
+	// ~/ghosttree otherwise.
+	Dir string
+	// Image is the image to run instead of the one the signed release names.
+	Image string
+	// ImageRepo is where the release's image is pulled from, default
+	// ghcr.io/deadweight-labs/ghosttree; a mirror works, since the digest from the
+	// signed release decides what is run.
+	ImageRepo string
+	// Version is the version of the ctx that runs the installation, which names
+	// the default image.
+	Version string
+	// Subnet and Gateway are the bridge of the Docker setup; chosen at the
+	// installation among the ranges no other Docker network uses.
+	Subnet, Gateway string
 }
 
 // AIOptions describe an optional connection to a model provider. The key is

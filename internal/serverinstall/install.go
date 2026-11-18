@@ -68,6 +68,10 @@ type Env struct {
 	HealthTimeout time.Duration
 	// Poll is the pause between health checks (default one second).
 	Poll time.Duration
+	// Release is where the signed release information comes from, and the key
+	// it is checked with. The Docker setup needs it to pin the image to the
+	// digest the release names; nil when this ctx has no release key.
+	Release *Release
 	// Root requires root; tests set it false and use Options.Prefix.
 	RequireRoot bool
 	// Systemd says whether the machine runs systemd; the check is skipped when
@@ -137,6 +141,9 @@ func (o Options) AdminName() string { return o.admin() }
 func Install(ctx context.Context, o Options, env Env) (*Result, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
+	}
+	if o.Docker {
+		return installDocker(ctx, o, env)
 	}
 	if o.Prefix == "" {
 		if runtimeGOOS() != "linux" {
@@ -251,10 +258,11 @@ func Install(ctx context.Context, o Options, env Env) (*Result, error) {
 	env.say("server is up on %s", local)
 
 	// 4. First accounts, through the service's own identity.
-	if err := ensureAccounts(ctx2, env, o); err != nil {
+	run := func(c context.Context, args ...string) (string, error) { return asService(c, env, args...) }
+	if err := ensureAccounts(ctx2, env, o, run, DBPath); err != nil {
 		return nil, err
 	}
-	link, err := loginLink(ctx2, env, o)
+	link, err := loginLink(ctx2, o, run, DBPath)
 	if err != nil {
 		return nil, err
 	}
@@ -373,8 +381,12 @@ func asService(ctx context.Context, env Env, args ...string) (string, error) {
 	return env.Sys.Run(ctx, "systemd-run", full...)
 }
 
-func ensureAccounts(ctx context.Context, env Env, o Options) error {
-	list, err := asService(ctx, env, "account", "list", "--db", DBPath)
+// ctxRunner runs a ctx command where the server's data is: as the service's
+// user for systemd, inside the container for Docker.
+type ctxRunner func(ctx context.Context, args ...string) (string, error)
+
+func ensureAccounts(ctx context.Context, env Env, o Options, run ctxRunner, db string) error {
+	list, err := run(ctx, "account", "list", "--db", db)
 	if err != nil {
 		return fmt.Errorf("account list: %v: %s", err, strings.TrimSpace(list))
 	}
@@ -388,7 +400,7 @@ func ensureAccounts(ctx context.Context, env Env, o Options) error {
 		return false, false
 	}
 	if found, _ := has(o.admin()); !found {
-		if out, err := asService(ctx, env, "account", "add", o.admin(), "--admin", "--db", DBPath); err != nil {
+		if out, err := run(ctx, "account", "add", o.admin(), "--admin", "--db", db); err != nil {
 			return fmt.Errorf("account add %s: %v: %s", o.admin(), err, strings.TrimSpace(out))
 		}
 		env.say("administrator %q created", o.admin())
@@ -399,16 +411,16 @@ func ensureAccounts(ctx context.Context, env Env, o Options) error {
 	found, isGardener := has(gardener)
 	if !found {
 		for _, args := range [][]string{
-			{"account", "add", gardener, "--db", DBPath},
-			{"account", "set-kind", gardener, "--kind", "service", "--db", DBPath},
+			{"account", "add", gardener, "--db", db},
+			{"account", "set-kind", gardener, "--kind", "service", "--db", db},
 		} {
-			if out, err := asService(ctx, env, args...); err != nil {
+			if out, err := run(ctx, args...); err != nil {
 				return fmt.Errorf("%s: %v: %s", strings.Join(args[:2], " "), err, strings.TrimSpace(out))
 			}
 		}
 	}
 	if !isGardener {
-		if out, err := asService(ctx, env, "account", "set-gardener", gardener, "--db", DBPath); err != nil {
+		if out, err := run(ctx, "account", "set-gardener", gardener, "--db", db); err != nil {
 			return fmt.Errorf("account set-gardener: %v: %s", err, strings.TrimSpace(out))
 		}
 		env.say("account %q is the gardener (its sandboxed runs are set up as described in deploy/README.md)", gardener)
@@ -416,8 +428,8 @@ func ensureAccounts(ctx context.Context, env Env, o Options) error {
 	return nil
 }
 
-func loginLink(ctx context.Context, env Env, o Options) (string, error) {
-	out, err := asService(ctx, env, "account", "login-link", o.admin(), "--url", o.PublicURL(), "--db", DBPath)
+func loginLink(ctx context.Context, o Options, run ctxRunner, db string) (string, error) {
+	out, err := run(ctx, "account", "login-link", o.admin(), "--url", o.PublicURL(), "--db", db)
 	if err != nil {
 		return "", fmt.Errorf("login link: %v: %s", err, strings.TrimSpace(out))
 	}
