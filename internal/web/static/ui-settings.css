@@ -87,11 +87,18 @@
   & .prow.pname .inline-form { display: flex; min-width: 0; }
   /* The retention of workflow runs is a number of days: a short field, the unit and the button right behind it */
   & .prow.wfret { grid-template-columns: 240px 7rem auto auto; justify-content: start; }
-  & .wfpol { margin-top: 12px; }
-  & .wfpol .gform { padding: 12px 16px; display: grid; gap: 12px; }
-  & .wfpolset { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 20px; }
-  & .wfpolset legend { font-weight: 600; font-size: 14px; margin-bottom: 8px; padding: 0; }
-  & .wfchk { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+  /* The policy of the workflows: three cards, each with its heading; a choice names the workflows it concerns */
+  & .wfpol { display: grid; gap: 12px; }
+  & .wfcards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
+  & .wfcard { margin: 0; padding: 12px 16px 16px; min-width: 0; display: grid; gap: 10px; }
+  & .wfcard legend { font-weight: 600; font-size: 14px; padding: 0 4px; margin-left: -4px; }
+  & .wfchk { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; }
+  & .wfchk input { margin-top: 3px; flex: none; }
+  & .wfchk small { display: block; font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+  & .wfwarn { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0 0; font-size: 12px; color: var(--fg-muted); }
+  & .wfwarn svg { flex: none; margin-top: 1px; }
+  & .wfwarn.on { color: var(--attention-fg); }
+  & .wfpolact { display: flex; justify-content: flex-end; }
   & .inline-form .grow { flex: 1; }
   & .invite .gfield:first-child, & .invite .grow { flex: 1; }
   & .invite select.gfield { width: auto; }
@@ -383,12 +390,57 @@
   & .airelease fieldset { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; padding: 0; border: 0; min-width: 0; flex: 1; }
   & .airelease .irc { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
   & .box > .aitab { margin: 0; }
+  /* Reasons at the fields of the connection form */
+  & .fl small.bad { color: var(--danger-fg); font-size: 12px; }
+  & .gfield:has([aria-invalid="true"]) { border-color: var(--danger-emphasis); }
+  & .gfield:has([aria-invalid="true"]:focus) { box-shadow: inset 0 0 0 1px var(--danger-emphasis); }
+  & .gfield input[aria-invalid="true"], & .gfield input[aria-invalid="true"]:focus { border: 0; box-shadow: none; }
+  & .aimrows { display: grid; gap: 8px; }
+  & .aimhead, & .aimrow { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) 32px; gap: 8px; align-items: center; }
+  & .aimhead { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  & .aimrow .gfield { min-width: 0; }
+  & .aimrow .aimerr { grid-column: 1 / -1; }
+  & .aimrow.bad .gfield { border-color: var(--danger-emphasis); }
+  & .aimodels-f > div:has(> [data-addrow]) { margin-top: 2px; }
+  /* The outcome of "Test connection" on the card of a connection */
+  & .aitest { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border-default); border-radius: 6px; font-size: 14px; }
+  & .aitest > svg { flex: none; margin-top: 2px; }
+  & .aitest.ok { background: var(--success-subtle); border-color: var(--success-muted); }
+  & .aitest.ok > svg { color: var(--success-fg); }
+  & .aitest.bad { background: var(--danger-subtle); border-color: var(--danger-muted); }
+  & .aitest.bad > svg { color: var(--danger-fg); }
+  & .aitest .aidetail { margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; }
+  & .aitest .aiat { font-size: 12px; margin-top: 2px; }
+  & .aiconn .acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: flex-start; }
+  /* Release of the server's connections: one cap per organization */
+  & .aigrantcap { display: flex; gap: 8px; align-items: center; }
+  & .aigrantcap .gfield { width: 10rem; }
+  & .aigrants th:nth-child(2), & .aigrants td:nth-child(2) { width: 1%; white-space: nowrap; }
 }
 @media (max-width: 767px) {
   :is(.g2.set) {
     & .aiconn { grid-template-columns: minmax(0, 1fr) auto; }
     & .aiconn > .gav { display: none; }
     & .aigrid { grid-template-columns: minmax(0, 1fr); }
+    & .wfcards { grid-template-columns: minmax(0, 1fr); }
+    & .aimhead { display: none; }
+    & .aimrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
+    & .aimrow > .gfield:first-child { grid-column: 1 / -1; }
+    & .aimrow > button { grid-column: 3; grid-row: 2; }
+    & .airelease fieldset { flex: 1 1 100%; flex-direction: column; }
+    & .airelease .fl { flex: 1 1 100%; }
+    & .box > .aitab:not(.aigrants) { display: block; overflow-x: auto; }
+    & .aigrants, & .aigrants tbody { display: block; }
+    & .aigrants thead { display: none; }
+    & .aigrants tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 12px 16px; border-top: 1px solid var(--border-muted); }
+    & .aigrants td { display: block; padding: 0; width: auto; border: 0; white-space: normal; }
+    & .aigrants td:nth-child(1) { grid-column: 1; grid-row: 1; }
+    & .aigrants td:nth-child(2) { grid-column: 1 / -1; grid-row: 2; width: auto; }
+    & .aigrants td:nth-child(3) { grid-column: 1 / -1; grid-row: 3; }
+    & .aigrants td:nth-child(4) { grid-column: 2; grid-row: 1; }
+    & .aigrantcap { flex-wrap: wrap; }
+    & .aigrantcap .gfield { flex: 1 1 8rem; width: auto; }
+    & .aitest { padding: 8px; }
     & .aialias .fl, & .aicaps .fl { flex: 1 1 100%; }
     & .aialias .gbtn, & .aicaps .gbtn, & .airelease .gbtn { flex: 1 1 100%; min-height: 44px; }
     & .aicost th:nth-child(3), & .aicost td:nth-child(3) { display: none; }

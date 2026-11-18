@@ -51,6 +51,7 @@ var writerMethodClasses = map[string]string{
 	"RevokeAIRunTokens":             "write",
 	"AIRunOfToken":                  "read",
 	"AIRouteFor":                    "read",
+	"AITestRoute":                   "read",
 	"MarkAIRunCap":                  "write",
 	"RecordAICall":                  "write",
 	"ReserveAICall":                 "write",

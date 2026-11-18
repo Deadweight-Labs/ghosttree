@@ -46,6 +46,8 @@ type app struct {
 	language      lang             // server language (GHOSTTREE_LANGUAGE); empty = en
 	explain       *explain.Service // "Kurz erklärt"; nil = off
 	aiBox         *secretbox.Box   // seals the keys of AI connections; nil without a server key
+	aiTester      AITester         // tests a connection with one minimal call; nil: the button is not offered
+	aiTests       aiTestLog        // the last outcome of a test per connection
 	gardenLimits  llmusage.Limits  // caps of the gardener, shown to administrators
 	prover        forge.Prover     // proof behind "connect GitHub"; nil = off
 	sourceFlows   *sourceFlows
@@ -758,6 +760,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/workflow-policy":         webAdmin,
 	"POST /ui/orgs/ai/connection":           webAdmin,
 	"POST /ui/orgs/ai/connection/delete":    webAdmin,
+	"POST /ui/orgs/ai/connection/test":      webAdmin,
 	"POST /ui/orgs/ai/alias":                webAdmin,
 	"POST /ui/orgs/ai/alias/delete":         webAdmin,
 	"POST /ui/orgs/ai/cap":                  webAdmin,

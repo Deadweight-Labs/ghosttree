@@ -147,6 +147,9 @@ type AIConnection struct {
 	// for the owners of the organization.
 	Host       string  `json:"host,omitempty"`
 	SpentMonth float64 `json:"spent_month_usd"`
+	// ReleaseCapUSD is, for a server connection seen from an organization it is
+	// released to, the monthly cap of that release (0: none).
+	ReleaseCapUSD float64 `json:"release_cap_usd,omitempty"`
 }
 
 // AIConnectionInput creates (ID 0) or changes a connection. The key comes as
@@ -905,7 +908,8 @@ func aiReleaseDefaultCapTx(q rowQuerier) float64 {
 
 // aiServerGrantTx says whether the server's connections are released to the
 // namespace, and with which cap. Under the release "all" every namespace,
-// personal ones too, has the default cap unless its grant sets one; without a
+// personal ones too, has the default cap unless its grant sets one; under
+// "selected" a grant without a cap takes the default cap, if there is one; without a
 // default cap (a release saved before there was one) "all" releases nothing,
 // so that no namespace calls the server's models without any cap.
 func aiServerGrantTx(q rowQuerier, orgID int64) (bool, float64) {
@@ -924,6 +928,13 @@ func aiServerGrantTx(q rowQuerier, orgID int64) (bool, float64) {
 		}
 		return false, 0
 	case AIReleaseSelected:
+		if has && capUSD <= 0 {
+			// A selected namespace without a cap of its own has the default one,
+			// as under "all": one cap per namespace, the default unless set.
+			if def := aiReleaseDefaultCapTx(q); def > 0 {
+				return true, def
+			}
+		}
 		return has, capUSD
 	}
 	return false, 0
@@ -970,13 +981,13 @@ func (s *Store) AIConnectionsFor(orgID int64) ([]AIConnection, error) {
 			out[i].SpentMonth = aiSum(s.db, `loan_id=? AND created_at>=?`, out[i].LoanID, month)
 		}
 	}
-	if ok, _ := aiServerGrantTx(s.db, orgID); ok {
+	if ok, release := aiServerGrantTx(s.db, orgID); ok {
 		server, err := aiConnectionsTx(s.db, `WHERE org_id=0 ORDER BY name`)
 		if err != nil {
 			return nil, err
 		}
 		for _, c := range server {
-			out = append(out, AIConnection{ID: c.ID, Name: c.Name, Models: c.Models, Via: AIViaServer,
+			out = append(out, AIConnection{ID: c.ID, Name: c.Name, Models: c.Models, Via: AIViaServer, ReleaseCapUSD: release,
 				SpentMonth: aiSum(s.db, `connection_id=? AND org_id=? AND created_at>=?`, c.ID, orgID, month)})
 		}
 	}
@@ -1792,7 +1803,53 @@ func (s *Store) ReleaseAICall(id int64) error {
 	return err
 }
 
+// AITestWorkflow is the name a test of a connection is booked under: it is a
+// call like any other, without a run.
+const AITestWorkflow = "ghosttree/connection-test"
+
+// AITestRoute is the route of a test call on one connection: the cheapest of
+// its models, the key as stored, booked on the connection's own namespace (the
+// server's connections on none). Only who keeps the connection may test it:
+// the admin for the server's, the owner for a namespace's. A connection that
+// was lent or released is not its borrower's to test.
+func (s *Store) AITestRoute(actorPrincipal string, id int64) (AIRoute, error) {
+	if s.reader != nil {
+		return s.reader.AITestRoute(actorPrincipal, id)
+	}
+	actor, err := parsePersonPrincipalID(actorPrincipal)
+	if err != nil {
+		return AIRoute{}, err
+	}
+	c, err := aiConnectionTx(s.db, id)
+	if err != nil {
+		return AIRoute{}, ErrAIUnavailable
+	}
+	if err := canKeepAIOf(s.db, c.OrgID, actor); err != nil {
+		return AIRoute{}, err
+	}
+	if len(c.Models) == 0 {
+		return AIRoute{}, ErrAIConnection
+	}
+	m := c.Models[0]
+	for _, o := range c.Models[1:] {
+		if o.InUSD+o.OutUSD < m.InUSD+m.OutUSD {
+			m = o
+		}
+	}
+	via := AIViaOwn
+	if c.OrgID == 0 {
+		via = AIViaServer
+	}
+	var sealed []byte
+	_ = s.db.QueryRow(`SELECT key_sealed FROM ai_connections WHERE id=?`, id).Scan(&sealed)
+	return AIRoute{OrgID: c.OrgID, Workflow: AITestWorkflow, Requested: c.Name + "/" + m.Model, Connection: c, KeySealed: sealed, Model: m, Via: via}, nil
+}
+
 func markReachedCapTx(tx *sql.Tx, r AIRoute) (string, error) {
+	if r.RunID == 0 {
+		// A call without a run (the test of a connection) has none to mark.
+		return "", nil
+	}
 	for _, cl := range aiCapsFor(tx, r) {
 		if cl.reached() {
 			_, err := tx.Exec(`INSERT OR IGNORE INTO ai_run_caps(run_id, cap, created_at) VALUES(?,?,?)`, r.RunID, cl.name, now())

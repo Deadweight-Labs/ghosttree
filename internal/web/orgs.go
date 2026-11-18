@@ -145,6 +145,8 @@ type orgsView struct {
 	// the server's, for the instance admin.
 	AI       *aiView
 	AIServer *aiServerView
+	// AIForm is a connection form a refusal sends back, with what it found.
+	AIForm *aiFormView
 	// GardenSet is the gardener's settings section, for the owner (REQ-624).
 	GardenSet *gardenSettingsView
 	// Moved: the viewer's namespaces that had to yield their address to its
@@ -243,7 +245,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	v.Explain = a.explainAdminFor(r)
 	v.Garden = a.gardenAdminFor(r)
 	v.Transcripts = a.transcriptsAdminFor(r)
-	v.AIServer = a.aiServerFor(r)
+	v.AIServer = a.aiServerFor(r, v.AIForm)
 	if interactive(r) && a.isAdmin(browserPrincipal(r)) {
 		v.Assign, _ = a.store.AllOwners()
 	}
@@ -262,11 +264,11 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	}
 	if v.Selected.ID != 0 {
 		v.GardenSet = a.gardenSettingsFor(r, v.Selected)
-		v.AI = a.aiViewFor(r, v.Selected)
+		v.AI = a.aiViewFor(r, v.Selected, v.AIForm)
 		v.Owner = v.Selected.Role == store.OrgOwner
 		if v.Owner {
 			v.Retention = a.store.WorkflowSettingsFor(v.Selected.ID).RetentionDays
-			v.Policy = wfPolicyViewOf(a.store.WorkflowPolicyFor(v.Selected.ID))
+			v.Policy = a.wfPolicyViewOf(r, v.Selected, a.store.WorkflowPolicyFor(v.Selected.ID))
 		}
 		v.CanRename = v.Owner || a.isAdmin(browserPrincipal(r))
 		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me, a.store.AccessEnforced())
@@ -518,6 +520,8 @@ func orgNotice(l lang, key string) string {
 		return l.msg("gardener.saved")
 	case "workflows":
 		return l.msg("wf.retention.saved")
+	case "workflow_policy":
+		return l.msg("wf.policy.saved")
 	case "ai", "ai_server":
 		return l.msg("ai.saved")
 	case "moved":
@@ -602,7 +606,7 @@ func noticeAnchor(notice string) string { return noticeSection[notice] }
 var noticeSection = map[string]string{
 	"source_added": "#sources", "source_failed": "#sources", "source_proved": "#sources", "source_removed": "#sources", "imported": "#sources", "follow": "#sources", "assigned": "#projects",
 	"visibility": "#projects", "project": "#projects", "moved": "#projects", "project_created": "#projects",
-	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener", "workflows": "#workflows", "ai": "#ai", "ai_server": "#ai-server",
+	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener", "workflows": "#workflows", "workflow_policy": "#workflows", "ai": "#ai", "ai_server": "#ai-server",
 }
 
 // fillInvites lists the organization's invitations with the links their

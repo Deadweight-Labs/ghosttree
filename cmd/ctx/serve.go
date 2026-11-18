@@ -54,6 +54,8 @@ type serveConfig struct {
 	AIBox *secretbox.Box
 	// AIProxyURL is the model proxy on loopback; the gardener's runs get it.
 	AIProxyURL string
+	// AITester tests a connection with one minimal call; nil without one.
+	AITester web.AITester
 	// GardenLimits are shown to administrators; the gardener itself runs as a command.
 	GardenLimits llmusage.Limits
 	// Embed configures hybrid search; without a URL it is off.
@@ -388,6 +390,9 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		return 1
 	}
 	cfg.AIBox, cfg.AIProxyURL = ai.Box, ai.BaseURL
+	if ai.Tester != nil {
+		cfg.AITester = ai.Tester
+	}
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
 	fmt.Fprintln(stdout, mailStartLine(cfg))
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", accessEnforcedByEnv(), "env", envEnforceAccess,
@@ -555,7 +560,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	explainCfg.Language = cfg.Language
 	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))
 	webOptions = append(webOptions, web.WithGardenLimits(cfg.GardenLimits))
-	webOptions = append(webOptions, web.WithAIConnections(cfg.AIBox))
+	webOptions = append(webOptions, web.WithAIConnections(cfg.AIBox), web.WithAITester(cfg.AITester))
 	// Automatic approvals of the gardener (REQ-624), for the namespaces whose
 	// owners switched rules on. They run in the server because they act through
 	// the same plans as the review page; the loop lives as long as the process.

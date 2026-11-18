@@ -30,6 +30,45 @@
     sync();
   }
 
+  // The model rows of a connection form: a row more, a row less. The last
+  // remaining row is emptied, not removed. Without this script the form shows
+  // its rows and one empty one.
+  for (const group of document.querySelectorAll(".aimodels-f")) {
+    const rows = group.querySelector("[data-rows]");
+    const tpl = group.querySelector("template[data-rowtpl]");
+    const add = group.querySelector("[data-addrow]");
+    if (!rows || !tpl || !add) continue;
+    add.hidden = false;
+    add.addEventListener("click", () => {
+      const row = tpl.content.firstElementChild.cloneNode(true);
+      rows.append(row);
+      const first = row.querySelector("input");
+      if (first) first.focus();
+    });
+    group.addEventListener("click", (event) => {
+      const del = event.target.closest("[data-delrow]");
+      if (!del) return;
+      const row = del.closest("[data-row]");
+      if (rows.querySelectorAll("[data-row]").length > 1) row.remove();
+      else for (const input of row.querySelectorAll("input")) input.value = "";
+    });
+  }
+
+  // A choice of radio buttons that is saved by choosing (who the server's
+  // connections are released to). "All organizations" needs the standard cap
+  // first: the cursor goes there instead.
+  for (const form of document.querySelectorAll("form[data-autosubmit]")) {
+    const cap = form.querySelector("[data-defcap]");
+    form.addEventListener("change", (event) => {
+      if (!event.target.matches('input[type="radio"]')) return;
+      if (event.target.value === "all" && cap && !cap.value) {
+        cap.focus();
+        return;
+      }
+      form.requestSubmit();
+    });
+  }
+
   // The navigation at the left opens one section at a time, each a page of its own
   // (the headings and boxes up to the next heading). The address names it:
   // #members shows the members, and so does a link to something inside them.
