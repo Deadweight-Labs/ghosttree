@@ -90,3 +90,26 @@ func TestVersionForTheUnknownHasNoBuildDetails(t *testing.T) {
 		t.Fatalf("info for a signed-in client = %+v", known)
 	}
 }
+
+// The machine the server runs on reads its version without a token: the
+// installer waits for it after an update.
+func TestVersionForThisMachineNamesTheBuild(t *testing.T) {
+	h, _ := publicRouteHandler(t, WithBuildVersion("0.1.0-dev+b0cd1b9"))
+	var local version.Info
+	w := fetch(h, "/api/version", "127.0.0.1:5000", "", "")
+	if err := json.Unmarshal(w.Body.Bytes(), &local); err != nil {
+		t.Fatal(err)
+	}
+	if local.Version != "0.1.0-dev+b0cd1b9" {
+		t.Errorf("loopback does not read the version: %+v", local)
+	}
+	// Behind the local proxy the address that counts is the forwarded one.
+	var far version.Info
+	w = fetch(h, "/api/version", "127.0.0.1:5000", "203.0.113.9", "")
+	if err := json.Unmarshal(w.Body.Bytes(), &far); err != nil {
+		t.Fatal(err)
+	}
+	if far.Version != "" {
+		t.Errorf("a forwarded stranger reads the version: %+v", far)
+	}
+}

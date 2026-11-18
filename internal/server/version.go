@@ -18,10 +18,12 @@ import (
 // only with what it needs to see whether it fits this server: the protocol, the
 // oldest client it takes and its capabilities. Version, channel and commit tell
 // someone who knows nothing else how to pick an attack, so they need a token.
+// The machine itself reads them without one: ctx server install and update wait
+// for the new version to answer, and ctx doctor names it.
 func (a *api) versionInfo(w http.ResponseWriter, r *http.Request) {
 	info := a.version()
 	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-	if _, ok := a.st.AuthenticatePrincipal(token); !ok {
+	if _, ok := a.st.AuthenticatePrincipal(token); !ok && !a.fromThisMachine(r) {
 		info.Version, info.Commit, info.Channel = "", "", ""
 	}
 	writeJSON(w, http.StatusOK, info)

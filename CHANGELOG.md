@@ -1485,7 +1485,7 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   and address, and carry one plain line of the sender's text.
 - `/metrics` answers the machine itself and the holder of `GHOSTTREE_METRICS_TOKEN`
   (a scraper on another host sets it, see deploy/README.md), everyone else gets 404;
-  `/api/version` shows no version or commit without a token.
+  `/api/version` shows no version or commit without a token, except to the machine the server runs on.
 - Every web answer carries HSTS over https, a permissions policy and an opener
   policy; the CSP names `form-action`; the session cookie is `__Host-gt_session`
   where it is Secure; a Markdown link whose text names another site shows the real

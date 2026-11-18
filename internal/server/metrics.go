@@ -306,6 +306,12 @@ func (a *api) metricsAllowed(r *http.Request) bool {
 			return true
 		}
 	}
+	return a.fromThisMachine(r)
+}
+
+// fromThisMachine reports whether the client address, read through the trusted
+// proxies, is loopback.
+func (a *api) fromThisMachine(r *http.Request) bool {
 	ip, err := netip.ParseAddr(a.clientAddr(r))
 	return err == nil && ip.Unmap().IsLoopback()
 }
