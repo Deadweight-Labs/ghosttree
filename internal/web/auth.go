@@ -197,6 +197,23 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 // es, ob etwas als Mensch oder als Agent geschrieben wird.
 func fromSignIn(r *http.Request) bool { return browserPrincipal(r).SignedIn() }
 
+// pageView says whether the request is the browser showing a page to the person: a
+// navigation of a document, not an image, script or prefetch that another site
+// embeds or a browser makes ahead. A GET that touches the state of the person (a note
+// seen, an index started) only does so for such a request.
+func pageView(r *http.Request) bool {
+	if r.Header.Get("Sec-Purpose") != "" || strings.Contains(strings.ToLower(r.Header.Get("Purpose")), "prefetch") {
+		return false
+	}
+	if d := r.Header.Get("Sec-Fetch-Dest"); d != "" && d != "document" {
+		return false
+	}
+	if m := r.Header.Get("Sec-Fetch-Mode"); m != "" && m != "navigate" {
+		return false
+	}
+	return true
+}
+
 func (a *app) notInteractive(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")

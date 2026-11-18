@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
@@ -140,5 +141,49 @@ func TestLinkSessionIsShortAndNotSliding(t *testing.T) {
 	v2, _ := s.get(id)
 	if !v2.expires.Equal(v.expires) {
 		t.Fatal("a link session must not slide: its end stays")
+	}
+}
+
+func TestPageViewIsANavigationOfADocument(t *testing.T) {
+	for name, tc := range map[string]struct {
+		header map[string]string
+		want   bool
+	}{
+		"a plain request":      {nil, true},
+		"a navigation":         {map[string]string{"Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate"}, true},
+		"an image of a page":   {map[string]string{"Sec-Fetch-Dest": "image", "Sec-Fetch-Mode": "no-cors"}, false},
+		"a fetch":              {map[string]string{"Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors"}, false},
+		"a prefetch":           {map[string]string{"Sec-Purpose": "prefetch"}, false},
+		"an old prefetch":      {map[string]string{"Purpose": "prefetch"}, false},
+		"an embedded document": {map[string]string{"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Mode": "navigate"}, false},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/ui/orgs", nil)
+		for k, v := range tc.header {
+			r.Header.Set(k, v)
+		}
+		if got := pageView(r); got != tc.want {
+			t.Errorf("%s: pageView = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// A pasted token does not take an invitation; a sign-in does.
+func TestPastedTokenDoesNotAcceptAnInvitation(t *testing.T) {
+	srv, st, _ := testWeb(t)
+	org, _ := st.CreateOrg("person:1", "Alpha", "alpha")
+	jonasToken, err := st.AddPerson("jonas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, time.Hour)
+	pasted := login(t, srv, jonasToken)
+	csrf := csrfOfPage(t, body(t, getURL(t, pasted, srv.URL+"/ui/orgs")))
+	resp := sameOriginPostForm(t, pasted, srv.URL+"/ui/orgs/accept", url.Values{"csrf_token": {csrf}, "code": {code}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a pasted token took an invitation: %d", resp.StatusCode)
+	}
+	if orgs, _ := st.ListOrgs("person:2"); len(orgs) != 0 {
+		t.Fatalf("the account is a member after a pasted token: %v", orgs)
 	}
 }

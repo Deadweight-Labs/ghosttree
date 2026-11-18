@@ -435,7 +435,9 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	for path, h := range map[string]http.HandlerFunc{
 		"/ui/orgs/accept": a.orgAccept,
 	} {
-		a.handle(mux, "POST "+path, a.requirePerson(limitBody(a.requireCSRF(h))))
+		// An invitation is taken by a person who signed in, like the one of a project
+		// on the invitation page: not by a pasted or device token.
+		a.handle(mux, "POST "+path, a.requirePerson(a.requireSignIn(store.RightAccountSecurity, limitBody(a.requireCSRF(h)))))
 	}
 	a.handle(mux, "GET /ui/{$}", a.uiRoot)
 	a.registerRepoPages(mux)
