@@ -792,7 +792,14 @@ func knowledgeLabel(k store.Knowledge) string {
 	label := fmt.Sprintf("type:%s|scope:%s|status:%s|confidence:%s|activation:%s|source:%s",
 		k.Type, scopeLabel(k.Scope), k.Status, k.Confidence, activationLabel, source)
 	if provenance := store.KnowledgeProvenance(k); provenance != "" {
+		// The server states the author with the role they hold today; the
+		// stored name alone says nothing about their standing.
+		if author := store.SafeLine(k.Author, 120); author != "" && k.Person != "" {
+			provenance = strings.Replace(provenance, "by "+k.Person, "by "+author, 1)
+		}
 		label += "|" + provenance
+	} else if author := store.SafeLine(k.Author, 120); author != "" {
+		label += "|by " + author
 	}
 	return label
 }

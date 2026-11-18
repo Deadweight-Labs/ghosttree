@@ -173,7 +173,8 @@ func (a CoordAccess) mentionCandidatesTx(tx *sql.Tx, actor, roomKey string) ([]m
 		}
 		if display != "" && display != external {
 			if c.label == id {
-				c.label = display
+				// Stored before the registration was checked, it may carry anything.
+				c.label = SafeLabel(display)
 			}
 			c.handles = addHandle(c.handles, display)
 			if first, _, found := strings.Cut(strings.TrimSpace(display), " "); found {

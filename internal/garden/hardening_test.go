@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/config"
 )
 
 func argVal(t *testing.T, args []string, flag string) string {
@@ -25,7 +27,7 @@ func argVal(t *testing.T, args []string, flag string) string {
 
 func TestClaudeArgsAreLockedDown(t *testing.T) {
 	c := ClaudeConfig{Bin: "claude", Model: "claude-sonnet-5-5", RepoRoot: "/r", CtxBin: "/usr/bin/ctx", DenyRead: []string{"/srv/x/private"},
-		ParentEnv: []string{"HOME=/h", "PATH=/bin", "GHOSTTREE_GARDEN_KEY=geheim"}}
+		Ghosttree: &config.Config{ServerURL: "http://s", Token: "scoped"}, ParentEnv: []string{"HOME=/h", "PATH=/bin", "GHOSTTREE_GARDEN_KEY=geheim"}}
 	args, err := c.Args(SessionSpec{MaxTurns: 60, BudgetUSD: 1.5})
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +96,7 @@ func mcpServers(t *testing.T, args []string) map[string]map[string]any {
 // only the fixed git server, the allowlist has no context_search or
 // context_get, and the system prompt does not promise them.
 func TestClaudeArgsWithoutGhosttreeKeepTheGitTools(t *testing.T) {
-	base := ClaudeConfig{Bin: "claude", RepoRoot: "/r", CtxBin: "/usr/bin/ctx", ParentEnv: []string{"HOME=/h", "PATH=/bin"}}
+	base := ClaudeConfig{Bin: "claude", RepoRoot: "/r", CtxBin: "/usr/bin/ctx", Ghosttree: &config.Config{ServerURL: "http://s", Token: "scoped"}, ParentEnv: []string{"HOME=/h", "PATH=/bin"}}
 	ghosttreeTools := []string{"mcp__ghosttree__context_search", "mcp__ghosttree__context_get"}
 
 	with, err := base.Args(SessionSpec{MaxTurns: 20})
@@ -712,5 +714,45 @@ func TestCheckAgentKeepsAnUntouchedCheckout(t *testing.T) {
 	})
 	if res.StoppedBy == "tamper" || judged != 4 {
 		t.Fatalf("stopped=%q judged=%d", res.StoppedBy, judged)
+	}
+}
+
+// The ghosttree MCP server of a session never reads the gardener's own config:
+// it gets the config of the run, with the token the server bound to the
+// project, and without one it is not started at all.
+func TestGhosttreeToolsComeOnlyWithTheRunsOwnScopedConfig(t *testing.T) {
+	parent := []string{"HOME=/home/gardener", "XDG_CONFIG_HOME=/home/gardener/.config", "PATH=/bin"}
+	without, err := ClaudeConfig{Bin: "claude", RepoRoot: "/r", CtxBin: "/usr/bin/ctx", ParentEnv: parent}.Args(SessionSpec{MaxTurns: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv := mcpServers(t, without); srv["ghosttree"] != nil {
+		t.Errorf("ghosttree server started without a project-bound config: %v", srv)
+	}
+	if a := argVal(t, without, "--allowedTools"); strings.Contains(a, "context_") {
+		t.Errorf("allowlist names tools of a server that is not there: %s", a)
+	}
+
+	c := ClaudeConfig{Bin: "claude", RepoRoot: "/r", CtxBin: "/usr/bin/ctx", ConfigRoot: "/cfg", mcpHome: "/cfg/run-1",
+		Ghosttree: &config.Config{ServerURL: "http://s", Token: "scoped"}, ParentEnv: parent}
+	args, err := c.Args(SessionSpec{MaxTurns: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, _ := mcpServers(t, args)["ghosttree"]["env"].(map[string]any)
+	if env["HOME"] != "/cfg/run-1" || env["XDG_CONFIG_HOME"] != "/cfg/run-1/mcp-config" {
+		t.Errorf("the MCP server reads %v, not the run's own directory", env)
+	}
+	if cfg := argVal(t, args, "--mcp-config"); strings.Contains(cfg, "/home/gardener") {
+		t.Errorf("the gardener's own directory reaches the session: %s", cfg)
+	}
+
+	dir := t.TempDir()
+	if err := c.writeGhosttreeConfig(dir); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(mcpConfigDir(dir), "ghosttree", "config.json"))
+	if err != nil || !strings.Contains(string(b), `"token":"scoped"`) {
+		t.Fatalf("config of the run: %s (%v)", b, err)
 	}
 }

@@ -177,6 +177,9 @@ func CleanGhostDescription(s string) (string, string) {
 			return "", "Text enthält Steuerzeichen"
 		}
 	}
+	if what := instructionLike(s); what != "" {
+		return "", "Text liest sich wie eine Anweisung an den Leser (" + what + "); eine Beschreibung sagt, was der Pfad ist"
+	}
 	return s, ""
 }
 

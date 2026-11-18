@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/Deadweight-Labs/ghosttree/internal/workflow"
 )
@@ -278,6 +280,16 @@ func TestRunbooksAreCalledRunbooksAndTheOldAddressLeadsThere(t *testing.T) {
 	}
 }
 
+// seedMemberIssue opens an issue of the project. The automatic approval of an
+// issue needs a quote from text that members wrote, and the title of a pull
+// request is not that: the open issues, which the run reads as well, are.
+func seedMemberIssue(t *testing.T, e shellEnv, title string) {
+	t.Helper()
+	if _, err := e.St.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: title, Scope: scope.Axes{Project: shellProject}, Person: "robin"}, AuthorID: 1}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // AC-695.4, 695.5 and 695.7 in the browser: the run page lists what a run
 // proposed and what it was refused, with the reason; a reviewer accepts the
 // proposed issue on the review page and the issue exists after it; the owner
@@ -285,7 +297,8 @@ func TestRunbooksAreCalledRunbooksAndTheOldAddressLeadsThere(t *testing.T) {
 // automatic approval stands on the run page with an undo.
 func TestRunPageShowsResultsAndTheReviewPageAcceptsAProposal(t *testing.T) {
 	e, _ := workflowEnv(t)
-	text := "---\non: pr.merged\ninputs: [pr.title]\nuses: ghosttree/echo\nresults:\n  issue: 2\n---\n"
+	text := "---\non: pr.merged\ninputs: [pr.title, requests.open]\nuses: ghosttree/echo\nresults:\n  issue: 2\n---\n"
+	seedMemberIssue(t, e, "feat: second path")
 	cat := workflow.DefaultCatalog()
 	spec := cat[workflow.EchoName]
 	spec.Results = workflow.ResultKinds
@@ -358,7 +371,8 @@ func TestRunPageShowsResultsAndTheReviewPageAcceptsAProposal(t *testing.T) {
 // cannot, and an approval taken back once stays taken back.
 func TestOnlyReviewersUndoAnAutomaticApproval(t *testing.T) {
 	e, _ := workflowEnv(t)
-	text := "---\non: pr.merged\ninputs: [pr.title]\nuses: ghosttree/echo\nresults:\n  issue: 1\n---\n"
+	text := "---\non: pr.merged\ninputs: [pr.title, requests.open]\nuses: ghosttree/echo\nresults:\n  issue: 1\n---\n"
+	seedMemberIssue(t, e, "feat: second path")
 	cat := workflow.DefaultCatalog()
 	spec := cat[workflow.EchoName]
 	spec.Results = workflow.ResultKinds

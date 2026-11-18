@@ -139,6 +139,9 @@ func ReadableAgentName(provider, project string) string {
 // room_key auf coord_agents bleibt als Kompatibilitätswert der Erstanmeldung
 // unverändert; die normalisierte Mitgliedschaft ist die aktuelle Wahrheit.
 func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
+	if err := a.normalizeForRegistration(); err != nil {
+		return 0, err
+	}
 	if s.writer != nil {
 		return queueValue(s, []any{a}, func(d *Store, p []any) (int64, error) {
 			return d.RegisterCoordAgent(p[0].(CoordAgent))
@@ -394,7 +397,9 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 			&a.Machine, &a.WorkNote, &a.WorkNoteAt, &ended); err != nil {
 			return nil, err
 		}
-		out = append(out, a)
+		// Altbestand kann Selbstauskunft in beliebiger Form tragen; was andere
+		// Agenten lesen, ist immer die geprüfte Form.
+		out = append(out, a.forPeers())
 		endeds = append(endeds, ended)
 		principals = append(principals, principal)
 		polls = append(polls, poll)

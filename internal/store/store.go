@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS api_tokens(
   machine TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, last_used_at TEXT NOT NULL DEFAULT '',
   expires_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS api_token_scopes(
+  token_id INTEGER PRIMARY KEY, project TEXT NOT NULL, read_only INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS account_migrations(
   version INTEGER PRIMARY KEY, migrated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS orgs(

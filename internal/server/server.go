@@ -145,6 +145,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "POST /api/invitations/accept", a.acceptInvitation)
 	a.routeFunc(mux, "PUT /api/account/default-org", a.setDefaultOrg)
 	a.routeFunc(mux, "GET /api/garden/due", a.gardenDue)
+	a.routeFunc(mux, "POST /api/garden/session-token", a.gardenSessionToken)
 	a.routeFunc(mux, "POST /api/garden/runs", a.gardenRunStart)
 	a.routeFunc(mux, "POST /api/garden/runs/{id}/finish", a.gardenRunFinish)
 	a.routeFunc(mux, "GET /api/projects", a.listProjects)
@@ -377,10 +378,14 @@ func (a *api) auth(next http.Handler) http.Handler {
 				return
 			}
 		} else {
-			principal, ok = a.st.AuthenticatePrincipal(token)
+			principal, ok = a.st.AuthenticateScopedPrincipal(token)
 		}
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if principal.ReadOnly && !scopedTokenMayRead(r) {
+			writeCoded(w, http.StatusForbidden, "forbidden", "this token is bound to one project and to reading")
 			return
 		}
 		a.st.TouchToken(principal.TokenID)
@@ -397,6 +402,28 @@ func (a *api) auth(next http.Handler) http.Handler {
 		movedProjects(r)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// scopedPrefixes are the routes a read-only project token reaches: the reads of
+// what belongs to a project. Organization, account, machine and coordination
+// routes are not among them, whatever the account behind the token may do.
+var scopedPrefixes = []string{
+	"/api/search", "/api/knowledge", "/api/ghosts", "/api/requests", "/api/pains", "/api/ideas", "/api/documents",
+	"/api/features", "/api/decisions", "/api/pulls", "/api/packages", "/api/commits", "/api/comments", "/api/labels",
+	"/api/topics", "/api/sessions", "/api/criteria", "/api/whoami", "/api/version", "/api/health",
+}
+
+// scopedTokenMayRead says whether a request is a read on one of scopedPrefixes.
+func scopedTokenMayRead(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	for _, p := range scopedPrefixes {
+		if r.URL.Path == p || strings.HasPrefix(r.URL.Path, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // whoAmIResponse ist der Principal plus die Kontodaten. Die Principal-Felder

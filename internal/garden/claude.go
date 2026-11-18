@@ -14,7 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
+	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
 )
 
 // SessionResult is what a Claude Code session reported: its closing text, the
@@ -271,15 +273,25 @@ type ClaudeConfig struct {
 	// CLAUDE_CONFIG_DIR (and HOME). It must be set: a session that fell back to
 	// the settings of whoever runs it could widen its own rights.
 	ConfigRoot string
+	// mcpHome is the directory of the run whose config the ghosttree MCP
+	// server reads; RunSession sets it.
+	mcpHome string
 	// CtxBin is the ctx binary that serves the fixed git tools (ctx garden
 	// git-mcp) and, unless NoGhosttree is set, the ghosttree MCP tools. Empty
 	// means the session gets neither; the agent mode always sets it.
 	CtxBin string
+	// Ghosttree is how the ghosttree MCP server of a session reaches the server:
+	// the address and a token that the server itself bound to the project of the
+	// run and to reading (Store.CreateGardenSessionToken). It is written into the
+	// run's own directory; the gardener's own config never reaches the session.
+	// Without it the session gets no ghosttree tools at all: whatever the
+	// session is told cannot make it read another project.
+	Ghosttree *config.Config
 	// NoGhosttree leaves the ghosttree MCP server (context_search, context_get)
 	// out of the session: no server in the MCP config, no allowlist entry, no
-	// mention in the system prompt. Those tools cannot be limited to one project,
-	// so a gardener that must not read other projects' entries runs without
-	// them. The fixed git tools stay.
+	// mention in the system prompt. A session also runs without them when the
+	// server gave it no project-bound token (Ghosttree is nil). The fixed git
+	// tools stay.
 	NoGhosttree bool
 	// DenyRead lists absolute paths (files or directories) the session may not read.
 	DenyRead []string
@@ -331,7 +343,30 @@ func AgentAllowed(repoRoot string, withGhosttree bool) []string {
 
 // ghosttreeTools says whether the session gets the ghosttree MCP server. The
 // allowlist, the MCP config and the system prompt all follow this one answer.
-func (c ClaudeConfig) ghosttreeTools() bool { return c.CtxBin != "" && !c.NoGhosttree }
+func (c ClaudeConfig) ghosttreeTools() bool {
+	return c.CtxBin != "" && !c.NoGhosttree && c.Ghosttree != nil
+}
+
+// mcpConfigDir is where the ghosttree MCP server finds its config.json
+// (XDG_CONFIG_HOME/ghosttree/config.json) inside a run's directory.
+func mcpConfigDir(runDir string) string { return filepath.Join(runDir, "mcp-config") }
+
+// writeGhosttreeConfig writes the session's own client config for the ghosttree
+// MCP server into runDir.
+func (c ClaudeConfig) writeGhosttreeConfig(runDir string) error {
+	if c.Ghosttree == nil {
+		return nil
+	}
+	dir := filepath.Join(mcpConfigDir(runDir), "ghosttree")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	b, err := json.Marshal(c.Ghosttree)
+	if err != nil {
+		return err
+	}
+	return privatefile.Write(filepath.Join(dir, "config.json"), append(b, '\n'))
+}
 
 // Args is the claude command line of one session. The prompt goes in on stdin.
 func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
@@ -382,13 +417,11 @@ func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 		// The MCP servers get what they need by their own env entry, so the
 		// session's own environment can stay small.
 		if c.ghosttreeTools() {
-			env := map[string]string{}
-			for _, kv := range c.ParentEnv {
-				k, v, _ := strings.Cut(kv, "=")
-				if mcpEnv[k] {
-					env[k] = v
-				}
+			home := c.mcpHome
+			if home == "" {
+				home = c.ConfigRoot
 			}
+			env := map[string]string{"HOME": home, "XDG_CONFIG_HOME": mcpConfigDir(home), "PATH": envOf(c.ParentEnv, "PATH")}
 			servers["ghosttree"] = map[string]any{"command": c.CtxBin, "args": []string{"mcp"}, "env": env}
 		}
 		servers[GitServerName] = map[string]any{"command": c.CtxBin, "args": []string{"garden", "git-mcp", "--repo", c.RepoRoot}, "env": map[string]string{"PATH": envOf(c.ParentEnv, "PATH")}}
@@ -406,9 +439,6 @@ func envOf(env []string, key string) string {
 	}
 	return ""
 }
-
-// mcpEnv is what the ghosttree MCP server needs to find its client config.
-var mcpEnv = map[string]bool{"HOME": true, "XDG_CONFIG_HOME": true, "PATH": true}
 
 // passEnv are the only variables a session inherits from its parent: where
 // programs and certificates are, not what is secret. Everything else, the
@@ -457,10 +487,6 @@ func (r ClaudeRunner) RunSession(ctx context.Context, s SessionSpec) (SessionRes
 	if !filepath.IsAbs(c.ConfigRoot) {
 		return SessionResult{}, fmt.Errorf("config root %q is not absolute", c.ConfigRoot)
 	}
-	args, err := c.Args(s)
-	if err != nil {
-		return SessionResult{}, err
-	}
 	if err := os.MkdirAll(c.ConfigRoot, 0o700); err != nil {
 		return SessionResult{}, err
 	}
@@ -471,6 +497,14 @@ func (r ClaudeRunner) RunSession(ctx context.Context, s SessionSpec) (SessionRes
 		return SessionResult{}, err
 	}
 	defer os.RemoveAll(runDir)
+	c.mcpHome = runDir
+	if err := c.writeGhosttreeConfig(runDir); err != nil {
+		return SessionResult{}, err
+	}
+	args, err := c.Args(s)
+	if err != nil {
+		return SessionResult{}, err
+	}
 	if c.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.Timeout)

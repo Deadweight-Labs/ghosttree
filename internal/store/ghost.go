@@ -21,9 +21,12 @@ type GhostFile struct {
 	GitBlob     string `json:"git_blob,omitempty"`
 	// Branch ist die Ebene der Beschreibung (#713): leer ist die Projektebene,
 	// sonst gilt sie auf diesem Branch und in davon abgezweigten (ghostbranch.go).
-	Branch      string `json:"branch,omitempty"`
-	LineCount   int    `json:"line_count"`
-	Person      string `json:"person,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	LineCount int    `json:"line_count"`
+	Person    string `json:"person,omitempty"`
+	// Author is who wrote the description and in which role, as the reader's
+	// server states it ("mia, member"); derived on delivery, never stored.
+	Author      string `json:"author,omitempty"`
 	Harness     string `json:"harness,omitempty"`
 	SessionRef  string `json:"session_ref,omitempty"`
 	DescribedAt string `json:"described_at"`

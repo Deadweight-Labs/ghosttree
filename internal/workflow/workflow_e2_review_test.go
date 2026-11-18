@@ -11,7 +11,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-const autoKindsText = "---\non: pr.merged\ninputs: [pr.title]\nuses: ghosttree/echo\nresults:\n  knowledge: 1\n  criterion: 1\n  relation: 1\n---\n"
+const autoKindsText = "---\non: pr.merged\ninputs: [pr.title, requests.open]\nuses: ghosttree/echo\nresults:\n  knowledge: 1\n  criterion: 1\n  relation: 1\n---\n"
 
 // leadAnna makes a second account that holds the role lead in the project, and
 // returns what a person with that role needs: the account and a workflow it
@@ -36,7 +36,7 @@ func leadAnna(t *testing.T, st *store.Store) {
 
 func twoRequests(t *testing.T, st *store.Store) {
 	t.Helper()
-	for _, title := range []string{"Erste", "Zweite"} {
+	for _, title := range []string{"Erste: Anmeldung per Link", "Zweite: Anmeldung per Link"} {
 		if _, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: title, Scope: scope.Axes{Project: project}, Person: "robin"}, AuthorID: 1}); err != nil {
 			t.Fatal(err)
 		}

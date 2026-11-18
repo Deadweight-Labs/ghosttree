@@ -871,6 +871,22 @@ run page; an automatic approval can be undone there. The owner's policy can
 forbid instructions (stage 2), own prompts (stage 3), research on the net and
 single kinds; a workflow against it does not run and is listed as skipped.
 
+The automatic approval of an issue, a criterion or a relation applies only when
+the quotes of the result stand in text that members wrote: inputs such as the open
+issues, the ideas or what people typed in the sessions of a pull request, and the
+results of read tools of the knowledge, issues, ideas, problems and sessions. A
+quote from the text of a pull request from GitHub (`pr.title`, `pr.text`,
+`pr.commits`, `pr.files`, `pr.diff`), the diff or a file description read by a
+tool, or from research on the net is no evidence for it: whoever wrote that text
+wrote the quote too. Such a result waits for a person like any other. Knowledge
+needs no such check: what a run applies of it starts untrusted and is not
+delivered before a person reviews it.
+
+Without a monthly cap of the owner, the runs of the workflows of an organization
+stop at 25 USD a month (the cap of the owner replaces that value); the gardener
+has its own budget. A model without a price, which no cap in dollars stops, stops
+at 40 calls per run and 2000 calls per month and connection.
+
 **The token of a run** names the account the run acts for (the author of the
 version it runs) and the run, at `GET /api/whoami`, and reaches nothing else
 of the API; what a run creates goes through the check of its results.
@@ -986,18 +1002,30 @@ session is treated as untrusted:
   `garden/state/state.json` (`--state-file`) instead of `--db`.
 
 The ghosttree MCP server of a session (`ctx mcp`, for `context_search` and
-`context_get`) reads its client config from `$HOME/.config/ghosttree/config.json`
-with the `HOME` of the unit, so with the example unit from
-`/var/lib/ghosttree/garden/claude/.config/ghosttree/config.json` (`server_url`
-and the token of the gardener). The old `garden/home/.config/ghosttree` is not
-visible in the sandbox any more; move the file. The probe checks that it is
-readable (`CLIENT_CONFIG` for another place).
+`context_get`) does not read the gardener's own client config. For every run
+the gardener asks the server for a session token (`POST /api/garden/session-token`),
+writes it into the directory of that run and points the MCP server there. The
+server binds that token to the one project of the run and to reading: it sees no
+other project or organization, takes no write, and reaches only the read routes
+of what belongs to a project. It lives for four hours at most. The gardener's own
+config (`$HOME/.config/ghosttree/config.json` of the unit) is still read by
+`ctx garden` itself, never by the session; the probe checks that it is readable
+(`CLIENT_CONFIG` for another place).
 
-`context_search` and `context_get` cannot be limited to one project by an
-allowlist, so a gardener that must not read other projects' entries runs with
-`--no-mcp`: the session then gets no ghosttree server (and needs no client
-config), is not allowed those two tools and is not told about them. The fixed
-git tools `git_log` and `git_show` stay either way.
+`ctx garden` runs as the same user as its sessions. Before it starts one it clears
+the dumpable flag of its own process (Linux), so that the kernel keeps the
+session from reading `/proc/<pid>/environ` and `/proc/<pid>/mem` of `ctx`, where the
+gardener's key and token are. The rule `Read(//proc/**)` of the session stays as
+a second barrier. Give the key as a systemd credential (`api_key_file` or
+`credential` in the `garden` entry of `llm.json`) rather than as
+`GHOSTTREE_GARDEN_KEY` in the environment; a symbolic link in the checkout that
+leads out of it is refused by the permission rules of Claude Code, which
+`internal/garden/matcher_test.go` checks with the real binary.
+
+If the server does not give a token (an older server, the gardener switched off for
+that organization), the session runs without the ghosttree tools, as with
+`--no-mcp`: no ghosttree server, those two tools are not allowed and not
+mentioned. The fixed git tools `git_log` and `git_show` stay either way.
 
 ### What the gardener writes, and what only people do
 
