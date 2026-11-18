@@ -564,7 +564,7 @@ func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
 	k, err := a.st.KnowledgeByID(id)
 	if err == sql.ErrNoRows {
 		a.access(r).Filtered()
-		writeErr(w, http.StatusNotFound, "no such knowledge entry")
+		writeNotFound(w)
 		return
 	}
 	if err != nil {
@@ -595,7 +595,7 @@ func (a *api) knowledgeHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		a.access(r).Filtered()
-		writeErr(w, http.StatusNotFound, "no such knowledge entry")
+		writeNotFound(w)
 		return
 	}
 	if err != nil {

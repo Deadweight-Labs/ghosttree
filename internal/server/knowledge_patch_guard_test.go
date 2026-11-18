@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -58,3 +59,59 @@ func TestKnowledgePatchDoesNotSetOriginSupersessionOrStatus(t *testing.T) {
 }
 
 func itoa64(n int64) string { return idPath("%d", n) }
+
+// Das Ziel einer Relation ist ein Auftrag oder Wissen desselben Projekts, das
+// der Aufrufer lesen darf; fehlend, fremd und verborgen antworten gleich.
+func TestRequestRelationChecksItsTarget(t *testing.T) {
+	f := accessAPI(t, true)
+	own := f.id["r-mia"]
+	path := idPath("/api/requests/%d/relations", own)
+	f.expect(t, "mia", 201, "POST", path, map[string]any{"kind": "related", "other_request_id": f.id["r-robin"]})
+	f.expect(t, "mia", 201, "POST", path, map[string]any{"kind": "knowledge", "knowledge_id": f.id["k-mia"]})
+	f.expect(t, "mia", 201, "POST", path, map[string]any{"kind": "external", "external_ref": "https://example.test/x"})
+	// What is not there, what lies in another project and what the caller may not
+	// read all answer the same.
+	for name, body := range map[string]map[string]any{
+		"unknown request":              {"kind": "related", "other_request_id": 99999},
+		"request of another project":   {"kind": "related", "other_request_id": f.id["r-other"]},
+		"unknown knowledge":            {"kind": "knowledge", "knowledge_id": 99999},
+		"knowledge of another project": {"kind": "knowledge", "knowledge_id": f.id["k-other"]},
+		"global knowledge of another":  {"kind": "knowledge", "knowledge_id": f.id["k-global"]},
+	} {
+		if out := f.expect(t, "mia", 404, "POST", path, body); !strings.Contains(out, "origin_not_found") {
+			t.Errorf("%s: %s", name, out)
+		}
+	}
+	if detail, err := f.st.RequestByID(own); err != nil || len(detail.Relations) != 3 {
+		t.Errorf("relations kept: %d %v", len(detail.Relations), err)
+	}
+}
+
+// "Gibt es nicht" und "darfst du nicht sehen" antworten Byte für Byte gleich,
+// damit fortlaufende Nummern von Wissen und Dokumenten nichts verraten.
+func TestUnknownAndHiddenObjectsAnswerAlike(t *testing.T) {
+	f := accessAPI(t, true)
+	body := func(who, method, path string, payload any) string {
+		code, out := f.call(t, who, method, path, payload)
+		if code != 404 {
+			t.Errorf("%s %s %s = %d, want 404", who, method, path, code)
+		}
+		return out
+	}
+	for _, c := range []struct {
+		method, format string
+		hidden         int64
+		payload        any
+	}{
+		{"GET", "/api/knowledge/%d", f.id["k-mia"], nil},
+		{"GET", "/api/knowledge/%d/history", f.id["k-mia"], nil},
+		{"PATCH", "/api/knowledge/%d", f.id["k-mia"], map[string]string{"body": "x"}},
+		{"GET", "/api/documents/%d", f.id["d-mia"], nil},
+		{"PATCH", "/api/documents/%d", f.id["d-mia"], map[string]string{"title": "x"}},
+		{"GET", "/api/documents/%d/revisions", f.id["d-mia"], nil},
+	} {
+		if hidden, unknown := body("nora", c.method, idPath(c.format, c.hidden), c.payload), body("nora", c.method, idPath(c.format, 99999), c.payload); hidden != unknown {
+			t.Errorf("%s %s: hidden answers %q, unknown %q", c.method, c.format, hidden, unknown)
+		}
+	}
+}
