@@ -51,6 +51,25 @@ signs:
       - "${artifact}"
       - --yes
     output: true
+  # The second signature, the one install.sh checks (REQ-723, DEC-56): minisign,
+  # key in the release workflow's secrets. The key has no password; the
+  # "trusted comment" names the tag, so a genuine list of another release does
+  # not pass for this one.
+  - id: minisign
+    cmd: minisign
+    artifacts: checksum
+    signature: "${artifact}.minisig"
+    args:
+      - -S
+      - -s
+      - "{{ .Env.MINISIGN_KEY_FILE }}"
+      - -m
+      - "${artifact}"
+      - -x
+      - "${signature}"
+      - -t
+      - "ghosttree {{ .Tag }}"
+    output: true
 
 changelog:
   use: git
@@ -62,3 +81,8 @@ changelog:
 
 release:
   prerelease: auto
+  # The installer and the key it checks with, next to the archives, so a
+  # release can be installed from its own files.
+  extra_files:
+    - glob: deploy/downloads/ghosttree/install.sh
+    - glob: deploy/downloads/ghosttree/minisign.pub

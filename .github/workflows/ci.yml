@@ -151,11 +151,31 @@ jobs:
       - name: Test store concurrency with race detector
         run: go test -race -count=1 -timeout 30m -run 'Concurren|Race|Racing|Contend|Admission|Writer|Pool|Runtime|Crash|Drain|Queue|AtomicAndStable' ./internal/store/
 
+  # The public installer in fresh containers (REQ-723): the real minisign and
+  # OpenSSL of each distribution, a throwaway key, no terminal. The same tests
+  # run on this runner in "Go tests (rest)" with OpenSSL only.
+  installer:
+    name: Installer (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:12", "ubuntu:24.04", "fedora:42"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test the installer in ${{ matrix.image }}
+        run: scripts/e2e/installer-containers.sh "${{ matrix.image }}"
+
   # Required status check of dev and main; it only summarises the parallel Go jobs.
   quality:
     name: Go quality
     if: always()
-    needs: [go-checks, go-test-web, go-test-rest, go-test-store]
+    needs: [go-checks, go-test-web, go-test-rest, go-test-store, installer]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

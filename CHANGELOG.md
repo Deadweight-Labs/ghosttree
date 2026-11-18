@@ -161,6 +161,22 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- Releases carry a second signature, a minisign signature over `checksums.txt`
+  (`checksums.txt.minisig`; the trusted comment names the tag), next to the
+  Sigstore bundle. A public installer, `deploy/downloads/ghosttree/install.sh`
+  (`curl -fsSL https://downloads.deadweightlabs.com/ghosttree/install.sh | sh`),
+  finds the newest stable release itself, checks the signature (the `minisign`
+  program, or OpenSSL 3 where that is not installed) and then the SHA-256 of the
+  archive, and installs `ctx` or goes on to `ctx join`. A release that fails
+  either check is not installed. `--version v0.1.0-rc.3` installs a release
+  candidate. It is tested in fresh Debian, Ubuntu and Fedora containers without
+  a terminal, with a tampered archive, tampered checksums, a foreign key, a
+  missing signature and a signed list of another release. A plain-http address
+  is only accepted for this machine (`http://localhost:1@example.org` is not
+  this machine), wget is followed redirect by redirect and never from https to
+  http (BusyBox wget and Wget2 are refused), and the release job reads the signing key from
+  the environment `release`, in the one step before goreleaser.
+
 - Every person chooses German or English: in the profile and with a DE | EN
   switcher in the account menu and on the sign-in and invitation pages. The
   choice is stored on the account and holds on every device. Without it, the
