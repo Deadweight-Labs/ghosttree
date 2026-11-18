@@ -109,7 +109,7 @@ func TestNoteToTheAgentDoesNotReportTheTask(t *testing.T) {
 	// Reported done: the pill is not the colour of a warning, and the page no longer takes notes.
 	tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {itoa(task.ID)}, "back": {"task"}, "confirm_open": {"1"}}).Body.Close()
 	_, done := fetchPage(t, e.Member, e.Base+path)
-	if strings.Contains(done, "p-warn") || !strings.Contains(done, "Reported done") {
+	if strings.Contains(done, "p-warn") || !strings.Contains(done, "Waiting for check") {
 		t.Errorf("the done state is a warning or unnamed: %s", done)
 	}
 	if r := tpPost(t, e, e.Member, noteURL, url.Values{"note": {"too late"}}); r.StatusCode == http.StatusSeeOther {

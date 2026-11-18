@@ -60,7 +60,7 @@ func TestTaskPageShowsStepsCheckHintAndTheFormThatMarksItDone(t *testing.T) {
 		t.Fatalf("done from the page -> %d %q, want 303 %s", resp.StatusCode, resp.Header.Get("Location"), path)
 	}
 	_, after := fetchPage(t, e.Member, e.Base+path)
-	mustContain(t, "task page after", after, "Reported done", "it is there")
+	mustContain(t, "task page after", after, "Waiting for check", "it is there")
 	if strings.Contains(after, `action="/ui/tasks/done"`) {
 		t.Error("a task that is done still offers the form")
 	}

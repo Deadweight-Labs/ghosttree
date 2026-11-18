@@ -46,9 +46,8 @@ type shellMemo struct {
 	// review is the number of proposals waiting for the viewer's review.
 	review    int
 	reviewSet bool
-	// waiting are the rows of "Waiting for you", read once for the inbox count.
-	waiting    []forYouRow
-	waitingSet bool
+	// inbox is what the inbox lists, by repo filter, read once per request: the bell counts it.
+	inbox map[string]*inboxData
 }
 
 // shellBaseFor liefert Betrachter und Projektliste. Ohne gültige Wahl gilt für
@@ -165,7 +164,9 @@ func (a *app) newMenuFor(r *http.Request, base shellBase, work store.Org) *newMe
 // has chosen as default (else the first) is the label.
 type orgSwitch struct {
 	Current string
-	Items   []orgSwitchItem
+	// CurrentHref is the page of the organization the viewer works in, for the header of the inbox.
+	CurrentHref string
+	Items       []orgSwitchItem
 	// New leads to the form for a new organization; empty when the viewer
 	// cannot create one from here.
 	New string
@@ -367,7 +368,8 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 		}
 	}
 
-	v.Inbox = len(a.waitingFor(r, selectedProjectOf(base)))
+	// The bell leads to the inbox, which lists every repo unless one is named in its address.
+	v.Inbox = a.inboxFor(r, "").Count()
 	v.Orgs = a.orgSwitchFor(r, orgs, work)
 	v.New = a.newMenuFor(r, base, work)
 
@@ -399,7 +401,11 @@ func (a *app) orgSwitchFor(r *http.Request, orgs []store.Org, work store.Org) *o
 		sw.New = newOrgHref
 	}
 	for _, o := range orgs {
-		sw.Items = append(sw.Items, orgSwitchItem{Label: o.Name, Href: "/ui/" + url.PathEscape(o.Slug), Current: o.ID == work.ID})
+		item := orgSwitchItem{Label: o.Name, Href: "/ui/" + url.PathEscape(o.Slug), Current: o.ID == work.ID}
+		if item.Current {
+			sw.CurrentHref = item.Href
+		}
+		sw.Items = append(sw.Items, item)
 	}
 	return sw
 }
@@ -506,6 +512,11 @@ func resolveProject(r *http.Request, visible []string) string {
 	chosen, explicit := chosenProject(r)
 	if explicit && (chosen == "" || slices.Contains(visible, chosen)) {
 		return chosen
+	}
+	// The inbox is the one list for the whole account: a repo browsed earlier does not narrow it. It
+	// narrows only when the address names a repo, and the bell leads there without one.
+	if r.URL.Path == "/ui/inbox" {
+		return ""
 	}
 	if c, err := r.Cookie(projectCookie); err == nil {
 		if remote := scope.NormalizeRemote(c.Value); slices.Contains(visible, remote) {

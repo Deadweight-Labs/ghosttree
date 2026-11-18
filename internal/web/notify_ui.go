@@ -12,14 +12,12 @@ import (
 // steht. Eine Art, die ein Konto abschaltet, fehlt dort ganz; sie bleibt in ihrer
 // Quelle (Raum, Aufgabe, Issue) lesbar.
 //
-// Die Glocke zählt nur, was auf die Person wartet (waitingFor): Fragen, Entscheidungen,
-// Aufgaben und die Notizen des Gärtners. Für diese vier Arten folgt sie dem Schalter,
-// denn waitingFor lässt die abgeschalteten Arten weg (notifyKeep). Erwähnungen zählt
-// sie nie, weder an noch aus: sie stehen nur im Abschnitt "Erwähnt" des Posteingangs
-// (inboxMentions). Sie an der Glocke mitzuzählen hieße, auf jeder Seite die Räume des
-// Kontos samt ungelesenen Erwähnungen zu lesen (RoomSummaries), nur für eine Zahl im
-// Kopf; das steht in keinem Verhältnis. Darum nennt der Schalter der Erwähnungen
-// auch nur den Posteingang (notify.aria_inbox).
+// Die Glocke zählt genau die Zeilen, die der Posteingang unter "Alle" zeigt (inboxFor):
+// was auf die Person wartet und was ihr gesagt wurde, über alle Repos. Eine Zahl, die
+// kleiner ist als die Liste, hinter die sie führt, sah aus wie ein Fehler (N13). Die
+// Räume des Kontos werden dafür je Anfrage einmal gelesen (inboxFor ist je Anfrage
+// gemerkt). Alle fünf Arten folgen dem Schalter: waitingFor-Zeilen über notifyKeep,
+// Erwähnungen über notifyOff in inboxMentions und inboxTextMentions.
 
 // notifyKeys sind die Texte der Arten.
 var notifyKeys = map[string]string{store.NotifyMention: "notify.mention", store.NotifyQuestion: "notify.question",
@@ -88,12 +86,7 @@ func (a *app) profileNotifyRows(r *http.Request, l lang) []profileNotify {
 		if off[k] {
 			next = "1"
 		}
-		aria := "notify.aria"
-		if k == store.NotifyMention {
-			// Erwähnungen stehen nur im Posteingang, nie an der Glocke.
-			aria = "notify.aria_inbox"
-		}
-		rows = append(rows, profileNotify{Kind: k, Label: label, Aria: l.msg(aria, label), On: !off[k], Next: next})
+		rows = append(rows, profileNotify{Kind: k, Label: label, Aria: l.msg("notify.aria", label), On: !off[k], Next: next})
 	}
 	return rows
 }

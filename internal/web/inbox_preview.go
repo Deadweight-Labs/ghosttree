@@ -181,6 +181,10 @@ func nameMentions(s string, names map[string]string) string {
 		out.WriteString(s[at:m[0]])
 		out.WriteString(name)
 		at = m[1] + typedRestOfName(s[m[1]:], handle, name)
+		// The picker leaves a space after the handle; a comma typed behind it must not float.
+		if trimmed := strings.TrimLeft(s[at:], " \t"); trimmed != s[at:] && trimmed != "" && strings.IndexByte(",.;:!?", trimmed[0]) >= 0 {
+			at = len(s) - len(trimmed)
+		}
 	}
 	out.WriteString(s[at:])
 	return out.String()

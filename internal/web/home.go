@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -76,6 +77,8 @@ type forYouRow struct {
 	Brief      string
 	// steps are the walk-through of a task, for the inbox row.
 	steps []humantask.Step
+	// actorKind and actorOwner draw the avatar of an agent that asked (authorship).
+	actorKind, actorOwner string
 	// explainStored: the text is shown only when an agent wrote it.
 	explainStored bool
 }
@@ -167,21 +170,24 @@ func (a *app) homeTasks(l lang, r *http.Request, pa *store.ProjectAccess, projec
 				}
 				titles[t.RequestID] = title
 			}
+			// Who asked leads the line ("Robin’s Claude"); "for X" would read as the one it is
+			// for, so the issue it hangs on is named with "on".
+			by := a.actorViewOf(l, pa, actor.Task, t.ID, t.CreatedBy, false)
 			rest := l.msg("home.task", lastSegment(t.Project))
 			if title != "" {
-				rest = l.msg("home.task_for", title)
+				rest = l.msg("home.task_on", title)
 			}
 			if foreign {
 				rest += agentLabelSep + store.NormalizeAccountName(t.Assignee)
 			}
 			created := parseTime(t.CreatedAt)
 			row := forYouRow{
-				Mark: t.Kind, Title: t.Title, Rest: rest, Action: l.msg("home.act.task"), Href: taskHref(t),
+				Mark: t.Kind, Title: t.Title, Lead: by.Label, Rest: rest, Action: l.msg("home.act.task"), Href: taskHref(t),
 				rank: rankTask, at: created, explainKind: explain.KindTask, explainID: t.ID,
-				taskID: t.ID, num: t.HumanID(), Actor: t.CreatedBy, RequestID: t.RequestID, steps: t.Steps,
+				taskID: t.ID, num: t.HumanID(), Actor: by.Label, actorKind: by.Kind, actorOwner: by.Owner(), RequestID: t.RequestID, steps: t.Steps,
 			}
 			if !created.IsZero() {
-				row.Age = l.msg("home.open_since", shortAge(l, now, created))
+				row.Age = openSince(l, now, created)
 				row.AgeOld = olderThan(t.CreatedAt, now, taskOldAfter)
 			}
 			out = append(out, homeTask{row: row, person: t.AssigneeAccount, canDone: pa.CheckTask(t, store.ActWork) == nil})
@@ -374,4 +380,13 @@ func projectNames(names []string, limit int) string {
 		names = names[:limit]
 	}
 	return strings.Join(names, ", ")
+}
+
+// openSince says how long a task has been open: "open for 5 min", and for the first minute "just now"
+// rather than "open for now".
+func openSince(l lang, now, created time.Time) string {
+	if now.Sub(created) < time.Minute {
+		return l.msg("home.open_new")
+	}
+	return l.msg("home.open_since", shortAge(l, now, created))
 }
