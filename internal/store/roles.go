@@ -44,40 +44,6 @@ var (
 	ErrNoProjectRole = errors.New("account holds no role in that project")
 )
 
-// RoleRank ordnet eine Rolle ein: owner 4, lead 3, member 2, guest 1, alles
-// andere (keine Rolle) 0.
-func RoleRank(role string) int {
-	switch role {
-	case RoleOwner:
-		return 4
-	case RoleLead:
-		return 3
-	case RoleMember:
-		return 2
-	case RoleGuest:
-		return 1
-	}
-	return 0
-}
-
-func roleOfRank(rank int) string {
-	switch {
-	case rank >= 4:
-		return RoleOwner
-	case rank == 3:
-		return RoleLead
-	case rank == 2:
-		return RoleMember
-	}
-	return RoleGuest
-}
-
-// ValidAgentRole sagt, ob eine Rolle für einen Agenten angefordert werden darf.
-// Leer heißt: nicht angegeben. Agenten sind nie owner.
-func ValidAgentRole(role string) bool {
-	return role == "" || role == RoleLead || role == RoleMember || role == RoleGuest
-}
-
 // RoleInfo ist die Rolle eines Kontos in einem Projekt.
 type RoleInfo struct {
 	// Role ist leer ohne jede Rolle.
@@ -121,21 +87,6 @@ func projectRoleTx(q rowQuerier, remote string, account int64) RoleInfo {
 	var review int
 	_ = q.QueryRow(`SELECT role, can_review FROM project_members WHERE project_id=? AND account_id=?`, pid, account).Scan(&role, &review)
 	return deriveRole(orgRole, role, review == 1, projectShareDefaultTx(q, pid, orgID, account))
-}
-
-// deriveRole ist die Ableitung selbst: Org-Owner sind implizit Owner, sonst
-// zählt die gespeicherte Zeile. Einzel- und Sammelabfrage (AccountRoles) teilen
-// sie, damit es nur eine Regel gibt.
-func deriveRole(orgRole, memberRole string, review, shareDefault bool) RoleInfo {
-	info := RoleInfo{Role: memberRole, CanReview: review}
-	if memberRole == "" && shareDefault {
-		info.Role, info.Inherited = DefaultSharedRole, true
-	}
-	if orgRole == OrgOwner {
-		info.Implicit = memberRole != RoleOwner
-		info.Role = RoleOwner
-	}
-	return info
 }
 
 // AccountRoles lädt in einer Abfrage die Rollen eines Kontos in allen Projekten
@@ -215,24 +166,7 @@ func (s *Store) ProjectRole(remote, accountPrincipal string) RoleInfo {
 // unter guest. Der Deckel ist der Rang des Kontos, höchstens lead; ein Konto
 // ohne Rolle ist guest. Eine unbekannte oder leere Anforderung zählt als member.
 func CapAgentRole(requested, account string) string {
-	req := RoleRank(requested)
-	if req == 0 || req > RoleRank(RoleLead) {
-		req = RoleRank(RoleMember)
-		if requested == RoleOwner {
-			req = RoleRank(RoleLead)
-		}
-	}
-	ceiling := RoleRank(account)
-	if ceiling > RoleRank(RoleLead) {
-		ceiling = RoleRank(RoleLead)
-	}
-	if ceiling < 1 {
-		ceiling = 1
-	}
-	if req > ceiling {
-		req = ceiling
-	}
-	return roleOfRank(req)
+	return capAgentRole(requested, account)
 }
 
 // agentAccountTx liefert die angeforderte Rolle und das Konto eines Agenten.
@@ -257,7 +191,7 @@ func effectiveAgentRoleTx(q rowQuerier, remote, externalID string) RoleInfo {
 	role := CapAgentRole(requested, acct.Role)
 	// can_review gehört dem Konto und gilt für den Agenten nur, wenn er
 	// mindestens member ist.
-	return RoleInfo{Role: role, CanReview: acct.CanReview && RoleRank(role) >= RoleRank(RoleMember)}
+	return agentRoleInfo(role, acct)
 }
 
 // EffectiveAgentRole berechnet live die Rolle eines Agenten in einem Projekt:
@@ -303,7 +237,7 @@ func (s *Store) changeProjectRole(actorPrincipal, remote, targetPrincipal, newRo
 	if err != nil {
 		return err
 	}
-	if newRole != "" && RoleRank(newRole) == 0 {
+	if newRole != "" && !ValidProjectRole(newRole) {
 		return fmt.Errorf("%w: role must be owner, lead, member or guest", ErrInvalidInput)
 	}
 	actor, err := parsePersonPrincipalID(actorPrincipal)
@@ -327,14 +261,14 @@ func (s *Store) changeProjectRole(actorPrincipal, remote, targetPrincipal, newRo
 	if orgRoleTx(tx, orgID, actor) == "" {
 		return ErrProjectNotFound
 	}
-	actorRank := RoleRank(projectRoleTx(tx, remote, actor).Role)
-	if actorRank < RoleRank(RoleLead) {
+	actorRole := projectRoleTx(tx, remote, actor)
+	if !actorRole.Has(RightRolesGrant) {
 		return ErrNotGrantor
 	}
 	if orgRoleTx(tx, orgID, target) == "" {
 		return ErrNotOrgMember
 	}
-	if orgRoleTx(tx, orgID, target) == OrgOwner {
+	if IsOrgOwnerRole(orgRoleTx(tx, orgID, target)) {
 		return ErrImplicitOwner
 	}
 	var curRole string
@@ -346,21 +280,10 @@ func (s *Store) changeProjectRole(actorPrincipal, remote, targetPrincipal, newRo
 	if newRole != "" && hasRow && curRole == newRole && (curReview == 1) == canReview {
 		return nil
 	}
-	curRank, newRank := RoleRank(curRole), RoleRank(newRole)
-	switch {
-	case actor == target:
-		// Die eigene Rolle darf nur sinken. Gleicher Rang ist nur erlaubt, wenn
-		// dabei das Flag nicht gesetzt, sondern höchstens abgelegt wird.
-		if newRank > actorRank || (newRank == actorRank && (curRole != newRole || (canReview && curReview == 0))) {
-			return ErrSelfPromotion
-		}
-	case actorRank == RoleRank(RoleOwner):
-	default: // lead
-		if newRank > RoleRank(RoleMember) || curRank >= RoleRank(RoleLead) {
-			return ErrRoleForbidden
-		}
+	if err := mayChangeRole(actorRole, actor == target, curRole, newRole, curReview == 1, canReview); err != nil {
+		return err
 	}
-	if curRole == RoleOwner && newRank < RoleRank(RoleOwner) && projectOwnerCountTx(tx, pid, orgID) <= 1 {
+	if lastOwnerAffected(curRole, newRole) && projectOwnerCountTx(tx, pid, orgID) <= 1 {
 		return ErrLastProjectOwner
 	}
 	old := ""
@@ -440,33 +363,11 @@ func (s *Store) GrantableRoles(actorPrincipal, remote, targetPrincipal string) [
 	if s.db.QueryRowContext(s.ctx(), `SELECT org_id FROM projects WHERE remote=?`, remote).Scan(&orgID) != nil {
 		return nil
 	}
-	if orgRoleTx(s.db, orgID, target) == "" || orgRoleTx(s.db, orgID, target) == OrgOwner {
-		return nil
-	}
-	actorRank := RoleRank(projectRoleTx(s.db, remote, actor).Role)
-	if actorRank < RoleRank(RoleLead) {
+	if orgRoleTx(s.db, orgID, target) == "" || IsOrgOwnerRole(orgRoleTx(s.db, orgID, target)) {
 		return nil
 	}
 	cur := projectRoleTx(s.db, remote, target).Role
-	curRank := RoleRank(cur)
-	var out []string
-	for _, r := range []string{RoleOwner, RoleLead, RoleMember, RoleGuest} {
-		rank := RoleRank(r)
-		switch {
-		case actor == target:
-			// Die eigene Stufe bleibt wählbar, damit sich allein das
-			// Reviewer-Flag ändern lässt; höher geht nicht.
-			if rank > actorRank || (rank == actorRank && r != cur) {
-				continue
-			}
-		case actorRank == RoleRank(RoleLead):
-			if rank > RoleRank(RoleMember) || curRank >= RoleRank(RoleLead) {
-				continue
-			}
-		}
-		out = append(out, r)
-	}
-	return out
+	return grantableRoles(projectRoleTx(s.db, remote, actor), actor == target, cur)
 }
 
 // ListProjectMembers liefert alle Konten mit einer Rolle im Projekt, absteigend
@@ -502,14 +403,10 @@ func (s *Store) ListProjectMembers(remote string) ([]ProjectMember, error) {
 		if err := rows.Scan(&id, &m.Account, &orgRole, &stored, &review, &by, &m.GrantedAt); err != nil {
 			return nil, err
 		}
-		m.AccountID, m.CanReview, m.Role = principalOfID(id), review == 1, stored
+		info := deriveRole(orgRole, stored, review == 1, !IsOrgOwnerRole(orgRole))
+		m.AccountID, m.CanReview, m.Role, m.Implicit, m.Inherited = principalOfID(id), review == 1, info.Role, info.Implicit, info.Inherited
 		if by > 0 {
 			m.GrantedBy = principalOfID(by)
-		}
-		if orgRole == OrgOwner {
-			m.Implicit, m.Role = stored != RoleOwner, RoleOwner
-		} else if stored == "" {
-			m.Role, m.Inherited = DefaultSharedRole, true
 		}
 		out = append(out, m)
 	}
@@ -521,11 +418,7 @@ func (s *Store) ListProjectMembers(remote string) ([]ProjectMember, error) {
 }
 
 func sortProjectMembers(m []ProjectMember) {
-	for i := 1; i < len(m); i++ {
-		for j := i; j > 0 && RoleRank(m[j].Role) > RoleRank(m[j-1].Role); j-- {
-			m[j], m[j-1] = m[j-1], m[j]
-		}
-	}
+	SortByRole(m, func(p ProjectMember) string { return p.Role })
 }
 
 // dropProjectRolesTx löscht gespeicherte Rollen und protokolliert sie. where

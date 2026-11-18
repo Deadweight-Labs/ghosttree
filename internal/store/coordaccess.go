@@ -1924,11 +1924,11 @@ func (a CoordAccess) requireThreadMutation(threadID int64) (Thread, error) {
 // role lead or owner may set the state of, and archive, any thread of the
 // project room.
 func (a CoordAccess) leadByRoleTx(tx rowQuerier, project string) bool {
-	if a.AgentExternalID != "" || a.publicOnly || a.Principal.TokenKind != WebSessionKind {
+	if a.AgentExternalID != "" || a.publicOnly {
 		return false
 	}
 	acct, ok := accountNumericID(a.Principal.ID)
-	return ok && RoleRank(projectRoleTx(tx, project, acct).Role) >= RoleRank(RoleLead)
+	return ok && canPrincipalTx(tx, project, a.Principal, acct, RightRoomManage)
 }
 
 // CanSetThreadState says whether the viewer may change the state of the thread
@@ -3045,7 +3045,7 @@ func (a CoordAccess) projectRoomGate(kind, roomKey string, res Resource, tx rowQ
 	d := Decision{Allowed: matrixAllows(role, res, ActRead, Object{})}
 	if !d.Allowed {
 		d.Hidden, d.Reason = true, "no access to the project room"
-		if RoleRank(role.Role) == 0 && !a.projectClaimed(tx, project) && ok && a.workedUnder(tx, project, acct) {
+		if !role.Any() && !a.projectClaimed(tx, project) && ok && a.workedUnder(tx, project, acct) {
 			d = Decision{Allowed: true, Reason: "unclaimed project, own work there"}
 		}
 	}

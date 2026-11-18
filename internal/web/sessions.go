@@ -1218,7 +1218,7 @@ func detailMeta(l lang, s store.Session) template.HTML {
 	return template.HTML(`<time datetime="` + html.EscapeString(t.UTC().Format(time.RFC3339)) + `" data-local="datetime">` + html.EscapeString(l.dateTime(t)) + `</time>`)
 }
 
-// sessionShare stellt die Freigabestufe ein (POST, CSRF, interaktive Sitzung).
+// sessionShare stellt die Freigabestufe ein (POST, CSRF; eine Token-Sitzung darf, was ihr Token darf).
 func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
 	sess, ok := a.lookupSession(r, pa)

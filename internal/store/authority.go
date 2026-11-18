@@ -26,8 +26,8 @@ type MessageAuthority struct {
 // des Absenders über dem des Empfängers liegt UND der Absender serverseitig
 // verifiziert ist. Gleicher Rang, fehlende Rolle (Rang 0) und unverifizierte
 // Absender sind Bitten.
-func AuthorityFor(senderRank, recipientRank int, verified bool) string {
-	if verified && senderRank > 0 && senderRank > recipientRank {
+func AuthorityFor(senderRole, recipientRole string, verified bool) string {
+	if verified && ValidProjectRole(senderRole) && RoleAbove(senderRole, recipientRole) {
 		return AuthorityDirective
 	}
 	return AuthorityRequest
@@ -164,7 +164,7 @@ func (c *authorityCtx) evaluate(m CoordMessage) MessageAuthority {
 		return MessageAuthority{Authority: AuthorityRequest}
 	}
 	sender := c.sender(m)
-	authority := AuthorityFor(RoleRank(sender.role.Role), RoleRank(c.recipientRole.Role), sender.verified)
+	authority := AuthorityFor(sender.role.Role, c.recipientRole.Role, sender.verified)
 	if !c.recipientHasRole {
 		authority = AuthorityRequest
 	}
@@ -319,8 +319,7 @@ func canEndStandingTx(q rowQuerier, principal, agent, roomKey, messageID string,
 	// Instanz-Admins beenden alles, ihre Agenten nicht: der Agent erbt vom
 	// Konto höchstens die Projektrolle.
 	if agent == "" {
-		var admin int
-		if q.QueryRow(`SELECT is_admin FROM persons WHERE id=?`, account).Scan(&admin) == nil && admin == 1 {
+		if instanceCanTx(q, account, RightInstanceAdmin) {
 			return true
 		}
 	}
@@ -330,23 +329,23 @@ func canEndStandingTx(q rowQuerier, principal, agent, roomKey, messageID string,
 	} else {
 		actor = projectRoleTx(q, project, account)
 	}
-	return RoleRank(actor.Role) > 0 && RoleRank(actor.Role) >= standingAuthorRankTx(q, project, m)
+	return actor.Any() && RoleAtLeast(actor.Role, standingAuthorRoleTx(q, project, m))
 }
 
-// standingAuthorRankTx ist der Rang, den die Autorin einer Vorgabe heute im
+// standingAuthorRoleTx ist die Rolle, die die Autorin einer Vorgabe heute im
 // Projekt hat, ohne Verifizierung: es geht darum, wer geschrieben hat. Nicht
-// bestimmbar heißt Owner-Rang, also nur Owner und Admins können beenden.
-func standingAuthorRankTx(q rowQuerier, project string, m CoordMessage) int {
-	unknown := RoleRank(RoleOwner)
+// bestimmbar heißt Owner, also nur Owner und Admins können beenden.
+func standingAuthorRoleTx(q rowQuerier, project string, m CoordMessage) string {
+	unknown := RoleOwner
 	if m.AuthorKind == AuthorAgent && m.SenderExternalID != "" {
 		if _, _, ok := agentAccountTx(q, m.SenderExternalID); ok {
-			return RoleRank(effectiveAgentRoleTx(q, project, m.SenderExternalID).Role)
+			return effectiveAgentRoleTx(q, project, m.SenderExternalID).Role
 		}
 		return unknown
 	}
 	if m.AuthorKind == AuthorHuman {
 		if id, err := parsePersonPrincipalID(m.AuthorPrincipalID); err == nil {
-			return RoleRank(projectRoleTx(q, project, id).Role)
+			return projectRoleTx(q, project, id).Role
 		}
 	}
 	return unknown

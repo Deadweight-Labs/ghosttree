@@ -689,10 +689,15 @@ func TestSharePostNeedsCSRFAndAnInteractiveSession(t *testing.T) {
 		t.Skipf("no token: %v", err)
 	}
 	c := login(t, e.srv, token)
-	form := url.Values{"csrf_token": {renderedCSRFToken(t, c, e.Base+"/ui/sessions")}, "level": {store.VisProject}}
+	form := url.Values{"csrf_token": {renderedCSRFToken(t, c, e.Base+"/ui/sessions")}, "level": {store.VisProject}, "confirm": {"1"}}
+	// A pasted token may do what the token may over the API (DEC-50): its
+	// owner shares the own session.
 	r := sameOriginPostForm(t, c, e.Base+"/ui/sessions/"+e.pid["anna-private"]+"/share", form)
-	if r.StatusCode == http.StatusSeeOther {
-		t.Error("a pasted token (read-only session) changed the level")
+	if r.StatusCode != http.StatusSeeOther {
+		t.Errorf("a pasted token of the owner could not share: %d", r.StatusCode)
+	}
+	if sess, _ := e.St.SessionByID(e.id["anna-private"]); sess.Visibility != store.VisProject {
+		t.Errorf("level after the share: %s", sess.Visibility)
 	}
 }
 

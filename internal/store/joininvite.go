@@ -99,12 +99,12 @@ func (s *Store) createProjectInvitation(actorPrincipal string, orgID int64, remo
 	if err != nil {
 		return "", Invitation{}, err
 	}
-	if projectRole != RoleMember && projectRole != RoleGuest {
+	if !linkProjectRole(projectRole) {
 		return "", Invitation{}, fmt.Errorf("%w: a link grants member or guest, nothing else", ErrInvalidInput)
 	}
 	if ttl <= 0 {
 		ttl = DefaultInvitationTTL
-		if projectRole == RoleGuest {
+		if (RoleInfo{Role: projectRole}).GuestOnly() {
 			ttl = DefaultGuestInvitationTTL
 		}
 	}
@@ -114,7 +114,7 @@ func (s *Store) createProjectInvitation(actorPrincipal string, orgID int64, remo
 	// Ein Gast sieht nur, was die Durchsetzung ihm lässt. Ohne sie erlaubt die
 	// Matrix im Log-Modus alles, und der Link würde mehr gewähren, als die
 	// Seite verspricht.
-	if projectRole == RoleGuest && !s.AccessEnforced() {
+	if (RoleInfo{Role: projectRole}).GuestOnly() && !s.AccessEnforced() {
 		return "", Invitation{}, ErrGuestLinkNeedsEnforcement
 	}
 	remote, err = normalizeRemote(remote)
@@ -126,7 +126,7 @@ func (s *Store) createProjectInvitation(actorPrincipal string, orgID int64, remo
 		return "", Invitation{}, err
 	}
 	defer tx.Rollback()
-	if orgRoleTx(tx, orgID, actor) != OrgOwner {
+	if !orgCanTx(tx, orgID, actor, RightOrgMembers) {
 		return "", Invitation{}, ErrNotOrgOwner
 	}
 	if claim {

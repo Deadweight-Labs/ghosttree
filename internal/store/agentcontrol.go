@@ -166,14 +166,14 @@ func controlRightTx(q rowQuerier, actor Principal, agent string) (project string
 			owner = true
 		}
 	}
-	rank := 0
+	var role RoleInfo
 	if project != "" {
-		rank = RoleRank(projectRoleTx(q, project, id).Role)
+		role = projectRoleTx(q, project, id)
 	}
 	switch {
-	case actor.TokenKind == WebSessionKind && (owner || rank >= RoleRank(RoleLead)):
+	case humanOK(actor, RightAgentControl) && (owner || role.Has(RightAgentControl)):
 		return project, controlAllowed
-	case owner || rank >= RoleRank(RoleGuest):
+	case owner || role.Any():
 		return project, controlSeen
 	}
 	return project, controlUnseen
@@ -191,14 +191,14 @@ func mayResumeTx(q rowQuerier, actor Principal, project string, active AgentCont
 	if actor.ID == active.RequestedBy {
 		return true
 	}
-	rank := func(principal string) int {
+	role := func(principal string) string {
 		id, err := parsePersonPrincipalID(principal)
 		if err != nil || project == "" {
-			return 0
+			return ""
 		}
-		return RoleRank(projectRoleTx(q, project, id).Role)
+		return projectRoleTx(q, project, id).Role
 	}
-	return rank(actor.ID) >= rank(active.RequestedBy)
+	return RoleAtLeast(role(actor.ID), role(active.RequestedBy))
 }
 
 func agentRegisteredTx(q rowQuerier, agent string) bool {

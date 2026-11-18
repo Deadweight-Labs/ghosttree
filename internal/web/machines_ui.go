@@ -19,7 +19,7 @@ import (
 // einer Org und die Verwaltung der Freigaben. Wer die Maschine nicht erreicht
 // (kein Besitzer, keine Org, keine Freigabe), bekommt 404, genau wie bei einer
 // Maschine, die es nicht gibt. Verwaltet wird nur aus einer Web-Sitzung (#2411);
-// den Weg dorthin sperren requireInteractive und der Store selbst.
+// den Weg dorthin sperren requireSignIn(org.machines) und der Store selbst.
 //
 // Einträge mit Projekt UND Maschine sind Projektwissen (Entscheidung #4349): sie
 // stehen hier nur, wenn die Projektrolle sie freigibt, und ein Gast des Projekts
@@ -117,7 +117,7 @@ func (a *app) registerMachinePages(mux *http.ServeMux) {
 	for suffix, h := range map[string]http.HandlerFunc{
 		"share": a.machineShare, "unshare": a.machineUnshare, "owner": a.machineOwner, "entry": a.machineEntryShare,
 	} {
-		a.handle(mux, "POST /ui/m/{machine}/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+		a.handle(mux, "POST /ui/m/{machine}/"+suffix, a.requirePerson(a.requireSignIn(store.RightOrgMachines, limitBody(a.requireCSRF(h)))))
 	}
 }
 
@@ -288,7 +288,7 @@ func (a *app) machinePage(w http.ResponseWriter, r *http.Request, m store.Machin
 	manage := m.Relation == store.RelOwner || m.Relation == store.RelMaintainer
 	v := &machinePageView{Name: m.Name, Base: "/ui/m/" + url.PathEscape(m.Name), Token: csrfOf(r), Relation: m.Relation, RelationLabel: label(l, machineRelationKeys, m.Relation), RelationTone: machineRelationTone[m.Relation],
 		Owner: m.Owner, OwnerOrg: m.OwnerOrg, FirstSeen: shortAgo(l, now, parseTime(m.FirstSeen)), LastSeen: shortAgo(l, now, parseTime(m.LastSeen)),
-		CanManage: manage && interactive(r), PersonOwned: m.OwnerOrg == ""}
+		CanManage: manage && browserPrincipal(r).May(store.RightOrgMachines), PersonOwned: m.OwnerOrg == ""}
 	if m.OwnerOrg != "" {
 		v.OwnerOrgHref = "/ui/" + url.PathEscape(m.OwnerOrg)
 	}
@@ -314,7 +314,7 @@ func (a *app) machinePage(w http.ResponseWriter, r *http.Request, m store.Machin
 		if !shared[strings.ToLower(o.Slug)] {
 			v.ShareOrgs = append(v.ShareOrgs, composerOption{Value: o.Slug, Label: o.Name})
 		}
-		if o.Role == store.OrgOwner && m.OwnerOrg == "" {
+		if store.OrgRoleHas(o.Role, store.RightOrgMachines) && m.OwnerOrg == "" {
 			v.OwnerOrgs = append(v.OwnerOrgs, composerOption{Value: o.Slug, Label: o.Name})
 		}
 	}

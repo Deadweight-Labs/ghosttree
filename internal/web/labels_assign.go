@@ -38,7 +38,7 @@ var labelKinds = []string{store.CommentOnRequest, store.CommentOnPain, store.Com
 // Recht, welche zu setzen).
 func (a *app) labelBox(r *http.Request, pa *store.ProjectAccess, project, kind string, id int64, current []rowLabel) *labelBoxView {
 	v := &labelBoxView{Kind: kind, ID: id, Items: current, Token: csrfOf(r)}
-	if interactive(r) && pa.Check(project, store.ResLabel, store.ActRead, store.Object{}) == nil {
+	if pa.Check(project, store.ResLabel, store.ActRead, store.Object{}) == nil {
 		if _, err := pa.LabelTarget(kind, id, store.ActWork); err == nil {
 			v.CanEdit = true
 		}

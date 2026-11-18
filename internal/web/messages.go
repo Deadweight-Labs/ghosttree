@@ -1076,7 +1076,7 @@ var messages = map[string]string{
 	"adm.tokens.expired":                "Expired",
 
 	"adm.login.title":    "You need to sign in for this",
-	"adm.login.readonly": "Your token can only read. Get a login link:",
+	"adm.login.readonly": "Only your own sign-in may do this, not a token. Get a login link:",
 	"adm.login.action":   "Sign in",
 	"adm.login.command":  "ctx account login-link %s",
 

@@ -78,7 +78,7 @@ type gardenAutoRow struct {
 // in this namespace: its owner, or someone with lead, owner or the review
 // right in one of its projects. Guests never.
 func (a *app) gardenReviewer(r *http.Request, org store.Org) bool {
-	if org.Role == store.OrgOwner {
+	if store.OrgRoleHas(org.Role, store.RightOrgAI) {
 		return true
 	}
 	pa := a.access(r)
@@ -92,7 +92,7 @@ func (a *app) gardenReviewer(r *http.Request, org store.Org) bool {
 
 // reviews: the role may decide the gardener's proposals in its project.
 func reviews(role store.RoleInfo) bool {
-	return role.CanReview || store.RoleRank(role.Role) >= store.RoleRank(store.RoleLead)
+	return role.Has(store.RightKnowledgeVerify)
 }
 
 // gardenTabFor says whether the tab exists for this viewer, with the settings.
@@ -134,7 +134,7 @@ func (a *app) gardenTab(w http.ResponseWriter, r *http.Request, org store.Org) {
 	pa := a.access(r)
 	base := "/ui/" + url.PathEscape(org.Slug) + "/gardener"
 	v := &gardenTabView{Token: csrfOf(r), Org: org.Slug}
-	if org.Role == store.OrgOwner {
+	if store.OrgRoleHas(org.Role, store.RightOrgAI) {
 		v.ShowBudget = true
 		v.Settings = "/ui/orgs?org=" + url.QueryEscape(org.Slug) + "#gardener"
 	}
@@ -213,7 +213,7 @@ func (a *app) gardenTab(w http.ResponseWriter, r *http.Request, org store.Org) {
 		}
 		v.Auto = append(v.Auto, gardenAutoRow{ID: e.ID, Rule: l.msg(gardenRuleKeys[e.Rule]), What: lastSegment(e.Project) + " · " + e.TargetID,
 			Before: e.Before, After: e.After, When: shortAge(l, now, parseTime(e.CreatedAt)), Href: "/ui/knowledge/" + strconv.FormatInt(e.NoteID, 10),
-			Undone: e.UndoneAt != "", CanUndo: e.UndoneAt == "" && interactive(r) && reviews(role)})
+			Undone: e.UndoneAt != "", CanUndo: e.UndoneAt == "" && reviews(role)})
 	}
 	a.renderBrowser(w, r, "gardentab", pageData{Title: l.msg("ui.org.tab.gardener"), OrgName: org.Name, OrgBand: a.orgBandFor(r, org, "gardener"), GardenTabV: v})
 }
@@ -316,7 +316,7 @@ type gardenChoice struct {
 
 // gardenSettingsFor builds the settings section for the owner of a namespace.
 func (a *app) gardenSettingsFor(r *http.Request, org store.Org) *gardenSettingsView {
-	if org.Role != store.OrgOwner {
+	if !store.OrgRoleHas(org.Role, store.RightOrgAI) {
 		return nil
 	}
 	l := a.langFor(r)
@@ -429,7 +429,7 @@ func (a *app) applyGardenAuto(g store.GardenSettings) int {
 		return 0
 	}
 	enabler := "person:" + strconv.FormatInt(g.UpdatedBy, 10)
-	if a.store.OrgRole(g.OrgID, enabler) != store.OrgOwner {
+	if !store.OrgRoleHas(a.store.OrgRole(g.OrgID, enabler), store.RightOrgAI) {
 		return 0
 	}
 	acct, err := a.store.AccountByPrincipalID(enabler)

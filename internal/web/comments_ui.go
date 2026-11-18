@@ -66,7 +66,7 @@ func (a *app) commentTimeline(r *http.Request, l lang, pa *store.ProjectAccess, 
 	if err != nil {
 		return nil
 	}
-	forms := interactive(r)
+	forms := true
 	token := csrfOf(r)
 	reacted, _ := pa.CommentReactions(kind, objectID)
 	project := ""
@@ -338,7 +338,7 @@ func (a *app) fillKnowledgeComments(r *http.Request, l lang, pa *store.ProjectAc
 		v.Reactions = a.reactionsFor(r, l, store.ReactOnKnowledge, k.ID, s)
 	}
 	v.CommentResult = commentResult(r, l)
-	if interactive(r) && pa.Allow(project, store.ResComment, store.ActCreate, store.Object{Own: true}) {
+	if pa.Allow(project, store.ResComment, store.ActCreate, store.Object{Own: true}) {
 		v.Composer = &composerView{Action: "/ui/knowledge/" + strconv.FormatInt(k.ID, 10) + "/comment", Token: csrfOf(r), Name: "body",
 			Avatar: browserPrincipal(r).Label, Placeholder: l.msg("comments.cx.placeholder"), Submit: l.msg("comments.cx.submit")}
 	}

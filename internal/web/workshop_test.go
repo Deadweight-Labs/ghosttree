@@ -202,7 +202,8 @@ func TestWorkshopStepsRefuseWhoMayNotAndWhoCannotSeeTheIdea(t *testing.T) {
 	if resp := post(e.Owner, "/ui/ideas/"+strconv.FormatInt(i.ID, 10)+"/phase", url.Values{"mode": {"fly"}}); resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("unknown mode -> %d", resp.StatusCode)
 	}
-	// A token alone is no person: the forms are shut for a pasted token.
+	// A token alone is no person: a decision a person has to take stays shut
+	// for a pasted token (DEC-49); voting stays open, as over the API.
 	token, _, err := e.St.CreateDeviceToken("person:1", "mainex")
 	if err != nil {
 		t.Fatal(err)
@@ -216,8 +217,8 @@ func TestWorkshopStepsRefuseWhoMayNotAndWhoCannotSeeTheIdea(t *testing.T) {
 	if got, _ := pa.DecisionView(d.ID); got.State != idea.DecisionOpen {
 		t.Errorf("the refused steps closed the question: %s", got.State)
 	}
-	if _, page := fetchPage(t, pasted, e.Base+ideaPath(i)); strings.Contains(page, `/ui/decisions/`) {
-		t.Error("a pasted token sees the forms")
+	if _, page := fetchPage(t, pasted, e.Base+ideaPath(i)); strings.Contains(page, `</svg>Decide</button>`) || !strings.Contains(page, `/ui/decisions/`) {
+		t.Error("a pasted token sees the button that decides, or cannot vote")
 	}
 }
 

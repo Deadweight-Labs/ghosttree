@@ -162,13 +162,13 @@ func (a *app) workflowDefPage(w http.ResponseWriter, r *http.Request, remote, na
 	q := r.URL.Query()
 	href := workflowHref(remote, name)
 	v := &workflowDefView{Name: def.Name, Project: remote, Base: repoHref(remote) + "/workflows", Href: href, Version: def.Version, Shown: def.Version,
-		Enabled: def.Enabled, CanEdit: interactive(r) && pa.CanEditWorkflows(remote), Token: csrfOf(r), CmpFrom: max(1, def.Version-1), CmpTo: def.Version}
+		Enabled: def.Enabled, CanEdit: pa.CanEditWorkflows(remote), Token: csrfOf(r), CmpFrom: max(1, def.Version-1), CmpTo: def.Version}
 	if def.Enabled {
 		v.Blocked = workflowBlocked(def.Text, workflow.EnvFor(a.store, remote))
 	}
 	if v.CanEdit {
 		v.EditHref = href + "?edit=1"
-	} else if interactive(r) {
+	} else {
 		v.Need = roleNeededShort(l, roleNeededOf(pa.Check(remote, store.ResWorkflow, store.ActEdit, store.Object{})))
 	}
 	byN := map[int]store.WorkflowDefVersion{}
@@ -236,10 +236,6 @@ func (a *app) workflowDefPage(w http.ResponseWriter, r *http.Request, remote, na
 // workflowNewPage is GET /ui/{org}/{repo}/workflows/new.
 func (a *app) workflowNewPage(w http.ResponseWriter, r *http.Request, remote string) {
 	pa := a.access(r)
-	if !interactive(r) {
-		a.notInteractive(w, r)
-		return
-	}
 	if a.accessDenied(w, r, pa.Check(remote, store.ResWorkflow, store.ActEdit, store.Object{})) {
 		return
 	}
@@ -247,10 +243,6 @@ func (a *app) workflowNewPage(w http.ResponseWriter, r *http.Request, remote str
 }
 
 func (a *app) workflowEditPage(w http.ResponseWriter, r *http.Request, pa *store.ProjectAccess, def store.WorkflowDef) {
-	if !interactive(r) {
-		a.notInteractive(w, r)
-		return
-	}
 	if a.accessDenied(w, r, pa.Check(def.Project, store.ResWorkflow, store.ActEdit, store.Object{})) {
 		return
 	}
@@ -443,7 +435,7 @@ func (a *app) wfResultRows(r *http.Request, pa *store.ProjectAccess, remote stri
 	if err != nil {
 		return nil
 	}
-	canUndo := interactive(r) && reviews(pa.Role(remote))
+	canUndo := reviews(pa.Role(remote))
 	var out []wfResultRow
 	for _, res := range results {
 		st := wfResultStates[res.State]

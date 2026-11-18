@@ -166,7 +166,7 @@ func (a *app) searchSidebar(l lang, r *http.Request, pa *store.ProjectAccess, v 
 			}
 		}
 	}
-	if project != "" && !guest && interactive(r) && v.Searched && v.Preset == "" && v.Notice == "" {
+	if project != "" && !guest && v.Searched && v.Preset == "" && v.Notice == "" {
 		v.CanSave = true
 		v.Scopes = a.saveScopes(l, r, pa, project)
 	}
@@ -199,7 +199,7 @@ func (a *app) saveScopes(l lang, r *http.Request, pa *store.ProjectAccess, proje
 	if p, ok := a.store.ProjectByRemote(project); ok && p.OrgID != 0 {
 		if orgs, err := a.store.ListOrgs(browserPrincipal(r).ID); err == nil {
 			for _, o := range orgs {
-				if o.ID == p.OrgID && o.Role == store.OrgOwner {
+				if o.ID == p.OrgID && store.OrgRoleHas(o.Role, store.RightOrgManage) {
 					out = append(out, saveScope{Value: "org", Label: l.msg(saveScopeKeys["org"])})
 					break
 				}

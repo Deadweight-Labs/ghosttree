@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // The page of one decision, /ui/{org}/{repo}/decisions/{n} (REQ-684). Every decision has this
@@ -61,8 +62,9 @@ func (a *app) decisionInRepo(w http.ResponseWriter, r *http.Request, remote, id 
 	view := a.repoViewFor(r2, pa, a.shellBaseFor(r2).who.kind, remote, "issues")
 	r2 = r2.WithContext(context.WithValue(r2.Context(), repoCtxKey{}, view))
 	now := overviewNow().UTC()
-	human := interactive(r)
-	wd := decisionViewOf(l, r, d, now, human && pa.CanWorkDecision(d), human && pa.CanCloseDecision(d))
+	// A decision a person has to take closes only from a sign-in (DEC-49).
+	closes := pa.CanCloseDecision(d) && (d.Way != idea.WayHuman || browserPrincipal(r).May(store.RightDecideHuman))
+	wd := decisionViewOf(l, r, d, now, pa.CanWorkDecision(d), closes)
 	v := &decisionPageView{ID: d.ID, Question: d.Question, Num: d.HumanID(), Decision: wd, Token: csrfOf(r), Viewer: browserPrincipal(r).Label,
 		Base: view.Href, Asked: d.Person, Age: shortAgo(l, now, parseTime(d.CreatedAt))}
 	if d.Subject == idea.SubjectRequest {

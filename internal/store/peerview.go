@@ -30,7 +30,7 @@ func (a *ProjectAccess) SharesContextWith(account int64) bool {
 	}
 	roles, _ := a.st.AccountRoles(other)
 	for remote, r := range roles {
-		if RoleRank(r.Role) >= 1 && RoleRank(a.Role(remote).Role) >= 1 {
+		if r.Any() && a.Role(remote).Any() {
 			return true
 		}
 	}

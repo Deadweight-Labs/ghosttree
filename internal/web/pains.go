@@ -106,14 +106,14 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 		Blocks: bodyBlocks(p.Body, 0), Token: csrfOf(r), Back: "/ui/pains?project=" + url.QueryEscape(p.Project)}
 	v.Actor = a.actorViewOf(l, pa, actor.Pain, p.ID, p.Person, true)
 	v.CanWork = pa.CheckPain(p, store.ActWork) == nil
-	v.CanIdea = v.CanWork && interactive(r) && pa.Allow(p.Project, store.ResIdea, store.ActCreate, store.Object{Own: true})
+	v.CanIdea = v.CanWork && pa.Allow(p.Project, store.ResIdea, store.ActCreate, store.Object{Own: true})
 	v.Explain = a.explainFor(l, explain.KindPain, p.ID)
 	v.Attach = a.attachBoxFor(r, l, pa, idea.SubjectPain, p.ID, painURL(p.ID)+"/attach")
-	if interactive(r) && pa.CheckPain(p, store.ActEdit) == nil {
+	if pa.CheckPain(p, store.ActEdit) == nil {
 		v.Edit = &editPanel{Open: r.URL.Query().Get("panel") == "edit", Close: repoHref(p.Project) + "/pains/" + strconv.FormatInt(p.ID, 10),
 			Action: painURL(p.ID) + "/correct", Token: csrfOf(r), Title: p.Title, Body: p.Body}
 	}
-	if interactive(r) && pa.Allow(p.Project, store.ResRequest, store.ActCreate, store.Object{Own: true}) {
+	if pa.Allow(p.Project, store.ResRequest, store.ActCreate, store.Object{Own: true}) {
 		v.IssueHref = repoHref(p.Project) + "/issues/new?derived_from=PAIN-" + strconv.FormatInt(p.ID, 10)
 	}
 	for _, s := range pain.States {
@@ -174,7 +174,7 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 		v.Labels = rowLabels(labels[p.ID], v.Base+"/issues")
 	}
 	v.LabelBox = a.labelBox(r, pa, p.Project, store.CommentOnPain, p.ID, v.Labels)
-	v.Composer = a.painComposer(l, v, p.State, interactive(r) && pa.Allow(p.Project, store.ResComment, store.ActCreate, store.Object{Own: true}))
+	v.Composer = a.painComposer(l, v, p.State, pa.Allow(p.Project, store.ResComment, store.ActCreate, store.Object{Own: true}))
 	switch {
 	case commentResult(r, l) != nil:
 		v.Result = commentResult(r, l)

@@ -105,7 +105,7 @@ func (a *app) packageManage(w http.ResponseWriter, r *http.Request) (int64, stri
 			return 0, "", nil, false
 		}
 	}
-	if a.accessDenied(w, r, pa.Check(project, store.ResRequest, store.ActEdit, store.Object{})) {
+	if a.accessDenied(w, r, pa.Check(project, store.ResPackage, store.ActWork, store.Object{})) {
 		return 0, "", nil, false
 	}
 	return id, project, pa, true
@@ -117,7 +117,7 @@ func packageHref(project string, id int64) string {
 
 // packageCreate is POST /ui/packages/create.
 func (a *app) packageCreate(w http.ResponseWriter, r *http.Request) {
-	project, pa, ok := a.leadProject(w, r, store.ResRequest)
+	project, pa, ok := a.leadProject(w, r, store.ResPackage, store.ActCreate)
 	if !ok {
 		return
 	}

@@ -168,7 +168,7 @@ func authorMayWriteTx(tx *sql.Tx, project string, number int64) (bool, error) {
 	case err != nil:
 		return false, err
 	}
-	return RoleRank(projectRoleTx(tx, project, account).Role) >= RoleRank(RoleMember), nil
+	return canTx(tx, project, account, RightPackageManage), nil
 }
 
 // closeFinishedPackagesTx schließt die offenen Pakete des Branches, deren PR
