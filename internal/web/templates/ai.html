@@ -18,7 +18,7 @@
 
 {{define "ai_test_result"}}{{with .}}<div class="aitest {{if .OK}}ok{{else}}bad{{end}}" role="status">{{if .OK}}{{mi "check"}}{{else}}{{mi "tri"}}{{end}}<div><span>{{.Text}}</span>{{with .Detail}}<div class="mono aidetail">{{.}}</div>{{end}}<div class="muted aiat">{{.At}}</div></div></div>{{end}}{{end}}
 
-{{define "ai_conn"}}{{$p := .Page}}{{$server := .Server}}{{$edit := .Edit}}{{$canTest := .CanTest}}{{with .Row}}<div class="row aiconn" id="ai-{{.ID}}"><span class="gav lg org" aria-hidden="true">{{mi "bot"}}</span>
+{{define "ai_conn"}}{{$p := .Page}}{{$server := .Server}}{{$edit := .Edit}}{{$canTest := .CanTest}}{{with .Row}}<div class="row aiconn" id="{{if $server}}ai-server-{{else}}ai-{{end}}{{.ID}}"><span class="gav lg org" aria-hidden="true">{{mi "bot"}}</span>
 <div class="aimain"><div class="aitop"><b>{{.Name}}</b>{{if eq .Via "loan"}}<span class="lb out">{{t "ai.via.loan"}}</span>{{else if and (eq .Via "server") (not $server)}}<span class="lb out">{{t "ai.via.server"}}</span>{{end}}{{if .FromFile}}<span class="lb out">{{t "ai.from_file"}}</span>{{end}}</div>
 <div class="mt muted">{{if .Format}}<span>{{.Format}}</span>{{end}}{{if .BaseURL}}<span class="mono aiurl">{{.BaseURL}}</span>{{end}}{{if .Last4}}<span class="mono" aria-label="{{t "ai.key"}}">••••{{.Last4}}</span>{{end}}<span>{{.Spent}}</span>{{if .Release}}<span>{{.Release}}</span>{{end}}</div>
 {{if .Models}}<div class="aimodels">{{range .Models}}<span class="lb out mono">{{.Model}}</span>{{end}}</div>{{end}}

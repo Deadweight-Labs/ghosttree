@@ -84,8 +84,18 @@ var workshopDoneKeys = map[string]string{
 type workshopStep struct{ Label, State string }
 
 type workshopSection struct {
+	Key    string
 	Title  string
 	Blocks []bodyBlock
+	// Answered are the decisions that have an answer now, under the open
+	// questions of the concept (N-H): the free text does not change by itself.
+	Answered []workshopAnswered
+}
+
+// workshopAnswered is a decided question: its number, the question and what was
+// chosen or answered.
+type workshopAnswered struct {
+	Num, Question, Answer, Href string
 }
 
 type workshopRequirement struct {
@@ -165,6 +175,8 @@ type workshopView struct {
 	Affects               []workshopAffect
 	Decisions             []workshopDecision
 	OpenCount             int
+	// HasQuestions: the concept still has a section of open questions.
+	HasQuestions bool
 	// Stand says how many of the decisions are open; Next what comes next.
 	Stand       string
 	Next        *workshopNext
@@ -293,7 +305,8 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		wc := &workshopConcept{Revision: c.Revision, By: c.Person, Age: age(c.CreatedAt)}
 		for _, s := range []struct{ key, text string }{{"about", c.Concept.About}, {"what", c.Concept.What}, {"how", c.Concept.How}, {"not", c.Concept.Not}, {"questions", c.Concept.Questions}} {
 			if blocks := bodyBlocks(s.text, 0); len(blocks) > 0 {
-				wc.Sections = append(wc.Sections, workshopSection{Title: l.msg(workshopSectionKeys[s.key]), Blocks: blocks})
+				wc.Sections = append(wc.Sections, workshopSection{Key: s.key, Title: l.msg(workshopSectionKeys[s.key]), Blocks: blocks})
+				w.HasQuestions = w.HasQuestions || s.key == "questions"
 			}
 		}
 		if len(ws.Coverage) > 0 {
@@ -328,6 +341,13 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		}
 		wd.CanAttach = canWork && wd.Open && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
 		w.Decisions = append(w.Decisions, wd)
+		if d.State == idea.DecisionDecided && w.Concept != nil {
+			for k := range w.Concept.Sections {
+				if sec := &w.Concept.Sections[k]; sec.Key == "questions" {
+					sec.Answered = append(sec.Answered, workshopAnswered{Num: wd.Num, Question: wd.Question, Answer: firstNonEmpty(wd.Chosen, wd.Answer), Href: "#decision-" + strconv.FormatInt(wd.ID, 10)})
+				}
+			}
+		}
 	}
 	// Die Wege der Phase, je Phase nur der passende: die Diskussion beginnen (aus Rohidee und Konzept), sie beenden (in der Diskussion),
 	// freigeben (nach der Diskussion), die Diskussion wieder öffnen (nach ihrem Ende) und die Freigabe zurücknehmen. Beginnen kann, wer
@@ -354,7 +374,11 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 	q := r.URL.Query()
 	switch ask := q.Get("wask"); {
 	case ask == "close" && w.CanClose:
-		w.Ask = &workshopAsk{Mode: "close", Text: l.msg("workshop.ask.close", w.OpenCount), Cancel: repoHref(i.Project) + "/ideas/" + strconv.FormatInt(i.ID, 10) + "#workshop"}
+		text := l.msg("workshop.ask.close", w.OpenCount)
+		if w.OpenCount == 0 {
+			text = l.msg("workshop.ask.close_questions")
+		}
+		w.Ask = &workshopAsk{Mode: "close", Text: text, Cancel: repoHref(i.Project) + "/ideas/" + strconv.FormatInt(i.ID, 10) + "#workshop"}
 	case ask == "approve" && w.CanApprove:
 		w.Ask = &workshopAsk{Mode: "approve", Text: l.msg("workshop.ask.approve"), Revision: w.Revision, Cancel: repoHref(i.Project) + "/ideas/" + strconv.FormatInt(i.ID, 10) + "#workshop"}
 		if n, err := strconv.Atoi(q.Get("wrev")); err == nil && n > 0 {

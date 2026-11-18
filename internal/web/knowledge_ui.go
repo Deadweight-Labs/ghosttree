@@ -54,6 +54,7 @@ type rvRow struct {
 	Warn                    string
 	CanApprove              bool
 	CanReject               bool
+	Need                    string
 	Retire                  bool
 	CanEdit                 bool
 	Act                     *gardenAct
@@ -87,7 +88,7 @@ func reviewRows(l lang, garden *gardenView, cards []knowledgeCard) []rvRow {
 		row := rvRow{ID: c.ID, Href: c.Href, Label: c.TypeLabel, Tone: c.Tone, Title: c.Title, Num: num, Who: c.Person, Age: c.Age, Old: c.Old, Why: c.Excerpt,
 			Level: c.Level, LevelLabel: c.LevelLabel, LevelTitle: c.LevelTitle,
 			Blocks: c.Blocks, Evidence: c.Evidence, Proof: c.Proof, From: c.From, Explain: c.Explain,
-			CanApprove: c.CanApprove, CanReject: c.CanReject, Retire: c.Retire, CanEdit: c.CanEdit, Token: c.Token, Next: c.Next, Filter: c.Filter}
+			CanApprove: c.CanApprove, CanReject: c.CanReject, Need: c.Need, Retire: c.Retire, CanEdit: c.CanEdit, Token: c.Token, Next: c.Next, Filter: c.Filter}
 		if c.Stale {
 			row.Label, row.Tone = l.msg("knowledge.stale"), "warn"
 		}

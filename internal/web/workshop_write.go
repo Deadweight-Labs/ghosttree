@@ -266,6 +266,12 @@ func (a *app) phaseNeedsAsk(r *http.Request, id int64, mode string) string {
 				}
 			}
 		}
+		// The concept's own section of open questions counts as well: a
+		// decision does not strike a line out of the free text, so a person
+		// who closes the discussion is asked once more (N-I).
+		if c, ok, err := pa.IdeaConcept(id, 0); err == nil && ok && strings.TrimSpace(c.Concept.Questions) != "" {
+			return "close"
+		}
 	case "approve":
 		if c, ok, err := pa.IdeaConcept(id, 0); err == nil && ok && len(c.Concept.Requirements) == 0 {
 			return "approve"

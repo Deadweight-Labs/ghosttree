@@ -162,10 +162,12 @@ func (g Gate) Apply(results []Result) (GateReport, error) {
 		payload, _ := json.Marshal(r)
 		rec.Payload = string(payload)
 		w := writer{st: g.Store, run: g.Run, person: person, account: account}
-		// A comment and a requirement always wait for a person, and so does a
-		// relation of an idea to a feature: the owner's automatic approval
-		// covers knowledge, issues, criteria and relations between issues.
-		if g.Policy.Auto(r.Kind) && r.IdeaID == 0 {
+		// A comment and a requirement always wait for a person: they are words
+		// in a place people talk (and the policy does not offer them). The
+		// owner's automatic approval covers knowledge, issues, criteria and
+		// relations, including the link of an idea to a feature, which one
+		// click takes back.
+		if g.Policy.Auto(r.Kind) && (r.IdeaID == 0 || r.Kind == ResultRelation) {
 			ref, err := w.apply(r, 0)
 			if err != nil {
 				rec.State, rec.Reason, rec.Payload = store.ResultRejected, store.ResultInvalid, ""
@@ -437,6 +439,24 @@ func AcceptProposal(st *store.Store, noteID, by int64) (string, error) {
 	return ref, st.SettleWorkflowResult(res.ID, store.ResultProposed, store.ResultAccepted, ref, by)
 }
 
+// undoIdeaLink removes the link of an idea to a feature that an automatic
+// approval wrote, with the rights of the account the run acts for, as when it
+// was written.
+func undoIdeaLink(st *store.Store, res store.WorkflowResult) error {
+	var r Result
+	if json.Unmarshal([]byte(res.Payload), &r) != nil || r.IdeaID == 0 || r.FeatureID == 0 {
+		return store.ErrWorkflowResult
+	}
+	run, _, err := st.WorkflowRunByID(res.RunID)
+	if err != nil {
+		return err
+	}
+	account := st.WorkflowRunAccount(run)
+	pa := st.Access(store.Principal{ID: fmt.Sprintf("person:%d", account)})
+	_, err = pa.UnlinkFeature(r.FeatureID, "idea", r.IdeaID, r.Relation)
+	return err
+}
+
 // UndoAuto takes back an automatic approval: the knowledge entry is retired,
 // the issue dropped, the criterion waived, the relation removed. Whoever may
 // review the project's proposals may take one back (owner, lead, or a member
@@ -469,6 +489,10 @@ func UndoAuto(st *store.Store, resultID, by int64, person string) error {
 		}
 		err = st.SetCriterionState(id, "waived", requestdomain.Evidence{Kind: "session", Ref: store.WorkflowRunRefPrefix + strconv.FormatInt(res.RunID, 10), Person: person})
 	case ResultRelation:
+		if strings.HasPrefix(res.Ref, "FEAT-") {
+			err = undoIdeaLink(st, res)
+			break
+		}
 		id, perr := strconv.ParseInt(strings.TrimPrefix(res.Ref, "relation:"), 10, 64)
 		if perr != nil {
 			return store.ErrWorkflowResult

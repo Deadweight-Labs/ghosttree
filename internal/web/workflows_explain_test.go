@@ -169,10 +169,10 @@ func TestIdeaMatchProposalLeadsToReviewAndAutoApprovalIsUndone(t *testing.T) {
 	_, page = fetchPage(t, e.Owner, e.Base+runHref)
 	mustContain(t, "after accepting", page, "1 proposal waits in review", "Accepted")
 
-	// A relation of an idea to a feature always waits for a person; the
-	// automatic approval covers knowledge, issues, criteria and relations
-	// between issues. With it switched on for knowledge, "knowledge after a
-	// merge" applies its entry at once, and the run page takes it back.
+	// With the automatic approval switched on for knowledge, "knowledge after a
+	// merge" applies its entry at once, and the run page takes it back. (The
+	// link of an idea to a feature applies automatically when "relation" is on:
+	// see TestIdeaLinkAppliesAutomatically...)
 	if err := e.St.SetWorkflowPolicy("person:1", e.org.ID, store.WorkflowPolicy{AutoKinds: []string{"knowledge"}}); err != nil {
 		t.Fatal(err)
 	}

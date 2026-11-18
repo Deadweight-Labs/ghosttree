@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"github.com/Deadweight-Labs/ghosttree/internal/workflow"
 )
 
 // Why a run ended without a result, in words (S02, usability run 5). The
@@ -159,4 +160,56 @@ func (a *app) workflowRerun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, workflowRunHref(repoHref(project), run.ID), http.StatusSeeOther)
+}
+
+// wfActiveRefreshSeconds is how often the page of a queued or running run
+// reloads itself: a run with a model call takes a minute or three.
+const wfActiveRefreshSeconds = 8
+
+// wfResultSummary words how the results of a run stand now: what waits, what
+// was applied or accepted, what was undone or refused. The sentence the run
+// stored when it ended ("1 proposed, 0 applied") goes stale as soon as a person
+// accepts a proposal (N-G).
+func wfResultSummary(l lang, rows []wfResultRow) string {
+	count := map[string]int{}
+	for _, r := range rows {
+		count[r.State]++
+	}
+	var parts []string
+	for _, k := range []struct{ state, key string }{
+		{store.ResultProposed, "wf.sum.proposed"}, {store.ResultAccepted, "wf.sum.accepted"}, {store.ResultAuto, "wf.sum.auto"},
+		{store.ResultUndone, "wf.sum.undone"}, {"linked", "wf.sum.linked"}, {store.ResultRejected, "wf.sum.rejected"},
+	} {
+		if n := count[k.state]; n > 0 {
+			parts = append(parts, l.msg(k.key, n))
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// wfInvalidWhy completes the explanation of a run skipped because the newest
+// version does not pass the check: it leads to the workflow and shows the first
+// error of the check (N-D). Only what the viewer may read is shown.
+func (a *app) wfInvalidWhy(l lang, pa *store.ProjectAccess, remote string, run store.WorkflowRun, v *workflowRunView) {
+	if v.Why == nil || run.Reason != "invalid" || strings.Contains(run.Workflow, "/") {
+		return
+	}
+	def, err := pa.WorkflowDef(remote, run.Workflow)
+	if err != nil {
+		return
+	}
+	v.Why.FixHref, v.Why.FixKey = workflowHref(remote, run.Workflow), "wf.fix.workflow_view"
+	if pa.CanEditWorkflows(remote) {
+		v.Why.FixHref, v.Why.FixKey = workflowHref(remote, run.Workflow)+"?edit=1", "wf.fix.workflow"
+	}
+	if msg := workflowBlocked(def.Text, workflow.EnvFor(a.store, remote)); msg != "" {
+		v.Why.Raw = msg
+	}
+}
+
+// reviewNeedLine is the line beside proposals a reader may not decide on: the
+// role that verifies knowledge and the people who give it ("Needs Lead · ask
+// Mara Keller"). "" when the reader has no refusal to explain.
+func reviewNeedLine(l lang, pa *store.ProjectAccess, project string) string {
+	return roleNeededShort(l, roleNeededOf(pa.Check(project, store.ResKnowledge, store.ActVerify, store.Object{})))
 }

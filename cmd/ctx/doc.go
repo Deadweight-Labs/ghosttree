@@ -516,19 +516,6 @@ func docDiff(repoRoot, project string, c *client.Client, slug string, remote boo
 	return 0
 }
 
-func printLineDiff(stdout io.Writer, oldLabel, newLabel, oldText, newText string) {
-	fmt.Fprintf(stdout, "--- %s\n+++ %s\n", oldLabel, newLabel)
-	if oldText == newText {
-		return
-	}
-	for _, line := range strings.Split(strings.TrimSuffix(oldText, "\n"), "\n") {
-		fmt.Fprintf(stdout, "-%s\n", line)
-	}
-	for _, line := range strings.Split(strings.TrimSuffix(newText, "\n"), "\n") {
-		fmt.Fprintf(stdout, "+%s\n", line)
-	}
-}
-
 func docMove(repoRoot, project string, c *client.Client, slug, newSlug string, stdout io.Writer) int {
 	if err := docwork.ValidateSlug(newSlug); err != nil {
 		fmt.Fprintln(stdout, err)

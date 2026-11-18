@@ -164,7 +164,33 @@ func (a *app) aiConnectionTest(w http.ResponseWriter, r *http.Request) {
 		a.aiTests.put(id, aiTestEntry{res: res, at: time.Now()})
 	}
 	q := url.Values{"org": {o.Slug}}
-	http.Redirect(w, r, "/ui/orgs?"+q.Encode()+"#ai-"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/orgs?"+q.Encode()+"#"+aiRowID(server, id), http.StatusSeeOther)
 }
 
 var errAITestOff = fmt.Errorf("%w: connections cannot be tested here", store.ErrInvalidInput)
+
+// aiRowID is the anchor of a connection's row. A connection the server released
+// to an organization stands in the organization's list as well as in the
+// server's, under the same number, so the server's row has its own anchor: the
+// address of a test of a server connection must open the server's section, not
+// the first row of that number (N-B).
+func aiRowID(server bool, id int64) string {
+	if server {
+		return "ai-server-" + strconv.FormatInt(id, 10)
+	}
+	return "ai-" + strconv.FormatInt(id, 10)
+}
+
+// aiSectionRedirect is GET on an address that only takes forms: it leads to the
+// AI connections of the organization the address names.
+func aiSectionRedirect(w http.ResponseWriter, r *http.Request) {
+	q := url.Values{}
+	if org := r.URL.Query().Get("org"); org != "" {
+		q.Set("org", org)
+	}
+	target := "/ui/orgs"
+	if len(q) > 0 {
+		target += "?" + q.Encode()
+	}
+	http.Redirect(w, r, target+"#ai", http.StatusSeeOther)
+}

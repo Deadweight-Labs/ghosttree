@@ -317,7 +317,7 @@ func TestRunPageShowsResultsAndTheReviewPageAcceptsAProposal(t *testing.T) {
 	run := merge(20, "feat: second path")
 	runHref := "/ui/x/shell/workflows/runs/" + itoa(run.ID)
 	_, page := fetchPage(t, e.Member, e.Base+runHref)
-	mustContain(t, "run page", page, "Results", "Proposed", "Refused", "No evidence found in the inputs", "1 proposed, 0 applied, 1 refused")
+	mustContain(t, "run page", page, "Results", "Proposed", "Refused", "No evidence found in the inputs", "1 waiting for review · 1 refused")
 	results, _ := e.St.WorkflowResultsOf(run.ID)
 	if r := postForm(t, e, e.Lead, "/ui/review/"+itoa(results[0].NoteID)+"/approve", url.Values{}); r.StatusCode != http.StatusSeeOther {
 		t.Fatalf("approve: %d", r.StatusCode)
@@ -327,7 +327,7 @@ func TestRunPageShowsResultsAndTheReviewPageAcceptsAProposal(t *testing.T) {
 		t.Fatalf("result after acceptance: %+v", got)
 	}
 	_, page = fetchPage(t, e.Member, e.Base+runHref)
-	mustContain(t, "run page after acceptance", page, "Accepted", `href="/ui/x/shell/issues/`)
+	mustContain(t, "run page after acceptance", page, "Accepted", `href="/ui/x/shell/issues/`, "1 accepted · 1 refused")
 	// The owner's settings: issues apply without acceptance, relations are forbidden.
 	if r := postForm(t, e, e.Owner, "/ui/orgs/workflow-policy", url.Values{"org": {"alpha"}, "auto_kind": {"issue"}, "deny_kind": {"relation"}}); r.StatusCode != http.StatusSeeOther {
 		t.Fatalf("policy: %d", r.StatusCode)

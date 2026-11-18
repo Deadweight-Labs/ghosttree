@@ -353,3 +353,31 @@ func TestPolicyShowsItsOwnToastCardsAndTheWorkflowsItConcerns(t *testing.T) {
 	_, saved := fetchPage(t, e.Owner, e.Base+"/ui/orgs?org=alpha&notice=workflows")
 	mustContain(t, "retention notice", saved, "Retention saved")
 }
+
+// N-B (counter-check of run 5): the test of the server's connection goes back
+// to an address that names the server's own row. The number alone ("#ai-1")
+// also names the row of the same connection in the organization's list once the
+// server released it, so the page opened the other section and the outcome
+// stood in the hidden one.
+func TestServerConnectionTestReturnsToTheServerRow(t *testing.T) {
+	e, clients := aiWebTesting(t, time.Second)
+	base := provider(t, clients, 200, `{"type":"message","usage":{"input_tokens":5,"output_tokens":1}}`, 0)
+	f := rowsForm("standard", "anthropic", base, aiKeyTeam, oneModel)
+	f.Set("scope", "server")
+	if status, body := e.aiPost(t, e.Owner, "alpha", "/ui/orgs/ai/connection", f); status != http.StatusSeeOther {
+		t.Fatalf("server connection: %d %s", status, body)
+	}
+	servers, _ := e.St.ServerAIConnections()
+	id := servers[0].ID
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/orgs?org=alpha")
+	form := url.Values{"id": {fmt.Sprint(id)}, "scope": {"server"}, "org": {"alpha"}, "csrf_token": {csrfOn(t, page)}}
+	resp := sameOriginPostForm(t, e.Owner, e.Base+"/ui/orgs/ai/connection/test", form)
+	resp.Body.Close()
+	want := fmt.Sprintf("#ai-server-%d", id)
+	if loc := resp.Header.Get("Location"); !strings.HasSuffix(loc, want) {
+		t.Fatalf("redirect %q does not end in %s", loc, want)
+	}
+	_, page = fetchPage(t, e.Owner, e.Base+"/ui/orgs?org=alpha")
+	mustContain(t, "server row", page, fmt.Sprintf(`id="ai-server-%d"`, id), "The connection answers")
+	mustNotContain(t, "server row", page, fmt.Sprintf(`id="ai-%d"`, id))
+}

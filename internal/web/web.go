@@ -386,6 +386,9 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	// AI connections (REQ-694): only from an interactive session, like the rest of the settings.
 	for path, h := range a.aiPOST() {
 		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+		// A refused form is drawn at the address it was sent to; reloading that
+		// page (or opening the address) leads back to the section, not to an error.
+		a.handle(mux, "GET "+path, a.requirePerson(http.HandlerFunc(aiSectionRedirect)))
 	}
 	for path, h := range map[string]http.HandlerFunc{
 		"/ui/orgs/accept": a.orgAccept,
@@ -624,6 +627,12 @@ const (
 	// webAdmin: Verwaltung, nur aus einer interaktiven Sitzung (#2411).
 	webAdmin webClass = "admin"
 )
+
+func init() {
+	for path := range (&app{}).aiPOST() {
+		webRoutes["GET "+path] = webAccount
+	}
+}
 
 var webRoutes = map[string]webClass{
 	"GET /static/":                          webPublic,
