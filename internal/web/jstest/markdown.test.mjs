@@ -686,3 +686,9 @@ test("a very long link text costs no more than its length", () => {
   render(p, "[" + "a".repeat(30000) + "](https://evil.example/) [" + "a.".repeat(15000) + "](https://evil.example/)");
   assert.ok(Date.now() - start < 2000, "the note for a link text is bounded");
 });
+
+test("zero-width characters and padding do not hide an address in a link text", () => {
+  const p = open();
+  const host = render(p, "[ghost\u200btree.example](https://evil.example/) and [" + " ".repeat(10) + "x".repeat(300) + " ghosttree.example](https://evil.example/)");
+  assert.equal(all(host, ".md-target").length, 2);
+});

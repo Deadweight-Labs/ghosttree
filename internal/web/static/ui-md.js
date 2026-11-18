@@ -145,11 +145,19 @@
     try { return new URL(u, window.location.href).hostname.toLowerCase().replace(/^www\./, ""); } catch (e) { return ""; }
   }
   function targetNote(a, url) {
-    var text = (a.textContent || "").slice(0, 256).normalize("NFKC").replace(/[\u3002\uff61\u2024\ufe52\u00b7]/g, ".");
-    var m = RE_SHOWN_HOST.exec(text);
-    if (!m) return null;
-    var shown = m[1].toLowerCase().replace(/^www\./, ""), target = hostOf(url);
-    if (!target || shown === target) return null;
+    // Format characters (zero width, joiners) are dropped first: they split an address in
+    // the text without changing how it reads. A text too long to look through always shows
+    // where the link leads, so padding cannot hide an address behind the limit.
+    var text = (a.textContent || "").replace(/[\p{Cf}\p{Cc}]/gu, "").normalize("NFKC").replace(/[\u3002\uff61\u2024\ufe52\u00b7]/g, "."), shown = "";
+    var target = hostOf(url);
+    if (!target) return null;
+    if (text.length > 256) shown = "?";
+    else {
+      var m = RE_SHOWN_HOST.exec(text);
+      if (!m) return null;
+      shown = m[1].toLowerCase().replace(/^www\./, "");
+    }
+    if (shown === target) return null;
     var note = el("span");
     note.className = "md-target";
     note.textContent = " (" + target + ")";
