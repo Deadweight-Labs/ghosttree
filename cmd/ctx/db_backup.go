@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -17,14 +18,16 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-const dbBackupUsage = `usage: ctx db backup --db <path> --out <file|directory> [--keep N]
+const dbBackupUsage = `usage: ctx db backup --db <path> --out <file|directory> [--keep N] [--every 24h]
 
 Write a verified copy of the database (VACUUM INTO, then an integrity check of
 the copy). It may run beside the server: the copy is one consistent state.
 --out names a file (a path ending in .db) or a directory, which is made if it
 is missing; the copy is then called ghosttree-<UTC time>.db there. --keep N (directory only) removes all but the
 newest N copies of that name afterwards, so a daily timer does not fill the disk.
-The copy is readable by its owner only. Restore: stop the server and put the
+--every D (directory only) keeps running and takes a copy every D, at least a
+minute apart; it is what the backup service of the Docker setup runs, where
+there is no timer. The copy is readable by its owner only. Restore: stop the server and put the
 copy where the database was (with its -wal and -shm files removed).`
 
 // cmdDBBackup is what the server's backup timer runs (ctx server install) and
@@ -35,14 +38,45 @@ func cmdDBBackup(args []string, stdout io.Writer) int {
 	dbPath := fs.String("db", "", "path to the ghosttree database")
 	out := fs.String("out", "", "file or directory for the copy")
 	keep := fs.Int("keep", 0, "with a directory: keep only the newest N copies (0 keeps all)")
+	every := fs.Duration("every", 0, "with a directory: keep running and take a copy every D")
 	fs.Usage = func() { fmt.Fprintln(stdout, dbBackupUsage) }
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagExit(err)
 	}
-	if *dbPath == "" || *out == "" || fs.NArg() != 0 || *keep < 0 {
+	if *dbPath == "" || *out == "" || fs.NArg() != 0 || *keep < 0 || *every < 0 || (*every > 0 && *every < time.Minute) {
 		fmt.Fprintln(stdout, dbBackupUsage)
 		return 2
 	}
+	if *every > 0 {
+		if strings.HasSuffix(*out, ".db") {
+			fmt.Fprintln(stdout, "--every needs --out to be a directory")
+			return 2
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return backupEvery(ctx, *dbPath, *out, *keep, *every, stdout)
+	}
+	return backupOnce(*dbPath, *out, *keep, stdout)
+}
+
+// backupEvery takes a copy now and then every period until ctx ends. A failed
+// copy is reported and tried again at the next time, not the end of the loop: a
+// full disk that is emptied tomorrow should not need a restart.
+func backupEvery(ctx context.Context, dbPath, out string, keep int, every time.Duration, stdout io.Writer) int {
+	for {
+		if code := backupOnce(dbPath, out, keep, stdout); code != 0 {
+			fmt.Fprintf(stdout, "backup failed; next try in %s\n", every)
+		}
+		select {
+		case <-ctx.Done():
+			return 0
+		case <-time.After(every):
+		}
+	}
+}
+
+func backupOnce(dbPathValue, outValue string, keepValue int, stdout io.Writer) int {
+	dbPath, out, keep := &dbPathValue, &outValue, &keepValue
 	if _, err := os.Stat(*dbPath); err != nil {
 		fmt.Fprintf(stdout, "database: %v\n", err)
 		return 1

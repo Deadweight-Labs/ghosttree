@@ -1,24 +1,39 @@
 # Deployment
 
-These units are starting points for a small private Linux deployment. Read and
-adapt them before installation; Ghosttree does not know which interface,
-reverse proxy, backup target, or model provider your environment uses.
+`ctx server install` sets a server up with systemd, `ctx server install
+--docker` with Docker; both are described in
+[`docs/operations.md`](../docs/operations.md), and the one-line installer in the
+README starts them. This file is what they do not do for you: the settings
+that depend on your environment (GitHub, mail, model providers), the snapshot
+and writer limits, metrics, and the maintenance commands. The units in this
+directory are the samples the installer's units follow (a test keeps
+`ghosttree.service` and the generated unit in step); copy them by hand only
+if you do not use the installer.
+
+## What the installer takes over
+
+| Step | systemd | Docker |
+| --- | --- | --- |
+| Files | `/etc/ghosttree/server.env`, `/etc/ghosttree/secret-key`, units in `/etc/systemd/system` | `compose.yaml`, `.env` and `secrets/` in the directory you chose |
+| Service | `ghosttree.service`, `DynamicUser=yes`, state in `/var/lib/ghosttree` | container `ghosttree`, data in the volume `data` |
+| Backup | `ghosttree-backup.timer`, newest 14 copies in `/var/lib/ghosttree/backups` | container `backup`, newest 14 copies in the volume `backups` |
+| First accounts | administrator and `gardener`, login link | the same |
+| TLS | a proxy of yours (Caddy and nginx configuration in `/etc/ghosttree/proxy`) or `--tls builtin` | the same, in `proxy/` |
+| Update | `ctx server update` | `ctx server update --docker` |
+| Check | `ctx server doctor` | `ctx server doctor --docker` |
+
+Settings below go into `/etc/ghosttree/server.env` (systemd; restart with
+`systemctl restart ghosttree`) or `.env` next to `compose.yaml` (Docker; then
+add the variable under `environment:` of the `ghosttree` service, or in a
+`compose.override.yaml`, and run `docker compose up -d`). Commands that read
+the database run as the service's user: with systemd in a transient unit
+(see "Running maintenance commands"), with Docker as
+`docker compose exec ghosttree ctx <command> --db /data/ghosttree.db`.
 
 ## Server
 
-`ghosttree.service` uses `DynamicUser=yes` and
-`StateDirectory=ghosttree`. Systemd owns `/var/lib/ghosttree` and exposes the
-real state directory to the service with the correct identity.
-
-The unit binds to `127.0.0.1:8474` by default. To use another trusted interface,
-create `/etc/ghosttree/server.env` before starting it:
-
-```text
-GHOSTTREE_LISTEN=<private-address>:8474
-```
-
-Behind a TLS terminator add the proxy settings to the same file (the unit
-passes the environment to `ctx serve`); see "Running behind TLS or a reverse
+Behind a TLS terminator add the proxy settings to `server.env`; the installer
+does this for you when you give a domain. See "Running behind TLS or a reverse
 proxy" in [`docs/operations.md`](../docs/operations.md):
 
 ```text
@@ -778,7 +793,9 @@ the run, puts the key in, passes the request on (also streaming), books tokens
 and cost on the run and stops a run at its cap.
 
 **The server key.** Keys in the database need a 32-byte server key, which never
-lives in the database. Make one and hand it to the unit as a systemd credential:
+lives in the database. `ctx server install` makes one (`/etc/ghosttree/secret-key`
+for systemd, `secrets/secret-key` for Docker) and hands it to the service. For a
+server set up by hand, make one and hand it to the unit as a systemd credential:
 
 ```sh
 sudo install -d -m 0700 /etc/ghosttree

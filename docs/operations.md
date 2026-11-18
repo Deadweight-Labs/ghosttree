@@ -153,6 +153,61 @@ are put back and the old server runs again; what the failed run wrote is kept
 as `ghosttree.db.failed-<time>` next to the database, and the command ends with
 an error. Nothing is changed before the release is fetched and checked.
 
+## Running the server with Docker
+
+`ctx server install --docker` (also `install.sh --docker`) writes a
+`compose.yaml` and a `.env` into a directory (`--dir`, by default `/opt/ghosttree`
+for root and `~/ghosttree` otherwise), makes the server key in `secrets/`, starts
+the containers, makes the first administrator and the gardener's account in the
+running container, and ends with the same check and login link as the systemd
+install. It needs Docker with the compose plugin, and a user who may run
+`docker`. Where a setup exists already (its `.env` is there) it stops and points
+to `ctx server update --docker`; `--force` goes on the way an update does: the
+database is copied into the backups volume first, the schema is upgraded with
+the new image, and the old image and the copy are put back if it does not come up.
+
+- **Image.** One image per release on `ghcr.io/deadweight-labs/ghosttree`
+  (amd64 and arm64, signed keyless like the archives; the tags `X.Y.Z` and, for
+  a final release, `latest` are set only after the release has been published): a static `ctx` on a base without a shell,
+  run as user 65532, with a read-only root file system and no capabilities. The
+  digest of the release's image is a file of the release, `ghosttree-image.txt`,
+  listed in the minisign-signed `checksums.txt`; `ctx server install --docker`
+  pulls and runs exactly that digest (`.env` holds
+  `ghcr.io/deadweight-labs/ghosttree:<version>@sha256:...`), so what the registry
+  serves under a tag decides nothing. `--image-repo` pulls it from a mirror, and
+  `--image` runs an image of your own choice, which nothing vouches for.
+- **Volumes and secrets.** `data` holds the database (`/data/ghosttree.db`),
+  `backups` the copies; the server key is a compose secret, a file in the
+  directory `secrets/` (mode 700, the file itself readable by the container's
+  user). Keep a copy of `secrets/secret-key` with your backups.
+- **Backup.** A second container, `backup`, runs `ctx db backup --every 24h` and
+  keeps the newest fourteen copies (and the newest fourteen from before updates)
+  in the volume `backups`; read one out with
+  `docker run --rm -v ghosttree_backups:/b -v "$PWD:/out" debian:12 cp /b/<file> /out/`.
+- **Network and proxy.** The server is published on `127.0.0.1:8474` only, and
+  no forwarding header is believed (`GHOSTTREE_TRUSTED_PROXIES=none`) unless you
+  give a domain and use the generated proxy configuration. Then the installer
+  picks a bridge subnet no other Docker network or route of this machine uses
+  (`GHOSTTREE_SUBNET`, `GHOSTTREE_GATEWAY` in `.env`) and trusts the gateway,
+  the address the proxy on this machine shows up as. With a domain it writes `proxy/Caddyfile` and `proxy/nginx.conf` to copy, as for
+  systemd. `--tls builtin` adds `compose.override.yaml`, which publishes ports 80
+  and 443 and lets the unprivileged user bind them; the certificate is kept in
+  the data volume.
+- **Update.** `ctx server update --docker [--dir DIR] [--version TAG]` only goes
+  up: an older release is refused as a downgrade unless `--force` is given. It reads the
+  image digest from the signed release (signature, trusted comment and checksum
+  are checked as for a systemd update), pulls that digest unless it is here,
+  stops the containers, copies the database into the volume `backups`
+  (`pre-update-<old>-to-<new>-<time>.db`), runs the schema upgrade with the new
+  image, starts it and waits for its version. If it does not answer, the old image
+  and the copy are put back. Run by hand: `docker compose pull && docker compose up -d`
+  (no copy, no way back, nothing checked). The image is also signed keyless:
+  `cosign verify --certificate-identity-regexp '^https://github.com/Deadweight-Labs/ghosttree/' --certificate-oidc-issuer https://token.actions.githubusercontent.com ghcr.io/deadweight-labs/ghosttree@<digest>`.
+- **The gardener.** Its account is made and set as in the systemd install. The
+  image has neither `git` nor Claude Code, so the sandboxed runs of the gardener
+  (`ctx garden run-due`, see `deploy/README.md`) belong on a machine that has
+  them, as a client of this server.
+
 ## Interface language
 
 Every person picks German or English in their profile, or with the switcher

@@ -164,6 +164,24 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- Docker: a `Dockerfile` (static `ctx` on a base without a shell, run as an
+  unprivileged user, read-only file system), an image per release on
+  `ghcr.io/deadweight-labs/ghosttree` (amd64 and arm64, signed), and a
+  `compose.yaml` with volumes for the data and the backups, the server key as a
+  secret and a container that copies the database every night.
+  `ctx server install --docker` (also `install.sh --docker`) sets it up and ends
+  with a check and a login link; `ctx server update --docker` and
+  `ctx server doctor --docker` update with a rollback and check it.
+  Installing over a Docker setup that exists is refused and points to the
+  update (`--force` copies the database and upgrades the schema first), an update
+  only goes up unless `--force` is given, and the image gets its tags
+  (`X.Y.Z`, `latest`) only after the release has been published.
+  `ctx server health` is the container's health check, and
+  `ctx db backup --every 24h` takes copies on a timer without systemd.
+
+- The README Quick start starts with the one line (`install.sh`), and
+  `deploy/README.md` keeps what the installer does not do for you.
+
 - `ctx server install` sets up a server on a Linux machine with systemd in one
   command (also `install.sh --server`): server key, settings, service, a nightly
   database backup, the first administrator, the gardener's account, a final
