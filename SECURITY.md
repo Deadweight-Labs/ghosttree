@@ -62,6 +62,31 @@ command is public.
   (model providers, GitHub) only to public hosts; it will not reach loopback or
   private networks on an organization's behalf.
 
+## What the server sends to a model provider
+
+Nothing leaves the server for a model unless the operator configured it; each
+of these is off until then:
+
+- **"In short" notes** send the text of the knowledge entry, request, pain, task
+  or room question that gets a note to the provider the operator named in
+  `llm.json` or `GHOSTTREE_EXPLAIN_KEY`, within daily caps. No key, or
+  `GHOSTTREE_EXPLAIN=off`: nothing is sent.
+- **Session distillation** (`ctx distill-sessions`, run by a timer the operator
+  installs) sends excerpts of stored transcripts to the provider of `llm.json`.
+  Transcripts are redacted for secrets when they are stored; redaction is a
+  safeguard, not a guarantee.
+- **Embeddings** send document text to the embedding server at
+  `GHOSTTREE_EMBED_URL`. The sample deployment runs it as a container on the same
+  machine, reachable on loopback only; an address elsewhere sends the text there.
+- **An organization's own AI connection** uses the key and provider that
+  organization entered, never the operator's.
+
+The first three are the operator's, for the whole server: there is no switch
+per organization yet. Text of every organization on the server can go to the
+operator's provider, so an operator tells the people on the server which of
+these are on, and an organization that must exclude them runs its own server or
+asks the operator to leave them off.
+
 ## Checking a release
 
 Every release is signed. `checksums.txt` lists the SHA-256 of each archive and is
