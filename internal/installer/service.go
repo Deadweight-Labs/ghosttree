@@ -79,16 +79,34 @@ func systemdQuote(w string) string {
 // on-failure aus, und keine Session kam mehr beim Server an. Ein bewusstes
 // systemctl stop startet systemd trotzdem nicht neu.
 func watchUnitText(ctx string) string {
+	return unhardenedWatchUnitText(ctx, "always", watchHardening)
+}
+
+// watchHardening ist, was eine Benutzer-Unit ohne Mount-Namespace einschränken
+// kann (die Sandbox mit ProtectSystem und PrivateTmp setzt unprivilegierte User-
+// Namespaces voraus, die nicht überall laufen und die Unit dann ganz scheitern
+// ließen): keine Rechteerweiterung, keine Namespaces, kein Echtzeit, kein
+// beschreibbarer ausführbarer Speicher, nur Netz und Unix-Sockets.
+const watchHardening = "NoNewPrivileges=yes\nRestrictSUIDSGID=yes\nRestrictNamespaces=yes\nRestrictRealtime=yes\n" +
+	"LockPersonality=yes\nMemoryDenyWriteExecute=yes\nSystemCallArchitectures=native\n" +
+	"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n"
+
+func unhardenedWatchUnitText(ctx, restart, hardening string) string {
 	return "[Unit]\nDescription=ghosttree session collector\nAfter=network-online.target\n\n" +
-		"[Service]\nExecStart=" + systemdQuote(ctx) + " watch\nRestart=always\nRestartSec=30\n\n" +
+		"[Service]\nExecStart=" + systemdQuote(ctx) + " watch\nRestart=" + restart + "\nRestartSec=30\n" + hardening + "\n" +
 		"[Install]\nWantedBy=default.target\n"
 }
 
 // legacyWatchUnitText und legacyWatchPlistText sind die Fassungen vor Restart=always
 // bzw. KeepAlive true. Der Installer erkennt sie als seine eigenen und ersetzt
-// sie, statt sie für fremd zu halten.
+// sie, statt sie für fremd zu halten. Das gilt auch für die Unit ohne die
+// Einschränkungen davor.
 func legacyWatchUnitText(ctx string) string {
-	return strings.Replace(watchUnitText(ctx), "\nRestart=always\n", "\nRestart=on-failure\n", 1)
+	return unhardenedWatchUnitText(ctx, "on-failure", "")
+}
+
+func beforeHardeningWatchUnitText(ctx string) string {
+	return unhardenedWatchUnitText(ctx, "always", "")
 }
 
 func legacyWatchPlistText(ctx, logPath string) string {
@@ -233,7 +251,7 @@ func isOurWatchDefinition(old, home string) bool {
 			return false
 		}
 		ctx := strings.NewReplacer("%%", "%", "$$", "$").Replace(words[0])
-		return old == watchUnitText(ctx) || old == legacyWatchUnitText(ctx)
+		return old == watchUnitText(ctx) || old == legacyWatchUnitText(ctx) || old == beforeHardeningWatchUnitText(ctx)
 	}
 	return false
 }

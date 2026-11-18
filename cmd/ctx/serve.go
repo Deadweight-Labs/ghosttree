@@ -79,9 +79,12 @@ const (
 	envOIDCIssuer       = "GHOSTTREE_OIDC_ISSUER"
 	envOIDCClientID     = "GHOSTTREE_OIDC_CLIENT_ID"
 	envOIDCClientSecret = "GHOSTTREE_OIDC_CLIENT_SECRET"
-	envOIDCRedirectURL  = "GHOSTTREE_OIDC_REDIRECT_URL"
-	envOIDCName         = "GHOSTTREE_OIDC_NAME"
-	envOIDCSignup       = "GHOSTTREE_OIDC_SIGNUP"
+	// envOIDCClientSecretFile names a file with the secret, so it can come from a
+	// systemd credential instead of the environment.
+	envOIDCClientSecretFile = "GHOSTTREE_OIDC_CLIENT_SECRET_FILE"
+	envOIDCRedirectURL      = "GHOSTTREE_OIDC_REDIRECT_URL"
+	envOIDCName             = "GHOSTTREE_OIDC_NAME"
+	envOIDCSignup           = "GHOSTTREE_OIDC_SIGNUP"
 	// envEnforceAccess schaltet die Sichtbarkeit nach Rolle scharf. Ohne "1"
 	// wird nur protokolliert, was verweigert würde ("access: would deny").
 	envEnforceAccess = "GHOSTTREE_ENFORCE_ACCESS"
@@ -227,6 +230,11 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	if fs.NArg() != 0 {
 		return serveConfig{}, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
 	}
+	secret, err := oidcClientSecret(cfg.OIDC.ClientSecret, os.Getenv(envOIDCClientSecretFile))
+	if err != nil {
+		return serveConfig{}, err
+	}
+	cfg.OIDC.ClientSecret = secret
 	if err := cfg.OIDC.Validate(); err != nil {
 		return serveConfig{}, err
 	}
