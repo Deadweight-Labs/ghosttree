@@ -28,13 +28,12 @@ func drop(r rune) bool {
 }
 
 // Strip removes the characters that could steer a terminal. A carriage return
-// that is part of a line ending (\r\n) becomes the line break alone; a lone one
-// is dropped, since it lets a line overwrite the one before it.
+// stays in a line ending (\r\n), so text read back from a file is as it was; a
+// lone one is dropped, since it lets a line overwrite the one before it.
 func Strip(s string) string {
 	if !needsStrip(s) {
 		return s
 	}
-	s = strings.ReplaceAll(s, "\r\n", "\n")
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); {
@@ -50,7 +49,9 @@ func Strip(s string) string {
 			i++
 			continue
 		}
-		if !drop(r) {
+		if r == '\r' && i+1 < len(s) && s[i+1] == '\n' {
+			b.WriteByte('\r')
+		} else if !drop(r) {
 			b.WriteString(s[i : i+n])
 		}
 		i += n
@@ -92,6 +93,10 @@ func (s *writer) Write(p []byte) (int, error) {
 			}
 			break
 		}
+	}
+	// A \r at the end may belong to a \r\n that is cut by the boundary.
+	if end > 0 && data[end-1] == '\r' {
+		end--
 	}
 	s.carry = append([]byte(nil), data[end:]...)
 	out := Strip(string(data[:end]))
