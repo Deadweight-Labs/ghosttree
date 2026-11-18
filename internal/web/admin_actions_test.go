@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -416,5 +419,42 @@ func TestProjectRoleFormAnswersAMemberWithoutTheRightTheSameForEveryAccount(t *t
 	member, stranger, unknown := answer("person:1"), answer("person:2"), answer("person:99")
 	if member != stranger || stranger != unknown {
 		t.Errorf("the answer tells which account numbers are members of the organization: %q %q %q", member, stranger, unknown)
+	}
+}
+
+// Ein Konto einer fremden Org sieht und ändert in der Weboberfläche nichts,
+// auch im Log-Modus (der Store öffnet sich hier ohne Durchsetzung).
+func TestStrangerOfAnotherOrgReadsAndChangesNothingInLogMode(t *testing.T) {
+	base, st, alice, anna, _ := orgWeb(t)
+	if st.AccessEnforced() {
+		t.Fatal("the fixture is meant to run in log mode")
+	}
+	const remote = "github.com/x/one"
+	if _, err := st.ClaimProject("person:1", remote, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	id, err := st.InsertKnowledge(store.Knowledge{Type: "note", Title: "alpha secret note", Body: "alpha secret body", Person: "alice", AuthorID: 1, Scope: scope.Axes{Project: remote}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "alpha secret request", Scope: scope.Axes{Project: remote}, Person: "alice"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	knowledge := fmt.Sprintf("%s/ui/knowledge/%d", base, id)
+	request := fmt.Sprintf("%s/ui/requests/%d", base, d.Request.ID)
+	for _, target := range []string{knowledge, request} {
+		if status, body := fetchPage(t, alice, target); status != 200 || !strings.Contains(body, "alpha secret") {
+			t.Fatalf("the owner reads %s: %d", target, status)
+		}
+		status, body := fetchPage(t, anna, target)
+		if status == 200 || strings.Contains(body, "alpha secret") {
+			t.Errorf("a stranger reads %s: %d", target, status)
+		}
+	}
+	resp := postOrg(t, anna, base, fmt.Sprintf("/ui/knowledge/%d/edit", id), url.Values{"title": {"hijacked"}, "body": {"hijacked"}})
+	resp.Body.Close()
+	if k, _ := st.KnowledgeByID(id); k.Title != "alpha secret note" {
+		t.Errorf("a stranger edited the entry: %q", k.Title)
 	}
 }
