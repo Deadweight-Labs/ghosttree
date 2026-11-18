@@ -251,10 +251,6 @@ func (a *app) renderRunbookForm(w http.ResponseWriter, r *http.Request, v *runbo
 // runbookNewPage is GET /ui/{org}/{repo}/runbooks/new.
 func (a *app) runbookNewPage(w http.ResponseWriter, r *http.Request, remote string) {
 	pa := a.access(r)
-	if !interactive(r) {
-		a.notInteractive(w, r)
-		return
-	}
 	if a.accessDenied(w, r, pa.CheckRunbookCreate(remote, "")) {
 		return
 	}
@@ -264,10 +260,6 @@ func (a *app) runbookNewPage(w http.ResponseWriter, r *http.Request, remote stri
 // runbookEditPage is GET /ui/{org}/{repo}/runbooks/{name}?edit=1.
 func (a *app) runbookEditPage(w http.ResponseWriter, r *http.Request, remote string, ref store.RunbookRef) {
 	pa := a.access(r)
-	if !interactive(r) {
-		a.notInteractive(w, r)
-		return
-	}
 	if a.accessDenied(w, r, pa.CheckRunbook(ref, store.ActEdit)) {
 		return
 	}

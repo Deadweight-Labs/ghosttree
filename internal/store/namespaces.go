@@ -324,7 +324,7 @@ func (s *Store) SetOrgFollowGitHub(actorPrincipal string, orgID int64, follow bo
 		return err
 	}
 	defer tx.Rollback()
-	if orgRoleTx(tx, orgID, actor) != OrgOwner {
+	if !orgCanTx(tx, orgID, actor, RightOrgProjects) {
 		return ErrNotOrgOwner
 	}
 	cur, err := orgByIDTx(tx, orgID)
@@ -457,7 +457,7 @@ func orgViewerKindTx(q queryer, orgID, account int64) string {
 	switch role := orgRoleTx(q, orgID, account); {
 	case role == "":
 		return ""
-	case role == OrgOwner:
+	case IsOrgOwnerRole(role):
 		return OrgViewerOwner
 	case orgGuestTx(q, orgID, account):
 		return OrgViewerGuest

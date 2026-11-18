@@ -34,7 +34,7 @@ func packagesOf(t *testing.T, e shellEnv) []requestdomain.PackageSummary {
 	return list
 }
 
-func TestALeadMakesAPackageInTheBrowserAndAMemberSeesTheButtonSwitchedOff(t *testing.T) {
+func TestALeadMakesAPackageInTheBrowserAndAGuestSeesTheButtonSwitchedOff(t *testing.T) {
 	e, _ := manageEnv(t)
 	first := rqMake(t, e.St, rqSpec{Title: "First thing", Criteria: []string{"one"}})
 	second := rqMake(t, e.St, rqSpec{Title: "Second thing", Criteria: []string{"two"}})
@@ -45,10 +45,13 @@ func TestALeadMakesAPackageInTheBrowserAndAMemberSeesTheButtonSwitchedOff(t *tes
 	mustContain(t, "lead's empty list", empty, `href="/ui/x/shell/packages?panel=new#new"`, `action="/ui/packages/create"`, `name="branch"`,
 		`name="issue" value="`+strconv.FormatInt(first.Request.ID, 10)+`"`, "Second thing")
 	mustNotContain(t, "lead's empty list", empty, "ctx package create", "pk-need")
-	// A member sees the button, off, with the role and whom to ask, and no form.
+	// A member makes packages as over the API (DEC-51 A); a guest sees the
+	// button, off, with the role it needs, and no form.
 	_, member := fetchPage(t, e.Member, base)
-	mustContain(t, "member's list", member, `<span class="needrole" id="pk-need">`, "Needs Lead · ask alice", `disabled aria-describedby="pk-need"`)
-	mustNotContain(t, "member's list", member, `action="/ui/packages/create"`, "ctx package create", "?panel=new")
+	mustContain(t, "member's list", member, `action="/ui/packages/create"`)
+	_, guest := fetchPage(t, e.Guest, base)
+	mustContain(t, "guest's list", guest, `<span class="needrole" id="pk-need">`, "Needs Member", `disabled aria-describedby="pk-need"`)
+	mustNotContain(t, "guest's list", guest, `action="/ui/packages/create"`, "ctx package create", "?panel=new")
 
 	form := url.Values{"project": {shellProject}, "branch": {"feat/voice"}, "name": {"Voice answers"}, "pr": {"#31"}, "role": {"optional"},
 		"issue": {strconv.FormatInt(first.Request.ID, 10), strconv.FormatInt(second.Request.ID, 10)}}
@@ -72,8 +75,10 @@ func TestALeadMakesAPackageInTheBrowserAndAMemberSeesTheButtonSwitchedOff(t *tes
 	mustContain(t, "lead's package", page, "Package created.", `action="/ui/packages/`+strconv.FormatInt(id, 10)+`/state"`, `name="reason"`, `value="Voice answers"`)
 	mustNotContain(t, "lead's package", page, "pk-need")
 	_, memberPkg := fetchPage(t, e.Member, e.Base+"/ui/x/shell/packages/"+strconv.FormatInt(id, 10))
-	mustContain(t, "member's package", memberPkg, `<span class="needrole" id="pk-need">`, `disabled aria-describedby="pk-need"`)
-	mustNotContain(t, "member's package", memberPkg, `/update"`, `/remove"`, `/state"`, `/add"`)
+	mustContain(t, "member's package", memberPkg, `/state"`)
+	_, guestPkg := fetchPage(t, e.Guest, e.Base+"/ui/x/shell/packages/"+strconv.FormatInt(id, 10))
+	mustContain(t, "guest's package", guestPkg, `<span class="needrole" id="pk-need">`, `disabled aria-describedby="pk-need"`)
+	mustNotContain(t, "guest's package", guestPkg, `/update"`, `/remove"`, `/state"`, `/add"`)
 }
 
 func TestAPackageIsChangedFromItsPage(t *testing.T) {
@@ -176,11 +181,6 @@ func TestNoPackageFormWorksWithoutTheTokenOrTheRole(t *testing.T) {
 		if resp := sameOriginPostForm(t, e.Lead, e.Base+path, cloneValues(form)); resp.StatusCode != http.StatusForbidden {
 			t.Errorf("%s without a token -> %d, want 403", path, resp.StatusCode)
 		}
-		// A member with a good token.
-		resp := postForm(t, e, e.Member, path, cloneValues(form))
-		if resp.StatusCode != http.StatusForbidden {
-			t.Errorf("%s as a member -> %d, want 403", path, resp.StatusCode)
-		}
 		// A guest.
 		if resp := postForm(t, e, e.Guest, path, cloneValues(form)); resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s as a guest -> %d, want 403 or 404", path, resp.StatusCode)
@@ -189,12 +189,12 @@ func TestNoPackageFormWorksWithoutTheTokenOrTheRole(t *testing.T) {
 	if list := packagesOf(t, e); len(list) != 1 || list[0].Name != "Y" || list[0].State != requestdomain.PackageOpen || list[0].Requests != 1 {
 		t.Fatalf("a refused form changed something: %+v", list)
 	}
-	// The member who asks by hand is told the role.
+	// The guest who asks by hand is told the role.
 	form := cloneValues(forms["/ui/packages/create"])
-	form.Set("csrf_token", renderedCSRFToken(t, e.Member, e.Base+"/ui/overview"))
-	resp := sameOriginPostForm(t, e.Member, e.Base+"/ui/packages/create", form)
+	form.Set("csrf_token", renderedCSRFToken(t, e.Guest, e.Base+"/ui/overview"))
+	resp := sameOriginPostForm(t, e.Guest, e.Base+"/ui/packages/create", form)
 	body := readBody(t, resp)
-	if !strings.Contains(body, "This needs the role Lead in shell. You are Member there. Ask alice for it.") {
+	if !strings.Contains(body, "This needs the role Member in shell. You are Guest there.") {
 		t.Errorf("the refusal does not name the role: %s", body)
 	}
 }
@@ -229,8 +229,10 @@ func TestALeadMakesAndEditsAFeatureAndLinksIt(t *testing.T) {
 	mustContain(t, "lead's feature list", empty, `href="`+base+`?panel=new#new"`, `action="/ui/features/create"`, `name="behavior"`, `name="areas"`)
 	mustNotContain(t, "lead's feature list", empty, "ctx feature add", "ft-need")
 	_, member := fetchPage(t, e.Member, e.Base+base)
-	mustContain(t, "member's feature list", member, `<span class="needrole" id="ft-need">`, "Needs Lead · ask alice", `disabled aria-describedby="ft-need"`)
-	mustNotContain(t, "member's feature list", member, `action="/ui/features/create"`, "ctx feature add")
+	mustContain(t, "member's feature list", member, `action="/ui/features/create"`)
+	_, guest := fetchPage(t, e.Guest, e.Base+base)
+	mustContain(t, "guest's feature list", guest, `<span class="needrole" id="ft-need">`, "Needs Member", `disabled aria-describedby="ft-need"`)
+	mustNotContain(t, "guest's feature list", guest, `action="/ui/features/create"`, "ctx feature add")
 
 	resp := postForm(t, e, e.Lead, "/ui/features/create", url.Values{"project": {shellProject}, "name": {"Voice inbox"}, "summary": {"Answer by voice."},
 		"behavior": {"The inbox reads questions aloud."}, "limits": {"German only."}, "cli": {"`ctx inbox --voice`"}, "areas": {"internal/web\ninternal/inbox"}, "message": {"first"}})
@@ -331,9 +333,6 @@ func TestNoFeatureFormWorksWithoutTheTokenOrTheRole(t *testing.T) {
 		if resp := sameOriginPostForm(t, e.Lead, e.Base+path, cloneValues(form)); resp.StatusCode != http.StatusForbidden {
 			t.Errorf("%s without a token -> %d, want 403", path, resp.StatusCode)
 		}
-		if resp := postForm(t, e, e.Member, path, cloneValues(form)); resp.StatusCode != http.StatusForbidden {
-			t.Errorf("%s as a member -> %d, want 403", path, resp.StatusCode)
-		}
 		if resp := postForm(t, e, e.Guest, path, cloneValues(form)); resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s as a guest -> %d, want 403 or 404", path, resp.StatusCode)
 		}
@@ -342,9 +341,9 @@ func TestNoFeatureFormWorksWithoutTheTokenOrTheRole(t *testing.T) {
 	if got, _ := pa.FeatureView(f.ID); len(list) != 1 || got.Summary != "As is." || got.Revision != 1 {
 		t.Fatalf("a refused form changed something: %d features, %+v", len(list), got)
 	}
-	_, member := fetchPage(t, e.Member, e.Base+"/ui/x/shell/features/"+id)
-	mustContain(t, "member's feature", member, `<span class="needrole" id="ft-need">`, `disabled aria-describedby="ft-need"`)
-	mustNotContain(t, "member's feature", member, `/edit"`, `/link"`, `id="link"`)
+	_, guest := fetchPage(t, e.Guest, e.Base+"/ui/x/shell/features/"+id)
+	mustContain(t, "guest's feature", guest, `<span class="needrole" id="ft-need">`, `disabled aria-describedby="ft-need"`)
+	mustNotContain(t, "guest's feature", guest, `/edit"`, `/link"`, `id="link"`)
 }
 
 // S19: a label is made where it is wanted, on the issue and in the form of a new one.

@@ -153,26 +153,12 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 	})
 }
 
-// interactive sagt, ob die Sitzung aus einem Login stammt (OIDC, Login-Link,
+// fromSignIn sagt, ob die Sitzung aus einem Login stammt (OIDC, Login-Link,
 // Bootstrap-, Claim- oder Einladungscode) und nicht aus einem eingefügten
-// Token. Ein Token liegt in der Konfiguration jedes Rechners, auf dem ein Agent
-// läuft; wer es einfügt, bekommt eine lesende Sitzung.
-func interactive(r *http.Request) bool {
-	return browserPrincipal(r).TokenKind == store.WebSessionKind
-}
-
-// requireInteractive schützt Verwaltungsformulare: Rollen, Mitgliedschaften,
-// Einladungen, Projektverschiebungen und die Freigabe von Geräten. Eine Sitzung
-// aus eingefügtem Token bekommt 403 mit einer Erklärung.
-func (a *app) requireInteractive(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !interactive(r) {
-			a.notInteractive(w, r)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
+// Token. Nur eine solche Sitzung nutzt Menschen-Rechte (requireSignIn); eine
+// Token-Sitzung darf dasselbe wie das Token über die API. Außerdem entscheidet
+// es, ob etwas als Mensch oder als Agent geschrieben wird.
+func fromSignIn(r *http.Request) bool { return browserPrincipal(r).SignedIn() }
 
 func (a *app) notInteractive(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)

@@ -445,12 +445,12 @@ func checkAIBaseURL(raw string, server bool) bool {
 // a namespace.
 func canKeepAIOf(q rowQuerier, orgID, account int64) error {
 	if orgID == 0 {
-		if !isServerAdminTx(q, account) {
+		if !instanceCanTx(q, account, RightInstanceAI) {
 			return ErrNotServerAdmin
 		}
 		return nil
 	}
-	if orgRoleTx(q, orgID, account) != OrgOwner {
+	if !orgCanTx(q, orgID, account, RightOrgAI) {
 		return ErrNotOrgOwner
 	}
 	return nil
@@ -1047,7 +1047,7 @@ func (s *Store) SetAIRelease(actorPrincipal, mode string, defaultCapUSD float64)
 	if mode != AIReleaseAll && mode != AIReleaseSelected && mode != AIReleaseNone {
 		return fmt.Errorf("%w: release is all, selected or none", ErrInvalidInput)
 	}
-	if !isServerAdminTx(s.db, actor) {
+	if !instanceCanTx(s.db, actor, RightInstanceAI) {
 		return ErrNotServerAdmin
 	}
 	if !validCap(defaultCapUSD) || (mode == AIReleaseAll && defaultCapUSD <= 0) {
@@ -1074,7 +1074,7 @@ func (s *Store) SetAIGrant(actorPrincipal string, orgID int64, capUSD float64) e
 	if !validCap(capUSD) {
 		return ErrAICap
 	}
-	if !isServerAdminTx(s.db, actor) {
+	if !instanceCanTx(s.db, actor, RightInstanceAI) {
 		return ErrNotServerAdmin
 	}
 	if _, err := orgByIDTx(s.db, orgID); err != nil {
@@ -1094,7 +1094,7 @@ func (s *Store) DeleteAIGrant(actorPrincipal string, orgID int64) error {
 	if err != nil {
 		return err
 	}
-	if !isServerAdminTx(s.db, actor) {
+	if !instanceCanTx(s.db, actor, RightInstanceAI) {
 		return ErrNotServerAdmin
 	}
 	_, err = s.db.Exec(`DELETE FROM ai_server_grants WHERE org_id=?`, orgID)
@@ -1168,7 +1168,7 @@ func (s *Store) RevokeAILoan(actorPrincipal string, loanID int64) error {
 	if err := tx.QueryRow(`SELECT l.connection_id, l.org_id, c.org_id FROM ai_loans l JOIN ai_connections c ON c.id=l.connection_id WHERE l.id=? AND l.revoked_at=''`, loanID).Scan(&connID, &orgID, &owner); err != nil {
 		return ErrAIUnavailable
 	}
-	if orgRoleTx(tx, owner, actor) != OrgOwner {
+	if !orgCanTx(tx, owner, actor, RightOrgAI) {
 		return ErrNotOrgOwner
 	}
 	if err := revokeAILoansTx(tx, `id=?`, loanID); err != nil {
@@ -1413,7 +1413,7 @@ func (s *Store) SetAICap(actorPrincipal string, c AICap) error {
 	if c.OrgID <= 0 || !validCap(c.MonthUSD) || !validCap(c.RunUSD) || len(c.Workflow) > 200 || strings.ContainsAny(c.Workflow, " \t\r\n") {
 		return ErrAICap
 	}
-	if orgRoleTx(s.db, c.OrgID, actor) != OrgOwner {
+	if !orgCanTx(s.db, c.OrgID, actor, RightOrgAI) {
 		return ErrNotOrgOwner
 	}
 	if c.Workflow != "" && c.MonthUSD == 0 && c.RunUSD == 0 {

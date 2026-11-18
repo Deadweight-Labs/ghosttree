@@ -147,7 +147,7 @@ func (a *app) newMenuFor(r *http.Request, base shellBase, work store.Org) *newMe
 		m.Idea = m.Issue + "?kind=idea"
 		m.Pain = m.Issue + "?kind=pain"
 	}
-	if interactive(r) {
+	if browserPrincipal(r).May(store.RightOrgCreate) {
 		m.Org = newOrgHref
 	}
 	// Every member creates projects in the organization (17 A, #4376): in the one
@@ -205,24 +205,23 @@ func (a *app) viewerOf(r *http.Request, pa *store.ProjectAccess) viewer {
 	orgOwner := false
 	if orgs, err := a.store.ListOrgs(browserPrincipal(r).ID); err == nil {
 		for _, o := range orgs {
-			orgOwner = orgOwner || o.Role == store.OrgOwner
+			orgOwner = orgOwner || store.IsOrgOwnerRole(o.Role)
 		}
 	}
-	rank, flag := 0, false
+	best, reviewer := "", pa.IsAdmin() || orgOwner
 	for _, remote := range pa.Projects() {
 		role := pa.Role(remote)
-		rank = max(rank, store.RoleRank(role.Role))
-		flag = flag || role.CanReview
+		best = store.HighestRole(best, role.Role)
+		reviewer = reviewer || role.Has(store.RightKnowledgeVerify)
 	}
-	reviewer := flag || rank >= store.RoleRank(store.RoleLead) || pa.IsAdmin() || orgOwner
 	switch {
-	case orgOwner || rank >= store.RoleRank(store.RoleOwner):
+	case orgOwner || store.RoleAtLeast(best, store.RoleOwner):
 		return viewer{viewerOwner, a.activeRoleKey(r, pa, "role.owner"), true}
 	case pa.IsAdmin():
 		return viewer{viewerOwner, "role.admin", true}
-	case rank == store.RoleRank(store.RoleLead):
+	case store.RoleAtLeast(best, store.RoleLead):
 		return viewer{viewerMember, "role.lead", reviewer}
-	case rank == store.RoleRank(store.RoleGuest):
+	case (store.RoleInfo{Role: best}).GuestOnly():
 		return viewer{viewerGuest, "role.guest", false}
 	}
 	return viewer{viewerMember, "role.member", reviewer}
@@ -239,21 +238,21 @@ func (a *app) activeRoleKey(r *http.Request, pa *store.ProjectAccess, fallback s
 	if work.ID == 0 {
 		return fallback
 	}
-	if work.Role == store.OrgOwner {
+	if store.IsOrgOwnerRole(work.Role) {
 		return "role.owner"
 	}
-	rank := 0
+	best := ""
 	for _, remote := range pa.Projects() {
 		if p, ok := a.store.ProjectByRemote(remote); ok && p.OrgID == work.ID {
-			rank = max(rank, store.RoleRank(pa.Role(remote).Role))
+			best = store.HighestRole(best, pa.Role(remote).Role)
 		}
 	}
 	switch {
-	case rank >= store.RoleRank(store.RoleOwner):
+	case store.RoleAtLeast(best, store.RoleOwner):
 		return "role.owner"
-	case rank == store.RoleRank(store.RoleLead):
+	case store.RoleAtLeast(best, store.RoleLead):
 		return "role.lead"
-	case rank == store.RoleRank(store.RoleGuest):
+	case (store.RoleInfo{Role: best}).GuestOnly():
 		return "role.guest"
 	case pa.IsAdmin():
 		return "role.admin"
@@ -398,7 +397,7 @@ func (a *app) orgSwitchFor(r *http.Request, orgs []store.Org, work store.Org) *o
 		return nil
 	}
 	sw := &orgSwitch{Current: work.Name}
-	if interactive(r) {
+	if browserPrincipal(r).May(store.RightOrgCreate) {
 		sw.New = newOrgHref
 	}
 	for _, o := range orgs {

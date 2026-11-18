@@ -125,7 +125,7 @@ func (a *app) orgBandFor(r *http.Request, org store.Org, current string) *bandVi
 		}
 		counts["agents"] = n
 	}
-	opts := orgBandOpts{Owner: org.Role == store.OrgOwner, Services: showServices}
+	opts := orgBandOpts{Owner: store.OrgRoleHas(org.Role, store.RightOrgManage), Services: showServices}
 	if n := a.gardenOpenCount(r, org); n >= 0 {
 		counts["gardener"], opts.Gardener = n, true
 	}
@@ -192,11 +192,11 @@ func (a *app) orgPage(w http.ResponseWriter, r *http.Request, org store.Org, tab
 		if org.IsUser() {
 			list, _ := a.store.PendingHandovers(browserPrincipal(r).ID)
 			for _, h := range list {
-				v.Handover = append(v.Handover, orgHandoverRow{Remote: h.Remote, Name: lastSegment(h.Remote), Owner: h.Owner, Org: h.Org, Consented: h.Consented, CanAct: !h.Consented && interactive(r)})
+				v.Handover = append(v.Handover, orgHandoverRow{Remote: h.Remote, Name: lastSegment(h.Remote), Owner: h.Owner, Org: h.Org, Consented: h.Consented, CanAct: !h.Consented && browserPrincipal(r).May(store.RightOrgProjects)})
 			}
 		} else if list, err := a.store.PendingTakeovers(browserPrincipal(r).ID, org.ID); err == nil {
 			for _, h := range list {
-				v.Handover = append(v.Handover, orgHandoverRow{Remote: h.Remote, Name: lastSegment(h.Remote), Owner: h.Owner, Org: h.Org, Consented: h.Consented, CanAct: (h.Consented || admin) && interactive(r)})
+				v.Handover = append(v.Handover, orgHandoverRow{Remote: h.Remote, Name: lastSegment(h.Remote), Owner: h.Owner, Org: h.Org, Consented: h.Consented, CanAct: (h.Consented || admin) && browserPrincipal(r).May(store.RightOrgProjects)})
 			}
 		}
 	case "people":
@@ -278,7 +278,7 @@ func (a *app) orgTab(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	if tab == "settings" {
-		if org.Role != store.OrgOwner {
+		if !store.OrgRoleHas(org.Role, store.RightOrgManage) {
 			http.NotFound(w, r)
 			return true
 		}
@@ -323,7 +323,7 @@ func (v *orgPageView) fillAgentFilters(canConnect bool) {
 // picture when they linked GitHub.
 func (a *app) userBandFor(r *http.Request, org store.Org, current string) *bandView {
 	counts := map[string]int{"repos": len(a.orgProjects(r, org)), "machines": a.orgMachineCount(r, org)}
-	opts := orgBandOpts{Owner: org.Role == store.OrgOwner}
+	opts := orgBandOpts{Owner: store.OrgRoleHas(org.Role, store.RightOrgManage)}
 	if n := a.gardenOpenCount(r, org); n >= 0 {
 		counts["gardener"], opts.Gardener = n, true
 	}

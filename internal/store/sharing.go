@@ -165,11 +165,11 @@ func (s *Store) SetProjectVisibility(actorPrincipal, remote string, shared bool)
 	if !ok || orgRoleTx(tx, p.OrgID, actor) == "" {
 		return ErrProjectNotFound
 	}
-	rank := RoleRank(projectRoleTx(tx, remote, actor).Role)
-	if rank == 0 {
+	role := projectRoleTx(tx, remote, actor)
+	if !role.Any() {
 		return ErrProjectNotFound
 	}
-	if rank < RoleRank(RoleOwner) {
+	if !role.Has(RightProjectShare) {
 		return ErrNotProjectOwner
 	}
 	if p.Shared == shared {
@@ -213,12 +213,12 @@ func sourceHost(kind string) (string, bool) {
 	return "", false
 }
 
-func requireOrgOwnerTx(tx rowQuerier, orgID int64, actorPrincipal string) (int64, error) {
+func requireOrgRightTx(tx rowQuerier, orgID int64, actorPrincipal string, right Right) (int64, error) {
 	actor, err := parsePersonPrincipalID(actorPrincipal)
 	if err != nil {
 		return 0, err
 	}
-	if orgRoleTx(tx, orgID, actor) != OrgOwner {
+	if !orgCanTx(tx, orgID, actor, right) {
 		return 0, ErrNotOrgOwner
 	}
 	return actor, nil
@@ -265,7 +265,7 @@ func (s *Store) ConnectSourceWithInstallation(actorPrincipal string, orgID int64
 		return Source{}, err
 	}
 	defer tx.Rollback()
-	actor, err := requireOrgOwnerTx(tx, orgID, actorPrincipal)
+	actor, err := requireOrgRightTx(tx, orgID, actorPrincipal, RightOrgProjects)
 	if err != nil {
 		return Source{}, err
 	}
@@ -372,7 +372,7 @@ func (s *Store) DisconnectSource(actorPrincipal string, orgID int64, kind, login
 		return err
 	}
 	defer tx.Rollback()
-	actor, err := requireOrgOwnerTx(tx, orgID, actorPrincipal)
+	actor, err := requireOrgRightTx(tx, orgID, actorPrincipal, RightOrgProjects)
 	if err != nil {
 		return err
 	}
@@ -428,7 +428,7 @@ func (s *Store) ListSourceRepos(actorPrincipal string, orgID, sourceID int64) ([
 	if s.reader != nil {
 		return s.reader.ListSourceRepos(actorPrincipal, orgID, sourceID)
 	}
-	if _, err := requireOrgOwnerTx(s.db, orgID, actorPrincipal); err != nil {
+	if _, err := requireOrgRightTx(s.db, orgID, actorPrincipal, RightOrgProjects); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.Query(`SELECT r.remote, EXISTS(SELECT 1 FROM projects p WHERE p.remote=r.remote AND p.org_id=g.org_id)
@@ -463,7 +463,7 @@ func (s *Store) ImportSourceRepos(actorPrincipal string, orgID, sourceID int64) 
 		return 0, err
 	}
 	defer tx.Rollback()
-	actor, err := requireOrgOwnerTx(tx, orgID, actorPrincipal)
+	actor, err := requireOrgRightTx(tx, orgID, actorPrincipal, RightOrgProjects)
 	if err != nil {
 		return 0, err
 	}
@@ -573,7 +573,7 @@ func (s *Store) ClaimPrefix(actorPrincipal string, orgID int64, prefix, visibili
 		return OrgPrefix{}, err
 	}
 	defer tx.Rollback()
-	actor, err := requireOrgOwnerTx(tx, orgID, actorPrincipal)
+	actor, err := requireOrgRightTx(tx, orgID, actorPrincipal, RightOrgProjects)
 	if err != nil {
 		return OrgPrefix{}, err
 	}
@@ -634,7 +634,7 @@ func (s *Store) ReleasePrefix(actorPrincipal string, orgID int64, prefix string)
 		return err
 	}
 	defer tx.Rollback()
-	actor, err := requireOrgOwnerTx(tx, orgID, actorPrincipal)
+	actor, err := requireOrgRightTx(tx, orgID, actorPrincipal, RightOrgProjects)
 	if err != nil {
 		return err
 	}

@@ -46,7 +46,9 @@ func (e *RoleNeeded) Grantors() []string {
 // action on this object, keeping the viewer's review flag; "" when no role
 // does (the object is someone else's own).
 func neededRole(have RoleInfo, res Resource, act Action, obj Object) string {
-	for _, role := range []string{RoleGuest, RoleMember, RoleLead, RoleOwner} {
+	roles := ProjectRoles()
+	slices.Reverse(roles)
+	for _, role := range roles {
 		if matrixAllows(RoleInfo{Role: role, CanReview: have.CanReview}, res, act, obj) {
 			return role
 		}
@@ -63,7 +65,7 @@ func (a *ProjectAccess) roleNeeded(project string, res Resource, act Action, obj
 	}
 	have := a.Role(project)
 	need := neededRole(have, res, act, obj)
-	if need == "" || RoleRank(need) <= RoleRank(have.Role) {
+	if need == "" || RoleAtLeast(have.Role, need) {
 		return ErrAccessForbidden
 	}
 	self := a.principal.ID
@@ -84,13 +86,10 @@ func (s *Store) RoleGrantors(project, role, except string) []string {
 	if err != nil {
 		return nil
 	}
-	min := RoleRank(RoleOwner)
-	if RoleRank(role) <= RoleRank(RoleMember) {
-		min = RoleRank(RoleLead)
-	}
+	right := roleGrantRight(role)
 	var out []string
 	for _, m := range members {
-		if m.AccountID == except || m.Inherited || RoleRank(m.Role) < min {
+		if m.AccountID == except || m.Inherited || !(RoleInfo{Role: m.Role}).Has(right) {
 			continue
 		}
 		name := NormalizeAccountName(m.Account)

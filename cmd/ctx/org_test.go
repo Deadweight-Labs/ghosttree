@@ -121,7 +121,11 @@ func TestOrgCLICreateInviteAcceptAndMembers(t *testing.T) {
 	if !strings.Contains(list, "pending") || !strings.Contains(list, "x@example.test") || strings.Contains(list, code) {
 		t.Fatalf("invitations: %s", list)
 	}
-	f.ok(t, "anna", "org", "invitations", "alpha", "revoke", "2")
+	// Invitations are member management, a human right (DEC-49): a token
+	// neither issues nor revokes one.
+	if c, o := f.as(t, "anna", "org", "invitations", "alpha", "revoke", "2"); c == 0 || !strings.Contains(o, "web_session_required") {
+		t.Fatalf("revoking an invitation over the API: %d %s", c, o)
+	}
 	if c, o := f.as(t, "anna", "org", "members", "alpha", "remove", "robin"); c == 0 || !strings.Contains(o, "web_session_required") {
 		t.Fatalf("removing another member over the API: %d %s", c, o)
 	}

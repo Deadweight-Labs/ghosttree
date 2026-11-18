@@ -206,7 +206,7 @@ func (s *Store) SaveWorkflowDef(actorPrincipal string, in WorkflowDefSave) (Work
 		return WorkflowDefSaved{}, err
 	}
 	defer tx.Rollback()
-	if RoleRank(projectRoleTx(tx, in.Project, actor).Role) < 3 {
+	if !canTx(tx, in.Project, actor, RightWorkflowEdit) {
 		return WorkflowDefSaved{}, ErrAccessForbidden
 	}
 	out, err := saveWorkflowDefTx(tx, actor, in)
@@ -306,7 +306,7 @@ func (s *Store) SetWorkflowDefEnabled(actorPrincipal, project, name string, enab
 		return err
 	}
 	defer tx.Rollback()
-	if RoleRank(projectRoleTx(tx, project, actor).Role) < 3 {
+	if !canTx(tx, project, actor, RightWorkflowEdit) {
 		return ErrAccessForbidden
 	}
 	var id int64

@@ -62,7 +62,7 @@ func (a *app) denialFor(r *http.Request, remote string) *denial {
 	if org, err := a.store.OrgByRef(p.Org); err == nil {
 		if members, err := a.store.ListOrgMembers(org.ID); err == nil {
 			for _, m := range members {
-				if m.Role == store.OrgOwner && !m.Guest && m.Kind != store.AccountKindService {
+				if store.IsOrgOwnerRole(m.Role) && !m.Guest && m.Kind != store.AccountKindService {
 					d.Owners = append(d.Owners, m.Account)
 				}
 			}

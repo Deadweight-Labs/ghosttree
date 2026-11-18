@@ -383,7 +383,7 @@ func approverOf(q queryer, ref RunbookRef, versionRowID int64) (string, bool) {
 			}
 			continue
 		}
-		if RoleRank(projectRoleTx(q, ref.Project, id).Role) >= 3 {
+		if canTx(q, ref.Project, id, RightRunbookApprove) {
 			return person, true
 		}
 	}

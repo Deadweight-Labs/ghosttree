@@ -258,9 +258,6 @@ func (a *app) fillIssue(r *http.Request, pa *store.ProjectAccess, remote, base, 
 // the reason. A viewer who may not edit the issue, but may comment, gets the field
 // without the row; a closed issue can still be commented on.
 func (a *app) issueComposer(r *http.Request, l lang, pa *store.ProjectAccess, v *requestView) *composerView {
-	if !interactive(r) {
-		return nil
-	}
 	canComment := v.ProjectRemote != "" && pa.Allow(v.ProjectRemote, store.ResComment, store.ActCreate, store.Object{Own: true})
 	canClose := v.Open && v.CanEdit
 	if !canComment && !canClose {

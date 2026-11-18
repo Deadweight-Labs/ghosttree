@@ -162,7 +162,7 @@ func (s *Store) SetWorkflowPolicy(actorPrincipal string, orgID int64, p Workflow
 		return err
 	}
 	defer tx.Rollback()
-	if orgRoleTx(tx, orgID, actor) != OrgOwner {
+	if !orgCanTx(tx, orgID, actor, RightOrgAI) {
 		return ErrNotOrgOwner
 	}
 	if _, err := tx.Exec(`INSERT INTO workflow_settings(org_id,retention_days,policy,updated_by,updated_at) VALUES(?,?,?,?,?)
@@ -302,7 +302,7 @@ func (s *Store) WorkflowRunActor(run WorkflowRun) int64 {
 	}
 	id := principalOfID(account)
 	acc, err := s.AccountByPrincipalID(id)
-	if err != nil || acc.State != "active" || RoleRank(s.ProjectRole(run.Project, id).Role) < RoleRank(RoleLead) {
+	if err != nil || acc.State != "active" || !s.ProjectRole(run.Project, id).Has(RightWorkflowEdit) {
 		return 0
 	}
 	return account

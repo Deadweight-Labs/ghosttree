@@ -222,7 +222,9 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		for _, n := range notices {
 			v.Moved = append(v.Moved, l.msg("adm.notice.slug_yielded", n.OldSlug, n.NewSlug))
 		}
-		if interactive(r) {
+		// Only the person reading it marks a notice as seen, not an agent
+		// that opened the page with a token.
+		if fromSignIn(r) {
 			_ = a.store.MarkNamespaceNoticesSeen(me)
 		}
 	}
@@ -246,7 +248,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	v.Garden = a.gardenAdminFor(r)
 	v.Transcripts = a.transcriptsAdminFor(r)
 	v.AIServer = a.aiServerFor(r, v.AIForm)
-	if interactive(r) && a.isAdmin(browserPrincipal(r)) {
+	if a.access(r).CanInstance(store.RightInstanceAdmin) && browserPrincipal(r).May(store.RightOrgProjects) {
 		v.Assign, _ = a.store.AllOwners()
 	}
 	for _, o := range orgs {
@@ -265,17 +267,17 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	if v.Selected.ID != 0 {
 		v.GardenSet = a.gardenSettingsFor(r, v.Selected)
 		v.AI = a.aiViewFor(r, v.Selected, v.AIForm)
-		v.Owner = v.Selected.Role == store.OrgOwner
+		v.Owner = store.OrgRoleHas(v.Selected.Role, store.RightOrgManage)
 		if v.Owner {
 			v.Retention = a.store.WorkflowSettingsFor(v.Selected.ID).RetentionDays
 			v.Policy = a.wfPolicyViewOf(r, v.Selected, a.store.WorkflowPolicyFor(v.Selected.ID))
 		}
-		v.CanRename = v.Owner || a.isAdmin(browserPrincipal(r))
+		v.CanRename = v.Owner || a.access(r).CanInstance(store.RightInstanceOrgRename)
 		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me, a.store.AccessEnforced())
 		v.GuestLinks = a.store.AccessEnforced()
 		owners := 0
 		for _, m := range members {
-			if m.Role == store.OrgOwner {
+			if store.IsOrgOwnerRole(m.Role) {
 				owners++
 			}
 		}
@@ -291,10 +293,10 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			}
 			m.Account = store.NormalizeAccountName(m.Account)
 			row := orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me, Initial: initialOf(m.Account),
-				SoleOwner: m.Role == store.OrgOwner && owners == 1, Service: m.Kind == store.AccountKindService}
+				SoleOwner: store.IsOrgOwnerRole(m.Role) && owners == 1, Service: m.Kind == store.AccountKindService}
 			// An owner can hand a member a one-time sign-in link: the way back in
 			// when the instance cannot send mail. Not for owners, services or oneself.
-			if v.Owner && interactive(r) && m.Role == store.OrgMember && !row.Service && m.AccountID != me && a.store.LoginLinkAllowed(v.Selected.ID, m.AccountID) {
+			if orgMay(r, v.Selected, store.RightOrgMembers) && store.IsOrgPlainMemberRole(m.Role) && !row.Service && m.AccountID != me && a.store.LoginLinkAllowed(v.Selected.ID, m.AccountID) {
 				row.CanLoginLink = true
 				row.LoginLink = a.loginLinkFor(r, me, m.AccountID)
 			}
@@ -306,10 +308,10 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		for _, p := range v.Projects {
 			rv := projectRolesView{Remote: p.Remote, You: a.store.ProjectRole(p.Remote, me).Role, Shared: p.Shared}
 			rv.Toggle = map[bool]string{true: "0", false: "1"}[p.Shared]
-			rv.CanShare = interactive(r) && store.RoleRank(rv.You) >= store.RoleRank(store.RoleOwner)
+			rv.CanShare = a.access(r).Can(p.Remote, store.RightProjectShare)
 			// Ein Gast sieht nur den eigenen Eintrag, wie in der API
 			// (listProjectMembers).
-			guest := store.RoleRank(a.access(r).Role(p.Remote).Role) == 1 && a.store.AccessEnforced()
+			guest := a.access(r).Role(p.Remote).GuestOnly() && a.store.AccessEnforced()
 			// Die Zeilen kommen aus den Mitgliedern des Projekts, nicht aus der
 			// Org-Liste: sonst stünde jedes Org-Mitglied mit "none" darin.
 			projectMembers, _ := a.store.ListProjectMembers(p.Remote)
@@ -322,7 +324,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			// Owner, jeder ohne durchgesetzte Sichtbarkeit (dort sehen alle
 			// ohnehin alles) und ein Lead oder Projekt-Owner in seinem Projekt (vom Owner
 			// eingesetzt). Member und Gast sehen die Mitglieder des Projekts.
-			if v.Owner || !a.store.AccessEnforced() || store.RoleRank(rv.You) >= store.RoleRank(store.RoleLead) {
+			if v.Owner || !a.store.AccessEnforced() || (store.RoleInfo{Role: rv.You}).Has(store.RightRolesGrant) {
 				if orgAll == nil {
 					orgAll, _ = a.store.ListOrgMembers(v.Selected.ID)
 				}
@@ -363,7 +365,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				}
 			}
 			for i, m := range v.Members {
-				v.Members[i].NoProject = m.Role != store.OrgOwner && !inProject[m.AccountID] && len(v.Projects) > 0
+				v.Members[i].NoProject = !store.IsOrgOwnerRole(m.Role) && !inProject[m.AccountID] && len(v.Projects) > 0
 			}
 		}
 	}
@@ -698,7 +700,7 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	var inv store.Invitation
 	link := false
 	project := strings.TrimSpace(r.FormValue("project"))
-	if role := r.FormValue("role"); role == store.RoleGuest || (role == "" && project != "") {
+	if role := r.FormValue("role"); (store.RoleInfo{Role: role}).GuestOnly() || (role == "" && project != "") {
 		// A project link is for guests only: people who work with the
 		// organization are invited into it as members.
 		if project == "" {
@@ -778,7 +780,7 @@ func (a *app) orgMemberRole(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	text := l.msg("adm.done.member", name, o.Name)
 	switch {
-	case role == store.OrgOwner:
+	case store.IsOrgOwnerRole(role):
 		text = l.msg("adm.done.owner", name, o.Name)
 	case account == me:
 		text = l.msg("adm.done.member_self", o.Name)
@@ -884,10 +886,10 @@ func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
 	a.orgDone(w, r, o.Slug, "role", doneNote{Text: text, Row: rowAnchor("pr", remote+"-"+account)})
 }
 
-// grantable nennt die wählbaren Rollen, aber nur in einer interaktiven Sitzung:
-// aus eingefügtem Token zeigt die Seite keine Rollenformulare.
+// grantable nennt die wählbaren Rollen. Rollen zu vergeben ist ein
+// Menschen-Recht: aus eingefügtem Token zeigt die Seite keine Rollenformulare.
 func (a *app) grantable(r *http.Request, actor, remote, target string) []string {
-	if !interactive(r) {
+	if !browserPrincipal(r).May(store.RightRolesGrant) {
 		return nil
 	}
 	return a.store.GrantableRoles(actor, remote, target)
@@ -1006,14 +1008,14 @@ func projectInputRemote(input, orgSlug string) (value string, isRemote bool) {
 // Instanz-Admin; die Adresse (Slug) bleibt, damit Links gültig bleiben.
 func (a *app) orgRename(w http.ResponseWriter, r *http.Request) {
 	me := browserPrincipal(r)
-	admin := a.isAdmin(me)
+	admin := a.access(r).CanInstance(store.RightInstanceOrgRename)
 	o, err := a.formOrg(r)
 	if err != nil && admin {
 		// Ein Instanz-Admin darf jede Organisation umbenennen, auch ohne Mitglied zu sein.
 		o, err = a.store.OrgByRef(r.FormValue("org"))
 	}
 	if err == nil {
-		if a.store.OrgRole(o.ID, me.ID) != store.OrgOwner && admin {
+		if !a.access(r).CanOrg(o.ID, store.RightOrgManage) && admin {
 			_, err = a.store.RenameOrgAsAdmin(me.ID, o.ID, r.FormValue("name"), "")
 		} else {
 			_, err = a.store.RenameOrg(me.ID, o.ID, r.FormValue("name"), "")

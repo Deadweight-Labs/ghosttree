@@ -498,7 +498,7 @@ func (s *Store) SetWorkflowTrigger(actorPrincipal string, t WorkflowTrigger) (Wo
 		return WorkflowTrigger{}, err
 	}
 	defer tx.Rollback()
-	if RoleRank(projectRoleTx(tx, t.Project, actor).Role) < 3 {
+	if !canTx(tx, t.Project, actor, RightWorkflowEdit) {
 		return WorkflowTrigger{}, ErrAccessForbidden
 	}
 	t, err = setWorkflowTriggerTx(tx, t, actorPrincipal)
@@ -1125,7 +1125,7 @@ func (s *Store) SetWorkflowSettings(actorPrincipal string, in WorkflowSettings) 
 		return err
 	}
 	defer tx.Rollback()
-	if orgRoleTx(tx, in.OrgID, actor) != OrgOwner {
+	if !orgCanTx(tx, in.OrgID, actor, RightOrgManage) {
 		return ErrNotOrgOwner
 	}
 	if _, err := tx.Exec(`INSERT INTO workflow_settings(org_id,retention_days,updated_by,updated_at) VALUES(?,?,?,?)

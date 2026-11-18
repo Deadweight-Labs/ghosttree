@@ -65,8 +65,15 @@ func TestPastedTokenSessionIsReadOnly(t *testing.T) {
 		"/ui/orgs/invite":        {"org": {"alpha"}, "role": {"owner"}},
 		"/ui/orgs/invite/revoke": {"org": {"alpha"}, "id": {"1"}},
 		"/ui/orgs/project/move":  {"org": {"alpha"}, "remote": {webRoleProject}, "to": {"beta"}},
-		"/ui/device":             {"user_code": {"ABCD-EFGH"}},
-		"/ui/device/decide":      {"user_code": {"ABCD-EFGH"}, "decision": {"approve"}},
+		// Review of PR #315: sharing a project with the whole organization, founding an
+		// organization, the retention of workflow runs and releasing held entries are a
+		// person's; a token session reached them once requireInteractive was gone.
+		"/ui/orgs/project/visibility": {"org": {"alpha"}, "remote": {webRoleProject}, "shared": {"1"}},
+		"/ui/orgs/create":             {"name": {"Via Token Session"}, "slug": {"via-token"}},
+		"/ui/orgs/workflows":          {"org": {"alpha"}, "retention_days": {"1"}},
+		"/ui/review/held":             {"kind": {"knowledge"}, "id": {"1"}, "release": {"1"}},
+		"/ui/device":                  {"user_code": {"ABCD-EFGH"}},
+		"/ui/device/decide":           {"user_code": {"ABCD-EFGH"}, "decision": {"approve"}},
 	}
 	for path, form := range forms {
 		f := url.Values{"csrf_token": {renderedCSRFToken(t, pasted, srv.URL+"/ui/orgs")}}
@@ -75,7 +82,7 @@ func TestPastedTokenSessionIsReadOnly(t *testing.T) {
 		}
 		resp := sameOriginPostForm(t, pasted, srv.URL+path, f)
 		page := body(t, resp)
-		if resp.StatusCode != http.StatusForbidden || !strings.Contains(page, "can only read") || !strings.Contains(page, "login-link") {
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(page, "not a token") || !strings.Contains(page, "login-link") {
 			t.Fatalf("%s with a pasted token: %d %s", path, resp.StatusCode, page)
 		}
 	}
