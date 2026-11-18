@@ -31,6 +31,14 @@ jobs:
         run: |
           go install github.com/zricethezav/gitleaks/v8@v8.30.1
           gitleaks git --redact --no-banner --log-opts="--full-history HEAD"
+      # Only the gosec rules the code is clean of: a new finding of one of them
+      # is a new mistake. The rules with old findings (triaged as harmless) stay
+      # out, or every pull request would be red.
+      - name: Check the clean gosec rules
+        run: |
+          go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 -quiet \
+            -include=G107,G110,G112,G114,G201,G305,G402,G403,G405,G406,G407,G501,G502,G503,G504,G506,G601,G701,G702,G706,G707 \
+            -exclude-dir=.ghosttree -exclude-dir=bench ./...
       - name: Check dependency licenses
         run: |
           go install github.com/google/go-licenses/v2@v2.0.1
