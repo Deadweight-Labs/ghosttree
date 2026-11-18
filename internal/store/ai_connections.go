@@ -1929,6 +1929,9 @@ func (s *Store) AIRunUsageOf(runID int64) (AIRunUsage, error) {
 // AICostReportOf is what a namespace spent since a time (RFC 3339), by
 // workflow, run, connection and model. Every amount belongs to one of each.
 func (s *Store) AICostReportOf(orgID int64, since string) (AICostReport, error) {
+	if s.reader != nil {
+		return s.reader.AICostReportOf(orgID, since)
+	}
 	return s.AICostReportFor(orgID, since, nil)
 }
 
