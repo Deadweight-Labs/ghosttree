@@ -395,3 +395,26 @@ func withJar(t *testing.T, c *http.Client, base string) *http.Client {
 	jar.SetCookies(u, c.Jar.Cookies(u))
 	return &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
+
+// "Mitglied (Standard der Org)" ändert nichts und sagt es nur dem, der Rollen
+// geben darf; wer es nicht darf, bekommt für jede Kontonummer dieselbe Antwort.
+func TestProjectRoleFormAnswersAMemberWithoutTheRightTheSameForEveryAccount(t *testing.T) {
+	base, st, alice, anna, _ := adminOrg(t)
+	// A project shared with the organization gives every member the default role
+	// without a row, which is what the form answers for.
+	if err := st.SetProjectVisibility("person:1", "github.com/x/one", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := postOrgLoc(t, alice, base, "/ui/orgs/project/role", url.Values{"org": {"alpha"}, "remote": {"github.com/x/one"}, "account": {"person:2"}, "role": {""}}); !strings.Contains(got, "/ui/orgs") {
+		t.Fatalf("the owner is told the choice changes nothing: %q", got)
+	}
+	answer := func(account string) string {
+		resp := postOrg(t, anna, base, "/ui/orgs/project/role", url.Values{"org": {"alpha"}, "remote": {"github.com/x/one"}, "account": {account}, "role": {""}})
+		defer resp.Body.Close()
+		return resp.Status + " " + resp.Header.Get("Location")
+	}
+	member, stranger, unknown := answer("person:1"), answer("person:2"), answer("person:99")
+	if member != stranger || stranger != unknown {
+		t.Errorf("the answer tells which account numbers are members of the organization: %q %q %q", member, stranger, unknown)
+	}
+}
