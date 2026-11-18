@@ -727,3 +727,28 @@ func (a *app) isJoinInvitation(code string) bool {
 	_, ok := a.joinPreview(code)
 	return ok
 }
+
+// formOrigins are the origins a sign-in form may lead to: the identity provider (the
+// issuer and, once discovered, the address of its authorization endpoint).
+func (c *oidcClient) formOrigins() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(raw string) {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+			return
+		}
+		origin := u.Scheme + "://" + u.Host
+		if !seen[origin] {
+			seen[origin] = true
+			out = append(out, origin)
+		}
+	}
+	add(c.cfg.Issuer)
+	c.mu.Lock()
+	if c.oauth != nil {
+		add(c.oauth.Endpoint.AuthURL)
+	}
+	c.mu.Unlock()
+	return out
+}

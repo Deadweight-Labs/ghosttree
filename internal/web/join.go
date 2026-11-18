@@ -117,12 +117,11 @@ func (a *app) joinHeaders(w http.ResponseWriter) {
 	h.Set("Referrer-Policy", "strict-origin")
 	h.Set("X-Robots-Tag", "noindex, nofollow")
 	h.Set("X-Content-Type-Options", "nosniff")
-	// Keine Skripte, keine fremden Ressourcen, nicht einbettbar. form-action
-	// bleibt offen: der Weg zum Identitätsanbieter ist eine Weiterleitung, und
-	// 'self' würde auch die 303-Weiterleitung der Freigabe auf den Loopback des
-	// Installers (http://127.0.0.1:<port>/callback) blockieren, weil Browser
-	// form-action auf die Ziele von Weiterleitungen anwenden.
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	// Keine Skripte, keine fremden Ressourcen, nicht einbettbar. Formulare gehen an
+	// diese Herkunft, an den Identitätsanbieter und auf den Loopback des Installers
+	// (die 303-Weiterleitung der Freigabe auf http://127.0.0.1:<port>/callback),
+	// weil Browser form-action auch auf die Ziele von Weiterleitungen anwenden.
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; "+a.formAction(true)+"; frame-ancestors 'none'")
 	h.Set("Content-Type", "text/html; charset=utf-8")
 }
 
@@ -130,7 +129,7 @@ func (a *app) joinHeaders(w http.ResponseWriter) {
 // (/static/join.js) und Abfragen an dieselbe Herkunft; sonst bleibt alles zu.
 func (a *app) joinScriptHeaders(w http.ResponseWriter) {
 	a.joinHeaders(w)
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; "+a.formAction(true)+"; frame-ancestors 'none'")
 }
 
 // joinGate zählt den Aufruf. Es antwortet selbst, wenn die Grenze erreicht ist.
