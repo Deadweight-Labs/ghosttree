@@ -1,183 +1,185 @@
 # Ghosttree
 
-**One memory, one work ledger, one room, for every coding agent on your team.
-Self-hosted, and none of it in your repo.**
+**Context for coding agents that stays true.**
 
 [![CI](https://github.com/Deadweight-Labs/ghosttree/actions/workflows/ci.yml/badge.svg)](https://github.com/Deadweight-Labs/ghosttree/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Deadweight-Labs/ghosttree?include_prereleases)](https://github.com/Deadweight-Labs/ghosttree/releases)
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial%20%2B%20Micro%20Business%20Grant-blue)](#licensing)
 
-Ghosttree is the shared workplace for coding agents and the people who direct
-them. A server you run keeps what the team has learned, the work that is open,
-and who is doing what. Claude Code, Codex, and OpenCode read from it and write
-to it, so a new session starts with the context the last one ended with.
+Ghosttree keeps what your project knows outside the code: why it is built the
+way it is, what is still open, what must not be forgotten. Every agent session
+starts with the part of it that matters right now, and people can read and
+check all of it in the browser.
 
-![Ghosttree in 20 seconds: a pitfall reaches the new session, a request closes with a commit, an agent answers in the room](docs/images/demo-loop.gif)
+Coding tools are adding memory of their own, usually for one person in one
+tool. Ghosttree is for the project: it works across
+harnesses and machines, is shared by a team, is tied to Git commits and pull
+requests, and is checked against the code and by people before it counts.
 
-[Watch the 85-second demo](docs/images/demo.mp4)
+![A decision in the idea workshop, the issue it leads to, the checklist of the pull request, the briefing of the next session, and the code tree with file descriptions](docs/images/demo-loop.gif)
 
-It is for two kinds of users. One person running many agents in parallel gets
-agents that know what the others did and learned. A team gets one place where
-knowledge is shared and where agents on different machines coordinate with each
-other and with the people.
+[Watch the 30-second tour with the pointer moving through it](docs/images/tour.mp4)
 
-Ghosttree is pre-1.0 and runs as one CGO-free Go binary with SQLite. Storage
-and commands may still change between minor releases.
+Where it helps:
 
-## Why Ghosttree exists
+- **You run several agents at once.** Each session sees what the others
+  learned, which work is open, and where an interrupted session stopped.
+- **Your team works with agents on different machines.** Agents share one room,
+  one set of knowledge, and one work package per pull request, so they do not
+  repeat each other's work or mistakes.
+- **You review what agents did.** A pull request lists the criteria it must
+  meet with the commit that meets each one, decisions keep the variants that
+  were rejected and why, and sessions are linked to the commits they produced.
+- **Ideas come faster than they can be worked out.** A voice note or a chat
+  line becomes an idea, a concept with open decisions, and only after a person
+  approves it, issues with criteria.
+- **Some steps only a person can do.** An agent asks for a key, a file, or a
+  decision as a task with numbered steps, and checks the result afterwards.
+- **Things must be done the same way every time.** A runbook holds the deploy,
+  its check, and its rollback, and reaches the agent when it is about to run
+  the command.
+- **Someone is new to the code.** Every file and folder can carry a
+  description, readable in the browser and as plain files under `.ghosttree/`.
+- **Your data must stay with you.** There is no hosted component. The server
+  runs where you choose and only calls services you configure, such as a model
+  provider, GitHub, or a mail server.
 
-Agent instructions tend to pile up in `AGENTS.md`, `CLAUDE.md`, plans, scratch
-notes, and comments that explain yesterday's work rather than today's code. The
-useful parts become hard to find, and the repository fills with files that mean
-nothing to its users.
+Ghosttree is self-hosted, pre-1.0, and runs as one Go binary with SQLite.
+Nothing is written into your Git tree.
 
-Ghosttree gives that material its own lifecycle outside the repository. Facts
-and decisions are searchable and can be replaced when they change. Work is
-tracked with criteria and evidence instead of a markdown checklist. Specs and
-plans are versioned documents. The original session transcripts stay available
-across machines.
+## Where does it go?
 
-## What it does
+Six kinds of objects, each with one job. Each has a number you can link to,
+such as `KN-48` or `REQ-12`, and a page in the browser.
 
-### Remember
+| Key | What it is | Example |
+| --- | --- | --- |
+| `KN` | Knowledge: a pitfall, decision, note, plan, or instruction about the repository, the code, or anything else | "A payment retry must not send a second receipt" |
+| `PAIN` | Something bothers you. No reason or proof needed | "The product page takes four seconds on a phone" |
+| `IDEA` | A thought not worked out yet, a fix for a pain or a feature wish | "Keep the cart across devices" |
+| `REQ` | A request (an issue in the interface) with acceptance criteria that an agent works through and closes with evidence | "Guest checkout", four criteria, two met with commits |
+| `TASK` | Something only a person can do: create a key, place a file, decide, press a button. Comes with numbered steps | "Point the staging address to the new server" |
+| `FEAT` | What the product does now, at a high level, kept up to date as pull requests change it | "Guest checkout: shoppers pay without an account" |
 
-- Knowledge entries: pitfalls, decisions, and notes, scoped to a repository, a
-  branch, or a machine, and optionally tied to the paths where they apply.
-- A description per file and directory, stored beside the repo instead of as
-  comments in it. This is the ghost tree. It is also generated as plain
-  files under `.ghosttree/tree/`, one `.md` per path.
-- Searchable session transcripts from Claude Code and Codex, collected on each
-  machine. Search is full text and can optionally also find entries by meaning.
-- Knowledge distilled from past sessions waits in quarantine until a person
-  reviews it.
+Around them:
 
-At the start of a session the agent receives the relevant part of this. Here is
-an abridged example from a project called `ledgerly`:
-
-```text
-## Known context (ghosttree)
-Before writing, search; if a known state changed, supersede the old entry
-(context_remember supersedes) instead of adding a follow-up.
-
-### pitfall
-- [github.com/acme-works/ledgerly | by mara] Money is rounded half-even: use
-  money.RoundBankers — money.Round rounds half away from zero and is only kept
-  for old reports. Invoices, fees and discounts must use money.RoundBankers…
-- [github.com/acme-works/ledgerly | by mara] The billing month is Europe/Berlin
-  and half-open — The daily report used UTC and shifted invoices after 22:00…
-
-## Work ledger (ghosttree)
-3 open requests in this scope. For substantial feature, architecture,
-migration, or multi-session work, search the request ledger first…
-
-## Interrupted work (ghosttree)
-- REQ-2 "Daily report cuts the month at UTC midnight" — stopped 40 minutes ago,
-  handoff left: request_get 2
-```
-
-Writing goes through MCP tools. This call records a decision and retires the
-note it replaces:
-
-```text
-context_remember(
-  type: "decision",
-  title: "Invoices are exported as CSV, not XLSX",
-  body: "Finance imports CSV. XLSX was rejected: it needs a dependency, and ledgerly has none.",
-  scope_hint: "project",
-  supersedes: [14],
-  supersede_reason: "The XLSX plan was dropped."
-)
-```
-
-### Work
-
-- A request ledger for work that spans sessions: each request has acceptance
-  criteria, and a criterion is closed with evidence such as a commit or a test.
-- Interrupted-session handoff: when an agent stops mid-request, the next session
-  sees it and can pick it up.
-- Versioned documents for specs and plans, edited as local Markdown and then
-  published with history and diff. They stay out of Git.
-- Tasks for people: the key, file, decision, or manual step that only a human
-  can provide, with where it lives and how to check it.
-
-The CLI mirrors what agents do through MCP:
-
-```bash
-ctx request create --type bug --title "Daily report cuts the month at UTC midnight" \
-  --ac "Billing month is Europe/Berlin, half-open" \
-  --ac "Regression test pins the 22:00 case"
-ctx request show 2 --json       # lists the criterion ids
-ctx request ac met 2 4 --evidence-kind commit --evidence-ref 3b9fecd
-```
-
-![A request with two criteria: the first is met with a commit as evidence, the second is still open](docs/images/ui-request.png)
-
-### Coordinate
-
-- A room per project where agents and people see each other: who is online,
-  which machine and branch, and one sentence about what each is working on.
-- Messages with `@name` mentions, direct messages, and threads. A question can
-  ask a named agent for an answer.
-- Running Claude Code sessions can be woken by a message, through an opt-in
-  channel. Details and limits are in [docs/coordination.md](docs/coordination.md).
-- Accounts, organizations, and per-project roles, so a team shares the same
-  room and the same knowledge.
-
-![A Ghosttree room: four agents on three machines, a person asking who touched the report code, and an agent answering with a pointer to the request](docs/images/ui-room.png)
-
-```bash
-ctx coord status "Switching money.Round to half-even"
-ctx coord send "Can you check the UTC cut in the daily report?" \
-  --mention claude:atlas:11111111 --intent question
-```
-
-### Two promises
-
-Nothing in your repo. Ghosttree does not add agent files, plans, or notes to
-your Git tree. Its local `.ghosttree/` view is generated and listed in
-`.git/info/exclude`, not in your `.gitignore`. Existing `AGENTS.md` and
-`CLAUDE.md` content can be migrated into Ghosttree and removed.
-
-Self-hosted. The server is one Go binary with a SQLite database. You choose the
-machine and the network. Ghosttree has no hosted component. The only outbound
-calls go to providers you configure yourself, such as a model API for the
-optional distiller.
-
-### How it avoids filling the context
-
-Injected memory costs context, so Ghosttree keeps it bounded:
-
-- Automatic context shares a fixed budget of 24,000 characters per session. When
-  it is used up, automatic delivery stops and the agent retrieves more on
-  request.
-- An entry arrives once per session. A prompt only triggers an entry through a
-  rare word, one that few entries name and that is unusual in your recent
-  sessions. Each such entry names the word that triggered it.
-- The collector redacts common credential formats on your machine before any
-  transcript is uploaded, and writes of documents reject suspected secrets.
-  This is a last line of defense, not a guarantee.
-- Knowledge is replaced, not piled up: a changed fact supersedes the old entry,
-  and a fact that stopped being true is retired with a reason.
-
-The exact rules are in [docs/context-delivery.md](docs/context-delivery.md).
+- **Ideas workshop.** An idea grows from raw text (a voice note, a chat line)
+  into a concept with *what*, *how*, and *what not*, and open questions become
+  decisions (`DEC`) with variants, pros and cons, and votes. The rejected
+  variants stay readable. Only a person approves a concept, and then it becomes
+  issues.
+- **Work ledger and work packages.** The ledger is every `REQ` with its
+  criteria. A work package takes some of them and binds them to one branch or
+  pull request: this is what must be done before it merges.
+- **File descriptions (ghost files).** What a file or folder does, stored next
+  to the code tree instead of as comments in it. An agent gets the description
+  when it opens the file.
+- **Documents.** Specs, plans, and analyses that would otherwise end up as
+  Markdown in the repository. Versioned, with history and diff.
+- **Runbooks.** Fixed procedures such as a deploy with its check and rollback,
+  so an agent does not have to work out again how the project is deployed.
+- **Snapshots.** An immutable, named state of the knowledge, file
+  descriptions, documents, and requests, for example at a release: which state
+  was this release built with?
+- **Workflows.** Model runs that react to events (an idea is created, a pull
+  request is merged, a discussion is closed, a schedule). Each run has a budget,
+  may only produce the result kinds it declares, and its results are proposals
+  unless the owner lets a kind apply directly.
 
 ## How it fits together
 
-```text
-Claude Code / Codex / OpenCode
-        │  MCP, hooks, transcripts
-        ▼
-      ctx on each workstation
-        │  authenticated HTTP on a network you choose
-        ▼
-  Ghosttree server ── SQLite + FTS5
-        │
-        └── generated .ghosttree/ view in each repository
+```mermaid
+flowchart LR
+    S(["Session, chat, report"])
+    PAIN["PAIN<br>something bothers"]
+    IDEA["IDEA<br>workshop: concept, DEC"]
+    REQ["REQ<br>criteria with evidence"]
+    TASK["TASK<br>steps for a person"]
+    PKG["Work package<br>bound to a pull request"]
+    FEAT["FEAT<br>what the product does"]
+    KN["KN<br>pitfalls, decisions, notes"]
+    GH["File descriptions<br>runbooks"]
+    ACT(["Gardener, workflows"])
+    B["Briefing<br>what the next session sees"]
+
+    S --> PAIN
+    S --> IDEA
+    PAIN -->|"motivates"| IDEA
+    IDEA -->|"a person approves"| REQ
+    IDEA -->|"DEC decided"| KN
+    REQ -->|"only a person can"| TASK
+    REQ -->|"required or optional"| PKG
+    PKG -->|"checklist: description still right?"| FEAT
+    REQ -.->|"evidence"| PAIN
+    S -->|"remember, distill"| KN
+    ACT -.->|"propose, a person decides"| KN
+    ACT -.->|"gardener: descriptions after a merge"| GH
+    KN --> B
+    GH --> B
+    PKG --> B
+    TASK --> B
 ```
 
-`ctx` is the client, the server, the collector, the MCP server, the installer,
-the migration tools, and the web interface in one binary. The server can stay on
-one machine while collectors and agent integrations run wherever work happens.
+Everything ends in the briefing. A session on a branch starts with that
+branch's work package, its open tasks for people, the pitfalls and
+instructions of the project, and interrupted work it can pick up. File
+descriptions arrive when the agent opens the file, runbooks when it runs a
+matching command or names them.
+
+## What it looks like
+
+What a new session in `storefront` is told, as the agent sees it:
+
+![The agent context page: the briefing a new session receives, with instructions and pitfalls, and below it the descriptions of files and folders](docs/images/ui-context.png)
+
+The code tree with what each file does. The descriptions live in Ghosttree, not
+in the repository:
+
+![The code tab of a repository: folders and files with their descriptions and the description of the repository itself](docs/images/ui-code.png)
+
+An idea in the workshop. The concept says what is out of scope, and the open
+question is a decision with three variants:
+
+![The workshop of an idea: steps from raw idea to done, the concept with about, what, how, what not and requirements, and a decision with three variants and their pros and cons](docs/images/ui-idea.png)
+
+A pull request with its work package. Each criterion shows the commit that
+meets it, and the tasks that wait for a person are part of the list:
+
+![The checklist of a pull request: two issues of the work package with their criteria, commits as evidence, and two tasks waiting for a person](docs/images/ui-pr.png)
+
+A room where agents and people talk:
+
+![A project room: a question from an agent, the answer, and a note from a person to the agent](docs/images/ui-room.png)
+
+## What keeps it true
+
+- **Review before it counts.** Knowledge distilled from past sessions and
+  proposals from the gardener and from workflows wait until a person approves
+  them. What waits for review is not part of the briefing.
+- **The gardener.** An optional job checks knowledge against the code. For
+  knowledge and the ledger it proposes upkeep (outdated entries, duplicates,
+  criteria that look met), and a person decides. File descriptions that are
+  missing or out of date it rewrites itself, starting with the files a merge
+  brought, and keeps paragraphs a person or agent wrote word for word.
+- **Evidence.** A criterion closes with a commit, a test, or another reference.
+  A pain is mitigated or resolved with evidence, not because a request was
+  closed.
+- **Replace, don't pile up.** A changed fact supersedes the old entry, and a
+  fact that stopped being true is retired with a reason.
+- **Regression cover.** `ctx regression` lists the fixed pitfalls that no test
+  guards.
+- **Git anchors.** Every entry records the commit and branch it was written
+  at, and sessions are linked to the commits they produced, so "why is this
+  code like that?" has an answer.
+- **A fixed budget.** Automatic context shares 24,000 characters per session.
+  Ghosttree logs what it delivered and later judges from the transcript whether
+  the agent used it (`ctx usage context`). The rules are in
+  [docs/context-delivery.md](docs/context-delivery.md).
+
+Nothing in your repository: the local `.ghosttree/` view, which agents can read
+with `cat` and `grep` without a tool call, is generated and listed in
+`.git/info/exclude`. Existing `AGENTS.md` and `CLAUDE.md` content can be
+migrated with `ctx migrate`.
 
 ## Quick start
 
@@ -232,25 +234,19 @@ own `CLAUDE.md`. It used deterministic scoring without a model in the loop, and
 | A static website, 8 tasks | 30 | +0.500 (+0.125 to +0.875) |
 | A monorepo, 6 tasks | none | exactly 0 |
 
-Where the team kept a request ledger, the hit rate was higher. The benchmark's
-reading is that the ledger held facts the agent could not find in the code.
-Where nobody kept one, the effect was zero. For questions that can be answered from the code
-alone, the described file tree showed no clear benefit so far.
+Where the team kept a request ledger, the hit rate was higher: the ledger held
+facts the agent could not find in the code. Where nobody kept one, the effect
+was zero. The tasks were written by the author, only one model was tested, and
+the report is internal. Time saved and usefulness beyond fact questions were
+not measured.
 
-The limits: the tasks were written by the author, only one model was tested,
-and the report is internal. Time saved, the contribution of individual parts,
-and usefulness beyond fact questions were not measured.
-
-A second, pre-registered comparison in November 2026 asked a narrower question:
-does an agent in a fresh session follow project rules it was given in earlier
-sessions? On one machine with one person, Claude Code with Ghosttree did so in
-60 of 60 sessions, and so did Claude Code with its built-in auto-memory. In that
-setting Ghosttree matches auto-memory rather than beating it, and it cost more
-per session on a small project. An independent audit found that the numbers for
-claude-mem and for running without memory came from the test setup, not from
-those tools, so we do not quote them. What auto-memory cannot do (several
-machines, several people, Claude Code and Codex on the same project) is the next
-thing to measure.
+A second, pre-registered comparison in November 2026 asked whether an agent in
+a fresh session follows project rules it was given in earlier sessions. On one
+machine with one person, Claude Code with Ghosttree did so in 60 of 60
+sessions, and so did Claude Code with its built-in auto-memory, at a lower cost
+per session. In that setting Ghosttree matches auto-memory rather than beating
+it. What auto-memory cannot do (several machines, several people, Claude Code
+and Codex on one project) is the next thing to measure.
 
 ## How it compares
 
@@ -270,33 +266,25 @@ sourced comparison, including what each alternative does better, is in
 | Harnesses | Claude Code, Codex, OpenCode | Claude Code reads both files | Claude Code | Claude Code, OpenCode, T3 Code and several more | Claude Code, Codex, Gemini CLI and more | Claude Code, Codex, Gemini CLI, Kiro, any MCP or CLI client |
 | License | PolyForm Noncommercial, plus a grant for small businesses | n/a | n/a | Apache 2.0 | MIT with an OpenAI/Anthropic rider | MIT |
 
-MCP Agent Mail is the Rust rewrite. The Python original is in maintenance mode.
-
 Where Ghosttree is behind:
 
-- It supports fewer harnesses: three. Transcript collection covers two of them,
+- It supports three harnesses. Transcript collection covers two of them,
   Claude Code and Codex.
-- It needs a server. The tools that run locally or live in your repo need
+- It needs a server. The tools that run locally or live in your repository need
   nothing to host.
-- The license is source-available, not open source. Personal and noncommercial
-  use is free, and small businesses have a grant (see below), but it is not an
-  OSI license.
+- The license is source-available, not open source (see below).
 - It is pre-1.0. Storage and commands can still change.
 
-## Status and roadmap
+## Status
 
-Ghosttree runs in daily use on its authors' machines. The newest release is a
-pre-release, and the main branch moves faster than the releases. Next:
+Ghosttree runs in daily use on its authors' machines, and Ghosttree itself is
+built with it. The newest release is a pre-release, and the `dev` branch moves
+faster than the releases. Workflows and the AI connections they run on are the
+newest part. Next:
 
-1. Finish the document lifecycle, including migration and recovery.
-2. Measure relevance and outcomes better, so that stored context has to earn its
-   place.
-3. Add explicit relationships between knowledge entries and safer duplicate
-   consolidation.
-4. Round out team administration (organizations, roles, and invitations exist
-   today) and offer an optional managed service.
-
-Docker images and package-manager distribution wait for real demand.
+1. Measure outcomes on larger projects, with several people and harnesses.
+2. Rename the binary to `ghosttree`, keeping `ctx` as an alias.
+3. Round out team administration and offer an optional managed service.
 
 ## Licensing
 
@@ -319,13 +307,15 @@ anyone who wants different terms need a commercial agreement. See
 ## Documentation
 
 - [docs/features.md](docs/features.md): the complete list of what works today
-- [docs/context-delivery.md](docs/context-delivery.md): budget, receipts, prompt triggers, archiving file descriptions
+- [docs/concepts.md](docs/concepts.md): the objects in detail, the work side and the knowledge side as diagrams
+- [docs/context-delivery.md](docs/context-delivery.md): budget, receipts, prompt triggers, usage measurement
 - [docs/documents.md](docs/documents.md): the document workflow and migration inventory
-- [docs/coordination.md](docs/coordination.md): the Claude Code channel, `ghclaude`, and what was measured
+- [docs/coordination.md](docs/coordination.md): rooms, the Claude Code channel, `ghclaude`
 - [docs/snapshots.md](docs/snapshots.md): immutable context snapshots
 - [docs/in-short-notes.md](docs/in-short-notes.md): the plain-language notes and their model setup
 - [docs/operations.md](docs/operations.md): installer, interface language, privacy and security, TLS and reverse proxies
 - [docs/development.md](docs/development.md): building and testing
+- [docs/images/src/README.md](docs/images/src/README.md): how the pictures on this page are made
 - [`deploy/`](deploy/): systemd units, backups, maintenance
 - [Website](https://deadweightlabs.com/projects/ghosttree)
 
