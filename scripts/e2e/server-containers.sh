@@ -10,7 +10,23 @@
 #
 # Needs Docker and permission to start privileged containers (systemd needs
 # the cgroup tree). The containers are removed afterwards.
+#
+# Not for a machine somebody sits at: a privileged container sees the host's
+# consoles and graphics devices, and its systemd takes them over, which ends
+# the desktop session of whoever is logged in. The script refuses to start
+# there. Run it in CI or in a throwaway VM.
 set -eu
+
+if command -v loginctl >/dev/null 2>&1; then
+  for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+    case "$(loginctl show-session "$s" -p Type --value 2>/dev/null)" in
+      wayland|x11|mir)
+        echo "server-containers.sh: this machine has a graphical session (session $s)." >&2
+        echo "The privileged systemd container would end it. Run this in CI or in a throwaway VM." >&2
+        exit 2 ;;
+    esac
+  done
+fi
 
 cd "$(dirname "$0")/../.."
 [ "$#" -gt 0 ] || set -- debian:12 ubuntu:24.04 fedora:42
