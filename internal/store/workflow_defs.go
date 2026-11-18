@@ -196,6 +196,9 @@ func (s *Store) SaveWorkflowDef(actorPrincipal string, in WorkflowDefSave) (Work
 	if strings.TrimSpace(in.Text) == "" || len(in.Text) > 64<<10 {
 		return WorkflowDefSaved{}, fmt.Errorf("%w: a workflow has 1 byte to 64 KiB of text", ErrInvalidInput)
 	}
+	if err := refuseSecrets("text", in.Text, "note", in.Note); err != nil {
+		return WorkflowDefSaved{}, err
+	}
 	switch in.Via {
 	case WorkflowViaWeb, WorkflowViaMCP, WorkflowViaAPI:
 	default:
