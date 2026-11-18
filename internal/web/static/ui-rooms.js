@@ -101,6 +101,18 @@
   }, true);
   window.addEventListener("scroll", closeFloating, { passive: true });
   window.addEventListener("resize", closeFloating);
+  // The options of the reply field (to whom, what kind, the status) open in the flow, above the field. At the end
+  // of the page the history moves up by what they take, so the last messages stay in view instead of under the panel.
+  document.addEventListener("toggle", (event) => {
+    const opts = event.target;
+    if (!(opts instanceof HTMLDetailsElement) || !opts.classList.contains("cx-opts") || !opts.open) return;
+    const panel = opts.querySelector(":scope > .cx-optpop");
+    const page = document.scrollingElement;
+    if (!panel || !page) return;
+    const taken = panel.offsetHeight;
+    const below = page.scrollHeight - page.scrollTop - window.innerHeight;
+    if (below - taken < 48) page.scrollBy({ top: taken });
+  }, true);
   // Where a tap is what a hover is elsewhere, the tools of the touched message unfold
   // under it (CSS, :focus-within); the list brings them into view.
   const touchLike = window.matchMedia("(hover: none), (max-width: 767px)");

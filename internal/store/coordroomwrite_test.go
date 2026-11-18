@@ -200,6 +200,36 @@ func TestRoleDoesNotOpenDirectMessagesToAgents(t *testing.T) {
 	}
 }
 
+// A person who answered in a thread may settle it, put it aside or open it
+// again; a member who never wrote in it may not, and the guest still may not.
+func TestWhoeverWroteInAThreadMaySetItsState(t *testing.T) {
+	st, _ := mentionFixture(t)
+	author := st.CoordinationFor(webPrincipal("person:3", "mia"), "")
+	tid, err := author.CreateThread(Thread{Project: roleProject, Title: "mine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pia := st.CoordinationFor(webPrincipal("person:4", "pia"), "")
+	if pia.CanSetThreadState(tid) {
+		t.Fatal("a member who never wrote in the thread may set its state")
+	}
+	if _, err := pia.ThreadPost(tid, CoordMessage{ClientID: "pia-1", Body: "Ten minutes are enough."}); err != nil {
+		t.Fatal(err)
+	}
+	if !pia.CanSetThreadState(tid) {
+		t.Fatal("a person who answered in the thread may not set its state")
+	}
+	for _, state := range []string{ThreadResolved, ThreadDeferred, ThreadOpen} {
+		if err := pia.SetThreadState(tid, state); err != nil {
+			t.Errorf("answering person sets %s: %v", state, err)
+		}
+	}
+	// Only the state opens to them: the links, the summary and the archive stay with author, manager and lead.
+	if err := pia.SetThreadArchived(tid, true); !errors.Is(err, ErrCoordForbidden) {
+		t.Errorf("answering person archives: %v", err)
+	}
+}
+
 func TestOnlyAuthorManagerOrLeadSetsAThreadState(t *testing.T) {
 	st, _ := mentionFixture(t)
 	author := st.CoordinationFor(webPrincipal("person:3", "mia"), "")

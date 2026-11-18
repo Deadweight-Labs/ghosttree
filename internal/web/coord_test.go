@@ -1290,6 +1290,12 @@ func TestReplyCountsRenderInRoomAndThread(t *testing.T) {
 	if got := strings.Count(roomPage, `>2 replies<`) + strings.Count(page, `>2 replies<`); got != 2 {
 		t.Fatalf("room and thread reply counters: got %d occurrences, want 2", got)
 	}
+	// REQ-706 (G9): a chain of replies in the room is no thread. It carries the sign of a reply, not the
+	// speech bubble of the thread list, and says so.
+	chain := segment(t, roomPage, `<small class="coord-reply-count muted"`, "</small>")
+	if !strings.Contains(chain, `title="`+messages["coord.replies_in_room"]+`"`) || strings.Contains(chain, `M2.5 3.5a1 1 0 0 1 1-1h9`) || !strings.Contains(chain, `M6.5 3.5 2.5 7.5l4 4`) {
+		t.Errorf("the reply chain of the room reads like a thread: %s", chain)
+	}
 }
 
 func TestCoordDrawerScriptMakesOutsideRegionsInertAndRestoresThem(t *testing.T) {

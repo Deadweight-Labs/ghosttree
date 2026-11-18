@@ -111,3 +111,38 @@ test("with the preview open the tile switches back to writing; without a compose
   const none = page(tile);
   assert.ok(!none.document.documentElement.classList.contains("has-cx"), "no field, no button (the CSS shows it only with has-cx)");
 });
+
+// REQ-706 (S08): the reply field of a thread and the field of a room send with .comp-send, not with a
+// [data-submit] button. The markup is what the template renders (fixtures/coord-composer-*.html).
+for (const name of ["thread", "room"]) {
+  const html = readFileSync(new URL(`./fixtures/coord-composer-${name}.html`, import.meta.url), "utf8");
+  const sends = (p) => {
+    const asked = [];
+    const form = p.document.querySelector("form");
+    form.requestSubmit = (submitter) => { asked.push(submitter); };
+    return asked;
+  };
+
+  test(`Ctrl+Enter and Cmd+Enter in the ${name} field send with its send button`, () => {
+    const p = page(`<form method="post" action="/ui/coord/${name}/post">${html}</form>`);
+    const asked = sends(p);
+    const ta = p.document.querySelector("textarea");
+    ta.value = "Ten minutes are enough.";
+    ta.focus();
+    p.key("Enter", {}, ta);
+    assert.equal(asked.length, 0, "Enter alone is not ours here");
+    const ctrl = p.key("Enter", { ctrlKey: true }, ta);
+    assert.equal(asked.length, 1, "Ctrl+Enter sends");
+    assert.ok(asked[0].classList.contains("comp-send"), "with the send button, not the request button");
+    assert.equal(ctrl.defaultPrevented, true);
+    p.key("Enter", { metaKey: true }, ta);
+    assert.equal(asked.length, 2, "Cmd+Enter sends too");
+  });
+
+  test(`the send button of the ${name} field names the keys`, () => {
+    const en = page(`<form>${html}</form>`);
+    assert.match(en.document.querySelector(".comp-send").title, /Ctrl\+Enter/);
+    const de = page(`<form>${html}</form>`, { lang: "de" });
+    assert.match(de.document.querySelector(".comp-send").title, /Strg\+Enter/);
+  });
+}

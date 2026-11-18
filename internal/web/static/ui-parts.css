@@ -415,3 +415,7 @@
 
 /* What only works with script is not shown without it (the toolbar of the composer, the copy buttons). */
 html:not(.js) .js-only { display: none; }
+
+/* A choice with a line that says what it does: the label above, the line under it. */
+.pop .opt .otx { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pop .opt .otx small { margin-left: 0; white-space: normal; }

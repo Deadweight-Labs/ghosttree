@@ -291,7 +291,9 @@ type composerMode struct {
 // composerOption is a choice in a field or in the signal select.
 type composerOption struct {
 	Value, Label string
-	Selected     bool
+	// Hint is one short line under the label that says what the choice does.
+	Hint     string
+	Selected bool
 }
 
 // composerField is a field between the text and the footer. Show lists the
