@@ -99,3 +99,45 @@ func TestValidGitRef(t *testing.T) {
 		}
 	}
 }
+
+// The free fields of a message are identifiers: a long one, one over a line, or
+// a pile of refs is not stored, and a client cannot date a message ahead.
+func TestMessageFieldsAreBoundedAndNotDatedAhead(t *testing.T) {
+	s := openTest(t)
+	room := RoomKeyForProject("github.com/deadweight-labs/ghosttree")
+	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: "claude:a", Provider: "claude", RoomKey: room}); err != nil {
+		t.Fatal(err)
+	}
+	base := func(client string) CoordMessage {
+		return CoordMessage{DestinationKind: DestinationRoom, DestinationID: room, SenderExternalID: "claude:a", ClientID: client, Body: "hallo"}
+	}
+	refs := make([]CoordRef, maxCoordRefs+1)
+	for i := range refs {
+		refs[i] = CoordRef{Kind: "request", ID: "REQ-1"}
+	}
+	for name, m := range map[string]CoordMessage{
+		"long kind":     func() CoordMessage { m := base("c1"); m.Kind = strings.Repeat("k", 100); return m }(),
+		"line break":    func() CoordMessage { m := base("c2\n## x"); return m }(),
+		"long client":   base(strings.Repeat("c", 300)),
+		"too many refs": func() CoordMessage { m := base("c3"); m.Refs = refs; return m }(),
+		"ref line":      func() CoordMessage { m := base("c4"); m.Refs = []CoordRef{{Kind: "request", ID: "a\nb"}}; return m }(),
+	} {
+		if _, err := s.AppendCoordMessage(m); !errors.Is(err, ErrWriterInvalidPayload) {
+			t.Errorf("%s: want a refusal, got %v", name, err)
+		}
+	}
+
+	future := base("c5")
+	future.CreatedAt = "2099-01-01T00:00:00Z"
+	id, err := s.AppendCoordMessage(future)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var at string
+	if err := s.db.QueryRow(`SELECT created_at FROM coord_messages WHERE id=?`, id).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(at, "2099") {
+		t.Errorf("a message dated ahead kept its date: %s", at)
+	}
+}
