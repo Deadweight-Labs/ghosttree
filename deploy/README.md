@@ -983,18 +983,20 @@ session is treated as untrusted:
   `garden/state/state.json` (`--state-file`) instead of `--db`.
 
 The ghosttree MCP server of a session (`ctx mcp`, for `context_search` and
-`context_get`) reads its client config from `$HOME/.config/ghosttree/config.json`
-with the `HOME` of the unit, so with the example unit from
-`/var/lib/ghosttree/garden/claude/.config/ghosttree/config.json` (`server_url`
-and the token of the gardener). The old `garden/home/.config/ghosttree` is not
-visible in the sandbox any more; move the file. The probe checks that it is
-readable (`CLIENT_CONFIG` for another place).
+`context_get`) does not read the gardener's own client config. For every run
+the gardener asks the server for a session token (`POST /api/garden/session-token`),
+writes it into the directory of that run and points the MCP server there. The
+server binds that token to the one project of the run and to reading: it sees no
+other project or organization, takes no write, and reaches only the read routes
+of what belongs to a project. It lives for four hours at most. The gardener's own
+config (`$HOME/.config/ghosttree/config.json` of the unit) is still read by
+`ctx garden` itself, never by the session; the probe checks that it is readable
+(`CLIENT_CONFIG` for another place).
 
-`context_search` and `context_get` cannot be limited to one project by an
-allowlist, so a gardener that must not read other projects' entries runs with
-`--no-mcp`: the session then gets no ghosttree server (and needs no client
-config), is not allowed those two tools and is not told about them. The fixed
-git tools `git_log` and `git_show` stay either way.
+If the server does not give a token (an older server, the gardener switched off for
+that organization), the session runs without the ghosttree tools, as with
+`--no-mcp`: no ghosttree server, those two tools are not allowed and not
+mentioned. The fixed git tools `git_log` and `git_show` stay either way.
 
 ### What the gardener writes, and what only people do
 

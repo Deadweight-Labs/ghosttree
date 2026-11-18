@@ -64,6 +64,7 @@ var accessRoutes = map[string]routeClass{
 	"POST /api/invitations/accept":                classAccount,
 	"PUT /api/account/default-org":                classAccount,
 	"GET /api/garden/due":                         classAccount,
+	"POST /api/garden/session-token":              classAccount,
 	"POST /api/garden/runs":                       classAccount,
 	"POST /api/garden/runs/{id}/finish":           classAccount,
 	"GET /api/projects":                           classProject,

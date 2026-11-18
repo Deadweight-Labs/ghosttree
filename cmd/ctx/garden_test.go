@@ -410,7 +410,15 @@ func TestGardenNoMCPLeavesOnlyTheGhosttreeToolsOut(t *testing.T) {
 	if out, err := exec.Command("git", "-C", repo.Root, "remote", "add", "origin", "https://github.com/o/r.git").CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
+	var tokenAsked []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/garden/session-token" {
+			// The server hands out a token bound to the project; the gardener's own
+			// token ("t") must not be what the session reads with.
+			tokenAsked = append(tokenAsked, r.Header.Get("Authorization"))
+			json.NewEncoder(w).Encode(map[string]string{"token": "scoped-for-the-run"})
+			return
+		}
 		json.NewEncoder(w).Encode(gardenEntries()[:1])
 	}))
 	defer srv.Close()
@@ -427,7 +435,8 @@ func TestGardenNoMCPLeavesOnlyTheGhosttreeToolsOut(t *testing.T) {
 	}
 	record := filepath.Join(dir, "args")
 	bin := filepath.Join(dir, "claude")
-	script := "#!/bin/sh\nprintf '%s\\0' \"$@\" > " + record + "\ncat > /dev/null\ncat <<'EOF'\n" +
+	mcpConfig := filepath.Join(dir, "mcp-config-seen")
+	script := "#!/bin/sh\nprintf '%s\\0' \"$@\" > " + record + "\ncp \"$HOME/mcp-config/ghosttree/config.json\" " + mcpConfig + " 2>/dev/null\ncat > /dev/null\ncat <<'EOF'\n" +
 		`{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"{\"verdicts\":[{\"id\":1,\"verdict\":\"holds\",\"reason\":\"r\"}]}","usage":{"input_tokens":1,"output_tokens":1}}` + "\nEOF\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -481,6 +490,24 @@ func TestGardenNoMCPLeavesOnlyTheGhosttreeToolsOut(t *testing.T) {
 	}
 	if !strings.Contains(with["--append-system-prompt"], "context_search") {
 		t.Error("default prompt does not name the ghosttree tools")
+	}
+	// The ghosttree server of the session reads the run's own config with the
+	// token the server bound to the project, not the gardener's config.
+	if len(tokenAsked) != 1 || tokenAsked[0] != "Bearer t" {
+		t.Errorf("the gardener asked for the session token like this: %v", tokenAsked)
+	}
+	seen, err := os.ReadFile(mcpConfig)
+	if err != nil || !strings.Contains(string(seen), `"token":"scoped-for-the-run"`) || strings.Contains(string(seen), `"token":"t"`) {
+		t.Errorf("config the session saw: %s (%v)", seen, err)
+	}
+	var ghosttreeEnv struct {
+		Servers map[string]struct {
+			Env map[string]string `json:"env"`
+		} `json:"mcpServers"`
+	}
+	_ = json.Unmarshal([]byte(with["--mcp-config"]), &ghosttreeEnv)
+	if xdg := ghosttreeEnv.Servers["ghosttree"].Env["XDG_CONFIG_HOME"]; xdg == dir || !strings.HasPrefix(xdg, filepath.Join(dir, "sessions")) {
+		t.Errorf("the MCP server reads %q, which is not a directory of the run", xdg)
 	}
 
 	without := sessionArgs("--no-mcp")

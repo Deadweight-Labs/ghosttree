@@ -20,6 +20,12 @@ type Principal struct {
 	// RunID is the run a token of TokenKind WorkflowRunKind belongs to; zero for
 	// everyone else. Only the server sets it.
 	RunID int64 `json:"run_id,omitempty"`
+	// ScopeProject, when set, limits the token to that one project: every
+	// permission check sees no role anywhere else. ReadOnly refuses every
+	// request that changes something. Only the server sets both, when it issues
+	// the token (a gardener session, CreateGardenSessionToken).
+	ScopeProject string `json:"-"`
+	ReadOnly     bool   `json:"-"`
 }
 
 // WebSessionKind kennzeichnet einen Principal einer Websitzung, die aus einem
@@ -106,14 +112,17 @@ func (s *Store) AuthenticatePrincipal(token string) (Principal, bool) {
 	}
 	var p Principal
 	var accountID int64
-	err := s.db.QueryRow(`SELECT t.id, t.kind, t.machine, p.id, p.name
+	var readOnly int
+	err := s.db.QueryRow(`SELECT t.id, t.kind, t.machine, p.id, p.name, COALESCE(sc.project,''), COALESCE(sc.read_only,0)
 		FROM api_tokens t JOIN persons p ON p.id = t.account_id
+		LEFT JOIN api_token_scopes sc ON sc.token_id = t.id
 		WHERE t.token_hash = ? AND t.revoked_at = ''
 		  AND (t.expires_at = '' OR t.expires_at > ?) AND p.state = 'active'`,
-		hashToken(token), now()).Scan(&p.TokenID, &p.TokenKind, &p.Machine, &accountID, &p.Label)
+		hashToken(token), now()).Scan(&p.TokenID, &p.TokenKind, &p.Machine, &accountID, &p.Label, &p.ScopeProject, &readOnly)
 	if err != nil {
 		return Principal{}, false
 	}
+	p.ReadOnly = readOnly == 1
 	p.ID = "person:" + strconv.FormatInt(accountID, 10)
 	return p, true
 }
@@ -126,4 +135,18 @@ func (s *Store) TouchMachine(hostname string) {
 	s.db.Exec(`INSERT INTO machines(hostname, first_seen, last_seen) VALUES(?,?,?)
 	           ON CONFLICT(hostname) DO UPDATE SET last_seen = excluded.last_seen`,
 		hostname, now(), now())
+}
+
+// limitRoles applies the project a token is bound to: the roles of every other
+// project are gone, and so is the admin flag. A token without a scope keeps
+// what the account has.
+func (p Principal) limitRoles(roles map[string]RoleInfo, admin bool) (map[string]RoleInfo, bool) {
+	if p.ScopeProject == "" {
+		return roles, admin
+	}
+	kept := map[string]RoleInfo{}
+	if r, ok := roles[p.ScopeProject]; ok {
+		kept[p.ScopeProject] = r
+	}
+	return kept, false
 }

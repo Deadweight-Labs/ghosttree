@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	"net/url"
 	"strconv"
 
@@ -173,6 +174,22 @@ func (c *Client) StartGardenRun(orgID int64, project string) (store.GardenRunSta
 	var out store.GardenRunStart
 	err := c.do("POST", "/api/garden/runs", nil, map[string]any{"org_id": orgID, "project": project}, &out)
 	return out, err
+}
+
+// GardenSessionToken asks for the token a gardener session reads ghosttree
+// with: the server binds it to the project and to reading. An error (an older
+// server, the gardener switched off) means the session gets no ghosttree tools.
+func (c *Client) GardenSessionToken(project string) (string, error) {
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := c.do("POST", "/api/garden/session-token", nil, map[string]any{"project": project}, &out); err != nil {
+		return "", err
+	}
+	if out.Token == "" {
+		return "", fmt.Errorf("the server sent no token")
+	}
+	return out.Token, nil
 }
 
 // FinishGardenRun reports how a run ended.

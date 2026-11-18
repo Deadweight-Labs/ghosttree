@@ -69,7 +69,7 @@ Two ways to run it:
                GHOSTTREE_GARDEN_CLAUDE_DIR); no ghosttree tools (context_search and
                context_get are neither allowed nor mentioned to the session; the fixed
                git tools git_log and git_show stay). Use it where the ghosttree tools
-               must not reach other projects' entries: they cannot be limited to one project.
+               must not read ghosttree at all. Without it the sessions read with a token the server binds to the project and to reading.
 
   --requests, --ghosts, --idle-days  (agent mode; the ledger and the ghosts)
                --requests N: job 4, the ledger. The N open requests (default 8, 0 = off) that
@@ -382,6 +382,17 @@ func cmdGardenWith(args []string, stdout io.Writer, ai *store.GardenAI) int {
 			if cc.CtxBin, err = os.Executable(); err != nil {
 				fmt.Fprintf(stdout, "cannot find the ctx binary for the git tools: %v\n", err)
 				return 1
+			}
+			if !*noMCP {
+				// The sessions read ghosttree with a token the server binds to this
+				// project and to reading, never with the gardener's own.
+				tok, terr := client.New(sc).GardenSessionToken(project)
+				if terr != nil {
+					fmt.Fprintf(stdout, "note: no project-bound token for the sessions (%v): they run without the ghosttree tools\n", terr)
+					cc.NoGhosttree = true
+				} else {
+					cc.Ghosttree = &config.Config{ServerURL: sc.ServerURL, Token: tok, Machine: sc.Machine}
+				}
 			}
 			if ai != nil {
 				// Claude Code's own helper calls go to the same alias.

@@ -496,6 +496,7 @@ func (a *ProjectAccess) loadRoles() {
 	a.rolesOnce.Do(func() {
 		a.loads.Add(1)
 		a.roles, a.admin = a.st.AccountRoles(a.principal.ID)
+		a.roles, a.admin = a.principal.limitRoles(a.roles, a.admin)
 	})
 }
 
