@@ -587,6 +587,8 @@ func TestLogModeKeepsTheOrgBorderAndPrivateTranscripts(t *testing.T) {
 	f.expect(t, "nora", 404, "PATCH", idPath("/api/knowledge/%d", staged), map[string]string{"body": "x"})
 	f.expect(t, "nora", 404, "PATCH", idPath("/api/requests/%d", f.id["r-mia"]), map[string]any{"patch": map[string]string{"title": "x"}, "reason": "t"})
 	f.expect(t, "nora", 404, "POST", idPath("/api/requests/%d/drop", f.id["r-mia"]), map[string]string{"reason": "x"})
+	f.expect(t, "nora", 404, "POST", "/api/ghosts/move", map[string]string{"project": accProject, "from": "a.go", "to": "b.go"})
+	f.expect(t, "nora", 404, "POST", "/api/ghosts/archive", map[string]any{"project": accProject, "paths": []string{"a.go"}})
 	for _, path := range []string{"/api/requests", "/api/knowledge?q=pitfall", "/api/search?q=pitfall", "/api/sessions"} {
 		if _, out := f.call(t, "nora", "GET", path, nil); strings.Contains(out, "mia ") || strings.Contains(out, "secretterm") || strings.Contains(out, "robin staged") {
 			t.Errorf("nora GET %s lists foreign content: %s", path, out)
