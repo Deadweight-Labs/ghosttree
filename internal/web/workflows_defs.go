@@ -490,22 +490,94 @@ func (a *app) workflowUndo(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, workflowRunHref(repoHref(res.Project), res.RunID), http.StatusSeeOther)
 }
 
-// wfPolicyView is the owner's policy in the settings of a namespace.
+// wfPolicyView is the owner's policy in the settings of a namespace, each
+// choice with the workflows it concerns.
 type wfPolicyView struct {
 	DenyInstruction, DenyPrompt, DenyResearch bool
-	Kinds                                     []wfPolicyKind
+	// Affects name the workflows that use what the choice is about.
+	AffectsInstruction, AffectsPrompt, AffectsResearch string
+	Kinds                                              []wfPolicyKind
+	// AnyAuto: some kind applies without review.
+	AnyAuto bool
 }
 
 type wfPolicyKind struct {
 	Kind, Key           string
 	Deny, Auto, CanAuto bool
+	Affects             string
 }
 
-func wfPolicyViewOf(p store.WorkflowPolicy) *wfPolicyView {
-	v := &wfPolicyView{DenyInstruction: p.DenyInstruction, DenyPrompt: p.DenyPrompt, DenyResearch: p.DenyResearch}
+// wfPolicyUse is which workflows of a namespace use what a policy can forbid.
+type wfPolicyUse struct {
+	instruction, prompt, research []string
+	kinds                         map[string][]string
+}
+
+// wfPolicyUseOf reads the workflows of the namespace's repositories.
+func (a *app) wfPolicyUseOf(r *http.Request, org store.Org) wfPolicyUse {
+	use := wfPolicyUse{kinds: map[string][]string{}}
+	type repoDefs struct {
+		remote string
+		defs   []store.WorkflowDef
+	}
+	var all []repoDefs
+	for _, p := range a.orgProjects(r, org) {
+		if defs, _ := a.store.WorkflowDefsIn(p.Remote); len(defs) > 0 {
+			all = append(all, repoDefs{p.Remote, defs})
+		}
+	}
+	for _, rd := range all {
+		for _, d := range rd.defs {
+			def, _ := workflow.Parse(d.Text)
+			name := d.Name
+			if len(all) > 1 {
+				// Workflows of several repositories: say which one.
+				name = lastSegment(rd.remote) + "/" + name
+			}
+			switch def.Stage() {
+			case workflow.StageInstruction:
+				use.instruction = append(use.instruction, name)
+			case workflow.StagePrompt:
+				use.prompt = append(use.prompt, name)
+			}
+			if def.Research {
+				use.research = append(use.research, name)
+			}
+			for _, rl := range def.Results {
+				if rl.Max > 0 {
+					use.kinds[rl.Kind] = append(use.kinds[rl.Kind], name)
+				}
+			}
+		}
+	}
+	return use
+}
+
+// wfAffects words a list of workflow names ("affects: a, b, c and 2 more").
+func wfAffects(l lang, names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	shown := names
+	if len(shown) > 4 {
+		shown = shown[:4]
+	}
+	text := strings.Join(shown, ", ")
+	if len(names) > len(shown) {
+		text += " +" + strconv.Itoa(len(names)-len(shown))
+	}
+	return l.msg("wf.policy.affects", text)
+}
+
+func (a *app) wfPolicyViewOf(r *http.Request, org store.Org, p store.WorkflowPolicy) *wfPolicyView {
+	l := a.langFor(r)
+	use := a.wfPolicyUseOf(r, org)
+	v := &wfPolicyView{DenyInstruction: p.DenyInstruction, DenyPrompt: p.DenyPrompt, DenyResearch: p.DenyResearch,
+		AffectsInstruction: wfAffects(l, use.instruction), AffectsPrompt: wfAffects(l, use.prompt), AffectsResearch: wfAffects(l, use.research),
+		AnyAuto: len(p.AutoKinds) > 0}
 	for _, k := range workflow.ResultKinds {
 		v.Kinds = append(v.Kinds, wfPolicyKind{Kind: k, Key: wfKindKeys[k], Deny: slices.Contains(p.DenyKinds, k), Auto: p.Auto(k),
-			CanAuto: slices.Contains(store.WorkflowAutoKinds, k)})
+			CanAuto: slices.Contains(store.WorkflowAutoKinds, k), Affects: wfAffects(l, use.kinds[k])})
 	}
 	return v
 }
@@ -534,5 +606,5 @@ func (a *app) orgWorkflowPolicySave(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "workflows")
+	orgRedirect(w, r, o.Slug, "workflow_policy")
 }

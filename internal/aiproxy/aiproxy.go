@@ -57,9 +57,19 @@ type Proxy struct {
 	// Upstream makes the HTTP client for a connection; nil uses the safe
 	// default (UpstreamClient). Tests point it at a fake provider.
 	Upstream func(c store.AIConnection, u *url.URL) (*http.Client, error)
+	// TestTimeout is how long a test of a connection waits for the provider, and
+	// TestGap the least time between two tests of one connection; zero takes the
+	// defaults (20 s and 3 s), a negative TestGap none.
+	TestTimeout time.Duration
+	TestGap     time.Duration
 
 	mu     sync.Mutex
 	active map[int64]*runCalls
+	// The tests of connections in flight, the time of the last one per
+	// connection and the times per person (testGate).
+	testBusy map[int64]bool
+	testLast map[int64]time.Time
+	testBy   map[string][]time.Time
 }
 
 // Listen opens the proxy's listener. Only loopback addresses are accepted:

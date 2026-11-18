@@ -27,6 +27,9 @@ type aiRuntime struct {
 	BaseURL string
 	// EndRun stops the calls of a run still under way (Proxy.EndRun).
 	EndRun func(runID int64)
+	// Tester makes the test call of "Test connection": the proxy's own way to a
+	// provider, also when its listener is off.
+	Tester *aiproxy.Proxy
 	wait   func()
 }
 
@@ -70,6 +73,8 @@ func startAI(ctx context.Context, st *store.Store, logger *slog.Logger) (aiRunti
 			logger.Info("ai_llm_json", "connection", conn.Name, "model", c.Model)
 		}
 	}
+	p := &aiproxy.Proxy{Store: st, Box: box, FileKeys: fileKeys, Log: logger}
+	rt.Tester = p
 	addr := strings.TrimSpace(os.Getenv(envAIProxyAddr))
 	if addr == "off" {
 		logger.Info("ai_proxy", "state", "off")
@@ -79,7 +84,6 @@ func startAI(ctx context.Context, st *store.Store, logger *slog.Logger) (aiRunti
 	if err != nil {
 		return rt, err
 	}
-	p := &aiproxy.Proxy{Store: st, Box: box, FileKeys: fileKeys, Log: logger}
 	rt.BaseURL, rt.wait = p.Serve(ctx, ln)
 	rt.EndRun = p.EndRun
 	logger.Info("ai_proxy", "listen", ln.Addr().String())
