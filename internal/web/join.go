@@ -253,14 +253,16 @@ func roleLabel(l lang, role string) string {
 	return l.msg("join.role_member")
 }
 
-// joinSession liefert das angemeldete Konto, wenn eine interaktive Sitzung da ist.
+// joinSession liefert das angemeldete Konto, wenn eine Sitzung aus einer Anmeldung
+// mit Nachweis da ist. Eine Sitzung aus einem Einmal-Link zählt nicht: wer damit
+// auf der Anmelde- oder Einladungsseite ist, kann sich dort mit Nachweis anmelden.
 func (a *app) joinSession(r *http.Request) (browserSession, bool) {
 	cookie, err := r.Cookie(sessionCookie)
 	if err != nil {
 		return browserSession{}, false
 	}
 	session, ok := a.sessions.get(cookie.Value)
-	if !ok || session.principal.TokenKind != store.WebSessionKind || !a.store.PrincipalValid(session.principal) {
+	if !ok || session.link || session.principal.TokenKind != store.WebSessionKind || !a.store.PrincipalValid(session.principal) {
 		return browserSession{}, false
 	}
 	return session, true

@@ -25,6 +25,9 @@ const multipartMemory = 1 << 20
 
 type personKey struct{}
 type csrfKey struct{}
+
+// linkSessionKey trägt, wann eine Link-Sitzung endet; es fehlt in jeder anderen.
+type linkSessionKey struct{}
 type browserSession struct {
 	principal store.Principal
 	csrf      string
@@ -54,10 +57,14 @@ func (s *sessions) create(principal store.Principal) (string, error) {
 	s.mu.Unlock()
 	return id, nil
 }
+
+// markLink kennzeichnet die Sitzung als eine aus einem Einmal-Link und gibt ihr
+// eine feste Laufzeit, die bei Nutzung nicht nachrückt.
 func (s *sessions) markLink(id string) {
 	s.mu.Lock()
 	if v, ok := s.values[id]; ok {
 		v.link = true
+		v.expires = time.Now().Add(linkSessionMaxAge)
 		s.values[id] = v
 	}
 	s.mu.Unlock()
@@ -82,8 +89,11 @@ func (s *sessions) get(id string) (browserSession, bool) {
 		delete(s.values, id)
 		return browserSession{}, false
 	}
-	v.expires = time.Now().Add(30 * 24 * time.Hour)
-	s.values[id] = v
+	// Eine Link-Sitzung behält ihr festes Ende; jede andere rückt bei Nutzung nach.
+	if !v.link {
+		v.expires = time.Now().Add(30 * 24 * time.Hour)
+		s.values[id] = v
+	}
 	return v, true
 }
 
@@ -138,12 +148,22 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				ctx := context.WithValue(r.Context(), personKey{}, session.principal)
 				ctx = context.WithValue(ctx, csrfKey{}, session.csrf)
 				ctx = context.WithValue(ctx, shellMemoKey{}, &shellMemo{})
+				if session.link {
+					ctx = context.WithValue(ctx, linkSessionKey{}, session.expires)
+				}
 				r = r.WithContext(ctx)
 				r = a.withLang(r, session.principal.ID)
 				a.rememberProject(w, r)
 				// A plain 404 or 403 of a page becomes a page in the shell.
 				r, keep := withFormKeep(r)
 				ew := &errorPageWriter{ResponseWriter: w, a: a, r: r, keep: keep}
+				// A session from a one-time link does ordinary work only; what changes
+				// rights or access needs a sign-in with a real proof.
+				if session.link && linkNeedsProof(r) {
+					a.proofRequired(ew, r)
+					ew.finish()
+					return
+				}
 				next.ServeHTTP(ew, r)
 				ew.finish()
 				return
@@ -167,14 +187,26 @@ func (a *app) notInteractive(w http.ResponseWriter, r *http.Request) {
 	a.renderBrowser(w, r, "interactive", pageData{Title: l.msg("adm.login.title"), OIDC: a.oidc != nil})
 }
 
+// proofRequired is the page for an action a session from a one-time link may not
+// do: it says so and leads to the sign-in, which comes back to the page the person
+// was on. The session of the link stays until the new sign-in replaces it.
+func (a *app) proofRequired(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	a.renderBrowser(w, r, "interactive", pageData{Title: l.msg("adm.relogin.title"), OIDC: a.oidc != nil, ReloginHref: reloginHref(r)})
+}
+
 // requireCredentialSession refuses a session that started from a one-time login
 // link (an owner's, or ctx web) on every route that hands out or approves a
 // credential: pairing and approving a device. Such a session would otherwise turn
-// a link of minutes into a token that lasts.
+// a link of minutes into a token that lasts. requirePerson applies the same rule
+// to every route of linkRules; this gate stays for the routes that name it.
 func (a *app) requireCredentialSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.linkSession(r) {
-			http.Error(w, a.langFor(r).msg("mail.error_link_session"), http.StatusForbidden)
+			a.proofRequired(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -446,7 +478,11 @@ func (a *app) startSessionLink(w http.ResponseWriter, r *http.Request, principal
 	if link {
 		a.sessions.markLink(id)
 	}
-	http.SetCookie(w, a.sessionCookieFor(r, id, 30*24*60*60))
+	maxAge := 30 * 24 * 60 * 60
+	if link {
+		maxAge = int(linkSessionMaxAge.Seconds())
+	}
+	http.SetCookie(w, a.sessionCookieFor(r, id, maxAge))
 	a.adoptLanguageCookie(r, principal)
 	http.Redirect(w, r, next, http.StatusSeeOther)
 }

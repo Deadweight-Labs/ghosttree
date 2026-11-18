@@ -25,4 +25,4 @@
 {{define "needlogin"}}<div class="ico att">{{mi "lock"}}</div><h1>{{t "adm.login.title"}}</h1><p class="lead">{{if .OIDC}}{{t "adm.login.readonly_sso"}}{{else}}{{t "adm.login.readonly"}}{{end}}</p>
 {{if not .OIDC}}<div class="lnbox"><div class="cmdc one"><pre class="cmd" id="login-cmd">{{t "adm.login.command" .Person}}</pre>{{template "uicopy" (copyFrom "#login-cmd")}}</div></div>{{end}}
 <div class="center"><a class="gbtn pri" href="/ui/login">{{t "adm.login.action"}}</a></div>{{end}}
-{{define "interactive"}}{{template "head" .}}{{template "nav" .}}<main class="g2 set"><div class="wrap"><div class="narrow">{{template "needlogin" .}}</div></div>{{template "foot" .}}{{end}}
+{{define "interactive"}}{{template "head" .}}{{template "nav" .}}<main class="g2 set"><div class="wrap"><div class="narrow">{{if .ReloginHref}}<div class="ico att">{{mi "lock"}}</div><h1>{{t "adm.relogin.title"}}</h1><p class="lead">{{t "adm.relogin.text"}}</p><div class="center"><a class="gbtn pri" href="{{.ReloginHref}}">{{t "adm.relogin.action"}}</a></div>{{else}}{{template "needlogin" .}}{{end}}</div></div>{{template "foot" .}}{{end}}

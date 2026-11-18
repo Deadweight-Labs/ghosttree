@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
@@ -82,8 +83,12 @@ type pageData struct {
 	Notice string
 	// DeviceSession: the session belongs to a device (ctx web or a pasted token),
 	// not to a person who signed in; DeviceName is its machine, when it has one.
-	DeviceSession                              bool
-	DeviceName                                 string
+	DeviceSession bool
+	DeviceName    string
+	// LinkSession: the session came from a one-time link and ends at LinkUntil;
+	// ReloginHref leads to the sign-in a refused action needs.
+	LinkSession                                bool
+	LinkUntil, ReloginHref                     string
 	DeviceMachine, DeviceRemote, DeviceStarted string
 	Tokens                                     []tokenRow
 	UnusedTokens                               int
@@ -440,6 +445,9 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	data.Interactive = fromSignIn(r)
 	if !data.Interactive && principal.TokenID != 0 {
 		data.DeviceSession, data.DeviceName = true, principal.Machine
+	}
+	if until, ok := r.Context().Value(linkSessionKey{}).(time.Time); ok {
+		data.LinkSession, data.LinkUntil = true, until.Local().Format("15:04")
 	}
 	data.ServerVersion = version.Label(a.buildVersion)
 	data.Shell = a.shellFor(r, name)
