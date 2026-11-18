@@ -35,7 +35,7 @@ func (s *Store) CreateGardenSessionToken(accountPrincipal, project string) (stri
 	if err != nil {
 		return "", err
 	}
-	token, hash, err := newToken()
+	token, hash, err := newAPIToken()
 	if err != nil {
 		return "", err
 	}

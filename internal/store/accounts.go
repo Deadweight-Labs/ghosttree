@@ -326,7 +326,7 @@ func (s *Store) CreateToken(account string, spec TokenSpec) (string, TokenInfo, 
 	if spec.ExpiresIn < 0 {
 		return "", TokenInfo{}, fmt.Errorf("token lifetime must be positive")
 	}
-	token, hash, err := newToken()
+	token, hash, err := newAPIToken()
 	if err != nil {
 		return "", TokenInfo{}, err
 	}
@@ -981,7 +981,7 @@ func (s *Store) CreateDeviceToken(accountID, machine string) (string, TokenInfo,
 	if machine == "" {
 		return "", TokenInfo{}, fmt.Errorf("device token needs a machine")
 	}
-	token, hash, err := newToken()
+	token, hash, err := newAPIToken()
 	if err != nil {
 		return "", TokenInfo{}, err
 	}

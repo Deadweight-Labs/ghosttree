@@ -36,21 +36,30 @@ func urlCredentialSpans(s string, mode Mode) [][]int {
 		if !hasScheme(plain, p) {
 			continue
 		}
-		colon := -1
+		colon, special := -1, false
 		for k, n := from, 0; k < len(s) && n < maxURLCredential; n++ {
 			u := sc.unit(k)
 			if u.r == ':' && colon < 0 {
 				colon = k + u.n
 			}
 			if u.r == '@' {
-				if colon >= 0 && colon < k && !isPlaceholder(sc.decode(colon, k)) {
+				if colon >= 0 && colon < k && !isPlaceholder(sc.decode(colon, k)) && (!special || passwordWithSlash(sc.decode(from, colon-1), sc.decode(colon, k))) {
 					spans = append(spans, []int{colon, k})
 					from = k + u.n
 				}
 				break
 			}
-			if unicode.IsSpace(u.r) || strings.ContainsRune(`/?#"'<>\`, u.r) {
+			if unicode.IsSpace(u.r) || strings.ContainsRune(`"'<>\`, u.r) {
 				break
+			}
+			if strings.ContainsRune(`/?#`, u.r) {
+				// In the user name a slash ends the authority. In the password it
+				// may be part of it (a password that was not percent-encoded); that
+				// is decided at the "@" (passwordWithSlash).
+				if colon < 0 {
+					break
+				}
+				special = true
 			}
 			k += u.n
 		}
@@ -86,4 +95,22 @@ func redactURLCredentials(s string, mode Mode, stats Stats) string {
 		stats["url"] += int64(len(spans))
 	}
 	return replaceSpans(s, spans, urlMarker)
+}
+
+// passwordWithSlash says whether user:password, where the password holds a / ?
+// or #, is a credential and not a host with a port and a path
+// (https://host:8080/@scope/pkg): the user name of a credential is not a host
+// name (no dot), and the part behind the colon is not a port number.
+func passwordWithSlash(user, password string) bool {
+	if user == "" || strings.Contains(user, ".") {
+		return false
+	}
+	digits := 0
+	for digits < len(password) && password[digits] >= '0' && password[digits] <= '9' {
+		digits++
+	}
+	if digits > 0 && (digits == len(password) || strings.IndexByte("/?#", password[digits]) >= 0) {
+		return false
+	}
+	return true
 }

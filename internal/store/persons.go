@@ -42,6 +42,21 @@ func newToken() (token, hash string, err error) {
 	return token, hashToken(token), nil
 }
 
+// APITokenPrefix kennzeichnet ein Anmeldetoken, damit ein entwendetes in einer
+// Ausgabe oder im Code erkannt wird (Schwärzung, Secret-Scanning). Ältere Tokens
+// ohne Präfix gelten weiter: geprüft wird immer der Hash des ganzen Werts.
+const APITokenPrefix = "gtk_"
+
+// newAPIToken erzeugt ein Anmeldetoken mit Präfix.
+func newAPIToken() (token, hash string, err error) {
+	raw, _, err := newToken()
+	if err != nil {
+		return "", "", err
+	}
+	token = APITokenPrefix + raw
+	return token, hashToken(token), nil
+}
+
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
@@ -54,7 +69,7 @@ func (s *Store) AddPerson(name string) (string, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{name}, func(d *Store, p []any) (string, error) { return d.AddPerson(p[0].(string)) })
 	}
-	token, hash, err := newToken()
+	token, hash, err := newAPIToken()
 	if err != nil {
 		return "", err
 	}
