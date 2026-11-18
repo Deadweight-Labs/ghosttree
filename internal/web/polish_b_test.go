@@ -137,9 +137,8 @@ func TestDoneNamesWhatKeepsItShut(t *testing.T) {
 func TestMemberFindsTheWayToMakeALabel(t *testing.T) {
 	e := seedSessions(t)
 	d := rqMake(t, e.St, rqSpec{Title: "Needs a label"})
-	way := `href="` + repoHref(shellProject) + `/settings#labels"`
 	_, page := fetchPage(t, e.Member, e.Base+rqPath(d.Request.ID, ""))
-	if !strings.Contains(page, `class="lbnew"`) || !strings.Contains(page, way) || !strings.Contains(page, "Create a label") {
+	if !strings.Contains(page, `class="lbmake"`) || !strings.Contains(page, `action="/ui/labels/make"`) || !strings.Contains(page, "Create a label") {
 		t.Errorf("the labels of the issue carry no way to make one:\n%s", page[strings.Index(page, `id="labels"`):][:600])
 	}
 	code, settings := fetchPage(t, e.Member, e.Base+repoHref(shellProject)+"/settings")
@@ -157,7 +156,7 @@ func TestMemberFindsTheWayToMakeALabel(t *testing.T) {
 		t.Error("the lead lost the access section")
 	}
 	_, guestIssue := fetchPage(t, e.Guest, e.Base+rqPath(d.Request.ID, ""))
-	if strings.Contains(guestIssue, `class="lbnew"`) {
+	if strings.Contains(guestIssue, `class="lbmake"`) {
 		t.Error("a guest is offered to make a label")
 	}
 }

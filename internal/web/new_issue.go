@@ -56,8 +56,9 @@ type newIssueView struct {
 	Criteria                   []string
 	Types                      []newTypeOption
 	Labels                     []newLabelOption
-	// LabelsHref is the page where a label is made, when the project has none yet and the viewer may make one.
-	LabelsHref                 string
+	// CanMakeLabel: the viewer may make a label, so the form has a field for new ones; NewLabels is what they typed.
+	CanMakeLabel               bool
+	NewLabels                  string
 	Packages                   []newPackageOption
 	PackageChoice              string
 	PackageName, PackageBranch string
@@ -173,9 +174,7 @@ func (a *app) newIssueDefaults(r *http.Request, pa *store.ProjectAccess, remote 
 			v.Labels = append(v.Labels, newLabelOption{Name: lb.Name, Class: labelClass(lb.Color)})
 		}
 	}
-	if len(v.Labels) == 0 {
-		v.LabelsHref = newLabelHref(pa, remote)
-	}
+	v.CanMakeLabel = newLabelHref(pa, remote) != ""
 	if v.HasPackage {
 		if pkgs, err := pa.PackagesOfProject(remote, requestdomain.PackageOpen); err == nil {
 			for _, p := range pkgs {
@@ -239,6 +238,13 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 	for _, n := range r.Form["label"] {
 		picked[n] = true
 	}
+	// Labels typed into the form are made with the issue (S19): the ones the project has
+	// are used as they are. They are made before the issue so that a refusal keeps the form.
+	v.NewLabels = strings.TrimSpace(r.FormValue("new_label"))
+	var madeLabels []string
+	if v.CanMakeLabel {
+		madeLabels = formNames(strings.Split(v.NewLabels, ","))
+	}
 	for i := range v.Labels {
 		v.Labels[i].Checked = picked[v.Labels[i].Name]
 	}
@@ -249,6 +255,19 @@ func (a *app) issueCreate(w http.ResponseWriter, r *http.Request) {
 	fail := func(key, detail string) {
 		v.Error, v.ErrorDetail = key, detail
 		a.renderNewIssue(w, r, remote, v, http.StatusUnprocessableEntity)
+	}
+	if len(madeLabels) > 0 {
+		if len(madeLabels) > 5 {
+			fail("newissue.err.labels_many", "")
+			return
+		}
+		if err := makeLabels(pa, remote, madeLabels); err != nil {
+			fail("newissue.err.label", requestdomain.Code(err))
+			return
+		}
+		for _, n := range madeLabels {
+			picked[n] = true
+		}
 	}
 	var criteria []string
 	var links requestdomain.Links
