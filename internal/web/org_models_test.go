@@ -47,3 +47,11 @@ func TestOrgOwnerSetsTheLanguageModelSwitch(t *testing.T) {
 		t.Fatal("the owner could not switch it on")
 	}
 }
+
+// Die Richtlinienseite sagt, dass die automatische Übernahme nur für Belege aus
+// Mitgliedertext gilt.
+func TestWorkflowPolicyPageSaysAutoCoversMemberTextOnly(t *testing.T) {
+	e := shellWebAll(t)
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/orgs?org=alpha")
+	mustContain(t, "policy page", page, "only when the quotes come from text written by members")
+}

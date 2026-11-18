@@ -84,7 +84,8 @@
 {{range .Kinds}}<label class="wfchk"><input type="checkbox" name="deny_kind" value="{{.Kind}}"{{if .Deny}} checked{{end}}><span>{{t .Key}}{{with .Affects}}<small class="muted">{{.}}</small>{{end}}</span></label>{{end}}</fieldset>
 <fieldset class="box wfcard"><legend>{{t "wf.policy.auto"}}</legend>
 {{range .Kinds}}{{if .CanAuto}}<label class="wfchk"><input type="checkbox" name="auto_kind" value="{{.Kind}}"{{if .Auto}} checked{{end}}><span>{{t .Key}}{{with .Affects}}<small class="muted">{{.}}</small>{{end}}</span></label>{{end}}{{end}}
-<p class="wfwarn{{if .AnyAuto}} on{{end}}" role="note">{{mi "tri"}}<span>{{t "wf.policy.auto_warn"}}</span></p></fieldset>
+<p class="wfwarn{{if .AnyAuto}} on{{end}}" role="note">{{mi "tri"}}<span>{{t "wf.policy.auto_warn"}}</span></p>
+<p class="muted">{{t "wf.policy.auto_members"}}</p></fieldset>
 </div>
 {{if $.Interactive}}<div class="wfpolact"><button class="gbtn pri">{{t "wf.retention.save"}}</button></div>{{end}}
 </form>{{end}}{{end}}
