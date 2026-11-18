@@ -47,6 +47,10 @@ type serveConfig struct {
 	// there); empty, it carries none.
 	CheckPublicURL string
 	Language       string
+	// LanguageSet says the operator chose a language (flag or environment). Language
+	// is then that one; without a choice it is en for the generated texts, and the
+	// web interface leaves the decision to the person and the browser (REQ-715).
+	LanguageSet    bool
 	DistDir        string
 	TrustedProxies proxytrust.Set
 	Explain        ExplainConfig
@@ -234,6 +238,7 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	if err != nil {
 		return serveConfig{}, fmt.Errorf("--language: %w", err)
 	}
+	cfg.LanguageSet = strings.TrimSpace(cfg.Language) != ""
 	cfg.Language = lang
 	if *sessionText == "" {
 		*sessionText = store.SessionTextStored
@@ -555,7 +560,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	if cfg.Mailer != nil {
 		webOptions = append(webOptions, web.WithMail(cfg.Mailer), web.WithPasswordLogin(cfg.PasswordLogin))
 	}
-	webOptions = append(webOptions, web.WithLanguage(cfg.Language), web.WithAvatarCache(filepath.Join(filepath.Dir(cfg.DB), "avatars")), web.WithBuildVersion(version))
+	webOptions = append(webOptions, web.WithLanguage(serverLanguage(cfg)), web.WithAvatarCache(filepath.Join(filepath.Dir(cfg.DB), "avatars")), web.WithBuildVersion(version))
 	explainCfg := cfg.Explain
 	explainCfg.Language = cfg.Language
 	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))
@@ -684,4 +689,13 @@ func normalizeBaseURL(flagName, raw string) (string, error) {
 		return "", fmt.Errorf("%s host %q has characters outside letters, digits, . : [ ] -", flagName, u.Host)
 	}
 	return u.Scheme + "://" + u.Host, nil
+}
+
+// serverLanguage is the language the operator set for the web interface, "" when
+// none: then every person's own choice and the browser decide.
+func serverLanguage(cfg serveConfig) string {
+	if !cfg.LanguageSet {
+		return ""
+	}
+	return cfg.Language
 }

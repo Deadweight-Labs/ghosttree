@@ -37,11 +37,19 @@ run it afterwards.
 
 ## Interface language
 
-The web interface speaks English by default. `GHOSTTREE_LANGUAGE=de` (or
-`ctx serve --language de`) switches the whole interface, including the sign-in
-and invitation pages, dates and times, to German. The language is resolved per
-request; today it comes from this server setting. Text that people or agents
-wrote is shown as written, and the texts meant for agents (bootstrap, MCP
+Every person picks German or English in their profile, or with the switcher
+DE | EN in the account menu. The choice is stored on the account, so it holds on
+every device and after a new sign-in, and the page you are on stays where it is.
+Without a choice of their own, a person gets the server setting
+`GHOSTTREE_LANGUAGE=en|de` (or `ctx serve --language de`), and without that the
+language of the browser (`Accept-Language`); English if the browser names
+neither German nor English. The sign-in and invitation pages follow the cookie
+of their own switcher, then `Accept-Language`, then the server setting; a choice
+made there is kept for the account at its first sign-in.
+
+The server setting still decides the language of the texts the server writes
+(the "In short" notes, mails, the gardener's entries). Text that people or
+agents wrote is shown as written, and the texts meant for agents (bootstrap, MCP
 descriptions, rules) stay English.
 
 ## Signing in: mail, passwords and the ways back in

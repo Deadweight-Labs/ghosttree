@@ -161,6 +161,12 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- Every person chooses German or English: in the profile and with a DE | EN
+  switcher in the account menu and on the sign-in and invitation pages. The
+  choice is stored on the account and holds on every device. Without it, the
+  server setting `GHOSTTREE_LANGUAGE` applies, then the browser's language.
+  A server without `GHOSTTREE_LANGUAGE` no longer forces English on everyone.
+
 - Pains and issues carry images, like ideas: the page shows them and has a
   button for whoever may work on the object, Ctrl+V with a screenshot on the
   clipboard adds one, and so does dropping an image file on the page (also on

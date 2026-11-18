@@ -137,6 +137,8 @@ var writerMethodClasses = map[string]string{
 	"NamespaceNotices":              "read",
 	"MarkNamespaceNoticesSeen":      "write",
 	"AccountKind":                   "read",
+	"AccountLanguage":               "read",
+	"SetAccountLanguage":            "write",
 	"SetAccountKindAsOperator":      "write",
 	"OrgServices":                   "read",
 	"OrgViewerKind":                 "read",

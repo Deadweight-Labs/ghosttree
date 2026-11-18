@@ -19,19 +19,8 @@ const nextTTL = 10 * 60
 // kein "//", kein Backslash, keine Steuer- und Formatzeichen) und nie die
 // Anmeldeseiten selbst. Alles andere ist leer: dann gilt das normale Ziel.
 func safeNext(raw string) string {
-	if len(raw) < 2 || len(raw) > 2048 || raw[0] != '/' || raw[1] == '/' || raw[1] == '\\' {
-		return ""
-	}
-	if strings.ContainsAny(raw, "\\") {
-		return ""
-	}
-	for _, r := range raw {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.IsSpace(r) {
-			return ""
-		}
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
+	u, ok := cleanLocal(raw)
+	if !ok {
 		return ""
 	}
 	// Eine Einladungsseite darf Ziel sein, damit wer schon ein Konto hat, nach der
@@ -97,4 +86,25 @@ func (a *app) takeNext(w http.ResponseWriter, r *http.Request, fallback string) 
 		return next
 	}
 	return fallback
+}
+
+// cleanLocal parses a path of this site: no scheme, no host, no "//", no
+// backslash, no control or format characters.
+func cleanLocal(raw string) (*url.URL, bool) {
+	if len(raw) < 2 || len(raw) > 2048 || raw[0] != '/' || raw[1] == '/' || raw[1] == '\\' {
+		return nil, false
+	}
+	if strings.ContainsAny(raw, "\\") {
+		return nil, false
+	}
+	for _, r := range raw {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.IsSpace(r) {
+			return nil, false
+		}
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
+		return nil, false
+	}
+	return u, true
 }

@@ -60,10 +60,10 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .gh-header .account-menu .shell-nav { display: grid; grid-template-columns: 1fr 1fr; }
 .gh-header .account-menu .shell-nav .opt { width: auto; margin: 0 4px; padding-inline: 8px; }
 .gh-header .account-menu .org-list { max-height: 104px; overflow-y: auto; }
-.gh-header .account-menu .theme-pick { display: flex; gap: 2px; margin: 4px 8px; padding: 2px; background: var(--neutral-muted); border-radius: 8px; }
-.gh-header .account-menu .theme-pick .opt { flex: 1 1 0; width: auto; min-width: 0; margin: 0; padding: 4px 6px; justify-content: center; gap: 4px; font-size: 13px; }
-.gh-header .account-menu .theme-pick .opt span { flex: 0 1 auto; }
-.gh-header .account-menu .theme-pick .opt[aria-checked="true"] { background: var(--canvas-default); box-shadow: 0 0 0 1px var(--border-default); font-weight: 600; }
+.gh-header .account-menu :is(.theme-pick, .lang-pick) { display: flex; gap: 2px; margin: 4px 8px; padding: 2px; background: var(--neutral-muted); border-radius: 8px; }
+.gh-header .account-menu :is(.theme-pick, .lang-pick) .opt { flex: 1 1 0; width: auto; min-width: 0; margin: 0; padding: 4px 6px; justify-content: center; gap: 4px; font-size: 13px; }
+.gh-header .account-menu :is(.theme-pick, .lang-pick) .opt span { flex: 0 1 auto; }
+.gh-header .account-menu :is(.theme-pick .opt[aria-checked="true"], .lang-pick .opt[aria-pressed="true"]) { background: var(--canvas-default); box-shadow: 0 0 0 1px var(--border-default); font-weight: 600; }
 .gh-header .account-menu .theme-pick .opt[aria-checked="true"] svg.i { color: var(--fg-default); }
 .gh-header .account-menu .account-foot { display: flex; margin: 0 8px; }
 .gh-header .account-menu .account-foot > .opt, .gh-header .account-menu .account-foot > form { flex: 1 1 0; min-width: 0; margin: 0; }
@@ -202,3 +202,16 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .rband .ohead .ohead-pic { width: 48px; height: 48px; border-radius: 8px; border: 1px solid var(--border-default); object-fit: cover; background: var(--canvas-default); }
 .rband .ohead .ohead-gh { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-muted); font-size: 13px; }
 .rband .ohead .ohead-gh .i { width: 14px; height: 14px; }
+
+/* Language switcher DE | EN (REQ-715): a segmented control in the account menu and the profile, plain links in the sign-in footer. */
+.lang-pick { display: inline-flex; gap: 2px; padding: 2px; background: var(--neutral-muted); border-radius: 8px; }
+.lang-pick .opt { appearance: none; border: 0; background: transparent; color: var(--fg-default); font: inherit; font-size: 13px; line-height: 20px; padding: 4px 10px; border-radius: 6px; cursor: pointer; min-width: 40px; justify-content: center; text-align: center; }
+.lang-pick .opt:hover { background: var(--canvas-subtle); }
+.lang-pick .opt[aria-pressed="true"] { background: var(--canvas-default); box-shadow: 0 0 0 1px var(--border-default); font-weight: 600; }
+.lang-pick .opt:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 1px; }
+.gt-foot .lang-pick { background: transparent; padding: 0; gap: 0; }
+.gt-foot .lang-pick .opt { color: var(--fg-muted); padding: 0 6px; min-width: 0; font-size: 12px; border-radius: 4px; }
+.gt-foot .lang-pick .opt[aria-pressed="true"] { background: transparent; box-shadow: none; color: var(--fg-default); text-decoration: underline; text-underline-offset: 3px; }
+.gt-foot .lang-pick .opt + .opt { border-left: 1px solid var(--border-muted); border-radius: 0 4px 4px 0; }
+.pf .row .lang-pick { margin-left: auto; }
+.gh-header .account-menu .lang-pick { display: flex; }

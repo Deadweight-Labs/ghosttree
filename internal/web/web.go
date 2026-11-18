@@ -43,7 +43,7 @@ type app struct {
 	distSums      distCache
 	distDir       string           // ctx archives + checksums.txt served at /dist/; empty = off
 	oidcName      string           // display name of the identity provider; empty = unnamed
-	language      lang             // server language (GHOSTTREE_LANGUAGE); empty = en
+	language      lang             // server language (GHOSTTREE_LANGUAGE); empty = not set
 	explain       *explain.Service // "Kurz erklärt"; nil = off
 	aiBox         *secretbox.Box   // seals the keys of AI connections; nil without a server key
 	aiTester      AITester         // tests a connection with one minimal call; nil: the button is not offered
@@ -222,6 +222,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /", a.unknownAddress)
 	a.handle(mux, "GET /favicon.ico", a.favicon)
 	a.handle(mux, "GET /ui/login", a.loginPage)
+	a.handle(mux, "POST /ui/language", http.HandlerFunc(a.languageSwitch))
 	a.handle(mux, "POST /ui/login", a.requireSameOrigin(http.HandlerFunc(a.loginSubmit)))
 	a.handle(mux, "POST /ui/login/oidc", a.requireSameOrigin(http.HandlerFunc(a.oidcStart)))
 	a.handle(mux, "GET /ui/login/oidc/callback", a.oidcCallback)
@@ -648,6 +649,7 @@ var webRoutes = map[string]webClass{
 	"POST /join/{code}/accept":              webAdmin,
 	"POST /join/{code}/signout":             webAccount,
 	"GET /ui/login":                         webPublic,
+	"POST /ui/language":                     webPublic,
 	"POST /ui/login":                        webPublic,
 	"POST /ui/login/oidc":                   webPublic,
 	"GET /ui/login/oidc/callback":           webPublic,
