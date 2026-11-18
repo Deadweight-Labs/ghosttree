@@ -87,20 +87,135 @@ func (l *rateWindow) allow(key string) bool {
 	return c.n <= l.limit
 }
 
+// over says whether key has reached its limit in the window, without counting.
+func (l *rateWindow) over(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	c, ok := l.counts[key]
+	return ok && l.now().Sub(c.start) < l.window && c.n >= l.limit
+}
+
+// hit counts one event for key (a failure); it does not say whether the limit is reached.
+func (l *rateWindow) hit(key string) { l.allow(key) }
+
+// clear forgets key: a success ends the count of the failures before it.
+func (l *rateWindow) clear(key string) {
+	l.mu.Lock()
+	delete(l.counts, key)
+	l.mu.Unlock()
+}
+
 // emailGuards sind die Grenzen der Mail- und Passwortwege: je Adresse (oder
 // Konto) und je Absender, getrennt für "Mail anfordern" und "etwas eintippen".
+//
+// Eine Sperre bindet an Adresse und Quelle (askAddr, tryAddr): wer von seiner
+// Adresse aus für fremde Konten Fehlversuche sammelt, sperrt sie nur für sich. Die
+// Zähler je Adresse über alle Quellen (askAddrAll, failAddrAll) sperren nie eine
+// Person aus: der eine begrenzt nur, wie viele Mails eine Postfach-Adresse bekommt,
+// der andere verzögert Versuche, wenn sehr viele Quellen raten.
 type emailGuards struct {
 	askAddr, askIP *rateWindow
 	tryAddr, tryIP *rateWindow
+	askAddrAll     *rateWindow
+	failAddrAll    *rateWindow
+	gate           *attemptGate
+	known          *knownSources
 }
 
 const guardWindow = 15 * time.Minute
+
+// failDelay is how long an attempt waits while many sources guess at one address.
+var failDelay = 2 * time.Second
 
 func newEmailGuards() *emailGuards {
 	return &emailGuards{
 		askAddr: newRateWindow(5, guardWindow), askIP: newRateWindow(20, guardWindow),
 		tryAddr: newRateWindow(10, guardWindow), tryIP: newRateWindow(40, guardWindow),
+		askAddrAll: newRateWindow(30, guardWindow), failAddrAll: newRateWindow(30, guardWindow),
+		gate: newAttemptGate(), known: newKnownSources(),
 	}
+}
+
+// attemptGate lets one attempt at a time through for an address that many sources
+// are guessing at, each followed by a pause. Whoever cannot get a turn in time is
+// told to wait; a person with a known source never queues (knownSources).
+type attemptGate struct {
+	mu    sync.Mutex
+	slots map[string]chan struct{}
+}
+
+func newAttemptGate() *attemptGate { return &attemptGate{slots: map[string]chan struct{}{}} }
+
+// enter waits for the turn of key, at most wait. done frees the turn after the pause.
+func (g *attemptGate) enter(key string, wait, pause time.Duration) (done func(), ok bool) {
+	g.mu.Lock()
+	ch, found := g.slots[key]
+	if !found {
+		ch = make(chan struct{}, 1)
+		g.slots[key] = ch
+	}
+	g.mu.Unlock()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case ch <- struct{}{}:
+	case <-timer.C:
+		return nil, false
+	}
+	return func() {
+		go func() {
+			time.Sleep(pause)
+			g.mu.Lock()
+			<-ch
+			if len(ch) == 0 && g.slots[key] == ch {
+				delete(g.slots, key)
+			}
+			g.mu.Unlock()
+		}()
+	}, true
+}
+
+// knownSources remembers which source an address last signed in from successfully.
+// It lives in memory; after a restart every source starts unknown.
+type knownSources struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+const knownSourceTTL = 30 * 24 * time.Hour
+
+func newKnownSources() *knownSources { return &knownSources{seen: map[string]time.Time{}} }
+
+func (k *knownSources) has(key string) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	at, ok := k.seen[key]
+	return ok && time.Since(at) < knownSourceTTL
+}
+
+func (k *knownSources) add(key string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if len(k.seen) >= rateWindowMax {
+		for old, at := range k.seen {
+			if time.Since(at) >= knownSourceTTL {
+				delete(k.seen, old)
+			}
+		}
+		if len(k.seen) >= rateWindowMax {
+			return
+		}
+	}
+	k.seen[key] = time.Now()
+}
+
+// askAddrOK counts a request for a mail for addr from the source of r and says
+// whether it may go out: within the limit of the source, and within the much higher
+// one of the address over all sources.
+func (a *app) askAddrOK(r *http.Request, purpose, addr string) bool {
+	fromSource := a.guards.askAddr.allow(purpose + "|" + addr + "|" + a.joinClientKey(r))
+	overall := a.guards.askAddrAll.allow(purpose + "|" + addr)
+	return fromSource && overall
 }
 
 // tooMany antwortet mit der Seite "zu viele Versuche"; es gibt keinen Hinweis
@@ -142,6 +257,32 @@ func (a *app) mailBase(r *http.Request) string {
 	return base
 }
 
+// issueLoginMail legt die Herausforderung für Anmelden oder Zurücksetzen an und
+// schickt die Mail, beides im Hintergrund. Gibt es zur Adresse kein Konto, entsteht
+// nichts; das sieht nur das Log.
+func (a *app) issueLoginMail(r *http.Request, l lang, purpose, email string) {
+	if a.mailer == nil {
+		return
+	}
+	base := a.mailBase(r)
+	a.mailWG.Add(1)
+	go func() {
+		defer a.mailWG.Done()
+		ch, found, err := a.store.IssueLoginChallenge(purpose, email)
+		if err != nil {
+			logger := a.logger
+			if logger == nil {
+				logger = slog.Default()
+			}
+			logger.Error("login_challenge_failed", "purpose", purpose)
+			return
+		}
+		if found {
+			a.deliverChallengeMail(base, l, ch)
+		}
+	}()
+}
+
 // sendChallengeMail schreibt die Mail zu einer Herausforderung und schickt sie im
 // Hintergrund. Fehler stehen im Log, ohne die Adresse.
 func (a *app) sendChallengeMail(r *http.Request, l lang, ch store.Challenge) {
@@ -149,6 +290,15 @@ func (a *app) sendChallengeMail(r *http.Request, l lang, ch store.Challenge) {
 		return
 	}
 	base := a.mailBase(r)
+	a.mailWG.Add(1)
+	go func() {
+		defer a.mailWG.Done()
+		a.deliverChallengeMail(base, l, ch)
+	}()
+}
+
+// deliverChallengeMail schreibt die Mail und schickt sie in diesem Aufruf.
+func (a *app) deliverChallengeMail(base string, l lang, ch store.Challenge) {
 	link := "\x00"
 	if base != "" {
 		link = base + "/ui/mail/" + ch.Purpose + "/link?t=" + url.QueryEscape(ch.Link)
@@ -163,19 +313,15 @@ func (a *app) sendChallengeMail(r *http.Request, l lang, ch store.Challenge) {
 		text = withoutLink(text)
 	}
 	msg := mail.Message{To: ch.Email, Subject: l.msg(k.subject), Text: text}
-	a.mailWG.Add(1)
-	go func() {
-		defer a.mailWG.Done()
-		if err := a.mailer.Send(msg); err != nil {
-			logger := a.logger
-			if logger == nil {
-				logger = slog.Default()
-			}
-			// SMTP-Antworten nennen gern die Adresse; das Log bekommt sie nie.
-			text := strings.ReplaceAll(err.Error(), msg.To, "<address>")
-			logger.Error("mail_send_failed", "purpose", ch.Purpose, "error", text)
+	if err := a.mailer.Send(msg); err != nil {
+		logger := a.logger
+		if logger == nil {
+			logger = slog.Default()
 		}
-	}()
+		// SMTP-Antworten nennen gern die Adresse; das Log bekommt sie nie.
+		text := strings.ReplaceAll(err.Error(), msg.To, "<address>")
+		logger.Error("mail_send_failed", "purpose", ch.Purpose, "error", text)
+	}
 }
 
 // withoutLink drops the paragraph with the link and the one that introduces it,
@@ -311,15 +457,10 @@ func (a *app) mailRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Ist die Grenze für die Adresse erreicht, kommt dieselbe Seite, nur ohne Mail.
-	if a.guards.askAddr.allow(purpose + "|" + email) {
-		ch, found, err := a.store.IssueLoginChallenge(purpose, email)
-		if err != nil {
-			http.Error(w, "could not start sign-in", http.StatusInternalServerError)
-			return
-		}
-		if found {
-			a.sendChallengeMail(r, l, ch)
-		}
+	// Die Herausforderung entsteht im Hintergrund, für eine Adresse mit Konto wie für
+	// eine ohne: die Antwort und ihre Zeit verraten nicht, ob es ein Konto gibt.
+	if a.askAddrOK(r, purpose, email) {
+		a.issueLoginMail(r, l, purpose, email)
 	}
 	a.renderEmailAuth(l, w, http.StatusOK, "authcode", emailAuthView{
 		Purpose: purpose, Masked: maskedOr(email), Email: email, NeedsPassword: purpose == store.ChallengeReset,
@@ -363,7 +504,7 @@ func (a *app) mailCode(w http.ResponseWriter, r *http.Request) {
 	if !a.tryAllowedIP(w, r, l) {
 		return
 	}
-	if err == nil && !a.guards.tryAddr.allow("code|"+purpose+"|"+email) {
+	if err == nil && !a.guards.tryAddr.allow("code|"+purpose+"|"+email+"|"+a.joinClientKey(r)) {
 		a.tooMany(l, w)
 		return
 	}
@@ -520,11 +661,30 @@ func (a *app) passwordLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	typed := strings.TrimSpace(r.FormValue("email"))
 	email, err := store.NormalizeEmail(typed)
 	pw := r.FormValue("password")
-	if err == nil && !a.guards.tryAddr.allow("pw|"+email) {
+	// Each attempt is counted before the password is looked at, per address and
+	// source, so that attempts sent at the same time cannot slip past the limit; a
+	// success clears the count. A wrong password of someone else from elsewhere does
+	// not lock this person out.
+	pwKey := "pw|" + email + "|" + a.joinClientKey(r)
+	if err == nil && !a.guards.tryAddr.allow(pwKey) {
 		a.tooMany(l, w)
 		return
 	}
+	// Many sources guessing at one address are let through one at a time with a
+	// pause; a source this address has signed in from before never waits. Nobody is
+	// locked out for good: the wait is short and the mailed code stays open.
+	if err == nil && a.guards.failAddrAll.over("pw|"+email) && !a.guards.known.has(pwKey) {
+		done, ok := a.guards.gate.enter("pw|"+email, 5*failDelay, failDelay)
+		if !ok {
+			a.tooMany(l, w)
+			return
+		}
+		defer done()
+	}
 	reject := func() {
+		if err == nil {
+			a.guards.failAddrAll.hit("pw|" + email)
+		}
 		codeHeaders(w)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnprocessableEntity)
@@ -547,6 +707,8 @@ func (a *app) passwordLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		reject()
 		return
 	}
+	a.guards.tryAddr.clear(pwKey)
+	a.guards.known.add(pwKey)
 	if passhash.NeedsRehash(hash) {
 		if h, err := passhash.Hash(pw); err == nil {
 			_ = a.store.SetPassword(account.ID, h)
@@ -578,7 +740,7 @@ func (a *app) profileEmail(w http.ResponseWriter, r *http.Request) {
 	if !a.askAllowedIP(w, r, l) {
 		return
 	}
-	if !a.guards.askAddr.allow(store.ChallengeConfirm + "|" + email) {
+	if !a.askAddrOK(r, store.ChallengeConfirm, email) {
 		a.renderProfile(w, r, http.StatusTooManyRequests, "", profileMailSection, l.msg("mail.too_many.text"))
 		return
 	}
@@ -615,7 +777,7 @@ func (a *app) confirmResend(w http.ResponseWriter, r *http.Request) {
 	if !a.askAllowedIP(w, r, l) {
 		return
 	}
-	if a.guards.askAddr.allow(store.ChallengeConfirm + "|" + email) {
+	if a.askAddrOK(r, store.ChallengeConfirm, email) {
 		if ch, err := a.store.IssueConfirmChallenge(me.ID, email); err == nil {
 			a.sendChallengeMail(r, l, ch)
 		}
@@ -740,7 +902,7 @@ func (a *app) joinByMail(w http.ResponseWriter, r *http.Request, l lang, code st
 		return
 	}
 	a.inviteNames.accepted(code)
-	if a.guards.askAddr.allow(ch.Purpose + "|" + ch.Email) {
+	if a.askAddrOK(r, ch.Purpose, ch.Email) {
 		a.sendChallengeMail(r, l, ch)
 	}
 	if account.ID == "" {

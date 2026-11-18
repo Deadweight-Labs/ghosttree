@@ -119,6 +119,28 @@ func TestDeviceWrongUserCodeLocksAccountNotOthers(t *testing.T) {
 	}
 }
 
+// Many wrong codes from many accounts slow down those who guess, not a person who
+// has not guessed: nobody can lock the approval for everyone else.
+func TestDeviceGlobalFailuresDoNotLockAnAccountWithoutFailures(t *testing.T) {
+	d, _ := newDeviceFixture(t)
+	start, _ := d.Start("a", "laptop", "a")
+	for i := 0; i < maxDeviceFailuresGlobal; i++ {
+		// Each guesser stays under the limit of its own account.
+		if _, err := d.Lookup("BBBB-BBBB", fmt.Sprintf("person:%d", 100+i)); !errors.Is(err, ErrDeviceUnknown) {
+			t.Fatalf("guess %d: %v", i, err)
+		}
+	}
+	if _, err := d.Lookup(start.UserCode, "person:1"); err != nil {
+		t.Fatalf("an account that never guessed is locked out: %v", err)
+	}
+	if _, err := d.Lookup("BBBB-BBBB", "person:2"); !errors.Is(err, ErrDeviceUnknown) {
+		t.Fatalf("first wrong code: %v", err)
+	}
+	if _, err := d.Lookup(start.UserCode, "person:2"); !errors.Is(err, ErrDeviceLocked) {
+		t.Fatalf("an account that guessed while the instance is under attack must wait: %v", err)
+	}
+}
+
 func TestDeviceStartsAreBoundedPerClientAndDoNotBlockOthers(t *testing.T) {
 	d, _ := newDeviceFixture(t)
 	for i := 0; i < maxDevicePerClient; i++ {
