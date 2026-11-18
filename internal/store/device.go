@@ -281,8 +281,8 @@ func (d *DeviceFlows) Poll(deviceCode string) (DeviceApproval, time.Duration, er
 	return DeviceApproval{}, f.interval, ErrDevicePending
 }
 
-// locked sagt, ob das Konto oder die Instanz im Fenster zu viele falsche Codes
-// hatte. Der Aufrufer hält d.mu.
+// locked sagt, ob das Konto im Fenster zu viele falsche Codes hatte oder, bei einer
+// Welle falscher Codes in der Instanz, selbst schon einen. Der Aufrufer hält d.mu.
 func (d *DeviceFlows) locked(account string, now time.Time) bool {
 	cutoff := now.Add(-deviceFailureWindow)
 	d.failures[account] = trimBefore(d.failures[account], cutoff)
@@ -290,7 +290,10 @@ func (d *DeviceFlows) locked(account string, now time.Time) bool {
 		delete(d.failures, account)
 	}
 	d.allFails = trimBefore(d.allFails, cutoff)
-	return len(d.failures[account]) >= maxDeviceFailures || len(d.allFails) >= maxDeviceFailuresGlobal
+	// Under a wave of wrong codes only those who have guessed themselves wait; an
+	// account without a failure is never locked by what others did.
+	return len(d.failures[account]) >= maxDeviceFailures ||
+		(len(d.allFails) >= maxDeviceFailuresGlobal && len(d.failures[account]) > 0)
 }
 
 func trimBefore(in []time.Time, cutoff time.Time) []time.Time {

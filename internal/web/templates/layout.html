@@ -41,7 +41,7 @@
 
 {{define "gcmd"}}{{with .}}<div class="g-cmd">{{template "icon" .Icon}}<code tabindex="0">{{.Text}}</code>{{template "uicopy" (copyIcon "")}}</div>{{end}}{{end}}
 
-{{define "devbanner"}}{{if not .Interactive}}<div class="flash info devnote" role="status">{{mi "lock"}}<div><p>{{t "adm.device.note" (or .DeviceName (t "adm.this_device"))}}</p><form method="post" action="/ui/logout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="gbtn sm">{{t "adm.device.signin"}}</button></form></div></div>{{end}}{{end}}
+{{define "devbanner"}}{{if not .Interactive}}<div class="flash info devnote" role="status">{{mi "lock"}}<div><p>{{t "adm.device.note" (or .DeviceName (t "adm.this_device"))}}</p><form method="post" action="/ui/logout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="gbtn sm">{{t "adm.device.signin"}}</button></form></div></div>{{else if .LinkSession}}<div class="flash info devnote" role="status">{{mi "lock"}}<div><p>{{t "adm.link.note" .LinkUntil}}</p><form method="post" action="/ui/logout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="gbtn sm">{{t "adm.device.signin"}}</button></form></div></div>{{end}}{{end}}
 
 {{define "gexplain"}}{{with .}}{{if .Pending}}{{template "explain" .}}{{else}}<details class="g-fold g-fold-ex"><summary><span class="g-fold-t">{{.Title}}</span><span class="g-fold-p">{{lead .Text}}</span></summary><div class="g-fold-b">{{template "explain" .}}</div></details>{{end}}{{end}}{{end}}
 

@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
@@ -181,9 +180,7 @@ func peopleOf(ws store.IdeaWorkshop) []string {
 // ideaItems are the workshop's work as entries of the timeline, oldest first.
 func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, edits []store.IdeaEdit, age func(string) string) []tlItem {
 	all := a.workshopDated(l, ws, age)
-	sentence := func(key string, args ...any) template.HTML {
-		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
-	}
+	sentence := func(key string, args ...template.HTML) template.HTML { return sentenceOf(l, key, args...) }
 	// An agent that wrote a text is named as its owner's agent ("Pia’s Claude"), a person by name.
 	byWho := func(it tlItem, person string, agent bool) tlItem {
 		it.Who = person
@@ -196,13 +193,13 @@ func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, edits []store.IdeaEdit, a
 		if t.Revision <= 1 {
 			continue
 		}
-		all = append(all, datedItem{t.CreatedAt, byWho(tlItem{ID: "text-raw-" + strconv.Itoa(t.Revision), Act: "idea.raw", Icon: "pencil", Head: sentence("ideas.ev.raw", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}, t.Person, t.ByAgent)})
+		all = append(all, datedItem{t.CreatedAt, byWho(tlItem{ID: "text-raw-" + strconv.Itoa(t.Revision), Act: "idea.raw", Icon: "pencil", Head: sentence("ideas.ev.raw", numHTML(t.Revision)), Age: age(t.CreatedAt), Body: mdText(t.Message)}, t.Person, t.ByAgent)})
 	}
 	if s := ws.Summary; s != nil {
 		all = append(all, datedItem{s.CreatedAt, byWho(tlItem{ID: "text-summary", Act: "idea.summary", Icon: "list", Head: sentence("ideas.ev.summary"), Age: age(s.CreatedAt), Body: mdText(s.Message)}, s.Person, s.ByAgent)})
 	}
 	for _, t := range ws.ConceptRevs {
-		all = append(all, datedItem{t.CreatedAt, byWho(tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Icon: "book", Head: sentence("ideas.ev.concept", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}, t.Person, t.ByAgent)})
+		all = append(all, datedItem{t.CreatedAt, byWho(tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Icon: "book", Head: sentence("ideas.ev.concept", numHTML(t.Revision)), Age: age(t.CreatedAt), Body: mdText(t.Message)}, t.Person, t.ByAgent)})
 	}
 	for _, d := range ws.Decisions {
 		asked := byWho(tlItem{ID: "asked-decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Icon: "chat", Head: sentence("ideas.ev.decision") + " " + longPill(l, "decision", d.ID, "#decision-"+strconv.FormatInt(d.ID, 10)), Age: age(d.CreatedAt)}, d.Person, d.OpenedByAgent)

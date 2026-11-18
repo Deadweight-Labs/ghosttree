@@ -87,6 +87,9 @@ func ensureEmailAuth(db *sql.DB) error {
 	if _, err := db.Exec(emailAuthSchema); err != nil {
 		return err
 	}
+	if _, err := db.Exec(inviteMailSchema); err != nil {
+		return err
+	}
 	for _, c := range []struct{ name, ddl string }{
 		{"token_id", `INTEGER NOT NULL DEFAULT 0`},
 		{"machine", `TEXT NOT NULL DEFAULT ''`},

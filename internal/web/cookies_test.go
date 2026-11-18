@@ -38,9 +38,14 @@ func (p peer) post(h http.Handler, target, origin string, form url.Values, cooki
 	return rec.Result()
 }
 
+// isSessionCookie: the session cookie under its plain or its __Host- name.
+func isSessionCookie(c *http.Cookie) bool {
+	return c.Name == sessionCookie || c.Name == hostSessionCookie
+}
+
 func sessionOf(resp *http.Response) *http.Cookie {
 	for _, c := range resp.Cookies() {
-		if c.Name == sessionCookie {
+		if c.Name == sessionCookie || c.Name == hostSessionCookie {
 			return c
 		}
 	}
@@ -72,6 +77,10 @@ func cycle(t *testing.T, p peer, origin string, opts ...Option) (login, logout *
 func checkCookies(t *testing.T, login, logout *http.Cookie, secure bool) {
 	t.Helper()
 	for name, c := range map[string]*http.Cookie{"login": login, "logout": logout} {
+		// Where the cookie is Secure it carries the __Host- prefix, and only there.
+		if wantName := map[bool]string{true: hostSessionCookie, false: sessionCookie}[secure]; c.Name != wantName {
+			t.Errorf("%s cookie is named %q, want %q", name, c.Name, wantName)
+		}
 		if c.Secure != secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" {
 			t.Errorf("%s cookie attributes wrong (want secure=%v): %+v", name, secure, c)
 		}
@@ -212,5 +221,37 @@ func TestPublicURLDefaultPortIsDropped(t *testing.T) {
 	r.Header.Set("Origin", "https://gt.example.test")
 	if !a.sameOrigin(r) {
 		t.Fatal("browser origin without default port rejected")
+	}
+}
+
+// Where cookies are Secure only the __Host- cookie opens a session: a plain
+// gt_session planted from a sibling subdomain (or over http) is not read.
+func TestPlainSessionCookieIsIgnoredWhereCookiesAreSecure(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "h.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	token, _ := st.AddPerson("alice")
+	h := newApp(st)
+	tlsPeer := peer{tls: true, remote: "203.0.113.5:4000"}
+	login := sessionOf(tlsPeer.post(h, "https://gt.test/ui/login", "https://gt.test", url.Values{"token": {token}}))
+	if login == nil || login.Name != hostSessionCookie {
+		t.Fatalf("login cookie: %+v", login)
+	}
+	get := func(name string) int {
+		req := httptest.NewRequest(http.MethodGet, "https://gt.test/ui/inbox", nil)
+		req.TLS = &tls.ConnectionState{}
+		req.RemoteAddr = tlsPeer.remote
+		req.AddCookie(&http.Cookie{Name: name, Value: login.Value})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if got := get(hostSessionCookie); got != http.StatusOK {
+		t.Fatalf("the __Host- cookie: %d", got)
+	}
+	if got := get(sessionCookie); got != http.StatusSeeOther {
+		t.Fatalf("a plain cookie over TLS opened the session: %d", got)
 	}
 }

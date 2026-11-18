@@ -28,7 +28,8 @@ func cmdSetup(args []string, stdout io.Writer) int {
 		cfg.Channel = prev.Channel // a new login keeps the update channel
 	}
 	if cfg.Machine == "" {
-		cfg.Machine, _ = os.Hostname()
+		host, _ := os.Hostname()
+		cfg.Machine = normalizeMachine(host)
 	}
 	if err := config.Save(cfg); err != nil {
 		fmt.Fprintf(stdout, "save config: %v\n", err)

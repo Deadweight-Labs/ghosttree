@@ -60,6 +60,10 @@ func TestDeviceLoginEndToEnd(t *testing.T) {
 	if !strings.HasSuffix(start["verification_uri"].(string), "/ui/device") || start["interval"].(float64) != 5 || start["expires_in"].(float64) != 600 {
 		t.Fatalf("start body: %v", start)
 	}
+	// The link to open carries no code: whoever approves types the one the terminal shows.
+	if complete, _ := start["verification_uri_complete"].(string); strings.Contains(complete, "user_code") || strings.Contains(complete, userCode) {
+		t.Fatalf("the link to open carries the code: %v", start)
+	}
 
 	// Zu früh: slow_down.
 	code, body := postJSON(t, srv.URL+"/api/auth/device/token", "", map[string]string{"device_code": deviceCode})
@@ -167,9 +171,18 @@ func TestDeviceStartIsBoundedAndInputIsLimited(t *testing.T) {
 	if code, _ := postJSON(t, srv.URL+"/api/auth/device", "10.0.2.1", big); code != 413 && code != 400 {
 		t.Fatalf("oversized body status = %d", code)
 	}
-	for _, bad := range []string{"", "  ", strings.Repeat("a", 129), "evil\nname", "x\x00y"} {
+	// Der Name steht auf der Freigabeseite: nur Buchstaben, Ziffern, Punkt,
+	// Unterstrich und Bindestrich, wie beim Beitritt; ein Satz, der zum Freigeben
+	// auffordert, ist keiner.
+	for _, bad := range []string{"", "  ", strings.Repeat("a", 65), "evil\nname", "x\x00y",
+		"Approve me, I am your IT department", "räuber", "a/b", "name<b>", "emoji🙂"} {
 		if code, _ := postJSON(t, srv.URL+"/api/auth/device", "10.0.2.2", map[string]string{"machine": bad}); code != 400 {
 			t.Fatalf("machine %q status = %d", bad, code)
+		}
+	}
+	for _, good := range []string{"robins-laptop", "Build_Server.01", strings.Repeat("a", 64)} {
+		if code, _ := postJSON(t, srv.URL+"/api/auth/device", "10.0.2.3", map[string]string{"machine": good}); code != 200 {
+			t.Fatalf("machine %q status = %d", good, code)
 		}
 	}
 	// Der Token-Endpunkt begrenzt seinen Körper ebenso.

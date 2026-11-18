@@ -74,18 +74,19 @@ func TestDeviceApprovalInBrowserIssuesBoundToken(t *testing.T) {
 	start := startDevice(t, st, "laptop")
 	client := loginInteractive(t, srv, st, "alice")
 
-	// Die Eingabeseite füllt den Code vor, ohne zu bestätigen.
+	// Die Eingabeseite füllt den Code nie aus der Adresse vor: wer freigibt, tippt den
+	// Code ab, den sein eigenes Terminal zeigt.
 	resp, err := client.Get(srv.URL + "/ui/device?user_code=" + url.QueryEscape(store.FormatUserCode(start.UserCode)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page := body(t, resp); !strings.Contains(page, store.FormatUserCode(start.UserCode)) {
-		t.Fatalf("code not prefilled: %s", page)
+	if page := body(t, resp); strings.Contains(page, store.FormatUserCode(start.UserCode)) {
+		t.Fatalf("code prefilled from the address: %s", page)
 	}
 	csrf := renderedCSRFToken(t, client, srv.URL+"/ui/device")
 	resp = sameOriginPostForm(t, client, srv.URL+"/ui/device", url.Values{"user_code": {strings.ToLower(start.UserCode)}, "csrf_token": {csrf}})
 	page := body(t, resp)
-	if resp.StatusCode != 200 || !strings.Contains(page, "laptop") || !strings.Contains(page, "203.0.113.9") || !strings.Contains(plainText(page), "Only approve if you just ran ctx login yourself.") {
+	if resp.StatusCode != 200 || !strings.Contains(page, "laptop") || !strings.Contains(page, "203.0.113.9") || !strings.Contains(plainText(page), "Only approve if you just ran ctx login yourself.") || !strings.Contains(plainText(page), "full access to your account") {
 		t.Fatalf("check page: %d %s", resp.StatusCode, page)
 	}
 	resp = sameOriginPostForm(t, client, srv.URL+"/ui/device/decide", url.Values{"user_code": {start.UserCode}, "decision": {"approve"}, "csrf_token": {csrf}})

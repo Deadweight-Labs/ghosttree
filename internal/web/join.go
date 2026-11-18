@@ -117,12 +117,11 @@ func (a *app) joinHeaders(w http.ResponseWriter) {
 	h.Set("Referrer-Policy", "strict-origin")
 	h.Set("X-Robots-Tag", "noindex, nofollow")
 	h.Set("X-Content-Type-Options", "nosniff")
-	// Keine Skripte, keine fremden Ressourcen, nicht einbettbar. form-action
-	// bleibt offen: der Weg zum Identitätsanbieter ist eine Weiterleitung, und
-	// 'self' würde auch die 303-Weiterleitung der Freigabe auf den Loopback des
-	// Installers (http://127.0.0.1:<port>/callback) blockieren, weil Browser
-	// form-action auf die Ziele von Weiterleitungen anwenden.
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	// Keine Skripte, keine fremden Ressourcen, nicht einbettbar. Formulare gehen an
+	// diese Herkunft, an den Identitätsanbieter und auf den Loopback des Installers
+	// (die 303-Weiterleitung der Freigabe auf http://127.0.0.1:<port>/callback),
+	// weil Browser form-action auch auf die Ziele von Weiterleitungen anwenden.
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; "+a.formAction(true)+"; frame-ancestors 'none'")
 	h.Set("Content-Type", "text/html; charset=utf-8")
 }
 
@@ -130,7 +129,7 @@ func (a *app) joinHeaders(w http.ResponseWriter) {
 // (/static/join.js) und Abfragen an dieselbe Herkunft; sonst bleibt alles zu.
 func (a *app) joinScriptHeaders(w http.ResponseWriter) {
 	a.joinHeaders(w)
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; "+a.formAction(true)+"; frame-ancestors 'none'")
 }
 
 // joinGate zählt den Aufruf. Es antwortet selbst, wenn die Grenze erreicht ist.
@@ -253,14 +252,16 @@ func roleLabel(l lang, role string) string {
 	return l.msg("join.role_member")
 }
 
-// joinSession liefert das angemeldete Konto, wenn eine interaktive Sitzung da ist.
+// joinSession liefert das angemeldete Konto, wenn eine Sitzung aus einer Anmeldung
+// mit Nachweis da ist. Eine Sitzung aus einem Einmal-Link zählt nicht: wer damit
+// auf der Anmelde- oder Einladungsseite ist, kann sich dort mit Nachweis anmelden.
 func (a *app) joinSession(r *http.Request) (browserSession, bool) {
-	cookie, err := r.Cookie(sessionCookie)
+	cookie, err := a.sessionCookieOf(r)
 	if err != nil {
 		return browserSession{}, false
 	}
 	session, ok := a.sessions.get(cookie.Value)
-	if !ok || session.principal.TokenKind != store.WebSessionKind || !a.store.PrincipalValid(session.principal) {
+	if !ok || session.link || session.principal.TokenKind != store.WebSessionKind || !a.store.PrincipalValid(session.principal) {
 		return browserSession{}, false
 	}
 	return session, true
@@ -396,7 +397,7 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 
 // joinSignOut beendet die Sitzung und führt zurück zur Einladung ("Not you?").
 func (a *app) joinSignOut(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(sessionCookie); err == nil {
+	if cookie, err := a.sessionCookieOf(r); err == nil {
 		a.sessions.remove(cookie.Value)
 	}
 	http.SetCookie(w, a.sessionCookieFor(r, "", -1))
