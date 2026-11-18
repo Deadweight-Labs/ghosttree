@@ -79,3 +79,27 @@ func TestFormActionNamesTheIdentityProvider(t *testing.T) {
 		t.Errorf("form-action does not name the identity provider: %s", csp)
 	}
 }
+
+// The list of the embedded files is not served, and a file that exists still is.
+func TestStaticDirectoriesAreNotListed(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	h := newApp(st)
+	for path, want := range map[string]int{
+		"/static/": 404, "/static": 307, "/static/vendor/": 404, "/static/vendor": 404,
+		"/static/join.js": 200, "/static/missing.js": 404, "/static/vendor/mermaid.min.js": 200,
+	} {
+		req := httptest.NewRequest(http.MethodGet, "http://gt.test"+path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
+		}
+		if strings.Contains(rec.Body.String(), "mermaid.min.js</a>") {
+			t.Errorf("GET %s lists files", path)
+		}
+	}
+}

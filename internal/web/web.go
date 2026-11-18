@@ -455,7 +455,9 @@ func (a *app) renderPost(l lang, w http.ResponseWriter, name string, data pageDa
 	}
 	var output bytes.Buffer
 	if err := l.page().ExecuteTemplate(&output, name, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// The text of a template error names internals; it goes to the log, not to the page.
+		slog.Error("template_failed", "template", name, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
