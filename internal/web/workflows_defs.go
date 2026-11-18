@@ -34,7 +34,11 @@ type wfDefRow struct {
 	Name, Href, Summary, Uses, EventKey string
 	Version                             int
 	Enabled                             bool
-	Last                                *wfRunRow
+	// Blocked is the first problem of the check when the stored file no longer
+	// passes it (a policy or an alias changed since saving): the switch says On,
+	// but runs do not happen.
+	Blocked string
+	Last    *wfRunRow
 }
 
 // wfVersionRow is one saved version.
@@ -55,6 +59,7 @@ type workflowDefView struct {
 	Old                       bool
 	Author, At                string
 	Enabled, CanEdit          bool
+	Blocked                   string
 	EditHref, Token           string
 	Versions                  []wfVersionRow
 	Diff                      *docDiffView
@@ -102,6 +107,14 @@ func (a *app) accountName(id int64) string {
 	return acc.Name
 }
 
+// workflowBlocked is the first error of the check of a stored file, or "".
+func workflowBlocked(text string, env workflow.Env) string {
+	if _, rep := workflow.Check(text, env); len(rep.Errors) > 0 {
+		return rep.Errors[0].String()
+	}
+	return ""
+}
+
 // workflowDefRows lists the workflows of a project with their last runs.
 func (a *app) workflowDefRows(l lang, pa *store.ProjectAccess, base, remote string) []wfDefRow {
 	defs, err := pa.WorkflowDefs(remote)
@@ -109,10 +122,14 @@ func (a *app) workflowDefRows(l lang, pa *store.ProjectAccess, base, remote stri
 		return nil
 	}
 	last, _ := a.store.LastWorkflowRuns(remote)
+	env := workflow.EnvFor(a.store, remote)
 	var out []wfDefRow
 	for _, d := range defs {
 		row := wfDefRow{Name: d.Name, Href: workflowHref(remote, d.Name), Summary: d.Summary, Uses: d.Uses, EventKey: wfEventKeys[d.Event],
 			Version: d.Version, Enabled: d.Enabled}
+		if d.Enabled {
+			row.Blocked = workflowBlocked(d.Text, env)
+		}
 		if run, ok := last[d.Name]; ok {
 			r := a.wfRow(l, base, run)
 			row.Last = &r
@@ -146,6 +163,9 @@ func (a *app) workflowDefPage(w http.ResponseWriter, r *http.Request, remote, na
 	href := workflowHref(remote, name)
 	v := &workflowDefView{Name: def.Name, Project: remote, Base: repoHref(remote) + "/workflows", Href: href, Version: def.Version, Shown: def.Version,
 		Enabled: def.Enabled, CanEdit: interactive(r) && pa.CanEditWorkflows(remote), Token: csrfOf(r), CmpFrom: max(1, def.Version-1), CmpTo: def.Version}
+	if def.Enabled {
+		v.Blocked = workflowBlocked(def.Text, workflow.EnvFor(a.store, remote))
+	}
 	if v.CanEdit {
 		v.EditHref = href + "?edit=1"
 	} else if interactive(r) {

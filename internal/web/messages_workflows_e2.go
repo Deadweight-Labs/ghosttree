@@ -18,6 +18,7 @@ func init() {
 		{"wf.def.cancel", "Cancel", "Abbrechen"},
 		{"wf.def.on", "On", "An"},
 		{"wf.def.off", "Off", "Aus"},
+		{"wf.def.blocked", "Fails the check", "Besteht die Prüfung nicht"},
 		{"wf.def.switch_on", "Switch on", "Einschalten"},
 		{"wf.def.switch_off", "Switch off", "Ausschalten"},
 		{"wf.def.last_run", "Last run", "Letzter Lauf"},

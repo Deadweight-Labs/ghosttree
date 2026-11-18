@@ -4,7 +4,7 @@
 // lands in the form's textarea, so saving stays the save of the text form.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadPage } from "./dom.mjs";
+import { loadPage, manualTimers } from "./dom.mjs";
 
 // Values made in the page's own context compare by their JSON.
 const plain = (x) => JSON.parse(JSON.stringify(x));
@@ -121,4 +121,100 @@ test("an edit goes to the server and its text lands in the textarea of the form"
   // The text tab shows the textarea with the same text.
   p.document.querySelector('button[data-mode="text"]').click();
   assert.ok(!p.document.querySelector("label.wfv-text").hidden);
+});
+
+// REQ-708: a problem of the instruction (a misspelt placeholder) stands at the
+// instruction node, which shows the line it starts on like every other node.
+test("a problem of the instruction stands at the instruction node", () => {
+  const p = load();
+  const v = Object.assign({}, view, {
+    errors: [{ key: "body", item: "idea.titel", line: 13, message: "unknown placeholder {{idea.titel}}: did you mean {{idea.title}}?" }],
+    warnings: [{ key: "body", item: "pr.diff", line: 12, message: "placeholder {{pr.diff}}: the workflow does not read it" }],
+  });
+  const g = p.window.GTWfv.graph(v, catalog, "");
+  assert.equal(g.nodes.body.errors.length, 1);
+  assert.equal(g.nodes.body.warnings.length, 1);
+  assert.equal(g.nodes.body.line, 12);
+  assert.equal(g.loose.length, 0, "the problem is not left loose");
+});
+
+// The block that cannot create a kind does not offer it in the palette.
+test("the palette of the echo block offers none of the kinds it cannot create", () => {
+  const p = load();
+  const echo = { ok: true, keys: [{ key: "on", line: 2, scalar: "pr.merged" }, { key: "uses", line: 3, scalar: "ghosttree/echo@v1" }], blocks: [], body: "", errors: [], warnings: [] };
+  const P = p.window.GTWfv.palette(echo, Object.assign({}, catalog, { blocks: [{ name: "ghosttree/echo", label: "Echo", version: "v1" }] }));
+  assert.deepEqual(plain(P.results), []);
+});
+
+function editor(extra = {}) {
+  const calls = [];
+  const clock = manualTimers();
+  const fetch = (url, opts) => {
+    calls.push({ url, body: new URLSearchParams(String(opts.body)) });
+    const answer = url === "/ui/workflows/visual" ? { text: "NEW", view } : extra.answer || { ok: true, stage: 1, errors: [], warnings: [] };
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(answer) });
+  };
+  const p = loadPage(`<form class="wfform"><input type="hidden" name="csrf_token" value="tok"><input type="hidden" name="project" value="github.com/x/shell"><div class="wfv" data-wfv data-edit><label class="wfv-text"><textarea name="text">OLD</textarea></label></div></form>`,
+    { scripts: [], hooks: { fetch, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, ResizeObserver: class { observe() {} } } });
+  const root = p.document.querySelector("[data-wfv]");
+  root.setAttribute("data-model", JSON.stringify({ text: "OLD", view }));
+  root.setAttribute("data-catalog", JSON.stringify(catalog));
+  root.setAttribute("data-l10n", JSON.stringify({ visual: "Visual", text: "Text", errors: "%d errors", errors_one: "1 error", checked: "Checked", line: "line %d", checking: "Checking", add: "Add", added: "Added: %s", stage_2: "Stage %d: instruction" }));
+  p.run("ui-wfvisual.js");
+  return { p, calls, clock };
+}
+const settle = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0)); };
+
+// AC-708.2: typing in the text mode checks the file after a pause, without saving.
+test("typing in the text mode asks the server for a check after a pause and stores nothing", async () => {
+  const { p, calls, clock } = editor({ answer: { ok: false, stage: 2, errors: [{ line: 8, key: "body", message: "unknown placeholder {{idea.titel}}: did you mean {{idea.title}}?" }], warnings: [] } });
+  p.document.querySelector('button[data-mode="text"]').click();
+  clock.advance(0);
+  await settle();
+  assert.equal(calls.length, 1, "entering the text mode checks the text once");
+  const ta = p.document.querySelector("textarea");
+  ta.value = "---\non: idea.created\n---\nNenne {{idea.titel}}";
+  ta.dispatchEvent(new p.window.Event("input"));
+  ta.value += "x";
+  ta.dispatchEvent(new p.window.Event("input"));
+  clock.advance(300);
+  await settle();
+  assert.equal(calls.length, 1, "no request while the person is still typing");
+  clock.advance(400);
+  await settle();
+  assert.equal(calls.length, 2, "one request after the pause, not one per keystroke");
+  assert.equal(calls[1].url, "/ui/workflows/check", "the check does not go to the edit or save routes");
+  assert.equal(calls[1].body.get("csrf_token"), "tok");
+  assert.equal(calls[1].body.get("text"), ta.value);
+  const box = p.document.querySelector(".wfv-tcheck");
+  assert.ok(box && !box.hidden, "the result stands under the text");
+  assert.match(box.textContent, /1 error/);
+  assert.match(box.textContent, /line 8/);
+  assert.match(box.textContent, /did you mean \{\{idea\.title\}\}\?/);
+  assert.equal(ta.value.endsWith("x"), true, "the text stays as typed");
+});
+
+// AC-708.3: a click on the add button opens the palette so that it can be seen,
+// and a click on a chip says what it added.
+test("the add button shows the palette, and a chip says what it added", async () => {
+  const { p, calls } = editor();
+  const plus = p.document.querySelector(".wfv-plus");
+  assert.ok(plus, "the button is there");
+  assert.match(plus.textContent, /Add/, "and it says what it does");
+  const pal = p.document.querySelector(".wfv-pal");
+  assert.ok(pal.hidden, "the palette is closed (a phone) until the button opens it");
+  plus.click();
+  assert.ok(!pal.hidden && pal.classList.contains("open"), "the palette is open after the click");
+  assert.equal(plus.getAttribute("aria-expanded"), "true");
+  assert.ok(pal.querySelectorAll(".wfv-chip").length > 0, "with chips in it");
+  plus.click();
+  assert.ok(pal.hidden, "a second click closes it");
+  plus.click();
+  const chip = pal.querySelectorAll(".wfv-chip").find((b) => b.textContent.includes("budget"));
+  chip.click();
+  await settle();
+  assert.equal(calls.length, 1);
+  const note = p.document.querySelector(".wfv-note");
+  assert.ok(!note.hidden, "the click shows what it added");
+  assert.match(note.textContent, /Added: .*budget.*Stage 2: instruction/);
 });

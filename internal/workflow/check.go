@@ -129,7 +129,7 @@ func Check(text string, env Env) (Def, CheckReport) {
 	case d.On == "":
 		errf(KeyOn, "on is missing: one of %s", strings.Join(store.WorkflowTriggerKinds, ", "))
 	case !slices.Contains(store.WorkflowTriggerKinds, d.On):
-		errf(KeyOn, "unknown event %s (known: %s)", d.On, strings.Join(store.WorkflowTriggerKinds, ", "))
+		errf(KeyOn, "unknown event %s%s (known: %s)", d.On, didYouMean(d.On, store.WorkflowTriggerKinds), strings.Join(store.WorkflowTriggerKinds, ", "))
 	}
 	if len(d.Branches) > 0 && d.On != store.EventPRMerged {
 		errf(KeyBranches, "branches only narrows %s", store.EventPRMerged)
@@ -180,7 +180,7 @@ func Check(text string, env Env) (Def, CheckReport) {
 		t, ok := ToolByName(n)
 		switch {
 		case !ok:
-			errf(KeyTools, "unknown tool %s (known: %s)", n, strings.Join(ToolNames(), ", "))
+			errf(KeyTools, "unknown tool %s%s (known: %s)", n, didYouMean(n, ToolNames()), strings.Join(ToolNames(), ", "))
 		case t.Research:
 			errf(KeyTools, "%s comes with research: true, not in tools", n)
 		case slices.Contains(d.Tools[:i], n):
@@ -194,7 +194,7 @@ func Check(text string, env Env) (Def, CheckReport) {
 	if d.Uses != "" {
 		block, known = env.Catalog.Lookup(d.Uses)
 		if !known {
-			errf(KeyUses, "unknown block %s (known: %s)", d.Uses, strings.Join(env.Catalog.Names(), ", "))
+			errf(KeyUses, "unknown block %s%s (known: %s)", d.Uses, didYouMean(blockBase(d.Uses), env.Catalog.Names()), strings.Join(env.Catalog.Names(), ", "))
 		}
 	}
 	if known && block.External {
@@ -202,7 +202,9 @@ func Check(text string, env Env) (Def, CheckReport) {
 	}
 	if known {
 		rep.Block, rep.External = block.Name, block.External
-		if len(block.Events) > 0 && d.On != "" && !slices.Contains(block.Events, d.On) {
+		// An event that does not exist is reported once, as that; only a real
+		// event the block cannot take is reported against the block.
+		if len(block.Events) > 0 && slices.Contains(store.WorkflowTriggerKinds, d.On) && !slices.Contains(block.Events, d.On) {
 			errf(KeyOn, "%s does not run on %s (only on %s)", block.Name, d.On, strings.Join(block.Events, ", "))
 		}
 		if d.Stage() == StageInstruction && !block.Instruction {
@@ -219,7 +221,7 @@ func Check(text string, env Env) (Def, CheckReport) {
 		spec, ok := InputByName(in)
 		switch {
 		case !ok:
-			itemf(KeyInputs, in, "unknown input %s", in)
+			itemf(KeyInputs, in, "unknown input %s%s (known: %s)", in, didYouMean(in, InputNames()), strings.Join(InputNames(), ", "))
 		case len(spec.Events) > 0 && d.On != "" && !slices.Contains(spec.Events, d.On):
 			itemf(KeyInputs, in, "input %s is not there on %s", in, d.On)
 		case slices.Contains(rep.Reads, in):
@@ -227,14 +229,27 @@ func Check(text string, env Env) (Def, CheckReport) {
 			rep.Reads = append(rep.Reads, in)
 		}
 	}
+	// Placeholders in the instruction or the prompt: references to inputs.
+	read := slices.Clone(d.Inputs)
+	if known {
+		read = append(read, block.Inputs...)
+		if d.Research && block.Research {
+			read = append(read, "research")
+		}
+	}
+	checkPlaceholders(text, d, read, func(p Problem) { rep.Errors = append(rep.Errors, p) }, func(p Problem) { rep.Warnings = append(rep.Warnings, p) })
 	// Results.
 	for _, r := range d.Results {
 		switch {
 		case !slices.Contains(ResultKinds, r.Kind):
-			itemf(KeyResults, r.Kind, "unknown kind of result %s (known: %s)", r.Kind, strings.Join(ResultKinds, ", "))
+			itemf(KeyResults, r.Kind, "unknown kind of result %s%s (known: %s)", r.Kind, didYouMean(r.Kind, ResultKinds), strings.Join(ResultKinds, ", "))
 			continue
 		case known && !slices.Contains(block.Results, r.Kind):
-			itemf(KeyResults, r.Kind, "%s cannot create %s", block.Name, r.Kind)
+			can := "it creates no results"
+			if len(block.Results) > 0 {
+				can = "it can create: " + strings.Join(block.Results, ", ")
+			}
+			itemf(KeyResults, r.Kind, "%s cannot create %s (%s)", block.Name, r.Kind, can)
 			continue
 		case own && r.Kind == ResultDescription:
 			errf(KeyResults, "descriptions of files are the gardener's; an own prompt cannot create them")
@@ -282,6 +297,12 @@ func Check(text string, env Env) (Def, CheckReport) {
 		rep.Unbounded = (known || own) && rep.MaxRunUSD == 0
 	}
 	return d, rep
+}
+
+// blockBase is a block name without its @version.
+func blockBase(uses string) string {
+	name, _, _ := strings.Cut(uses, "@")
+	return name
 }
 
 // validBranchPattern accepts a branch name or a pattern of path.Match with

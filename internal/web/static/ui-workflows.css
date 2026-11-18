@@ -115,3 +115,10 @@
   & .wfwait { margin-bottom: 16px; }
   & .wfwait .row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
 }
+
+/* A workflow that is switched on but no longer passes the check (REQ-708). */
+:is(.g2.wf) {
+  & .wftpl-l { font-size: 12px; white-space: nowrap; }
+  & .wfblk { display: flex; align-items: flex-start; gap: 6px; margin-top: 2px; color: var(--attention-fg); font-size: 12px; overflow-wrap: anywhere; }
+  & .wfblk .i, & .wfblk svg { width: 14px; height: 14px; flex: none; margin-top: 1px; }
+}
