@@ -161,6 +161,27 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- `ctx server install` sets up a server on a Linux machine with systemd in one
+  command (also `install.sh --server`): server key, settings, service, a nightly
+  database backup, the first administrator, the gardener's account, a final
+  check and a login link; every answer is also an option, and `--yes` needs no
+  terminal. TLS is a proxy in front by default, with Caddy and nginx
+  configuration written to copy, or `--tls builtin` for the server's own
+  certificate. `ctx server update` fetches a release, checks its signature,
+  copies the database, replaces `ctx`, restarts, and goes back to the old
+  version and database when the new one does not come up. `ctx server doctor`
+  checks the server of a machine. Tested with real systemd in fresh Debian,
+  Ubuntu and Fedora containers.
+
+- `ctx serve` can get its own certificate from Let's Encrypt
+  (`--tls-acme-host`, env `GHOSTTREE_TLS_ACME_HOST`): https on `--tls-listen`
+  (`:443`), plain http on `--tls-http-listen` (`:80`) for the challenge and a
+  redirect, certificates in `--tls-acme-dir`; the listener of `--listen` stays.
+
+- `ctx db backup` writes a verified copy of the database beside a running
+  server (`--keep N` prunes a directory of copies), and `ctx db restore` puts
+  one back, keeping what it replaces.
+
 - Releases carry a second signature, a minisign signature over `checksums.txt`
   (`checksums.txt.minisig`; the trusted comment names the tag), next to the
   Sigstore bundle. A public installer, `deploy/downloads/ghosttree/install.sh`

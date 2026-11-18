@@ -5,7 +5,8 @@
 #
 # The file is the one `minisign -G -W -p ghosttree-release.pub -s ...key` writes.
 # The key line lands in deploy/downloads/ghosttree/minisign.pub and in the
-# pubkey='...' line of install.sh, which checks every release against it. The
+# pubkey='...' line of install.sh, which checks every release against it, and in
+# internal/releasekey/minisign.pub, the copy ctx server update embeds. The
 # secret half never comes near this script: it belongs in Bitwarden and in the
 # GitHub secret MINISIGN_SECRET_KEY (RELEASING.md). Also used to rotate the key.
 set -eu
@@ -29,4 +30,7 @@ sed "s|^  pubkey='[^']*'|  pubkey='$key'|" "$dir/install.sh" >"$tmp"
 grep -Fq "  pubkey='$key'" "$tmp" || { echo "install.sh has no pubkey='...' line to replace" >&2; exit 1; }
 cat "$tmp" >"$dir/install.sh"
 printf '%s\n%s\n' "$(sed -n 1p "$pub" | tr -d '\r')" "$key" >"$dir/minisign.pub"
-echo "release key $key written to $dir/install.sh and $dir/minisign.pub"
+embedded=$root/internal/releasekey
+mkdir -p "$embedded"
+cp "$dir/minisign.pub" "$embedded/minisign.pub"
+echo "release key $key written to $dir/install.sh, $dir/minisign.pub and $embedded/minisign.pub"

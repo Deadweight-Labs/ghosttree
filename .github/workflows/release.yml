@@ -73,8 +73,8 @@ jobs:
         run: |
           set -eu
           test -n "$MINISIGN_SECRET_KEY" || { echo "secret MINISIGN_SECRET_KEY is not set" >&2; exit 1; }
-          if grep -q '__GHOSTTREE_MINISIGN_PUBKEY__' deploy/downloads/ghosttree/minisign.pub deploy/downloads/ghosttree/install.sh; then
-            echo "install.sh and minisign.pub still carry the key placeholder" >&2; exit 1
+          if grep -q '__GHOSTTREE_MINISIGN_PUBKEY__' deploy/downloads/ghosttree/minisign.pub deploy/downloads/ghosttree/install.sh internal/releasekey/minisign.pub; then
+            echo "install.sh, minisign.pub and internal/releasekey/minisign.pub still carry the key placeholder" >&2; exit 1
           fi
           sudo apt-get update -qq
           sudo apt-get install -y -qq minisign

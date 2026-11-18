@@ -416,6 +416,9 @@ func TestReleaseKeyScriptMakesAWorkingInstaller(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "internal", "releasekey"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"install.sh", "minisign.pub"} {
 		b, err := os.ReadFile(filepath.Join("../../deploy/downloads/ghosttree", name))
 		if err != nil {
@@ -442,6 +445,10 @@ func TestReleaseKeyScriptMakesAWorkingInstaller(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(dir, "minisign.pub")); err != nil || string(got) != k.pub.File() {
 		t.Errorf("minisign.pub = %q (%v)", got, err)
+	}
+	// ctx embeds the same key (internal/releasekey), for ctx server update.
+	if got, err := os.ReadFile(filepath.Join(root, "internal", "releasekey", "minisign.pub")); err != nil || string(got) != k.pub.File() {
+		t.Errorf("internal/releasekey/minisign.pub = %q (%v)", got, err)
 	}
 	// A file that is not a minisign public key is refused and install.sh stays as it was.
 	for name, content := range map[string]string{"empty": "", "secret-key-shaped": "untrusted comment: x\nRWQ=\n", "one line": "RWRO2MKMhNKzIw7tQgFomtGlgJwXklN+sy5/5922LpGTCnebY7G9Zt+e\n"} {

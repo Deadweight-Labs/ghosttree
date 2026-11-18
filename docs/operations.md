@@ -55,6 +55,65 @@ check. `--connect <url>` goes on to `ctx join`; the options, also for a run
 without a terminal, are listed by `... | sh -s -- --help`. The key, how it is
 kept and how it is rotated are described in [RELEASING.md](../RELEASING.md).
 
+## Setting up a server: `ctx server install`
+
+One command sets a server up on a Linux machine with systemd, from the
+installer above or from a `ctx` you already have:
+
+```sh
+curl -fsSL https://downloads.deadweightlabs.com/ghosttree/install.sh | sh -s -- --server
+# or, with ctx at hand: sudo ctx server install
+```
+
+It asks for what it needs when it has a terminal (the public name, how TLS is
+done, the name of the first administrator, the language, an optional model
+provider) and takes every answer as an option as well: `--domain`, `--tls`,
+`--email`, `--listen`, `--admin`, `--language`, `--ai` with `--ai-key-file`.
+With `--yes`, or without a terminal, it asks nothing and uses the options and
+the defaults; the defaults keep the server on this machine, on
+`http://127.0.0.1:8474`. The list of options is in `ctx server --help`.
+
+What it leaves behind:
+
+- `ctx` in `/usr/local/bin`, the settings in `/etc/ghosttree/server.env`
+  (access control switched on), and a 32-byte server key in
+  `/etc/ghosttree/secret-key` that the service reads as a systemd credential.
+  Keep a copy of that key with your backups: without it the AI keys stored in
+  the database cannot be opened again. Running the command again keeps the key
+  and the settings.
+- `ghosttree.service` (the unit of `deploy/ghosttree.service` plus the key), and
+  `ghosttree-backup.timer`, which copies the database every night into
+  `/var/lib/ghosttree/backups` and keeps the newest fourteen
+  (`ctx db backup`; `ctx db restore` puts a copy back).
+- The first administrator, and an account named `gardener` that is set as the
+  gardener (the sandboxed runs of the gardener are set up as in
+  `deploy/README.md`; the installer does not start them).
+- A last check, the same one `ctx server doctor` runs, and a login link for the
+  administrator that works once for fifteen minutes.
+
+**TLS.** The default is a proxy in front, which is what most machines have: the
+server listens on `127.0.0.1:8474`, `GHOSTTREE_PUBLIC_URL` and
+`GHOSTTREE_TRUSTED_PROXIES=127.0.0.1` are set, and ready configuration for
+Caddy and nginx is written to `/etc/ghosttree/proxy/Caddyfile` and
+`/etc/ghosttree/proxy/nginx.conf` to copy (the nginx one needs a certificate,
+for example from certbot; Caddy fetches its own). With `--tls builtin` the server
+gets its own certificate from Let's Encrypt instead (`GHOSTTREE_TLS_ACME_HOST`,
+optionally `GHOSTTREE_TLS_ACME_EMAIL` and `GHOSTTREE_TLS_ACME_DIR`): it answers
+https on `:443` and plain http on `:80` (the certificate challenge, and a
+redirect to https) besides its loopback listener, the unit may bind those ports,
+and the name has to point at this machine with both ports open to the internet.
+Certificates are fetched at the first visit and renewed by the server.
+
+**Updating.** `sudo ctx server update` (or `--version v0.2.0`) fetches the
+release, checks signature and checksum as the installer does, stops the service,
+copies the database to `/var/lib/ghosttree/backups/pre-update-<old>-to-<new>-<time>.db`,
+replaces `ctx` (the old one stays as `/usr/local/bin/ctx.prev-<old>`), upgrades
+the schema and starts the service. If the new release does not answer with its
+own version within `--wait` (90 seconds), the old `ctx` and the copied database
+are put back and the old server runs again; what the failed run wrote is kept
+as `ghosttree.db.failed-<time>` next to the database, and the command ends with
+an error. Nothing is changed before the release is fetched and checked.
+
 ## Interface language
 
 Every person picks German or English in their profile, or with the switcher
