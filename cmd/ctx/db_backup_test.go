@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -265,5 +266,48 @@ func TestDBBackupKeepsOnlyTheNewestCopiesFromBeforeUpdatesToo(t *testing.T) {
 	nightly, _ := filepath.Glob(filepath.Join(dir, "ghosttree-*.db"))
 	if len(nightly) != 2 {
 		t.Errorf("nightly copies: %v", nightly)
+	}
+}
+
+func TestDBBackupEveryTakesCopiesUntilStoppedAndPrunes(t *testing.T) {
+	db := seedBackupDB(t)
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	var out bytes.Buffer
+	done := make(chan int, 1)
+	go func() { done <- backupEvery(ctx, db, dir, 2, 1100*time.Millisecond, &out) }()
+	// Three rounds: now, +1.1 s, +2.2 s; only the newest two stay.
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Count(out.String(), "removed old backup") >= 1 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the loop did not stop")
+	}
+	left, _ := filepath.Glob(filepath.Join(dir, "ghosttree-*.db"))
+	if len(left) != 2 {
+		t.Fatalf("copies: %v\n%s", left, out.String())
+	}
+}
+
+func TestDBBackupEveryRefusesWhatCannotWork(t *testing.T) {
+	db := seedBackupDB(t)
+	for name, args := range map[string][]string{
+		"too often": {"backup", "--db", db, "--out", t.TempDir(), "--every", "5s"},
+		"a file":    {"backup", "--db", db, "--out", filepath.Join(t.TempDir(), "x.db"), "--every", "1h"},
+	} {
+		var out bytes.Buffer
+		if code := cmdDB(args, &out); code != 2 {
+			t.Errorf("%s: exit %d: %s", name, code, out.String())
+		}
 	}
 }

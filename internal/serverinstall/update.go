@@ -19,6 +19,9 @@ type UpdateOptions struct {
 	Version string // release tag such as v0.2.0; empty: the newest stable release
 	// Force installs the release even if that version already runs.
 	Force bool
+	// Docker updates a Docker installation in Dir instead of the systemd service.
+	Docker bool
+	Dir    string
 }
 
 // UpdateResult says what happened.
@@ -60,6 +63,9 @@ func asServiceBin(ctx context.Context, env Env, bin string, args ...string) (str
 // version in time, the old binary and the copied database are put back and the
 // service is started again: the update failed, the server did not.
 func Update(ctx context.Context, uo UpdateOptions, rel Release, env Env) (*UpdateResult, error) {
+	if uo.Docker {
+		return updateDocker(ctx, uo, rel, env)
+	}
 	o := OptionsFromDisk(uo.Prefix)
 	if uo.Prefix == "" {
 		if goos != "linux" {

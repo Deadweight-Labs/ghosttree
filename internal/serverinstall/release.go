@@ -168,20 +168,9 @@ func (r Release) Fetch(ctx context.Context, tag, dir string) (*Fetched, error) {
 		return nil, fmt.Errorf("unexpected release tag %q (expected v1.2.3 or v1.2.3-rc.1)", tag)
 	}
 	base := r.dl() + "/" + tag
-	sums, err := r.get(ctx, base+"/checksums.txt", maxText)
+	sums, err := r.verifiedChecksums(ctx, tag)
 	if err != nil {
-		return nil, fmt.Errorf("checksums of %s: %w", tag, err)
-	}
-	sig, err := r.get(ctx, base+"/checksums.txt.minisig", maxText)
-	if err != nil {
-		return nil, fmt.Errorf("a release without a signature is not installed: %w", err)
-	}
-	comment, err := minisign.Verify(r.Key, sums, sig)
-	if err != nil {
-		return nil, fmt.Errorf("the signature of checksums.txt does not match the ghosttree release key; nothing was installed (%w)", err)
-	}
-	if comment != "ghosttree "+tag {
-		return nil, fmt.Errorf("the signed checksums.txt belongs to %q, not to ghosttree %s; nothing was installed", comment, tag)
+		return nil, err
 	}
 	version := strings.TrimPrefix(tag, "v")
 	suffix := "_" + r.goos() + "_" + r.goarch() + ".tar.gz"
@@ -202,6 +191,39 @@ func (r Release) Fetch(ctx context.Context, tag, dir string) (*Fetched, error) {
 		return nil, err
 	}
 	return &Fetched{Tag: tag, Version: version, Binary: bin}, nil
+}
+
+// verifiedChecksums downloads checksums.txt of tag and returns it only if its
+// minisign signature is made by r.Key and its trusted comment names this tag.
+func (r Release) verifiedChecksums(ctx context.Context, tag string) ([]byte, error) {
+	if !ValidTag(tag) {
+		return nil, fmt.Errorf("unexpected release tag %q (expected v1.2.3 or v1.2.3-rc.1)", tag)
+	}
+	base := r.dl() + "/" + tag
+	sums, err := r.get(ctx, base+"/checksums.txt", maxText)
+	if err != nil {
+		return nil, fmt.Errorf("checksums of %s: %w", tag, err)
+	}
+	sig, err := r.get(ctx, base+"/checksums.txt.minisig", maxText)
+	if err != nil {
+		return nil, fmt.Errorf("a release without a signature is not installed: %w", err)
+	}
+	comment, err := minisign.Verify(r.Key, sums, sig)
+	if err != nil {
+		return nil, fmt.Errorf("the signature of checksums.txt does not match the ghosttree release key; nothing was installed (%w)", err)
+	}
+	if comment != "ghosttree "+tag {
+		return nil, fmt.Errorf("the signed checksums.txt belongs to %q, not to ghosttree %s; nothing was installed", comment, tag)
+	}
+	return sums, nil
+}
+
+// VerifyTag checks that tag is a release the release key signed, without
+// downloading anything else: what a Docker update needs, since the image comes
+// from the registry and only the tag is vouched for here.
+func (r Release) VerifyTag(ctx context.Context, tag string) error {
+	_, err := r.verifiedChecksums(ctx, tag)
+	return err
 }
 
 // archiveEntry finds the single ghosttree_… or ctx_… archive for this platform

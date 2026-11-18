@@ -18,16 +18,18 @@ import (
 )
 
 const serverUsage = `usage: ctx server install [options]
-       ctx server update [--version TAG] [--force] [--wait 90s]
-       ctx server doctor
+       ctx server update [--version TAG] [--force] [--wait 90s] [--docker --dir DIR]
+       ctx server doctor [--docker --dir DIR]
+       ctx server health [--url http://127.0.0.1:8474]
 
-  install  set up a ghosttree server on this machine with systemd: the server key,
+  install  set up a ghosttree server on this machine with systemd (or --docker): the server key,
            the settings, the service, a nightly database backup, the first
            administrator and the gardener's account, and print a login link
   update   move the server to another release: check its signature and checksum,
            copy the database, replace ctx, restart, and go back if the new
            release does not come up; it only goes up unless --force is given
   doctor   check the server of this machine (service, database, backup, key)
+  health   exit 0 if the server answers (what a container's health check runs)
 
 ctx server install asks what it needs when it has a terminal; every answer
 can also be given as an option, and --yes (or no terminal) takes the defaults:
@@ -45,6 +47,12 @@ can also be given as an option, and --yes (or no terminal) takes the defaults:
   --language de|en  language of the interface (empty: each person's browser)
   --ai anthropic|openai --ai-key-file FILE [--ai-model M] [--ai-base-url URL]
                     connect a model provider; the key is read from a file
+  --docker          run the server with Docker instead of systemd: compose.yaml and
+                    the settings in --dir (default /opt/ghosttree, or ~/ghosttree
+                    without root), the image of this ctx's release from ghcr.io
+                    (--image names another), volumes for the data and the backups
+  --dir DIR         where the Docker setup lives
+  --image IMAGE     the image to run with --docker
   --force           on a machine that has a server already: write settings and
                     units again from these answers, after copying the database,
                     replacing ctx and bringing the schema up to date (without
@@ -52,8 +60,9 @@ can also be given as an option, and --yes (or no terminal) takes the defaults:
   --yes             do not ask
   --wait 90s        how long the server may take to come up
 
-It needs root (sudo) and a machine that runs systemd. On a machine with a server
-set up, use ctx server update.`
+Without --docker it needs root (sudo) and a machine that runs systemd; with it,
+a user who may run docker. On a machine with a server set up, use ctx server
+update.`
 
 // serverRelease and serverSystem are seams for the tests of the commands.
 var (
@@ -80,6 +89,8 @@ func cmdServer(args []string, stdout io.Writer) int {
 		return cmdServerUpdate(args[1:], stdout)
 	case "doctor":
 		return cmdServerDoctor(args[1:], stdout)
+	case "health":
+		return cmdServerHealth(args[1:], stdout)
 	case "help", "--help", "-h":
 		fmt.Fprintln(stdout, serverUsage)
 		return 0
@@ -113,6 +124,9 @@ func cmdServerInstall(args []string, stdout io.Writer) int {
 	fs.StringVar(&o.AI.Model, "ai-model", "", "")
 	fs.StringVar(&o.AI.BaseURL, "ai-base-url", "", "")
 	fs.BoolVar(&o.Force, "force", false, "")
+	fs.BoolVar(&o.Docker, "docker", false, "")
+	fs.StringVar(&o.Dir, "dir", "", "")
+	fs.StringVar(&o.Image, "image", "", "")
 	yes := fs.Bool("yes", false, "")
 	wait := fs.Duration("wait", 0, waitUsage)
 	if err := fs.Parse(args); err != nil {
@@ -125,6 +139,7 @@ func cmdServerInstall(args []string, stdout io.Writer) int {
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	o.Prefix = serverPrefix
+	o.Version = version
 	// Before a question is asked: a server that is set up is updated, not
 	// installed over.
 	if !o.Force && serverinstall.Existing(o) {
@@ -150,23 +165,51 @@ func cmdServerInstall(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "server install: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "\nghosttree %s is running as %s.\n\n", version, serverinstall.ServiceID)
+	if o.Docker {
+		fmt.Fprintf(stdout, "\nghosttree %s is running with Docker (compose.yaml in %s).\n\n", version, o.Dir)
+	} else {
+		fmt.Fprintf(stdout, "\nghosttree %s is running as %s.\n\n", version, serverinstall.ServiceID)
+	}
 	printServerChecks(stdout, res.Checks)
 	fmt.Fprintf(stdout, "\nSign in as %s (one use, valid 15 minutes):\n  %s\n", res.Admin, res.LoginURL)
 	fmt.Fprintln(stdout, "\nNext:")
+	proxyDir := serverinstall.ProxyDir
+	secretKey, backups := serverinstall.SecretKey, serverinstall.BackupDir
+	if o.Docker {
+		dir := o.Dir
+		if dir == "" {
+			dir = serverinstall.DefaultDockerDir()
+		}
+		proxyDir, secretKey, backups = dir+"/proxy", dir+"/secrets/secret-key", "the Docker volume ghosttree_backups"
+	}
 	if o.Domain != "" && o.TLS != "builtin" {
-		fmt.Fprintf(stdout, "  - Put a proxy in front: copy %s/Caddyfile or %s/nginx.conf (they forward to %s).\n", serverinstall.ProxyDir, serverinstall.ProxyDir, o.ListenAddr())
+		fmt.Fprintf(stdout, "  - Put a proxy in front: copy %s/Caddyfile or %s/nginx.conf (they forward to %s).\n", proxyDir, proxyDir, o.ListenAddr())
 	}
 	if o.Domain != "" && o.TLS == "builtin" {
 		fmt.Fprintf(stdout, "  - %s must point at this machine and ports 80 and 443 must be open; the certificate is fetched on the first visit.\n", o.Domain)
 	}
 	fmt.Fprintf(stdout, "  - Connect a machine: invite it from the web interface, or run: ctx join --server %s\n", res.PublicURL)
-	fmt.Fprintf(stdout, "  - Keep a copy of %s with your backups (nightly copies of the database: %s).\n", serverinstall.SecretKey, serverinstall.BackupDir)
+	fmt.Fprintf(stdout, "  - Keep a copy of %s with your backups (nightly copies of the database: %s).\n", secretKey, backups)
 	fmt.Fprintln(stdout, "  - Update later with: ctx server update")
 	if !serverinstall.Healthy(res.Checks) {
 		return 1
 	}
 	return 0
+}
+
+// dockerInstalled says a Docker setup exists where one would be made and there
+// is no systemd service: update and doctor then know what to look at without
+// being told.
+func dockerInstalled(dir string) bool {
+	if _, err := os.Stat(serverPrefix + serverinstall.UnitDir + "/" + serverinstall.ServiceID); err == nil {
+		return false
+	}
+	o := serverinstall.Options{Prefix: serverPrefix, Dir: dir}
+	if dir == "" {
+		o.Dir = serverinstall.DefaultDockerDir()
+	}
+	_, err := os.Stat(serverPrefix + o.Dir + "/compose.yaml")
+	return err == nil
 }
 
 // flagExit is the exit status for a flag parsing error: asking for help is not one.
@@ -191,6 +234,9 @@ func askServerQuestions(t terminal, o *serverinstall.Options, given map[string]b
 	ask := func(prompt string) string {
 		s, _ := t.Ask(prompt)
 		return strings.TrimSpace(s)
+	}
+	if !given["docker"] {
+		o.Docker = ask("Run the server as 1) a systemd service, 2) with Docker [1]: ") == "2"
 	}
 	if !given["domain"] {
 		o.Domain = ask("Public name of this server, like ghosttree.example.com (empty: keep it on this machine only): ")
@@ -233,6 +279,8 @@ func cmdServerUpdate(args []string, stdout io.Writer) int {
 	tag := fs.String("version", "", "release tag to move to, such as v0.2.0 (default: the newest stable release)")
 	force := fs.Bool("force", false, "install the release even if that version runs already")
 	wait := fs.Duration("wait", 0, waitUsage)
+	docker := fs.Bool("docker", false, "update a Docker installation")
+	dir := fs.String("dir", "", "with --docker: where compose.yaml is")
 	if err := fs.Parse(args); err != nil {
 		return flagExit(err)
 	}
@@ -247,7 +295,7 @@ func cmdServerUpdate(args []string, stdout io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	res, err := serverinstall.Update(ctx, serverinstall.UpdateOptions{Prefix: serverPrefix, Version: *tag, Force: *force}, rel, serverEnv(stdout, *wait))
+	res, err := serverinstall.Update(ctx, serverinstall.UpdateOptions{Prefix: serverPrefix, Version: *tag, Force: *force, Docker: *docker || dockerInstalled(*dir), Dir: *dir}, rel, serverEnv(stdout, *wait))
 	if res != nil && len(res.Checks) > 0 {
 		fmt.Fprintln(stdout)
 		printServerChecks(stdout, res.Checks)
@@ -265,12 +313,42 @@ func cmdServerUpdate(args []string, stdout io.Writer) int {
 	return 0
 }
 
+// cmdServerHealth is the container's health check: the image has no curl.
+func cmdServerHealth(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("server health", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	addr := fs.String("url", "http://127.0.0.1:8474", "address of the server")
+	if err := fs.Parse(args); err != nil {
+		return flagExit(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	if _, err := serverSystem.Get(ctx, strings.TrimRight(*addr, "/")+"/api/health"); err != nil {
+		fmt.Fprintf(stdout, "unhealthy: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, "ok")
+	return 0
+}
+
 func cmdServerDoctor(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("server doctor", flag.ContinueOnError)
 	fs.SetOutput(stdout)
+	docker := fs.Bool("docker", false, "check a Docker installation")
+	dir := fs.String("dir", "", "with --docker: where compose.yaml is")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		fmt.Fprintln(stdout, serverUsage)
 		return 2
+	}
+	if *docker || dockerInstalled(*dir) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		checks := serverinstall.DockerDoctor(ctx, serverPrefix, *dir, serverEnv(stdout, 0))
+		printServerChecks(stdout, checks)
+		if !serverinstall.Healthy(checks) {
+			return 1
+		}
+		return 0
 	}
 	if _, err := os.Stat(serverPrefix + serverinstall.ServerEnv); err != nil && !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(stdout, "server doctor: %v\n", err)

@@ -86,8 +86,9 @@ release:
   # files has been checked (the last steps of release.yml).
   draft: true
   prerelease: auto
-  # The installer and the key it checks with, next to the archives, so a
-  # release can be installed from its own files.
+  # The installer, the key it checks with and the compose file of the Docker
+  # setup, next to the archives, so a release can be installed from its own files.
   extra_files:
     - glob: deploy/downloads/ghosttree/install.sh
     - glob: deploy/downloads/ghosttree/minisign.pub
+    - glob: deploy/downloads/ghosttree/compose.yaml

@@ -153,6 +153,51 @@ are put back and the old server runs again; what the failed run wrote is kept
 as `ghosttree.db.failed-<time>` next to the database, and the command ends with
 an error. Nothing is changed before the release is fetched and checked.
 
+## Running the server with Docker
+
+`ctx server install --docker` (also `install.sh --docker`) writes a
+`compose.yaml` and a `.env` into a directory (`--dir`, by default `/opt/ghosttree`
+for root and `~/ghosttree` otherwise), makes the server key in `secrets/`, starts
+the containers, makes the first administrator and the gardener's account in the
+running container, and ends with the same check and login link as the systemd
+install. It needs Docker with the compose plugin, and a user who may run
+`docker`.
+
+- **Image.** One image per release on `ghcr.io/deadweight-labs/ghosttree`
+  (amd64 and arm64, tagged with the version, `latest` for a final release,
+  signed keyless like the archives): a static `ctx` on a base without a shell,
+  run as user 65532, with a read-only root file system and no capabilities.
+  `ctx server install --docker` takes the tag of its own version; `--image`
+  names another.
+- **Volumes and secrets.** `data` holds the database (`/data/ghosttree.db`),
+  `backups` the copies; the server key is a compose secret, a file in the
+  directory `secrets/` (mode 700, the file itself readable by the container's
+  user). Keep a copy of `secrets/secret-key` with your backups.
+- **Backup.** A second container, `backup`, runs `ctx db backup --every 24h` and
+  keeps the newest fourteen copies in the volume `backups`; read one out with
+  `docker run --rm -v ghosttree_backups:/b -v "$PWD:/out" debian:12 cp /b/<file> /out/`.
+- **Network and proxy.** The server is published on `127.0.0.1:8474` only. The
+  installer picks a bridge subnet no other Docker network or route of this machine
+  uses (`GHOSTTREE_SUBNET`, `GHOSTTREE_GATEWAY` in `.env`); the gateway is the
+  address the proxy on this machine shows up as, so it is the one trusted proxy.
+  With a domain it writes `proxy/Caddyfile` and `proxy/nginx.conf` to copy, as for
+  systemd. `--tls builtin` adds `compose.override.yaml`, which publishes ports 80
+  and 443 and lets the unprivileged user bind them; the certificate is kept in
+  the data volume.
+- **Update.** `ctx server update --docker [--dir DIR] [--version TAG]` checks that
+  the release is signed, pulls the image of that tag unless it is here, stops the
+  containers, copies the database into the volume `backups`
+  (`pre-update-<old>-to-<new>-<time>.db`), runs the schema upgrade with the new
+  image, starts it and waits for its version. If it does not answer, the old image
+  and the copy are put back. Run by hand: `docker compose pull && docker compose up -d`
+  (no copy, no way back). The signature covers the release list; the image itself
+  is fetched by its tag over TLS and signed keyless, check it with
+  `cosign verify --certificate-identity-regexp '^https://github.com/Deadweight-Labs/ghosttree/' --certificate-oidc-issuer https://token.actions.githubusercontent.com ghcr.io/deadweight-labs/ghosttree:<version>`.
+- **The gardener.** Its account is made and set as in the systemd install. The
+  image has neither `git` nor Claude Code, so the sandboxed runs of the gardener
+  (`ctx garden run-due`, see `deploy/README.md`) belong on a machine that has
+  them, as a client of this server.
+
 ## Interface language
 
 Every person picks German or English in their profile, or with the switcher

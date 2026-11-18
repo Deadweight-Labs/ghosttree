@@ -183,43 +183,71 @@ migrated with `ctx migrate`.
 
 ## Quick start
 
-Ghosttree is built for a private network. This example keeps the server on
-loopback. Put it behind TLS or a private-network address before you connect a
-second machine.
-
-<!-- one-liner:start -->
-There is no hosted one-line installer yet. Build from source (Go 1.26.11 or
-newer) or download the archive for your platform from the
-[releases page](https://github.com/Deadweight-Labs/ghosttree/releases) and
-unpack `ctx`. A server you run can hand out an installer for your other
-machines, see [docs/operations.md](docs/operations.md).
-<!-- one-liner:end -->
+One line installs ghosttree, for a machine that works with agents and for a
+server alike. It finds the newest release, checks its signature and checksum, and
+asks what you want:
 
 ```bash
-git clone https://github.com/Deadweight-Labs/ghosttree && cd ghosttree
-make build                      # writes dist/ctx
-
-./dist/ctx account add alex --db ./ghosttree.db
-./dist/ctx account token create alex --db ./ghosttree.db     # prints the token once
-./dist/ctx serve --db ./ghosttree.db --listen 127.0.0.1:8474
+curl -fsSL https://downloads.deadweightlabs.com/ghosttree/install.sh | sh
 ```
 
-In a second terminal, in the repository you want to work on:
+1. **Connect this machine to a server.** It installs `ctx` and joins the server
+   you name. Given a pairing code from an invitation page, that is all.
+2. **Run a server of your own with systemd.** It sets up the service, a
+   nightly database backup, a server key and the first administrator, and ends
+   with a sign-in link for the web interface.
+3. **Run a server with Docker.** The same, with a compose file, volumes for the
+   data and the backups, and the image of the release from ghcr.io.
+
+For a server, the question about TLS comes with it. The default is a proxy in
+front: you get a ready Caddy and nginx configuration to copy. The server can
+also fetch its own certificate from Let's Encrypt. Everything can be answered
+with options instead, so a run needs no terminal:
 
 ```bash
-ctx setup --server http://127.0.0.1:8474 --token <token>
+# a server with systemd, behind your proxy, signed in as alex
+curl -fsSL https://downloads.deadweightlabs.com/ghosttree/install.sh | sudo sh -s -- \
+  --server --yes --domain ghosttree.example.com --admin alex
+
+# the same with Docker and the server's own certificate
+curl -fsSL https://downloads.deadweightlabs.com/ghosttree/install.sh | sh -s -- \
+  --docker --yes --domain ghosttree.example.com --tls builtin --admin alex
+
+# a machine that joins a server
+curl -fsSL https://downloads.deadweightlabs.com/ghosttree/install.sh | sh -s -- \
+  --connect https://ghosttree.example.com --pair XXXX-XXXX
+```
+
+`install.sh` is short and readable; fetch it first if you would rather read it
+before it runs. Every release is signed (minisign, checked by the installer) and
+lists the SHA-256 of its archives; how that is checked, how to update a server
+(`ctx server update`) and what is left to you is in
+[docs/operations.md](docs/operations.md) and [`deploy/`](deploy/).
+
+On a machine that has `ctx`, in the repository you want to work on:
+
+```bash
 ctx install claude              # or codex, or opencode
 ctx doctor                      # checks that a fresh agent would receive context
 ctx watch --once                # optional: import transcripts that already exist
 ```
 
-Start an agent as usual. For the web interface, create a one-time sign-in link
-with `ctx account login-link alex --db ./ghosttree.db --url http://127.0.0.1:8474`.
+Start an agent as usual. Running a server just to try it? Build from source
+(Go 1.26.11 or newer) and keep it on loopback:
 
-For a persistent Linux service, use the units and notes in [`deploy/`](deploy/).
-Adding a person or a machine, serving the installer, and putting the server
-behind TLS are covered in [docs/operations.md](docs/operations.md). Run `ctx`
-with no arguments for the full command list.
+```bash
+git clone https://github.com/Deadweight-Labs/ghosttree && cd ghosttree
+make build                      # writes dist/ctx
+./dist/ctx account add alex --db ./ghosttree.db
+./dist/ctx account token create alex --db ./ghosttree.db     # prints the token once
+./dist/ctx serve --db ./ghosttree.db --listen 127.0.0.1:8474
+# elsewhere: ctx setup --server http://127.0.0.1:8474 --token <token>
+```
+
+Adding a person or a machine, serving the installer from your own server, and
+putting the server behind TLS are covered in
+[docs/operations.md](docs/operations.md). Run `ctx` with no arguments for the
+full command list.
 
 ## Does it help?
 

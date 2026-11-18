@@ -1,0 +1,90 @@
+# ghosttree with Docker: the server, and a service that copies its database
+# every night. Written by `ctx server install --docker`, which also makes
+# secrets/secret-key; by hand:
+#
+#   mkdir -p secrets && chmod 700 secrets
+#   head -c 32 /dev/urandom | base64 > secrets/secret-key && chmod 644 secrets/secret-key
+#   docker compose up -d
+#
+# The server listens on 127.0.0.1:8474 only; put a proxy in front for https (the
+# installer writes Caddy and nginx configuration), or set GHOSTTREE_TLS_ACME_HOST
+# and publish ports 80 and 443 (see compose.override.yaml of the installer).
+# Settings come from the environment or a .env file next to this one:
+#
+#   GHOSTTREE_IMAGE=ghcr.io/deadweight-labs/ghosttree:0.1.0   the release to run
+#   GHOSTTREE_PUBLIC_URL=https://ghosttree.example.com        the address people use
+#   GHOSTTREE_LANGUAGE=de                                      de or en, default: each browser
+#
+# The proxy on this machine reaches the server through the bridge below, so its
+# address there (the gateway) is the one trusted proxy; the installer picks a
+# subnet no other Docker network uses (GHOSTTREE_SUBNET, GHOSTTREE_GATEWAY in
+# .env; without it 172.29.84.0/24). Keep a copy of
+# secrets/secret-key with your backups: without it the AI keys stored in the
+# database cannot be opened again.
+name: ghosttree
+
+services:
+  ghosttree:
+    image: ${GHOSTTREE_IMAGE:-ghcr.io/deadweight-labs/ghosttree:latest}
+    restart: unless-stopped
+    command: ["serve", "--db", "/data/ghosttree.db", "--listen", "0.0.0.0:8474"]
+    ports:
+      - "${GHOSTTREE_BIND:-127.0.0.1:8474}:8474"
+    environment:
+      GHOSTTREE_SECRET_KEY_FILE: /run/secrets/ghosttree-secret-key
+      GHOSTTREE_ENFORCE_ACCESS: "${GHOSTTREE_ENFORCE_ACCESS:-1}"
+      GHOSTTREE_PUBLIC_URL: "${GHOSTTREE_PUBLIC_URL:-}"
+      GHOSTTREE_TRUSTED_PROXIES: "${GHOSTTREE_TRUSTED_PROXIES:-${GHOSTTREE_GATEWAY:-172.29.84.1}}"
+      GHOSTTREE_LANGUAGE: "${GHOSTTREE_LANGUAGE:-}"
+      GHOSTTREE_TLS_ACME_HOST: "${GHOSTTREE_TLS_ACME_HOST:-}"
+      GHOSTTREE_TLS_ACME_EMAIL: "${GHOSTTREE_TLS_ACME_EMAIL:-}"
+      GHOSTTREE_TLS_ACME_DIR: /data/acme
+    volumes:
+      - data:/data
+    secrets:
+      - ghosttree-secret-key
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 330s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/ctx", "server", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  backup:
+    image: ${GHOSTTREE_IMAGE:-ghcr.io/deadweight-labs/ghosttree:latest}
+    restart: unless-stopped
+    command: ["db", "backup", "--db", "/data/ghosttree.db", "--out", "/backups", "--keep", "14", "--every", "24h"]
+    volumes:
+      - data:/data
+      - backups:/backups
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      ghosttree:
+        condition: service_healthy
+
+volumes:
+  data:
+  backups:
+
+secrets:
+  ghosttree-secret-key:
+    file: ./secrets/secret-key
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: "${GHOSTTREE_SUBNET:-172.29.84.0/24}"
+          gateway: "${GHOSTTREE_GATEWAY:-172.29.84.1}"

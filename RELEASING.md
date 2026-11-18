@@ -166,3 +166,17 @@ signature than it gives:
 - **Downloads go over https only** (curl, or GNU Wget 1.x with every redirect
   checked by the installer). BusyBox wget and Wget2 (Fedora's `wget`) cannot be
   stopped from following a redirect to plain http and are refused: install curl.
+
+## Docker image
+
+The release workflow builds `ghcr.io/deadweight-labs/ghosttree` from the
+`Dockerfile` for linux/amd64 and linux/arm64 before it publishes the release,
+tagged `X.Y.Z` (and `latest` for a final release, not for a release candidate),
+with provenance and an SBOM, and signs the digest keyless with cosign. The
+workflow checks that the pushed image runs and reports the version of the tag.
+The pull happens with the workflow's own token, so the package has to allow
+Actions of this repository to write to it (package settings on GitHub, "Manage
+Actions access"); a new package is private until it is made public there.
+`deploy/downloads/ghosttree/compose.yaml` is also a release asset. The base and
+build images in the `Dockerfile` are pinned by digest; update them with the
+Go version of `go.mod`.
