@@ -33,6 +33,9 @@ const (
 	inviteMailFailed = "failed" // an address was given and sending failed
 	inviteMailOff    = "off"    // the server cannot send mail
 	inviteMailNone   = "none"   // no address was given
+	// inviteMailLimited: the limit of mails per day for the sender, the
+	// organization or the address was reached.
+	inviteMailLimited = "limited"
 )
 
 // inviteLinks keeps the links of open invitations for the account that
