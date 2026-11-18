@@ -123,7 +123,7 @@
 /* Pictures: thumbnails above a variant or the idea, one dialog to enlarge them. */
 :is(.g2) {
   /* Equal tiles, whatever the picture: a fixed frame with the picture contained in it. */
-  & .ws-imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; align-items: start; }
+  & .ws-imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; align-items: start; }
   & .ws-imgs-idea { padding: 12px 16px; }
   /* The box of pictures is a card like the others: air to the field for a comment below it. */
   & .ws-imgbox { margin-bottom: 16px; }

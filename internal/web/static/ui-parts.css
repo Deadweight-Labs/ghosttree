@@ -424,22 +424,22 @@ html:not(.js) .js-only { display: none; }
 /* ---- Toast: what an action did. One corner of the window for every page (the outcome after a post, the answer in
    the inbox), above everything else, so it never covers the tabs or the card being read, and it leaves by itself.
    On the phone it spans the bottom edge. ---- */
-body .flash.fly, body .ibtoast {
+body.gt .flash.fly, body.gt .ibtoast {
   position: fixed; z-index: 100; right: 24px; bottom: 24px; left: auto; top: auto; transform: none;
   display: flex; align-items: center; gap: 12px; width: max-content; max-width: min(420px, calc(100vw - 32px)); margin: 0; padding: 10px 16px;
   font: 14px/1.5 var(--ui-font); color: var(--fg-default); background: var(--canvas-default);
   border: 1px solid var(--success-muted); border-radius: 6px; box-shadow: var(--shadow-pop);
   animation: gt-toast-in .18s ease-out, gt-toast-out .4s ease 10s forwards;
 }
-body .flash.fly > .i { flex: none; color: var(--success-fg); }
-body .flash.fly > div, body .ibtoast .tt { min-width: 0; overflow-wrap: anywhere; }
-body .ibtoast a { flex: none; font-weight: 600; }
-body .flash.fly:hover, body .flash.fly:focus-within, body .ibtoast:hover, body .ibtoast:focus-within { animation-play-state: paused; }
+body.gt .flash.fly > .i { flex: none; color: var(--success-fg); }
+body.gt .flash.fly > div, body.gt .ibtoast .tt { min-width: 0; overflow-wrap: anywhere; }
+body.gt .ibtoast a { flex: none; font-weight: 600; }
+body.gt .flash.fly:hover, body.gt .flash.fly:focus-within, body.gt .ibtoast:hover, body.gt .ibtoast:focus-within { animation-play-state: paused; }
 @keyframes gt-toast-in { from { opacity: 0; transform: translateY(8px); } }
 @keyframes gt-toast-out { to { opacity: 0; visibility: hidden; } }
-@media (prefers-reduced-motion: reduce) { body .flash.fly, body .ibtoast { animation: gt-toast-out .01s linear 10s forwards; } }
+@media (prefers-reduced-motion: reduce) { body.gt .flash.fly, body.gt .ibtoast { animation: gt-toast-out .01s linear 10s forwards; } }
 @media (max-width: 767px) {
-  body .flash.fly, body .ibtoast { left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); width: auto; max-width: none; }
+  body.gt .flash.fly, body.gt .ibtoast { left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); width: auto; max-width: none; }
 }
 
 /* ---- Popover anchored to its button: a caret points at the middle of the button (ui-parts.js sets --caret-x and
