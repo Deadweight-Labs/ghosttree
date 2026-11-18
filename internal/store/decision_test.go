@@ -264,8 +264,33 @@ func TestVariantsVotesAndAdoptionIntoKnowledgeAndConcept(t *testing.T) {
 	if !strings.Contains(cv.Concept.How, got.HumanID()) || !strings.Contains(cv.Concept.How, "In der Datenbank") || !strings.Contains(cv.Concept.How, "ATT-1") || cv.Revision != 2 {
 		t.Fatalf("concept does not carry the decision: %+v", cv)
 	}
+	// The concept names the variant taken and why; the text, for and against stay with the decision (run 5, P24).
+	for _, pasted := range []string{"Blob-Tabelle", "Pro:", "Contra:"} {
+		if strings.Contains(cv.Concept.How, pasted) {
+			t.Errorf("the concept carries %q of the variant:\n%s", pasted, cv.Concept.How)
+		}
+	}
+	if !strings.Contains(cv.Concept.How, "A · In der Datenbank. Reason: ein Backup reicht") {
+		t.Errorf("the concept line is not structured:\n%s", cv.Concept.How)
+	}
 	if _, err := w.pa["rex"].VoteDecision(d.ID, "B", "zu spät", w.actor("rex")); ruleCode(err) != "decision_closed" {
 		t.Fatalf("vote after the decision: %v", err)
+	}
+}
+
+// Deciding marks the open question of the concept that the decision answers (run 5, P24).
+func TestDecidingMarksTheAnsweredOpenQuestionOfTheConcept(t *testing.T) {
+	w := newPainWorld(t)
+	i := w.workshopIdea(t, "Fragen markieren")
+	questions := "- Wo liegen die Bilder?\n- Wer darf sie löschen?"
+	w.pa["mia"].PutIdeaConcept(i.ID, PutIdeaConceptInput{Patch: idea.ConceptPatch{Questions: &questions}, Actor: w.actor("mia")})
+	d := w.openOn(t, "mia", idea.SubjectIdea, i.ID, "wo liegen die bilder", w.actor("mia"), withVariants(idea.VariantInput{Title: "Datenbank"}, idea.VariantInput{Title: "Datei"}))
+	if _, err := w.pa["mia"].CloseDecision(CloseDecisionInput{ID: d.ID, Outcome: idea.DecisionDecided, Variant: "B", Reason: "einfach", Actor: w.actor("mia")}); err != nil {
+		t.Fatal(err)
+	}
+	cv, _, _ := w.pa["mia"].IdeaConcept(i.ID, 0)
+	if want := "- Wo liegen die Bilder? ✓ " + d.HumanID() + "\n- Wer darf sie löschen?"; cv.Concept.Questions != want {
+		t.Errorf("questions = %q, want %q", cv.Concept.Questions, want)
 	}
 }
 

@@ -77,6 +77,8 @@ var workshopDoneKeys = map[string]string{
 	"vote": "workshop.done.vote", "decided": "workshop.done.decided", "reopen": "workshop.done.reopen", "approve": "workshop.done.approve",
 	"discuss": "workshop.done.discuss", "withdraw": "workshop.done.withdraw",
 	"close": "workshop.done.close", "reopen_discussion": "workshop.done.reopen_discussion",
+	"text_raw": "workshop.done.text_raw", "text_summary": "workshop.done.text_summary", "concept_saved": "workshop.done.concept_saved", "concept_same": "workshop.done.concept_same",
+	"asked": "workshop.done.asked", "variant": "workshop.done.variant",
 }
 
 type workshopStep struct{ Label, State string }
@@ -126,7 +128,9 @@ type workshopDecision struct {
 	Answer, Reason, Trigger       string
 	DecidedBy, DecidedAge, Chosen string
 	CanDecide, CanVote, CanReopen bool
-	MyVote                        string
+	// CanAddVariant puts the form for one more variant into the card of an open choice.
+	CanAddVariant bool
+	MyVote        string
 	// CanAttach puts the form that adds a picture into the card of each variant.
 	CanAttach bool
 	// Stack puts the cards one below the other: four variants side by side are too narrow to read.
@@ -137,10 +141,12 @@ type workshopDecision struct {
 const workshopStackFrom = 4
 
 // workshopNext is what comes next on an idea: the first open decision (with its anchor) or the next step of the way.
-// Close puts the button that closes the discussion there (DEC-46): the workshop proposes it once the last decision is closed.
+// Mode puts the button of that step there instead of the text (DEC-46, REQ-709): the next step is one click.
 type workshopNext struct {
 	Text, Href string
-	Close      bool
+	// Mode is the step of the phase the text is a button for (discuss, close, approve); Revision belongs to approve.
+	Mode     string
+	Revision int
 }
 
 type workshopView struct {
@@ -171,14 +177,56 @@ type workshopView struct {
 	ClosedBy, ClosedSaid, ClosedAge string
 	Revision                        int
 	Result                          *requestResult
+	// Tools are the buttons that open a form (raw text, summary, concept, question); Panel is the form that is open.
+	Tools []workshopTool
+	Panel *workshopPanel
+	// Empty says that nothing is worked out yet: the box then has one line and the tools.
+	Empty bool
+	// Ask is the question before a step that has a consequence (confirm closing with an open question, approving without requirements).
+	Ask *workshopAsk
+}
+
+type workshopTool struct {
+	Key, Label, Href, Icon string
+	Current                bool
+}
+
+// workshopAsk asks before closing the discussion with a question open (Open) or before approving a concept without requirements.
+type workshopAsk struct {
+	Mode, Text, Cancel string
+	Revision           int
+}
+
+type panelField struct {
+	Name, Label, Value string
+	Rows, Max          int
+	Required           bool
+}
+
+type panelSlot struct {
+	No                       int
+	Label                    string
+	Title, Text, Pro, Contra string
+}
+
+// workshopPanel is one form of the workshop with what is already in it: the concept as it stands, the summary as it stands.
+type workshopPanel struct {
+	Kind, Action, Token, Cancel, Title, Submit string
+	Base                                       int
+	Fields                                     []panelField
+	Slots                                      []panelSlot
 }
 
 func (a *app) registerWorkshopPages(mux *http.ServeMux) {
 	for path, h := range map[string]http.HandlerFunc{
-		"/ui/ideas/{id}/phase":      a.workshopPhase,
-		"/ui/decisions/{id}/vote":   a.workshopVote,
-		"/ui/decisions/{id}/close":  a.workshopClose,
-		"/ui/decisions/{id}/reopen": a.workshopReopen,
+		"/ui/ideas/{id}/phase":       a.workshopPhase,
+		"/ui/decisions/{id}/vote":    a.workshopVote,
+		"/ui/decisions/{id}/close":   a.workshopClose,
+		"/ui/decisions/{id}/reopen":  a.workshopReopen,
+		"/ui/decisions/{id}/variant": a.workshopVariantAdd,
+		"/ui/ideas/{id}/text":        a.workshopText,
+		"/ui/ideas/{id}/concept":     a.workshopConceptSave,
+		"/ui/ideas/{id}/decisions":   a.workshopDecisionOpen,
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
@@ -201,12 +249,18 @@ type datedItem struct {
 func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, ws store.IdeaWorkshop, v *ideaPageView) {
 	i := ws.Idea
 	phase := idea.EffectivePhase(i.State, i.Phase)
-	if phase == idea.PhaseRaw && ws.Summary == nil && ws.Concept == nil && len(ws.Decisions) == 0 && len(ws.Raw) == 0 {
+	human := interactive(r)
+	canWork := human && pa.CheckIdea(i, store.ActWork) == nil
+	canEdit := human && pa.CheckIdea(i, store.ActEdit) == nil
+	// Writing a text or opening a question needs the right to work on the idea; once the concept is approved, the right to edit it.
+	canWrite := canWork && phase != idea.PhaseDismissed && phase != idea.PhaseDone && (canEdit || (phase != idea.PhaseApproved && phase != idea.PhaseBuilding))
+	empty := phase == idea.PhaseRaw && ws.Summary == nil && ws.Concept == nil && len(ws.Decisions) == 0 && len(ws.Raw) == 0
+	if empty && !canWrite {
 		return
 	}
 	now := overviewNow().UTC()
 	age := func(at string) string { return shortAgo(l, now, parseTime(at)) }
-	w := &workshopView{ID: i.ID, Token: csrfOf(r), Anchor: "workshop", Phase: phase, PhaseLabel: label(l, workshopPhaseKeys, phase), PhaseTone: workshopPhaseTone[phase]}
+	w := &workshopView{Empty: empty, ID: i.ID, Token: csrfOf(r), Anchor: "workshop", Phase: phase, PhaseLabel: label(l, workshopPhaseKeys, phase), PhaseTone: workshopPhaseTone[phase]}
 	cur := -1
 	for n, p := range workshopSteps {
 		if p == phase {
@@ -234,9 +288,6 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 			w.Raw += " · " + src
 		}
 	}
-	human := interactive(r)
-	canWork := human && pa.CheckIdea(i, store.ActWork) == nil
-	canEdit := human && pa.CheckIdea(i, store.ActEdit) == nil
 	if c := ws.Concept; c != nil {
 		w.Revision = c.Revision
 		wc := &workshopConcept{Revision: c.Revision, By: c.Person, Age: age(c.CreatedAt)}
@@ -278,14 +329,22 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		wd.CanAttach = canWork && wd.Open && len(wd.Variants) > 0 && phase != idea.PhaseDismissed && phase != idea.PhaseDone
 		w.Decisions = append(w.Decisions, wd)
 	}
-	// Die Wege der Phase: Diskussion anstoßen kann, wer mitarbeitet; sie beenden, wieder öffnen,
-	// freigeben und die Freigabe zurücknehmen nur, wer die Idee bearbeiten darf.
+	// Die Wege der Phase, je Phase nur der passende: die Diskussion beginnen (aus Rohidee und Konzept), sie beenden (in der Diskussion),
+	// freigeben (nach der Diskussion), die Diskussion wieder öffnen (nach ihrem Ende) und die Freigabe zurücknehmen. Beginnen kann, wer
+	// mitarbeitet; beenden, freigeben und zurücknehmen nur, wer die Idee bearbeiten darf.
 	w.CanDiscuss = canWork && (phase == idea.PhaseRaw || phase == idea.PhaseConcept) && ws.Concept != nil
-	w.CanClose = canEdit && ws.Concept != nil && (phase == idea.PhaseConcept || phase == idea.PhaseDiscussion)
+	w.CanClose = canEdit && ws.Concept != nil && phase == idea.PhaseDiscussion
 	w.CanReopen = canEdit && phase == idea.PhaseDiscussed
-	w.CanApprove = canEdit && ws.Concept != nil && (phase == idea.PhaseConcept || phase == idea.PhaseDiscussion || phase == idea.PhaseDiscussed)
+	w.CanApprove = canEdit && ws.Concept != nil && phase == idea.PhaseDiscussed
 	w.CanWithdraw = canEdit && phase == idea.PhaseApproved
-	w.standAndNext(l, phase, cur, ws.Concept != nil)
+	issueHref := ""
+	if human && i.State == idea.Open && phase == idea.PhaseApproved {
+		issueHref = repoHref(i.Project) + "/issues/new?derived_from=IDEA-" + strconv.FormatInt(i.ID, 10)
+	}
+	w.standAndNext(l, phase, cur, ws.Concept != nil, canWrite, func(panel string) string { return workshopPanelHref(i.Project, i.ID, panel) }, issueHref)
+	if canWrite {
+		w.fillTools(l, r, i, ws)
+	}
 	if c := ws.Closed; c != nil {
 		w.ClosedBy, w.ClosedAge = c.Person, age(c.At)
 		if c.ByAgent {
@@ -293,6 +352,15 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		}
 	}
 	q := r.URL.Query()
+	switch ask := q.Get("wask"); {
+	case ask == "close" && w.CanClose:
+		w.Ask = &workshopAsk{Mode: "close", Text: l.msg("workshop.ask.close", w.OpenCount), Cancel: repoHref(i.Project) + "/ideas/" + strconv.FormatInt(i.ID, 10) + "#workshop"}
+	case ask == "approve" && w.CanApprove:
+		w.Ask = &workshopAsk{Mode: "approve", Text: l.msg("workshop.ask.approve"), Revision: w.Revision, Cancel: repoHref(i.Project) + "/ideas/" + strconv.FormatInt(i.ID, 10) + "#workshop"}
+		if n, err := strconv.Atoi(q.Get("wrev")); err == nil && n > 0 {
+			w.Ask.Revision = n
+		}
+	}
 	switch {
 	case q.Get("wfail") != "":
 		key, ok := workshopFailKeys[q.Get("wfail")]
@@ -316,12 +384,16 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 }
 
 // standAndNext fills the top of the workshop: how many decisions are open and what comes next.
-// Decisions first: while one is open it is the next thing; then the next step of the way.
-func (w *workshopView) standAndNext(l lang, phase string, cur int, hasConcept bool) {
+// Decisions first: while one is open it is the next thing; then the next step of the way, as the button
+// of that step where the viewer may take it (REQ-709).
+func (w *workshopView) standAndNext(l lang, phase string, cur int, hasConcept, canWrite bool, panel func(string) string, issueHref string) {
 	if n := len(w.Decisions); n > 0 {
-		if w.OpenCount > 0 {
+		switch {
+		case w.OpenCount > 0:
 			w.Stand = l.msg("workshop.stand.open", w.OpenCount, n)
-		} else {
+		case n == 1:
+			w.Stand = l.msg("workshop.stand.done_one")
+		default:
 			w.Stand = l.msg("workshop.stand.done", n)
 		}
 	}
@@ -331,16 +403,89 @@ func (w *workshopView) standAndNext(l lang, phase string, cur int, hasConcept bo
 			return
 		}
 	}
+	step := func(mode, key string, args ...any) *workshopNext {
+		return &workshopNext{Mode: mode, Text: l.msg(key, args...), Revision: w.Revision}
+	}
 	switch {
 	case phase == idea.PhaseDismissed || cur < 0 || cur+1 >= len(workshopSteps):
+	case !hasConcept && (phase == idea.PhaseRaw || phase == idea.PhaseConcept) && canWrite:
+		w.Next = &workshopNext{Text: l.msg("workshop.tool.concept"), Href: panel(panelConcept)}
 	case hasConcept && phase == idea.PhaseDiscussion:
 		// No decision is open (any open one returned above): the workshop proposes closing the discussion.
-		w.Next = &workshopNext{Text: l.msg("workshop.close"), Close: w.CanClose}
-	case hasConcept && w.Revision > 0 && (phase == idea.PhaseConcept || phase == idea.PhaseDiscussed):
-		w.Next = &workshopNext{Text: l.msg("workshop.approve", w.Revision)}
+		w.Next = step("", "workshop.close")
+		if w.CanClose {
+			w.Next.Mode = "close"
+		}
+	case hasConcept && (phase == idea.PhaseRaw || phase == idea.PhaseConcept):
+		w.Next = step("", "workshop.discuss")
+		if w.CanDiscuss {
+			w.Next.Mode = "discuss"
+		}
+	case hasConcept && w.Revision > 0 && phase == idea.PhaseDiscussed:
+		w.Next = step("", "workshop.approve", w.Revision)
+		if w.CanApprove {
+			w.Next.Mode = "approve"
+		}
+	case phase == idea.PhaseApproved && issueHref != "":
+		w.Next = &workshopNext{Text: l.msg("ideas.make_issue"), Href: issueHref}
 	default:
 		w.Next = &workshopNext{Text: label(l, workshopPhaseKeys, workshopSteps[cur+1])}
 	}
+}
+
+// fillTools sets the buttons at the top of the workshop that open a form, and the form that is open (?panel=).
+func (w *workshopView) fillTools(l lang, r *http.Request, i idea.Idea, ws store.IdeaWorkshop) {
+	has := map[string]bool{panelRaw: len(ws.Raw) > 0, panelSummary: ws.Summary != nil, panelConcept: ws.Concept != nil}
+	want := r.URL.Query().Get("panel")
+	for _, t := range []struct{ key, icon, label, edit string }{
+		{panelRaw, "file", "workshop.tool.raw", ""}, {panelSummary, "list", "workshop.tool.summary", "workshop.tool.summary_edit"},
+		{panelConcept, "book", "workshop.tool.concept", "workshop.tool.concept_edit"}, {panelDecision, "chat", "workshop.tool.decision", ""},
+	} {
+		key := t.label
+		if has[t.key] && t.edit != "" {
+			key = t.edit
+		}
+		w.Tools = append(w.Tools, workshopTool{Key: t.key, Icon: t.icon, Label: l.msg(key), Href: workshopPanelHref(i.Project, i.ID, t.key), Current: want == t.key})
+	}
+	p := &workshopPanel{Kind: want, Token: w.Token, Cancel: repoHref(i.Project) + "/ideas/" + strconv.FormatInt(i.ID, 10) + "#workshop"}
+	id := strconv.FormatInt(i.ID, 10)
+	field := func(name, label, value string, rows int) panelField {
+		return panelField{Name: name, Label: label, Value: value, Rows: rows}
+	}
+	required := func(f panelField) panelField { f.Required = true; return f }
+	limit := func(f panelField, n int) panelField { f.Max = n; return f }
+	switch want {
+	case panelRaw:
+		p.Action, p.Title, p.Submit = "/ui/ideas/"+id+"/text", l.msg("workshop.tool.raw"), l.msg("workshop.save_text")
+		p.Fields = []panelField{required(field("body", l.msg("workshop.panel.raw"), "", 10)), limit(field("source", l.msg("workshop.panel.source"), "", 0), idea.MaxSourceLabel)}
+	case panelSummary:
+		body := ""
+		if ws.Summary != nil {
+			body = ws.Summary.Body
+		}
+		p.Action, p.Title, p.Submit = "/ui/ideas/"+id+"/text", l.msg("workshop.summary"), l.msg("workshop.save_text")
+		p.Fields = []panelField{required(field("body", l.msg("workshop.summary"), body, 5))}
+	case panelConcept:
+		var c idea.Concept
+		if ws.Concept != nil {
+			c = ws.Concept.Concept
+			p.Base = ws.Concept.Revision
+		}
+		p.Action, p.Title, p.Submit = "/ui/ideas/"+id+"/concept", l.msg("workshop.concept"), l.msg("workshop.save_concept")
+		for _, s := range []struct{ key, text string }{{"about", c.About}, {"what", c.What}, {"how", c.How}, {"not", c.Not}, {"questions", c.Questions}} {
+			p.Fields = append(p.Fields, field(s.key, l.msg(workshopSectionKeys[s.key]), s.text, 4))
+		}
+		p.Fields = append(p.Fields, field("requirements", l.msg("workshop.panel.requirements"), strings.Join(c.Requirements, "\n"), 5), limit(field("message", l.msg("workshop.panel.note"), "", 0), idea.MaxVersionNote))
+	case panelDecision:
+		p.Action, p.Title, p.Submit = "/ui/ideas/"+id+"/decisions", l.msg("workshop.tool.decision"), l.msg("workshop.ask_decision")
+		p.Fields = []panelField{required(limit(field("question", l.msg("workshop.panel.question"), "", 0), idea.MaxQuestion)), field("detail", l.msg("workshop.panel.detail"), "", 3)}
+		for n := 1; n <= workshopVariantSlots; n++ {
+			p.Slots = append(p.Slots, panelSlot{No: n, Label: idea.VariantLabel(n - 1)})
+		}
+	default:
+		return
+	}
+	w.Panel = p
 }
 
 // decisionViewOf is the view of one decision, on the page of its idea and on its own page.
@@ -358,6 +503,10 @@ func decisionViewOf(l lang, r *http.Request, d idea.Decision, now time.Time, can
 	}
 	// Schließen darf, wer den Gegenstand bearbeiten darf; abstimmen, wer mitarbeiten darf.
 	wd.CanDecide, wd.CanVote, wd.CanReopen = wd.Open && canEdit, wd.Open && canWork && len(d.Variants) > 0, !wd.Open && canWork
+	wd.CanAddVariant = wd.Open && canWork && len(d.Variants) >= 2 && len(d.Variants) < idea.MaxVariants
+	if d.ByAgent && d.DecidedBy != "" {
+		wd.DecidedBy = l.msg("workshop.closed_agent", d.DecidedBy)
+	}
 	var personVote, agentVote string
 	for _, vr := range d.Variants {
 		wv := workshopVariant{ID: vr.ID, Label: vr.Label, Title: vr.Title, Images: attachImages(l, vr.Attachments, func(idea.AttachmentMeta) bool { return true }), Text: bodyBlocks(vr.Text, 0), Pro: bodyBlocks(vr.Pro, 0), Contra: bodyBlocks(vr.Contra, 0), Chosen: d.ChosenVariant == vr.Label}
@@ -431,6 +580,10 @@ func (a *app) workshopDated(l lang, ws store.IdeaWorkshop, age func(string) stri
 		}
 		out = append(out, datedItem{d.DecidedAt, tlItem{ID: "decided-" + strconv.FormatInt(d.ID, 10), Act: "idea.decided", Who: d.DecidedBy, Icon: icon, Tone: tone,
 			Head: template.HTML(sentence(key) + " <span class=\"rn\">" + html.EscapeString(d.HumanID()) + "</span>"), Age: age(d.DecidedAt), Body: template.HTML(strings.Join(body, ""))}})
+		if d.ByAgent {
+			// A decision an agent made is not the decision of its person.
+			out[len(out)-1].item.withActor(byAgentActor(l, d.DecidedBy, true))
+		}
 	}
 	return out
 }
@@ -540,6 +693,14 @@ func (a *app) workshopPhase(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
 	actor := store.IdeaActorFor(browserPrincipal(r), "")
 	mode := r.FormValue("mode")
+	// Closing with a question open and approving without requirements ask first; confirm=1 is the answer.
+	if r.FormValue("confirm") != "1" {
+		if ask := a.phaseNeedsAsk(r, id, mode); ask != "" {
+			target := phaseAskHref(i.Project, id, ask, r.FormValue("revision"))
+			http.Redirect(w, r, target, http.StatusSeeOther)
+			return
+		}
+	}
 	switch mode {
 	case "discuss":
 		_, err = pa.StartIdeaDiscussion(id)
