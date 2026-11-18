@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 func decode[T any](t *testing.T, body string) T {
@@ -26,6 +28,19 @@ func (f *accessAPIFixture) newTask(t *testing.T, who string, body map[string]any
 		body["project"] = accProject
 	}
 	return decode[humantask.Task](t, f.expect(t, who, 201, "POST", "/api/tasks", body))
+}
+
+// markDone meldet Aufgaben als Mensch einer Websitzung: über die API geht das
+// nur dort, nie mit einem Token.
+func (f *accessAPIFixture) markDone(t *testing.T, who string, ids []int64, note string) ([]humantask.Task, error) {
+	t.Helper()
+	p, ok := f.st.AuthenticatePrincipal(f.tok[who])
+	if !ok {
+		t.Fatalf("unknown account %s", who)
+	}
+	acct, _ := store.AccountNumericID(p.ID)
+	p.TokenKind = store.WebSessionKind
+	return f.st.Access(p).MarkTasksDone(ids, note, humantask.Actor{AccountID: acct, Person: p.Label, Web: true})
 }
 
 func TestHumanTaskAPILifecycleAndErrors(t *testing.T) {
@@ -57,13 +72,24 @@ func TestHumanTaskAPILifecycleAndErrors(t *testing.T) {
 
 	// Übergänge.
 	f.expect(t, "mia", 409, "POST", idPath("/api/tasks/%d/confirm", id), nil)
-	done := decode[[]humantask.Task](t, f.expect(t, "lena", 200, "POST", "/api/tasks/done", map[string]any{"ids": []int64{id}, "note": "gesetzt"}))
-	if len(done) != 1 || done[0].State != "done" || done[0].DoneVia != "token" {
-		t.Errorf("done: %+v", done)
+	// Ein Token meldet nichts als erledigt, mit keinem Konto.
+	for _, who := range []string{"lena", "mia", "robin"} {
+		if out := f.expect(t, who, 403, "POST", "/api/tasks/done", map[string]any{"ids": []int64{id}, "note": "gesetzt"}); !strings.Contains(out, "web_session_required") {
+			t.Errorf("%s: token done: %s", who, out)
+		}
+	}
+	if got, _ := f.st.TaskByID(id); got.State != humantask.Open {
+		t.Fatalf("a token marked the task done: %+v", got)
+	}
+	done, err := f.markDone(t, "lena", []int64{id}, "gesetzt")
+	if err != nil || len(done) != 1 || done[0].State != "done" || done[0].DoneVia != "web" {
+		t.Errorf("done: %+v %v", done, err)
 	}
 	f.expect(t, "mia", 400, "POST", idPath("/api/tasks/%d/reopen", id), map[string]any{})
 	f.expect(t, "mia", 200, "POST", idPath("/api/tasks/%d/reopen", id), map[string]any{"reason": "leer"})
-	f.expect(t, "mia", 200, "POST", "/api/tasks/done", map[string]any{"ids": []int64{id}})
+	if _, err := f.markDone(t, "mia", []int64{id}, ""); err != nil {
+		t.Fatal(err)
+	}
 	f.expect(t, "mia", 200, "POST", idPath("/api/tasks/%d/confirm", id), nil)
 	f.expect(t, "mia", 409, "POST", idPath("/api/tasks/%d/drop", id), map[string]any{"reason": "x"})
 
@@ -90,7 +116,9 @@ func TestHumanTaskAPIGuestSeesOnlyAssignedAndGetsNotFound(t *testing.T) {
 	mine := f.newTask(t, "mia", map[string]any{"kind": "input", "title": "für Gus", "request_id": rid, "assignee": "gus"})
 	f.expect(t, "gus", 404, "GET", idPath("/api/tasks/%d", open.ID), nil)
 	f.expect(t, "gus", 200, "GET", idPath("/api/tasks/%d", mine.ID), nil)
-	f.expect(t, "gus", 404, "POST", "/api/tasks/done", map[string]any{"ids": []int64{open.ID, mine.ID}})
+	if _, err := f.markDone(t, "gus", []int64{open.ID, mine.ID}, ""); !errors.Is(err, store.ErrAccessNotFound) {
+		t.Errorf("guest marks a task it does not see: %v", err)
+	}
 	list := decode[[]humantask.Task](t, f.expect(t, "gus", 200, "GET", "/api/tasks?project="+accProject+"&state=all", nil))
 	if len(list) != 1 || list[0].ID != mine.ID {
 		t.Errorf("guest list: %+v", list)
@@ -104,7 +132,9 @@ func TestHumanTaskAPIGuestSeesOnlyAssignedAndGetsNotFound(t *testing.T) {
 		t.Errorf("guest does not see the assigned task: %s", body)
 	}
 	// Ein Gast liest nur, auch die ihm zugewiesene Aufgabe meldet er nicht (Robin, 2026-11-09).
-	f.expect(t, "gus", 403, "POST", "/api/tasks/done", map[string]any{"ids": []int64{mine.ID}, "note": "ok"})
+	if _, err := f.markDone(t, "gus", []int64{mine.ID}, "ok"); !errors.Is(err, store.ErrAccessForbidden) {
+		t.Errorf("guest marks the assigned task: %v", err)
+	}
 	f.expect(t, "gus", 403, "POST", idPath("/api/tasks/%d/confirm", mine.ID), nil)
 	f.expect(t, "nora", 404, "GET", "/api/tasks?project="+accProject, nil)
 	// Zuweisung an ein Nichtmitglied.
@@ -129,7 +159,9 @@ func TestBootstrapShowsWaitingTasks(t *testing.T) {
 		f.newTask(t, "mia", map[string]any{"kind": "input", "title": fmt.Sprintf("Offene Frage %d", i), "request_id": rid})
 	}
 	long := strings.Repeat("lang ", 60)
-	f.expect(t, "mia", 200, "POST", "/api/tasks/done", map[string]any{"ids": []int64{done.ID}, "note": long})
+	if _, err := f.markDone(t, "mia", []int64{done.ID}, long); err != nil {
+		t.Fatal(err)
+	}
 	out := boot("mia")
 	i1, i2 := strings.Index(out, "Done by the human"), strings.Index(out, "Still open")
 	if i1 < 0 || i2 < i1 {
@@ -138,8 +170,8 @@ func TestBootstrapShowsWaitingTasks(t *testing.T) {
 	if !strings.Contains(out, fmt.Sprintf("TASK-%d [file] Schema-Dump bereitlegen -> ./db/schema.sql (REQ-%d) | check: Datei existiert | human: ", done.ID, rid)) {
 		t.Errorf("done line:\n%s", out)
 	}
-	if !strings.Contains(out, "marked via token") || !strings.Contains(out, "…") {
-		t.Errorf("token marker or truncation missing:\n%s", out)
+	if strings.Contains(out, "marked via token") || !strings.Contains(out, "…") {
+		t.Errorf("truncation missing or a token marker on a task a person marked:\n%s", out)
 	}
 	if n := strings.Count(out[i2:], "\n- TASK-"); n != 5 {
 		t.Errorf("open lines capped at 5, got %d:\n%s", n, out)

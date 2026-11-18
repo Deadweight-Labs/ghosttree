@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -109,7 +110,7 @@ func TestHumanTaskAnswersCarryStepsLinkAndCard(t *testing.T) {
 	list := wireText(t, s, "human_task_list", map[string]any{})
 	mustHave(t, "human_task_list", list, `"url":"`+base+`/tasks/1"`)
 
-	if _, err := s.client.MarkTasksDone([]int64{1}, "erledigt", 0); err != nil {
+	if _, err := st.Access(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}).MarkTasksDone([]int64{1}, "erledigt", humantask.Actor{AccountID: 1, Person: "alice", Web: true}); err != nil {
 		t.Fatal(err)
 	}
 	got = wireText(t, s, "human_task_resolve", map[string]any{"id": 1, "action": "confirm"})

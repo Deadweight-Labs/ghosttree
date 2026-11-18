@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -167,7 +168,11 @@ func TestHumanTaskToolsOverTheWire(t *testing.T) {
 	if _, failed := callTool(t, session, "human_task_resolve", map[string]any{"id": 1, "action": "done"}); !failed {
 		t.Error("an agent marked a task done")
 	}
-	if _, err := c.MarkTasksDone([]int64{1}, "gesetzt", 0); err != nil {
+	// Über die API meldet ein Token nichts als erledigt; der Mensch tut es im Browser.
+	if _, err := c.MarkTasksDone([]int64{1}, "gesetzt", 0); err == nil {
+		t.Fatal("a token marked a task done over the API")
+	}
+	if _, err := st.Access(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}).MarkTasksDone([]int64{1}, "gesetzt", humantask.Actor{AccountID: 1, Person: "alice", Web: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got, failed := callTool(t, session, "human_task_list", map[string]any{}); failed || !strings.Contains(got, `"state":"done"`) {
