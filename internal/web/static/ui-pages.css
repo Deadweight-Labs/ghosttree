@@ -104,6 +104,9 @@
   & .crit { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px 12px; padding: 8px 16px; align-items: start; }
   & .crit.num { grid-template-columns: 20px 16px minmax(0, 1fr); }
   & .crit .tx { line-height: 20px; }
+  /* A requirement is a line of words that may hold code or a link: the renderer's box takes no space of its own. */
+  & .crit .tx .kn-body { font-size: inherit; line-height: inherit; }
+  & .crit .tx .kn-body p, & .crit .tx .kn-body ul, & .crit .tx .kn-body ol { margin: 0; }
   & .crit .no { color: var(--fg-muted); font-size: 12px; line-height: 20px; text-align: right; font-variant-numeric: tabular-nums; }
   & .crit .no::after { content: "."; }
   & .crit .pf { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 4px; font-size: 12px; color: var(--fg-muted); }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -333,18 +332,9 @@ func (r coordReplyView) Name() string {
 	return strings.TrimSpace(name)
 }
 
-// quoteMarkup is a link of Markdown, kept as its words in the one-line quote.
-var quoteMarkup = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
-
 // Snippet is the quoted text in one line, cut after a good length.
 func (r coordReplyView) Snippet() string {
-	text := quoteMarkup.ReplaceAllString(r.Body, "$1")
-	text = strings.NewReplacer("**", "", "__", "", "`", "", "~~", "").Replace(text)
-	text = strings.Join(strings.Fields(text), " ")
-	if len([]rune(text)) > 160 {
-		text = string([]rune(text)[:160]) + "…"
-	}
-	return text
+	return plainSnippet(r.Lang, r.Body, 160)
 }
 
 // Title is the tooltip of the quote line: who is quoted ("Reply to <name>").

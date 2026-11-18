@@ -40,7 +40,7 @@
 {{if $first}}{{template "firstopen" .First}}
 {{if .Blocks}}<div class="cb prose">{{template "knbody" .Blocks}}</div>{{end}}
 {{if or .Criteria .CanEdit}}<div class="reqs"><div class="rh"><b>{{t "issues.requirements"}}</b>{{if .Total}}<span class="sp"></span><span class="prog wide"><span class="bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{t "issue.met_x_of_y" .Done .Total}}</span>{{end}}</div>
-{{range .Criteria}}<div class="crit num{{if eq .State "met"}} done{{end}}" id="criterion-{{.Number}}" data-crit="{{.State}}"><span class="no">{{.Number}}</span><span class="cbx{{if eq .State "met"}} on{{else if eq .State "waived"}} waived{{end}}" role="img" aria-label="{{.StateLabel}}">{{if eq .State "met"}}{{mi "check"}}{{end}}</span><div><div class="tx">{{.Text}}</div>
+{{range .Criteria}}<div class="crit num{{if eq .State "met"}} done{{end}}" id="criterion-{{.Number}}" data-crit="{{.State}}"><span class="no">{{.Number}}</span><span class="cbx{{if eq .State "met"}} on{{else if eq .State "waived"}} waived{{end}}" role="img" aria-label="{{.StateLabel}}">{{if eq .State "met"}}{{mi "check"}}{{end}}</span><div><div class="tx">{{md .Text}}</div>
 {{if or .Evidence (eq .State "met") (eq .State "waived")}}<div class="pf">{{range $i, $e := .Evidence}}{{if eq $i 0}}{{if $e.Person}}{{avatarOf $e.Person}}{{end}}{{end}}{{end}}{{proofs .Evidence}}{{range .Evidence}}{{template "gitanchor" .Git}}{{end}}{{if and (eq .State "met") (not .Evidence)}}<span class="chip noproof">{{mi "tri"}}{{t "issue.no_proof"}}</span>{{end}}{{if eq .State "waived"}}<span class="lb neu">{{.StateLabel}}</span>{{end}}</div>{{end}}
 </div>
 {{if .CanResolve}}<details class="resolve"><summary class="gbtn sm quiet">{{t "issue.resolve"}}</summary>

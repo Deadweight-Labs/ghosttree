@@ -542,16 +542,6 @@ func uniqueAnchor(text string, used anchorSet) string {
 	return id
 }
 
-// excerptMarks are what a line of Markdown starts with: heading, quote, list, task.
-var excerptMarks = regexp.MustCompile(`^\s*(?:#{1,6}\s+|>\s?|(?:[-*+]|\d{1,9}[.)])\s+(?:\[[ xX]\]\s+)?)`)
-
-// mdPlain reads a line of Markdown as the words it says.
-func mdPlain(l string) string {
-	l = excerptMarks.ReplaceAllString(l, "")
-	l = strings.NewReplacer("**", "", "__", "", "~~", "", "`", "").Replace(l)
-	return strings.TrimSpace(l)
-}
-
 // withoutTitleHeading drops the first line of a document when it is a heading
 // of the first level that says what the title of the page says: the page shows
 // the title once.

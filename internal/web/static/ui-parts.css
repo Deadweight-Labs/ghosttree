@@ -309,9 +309,10 @@
   & .cx textarea:focus { outline: 0; border-color: var(--accent-emphasis); box-shadow: inset 0 0 0 1px var(--accent-emphasis); }
   & .cx textarea::placeholder { color: var(--fg-subtle); }
   /* The preview is the text field in reading form: same frame, radius and padding. It is at least as tall
-     as the field (the script sets that when it switches), grows with the text up to the window and then
-     scrolls, so a long table or diagram can be read in full before sending. */
-  & .cx-pv { box-sizing: border-box; overflow: auto; min-height: 96px; max-height: max(320px, calc(100dvh - 160px)); padding: 8px 12px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; }
+     as the field (the script sets that when it switches) and grows with the text, whatever its length
+     (REQ-705): nothing in it is cut at the bottom, the page scrolls. Only a wide table or diagram scrolls
+     sideways inside it. */
+  & .cx-pv { box-sizing: border-box; overflow-x: auto; min-height: 96px; padding: 8px 12px; color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; }
   /* The status row: every state the object can be in is one entry, the one it is in now carries a dot, the
      one that is chosen is filled. The words written above are the comment on the change. */
   & .cx-m { padding: 12px 12px 0; }

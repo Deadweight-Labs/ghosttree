@@ -12,8 +12,8 @@ import (
 func TestStripMarkdownLeavesWhatAPersonWouldRead(t *testing.T) {
 	names := map[string]string{"jonas": "Jonas Brandt"}
 	for _, c := range []struct{ in, en, de string }{
-		{"Schau ![Kasten](ATT-1) an", "Schau [Image: Kasten] an", "Schau [Bild: Kasten] an"},
-		{"![](ATT-2)", "[Image]", "[Bild]"},
+		{"Schau ![Kasten](ATT-1) an", "Schau Image: Kasten an", "Schau Bild: Kasten an"},
+		{"![](ATT-2)", "Image", "Bild"},
 		{"```go\nfmt.Println(1)\n```\nund weiter", "fmt.Println(1) und weiter", "fmt.Println(1) und weiter"},
 		{"<details><summary>Notizen</summary>drin</details>", "Notizen drin", "Notizen drin"},
 		{"## Titel\n- **fett** und _schräg_ mit `code` und [Link](https://x.test/a)", "Titel fett und schräg mit code und Link", "Titel fett und schräg mit code und Link"},
@@ -53,7 +53,7 @@ func TestInboxRowOfAThreadMentionNamesTheSenderAndTheTextAsPlainText(t *testing.
 	e := ovEnv(t)
 	room, thread := threadMention(t, e, "@anna ![Kasten](ATT-1) schau mal ```go\nx := 1\n``` <details><summary>Notizen</summary>drin</details>")
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/inbox")
-	for _, want := range []string{"<b>alice</b>", "[Image: Kasten] schau mal x := 1 Notizen drin", "thread=" + itoa(thread), `name="thread" value="` + itoa(thread) + `"`} {
+	for _, want := range []string{"<b>alice</b>", "Image: Kasten schau mal x := 1 Notizen drin", "thread=" + itoa(thread), `name="thread" value="` + itoa(thread) + `"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the inbox lacks %q:\n%s", want, page)
 		}

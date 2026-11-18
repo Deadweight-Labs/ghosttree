@@ -118,5 +118,5 @@ func plainLine(s string, limit int) string {
 	s = withoutGhostLabel(s)
 	s = strings.NewReplacer("`", "", "**", "", "\n> ", " ", "\n- ", " ").Replace(s)
 	s = strings.TrimLeft(s, "#> -*")
-	return leadSentence(s, limit)
+	return leadSentence(langEN, s, limit)
 }

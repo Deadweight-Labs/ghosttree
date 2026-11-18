@@ -90,16 +90,21 @@ func TestSessionViewShowsTheClosingAnswerOfTheAgent(t *testing.T) {
 		uLine("Prüfe den Spool"),
 		aLine(bash("a", "go test ./...")),
 		rLine("a", "ok", false),
-		aLine(tb("Die Tests laufen grün.\nIch habe nichts geändert <b>und</b> 5 Tests ergänzt.")),
+		aLine(tb("Die Tests laufen **grün**.\nIch habe nichts geändert <b>und</b> 5 Tests ergänzt.\n\n- `go test` ok")),
 	)
 	code, page := e.get(t, e.Member, "/ui/sessions/"+pid)
 	if code != 200 {
 		t.Fatalf("session page = %d", code)
 	}
-	for _, want := range []string{"answered", "Die Tests laufen grün.<br>Ich habe nichts geändert &lt;b&gt;und&lt;/b&gt; 5 Tests ergänzt."} {
+	// The answer goes to the one Markdown renderer (REQ-705): its source stands in data-md, escaped, and a
+	// reader without the script gets the blocks as escaped text, never a tag the agent wrote.
+	for _, want := range []string{"answered", `<div class="answer"><div class="kn-body prose" data-md="Die Tests laufen **grün**.`, "&lt;b&gt;und&lt;/b&gt; 5 Tests ergänzt.", "<ul><li><code>go test</code> ok</li></ul>"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the ghosttree view lacks %q:\n%.1500s", want, page)
 		}
+	}
+	if strings.Contains(page, "<b>und</b>") {
+		t.Error("a tag in the answer of an agent became markup")
 	}
 	// A run without any text of the agent shows no empty "answered".
 	pid = openRun(t, e, "silent-run", uLine("Nur ein Auftrag"), aLine(bash("a", "ls")), rLine("a", "x", false))

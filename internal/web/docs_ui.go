@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -494,7 +493,7 @@ func (a *app) searchDocs(l lang, st *store.Store, pa *store.ProjectAccess, sl se
 			Href: docHref(d.Project, d.Slug), Date: o.Date, Stamp: o.Stamp}
 		if i < sl.shown {
 			if rev, err := st.DocumentRevision(d.ID, d.HeadRevision); err == nil {
-				hit.Snip = docSnippet(rev.Body, words)
+				hit.Snip = docSnippet(l, rev.Body, words)
 			}
 		}
 		g.Hits = append(g.Hits, hit)
@@ -502,12 +501,9 @@ func (a *app) searchDocs(l lang, st *store.Store, pa *store.ProjectAccess, sl se
 	return g
 }
 
-// mdLinkRE is a Markdown link; a snippet keeps only its text.
-var mdLinkRE = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
-
 // docSnippet is the first line of a text that holds one of the words, plain
 // and cut to about 160 characters around it; empty when no line does.
-func docSnippet(body string, words []string) string {
+func docSnippet(l lang, body string, words []string) string {
 	fence := false
 	for _, line := range strings.Split(body, "\n") {
 		t := strings.TrimSpace(line)
@@ -528,9 +524,7 @@ func docSnippet(body string, words []string) string {
 		if at < 0 {
 			continue
 		}
-		t = strings.TrimSpace(strings.TrimLeft(t, "#>-*+ "))
-		t = mdLinkRE.ReplaceAllString(t, "$1")
-		t = strings.NewReplacer("**", "", "`", "").Replace(t)
+		t = stripMarkdown(l, t, nil)
 		return clipAround(t, strings.ToLower(t), words, 160)
 	}
 	return ""

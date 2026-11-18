@@ -6,8 +6,8 @@ package web
 var messagesWP12 = map[string]string{
 	"coord.mention.agent_of":    "Agent of %s",
 	"coord.mention.agent":       "Agent",
-	"inbox.preview.image":       "[Image: %s]",
-	"inbox.preview.image_plain": "[Image]",
+	"inbox.preview.image":       "Image: %s",
+	"inbox.preview.image_plain": "Image",
 	"inbox.sent":                "Reply sent.",
 	"inbox.sent_to":             "Reply sent to %s.",
 	"decision.asked":            "asked this %s",
@@ -21,8 +21,8 @@ var messagesWP12 = map[string]string{
 var messagesWP12DE = map[string]string{
 	"coord.mention.agent_of":    "Agent von %s",
 	"coord.mention.agent":       "Agent",
-	"inbox.preview.image":       "[Bild: %s]",
-	"inbox.preview.image_plain": "[Bild]",
+	"inbox.preview.image":       "Bild: %s",
+	"inbox.preview.image_plain": "Bild",
 	"inbox.sent":                "Antwort gesendet.",
 	"inbox.sent_to":             "Antwort an %s gesendet.",
 	"decision.asked":            "hat das %s gefragt",

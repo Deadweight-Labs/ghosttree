@@ -74,7 +74,9 @@
   & .md-alert.ok .md-alert-t { color: var(--success-fg); }
   & .md-alert.done .md-alert-t { color: var(--done-fg); }
   & .md-alert.is-danger .md-alert-t { color: var(--danger-fg); }
-  & .prose .md-img { max-width: 100%; height: auto; vertical-align: middle; border-radius: 6px; }
+  /* A picture in a text is a block of its own, also in the middle of a sentence: the line does not get as
+     tall as the picture (REQ-705). */
+  & .prose .md-img { display: block; max-width: 100%; height: auto; margin: 8px 0; border-radius: 6px; }
 }
 /* The frame that draws the diagrams stays out of sight but keeps its size, so the text in it is measured. */
 .mmd-frame { position: fixed; top: 0; left: -10000px; width: 1100px; height: 800px; border: 0; visibility: hidden; pointer-events: none; }

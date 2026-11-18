@@ -118,7 +118,7 @@ func (a *app) resolveRefCard(l lang, pa *store.ProjectAccess, now time.Time, pre
 		}
 		c := links.Builder{}.RequestCard(d)
 		card = refCardBase(l, "request", id, c.Title, d.Request.State, requestStateKeys)
-		card.Brief, card.Who, card.When = links.Clean(d.Request.Description, 180), d.Request.Person, when(d.Request.CreatedAt)
+		card.Brief, card.Who, card.When = links.Clean(plainSnippet(l, d.Request.Description, 180), 0), d.Request.Person, when(d.Request.CreatedAt)
 		if p, err := a.store.CriteriaProgress([]int64{id}); err == nil && p[id].Total > 0 {
 			card.Done, card.Total, card.Percent = p[id].Done, p[id].Total, p[id].Done*100/p[id].Total
 			card.ProgTitle, card.ProgText = l.msg("requests.progress"), strconv.Itoa(card.Done)+"/"+strconv.Itoa(card.Total)
@@ -134,7 +134,7 @@ func (a *app) resolveRefCard(l lang, pa *store.ProjectAccess, now time.Time, pre
 		}
 		c := links.Builder{}.PainCard(p)
 		card = refCardBase(l, "pain", id, c.Title, p.State, painStateKeys)
-		card.Brief, card.Who, card.When = links.Clean(p.Body, 180), p.Person, when(p.CreatedAt)
+		card.Brief, card.Who, card.When = links.Clean(plainSnippet(l, p.Body, 180), 0), p.Person, when(p.CreatedAt)
 		href = painURL(id)
 		if p.Project != "" {
 			href = repoHref(p.Project) + "/pains/" + strconv.FormatInt(id, 10)
@@ -146,7 +146,7 @@ func (a *app) resolveRefCard(l lang, pa *store.ProjectAccess, now time.Time, pre
 		}
 		c := links.Builder{}.TaskCard(t)
 		card = refCardBase(l, "task", id, c.Title, t.State, refTaskStateKeys)
-		card.Brief, card.When = links.Clean(t.Description, 180), when(t.CreatedAt)
+		card.Brief, card.When = links.Clean(plainSnippet(l, t.Description, 180), 0), when(t.CreatedAt)
 		card.Who = firstNonEmpty(t.Assignee, t.CreatedBy)
 		card.Note = a.taskNoteFor(l, id, t.Steps).forCard()
 		if t.Project != "" {
@@ -159,7 +159,7 @@ func (a *app) resolveRefCard(l lang, pa *store.ProjectAccess, now time.Time, pre
 		}
 		c := links.Builder{}.IdeaCard(i)
 		card = refCardBase(l, "idea", id, c.Title, i.State, ideaStateKeys)
-		card.Brief, card.Who, card.When = links.Clean(i.Body, 180), i.Person, when(i.CreatedAt)
+		card.Brief, card.Who, card.When = links.Clean(plainSnippet(l, i.Body, 180), 0), i.Person, when(i.CreatedAt)
 		if i.Project != "" {
 			href = repoHref(i.Project) + "/ideas/" + strconv.FormatInt(id, 10)
 		}
@@ -169,7 +169,7 @@ func (a *app) resolveRefCard(l lang, pa *store.ProjectAccess, now time.Time, pre
 			return
 		}
 		card = refCardBase(l, "decision", id, d.Question, d.State, workshopDecisionKeys)
-		card.Brief, card.Who, card.When = links.Clean(d.Detail, 180), d.Person, when(d.CreatedAt)
+		card.Brief, card.Who, card.When = links.Clean(plainSnippet(l, d.Detail, 180), 0), d.Person, when(d.CreatedAt)
 		href = decisionHref(d)
 	case "KN":
 		k, err := pa.KnowledgeRead(id)
@@ -181,7 +181,7 @@ func (a *app) resolveRefCard(l lang, pa *store.ProjectAccess, now time.Time, pre
 		// The card says what the entry is about, in words; a code block belongs on its page.
 		body, _, _ := strings.Cut(k.Body, "```")
 		card = refCardView{Key: "KN-" + strconv.FormatInt(id, 10), Long: knref.Format(id), Class: kd.Class, Icon: template.HTML(kd.Icon),
-			Tone: "gray", Title: links.Clean(c.Title, 140), Brief: links.Clean(body, 180), Who: k.Person, When: when(k.CreatedAt)}
+			Tone: "gray", Title: links.Clean(c.Title, 140), Brief: links.Clean(plainSnippet(l, body, 180), 0), Who: k.Person, When: when(k.CreatedAt)}
 		if u, err := url.Parse(c.URL); err == nil && u.Path != "" {
 			href = u.RequestURI()
 		}
@@ -192,7 +192,7 @@ func (a *app) resolveRefCard(l lang, pa *store.ProjectAccess, now time.Time, pre
 		}
 		kd := refKinds["feature"]
 		card = refCardView{Key: "FEAT-" + strconv.FormatInt(id, 10), Long: "FEAT-" + strconv.FormatInt(id, 10), Class: kd.Class, Icon: template.HTML(kd.Icon),
-			State: info.Zustand, Tone: "gray", Title: info.Titel, Brief: info.Kurzfassung, Who: info.Autor, When: when(info.Zeit)}
+			State: info.Zustand, Tone: "gray", Title: info.Titel, Brief: plainSnippet(l, info.Kurzfassung, 180), Who: info.Autor, When: when(info.Zeit)}
 		if u, err := url.Parse(info.Link); err == nil && u.Path != "" {
 			href = u.RequestURI()
 		}

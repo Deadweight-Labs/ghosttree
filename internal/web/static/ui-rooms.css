@@ -231,8 +231,9 @@
   /* A chat input starts small; the area above it keeps the room. */
   & .coord-composer .cx textarea, & .coord-thread-composer .cx textarea { min-height: 56px; }
   /* The chat has a height of its own and the composer stays below the messages: its preview grows with the
-     text like everywhere, but up to two fifths of the window, so the history stays in sight. */
-  & .coord-composer .cx-pv, & .coord-thread-composer .cx-pv { max-height: max(200px, 40dvh); }
+     text like everywhere, up to over half of the window, so the history stays in sight; a longer one
+     scrolls in its box. */
+  & .coord-composer .cx-pv, & .coord-thread-composer .cx-pv { max-height: max(240px, 55dvh); overflow-y: auto; }
   & .coord-readonly { padding: 12px 16px; border-top: 1px solid var(--border-default); }
   & .coord-composer .cx, & .coord-thread-composer .cx { border-color: var(--border-default); }
   & .coord-option-panel { min-width: 300px; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }

@@ -46,6 +46,9 @@ type issueEvent struct {
 	// Note is the text a close or drop was written with, as stored; Quote is its
 	// shortened form. Kept to compare with the comment the same form wrote.
 	Note string
+	// Rich says that Note is a text of a person that the page shows as Markdown, once, with the
+	// renderer (a close or drop); the other quotes are plain words.
+	Rich bool
 	// Commits go behind the sentence, the other proofs under the line.
 	Head, Body []evidenceLine
 	// Git is the anchor the entry was written at.
@@ -104,6 +107,11 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 	sentence := func(key string, args ...any) template.HTML {
 		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
 	}
+	// quote is what a text of a person says under the line of an entry: plain words of the
+	// Markdown (REQ-705), the one function the inbox rows use too.
+	quote := func(s string) string {
+		return plainSnippet(l, sessionScrub.ReplaceAllString(s, l.msg("requests.session")), 200)
+	}
 	reqLink := func(n int64) string { return string(longPill(l, "request", n, requestURL(n))) }
 	var out []issueEvent
 	for i := len(acts) - 1; i >= 0 && len(out) < activityShown; i-- {
@@ -113,17 +121,17 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 		case "request.created":
 			ev.Icon, ev.Sentence = "issue", sentence("issue.ev.created")
 		case "request.corrected":
-			ev.Icon, ev.Sentence, ev.Quote = "pencil", sentence("issue.ev.corrected"), ellipsize(sessionScrub.ReplaceAllString(act.Data, l.msg("requests.session")), 200)
+			ev.Icon, ev.Sentence, ev.Quote = "pencil", sentence("issue.ev.corrected"), quote(act.Data)
 		case "request.moved":
 			ev.Icon, ev.Sentence, ev.Quote = "folder", sentence("issue.ev.moved"), ellipsize(act.Data, 200)
 		case "request.migrated":
 			ev.Icon, ev.Sentence = "folder", sentence("issue.ev.migrated")
 		case "request.done":
-			ev.Tone, ev.Icon, ev.Sentence, ev.Quote, ev.Note = "don", "done", sentence("issue.ev.done"), ellipsize(sessionScrub.ReplaceAllString(act.Data, l.msg("requests.session")), 200), act.Data
+			ev.Tone, ev.Icon, ev.Sentence, ev.Quote, ev.Note, ev.Rich = "don", "done", sentence("issue.ev.done"), quote(act.Data), act.Data, true
 		case "request.dropped":
-			ev.Icon, ev.Sentence, ev.Quote, ev.Note = "drop", sentence("issue.ev.dropped"), ellipsize(sessionScrub.ReplaceAllString(act.Data, l.msg("requests.session")), 200), act.Data
+			ev.Icon, ev.Sentence, ev.Quote, ev.Note, ev.Rich = "drop", sentence("issue.ev.dropped"), quote(act.Data), act.Data, true
 		case "criterion.added":
-			ev.Icon, ev.Quote = "plus", ellipsize(act.Data, 200)
+			ev.Icon, ev.Quote = "plus", quote(act.Data)
 			if c, ok := byText[strings.TrimSpace(act.Data)]; ok {
 				ev.Sentence = sentence("issue.ev.criterion_added", crit(c.Number))
 			} else {
@@ -136,7 +144,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 				ev.Sentence = sentence(map[string]string{"criterion.met": "issue.ev.criterion_met_any", "criterion.waived": "issue.ev.criterion_waived_any"}[act.Kind])
 				break
 			}
-			ev.Quote = c.Text
+			ev.Quote = plainSnippet(l, c.Text, 400)
 			ev.Criterion, ev.CriterionID = c.Number, c.ID
 			if act.Kind == "criterion.met" {
 				ev.Tone, ev.Icon = "ok", "check"
@@ -173,7 +181,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 				ev.Sentence += template.HTML(" (" + html.EscapeString(label(l, roleKeys, role)) + ")")
 			}
 		case "work.finished":
-			ev.Icon, ev.Sentence, ev.Quote = "pause", sentence("issue.ev.work_finished"), ellipsize(sessionScrub.ReplaceAllString(act.Data, l.msg("requests.session")), 200)
+			ev.Icon, ev.Sentence, ev.Quote = "pause", sentence("issue.ev.work_finished"), quote(act.Data)
 		case "evidence.migrated":
 			ev.Icon, ev.Sentence = "check", sentence("issue.ev.evidence_migrated")
 		case "request.reopened":
@@ -186,7 +194,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			if m := reopenedData.FindStringSubmatch(act.Data); m != nil {
 				n, _ := strconv.Atoi(m[1])
 				ev.Sentence = sentence("issue.ev.criterion_reopened", crit(n))
-				ev.Criterion, ev.Quote = n, ellipsize(strings.TrimSpace(m[2]), 200)
+				ev.Criterion, ev.Quote = n, quote(strings.TrimSpace(m[2]))
 				// The requirement is what the stamp of who reopened it hangs on.
 				ev.CriterionID = byNum[n].ID
 			}
@@ -272,14 +280,14 @@ const sameMomentWithin = 2 * time.Minute
 func withoutRepeatedNotes(events []issueEvent, comments []tlItem) []issueEvent {
 	out := slices.Clone(events)
 	for i, ev := range out {
-		note := strings.TrimSpace(ev.Note)
+		note := sameText(ev.Note)
 		if note == "" {
 			continue
 		}
 		at := parseTime(ev.At)
 		for _, c := range comments {
 			v := c.Comment
-			if v == nil || v.Deleted || v.Who != ev.By || strings.TrimSpace(v.Raw) != note || at.IsZero() || c.at.IsZero() {
+			if v == nil || v.Deleted || v.Who != ev.By || !v.wrote(note) || at.IsZero() || c.at.IsZero() {
 				continue
 			}
 			if d := c.at.Sub(at); d < sameMomentWithin && d > -sameMomentWithin {
@@ -289,6 +297,26 @@ func withoutRepeatedNotes(events []issueEvent, comments []tlItem) []issueEvent {
 		}
 	}
 	return out
+}
+
+// sameText is a text as it is compared: a browser sends the line breaks of a form as CRLF, the
+// stored comment may have LF, and nothing but blanks around it counts.
+func sameText(s string) string {
+	return strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n"))
+}
+
+// wrote says whether the comment says note as it stands, or did when it was written: a comment
+// that was edited after the close is still the one the close wrote.
+func (v *commentView) wrote(note string) bool {
+	if sameText(v.Raw) == note {
+		return true
+	}
+	for _, old := range v.Versions {
+		if sameText(old.Raw) == note {
+			return true
+		}
+	}
+	return false
 }
 
 // relationSentence says what happened to a link, naming the other side.
@@ -457,6 +485,9 @@ func timelineItems(l lang, events []issueEvent) []tlItem {
 		var body template.HTML
 		if e.Quote != "" || len(e.Body) > 0 {
 			body = template.HTML(html.EscapeString(e.Quote))
+			if e.Rich && e.Quote != "" {
+				body = mdText(sessionScrub.ReplaceAllString(e.Note, l.msg("requests.session")))
+			}
 			if len(e.Body) > 0 {
 				body += " " + proofChips(l, e.Body)
 			}

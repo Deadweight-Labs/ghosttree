@@ -229,16 +229,12 @@ type knowledgeItemView struct {
 // ----------------------------------------------------------------- Textblöcke
 
 // excerpt ist der erste Absatz, gekürzt; fehlt er, die erste Zeile Code.
-func excerpt(s string) string {
+func excerpt(l lang, s string) string {
 	blocks := bodyBlocks(s, 0)
 	text := ""
 	for _, b := range blocks {
 		if b.Kind == "" || b.Kind == "h" || b.Kind == "list" || b.Kind == "quote" {
-			lines := strings.Split(b.Text, "\n")
-			for i, l := range lines {
-				lines[i] = mdPlain(l)
-			}
-			text = strings.Join(lines, " ")
+			text = stripMarkdown(l, b.Src, nil)
 			break
 		}
 	}
@@ -303,7 +299,7 @@ func (a *app) knowledgeRowFor(l lang, pa *store.ProjectAccess, raw store.Knowled
 	row := KnowledgeRow{
 		ID: strconv.FormatInt(k.ID, 10), Href: knowledgeHref(k.Scope.Project, k.ID), Title: k.Title,
 		Type: k.Type, TypeLabel: typeLabel(l, k.Type), Level: k.Confidence, LevelLabel: levelLabel(l, k.Confidence), LevelTitle: levelTitle(l, k.Confidence), TypeTitle: typeLabel(l, k.Type),
-		Stale: k.Status == "stale", Excerpt: excerpt(k.Body), Age: shortAge(l, overviewNow().UTC(), parseTime(firstNonEmpty(k.ObservedAt, k.CreatedAt))),
+		Stale: k.Status == "stale", Excerpt: excerpt(l, k.Body), Age: shortAge(l, overviewNow().UTC(), parseTime(firstNonEmpty(k.ObservedAt, k.CreatedAt))),
 		Old: olderThan(firstNonEmpty(k.ObservedAt, k.CreatedAt), overviewNow().UTC(), reviewOldAfter),
 		Num: k.ID, Person: k.Person, Tone: knowledgeTones[k.Type], Stamp: firstNonEmpty(k.ObservedAt, k.CreatedAt),
 	}

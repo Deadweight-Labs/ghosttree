@@ -168,7 +168,7 @@ func parseTemplates(l lang) *template.Template {
 		// kn writes the number of a knowledge entry the way text names it: KN-12.
 		"kn":   func(n any) string { return knref.Prefix + fmt.Sprint(n) },
 		"lang": func() string { return string(l) },
-		"lead": func(s string) string { return leadSentence(s, 200) },
+		"lead": func(s string) string { return leadSentence(l, s, 200) },
 		// lower writes an agent's name the way the mock does: claude, codex.
 		"lower": strings.ToLower,
 		// more is how many of n entries are left after the first k.

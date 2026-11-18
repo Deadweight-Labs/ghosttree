@@ -92,7 +92,7 @@ func (a *app) gardenBlock(r *http.Request, pa *store.ProjectAccess, project stri
 		created := firstNonEmpty(k.ObservedAt, k.CreatedAt)
 		row := gardenRow{
 			ID: card.ID, Href: card.Href, Project: lastSegment(k.Scope.Project), Verdict: verdict, Subject: subject, Tone: gardenTone(view.Title),
-			Reason: ellipsize(gardenReason(view.Body), gardenReasonRunes), Age: card.Age, Old: olderThan(created, now, reviewOldAfter),
+			Reason: plainSnippet(l, gardenReason(view.Body), gardenReasonRunes), Age: card.Age, Old: olderThan(created, now, reviewOldAfter),
 			Explain: card.Explain, CanApprove: card.CanApprove, CanReject: card.CanReject,
 			Token: v.Token, Next: "review", Filter: project,
 		}
