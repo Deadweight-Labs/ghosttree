@@ -170,10 +170,16 @@ signature than it gives:
 ## Docker image
 
 The release workflow builds `ghcr.io/deadweight-labs/ghosttree` from the
-`Dockerfile` for linux/amd64 and linux/arm64 before it publishes the release,
-tagged `X.Y.Z` (and `latest` for a final release, not for a release candidate),
-with provenance and an SBOM, and signs the digest keyless with cosign. The
-workflow checks that the pushed image runs and reports the version of the tag.
+`Dockerfile` for linux/amd64 and linux/arm64 before goreleaser runs, with
+provenance and an SBOM, pushes it by digest without a tag, and signs the digest
+keyless with cosign. The digest goes into the release as `ghosttree-image.txt`,
+which is listed in the minisign-signed `checksums.txt`; `ctx server install
+--docker` and `ctx server update --docker` run exactly that digest. The tags
+`X.Y.Z` (and `latest` for a final release, not for a release candidate) are set in
+the last step, right after the release is published, so a run that fails halfway
+leaves an image nobody can pull by name and never moves `latest` to a release
+that does not exist. The workflow checks that the pushed image runs and reports
+the version of the tag.
 The pull happens with the workflow's own token, so the package has to allow
 Actions of this repository to write to it (package settings on GitHub, "Manage
 Actions access"); a new package is private until it is made public there.
