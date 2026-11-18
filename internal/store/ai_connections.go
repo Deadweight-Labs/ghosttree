@@ -1929,13 +1929,30 @@ func (s *Store) AIRunUsageOf(runID int64) (AIRunUsage, error) {
 // AICostReportOf is what a namespace spent since a time (RFC 3339), by
 // workflow, run, connection and model. Every amount belongs to one of each.
 func (s *Store) AICostReportOf(orgID int64, since string) (AICostReport, error) {
+	return s.AICostReportFor(orgID, since, nil)
+}
+
+// AICostReportFor is AICostReportOf for a viewer who reads only some projects of
+// the organization: the tables that name a workflow, a run or a project (by
+// workflow, by run) keep what is not tied to a project (tests of a connection)
+// and the calls of the projects in visible. What the organization spent as a whole,
+// by connection and by model, stays complete: those amounts name no project.
+// visible nil means everything (an owner).
+func (s *Store) AICostReportFor(orgID int64, since string, visible []string) (AICostReport, error) {
 	if s.reader != nil {
-		return s.reader.AICostReportOf(orgID, since)
+		return s.reader.AICostReportFor(orgID, since, visible)
 	}
 	var rep AICostReport
-	group := func(cols string, limit int) ([]AICostRow, error) {
+	group := func(cols string, limit int, byProject bool) ([]AICostRow, error) {
+		where, args := `org_id=? AND created_at>=?`, []any{orgID, since}
+		if byProject && visible != nil {
+			where += ` AND (project='' OR project IN (` + placeholders(len(visible)) + `))`
+			for _, p := range visible {
+				args = append(args, p)
+			}
+		}
 		rows, err := s.db.Query(`SELECT `+cols+`, COUNT(*), SUM(input_tokens+output_tokens+cache_read_tokens+cache_write_tokens), SUM(cost_usd)
-			FROM ai_calls WHERE org_id=? AND created_at>=? GROUP BY `+cols+` ORDER BY SUM(cost_usd) DESC LIMIT ?`, orgID, since, limit)
+			FROM ai_calls WHERE `+where+` GROUP BY `+cols+` ORDER BY SUM(cost_usd) DESC LIMIT ?`, append(args, limit)...)
 		if err != nil {
 			return nil, err
 		}
@@ -1958,19 +1975,21 @@ func (s *Store) AICostReportOf(orgID int64, since string) (AICostReport, error) 
 		return out, rows.Err()
 	}
 	var err error
-	if rep.ByWorkflow, err = group("workflow", 100); err != nil {
+	if rep.ByWorkflow, err = group("workflow", 100, true); err != nil {
 		return rep, err
 	}
-	if rep.ByRun, err = group("run_id, project, workflow", 50); err != nil {
+	if rep.ByRun, err = group("run_id, project, workflow", 50, true); err != nil {
 		return rep, err
 	}
-	if rep.ByConnection, err = group("connection", 100); err != nil {
+	if rep.ByConnection, err = group("connection", 100, false); err != nil {
 		return rep, err
 	}
-	if rep.ByModel, err = group("model", 100); err != nil {
+	if rep.ByModel, err = group("model", 100, false); err != nil {
 		return rep, err
 	}
-	for _, r := range rep.ByWorkflow {
+	// Every call has a connection, so the whole is the sum over them, whatever
+	// the other tables were cut to.
+	for _, r := range rep.ByConnection {
 		rep.TotalUSD += r.CostUSD
 		rep.Calls += r.Calls
 	}
