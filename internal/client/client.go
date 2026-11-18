@@ -24,6 +24,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	"github.com/Deadweight-Labs/ghosttree/internal/profile"
+	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -264,16 +265,40 @@ func (c *Client) Relevant(text string, ax scope.Axes, limit int, session string)
 // answer divides into entries.
 func (c *Client) RelevantDelivered(text string, ax scope.Axes, limit int, session string) (Delivered, error) {
 	q := axesQuery(ax)
-	q.Set("q", text)
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
 	}
 	if session != "" {
 		q.Set("session", session)
 	}
+	text = ForServer(text)
+	// The text goes in the body, not in the address: a prompt may hold what
+	// nobody should find in a proxy's access log.
 	var d Delivered
-	err := c.do("GET", "/api/context/relevant", q, nil, &d)
+	err := c.do("POST", "/api/context/relevant", q, map[string]string{"q": text}, &d)
+	if IsRouteMissing(err) {
+		// An older server knows only the GET form. The text is redacted and cut
+		// here as well.
+		q.Set("q", text)
+		d = Delivered{}
+		err = c.do("GET", "/api/context/relevant", q, nil, &d)
+	}
 	return d, err
+}
+
+// maxPromptBytes is the most of a prompt or command that leaves the machine to
+// ask for context: what the question needs is the first part.
+const maxPromptBytes = 8000
+
+// ForServer makes text typed by a person or an agent (a prompt, a shell
+// command) fit to send: secrets blacked out as the collector does before an
+// upload, and cut to a length the question needs.
+func ForServer(s string) string {
+	s = redact.Redact(s)
+	if len(s) > maxPromptBytes {
+		s = strings.ToValidUTF8(s[:maxPromptBytes], "")
+	}
+	return s
 }
 
 func (c *Client) Machine() string { return c.cfg.Machine }
@@ -333,7 +358,7 @@ func (c *Client) doRepeating(ctx context.Context, repeatable bool, method, path 
 }
 
 func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values, in, out any) error {
-	if c.readOnly && method != http.MethodGet && method != http.MethodHead {
+	if c.readOnly && method != http.MethodGet && method != http.MethodHead && path != "/api/context/relevant" {
 		return ErrReadOnly
 	}
 	u := strings.TrimSuffix(c.cfg.ServerURL, "/") + path

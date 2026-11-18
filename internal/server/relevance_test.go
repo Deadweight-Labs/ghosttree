@@ -407,3 +407,17 @@ func TestRelevantStaysSilentForOrdinaryProse(t *testing.T) {
 		t.Errorf("ordinary prose delivered %q", out)
 	}
 }
+
+// The prompt may travel in the body of a POST, so it does not end up in the
+// access log of a proxy; the GET form still answers for older clients.
+func TestRelevantAnswersAPostWithThePromptInTheBody(t *testing.T) {
+	f := accessAPI(t, true)
+	addPitfall(t, f, "quillfeather zerbricht beim Neustart")
+	post := f.expect(t, "mia", 200, "POST", "/api/context/relevant?project="+accProject,
+		map[string]string{"q": "was ist mit quillfeather"})
+	get := f.expect(t, "mia", 200, "GET", relevantURL("was+ist+mit+quillfeather", ""), nil)
+	if !strings.Contains(post, "quillfeather zerbricht beim Neustart") || post != get {
+		t.Fatalf("POST answers differently from GET:\n%s\n---\n%s", post, get)
+	}
+	f.expect(t, "mia", 400, "POST", "/api/context/relevant?project="+accProject, "no json")
+}

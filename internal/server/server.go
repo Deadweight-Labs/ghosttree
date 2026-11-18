@@ -221,6 +221,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "GET /api/context/bootstrap", a.bootstrap)
 	a.routeFunc(mux, "GET /api/context/interrupted", a.interrupted)
 	a.routeFunc(mux, "GET /api/context/relevant", a.relevant)
+	a.routeFunc(mux, "POST /api/context/relevant", a.relevant)
 	a.routeFunc(mux, "POST /api/ghosts", a.putGhost)
 	a.routeFunc(mux, "GET /api/ghosts", a.ghostsForPath)
 	a.routeFunc(mux, "GET /api/ghosts/tree", a.ghostTree)

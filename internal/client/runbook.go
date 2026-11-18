@@ -164,6 +164,7 @@ type RunbookTrigger struct {
 // mit kurzem Timeout (NewWithTimeout), wie bei den anderen Hook-Abfragen: Wissen,
 // das spät kommt, ist schlechter als keines.
 func (c *Client) TriggeredRunbooks(t RunbookTrigger) (string, error) {
+	t.Prompt, t.Command = ForServer(t.Prompt), ForServer(t.Command)
 	var md string
 	err := c.do("POST", "/api/runbooks/triggered", nil, t, &md)
 	return md, err

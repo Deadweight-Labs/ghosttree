@@ -5,6 +5,11 @@
 // command line beats the repository config, so these settings hold whatever the
 // checkout says. safe.directory is left alone on purpose: git's refusal to use
 // a checkout of another owner stays in force.
+//
+// What this does not cover: a filter or diff driver that .git/config defines
+// and a tracked .gitattributes selects. Named drivers cannot be switched off
+// with one option, and `git status` runs a clean filter only for a file whose
+// stat data changed.
 package gitsafe
 
 import (
