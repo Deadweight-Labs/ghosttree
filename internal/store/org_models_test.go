@@ -143,3 +143,17 @@ func TestModelSwitchOffKeepsObjectsOutOfTheEmbeddingJob(t *testing.T) {
 		t.Fatal("the object is not due after the switch is on")
 	}
 }
+
+// Ist nicht zu lesen, ob die Organisation zugestimmt hat, wird nichts gesendet.
+func TestProjectAllowsExternalModelsFailsClosed(t *testing.T) {
+	st := orgStore(t, "robin")
+	if !st.ProjectAllowsExternalModels("") {
+		t.Fatal("an object without a project is refused")
+	}
+	if _, err := st.db.Exec(`ALTER TABLE orgs RENAME COLUMN external_models TO external_models_gone`); err != nil {
+		t.Fatal(err)
+	}
+	if st.ProjectAllowsExternalModels("github.com/o/r") {
+		t.Fatal("a failed read let the text go")
+	}
+}

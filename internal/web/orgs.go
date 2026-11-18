@@ -87,6 +87,10 @@ type projectRolesView struct {
 
 // orgsView sammelt, was die Org-Seite zeigt.
 type orgsView struct {
+	// ModelsOwner: the viewer may decide whether the operator's language model
+	// reads the texts of the organization; ExternalModels is the setting.
+	ModelsOwner    bool
+	ExternalModels bool
 	// Retention is how many days the full text of workflow runs stays; set
 	// only for an owner, who alone may change it (REQ-693).
 	Retention int
@@ -268,6 +272,9 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		v.GardenSet = a.gardenSettingsFor(r, v.Selected)
 		v.AI = a.aiViewFor(r, v.Selected, v.AIForm)
 		v.Owner = store.OrgRoleHas(v.Selected.Role, store.RightOrgManage)
+		if v.ModelsOwner = store.OrgRoleHas(v.Selected.Role, store.RightOrgAI); v.ModelsOwner {
+			v.ExternalModels = a.store.ExternalModelsFor(v.Selected.ID)
+		}
 		if v.Owner {
 			v.Retention = a.store.WorkflowSettingsFor(v.Selected.ID).RetentionDays
 			v.Policy = a.wfPolicyViewOf(r, v.Selected, a.store.WorkflowPolicyFor(v.Selected.ID))
@@ -524,7 +531,7 @@ func orgNotice(l lang, key string) string {
 		return l.msg("wf.retention.saved")
 	case "workflow_policy":
 		return l.msg("wf.policy.saved")
-	case "ai", "ai_server":
+	case "ai", "ai_server", "models":
 		return l.msg("ai.saved")
 	case "moved":
 		return l.msg("adm.notice.moved")
@@ -608,7 +615,7 @@ func noticeAnchor(notice string) string { return noticeSection[notice] }
 var noticeSection = map[string]string{
 	"source_added": "#sources", "source_failed": "#sources", "source_proved": "#sources", "source_removed": "#sources", "imported": "#sources", "follow": "#sources", "assigned": "#projects",
 	"visibility": "#projects", "project": "#projects", "moved": "#projects", "project_created": "#projects",
-	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener", "workflows": "#workflows", "workflow_policy": "#workflows", "ai": "#ai", "ai_server": "#ai-server",
+	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener", "workflows": "#workflows", "workflow_policy": "#workflows", "ai": "#ai", "ai_server": "#ai-server", "models": "#models",
 }
 
 // fillInvites lists the organization's invitations with the links their

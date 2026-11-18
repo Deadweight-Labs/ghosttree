@@ -63,8 +63,12 @@ func (s *Store) ProjectAllowsExternalModels(project string) bool {
 		return true
 	}
 	var off int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM projects xp JOIN orgs xo ON xo.id = xp.org_id WHERE xp.remote = ? AND xo.external_models = 0`, project).Scan(&off)
-	return err != nil || off == 0
+	// A failed read says no: a text is not sent when it is not known whether
+	// the organization agreed.
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM projects xp JOIN orgs xo ON xo.id = xp.org_id WHERE xp.remote = ? AND xo.external_models = 0`, project).Scan(&off); err != nil {
+		return false
+	}
+	return off == 0
 }
 
 // SetExternalModels changes the setting; only an owner of the organization may.

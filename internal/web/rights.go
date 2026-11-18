@@ -43,7 +43,7 @@ var orgFormRights = map[string]store.Right{
 	"/ui/orgs/create": store.RightOrgCreate, "/ui/orgs/project/create": store.RightOrgProjectCreate,
 	"/ui/orgs/rename": store.RightOrgManage, "/ui/orgs/workflows": store.RightOrgAI,
 	"/ui/orgs/project/visibility": store.RightProjectShare,
-	"/ui/orgs/garden":             store.RightOrgAI, "/ui/orgs/workflow-policy": store.RightOrgAI,
+	"/ui/orgs/garden":             store.RightOrgAI, "/ui/orgs/workflow-policy": store.RightOrgAI, "/ui/orgs/models": store.RightOrgAI,
 	"/ui/gardener/undo": store.RightKnowledgeVerify,
 }
 

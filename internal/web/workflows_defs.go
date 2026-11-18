@@ -624,3 +624,18 @@ func (a *app) orgWorkflowPolicySave(w http.ResponseWriter, r *http.Request) {
 	}
 	orgRedirect(w, r, o.Slug, "workflow_policy")
 }
+
+// orgModelsSave stores whether the operator's language model may read the texts
+// of an organization (POST /ui/orgs/models); only its owner may.
+func (a *app) orgModelsSave(w http.ResponseWriter, r *http.Request) {
+	o, err := a.formOrg(r)
+	if err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	if err := a.store.SetExternalModels(browserPrincipal(r).ID, o.ID, r.FormValue("external_models") == "1"); err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	orgRedirect(w, r, o.Slug, "models")
+}
