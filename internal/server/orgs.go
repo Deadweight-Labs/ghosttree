@@ -175,10 +175,11 @@ func (a *api) createOrg(w http.ResponseWriter, r *http.Request) {
 }
 
 // renameOrg ändert Name und optional Slug einer Organisation: wer org.manage
-// hat, oder ein Instanz-Admin, auch ohne Mitglied zu sein (wie im Web).
+// hat. Fremde Orgs benennt ein Instanz-Admin nur aus einer Anmeldung um
+// (instance.org_rename ist ein Menschen-Recht), wie im Web und ohne den Slug.
 func (a *api) renameOrg(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
-	admin := pa.CanInstance(store.RightInstanceAdmin)
+	admin := pa.CanInstance(store.RightInstanceOrgRename)
 	var o store.Org
 	if admin {
 		var err error
@@ -201,7 +202,7 @@ func (a *api) renameOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	rename := a.st.RenameOrg
 	if admin && !pa.CanOrg(o.ID, store.RightOrgManage) {
-		rename = a.st.RenameOrgAsAdmin
+		rename, body.Slug = a.st.RenameOrgAsAdmin, ""
 	}
 	renamed, err := rename(principalOf(r).ID, o.ID, body.Name, body.Slug)
 	if err != nil {

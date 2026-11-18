@@ -923,8 +923,8 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   rights only a person uses (roles and members, AI keys and budget, account
   security, machine sharing, controlling agents, decisions a person has to
   take) need a sign-in everywhere. Revoking an invitation therefore needs a
-  sign-in; an instance admin renames any organization over the API as well,
-  and `POST /api/projects/held` releases or discards a held entry for
+  sign-in, and so does an instance admin renaming an organization of others
+  (in the browser and over the API, without changing its address); and `POST /api/projects/held` releases or discards a held entry for
   whoever may verify knowledge in its project.
 
 - The inbox has two sections, what waits for you and what was said to you.

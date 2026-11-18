@@ -270,7 +270,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			v.Retention = a.store.WorkflowSettingsFor(v.Selected.ID).RetentionDays
 			v.Policy = a.wfPolicyViewOf(r, v.Selected, a.store.WorkflowPolicyFor(v.Selected.ID))
 		}
-		v.CanRename = v.Owner || a.isAdmin(browserPrincipal(r))
+		v.CanRename = v.Owner || a.access(r).CanInstance(store.RightInstanceOrgRename)
 		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me, a.store.AccessEnforced())
 		v.GuestLinks = a.store.AccessEnforced()
 		owners := 0
@@ -1006,7 +1006,7 @@ func projectInputRemote(input, orgSlug string) (value string, isRemote bool) {
 // Instanz-Admin; die Adresse (Slug) bleibt, damit Links gültig bleiben.
 func (a *app) orgRename(w http.ResponseWriter, r *http.Request) {
 	me := browserPrincipal(r)
-	admin := a.isAdmin(me)
+	admin := a.access(r).CanInstance(store.RightInstanceOrgRename)
 	o, err := a.formOrg(r)
 	if err != nil && admin {
 		// Ein Instanz-Admin darf jede Organisation umbenennen, auch ohne Mitglied zu sein.

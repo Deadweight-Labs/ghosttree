@@ -426,3 +426,20 @@ func TestHeldEntriesOverTheAPI(t *testing.T) {
 		t.Fatalf("still held after the release: %s", raw)
 	}
 }
+
+// An admin's token renames no organization of others: overriding the owners
+// is a human right (instance.org_rename), as in the web.
+func TestAdminTokenDoesNotRenameAnOrganizationOfOthers(t *testing.T) {
+	f := newOrgFixture(t)
+	if _, err := f.st.CreateOrg("person:2", "Beta", "beta"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := f.call(t, "PATCH", "/api/orgs/beta", f.robin, map[string]any{"name": "Taken", "slug": "taken"}); code < 400 {
+		t.Fatalf("an admin token renamed an organization of others: %d", code)
+	}
+	if o, err := f.st.OrgByRef("beta"); err != nil || o.Name != "Beta" {
+		t.Fatalf("organization after the refusal: %+v %v", o, err)
+	}
+	// The owner's own token still renames it.
+	f.mustCall(t, 200, "PATCH", "/api/orgs/beta", f.anna, map[string]any{"name": "Beta Team"})
+}

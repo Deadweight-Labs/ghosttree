@@ -132,6 +132,9 @@ const (
 
 	RightInstanceAdmin Right = "instance.admin"
 	RightInstanceAI    Right = "instance.ai"
+	// RightInstanceOrgRename: the admin renames an organization it does not
+	// own; a person decides that, never a token.
+	RightInstanceOrgRename Right = "instance.org_rename"
 
 	RightAccountSecurity Right = "account.security"
 	RightOrgCreate       Right = "account.org_create"
@@ -249,6 +252,7 @@ var rightCatalog = []RightInfo{
 	{RightOrgMachines, ScopeOrg, OrgOwner, true, "Maschinen der Organisation verwalten", "Manage the organization's machines"},
 
 	{RightInstanceAdmin, ScopeInstance, "admin", false, "Instanz verwalten", "Run the instance"},
+	{RightInstanceOrgRename, ScopeInstance, "admin", true, "Fremde Organisationen umbenennen", "Rename organizations of others"},
 	{RightInstanceAI, ScopeInstance, "admin", true, "KI-Schlüssel der Instanz", "AI keys of the instance"},
 
 	{RightOrgCreate, ScopeAccount, "", false, "Organisationen anlegen", "Create organizations"},
