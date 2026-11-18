@@ -137,11 +137,9 @@ func TestGuestWebViewsShowTypedMentionsNotDeliveredOnes(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, err := st.CoordinationFor(store.Principal{ID: "person:3", Label: "gus"}, "claude:gus").Send(store.CoordMessage{
-			DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus", ClientID: "c1",
-			Body: "a question", Intent: store.IntentQuestion, Mentions: []string{"claude:ghost"}}); err != nil {
-			t.Fatal(err)
-		}
+		legacyGuestSend(t, st, "person:3", "claude:gus", store.CoordMessage{
+			DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "c1",
+			Body: "a question", Intent: store.IntentQuestion, Mentions: []string{"claude:ghost"}}, "claude:ghost")
 		srv := httptest.NewServer(New(st))
 		t.Cleanup(srv.Close)
 		get := func(path string) string {
@@ -254,12 +252,8 @@ func guestStream(t *testing.T, targetInRoom bool, fillers int) (events []string,
 	}
 	start := read("")
 	cursor := lastSSEIDOrEmpty(start)
-	gus := st.CoordinationFor(store.Principal{ID: "person:3", Label: "gus"}, "claude:gus")
-	id, err := gus.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus",
-		ClientID: "q", Body: "question", Intent: store.IntentQuestion, Mentions: []string{"claude:target"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	id := legacyGuestSend(t, st, "person:3", "claude:gus", store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room,
+		ClientID: "q", Body: "question", Intent: store.IntentQuestion, Mentions: []string{"claude:target"}}, "claude:target")
 	mia := st.CoordinationFor(store.Principal{ID: "person:2", Label: "mia"}, "claude:mia")
 	if targetInRoom {
 		if err := mia.MarkDelivery(id, store.DeliveryFetched); err != nil {
@@ -269,9 +263,8 @@ func guestStream(t *testing.T, targetInRoom bool, fillers int) (events []string,
 	if err := mia.MarkRead(store.DestinationRoom, room, 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := gus.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus", ClientID: "marker", Body: "marker"}); err != nil {
-		t.Fatal(err)
-	}
+	legacyGuestSend(t, st, "person:3", "claude:gus", store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "marker", Body: "marker"})
+	gus := st.CoordinationFor(store.Principal{ID: "person:3", Label: "gus"}, "claude:gus")
 	// Füllereignisse des Gastes selbst: jedes Umschalten ist ein Ereignis.
 	for i := 0; i < fillers; i++ {
 		var err error

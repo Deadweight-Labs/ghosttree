@@ -21,7 +21,9 @@ import (
 func readArtifact(a migrate.Artifact) ([]byte, fs.FileMode, error) {
 	root, ok := strings.CutSuffix(a.Path, filepath.FromSlash(a.Rel))
 	if !ok || root == "" {
-		return nil, 0, fmt.Errorf("%s is not below its repository", a.Rel)
+		// Not below a repository by its name (a path that was not made by the scan):
+		// the file itself is still read without following a link.
+		return readPlainFile(filepath.Dir(a.Path), filepath.Base(a.Path))
 	}
 	return readPlainFile(filepath.Clean(root), a.Rel)
 }

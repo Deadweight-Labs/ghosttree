@@ -132,7 +132,10 @@ func TestCoordDirectivePlateNamesTheRoleAndLowRankIsAStandingRequest(t *testing.
 	if _, err := e.aliceAcc.CreateStanding(store.StandingInput{RoomKey: e.room, ClientID: "s1", Body: "Owner rule."}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.gusAcc.CreateStanding(store.StandingInput{RoomKey: e.room, ClientID: "s2", Body: "Guest wish."}); err != nil {
+	// A guest no longer creates a directive; one from before stays (a request).
+	guestStanding := legacyGuestSend(t, e.st, "person:3", "claude:gus", store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: e.room, ClientID: "s2", Body: "Guest wish.", Intent: store.IntentStanding})
+	if _, err := e.st.DB().Exec(`INSERT INTO coord_standing(room_key,message_id,person,body,targets,created_at) VALUES(?,?,?,?,?,?)`,
+		e.room, store.FormatMessageID(guestStanding), "gus", "Guest wish.", "", "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	page := e.page(t, e.alice)
