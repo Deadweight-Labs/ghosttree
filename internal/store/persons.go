@@ -110,6 +110,9 @@ func (s *Store) Authenticate(token string) (string, bool) {
 // an der API an (AuthenticateScopedPrincipal), nie zu einer Websitzung und nie
 // für einen anderen Zweck, der ein volles Konto meint.
 func (s *Store) AuthenticatePrincipal(token string) (Principal, bool) {
+	if s.reader != nil {
+		return s.reader.AuthenticatePrincipal(token)
+	}
 	p, ok := s.AuthenticateScopedPrincipal(token)
 	if !ok || p.ScopeProject != "" || p.ReadOnly {
 		return Principal{}, false

@@ -936,6 +936,15 @@ func TestLogModeListsEqualTheUnfilteredStore(t *testing.T) {
 		if err := json.Unmarshal([]byte(s), &v); err != nil {
 			t.Fatalf("%v: %s", err, s)
 		}
+		// "author" is derived when an entry is read through the access view
+		// (author and role); the store does not carry it.
+		if list, ok := v.([]any); ok {
+			for _, item := range list {
+				if m, ok := item.(map[string]any); ok {
+					delete(m, "author")
+				}
+			}
+		}
 		return asJSON(v)
 	}
 	ctxK, _ := f.st.KnowledgeForContext(p)
