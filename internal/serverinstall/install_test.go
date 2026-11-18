@@ -3,6 +3,7 @@ package serverinstall
 import (
 	"bufio"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,13 +156,90 @@ func TestInstallConnectsAModelProviderThroughACredential(t *testing.T) {
 		t.Errorf("llm.json:\n%s", cfg)
 	}
 	unit := read(t, prefix, UnitDir+"/"+ServiceID)
-	if !strings.Contains(unit, "LoadCredential=llm-key:"+LLMKey) || !strings.Contains(unit, "GHOSTTREE_LLM_CONFIG="+LLMConfig) || strings.Contains(unit, "sk-test") {
+	if !strings.Contains(unit, "LoadCredential=llm-key:"+LLMKey) || !strings.Contains(unit, "Environment=GHOSTTREE_LLM_CONFIG="+LLMConfig+"\n") || strings.Contains(unit, "sk-test") {
 		t.Errorf("unit:\n%s", unit)
 	}
 }
 
-// Running it again must not cost anyone their key, their settings or their account.
-func TestInstallAgainKeepsKeyAndSettingsAndAccounts(t *testing.T) {
+// The service runs as a dynamic user, not as root. Every file the unit points
+// it to must be one that user can open: a path it can walk to and read (a
+// directory only root may enter, with a world-readable file in it, is the
+// mistake this catches), or a credential that systemd hands over. A credential
+// is not an excuse for a path: the service opens the path it is given, as itself.
+func TestEveryFileTheServiceIsPointedToIsReadableByTheServiceUser(t *testing.T) {
+	key := filepath.Join(t.TempDir(), "k")
+	os.WriteFile(key, []byte("sk-test-123\n"), 0o600)
+	for name, o := range map[string]Options{
+		"proxy":   {AI: AIOptions{Format: "anthropic", KeyFile: key}},
+		"builtin": {Domain: "gt.example.com", TLS: "builtin", AI: AIOptions{Format: "openai", BaseURL: "https://x.example/v1", KeyFile: key}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, prefix, _ := install(t, o)
+			unit := read(t, prefix, UnitDir+"/"+ServiceID)
+			byName, byPath := map[string]bool{}, map[string]bool{} // credentials systemd loads as root
+			for _, line := range strings.Split(unit, "\n") {
+				if rest, ok := strings.CutPrefix(line, "LoadCredential="); ok {
+					if name, path, ok := strings.Cut(rest, ":"); ok {
+						byName[name], byPath[path] = true, true
+					}
+				}
+			}
+			// Every path an Environment= line hands the service. One inside the
+			// credentials directory (%d/name) must be a credential that is loaded;
+			// any other is opened by the service itself, as itself, so a credential
+			// of the same file does not help it.
+			var pointed []string
+			var inCredentials int
+			for _, line := range strings.Split(unit, "\n") {
+				rest, ok := strings.CutPrefix(line, "Environment=")
+				if !ok {
+					continue
+				}
+				_, v, ok := strings.Cut(rest, "=")
+				switch {
+				case ok && strings.HasPrefix(v, "%d/"):
+					inCredentials++
+					if name := strings.TrimPrefix(v, "%d/"); !byName[name] {
+						t.Errorf("%s points into the credentials directory, but no credential %q is loaded:\n%s", line, name, unit)
+					}
+				case ok && strings.HasPrefix(v, "/"):
+					pointed = append(pointed, v)
+				}
+			}
+			if inCredentials == 0 && len(pointed) == 0 {
+				t.Fatalf("the unit does not name the model configuration:\n%s", unit)
+			}
+			for _, p := range pointed {
+				full := filepath.Join(prefix, p)
+				for d := filepath.Dir(full); len(d) > len(prefix); d = filepath.Dir(d) {
+					if fi, err := os.Stat(d); err != nil || fi.Mode().Perm()&0o001 == 0 {
+						t.Errorf("the service user cannot enter %s to read %s (mode %v)", d, p, fi.Mode().Perm())
+					}
+				}
+				if fi, err := os.Stat(full); err != nil || fi.Mode().Perm()&0o004 == 0 {
+					t.Errorf("the service user cannot read %s", p)
+				}
+			}
+			// The directory can be entered but not listed, and what is secret stays
+			// root's and is only handed over by systemd.
+			if fi, err := os.Stat(filepath.Join(prefix, EtcDir)); err != nil || fi.Mode().Perm() != EtcDirMode {
+				t.Errorf("%s has mode %v, want %v", EtcDir, fi.Mode().Perm(), os.FileMode(EtcDirMode))
+			}
+			for _, p := range []string{SecretKey, LLMKey} {
+				if !byPath[p] {
+					t.Errorf("%s is not loaded as a credential", p)
+				}
+				if fi, err := os.Stat(filepath.Join(prefix, p)); err != nil || fi.Mode().Perm()&0o077 != 0 {
+					t.Errorf("%s is readable by others: %v %v", p, fi, err)
+				}
+			}
+		})
+	}
+}
+
+// install over a server that is set up would swap ctx and settings under it
+// without a copy of its data. It stops, and says what to run instead.
+func TestInstallOnAServerThatExistsPointsToUpdateAndTouchesNothing(t *testing.T) {
 	prefix := t.TempDir()
 	sys := newFakeSystem(t, prefix)
 	env, _ := testEnv(sys)
@@ -169,34 +247,104 @@ func TestInstallAgainKeepsKeyAndSettingsAndAccounts(t *testing.T) {
 	if _, err := Install(context.Background(), o, env); err != nil {
 		t.Fatal(err)
 	}
+	key1, env1, ctx1 := read(t, prefix, SecretKey), read(t, prefix, ServerEnv), read(t, prefix, BinPath)
+	sys.cmds = nil
+
+	o.CtxBinary = ctxSource(t, "0.0.9") // an older ctx, as install.sh used to put there
+	o.Domain, o.Language = "other.example.com", "en"
+	_, err := Install(context.Background(), o, env)
+	if !errors.Is(err, ErrInstalled) || !strings.Contains(err.Error(), "ctx server update") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("error = %v", err)
+	}
+	if len(sys.commands()) != 0 {
+		t.Errorf("it ran commands:\n%s", strings.Join(sys.commands(), "\n"))
+	}
+	if read(t, prefix, BinPath) != ctx1 || read(t, prefix, ServerEnv) != env1 || read(t, prefix, SecretKey) != key1 {
+		t.Error("the files of the running server were changed")
+	}
+}
+
+// --force goes on, with what an update does: a copy of the database first, the
+// program replaced with the old one kept, the schema upgraded; key and accounts stay.
+func TestInstallForceOnAServerThatExistsCopiesTheDatabaseAndUpgradesTheSchema(t *testing.T) {
+	prefix := t.TempDir()
+	sys := newFakeSystem(t, prefix)
+	env, _ := testEnv(sys)
+	o := Options{Prefix: prefix, CtxBinary: ctxSource(t, "0.1.0"), Domain: "gt.example.com", Admin: "alex"}
+	if _, err := Install(context.Background(), o, env); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(prefix, StateDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(prefix, DBPath), []byte("the data"), 0o600)
 	key1, env1 := read(t, prefix, SecretKey), read(t, prefix, ServerEnv)
 	sys.cmds = nil
 
-	o.Domain, o.Language = "other.example.com", "en"
-	if _, err := Install(context.Background(), o, env); err != nil {
+	o.CtxBinary = ctxSource(t, "0.2.0")
+	o.Domain, o.Language, o.Force = "other.example.com", "en", true
+	res, err := Install(context.Background(), o, env)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got := sys.binVersion(); got != "0.2.0" {
+		t.Errorf("the binary is %q", got)
+	}
+	if v, _ := versionOf(filepath.Join(prefix, BinPath+".prev-0.1.0")); v != "0.1.0" {
+		t.Errorf("the old binary was not kept: %q", v)
+	}
+	if !sys.saw("db backup --db "+DBPath+" --out "+BackupDir+"/pre-update-0.1.0-to-0.2.0-") || !sys.saw("upgrade-schema --db "+DBPath) {
+		t.Errorf("no copy of the database or no schema upgrade:\n%s", strings.Join(sys.commands(), "\n"))
+	}
+	if i, j, k := sys.index("systemctl stop"), sys.index("db backup"), sys.index("upgrade-schema"); !(i >= 0 && i < j && j < k) {
+		t.Errorf("order stop %d, backup %d, upgrade %d", i, j, k)
 	}
 	if read(t, prefix, SecretKey) != key1 {
 		t.Error("the server key was replaced")
 	}
-	if read(t, prefix, ServerEnv) != env1 {
-		t.Error("server.env was replaced without --force")
+	if read(t, prefix, ServerEnv) == env1 || !strings.Contains(read(t, prefix, ServerEnv), "other.example.com") {
+		t.Error("--force did not write the answers")
 	}
 	if sys.saw("account add alex") || sys.saw("account add gardener") {
 		t.Errorf("accounts were added twice:\n%s", strings.Join(sys.commands(), "\n"))
 	}
-	if !sys.saw("account login-link alex") {
-		t.Error("no new login link")
+	if res.Admin != "alex" || !sys.saw("account login-link alex") {
+		t.Errorf("no new login link: %+v", res)
 	}
-	o.Force = true
+}
+
+// A forced install that cannot bring the new program up must leave the old
+// server running, like an update.
+func TestInstallForceGoesBackWhenTheNewProgramDoesNotComeUp(t *testing.T) {
+	prefix := t.TempDir()
+	sys := newFakeSystem(t, prefix)
+	env, _ := testEnv(sys)
+	o := Options{Prefix: prefix, CtxBinary: ctxSource(t, "0.1.0"), Admin: "alex"}
 	if _, err := Install(context.Background(), o, env); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(read(t, prefix, ServerEnv), "other.example.com") {
-		t.Error("--force did not write the answers")
+	os.MkdirAll(filepath.Join(prefix, StateDir), 0o755)
+	os.WriteFile(filepath.Join(prefix, DBPath), []byte("the data"), 0o600)
+	p := filepath.Join(t.TempDir(), "ctx")
+	os.WriteFile(p, []byte("v:0.2.0 broken\n"), 0o755)
+	o.CtxBinary, o.Force = p, true
+	if _, err := Install(context.Background(), o, env); err == nil || !strings.Contains(err.Error(), "runs again") {
+		t.Fatalf("error = %v", err)
 	}
-	if read(t, prefix, SecretKey) != key1 {
-		t.Error("--force replaced the server key")
+	if got := sys.binVersion(); got != "0.1.0" || !sys.running || !sys.saw("db restore") {
+		t.Errorf("binary %q, running %v:\n%s", got, sys.running, strings.Join(sys.commands(), "\n"))
+	}
+}
+
+// The first line of defence of the one line that every admin runs twice.
+func TestInstallFirstTimeOnAMachineWithOnlyAClientCtxWorks(t *testing.T) {
+	prefix := t.TempDir()
+	os.MkdirAll(filepath.Join(prefix, filepath.Dir(BinPath)), 0o755)
+	os.WriteFile(filepath.Join(prefix, BinPath), []byte("v:0.0.1\n"), 0o755) // a client's ctx is not a server
+	sys := newFakeSystem(t, prefix)
+	env, out := testEnv(sys)
+	if _, err := Install(context.Background(), Options{Prefix: prefix, CtxBinary: ctxSource(t, "0.1.0")}, env); err != nil {
+		t.Fatalf("%v\n%s", err, out)
 	}
 }
 
@@ -215,6 +363,26 @@ func TestInstallRefusesAnswersItCannotUse(t *testing.T) {
 		"ai w/o key file":     {AI: AIOptions{Format: "anthropic"}},
 		"ai unknown format":   {AI: AIOptions{Format: "x", KeyFile: "k"}},
 		"openai w/o base url": {AI: AIOptions{Format: "openai", KeyFile: "k"}},
+		// Whatever would end up as a line of server.env, Caddyfile or nginx.conf.
+		"newline in domain":    {Domain: "gt.example.com\nGHOSTTREE_ENFORCE_ACCESS=0"},
+		"brace in domain":      {Domain: "gt.example.com {\nredir"},
+		"semicolon in domain":  {Domain: "gt.example.com;x.example.com"},
+		"upper case domain":    {Domain: "GT.example.com"},
+		"underscore in domain": {Domain: "gt_1.example.com"},
+		"quote in domain":      {Domain: `gt".example.com`},
+		"leading hyphen":       {Domain: "-gt.example.com"},
+		"long label":           {Domain: strings.Repeat("a", 64) + ".example.com"},
+		"numeric tld":          {Domain: "gt.example.123"},
+		"newline in email":     {Domain: "gt.example.com", TLS: "builtin", Email: "ops@example.com\nGHOSTTREE_ENFORCE_ACCESS=0"},
+		"space in email":       {Domain: "gt.example.com", TLS: "builtin", Email: "ops @example.com"},
+		"two ats in email":     {Domain: "gt.example.com", TLS: "builtin", Email: "a@b@example.com"},
+		"email w/o domain":     {Domain: "gt.example.com", TLS: "builtin", Email: "ops@localhost"},
+		"newline in listen":    {Listen: "127.0.0.1\nX=1:8474"},
+		"space in listen":      {Listen: "127.0.0.1 :8474"},
+		"port 0":               {Listen: "127.0.0.1:0"},
+		"port too big":         {Listen: "127.0.0.1:70000"},
+		"port text":            {Listen: "127.0.0.1:http"},
+		"control in admin":     {Admin: "al\x1b[2Jex"},
 	}
 	for name, o := range bad {
 		prefix := t.TempDir()
@@ -303,5 +471,65 @@ func TestOptionsFromDiskReadsWhatInstallWrote(t *testing.T) {
 	}
 	if o := OptionsFromDisk(t.TempDir()); o.PublicURL() != "http://127.0.0.1:8474" {
 		t.Errorf("defaults: %+v", o)
+	}
+}
+
+func TestServiceUnitsAreHardened(t *testing.T) {
+	want := []string{"NoNewPrivileges=yes", "PrivateDevices=yes", "ProtectKernelTunables=yes", "ProtectKernelModules=yes", "ProtectKernelLogs=yes",
+		"ProtectControlGroups=yes", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "RestrictNamespaces=yes", "LockPersonality=yes",
+		"SystemCallFilter=@system-service", "MemoryDenyWriteExecute=yes"}
+	for name, text := range map[string]string{
+		"proxy":   Options{Domain: "gt.example.com"}.ServiceText(),
+		"builtin": Options{Domain: "gt.example.com", TLS: "builtin"}.ServiceText(),
+		"backup":  BackupServiceText(),
+	} {
+		for _, w := range want {
+			if !strings.Contains(text, w+"\n") {
+				t.Errorf("%s unit lacks %s:\n%s", name, w, text)
+			}
+		}
+	}
+	// Behind a proxy no capability at all; the built-in certificate needs the
+	// low ports and nothing else.
+	if u := (Options{Domain: "gt.example.com"}).ServiceText(); !strings.Contains(u, "\nCapabilityBoundingSet=\n") || strings.Contains(u, "CAP_") {
+		t.Errorf("proxy unit keeps a capability:\n%s", u)
+	}
+	if u := (Options{Domain: "gt.example.com", TLS: "builtin"}).ServiceText(); !strings.Contains(u, "\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n") || strings.Count(u, "CAP_") != 2 {
+		t.Errorf("built-in TLS unit:\n%s", u)
+	}
+	if !strings.Contains(BackupServiceText(), "\nCapabilityBoundingSet=\n") {
+		t.Error("the backup needs no capability")
+	}
+}
+
+func TestPlainNamesAndAddressesAreAccepted(t *testing.T) {
+	for _, o := range []Options{
+		{Domain: "gt.example.com"},
+		{Domain: "ghost-tree.eu"},
+		{Domain: "a.b.c.example.org", TLS: "builtin", Email: "ops+gt@example.com"},
+		{Domain: "xn--bcher-kva.example", TLS: "builtin", Email: "Ops.Team_1@mail.example.co.uk"},
+		{Listen: "127.0.0.1:8474"}, {Listen: "[::1]:8474"}, {Listen: ":8474"}, {Listen: "localhost:9000"}, {Listen: "10.0.0.5:443"},
+		{Admin: "alex"}, {Admin: "Álex Müller"},
+	} {
+		if err := o.Validate(); err != nil {
+			t.Errorf("%+v: %v", o, err)
+		}
+	}
+}
+
+// An install of an earlier release made /etc/ghosttree 0700, which the service's
+// user cannot enter; a new install opens it (for entering, not listing).
+func TestInstallOpensAConfigDirectoryAnEarlierInstallClosed(t *testing.T) {
+	prefix := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(prefix, EtcDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sys := newFakeSystem(t, prefix)
+	env, _ := testEnv(sys)
+	if _, err := Install(context.Background(), Options{Prefix: prefix, CtxBinary: ctxSource(t, "0.1.0")}, env); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(prefix, EtcDir)); err != nil || fi.Mode().Perm() != 0o711 {
+		t.Errorf("%v %v", fi, err)
 	}
 }

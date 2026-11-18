@@ -26,7 +26,7 @@ const serverUsage = `usage: ctx server install [options]
            administrator and the gardener's account, and print a login link
   update   move the server to another release: check its signature and checksum,
            copy the database, replace ctx, restart, and go back if the new
-           release does not come up
+           release does not come up; it only goes up unless --force is given
   doctor   check the server of this machine (service, database, backup, key)
 
 ctx server install asks what it needs when it has a terminal; every answer
@@ -41,15 +41,19 @@ can also be given as an option, and --yes (or no terminal) takes the defaults:
                     (the name must point here; ports 80 and 443 must be free)
   --email ADDRESS   contact address for Let's Encrypt, optional
   --listen ADDR     listen address, default 127.0.0.1:8474
-  --admin NAME      name of the first administrator, default admin
+  --admin NAME      name of the first administrator (default: admin, also with --yes)
   --language de|en  language of the interface (empty: each person's browser)
   --ai anthropic|openai --ai-key-file FILE [--ai-model M] [--ai-base-url URL]
                     connect a model provider; the key is read from a file
-  --force           write settings and units again from these answers
+  --force           on a machine that has a server already: write settings and
+                    units again from these answers, after copying the database,
+                    replacing ctx and bringing the schema up to date (without
+                    it, install stops and points to ctx server update)
   --yes             do not ask
   --wait 90s        how long the server may take to come up
 
-It needs root (sudo) and a machine that runs systemd. It can be run again.`
+It needs root (sudo) and a machine that runs systemd. On a machine with a server
+set up, use ctx server update.`
 
 // serverRelease and serverSystem are seams for the tests of the commands.
 var (
@@ -121,6 +125,12 @@ func cmdServerInstall(args []string, stdout io.Writer) int {
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	o.Prefix = serverPrefix
+	// Before a question is asked: a server that is set up is updated, not
+	// installed over.
+	if !o.Force && serverinstall.Existing(o) {
+		fmt.Fprintf(stdout, "server install: %v (%s or %s exists).\nUpdate it with: ctx server update. To set it up again from other answers, add --force: the database is copied first and its schema brought up to date.\n", serverinstall.ErrInstalled, serverinstall.ServiceID, serverinstall.StateDir)
+		return 1
+	}
 
 	if !*yes {
 		if t, err := installTTY(); err == nil {
@@ -142,7 +152,7 @@ func cmdServerInstall(args []string, stdout io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "\nghosttree %s is running as %s.\n\n", version, serverinstall.ServiceID)
 	printServerChecks(stdout, res.Checks)
-	fmt.Fprintf(stdout, "\nSign in as %s (one use, valid 15 minutes):\n  %s\n", o.Admin, res.LoginURL)
+	fmt.Fprintf(stdout, "\nSign in as %s (one use, valid 15 minutes):\n  %s\n", res.Admin, res.LoginURL)
 	fmt.Fprintln(stdout, "\nNext:")
 	if o.Domain != "" && o.TLS != "builtin" {
 		fmt.Fprintf(stdout, "  - Put a proxy in front: copy %s/Caddyfile or %s/nginx.conf (they forward to %s).\n", serverinstall.ProxyDir, serverinstall.ProxyDir, o.ListenAddr())

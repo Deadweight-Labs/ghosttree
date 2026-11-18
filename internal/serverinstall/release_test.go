@@ -214,3 +214,74 @@ func TestLatestFindsTheStableTagOrSaysThereIsNone(t *testing.T) {
 		t.Error("an odd tag was accepted")
 	}
 }
+
+// "http://localhost:1@example.org" is a request to example.org.
+func TestPlainHttpIsOnlyForThisMachine(t *testing.T) {
+	for raw, ok := range map[string]bool{
+		"https://github.com/x":                true,
+		"http://localhost:8080/dl":            true,
+		"http://127.0.0.1:1/x":                true,
+		"http://[::1]:8080/x":                 true,
+		"http://localhost:1@example.org/dl":   false,
+		"http://localhost@example.org/dl":     false,
+		"http://127.0.0.1:1@example.org/dl":   false,
+		"http://[::1]:1@example.org/dl":       false,
+		"http://localhost.example.org/dl":     false,
+		"http://127.0.0.1.example.org/dl":     false,
+		"http://example.org/dl":               false,
+		"ftp://localhost/dl":                  false,
+		"http://localhost:1\\@example.org/dl": false,
+	} {
+		if err := httpsOrLoopback(raw); (err == nil) != ok {
+			t.Errorf("%s: accepted=%v, want %v (%v)", raw, err == nil, ok, err)
+		}
+	}
+}
+
+// The case the rule is for: the address is https and the answer sends the
+// client to plain http, where a genuine copy of the file is waiting. Following
+// it would succeed, so refusing it is what the test sees.
+func TestReleaseDownloadDoesNotFollowARedirectFromHttpsToHttp(t *testing.T) {
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("genuine")) }))
+	t.Cleanup(plain.Close)
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ok" {
+			w.Write([]byte("genuine"))
+			return
+		}
+		http.Redirect(w, r, plain.URL+"/x", http.StatusFound)
+	}))
+	t.Cleanup(secure.Close)
+	rel := Release{HTTP: secure.Client()}
+	if b, err := rel.get(context.Background(), secure.URL+"/ok", 100); err != nil || string(b) != "genuine" {
+		t.Fatalf("the control request failed: %q %v", b, err)
+	}
+	if b, err := rel.get(context.Background(), secure.URL+"/x", 100); err == nil {
+		t.Fatalf("followed a redirect to plain http: %q", b)
+	} else if !strings.Contains(err.Error(), "redirect") {
+		t.Errorf("error does not say why: %v", err)
+	}
+}
+
+// A mirror on this machine may redirect on this machine, and nowhere else.
+func TestReleaseDownloadFollowsRedirectsOnThisMachineOnly(t *testing.T) {
+	var self *httptest.Server
+	self = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/a":
+			http.Redirect(w, r, self.URL+"/b", http.StatusFound)
+		case "/b":
+			w.Write([]byte("b"))
+		default:
+			http.Redirect(w, r, "http://downloads.example.org/x", http.StatusFound)
+		}
+	}))
+	t.Cleanup(self.Close)
+	rel := Release{}
+	if b, err := rel.get(context.Background(), self.URL+"/a", 100); err != nil || string(b) != "b" {
+		t.Fatalf("%q %v", b, err)
+	}
+	if _, err := rel.get(context.Background(), self.URL+"/away", 100); err == nil {
+		t.Error("followed a redirect to another host over plain http")
+	}
+}

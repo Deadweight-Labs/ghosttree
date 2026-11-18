@@ -101,13 +101,39 @@ func SystemdRunning() bool {
 type Result struct {
 	LoginURL  string
 	PublicURL string
-	Checks    []Check
+	// Admin is the account the login link is for.
+	Admin  string
+	Checks []Check
 }
 
-// Install sets a server up and starts it. It can be run again: an existing
-// secret key and server.env stay as they are (Options.Force replaces server.env
-// and the units), a started service is restarted, an existing admin account is
-// kept and gets a new login link.
+// ErrInstalled is what Install answers when a server is already set up and
+// Options.Force is not set.
+var ErrInstalled = errors.New("a ghosttree server is already set up on this machine")
+
+// Existing reports whether a server is set up here: its unit or its data
+// directory is there. (The program alone is not a server: a connected machine
+// has one too.)
+func Existing(o Options) bool {
+	for _, p := range []string{filepath.Join(UnitDir, ServiceID), StateDir} {
+		if _, err := os.Lstat(o.path(p)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// AdminName is the account the first login link is for: the answer, or "admin".
+func (o Options) AdminName() string { return o.admin() }
+
+// Install sets a server up and starts it, on a machine that has none. Where one
+// is set up already it stops and points to ctx server update: an install over
+// it would swap the program and the settings under a running server with its
+// data. Options.Force goes on anyway, the way an update does: the database is
+// copied first, the program is replaced with the old one kept, the schema is
+// brought up to date, and it goes back if the server does not come up. An
+// existing secret key stays as it is, and so do the settings (Force writes them
+// again from the answers); an existing admin account is kept and gets a new
+// login link.
 func Install(ctx context.Context, o Options, env Env) (*Result, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
@@ -132,14 +158,34 @@ func Install(ctx context.Context, o Options, env Env) (*Result, error) {
 		src = exe
 	}
 
-	// 1. The program, where every user finds it.
-	if err := installBinary(src, o.path(BinPath)); err != nil {
-		return nil, fmt.Errorf("install ctx: %w", err)
+	if Existing(o) && !o.Force {
+		return nil, fmt.Errorf("%w (%s or %s exists). Update it with: ctx server update. To set it up again from these answers anyway, add --force: the database is copied first and its schema brought up to date", ErrInstalled, ServiceID, StateDir)
+	}
+
+	// 1. The program, where every user finds it. On a server that exists it
+	// goes the way an update goes: database copied, program swapped, schema
+	// upgraded, back again if the server does not answer.
+	moved := false
+	if Existing(o) {
+		var err error
+		if moved, err = moveExisting(ctx, o, env, src); err != nil {
+			return nil, err
+		}
+	}
+	if !moved {
+		if err := installBinary(src, o.path(BinPath)); err != nil {
+			return nil, fmt.Errorf("install ctx: %w", err)
+		}
 	}
 	env.say("ctx installed as %s", BinPath)
 
 	// 2. Configuration. Nothing that holds a secret is ever replaced.
-	if err := os.MkdirAll(o.path(EtcDir), 0o700); err != nil {
+	if err := os.MkdirAll(o.path(EtcDir), EtcDirMode); err != nil {
+		return nil, err
+	}
+	// MkdirAll leaves a directory that exists as it is: an earlier install made
+	// it 0700, and the service could not open llm.json in it.
+	if err := os.Chmod(o.path(EtcDir), EtcDirMode); err != nil {
 		return nil, err
 	}
 	wrote, err := writeFile(o.path(SecretKey), []byte(newSecretKey()+"\n"), 0o600, false)
@@ -217,7 +263,7 @@ func Install(ctx context.Context, o Options, env Env) (*Result, error) {
 		env.say("first backup did not run: %v: %s", err, strings.TrimSpace(out))
 	}
 
-	res := &Result{LoginURL: link, PublicURL: o.PublicURL()}
+	res := &Result{LoginURL: link, PublicURL: o.PublicURL(), Admin: o.admin()}
 	res.Checks = Doctor(ctx2, o, env)
 	return res, nil
 }
@@ -381,4 +427,63 @@ func loginLink(ctx context.Context, env Env, o Options) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("login link: no address in the answer: %s", strings.TrimSpace(out))
+}
+
+// moveExisting puts src in place of the ctx of a server that is set up, with
+// the safety of an update. It reports whether it did; a server that has no
+// database yet (an installation that stopped half way) or no ctx that runs has
+// nothing to protect, and the plain installation goes on.
+func moveExisting(ctx context.Context, o Options, env Env, src string) (bool, error) {
+	if _, err := os.Lstat(o.path(DBPath)); err != nil {
+		return false, nil
+	}
+	disk := OptionsFromDisk(o.Prefix)
+	bin := o.path(BinPath)
+	old, err := binVersion(ctx, env, bin)
+	if err != nil {
+		return false, nil
+	}
+	// The new program is a file next to the old one, like a download.
+	tmp, err := copyBeside(src, bin)
+	if err != nil {
+		return false, fmt.Errorf("install ctx: %w", err)
+	}
+	defer os.Remove(tmp)
+	version, err := binVersion(ctx, env, tmp)
+	if err != nil {
+		return false, fmt.Errorf("the ctx to install does not run: %w", err)
+	}
+	env.say("a server is set up here: copying its database and moving it from ctx %s to %s", old, version)
+	if _, err := moveTo(ctx, env, disk, old, tmp, version, &UpdateResult{From: old, To: version}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// copyBeside copies src to a new executable file in the directory of dst and
+// returns its path.
+func copyBeside(src, dst string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return "", err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".ctx-new-*")
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(tmp, in); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	if err := tmp.Chmod(0o755); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	return tmp.Name(), tmp.Close()
 }

@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -94,25 +96,40 @@ func cmdDBBackup(args []string, stdout io.Writer) int {
 
 func backupName(t time.Time) string { return "ghosttree-" + t.Format("20060102-150405") + ".db" }
 
-// pruneBackups removes all but the newest keep files named like backupName's
-// results from dir and returns what it removed. The names sort by time.
+// preUpdateRE matches the copy ctx server update makes before it changes
+// anything: pre-update-<old>-to-<new>-<UTC time>.db.
+var preUpdateRE = regexp.MustCompile(`^pre-update-.+-(\d{8}-\d{6})\.db$`)
+
+// pruneBackups removes all but the newest keep files of each kind from dir and
+// returns what it removed: the nightly copies (named like backupName's results,
+// which sort by time) and the copies from before an update (pre-update-*,
+// ordered by the time in their name). Only regular files with those names are
+// touched.
 func pruneBackups(dir string, keep int) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
-	var names []string
+	type file struct{ name, key string }
+	var nightly, before []file
 	for _, e := range entries {
 		n := e.Name()
-		if e.Type().IsRegular() && strings.HasPrefix(n, "ghosttree-") && strings.HasSuffix(n, ".db") && len(n) == len(backupName(time.Time{})) {
-			names = append(names, n)
+		if !e.Type().IsRegular() {
+			continue
+		}
+		if strings.HasPrefix(n, "ghosttree-") && strings.HasSuffix(n, ".db") && len(n) == len(backupName(time.Time{})) {
+			nightly = append(nightly, file{n, n})
+		} else if m := preUpdateRE.FindStringSubmatch(n); m != nil {
+			before = append(before, file{n, m[1] + n})
 		}
 	}
-	sort.Strings(names)
 	var removed []string
-	for i := 0; i < len(names)-keep; i++ {
-		if os.Remove(filepath.Join(dir, names[i])) == nil {
-			removed = append(removed, names[i])
+	for _, group := range [][]file{nightly, before} {
+		sort.Slice(group, func(i, j int) bool { return group[i].key < group[j].key })
+		for i := 0; i < len(group)-keep; i++ {
+			if os.Remove(filepath.Join(dir, group[i].name)) == nil {
+				removed = append(removed, group[i].name)
+			}
 		}
 	}
 	return removed
@@ -125,6 +142,105 @@ first. The copy is checked before anything changes; the database it replaces
 (and its -wal and -shm files) stays next to it as <path>.failed-<UTC time>, so a
 restore can be taken back. Run it as the user that owns the database (see
 "Running maintenance commands" in deploy/README.md).`
+
+// restoreNow is the clock of a restore, which stamps what it keeps. Tests set it.
+var restoreNow = time.Now
+
+// swapIn puts the file repl (written, synced, in the database's directory) in
+// place of the database at db, and keeps what it replaces as
+// <db>.failed-<stamp>[-wal|-shm]. Everything that can fail is done before the
+// first change, so a failure leaves the database exactly as it was:
+//
+//  1. the kept names are made as hard links of the old files (all or none);
+//  2. the old -shm and -wal go: they belong to the database being replaced, and
+//     a WAL replayed into another database corrupts it;
+//  3. repl is renamed over db, which is atomic: there is no moment without a
+//     database.
+//
+// The directory is synced after each step, so a crash cannot leave the names in
+// another order than the one that was made.
+func swapIn(db, repl, stamp string) error {
+	dir := filepath.Dir(db)
+	type kept struct{ old, aside string }
+	var all []kept
+	undo := func() {
+		for _, k := range all {
+			os.Remove(k.aside)
+		}
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		old := db + suffix
+		if _, err := os.Lstat(old); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			undo()
+			return err
+		}
+		aside := db + ".failed-" + stamp + suffix
+		if err := linkOrCopy(old, aside); err != nil {
+			undo()
+			return fmt.Errorf("cannot keep %s as %s, nothing was changed: %w", old, aside, err)
+		}
+		all = append(all, kept{old, aside})
+	}
+	syncDir(dir)
+	for _, suffix := range []string{"-shm", "-wal"} {
+		if err := os.Remove(db + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("cannot remove %s%s: %w (the database was not replaced)", filepath.Base(db), suffix, err)
+		}
+	}
+	syncDir(dir)
+	if err := os.Rename(repl, db); err != nil {
+		// Back to what there was: the WAL goes back next to its database.
+		for _, k := range all {
+			if k.old != db {
+				os.Link(k.aside, k.old)
+			}
+		}
+		return fmt.Errorf("%w (the database was not replaced)", err)
+	}
+	syncDir(dir)
+	return nil
+}
+
+// linkOrCopy makes dst a second name of src, or, where the file system does not
+// link, a copy. It never replaces a file that exists.
+func linkOrCopy(src, dst string) error {
+	err := os.Link(src, dst)
+	if err == nil || errors.Is(err, os.ErrExist) {
+		return err
+	}
+	in, oerr := os.Open(src)
+	if oerr != nil {
+		return oerr
+	}
+	defer in.Close()
+	out, oerr := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if oerr != nil {
+		return oerr
+	}
+	if _, cerr := io.Copy(out, in); cerr != nil {
+		out.Close()
+		os.Remove(dst)
+		return cerr
+	}
+	if cerr := out.Sync(); cerr != nil {
+		out.Close()
+		os.Remove(dst)
+		return cerr
+	}
+	return out.Close()
+}
+
+// syncDir makes the names in dir durable. A file system that cannot sync a
+// directory has nothing to offer here, so the error is not one.
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
+}
 
 // cmdDBRestore is what ctx server update uses to go back when the new release
 // does not come up, and what a person runs after a disk failure.
@@ -177,17 +293,8 @@ func cmdDBRestore(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "restore: %v\n", cerr)
 		return 1
 	}
-	stamp := time.Now().UTC().Format("20060102-150405")
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		old := *dbPath + suffix
-		if _, err := os.Lstat(old); err == nil {
-			if err := os.Rename(old, *dbPath+".failed-"+stamp+suffix); err != nil {
-				fmt.Fprintf(stdout, "restore: cannot move %s aside: %v\n", old, err)
-				return 1
-			}
-		}
-	}
-	if err := os.Rename(tmp.Name(), *dbPath); err != nil {
+	stamp := restoreNow().UTC().Format("20060102-150405")
+	if err := swapIn(*dbPath, tmp.Name(), stamp); err != nil {
 		fmt.Fprintf(stdout, "restore: %v\n", err)
 		return 1
 	}

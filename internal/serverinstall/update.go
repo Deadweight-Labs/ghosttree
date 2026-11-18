@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -90,6 +91,9 @@ func Update(ctx context.Context, uo UpdateOptions, rel Release, env Env) (*Updat
 		res.Unchanged = true
 		return res, nil
 	}
+	if IsDowngrade(old, res.To) && !uo.Force {
+		return nil, fmt.Errorf("%s is older than the %s that runs here: going back is a downgrade, and the database of the newer release may not open with the older one; nothing was changed. Add --force to do it anyway (the database is copied first)", tag, old)
+	}
 
 	env.say("fetching %s and checking its signature", tag)
 	got, err := rel.Fetch(ctx, tag, filepath.Dir(bin))
@@ -101,7 +105,17 @@ func Update(ctx context.Context, uo UpdateOptions, rel Release, env Env) (*Updat
 		return nil, fmt.Errorf("the downloaded ctx does not run as %s (%v %s); nothing was changed", got.Version, err, v)
 	}
 	env.say("signature and checksum ok, ctx %s -> %s", old, got.Version)
+	return moveTo(ctx, env, o, old, got.Binary, got.Version, res)
+}
 
+// moveTo is the part of an update that touches the server: stop it, copy the
+// database with the old binary, swap in the new binary (a file next to it,
+// already checked), bring the schema up to date and start it; if that does not
+// end in a server that answers with the new version, everything goes back. o is
+// the configuration on disk, which is what the old server runs with.
+func moveTo(ctx context.Context, env Env, o Options, old, newBinary, newVersion string, res *UpdateResult) (*UpdateResult, error) {
+	bin := o.path(BinPath)
+	got := struct{ Binary, Version string }{newBinary, newVersion}
 	local := "http://" + localAddr(o.listen())
 	if out, err := env.Sys.Run(ctx, "systemctl", "stop", ServiceID); err != nil {
 		return nil, fmt.Errorf("systemctl stop %s: %v: %s", ServiceID, err, strings.TrimSpace(out))
@@ -121,7 +135,7 @@ func Update(ctx context.Context, uo UpdateOptions, rel Release, env Env) (*Updat
 		return nil, err
 	}
 
-	res.Backup = fmt.Sprintf("%s/pre-update-%s-to-%s-%s.db", BackupDir, old, got.Version, time.Now().UTC().Format("20060102-150405"))
+	res.Backup = fmt.Sprintf("%s/pre-update-%s-to-%s-%s.db", BackupDir, safeName(old), safeName(got.Version), time.Now().UTC().Format("20060102-150405"))
 	if out, err := asServiceBin(ctx, env, bin, "db", "backup", "--db", DBPath, "--out", res.Backup); err != nil {
 		return abort(fmt.Errorf("the database could not be copied, so nothing was changed: %v: %s", err, strings.TrimSpace(out)))
 	}
@@ -173,8 +187,53 @@ func Update(ctx context.Context, uo UpdateOptions, rel Release, env Env) (*Updat
 	return res, nil
 }
 
-func safeName(v string) string {
-	return regexp.MustCompile(`[^A-Za-z0-9._+-]`).ReplaceAllString(v, "-")
+var unsafeNameRE = regexp.MustCompile(`[^A-Za-z0-9._+-]`)
+
+// safeName makes a version fit to stand in a file name.
+func safeName(v string) string { return unsafeNameRE.ReplaceAllString(v, "-") }
+
+var releaseVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$`)
+
+// parseVersion reads 1.2.3 or 1.2.3-rc.4 (what releases are tagged with).
+func parseVersion(v string) (parts [4]int, ok bool) {
+	m := releaseVersionRE.FindStringSubmatch(v)
+	if m == nil {
+		return parts, false
+	}
+	for i := 0; i < 3; i++ {
+		n, err := strconv.Atoi(m[i+1])
+		if err != nil {
+			return parts, false
+		}
+		parts[i] = n
+	}
+	// A release is newer than its own candidates: 1.2.3 > 1.2.3-rc.9.
+	parts[3] = int(^uint(0) >> 1)
+	if m[4] != "" {
+		n, err := strconv.Atoi(m[4])
+		if err != nil {
+			return parts, false
+		}
+		parts[3] = n
+	}
+	return parts, true
+}
+
+// IsDowngrade reports whether moving from the version that runs to next goes
+// back. Versions that are not release versions (a local build) cannot be
+// ordered and are never called a downgrade.
+func IsDowngrade(running, next string) bool {
+	a, ok1 := parseVersion(running)
+	b, ok2 := parseVersion(next)
+	if !ok1 || !ok2 {
+		return false
+	}
+	for i := range a {
+		if b[i] != a[i] {
+			return b[i] < a[i]
+		}
+	}
+	return false
 }
 
 // keepOld preserves the installed binary under prev (a hard link, so a running

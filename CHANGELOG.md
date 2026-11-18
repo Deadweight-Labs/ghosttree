@@ -171,7 +171,13 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   copies the database, replaces `ctx`, restarts, and goes back to the old
   version and database when the new one does not come up. `ctx server doctor`
   checks the server of a machine. Tested with real systemd in fresh Debian,
-  Ubuntu and Fedora containers.
+  Ubuntu and Fedora containers. Installing over a server that exists is
+  refused and points to the update (`--force` copies the database first, as an
+  update does), an update only goes up unless `--force` is given, `--domain`,
+  `--email` and `--listen` are checked against a plain list, the unit is
+  hardened, the service's user can open `llm.json`, a restore keeps the
+  database as it was when it cannot keep what it replaces, and the copies from
+  before updates are pruned like the nightly ones.
 
 - `ctx serve` can get its own certificate from Let's Encrypt
   (`--tls-acme-host`, env `GHOSTTREE_TLS_ACME_HOST`): https on `--tls-listen`

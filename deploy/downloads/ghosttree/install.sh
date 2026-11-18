@@ -24,6 +24,10 @@
 # Without a mode a terminal gets a menu; without a terminal only ctx is
 # installed.
 #
+# On a machine that has a server already, --server updates it (ctx server update:
+# database copied first, back again if the new release does not come up) and
+# leaves the installed ctx alone; options for a first installation are refused.
+#
 # Environment: GHOSTTREE_VERSION (as --version), GHOSTTREE_RELEASE_BASE (where
 # <tag>/<file> is downloaded from) and GHOSTTREE_API_URL (where the newest tag is
 # asked for) replace the GitHub addresses. The signature key cannot be replaced.
@@ -350,14 +354,46 @@ Release candidates are installed on request: run this again with --version v0.1.
   # ---- install ---------------------------------------------------------------
 
   if [ "$mode" = server ]; then
-    # A system service wants ctx where every user finds it.
-    bindir=/usr/local/bin
-    if [ "$(id -u)" -ne 0 ]; then
+    # A system service wants ctx where every user finds it. GHOSTTREE_PREFIX
+    # moves every system path under a directory (tests and image builds; no
+    # root needed there).
+    prefix=${GHOSTTREE_PREFIX:-}
+    bindir=$prefix/usr/local/bin
+    if [ -n "$prefix" ]; then
+      sudo_cmd=
+    elif [ "$(id -u)" -ne 0 ]; then
       command -v sudo >/dev/null 2>&1 || die "setting up a server needs root: run this as root, or install sudo"
       sudo_cmd=sudo
     else
       sudo_cmd=
     fi
+
+    # A server that is set up here is moved to a new release by ctx server
+    # update: it copies the database first, keeps the old ctx and goes back if
+    # the new release does not come up. Putting a new ctx over the old one under
+    # a running service does none of that, so the program is left where it is.
+    if [ -e "$prefix/etc/systemd/system/ghosttree.service" ] || [ -e "$prefix/var/lib/ghosttree" ] || [ -L "$prefix/var/lib/ghosttree" ]; then
+      extra=''
+      for a in "$@"; do
+        case "$a" in --yes | -y) ;; *) extra="$extra $a" ;; esac
+      done
+      if ! "$bindir/ctx" server update --help >/dev/null 2>&1; then
+        die "a ghosttree server is already set up on this machine, and its ctx ($bindir/ctx) does not know 'ctx server update'.
+It was set up by hand or by an older release: move it with the steps in deploy/README.md. Nothing was changed."
+      fi
+      if [ -n "$extra" ]; then
+        die "a ghosttree server is already set up on this machine, so these options do not apply:$extra
+They are for a first installation. To move the server to $version run: sudo ctx server update --version $version
+To set it up again from other answers: sudo ctx server install --force$extra
+Nothing was changed."
+      fi
+      say "A ghosttree server is already set up here: updating it with ctx server update (copy of the database first, back again if the new release does not come up)"
+      # (Not exec: the trap that removes the temporary directory has to run.)
+      # shellcheck disable=SC2086
+      $sudo_cmd "$bindir/ctx" server update --version "$version"
+      exit 0
+    fi
+
     # shellcheck disable=SC2086
     $sudo_cmd mkdir -p "$bindir" || die "cannot create $bindir"
     # shellcheck disable=SC2086

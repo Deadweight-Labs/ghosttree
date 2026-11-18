@@ -187,3 +187,89 @@ func TestUpdateNeedsAnInstalledServer(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestIsDowngradeOrdersReleasesAndCandidates(t *testing.T) {
+	for _, c := range []struct {
+		running, next string
+		down          bool
+	}{
+		{"0.2.0", "0.1.0", true},
+		{"0.2.0", "v0.1.9", true},
+		{"1.0.0", "0.9.9", true},
+		{"0.1.0", "0.1.0-rc.3", true}, // the release is newer than its candidates
+		{"0.1.0-rc.3", "0.1.0-rc.2", true},
+		{"0.1.10", "0.1.9", true},
+		{"0.1.0", "0.2.0", false},
+		{"0.1.0-rc.3", "0.1.0", false},
+		{"0.1.0-rc.2", "0.1.0-rc.10", false},
+		{"0.1.0", "0.1.0", false},
+		{"dev", "0.1.0", false}, // a local build cannot be ordered
+		{"0.2.0", "dev", false},
+		{"0.2.0", "0.1.0-weird", false},
+	} {
+		if got := IsDowngrade(c.running, c.next); got != c.down {
+			t.Errorf("IsDowngrade(%q, %q) = %v, want %v", c.running, c.next, got, c.down)
+		}
+	}
+}
+
+// Going back to an older release can leave the database in a state the older
+// program does not open. Without --force it does not start; with it, the usual
+// copy is made first.
+func TestUpdateToAnOlderReleaseNeedsForce(t *testing.T) {
+	u := newUpdateFixture(t)
+	u.fake.publish(t, u.key, "v0.2.0", "v:0.2.0\n")
+	if _, err := u.update(t, "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	u.sys.cmds = nil
+	u.fake.publish(t, u.key, "v0.1.5", "v:0.1.5\n")
+
+	_, err := u.update(t, "v0.1.5")
+	if err == nil || !strings.Contains(err.Error(), "downgrade") || !strings.Contains(err.Error(), "--force") || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("error = %v", err)
+	}
+	if u.sys.saw("systemctl stop") || u.sys.binVersion() != "0.2.0" || !u.sys.running {
+		t.Errorf("the server was touched (binary %q):\n%s", u.sys.binVersion(), strings.Join(u.sys.commands(), "\n"))
+	}
+	if left, _ := filepath.Glob(filepath.Join(u.prefix, "usr/local/bin/.ctx-new-*")); len(left) != 0 {
+		t.Errorf("temporary files left: %v", left)
+	}
+
+	res, err := Update(context.Background(), UpdateOptions{Prefix: u.prefix, Version: "v0.1.5", Force: true}, u.rel, u.env)
+	if err != nil || res.To != "0.1.5" || u.sys.binVersion() != "0.1.5" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if !u.sys.saw("db backup --db " + DBPath) {
+		t.Error("a forced downgrade must copy the database first")
+	}
+}
+
+// A release candidate of the version that runs is older than it, too.
+func TestUpdateFromAReleaseToItsCandidateIsADowngrade(t *testing.T) {
+	u := newUpdateFixture(t)
+	u.fake.publish(t, u.key, "v0.1.0-rc.3", "v:0.1.0-rc.3\n")
+	if _, err := u.update(t, "v0.1.0-rc.3"); err == nil || !strings.Contains(err.Error(), "downgrade") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// The name of a copy is made from the versions the programs report, which are
+// text: nothing in it may leave the backup directory.
+func TestUpdateBackupNameCannotLeaveTheBackupDirectory(t *testing.T) {
+	prefix := t.TempDir()
+	sys := newFakeSystem(t, prefix)
+	env, _ := testEnv(sys)
+	if _, err := Install(context.Background(), Options{Prefix: prefix, CtxBinary: ctxSource(t, "0.1.0/../../../x"), Admin: "alex"}, env); err != nil {
+		t.Fatal(err)
+	}
+	k, f := newTestKey(t), newFakeReleases(t)
+	f.publish(t, k, "v0.2.0", "v:0.2.0\n")
+	res, err := Update(context.Background(), UpdateOptions{Prefix: prefix, Version: "v0.2.0"}, f.release(k), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(res.Backup) != BackupDir || strings.Contains(filepath.Base(res.Backup), "/") {
+		t.Errorf("the copy would be written to %q", res.Backup)
+	}
+}

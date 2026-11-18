@@ -81,7 +81,11 @@ func (r Release) get(ctx context.Context, u string, limit int64) ([]byte, error)
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "ctx-server")
-	resp, err := r.client().Do(req)
+	// A redirect is checked like the first address: never from https to plain
+	// http, and plain http only to this machine.
+	client := *r.client()
+	client.CheckRedirect = checkRedirect
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +103,23 @@ func (r Release) get(ctx context.Context, u string, limit int64) ([]byte, error)
 	return b, nil
 }
 
+// checkRedirect is the redirect policy of release downloads.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if err := httpsOrLoopback(req.URL.String()); err != nil {
+		return fmt.Errorf("refusing a redirect: %w", err)
+	}
+	if via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+		return fmt.Errorf("refusing a redirect from https to plain http (%s)", req.URL.Host)
+	}
+	return nil
+}
+
 // httpsOrLoopback refuses plain http except to this machine, as install.sh does.
+// url.URL.Hostname leaves out the user information, so "http://localhost:1@example.org"
+// is the host example.org here, as it is for the client that sends the request.
 func httpsOrLoopback(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {

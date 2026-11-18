@@ -201,3 +201,42 @@ func TestServerUpdateNeedsAReleaseKeyAndAnInstalledServer(t *testing.T) {
 		t.Errorf("%d %s", code, out.String())
 	}
 }
+
+// "Sign in as  (one use…" with no name was what --yes without --admin printed.
+func TestServerInstallWithYesAndNoAdminNamesTheDefaultAdmin(t *testing.T) {
+	withServerSeams(t, &stubSystem{}, nil)
+	var out bytes.Buffer
+	if code := cmdServer([]string{"install", "--yes"}, &out); code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "Sign in as admin (one use, valid 15 minutes):") || strings.Contains(out.String(), "Sign in as  ") {
+		t.Errorf("the login line:\n%s", out.String())
+	}
+}
+
+// A second install on a machine that has a server is an update that someone
+// forgot: it must say so before it asks a single question.
+func TestServerInstallOnAServerThatExistsPointsToUpdateBeforeAskingAnything(t *testing.T) {
+	term := &scriptedTerminal{answers: []string{"gt.example.com"}}
+	prefix := withServerSeams(t, &stubSystem{}, term)
+	var out bytes.Buffer
+	if code := cmdServer([]string{"install", "--yes"}, &out); code != 0 {
+		t.Fatalf("first install: exit %d:\n%s", code, out.String())
+	}
+	env1, _ := os.ReadFile(filepath.Join(prefix, serverinstall.ServerEnv))
+	out.Reset()
+	if code := cmdServer([]string{"install"}, &out); code != 1 {
+		t.Fatalf("second install: exit %d:\n%s", code, out.String())
+	}
+	if len(term.asked) != 0 {
+		t.Errorf("it asked before refusing: %v", term.asked)
+	}
+	for _, want := range []string{"already set up", "ctx server update", "--force"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if env2, _ := os.ReadFile(filepath.Join(prefix, serverinstall.ServerEnv)); !bytes.Equal(env1, env2) {
+		t.Error("the settings of the running server were changed")
+	}
+}

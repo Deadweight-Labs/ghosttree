@@ -1,19 +1,27 @@
 package serverinstall
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"unicode"
 )
 
 // The places a server lives in, as the service sees them. Options.Prefix moves
 // where installation writes them to (tests, image builds); it never appears in
 // a unit or a configuration file.
 const (
-	BinPath    = "/usr/local/bin/ctx"
-	EtcDir     = "/etc/ghosttree"
+	BinPath = "/usr/local/bin/ctx"
+	EtcDir  = "/etc/ghosttree"
+	// EtcDirMode lets the service's dynamic user walk to the files that hold no
+	// secret (llm.json); nobody can list the directory. Every file in it that
+	// does hold one is 0600 or 0640 and root's.
+	EtcDirMode = 0o711
 	UnitDir    = "/etc/systemd/system"
 	StateDir   = "/var/lib/ghosttree"
 	DBPath     = StateDir + "/ghosttree.db"
@@ -83,13 +91,28 @@ func (o Options) path(abs string) string {
 	return filepath.Join(o.Prefix, abs)
 }
 
+// A DNS name in lower case: labels of letters, digits and hyphens, at least two
+// of them, the last starting with a letter. Everything else (a newline, a brace,
+// a semicolon, a quote, a space) would end up in server.env, the Caddyfile and
+// nginx.conf, so only what is on the list gets through.
+var domainRE = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// An address for Let's Encrypt: a plain local part and a DNS name.
+var emailRE = regexp.MustCompile(`(?i)^[a-z0-9._%+-]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// A host name or address in --listen.
+var listenHostRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$`)
+
+func validDomain(d string) bool { return len(d) <= 253 && domainRE.MatchString(d) }
+func validEmail(e string) bool  { return len(e) <= 254 && emailRE.MatchString(e) }
+
 // Validate checks the answers before anything is written.
 func (o Options) Validate() error {
-	if o.Domain != "" {
-		if o.Domain != strings.ToLower(o.Domain) || strings.ContainsAny(o.Domain, ":/@ ") || net.ParseIP(o.Domain) != nil ||
-			!strings.Contains(o.Domain, ".") || strings.Contains(o.Domain, "..") || strings.HasPrefix(o.Domain, ".") || strings.HasSuffix(o.Domain, ".") {
-			return fmt.Errorf("--domain must be a DNS name like ghosttree.example.com (no scheme, port or path), got %q", o.Domain)
-		}
+	if o.Domain != "" && !validDomain(o.Domain) {
+		return fmt.Errorf("--domain must be a DNS name in lower case like ghosttree.example.com (letters, digits, hyphens and dots; no scheme, port or path), got %q", o.Domain)
+	}
+	if o.Email != "" && !validEmail(o.Email) {
+		return fmt.Errorf("--email must be a plain address like ops@example.com, got %q", o.Email)
 	}
 	switch o.tls() {
 	case "proxy":
@@ -101,13 +124,16 @@ func (o Options) Validate() error {
 		return fmt.Errorf("--tls must be proxy or builtin, got %q", o.TLS)
 	}
 	host, port, err := net.SplitHostPort(o.listen())
-	if err != nil || port == "" {
+	if n, perr := strconv.Atoi(port); err != nil || perr != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
 		return fmt.Errorf("--listen must be host:port, got %q", o.Listen)
+	}
+	if host != "" && net.ParseIP(host) == nil && !listenHostRE.MatchString(host) {
+		return fmt.Errorf("--listen must be host:port with an address or a plain host name, got %q", o.Listen)
 	}
 	if o.Domain != "" && o.tls() == "proxy" && host != "127.0.0.1" && host != "localhost" && host != "::1" {
 		return fmt.Errorf("--listen %s is not on this machine only: behind a proxy the server must listen on loopback; put the proxy on this machine, or set GHOSTTREE_LISTEN and GHOSTTREE_TRUSTED_PROXIES in %s by hand", o.listen(), ServerEnv)
 	}
-	if n := o.admin(); strings.TrimSpace(n) != n || n == "" || strings.ContainsAny(n, "\n\r\t/\\") || len(n) > 64 {
+	if n := o.admin(); strings.TrimSpace(n) != n || n == "" || strings.ContainsAny(n, "\n\r\t/\\") || strings.IndexFunc(n, unicode.IsControl) >= 0 || len(n) > 64 {
 		return fmt.Errorf("--admin must be a plain name, got %q", n)
 	}
 	switch o.Language {
@@ -217,22 +243,54 @@ func (o Options) ServiceText() string {
 	b.WriteString("# The key that seals what the server keeps secret (AI keys); see deploy/README.md.\n")
 	b.WriteString("LoadCredential=ghosttree-secret-key:" + SecretKey + "\n")
 	if o.AI.enabled() {
+		// llm.json holds no secret (the key is the credential next to it), and the
+		// service opens it itself, as its dynamic user: /etc/ghosttree can be
+		// entered by everybody (Install sets EtcDirMode), the file can be read by
+		// everybody, and the key stays a root-only file that systemd hands over.
 		b.WriteString("LoadCredential=llm-key:" + LLMKey + "\nEnvironment=GHOSTTREE_LLM_CONFIG=" + LLMConfig + "\n")
 	}
 	if o.tls() == "builtin" {
-		b.WriteString("# Ports 80 and 443 for the server's own certificate.\nAmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n")
+		b.WriteString("# Ports 80 and 443 for the server's own certificate, and nothing else.\nAmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n")
+	} else {
+		b.WriteString("# Behind a proxy the server needs no privilege at all.\nCapabilityBoundingSet=\n")
 	}
+	b.WriteString(serviceHardening)
 	b.WriteString("UMask=0077\n")
 	b.WriteString(serviceExec)
 	b.WriteString("TimeoutStopSec=330\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n")
 	return b.String()
 }
 
+// serviceHardening keeps a compromised server from doing more than serving and
+// writing its own directory: no devices, no kernel settings, modules or logs, no
+// control groups, no namespaces, only network and unix sockets, no writable
+// executable memory, and the system calls of an ordinary service. DynamicUser
+// already gives it a private, read-only view of the file system. It is for the
+// server and the backup, which only read and write the database; the gardener's
+// units call git and claude and are looked at separately (deploy/README.md).
+const serviceHardening = `NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+`
+
 // BackupServiceText is the unit the backup timer starts: ctx db backup as the
 // service's own user, keeping the newest fourteen copies.
 func BackupServiceText() string {
 	return "[Unit]\nDescription=ghosttree database backup\nAfter=" + ServiceID + "\n\n" +
 		"[Service]\nType=oneshot\nUser=" + ServiceUser + "\nDynamicUser=yes\nStateDirectory=ghosttree\nUMask=0077\n" +
+		"CapabilityBoundingSet=\n" + serviceHardening +
 		"ExecStart=" + BinPath + " db backup --db " + DBPath + " --out " + BackupDir + " --keep 14\n"
 }
 
@@ -244,16 +302,17 @@ func BackupTimerText() string {
 
 // LLMConfigText is /etc/ghosttree/llm.json for the optional model provider.
 func (a AIOptions) LLMConfigText() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "{\n  \"format\": %q,\n", a.Format)
-	if a.BaseURL != "" {
-		fmt.Fprintf(&b, "  \"base_url\": %q,\n", a.BaseURL)
+	cfg := struct {
+		Format     string `json:"format"`
+		BaseURL    string `json:"base_url,omitempty"`
+		Model      string `json:"model,omitempty"`
+		Credential string `json:"credential"`
+	}{a.Format, a.BaseURL, a.Model, "llm-key"}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		panic(err) // strings only
 	}
-	if a.Model != "" {
-		fmt.Fprintf(&b, "  \"model\": %q,\n", a.Model)
-	}
-	b.WriteString("  \"credential\": \"llm-key\"\n}\n")
-	return b.String()
+	return string(b) + "\n"
 }
 
 // CaddyfileText is a site block for Caddy, which fetches the certificate itself

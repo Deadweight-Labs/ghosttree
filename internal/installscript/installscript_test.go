@@ -35,7 +35,7 @@ case "$1 $2" in
 esac
 case "$1" in
 join) [ "$2" = --help ] && exit 0; shift; echo "$*" > "$HOME/join-args" ;;
-server) if [ "$3" = --help ]; then exit 0; fi; shift 2; echo "$*" > "$HOME/server-args" ;;
+server) if [ "$3" = --help ]; then exit 0; fi; echo "$*" > "$HOME/server-args" ;;
 esac
 exit 0
 `
@@ -709,4 +709,148 @@ func TestWgetThatCannotRefuseARedirectIsTurnedAway(t *testing.T) {
 
 func pemOf(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// ---- the server way on a machine that has a server --------------------------
+
+// serverRoot is a made-up root with, optionally, a server set up in it and a
+// ctx of the given version in /usr/local/bin that records how it is called.
+func serverRoot(t *testing.T, installed bool, oldCtx string) string {
+	t.Helper()
+	root := t.TempDir()
+	bin := filepath.Join(root, "usr", "local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if oldCtx != "" {
+		if err := os.WriteFile(filepath.Join(bin, "ctx"), []byte(oldCtx), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if installed {
+		unit := filepath.Join(root, "etc", "systemd", "system")
+		if err := os.MkdirAll(unit, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(unit, "ghosttree.service"), []byte("[Service]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// oldCtxScript is the ctx of a server set up by an earlier release: it knows
+// ctx server update and records the call.
+const oldCtxScript = `#!/bin/sh
+case "$1 $2" in
+"version "*) echo "ctx 0.0.9-old" ;;
+"server update") if [ "$3" = --help ]; then exit 0; fi; shift 2; echo "$*" > "$HOME/update-args" ;;
+"server install") echo "install over a server must not run" > "$HOME/install-ran" ;;
+esac
+exit 0
+`
+
+func ctxVersion(t *testing.T, root string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(root, "usr", "local", "bin", "ctx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// The one line that people run again to update must not put a new ctx over the
+// running server's and then run install: that is how a server stopped working
+// with the old binary gone.
+func TestServerWayOnAMachineWithAServerUpdatesInsteadOfReplacingCtx(t *testing.T) {
+	_, k, srv := setup(t)
+	root := serverRoot(t, true, oldCtxScript)
+	r := runWith(t, k, toolbox(t, true, false), []string{
+		"GHOSTTREE_RELEASE_BASE=" + srv.URL + "/dl", "GHOSTTREE_API_URL=" + srv.URL + "/api", "GHOSTTREE_PREFIX=" + root,
+	}, "--version", "v0.1.0", "--server", "--yes")
+	if r.code != 0 {
+		t.Fatalf("exit %d:\n%s", r.code, r.out)
+	}
+	if got := ctxVersion(t, root); got != oldCtxScript {
+		t.Errorf("the installed ctx was replaced:\n%s", got)
+	}
+	b, err := os.ReadFile(filepath.Join(r.dir, "update-args"))
+	if err != nil || strings.TrimSpace(string(b)) != "--version v0.1.0" {
+		t.Errorf("ctx server update was not called with the version: %q %v\n%s", b, err, r.out)
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, "install-ran")); err == nil {
+		t.Error("ctx server install ran over the existing server")
+	}
+	if left, _ := filepath.Glob(filepath.Join(root, "usr", "local", "bin", ".ctx.new.*")); len(left) != 0 {
+		t.Errorf("temporary files left: %v", left)
+	}
+}
+
+// Options of a first installation (a name, a language...) do not apply to a
+// server that exists, and are not silently dropped.
+func TestServerWayOnAMachineWithAServerRefusesFirstInstallationOptions(t *testing.T) {
+	_, k, srv := setup(t)
+	root := serverRoot(t, true, oldCtxScript)
+	r := runWith(t, k, toolbox(t, true, false), []string{
+		"GHOSTTREE_RELEASE_BASE=" + srv.URL + "/dl", "GHOSTTREE_API_URL=" + srv.URL + "/api", "GHOSTTREE_PREFIX=" + root,
+	}, "--version", "v0.1.0", "--server", "--yes", "--domain", "gt.example.com")
+	if r.code == 0 {
+		t.Fatalf("accepted:\n%s", r.out)
+	}
+	for _, want := range []string{"already set up", "--domain", "ctx server update", "--force", "Nothing was changed"} {
+		if !strings.Contains(r.out, want) {
+			t.Errorf("output lacks %q:\n%s", want, r.out)
+		}
+	}
+	if ctxVersion(t, root) != oldCtxScript {
+		t.Error("the installed ctx was replaced")
+	}
+	for _, f := range []string{"update-args", "install-ran"} {
+		if _, err := os.Stat(filepath.Join(r.dir, f)); err == nil {
+			t.Errorf("%s: ctx was run", f)
+		}
+	}
+}
+
+// A server set up by hand has a ctx that cannot update it: say so, change nothing.
+func TestServerWayOnAHandMadeServerChangesNothing(t *testing.T) {
+	_, k, srv := setup(t)
+	root := serverRoot(t, true, "#!/bin/sh\nexit 1\n")
+	r := runWith(t, k, toolbox(t, true, false), []string{
+		"GHOSTTREE_RELEASE_BASE=" + srv.URL + "/dl", "GHOSTTREE_API_URL=" + srv.URL + "/api", "GHOSTTREE_PREFIX=" + root,
+	}, "--version", "v0.1.0", "--server", "--yes")
+	if r.code == 0 || !strings.Contains(r.out, "deploy/README.md") || ctxVersion(t, root) != "#!/bin/sh\nexit 1\n" {
+		t.Fatalf("exit %d:\n%s", r.code, r.out)
+	}
+}
+
+// Without a server the same command installs ctx system-wide and goes on.
+func TestServerWayOnAFreshMachineInstallsCtxAndSetsTheServerUp(t *testing.T) {
+	_, k, srv := setup(t)
+	root := serverRoot(t, false, "") // not even a ctx
+	r := runWith(t, k, toolbox(t, true, false), []string{
+		"GHOSTTREE_RELEASE_BASE=" + srv.URL + "/dl", "GHOSTTREE_API_URL=" + srv.URL + "/api", "GHOSTTREE_PREFIX=" + root,
+	}, "--version", "v0.1.0", "--server", "--yes", "--admin", "alex")
+	if r.code != 0 {
+		t.Fatalf("exit %d:\n%s", r.code, r.out)
+	}
+	if !strings.Contains(ctxVersion(t, root), "0.1.0-test") {
+		t.Errorf("ctx was not installed in %s", root)
+	}
+	b, err := os.ReadFile(filepath.Join(r.dir, "server-args"))
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(b)), "server install --yes --admin alex") {
+		t.Errorf("ctx server install: %q %v\n%s", b, err, r.out)
+	}
+}
+
+// A client's ctx in /usr/local/bin is not a server.
+func TestServerWayOnAMachineWithOnlyAClientCtxInstallsTheServer(t *testing.T) {
+	_, k, srv := setup(t)
+	root := serverRoot(t, false, oldCtxScript)
+	r := runWith(t, k, toolbox(t, true, false), []string{
+		"GHOSTTREE_RELEASE_BASE=" + srv.URL + "/dl", "GHOSTTREE_API_URL=" + srv.URL + "/api", "GHOSTTREE_PREFIX=" + root,
+	}, "--version", "v0.1.0", "--server", "--yes")
+	if r.code != 0 || !strings.Contains(ctxVersion(t, root), "0.1.0-test") {
+		t.Fatalf("exit %d:\n%s", r.code, r.out)
+	}
 }
