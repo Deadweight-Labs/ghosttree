@@ -13,10 +13,17 @@ jobs:
     name: Publish signed release
     runs-on: ubuntu-latest
     timeout-minutes: 70
+    # The environment holds the signing key (secret MINISIGN_SECRET_KEY) and is
+    # limited to v* tags; only admins can create those (repository ruleset). A
+    # branch, a pull request or any other workflow never sees the key.
+    environment: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          # Nothing after this needs the job token in .git/config; the actions
+          # below are other people's code.
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -62,33 +69,41 @@ jobs:
         env:
           TMPDIR: /dev/shm
         run: go test -race -count=1 -timeout 30m -run 'Concurren|Race|Racing|Contend|Admission|Writer|Pool|Runtime|Crash|Drain|Queue|AtomicAndStable' ./internal/store/
-      # The key that signs checksums.txt for install.sh (DEC-56). It lives in the
-      # repository secret MINISIGN_SECRET_KEY (the content of the .key file made
-      # with `minisign -G -W`) and is written to a file only for this job. The
-      # public half is deploy/downloads/ghosttree/minisign.pub; a key that does not
-      # match it stops the release before anything is published.
-      - name: Prepare the minisign key
+      # The key that signs checksums.txt for install.sh (DEC-56) is the secret
+      # MINISIGN_SECRET_KEY of the environment "release" (the content of the .key
+      # file made with `minisign -G -W`). It is not touched here: this step only
+      # makes sure the installer carries a real public key and installs minisign.
+      # The secret is written to a file in the step right before goreleaser and
+      # removed in the step right after it, so the only action that runs with
+      # the key on disk is goreleaser, which signs with it.
+      - name: Check the public key and install minisign
+        run: |
+          set -eu
+          if grep -q '__GHOSTTREE_MINISIGN_PUBKEY__' deploy/downloads/ghosttree/minisign.pub deploy/downloads/ghosttree/install.sh; then
+            echo "install.sh and minisign.pub still carry the key placeholder" >&2; exit 1
+          fi
+          pub=$(sed -n 2p deploy/downloads/ghosttree/minisign.pub)
+          grep -Fq "pubkey='$pub'" deploy/downloads/ghosttree/install.sh
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      # Only this step sees the secret. The key goes to a file for the signing
+      # run of goreleaser and is deleted by the step after it. A key that does not
+      # match minisign.pub stops the release before anything is published.
+      - name: Write the minisign key
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
         run: |
           set -eu
           test -n "$MINISIGN_SECRET_KEY" || { echo "secret MINISIGN_SECRET_KEY is not set" >&2; exit 1; }
-          if grep -q '__GHOSTTREE_MINISIGN_PUBKEY__' deploy/downloads/ghosttree/minisign.pub deploy/downloads/ghosttree/install.sh; then
-            echo "install.sh and minisign.pub still carry the key placeholder" >&2; exit 1
-          fi
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq minisign
           umask 077
           key="$RUNNER_TEMP/minisign.key"
           printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
-          echo "MINISIGN_KEY_FILE=$key" >> "$GITHUB_ENV"
           printf 'probe\n' > "$RUNNER_TEMP/probe"
           minisign -S -s "$key" -m "$RUNNER_TEMP/probe" -x "$RUNNER_TEMP/probe.minisig" -t probe
           minisign -V -p deploy/downloads/ghosttree/minisign.pub -m "$RUNNER_TEMP/probe" -x "$RUNNER_TEMP/probe.minisig"
-          pub=$(sed -n 2p deploy/downloads/ghosttree/minisign.pub)
-          grep -Fq "pubkey='$pub'" deploy/downloads/ghosttree/install.sh
-      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+          rm -f "$RUNNER_TEMP/probe" "$RUNNER_TEMP/probe.minisig"
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
@@ -96,6 +111,7 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MINISIGN_KEY_FILE: ${{ runner.temp }}/minisign.key
       - name: Remove the minisign key
         if: always()
         run: rm -f "$RUNNER_TEMP/minisign.key"

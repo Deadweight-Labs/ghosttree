@@ -55,6 +55,12 @@ check. `--connect <url>` goes on to `ctx join`; the options, also for a run
 without a terminal, are listed by `... | sh -s -- --help`. The key, how it is
 kept and how it is rotated are described in [RELEASING.md](../RELEASING.md).
 
+What the check does not give you, also listed there: it cannot tell the newest
+release from an older genuine one (the lookup is unsigned; pin a release with
+`--version` when that matters), it refuses releases from before the signature,
+macOS needs `brew install minisign` (the system's LibreSSL cannot check the
+signature), and downloads need curl or GNU Wget 1.x (BusyBox wget and Wget2 are refused).
+
 ## Interface language
 
 Every person picks German or English in their profile, or with the switcher

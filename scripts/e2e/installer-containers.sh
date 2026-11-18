@@ -29,15 +29,20 @@ for image in "$@"; do
       if command -v apt-get >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq >/dev/null
-        apt-get install -y -qq curl minisign openssl ca-certificates >/dev/null
+        apt-get install -y -qq curl wget minisign openssl ca-certificates >/dev/null
       elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y -q curl minisign openssl tar gzip >/dev/null
+        dnf install -y -q curl wget minisign openssl tar gzip >/dev/null
       else
         echo "no supported package manager" >&2; exit 1
       fi
       minisign -v | head -n 1; openssl version
-      /out/installscript.test -test.v -test.count=1 2>&1 | tee /tmp/t.log | grep -E "^(--- |ok|PASS|FAIL)|/minisign|SKIP"
+      /out/installscript.test -test.v -test.count=1 2>&1 | tee /tmp/t.log | grep -E "^(--- |ok|PASS|FAIL)|/minisign|SKIP|installscript_test|ghosttree install"
       grep -q "/minisign" /tmp/t.log || { echo "the minisign verifier was not exercised" >&2; exit 1; }
+      # Fedora ships Wget2 as wget, which the installer refuses (and tests so);
+      # the GNU Wget 1.x fallback is exercised where apt provides it.
+      if command -v apt-get >/dev/null 2>&1; then
+        grep -q "/wget" /tmp/t.log || { echo "the wget fallback was not exercised" >&2; exit 1; }
+      fi
       ! grep -q "^--- SKIP\|^    --- SKIP" /tmp/t.log || { echo "a test was skipped" >&2; exit 1; }
       grep -q "^PASS" /tmp/t.log
     ' </dev/null; then

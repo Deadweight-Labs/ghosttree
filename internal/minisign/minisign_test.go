@@ -102,3 +102,30 @@ func TestSignatureFromTheMinisignBinaryVerifies(t *testing.T) {
 		t.Errorf("File() = %q, minisign wrote %q", pk.File(), read("minisign-0.11.pub"))
 	}
 }
+
+// The attack the trusted comment's own signature stops: a genuine, signed list
+// of an older release, with only the comment line edited to name the release
+// the victim asked for. The signature over the file still verifies, so only
+// the second signature (over signature plus comment) can tell.
+func TestRewrittenTrustedCommentIsRefused(t *testing.T) {
+	pk, sign := testKey(t)
+	msg := []byte("abc  ghosttree_0.0.9_linux_amd64.tar.gz\n")
+	genuine := sign(msg, "ghosttree v0.0.9")
+	if got, err := Verify(pk, msg, genuine); err != nil || got != "ghosttree v0.0.9" {
+		t.Fatalf("the unedited signature must verify: %q, %v", got, err)
+	}
+	rewritten := strings.Replace(string(genuine), "trusted comment: ghosttree v0.0.9", "trusted comment: ghosttree v0.1.0", 1)
+	if rewritten == string(genuine) {
+		t.Fatal("the comment was not rewritten")
+	}
+	if got, err := Verify(pk, msg, []byte(rewritten)); err == nil {
+		t.Fatalf("a rewritten trusted comment was accepted as %q", got)
+	}
+	// The comment of one signature does not transfer to another file either.
+	other := sign([]byte("another list"), "ghosttree v0.1.0")
+	lines := strings.Split(string(other), "\n")
+	mixed := strings.Join([]string{lines[0], strings.Split(string(genuine), "\n")[1], lines[2], lines[3], ""}, "\n")
+	if _, err := Verify(pk, msg, []byte(mixed)); err == nil {
+		t.Fatal("the comment and its signature of another file were accepted")
+	}
+}
