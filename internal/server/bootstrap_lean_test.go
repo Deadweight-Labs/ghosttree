@@ -132,7 +132,7 @@ func TestLeanBootstrapNeverCutsAnInstruction(t *testing.T) {
 	out, shown, _ := renderLeanBootstrap([]store.Knowledge{
 		{ID: 1, Type: "instruction", Title: "long rule", Body: long, Scope: scope.Axes{Project: leanProject}},
 		{ID: 2, Type: "pitfall", Title: "a pitfall", Body: "b", Scope: scope.Axes{Project: leanProject}, Confidence: "trusted"},
-	}, "")
+	}, "", nil)
 	if !strings.Contains(out, long) {
 		t.Errorf("an instruction was cut")
 	}
@@ -147,7 +147,7 @@ func TestLeanBootstrapIgnoresStagedAndAnswersForAnEmptyProject(t *testing.T) {
 	out, shown, _ := renderLeanBootstrap([]store.Knowledge{
 		{ID: 1, Type: "instruction", Title: "unreviewed rule", Body: "b", Confidence: "staged"},
 		{ID: 2, Type: "pitfall", Title: "unreviewed pitfall", Body: "b", Scope: scope.Axes{Project: leanProject}, Confidence: "staged"},
-	}, "")
+	}, "", nil)
 	if strings.Contains(out, "unreviewed") || len(shown) != 0 {
 		t.Errorf("a staged entry went out: %s", out)
 	}

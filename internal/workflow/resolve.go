@@ -138,7 +138,7 @@ func (r DefResolver) Resolve(ctx context.Context, run store.WorkflowRun) (Block,
 		// or the instruction around them.
 		// What the read tools returned counts as input as well: the model
 		// may quote it, and it was read with the run's rights.
-		g := Gate{Store: r.Store, Run: run, Def: &d, Policy: policy, Inputs: inputsText(&d, in.Values) + in.Tools.Evidence(), Sources: asm.sources()}
+		g := Gate{Store: r.Store, Run: run, Def: &d, Policy: policy, Trusted: trustedText(&d, in.Values, in.Tools.TrustedEvidence()), Inputs: inputsText(&d, in.Values) + in.Tools.Evidence(), Sources: asm.sources()}
 		grep, gerr := g.Apply(results)
 		if gerr != nil {
 			return out, gerr
@@ -216,6 +216,31 @@ func renderInputs(d *Def, values map[string]string) string {
 
 // inputsText is the text of the declared inputs, against which evidence is
 // checked.
+// foreignInput says whether the text of a declared input may have been written
+// by a stranger: an input marked Foreign, or the research of the net.
+func foreignInput(name string) bool {
+	if name == "research" {
+		return true
+	}
+	spec, ok := InputByName(name)
+	return ok && spec.Foreign
+}
+
+// trustedText is the text of the declared inputs that members wrote, with what
+// the tools returned from text of members (Toolbox.TrustedEvidence).
+func trustedText(d *Def, values map[string]string, toolEvidence string) string {
+	var b strings.Builder
+	for _, n := range d.Inputs {
+		if foreignInput(n) {
+			continue
+		}
+		b.WriteString(values[n])
+		b.WriteString("\n")
+	}
+	b.WriteString(toolEvidence)
+	return b.String()
+}
+
 func inputsText(d *Def, values map[string]string) string {
 	var b strings.Builder
 	for _, n := range d.Inputs {
