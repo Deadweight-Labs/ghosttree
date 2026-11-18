@@ -3,8 +3,10 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -71,5 +73,33 @@ func TestOnlyProcessesThatCouldBeTheServerCount(t *testing.T) {
 		if got := mayBeServer(cmd); got != want {
 			t.Errorf("mayBeServer(%q) = %v", cmd, got)
 		}
+	}
+}
+
+// Eine Sicherung enthält alles, was der Server weiß: sie hat 0600, auch wenn
+// die umask des Prozesses weit offen ist.
+func TestBackupFileIsPrivateEvenWithAnOpenUmask(t *testing.T) {
+	prev := syscall.Umask(0)
+	defer syscall.Umask(prev)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "raw.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`CREATE TABLE only_this(x INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(dir, "copy.db")
+	if err := BackupDatabaseFile(path, backup); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := fi.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("backup mode = %04o, want 0600", mode)
 	}
 }

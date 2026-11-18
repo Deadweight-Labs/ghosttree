@@ -363,6 +363,7 @@ func (s *Store) sessionCandidates(m EmbedModel) ([]sessionRef, error) {
 	rows, err := s.db.Query(`SELECT se.id, se.harness, se.last_seen_at, COALESCE(y.gen, -1) FROM sessions se
 		LEFT JOIN session_embedding_sync y ON y.session_id = se.id
 		WHERE EXISTS (SELECT 1 FROM chunk_index ci WHERE ci.session_id = se.id AND ci.role != '')
+		  AND `+externalModelsOKSQL("se.project")+`
 		  AND (y.session_id IS NULL OR se.last_seen_at >= y.read_at
 		       OR y.version != ? OR y.model != ? OR y.prefix_version != ?)
 		ORDER BY se.last_seen_at DESC, se.id DESC`, sessionTextVersion, m.Model, m.PrefixVersion)
@@ -566,7 +567,8 @@ func (s *Store) sessionEmbeddingStatus(k embedKind, m EmbedModel) (EmbedStatus, 
 		return st, err
 	}
 	srows, err := s.db.Query(`SELECT id, harness, last_seen_at FROM sessions se
-		WHERE EXISTS (SELECT 1 FROM chunk_index ci WHERE ci.session_id = se.id AND ci.role != '') ORDER BY id`)
+		WHERE EXISTS (SELECT 1 FROM chunk_index ci WHERE ci.session_id = se.id AND ci.role != '')
+		  AND ` + externalModelsOKSQL("se.project") + ` ORDER BY id`)
 	if err != nil {
 		return st, err
 	}

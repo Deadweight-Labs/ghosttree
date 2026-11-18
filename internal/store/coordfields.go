@@ -88,6 +88,10 @@ func validOneLine(s string, max int) bool {
 	return true
 }
 
+// ValidOneLine sagt, ob s einzeilig und druckbar ist und höchstens max Zeichen
+// hat (leer ist gültig).
+func ValidOneLine(s string, max int) bool { return validOneLine(s, max) }
+
 // validCapabilities: eine Liste kurzer Namen (Buchstaben, Ziffern, . _ - : /),
 // durch Komma oder Leerzeichen getrennt.
 func validCapabilities(s string) bool {

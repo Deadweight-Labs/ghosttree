@@ -505,7 +505,7 @@ func TestCoordinationFollowsProjectRolesOverTheAPI(t *testing.T) {
 			DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:" + who, ClientID: "c-" + who, Body: "hi"})
 	}
 	send("mia", 200)
-	send("gus", 200) // der Gast darf schreiben; die Beiträge gelten als Bitten
+	send("gus", 403) // der Gast liest den Raum und schreibt nicht (room.post ist member und höher)
 	send("nora", 404)
 	peers := func(who string, want int) {
 		t.Helper()

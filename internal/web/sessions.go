@@ -612,7 +612,7 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 		// The search of transcripts is as long a read as the search page's: it
 		// takes a place among the searches too, so that the hooks and the other
 		// pages keep their connection.
-		release, ok := a.store.AcquireSearchSlot(r.Context(), sessionsSearchWait)
+		release, ok := a.store.AcquireSearchSlotFor(r.Context(), browserPrincipal(r).ID, sessionsSearchWait)
 		if !ok {
 			if r.Context().Err() == nil {
 				w.Header().Set("Retry-After", "2")

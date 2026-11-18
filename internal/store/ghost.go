@@ -57,6 +57,10 @@ const ghostCols = `id, project, path, kind, description, content_sha, git_blob,
 // verschwand. Ohne Aufbewahrung ist das unwiederbringlich; mit ihr kostet es
 // eine Abfrage.
 func (s *Store) PutGhostFile(g GhostFile) (int64, error) {
+	// Die Beschreibung wird jedem Agenten ausgeliefert, der den Pfad berührt.
+	if err := refuseSecrets("description", g.Description); err != nil {
+		return 0, err
+	}
 	if s.writer != nil {
 		return queueValue(s, []any{g}, func(d *Store, p []any) (int64, error) { return d.PutGhostFile(p[0].(GhostFile)) })
 	}

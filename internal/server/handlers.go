@@ -39,6 +39,10 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 	if !a.gateWorkflowRunRef(w, r, s.ExternalID) {
 		return
 	}
+	if msg := sessionFieldError(s); msg != "" {
+		writeCoded(w, http.StatusBadRequest, "invalid_session", msg)
+		return
+	}
 	s.Scope = scope.CanonicalAxes(s.Scope)
 	if !a.gateMachine(w, r, s.Scope.Machine, true) {
 		return
@@ -747,7 +751,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	// connection (Store.AcquireSearchSlot), but only for a moment: a server that
 	// stays busy says so with Retry-After, and the client asks again. A caller who
 	// has hung up gets no answer.
-	release, ok := a.st.AcquireSearchSlot(r.Context(), searchSlotWait)
+	release, ok := a.st.AcquireSearchSlotFor(r.Context(), principalOf(r).ID, searchSlotWait)
 	if !ok {
 		if r.Context().Err() == nil {
 			w.Header().Set("Retry-After", strconv.Itoa(int(searchSlotWait.Round(time.Second)/time.Second)))
@@ -1540,7 +1544,7 @@ func (a *api) ghostHistory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]int{"count": n})
 		return
 	}
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	limit := intParam(r, "limit", 0)
 	read := a.st.GhostFileHistory
 	// Die Kette nimmt die aktuelle Fassung als Kopf dazu. Ohne sie hat die
 	// neueste abgeloeste Fassung keinen Nachfolger, und genau der Vergleich
@@ -1675,4 +1679,31 @@ func (a *api) gardenerDescribes(w http.ResponseWriter, r *http.Request, g store.
 		return false
 	}
 	return true
+}
+
+// Grenzen der Felder, die ein Client beim Anlegen einer Session nennt. Sie
+// stehen in Listen und im Kontext anderer; ein Wert mit Zeilenumbruch oder von
+// Kilobytes Länge hat dort nichts zu suchen.
+const (
+	maxSessionHarnessLen = 32
+	maxSessionIDLen      = 200
+	maxSessionCWDLen     = 1024
+	maxSessionBranchLen  = 200
+)
+
+// sessionFieldError nennt das erste Feld, das nicht die erlaubte Form hat, oder "".
+func sessionFieldError(s store.Session) string {
+	switch {
+	case !store.ValidProvider(s.Harness):
+		return "harness must be a short name of letters, digits, . _ -"
+	case !store.ValidOneLine(s.ExternalID, maxSessionIDLen):
+		return "external_id must be one printable line of at most 200 characters"
+	case !store.ValidOneLine(s.CWD, maxSessionCWDLen):
+		return "cwd must be one printable line of at most 1024 characters"
+	case !store.ValidOneLine(s.Scope.Branch, maxSessionBranchLen):
+		return "branch must be one printable line of at most 200 characters"
+	case !store.ValidOneLine(s.Scope.Project, 300):
+		return "project must be one printable line of at most 300 characters"
+	}
+	return ""
 }

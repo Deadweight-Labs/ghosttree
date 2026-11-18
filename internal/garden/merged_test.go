@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
@@ -286,5 +287,31 @@ func TestGhostSessionsUseTheirModelAndADryRunPricesThem(t *testing.T) {
 	args, err := (ClaudeConfig{Model: "claude-sonnet-5-5", RepoRoot: "/r"}).Args(fr.specs[0])
 	if err != nil || !strings.Contains(strings.Join(args, " "), "--model "+DefaultGhostModel) || strings.Contains(strings.Join(args, " "), "sonnet") {
 		t.Errorf("args = %v, %v", args, err)
+	}
+}
+
+// refusingGhostWriter lehnt die Beschreibung eines Pfades wie der Server ab.
+type refusingGhostWriter struct {
+	recordingGhostWriter
+	refuse string
+}
+
+func (w *refusingGhostWriter) PutGhostAnchored(g store.GhostFile, a gitanchor.Anchor) (int64, error) {
+	if g.Path == w.refuse {
+		return 0, &client.APIError{Status: 422, Code: "secret_detected", Message: "refused"}
+	}
+	return w.recordingGhostWriter.PutGhostAnchored(g, a)
+}
+
+func TestWriteGhostsGoesOnWhenOneDescriptionIsRefusedAsASecret(t *testing.T) {
+	head := strings.Repeat("a", 40)
+	w := &refusingGhostWriter{refuse: "b.go"}
+	n, err := WriteGhosts(w, "github.com/o/r", head, "main", []GhostProposalData{
+		{GhostPath: GhostPath{Path: "a.go", SHA: "s", Blob: "bl", Lines: 4}, Description: goodText},
+		{GhostPath: GhostPath{Path: "b.go", SHA: "s", Blob: "bl", Lines: 4}, Description: goodText},
+		{GhostPath: GhostPath{Path: "c.go", SHA: "s", Blob: "bl", Lines: 4}, Description: goodText},
+	})
+	if n != 2 || err == nil || !strings.Contains(err.Error(), "b.go") {
+		t.Fatalf("WriteGhosts = %d, %v; want 2 written and the refusal named", n, err)
 	}
 }

@@ -105,6 +105,7 @@ type api struct {
 	metrics              *metricsRegistry
 	registered           []string
 	uncheckedHook        func(route string)
+	writeLimit           *writeLimiter
 	metricsToken         string
 }
 
@@ -308,6 +309,7 @@ func newAPI(st *store.Store, options ...Option) *api {
 	if a.operationIDGenerator == nil {
 		a.operationIDGenerator = randomOperationID
 	}
+	a.writeLimit = newWriteLimiter()
 	if a.snapshotErrorLogger == nil {
 		a.snapshotErrorLogger = func(operationID string, err, generatorErr error) {
 			log.Printf("snapshot_internal_error operation_id=%q error=%q operation_id_error=%q", operationID, err, generatorErr)
@@ -388,6 +390,11 @@ func (a *api) auth(next http.Handler) http.Handler {
 			writeCoded(w, http.StatusForbidden, "forbidden", "this token is bound to one project and to reading")
 			return
 		}
+		release, allowed := a.limitWrites(w, r, principal.ID)
+		if !allowed {
+			return
+		}
+		defer release()
 		a.st.TouchToken(principal.TokenID)
 		if principal.Machine != "" && a.machineSeenDue(principal) {
 			// A device that talks is a machine that was just seen: without it the
@@ -484,9 +491,16 @@ func (a *api) guestAxes(r *http.Request) scope.Axes {
 	return ax
 }
 
+// maxListLimit ist die größte Seite, die eine Liste auf Anfrage liefert. Ohne
+// sie holt limit=100000000 den ganzen Bestand in den Speicher.
+const maxListLimit = 1000
+
 func intParam(r *http.Request, name string, def int) int {
 	if v := r.URL.Query().Get(name); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
+			if name == "limit" && n > maxListLimit {
+				return maxListLimit
+			}
 			return n
 		}
 	}

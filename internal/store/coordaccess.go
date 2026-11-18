@@ -917,6 +917,9 @@ func (a CoordAccess) roomAccessTx(tx *sql.Tx, actor, roomKey string, via Action)
 		if member == 0 && !(kind == RoomProject && a.roleOpensProjectRoom(roomKey, tx, via)) {
 			return noMembershipError(kind)
 		}
+		if kind == RoomProject && via == ActPost {
+			return a.projectRoomPostGate(roomKey, tx)
+		}
 		return nil
 	default:
 		return ErrCoordNotFound
@@ -1117,6 +1120,9 @@ func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 	message.SenderExternalID = actor
 	message.AuthorPrincipalID = a.Principal.ID
 	message.AuthorKind = a.authorKind()
+	// Die Zeit einer Nachricht setzt der Server. Ein vom Client zurückdatierter
+	// Wert ließe die Nachricht aus dem Fenster der Quote fallen.
+	message.CreatedAt = ""
 	message.SenderRole, message.RecipientRole, message.Authority, message.SenderDisplayName = "", "", "", ""
 	message.SenderLabel, message.SenderWorkNote = "", ""
 	// Ein Wartekreis wird vor dem Senden abgeglichen, damit einer, der
@@ -1126,6 +1132,14 @@ func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 	if reason, ok := attentionReasonForIntent(message.Intent); ok && reason != AttentionHandoff {
 		waitRoom = messageRoomKeyTx(tx, message.DestinationKind, message.DestinationID)
 		if err := reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC()); err != nil {
+			return 0, false, err
+		}
+	}
+	// Eine Wiederholung einer schon gespeicherten Nachricht zählt nicht.
+	if _, found, err := existingCoordMessage(tx, message.withDefaults()); err != nil {
+		return 0, false, err
+	} else if !found {
+		if err := checkMessageRateTx(tx, message.AuthorPrincipalID, message.SenderExternalID); err != nil {
 			return 0, false, err
 		}
 	}
@@ -2490,7 +2504,14 @@ func (a CoordAccess) Recipients() ([]CoordRecipient, error) {
 	if actor == "" {
 		return nil, ErrCoordForbidden
 	}
-	roomRows, err := tx.Query(`SELECT room_key FROM coord_rooms ORDER BY room_key`)
+	// Nur Räume, in denen der Akteur selbst Mitglied ist: die Prüfung je Raum
+	// unten entscheidet weiter, aber die Arbeit wächst nicht mit den Räumen der
+	// ganzen Instanz, die ein Konto durch viele Gruppen aufblähen könnte.
+	roomRows, err := tx.Query(`SELECT room_key FROM coord_rooms WHERE room_key IN (
+		SELECT m.room_key FROM coord_room_memberships m
+		LEFT JOIN coord_agents agent ON agent.external_id=m.principal_id
+		WHERE m.left_at='' AND (m.principal_id IN (?,?) OR agent.principal_id=?)) ORDER BY room_key`,
+		actor, a.Principal.ID, a.Principal.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -3063,6 +3084,40 @@ func (a CoordAccess) projectRoomGate(kind, roomKey string, res Resource, tx rowQ
 		return nil
 	}
 	return ErrCoordNotFound
+}
+
+// projectRoomPostGate is the one rule for writing in a project room, for the
+// browser, the API and every agent alike: the project role must hold room.post
+// (member and up). A guest reads the room (room.read, projectRoomGate) and
+// writes nothing, also through an agent that joined while a guest could still
+// register one; such a membership stays, and from the next write on it is held
+// to this rule. A guest's refusal counts in every access mode, like every other
+// write of a guest (strictDenial).
+func (a CoordAccess) projectRoomPostGate(roomKey string, tx rowQuerier) error {
+	acct, ok := accountNumericID(a.Principal.ID)
+	if !ok || a.Store == nil {
+		return ErrCoordForbidden
+	}
+	project := strings.TrimPrefix(roomKey, "project:")
+	var role RoleInfo
+	if tx != nil {
+		role = projectRoleTx(tx, project, acct)
+	} else {
+		role = a.Store.ProjectRole(project, a.Principal.ID)
+	}
+	d := Decision{Allowed: matrixAllows(role, ResRoom, ActPost, Object{})}
+	if !d.Allowed {
+		d.Reason, d.Strict = "role may not post in the project room", strictDenial(role, ResRoom, ActPost)
+		// A remote nobody claimed has no roles: its room is open to whoever worked
+		// under it (the same exception as in projectRoomGate).
+		if !role.Any() && !a.projectClaimed(tx, project) && a.workedUnder(tx, project, acct) {
+			d = Decision{Allowed: true, Reason: "unclaimed project, own work there"}
+		}
+	}
+	if a.Store.accessCfg().apply(a.Principal.ID, project, ResRoom, ActPost, d) {
+		return nil
+	}
+	return ErrCoordForbidden
 }
 
 // workedUnder: the account has sessions or entries of its own under the

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -348,8 +349,8 @@ func TestPersonRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tok) != 64 {
-		t.Errorf("token length = %d, want 64 hex chars", len(tok))
+	if !strings.HasPrefix(tok, APITokenPrefix) || len(tok) != len(APITokenPrefix)+64 {
+		t.Errorf("token = %d characters, want the prefix %q and 64 hex chars", len(tok), APITokenPrefix)
 	}
 	name, ok := s.Authenticate(tok)
 	if !ok || name != "alice" {

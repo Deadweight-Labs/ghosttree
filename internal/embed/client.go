@@ -78,7 +78,7 @@ func New(cfg Config) (*Client, error) {
 	}
 	hc := cfg.HTTPClient
 	if hc == nil {
-		hc = &http.Client{Transport: &http.Transport{
+		hc = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{
 			Proxy:               nil, // the server is local; never route its texts through a proxy
 			MaxIdleConnsPerHost: 2,
 			IdleConnTimeout:     time.Minute,

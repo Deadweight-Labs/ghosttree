@@ -84,11 +84,27 @@ of these is off until then:
 - **An organization's own AI connection** uses the key and provider that
   organization entered, never the operator's.
 
-The first three are the operator's, for the whole server: there is no switch
-per organization yet. Text of every organization on the server can go to the
-operator's provider, so an operator tells the people on the server which of
-these are on, and an organization that must exclude them runs its own server or
-asks the operator to leave them off.
+The first three are the operator's service, but each organization decides for
+itself whether its texts go there. The owner of an organization sets it on the
+organization's settings page, under "Language model of the server":
+
+- The organizations that exist when the setting is introduced, and the
+  organizations of the instance owner (the first account), start with it **on**:
+  nothing changes for them until an owner switches it off.
+- Every organization anyone else creates afterwards starts with it **off**; its
+  owner switches it on if the organization agrees.
+- With it off, nothing of that organization is sent: no "In short" note is
+  generated for its objects (a note an agent wrote is kept), its sessions are
+  not distilled, and its knowledge, requests, pains, documents, file
+  descriptions and sessions get no vectors. Vectors that exist stay; what a
+  provider received before the switch stays with the provider.
+- Objects that belong to no organization (a session or entry without a project)
+  are not covered by any organization's setting. The distillation skips sessions
+  without a project; the other two treat them like text of the account that wrote
+  them.
+- The change is recorded in the organization's history.
+
+A server whose operator wants none of this leaves the features off.
 
 ## Checking a release
 

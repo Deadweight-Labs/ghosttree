@@ -110,6 +110,10 @@ CREATE TABLE IF NOT EXISTS org_events(
   id INTEGER PRIMARY KEY, org_id INTEGER NOT NULL, action TEXT NOT NULL,
   actor TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
   detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS org_events_no_update BEFORE UPDATE ON org_events
+  BEGIN SELECT RAISE(ABORT, 'org_events is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS org_events_no_delete BEFORE DELETE ON org_events
+  BEGIN SELECT RAISE(ABORT, 'org_events is append-only'); END;
 CREATE TABLE IF NOT EXISTS org_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS project_members(
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
@@ -1084,6 +1088,10 @@ func openWithOptions(path string, options OpenOptions, seed bool) (*Store, error
 		return nil, err
 	}
 	if err := migrateAccounts(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureTokenEvents(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

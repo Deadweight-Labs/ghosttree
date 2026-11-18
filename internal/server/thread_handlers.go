@@ -152,7 +152,7 @@ func (a *api) listThreads(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "project is required")
 		return
 	}
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	limit := intParam(r, "limit", 0)
 	out, err := access.SearchThreads(q.Get("project"), q.Get("q"), q.Get("archived") == "1", limit)
 	if err != nil {
 		writeCoordAccessError(w, err)

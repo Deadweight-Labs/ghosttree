@@ -560,7 +560,23 @@ func verifyIntegrity(db *sql.DB) error {
 }
 
 func createVerifiedBackup(db *sql.DB, backup string) error {
+	// Eine Kopie von allem, was der Server weiß: die Datei entsteht mit 0600,
+	// nicht mit den Rechten, die SQLite oder die umask ihr geben. VACUUM INTO
+	// schreibt in eine leere, schon vorhandene Datei. O_EXCL: eine Sicherung
+	// überschreibt nie eine andere.
+	f, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("backup to %s: %w", backup, err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(backup)
+		return fmt.Errorf("backup to %s: %w", backup, err)
+	}
 	if _, err := db.Exec(`VACUUM INTO ?`, backup); err != nil {
+		os.Remove(backup)
+		return fmt.Errorf("backup to %s: %w", backup, err)
+	}
+	if err := os.Chmod(backup, 0o600); err != nil {
 		return fmt.Errorf("backup to %s: %w", backup, err)
 	}
 	before, err := FileSHA256(backup)

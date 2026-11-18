@@ -62,8 +62,12 @@ func TestAnAgentDecidesWhatIsReversibleLocalAndConventional(t *testing.T) {
 	}
 	k := knowledgeOf(t, w, got.KnowledgeID)
 	if k.Type != "decision" || !strings.HasPrefix(k.Title, "vom Agenten: ") || !strings.Contains(k.Body, "so heißen die anderen Tabellen auch") ||
-		!strings.Contains(k.Body, "overturn") || !strings.Contains(k.Body, "Aspects as the agent declared them (not checked): none.") || k.Scope.Project != roleProject || k.Status != "active" || k.Confidence != "trusted" {
+		!strings.Contains(k.Body, "overturn") || !strings.Contains(k.Body, "Aspects as the agent declared them (not checked): none.") || k.Scope.Project != roleProject || k.Status != "active" {
 		t.Fatalf("knowledge: %+v", k)
+	}
+	// What an agent decides alone is a draft until a person confirms it.
+	if k.Confidence != "staged" || !strings.Contains(k.Body, "waits as a draft") {
+		t.Fatalf("an agent's lone decision is %q, want staged: %+v", k.Confidence, k)
 	}
 	// Der Agent hat nichts blockiert: die Idee läuft weiter, und der Mensch sieht den Hinweis.
 	if hints, _ := w.pa["mia"].SearchDecisions(DecisionFilter{Project: roleProject, State: "all", Way: idea.WayAgent}); len(hints) != 1 {
@@ -500,5 +504,42 @@ func TestClosingAndOverturningAreCheckedInLogMode(t *testing.T) {
 	w.pa["rex"].ReopenDecision(d.ID, "x", w.actor("rex"))
 	if after, _ = w.st.AccessCounters(); after <= before {
 		t.Fatalf("overturning was not checked (would-deny %d -> %d)", before, after)
+	}
+}
+
+// A person who took part in the decision (voted) makes what the agent then closes
+// trusted knowledge; an agent's own vote does not.
+func TestAnAgentDecisionWithAPersonVoteIsTrusted(t *testing.T) {
+	w := newPainWorld(t)
+	i := w.workshopIdea(t, "Mit Stimme")
+	about := "Worum es geht"
+	w.pa["mia"].PutIdeaConcept(i.ID, PutIdeaConceptInput{Patch: idea.ConceptPatch{About: &about}, Actor: w.actor("mia")})
+	d := w.openOn(t, "mia", idea.SubjectIdea, i.ID, "Wo liegen die Logs", w.agent("mia"), withVariants(
+		idea.VariantInput{Title: "In der Datenbank"}, idea.VariantInput{Title: "Als Datei"}))
+	if d.Way != idea.WayAgent {
+		t.Skipf("the question is not an agent's to decide here: %+v", d)
+	}
+	// An agent's vote alone does not count as a person.
+	if _, err := w.pa["rex"].VoteDecision(d.ID, "A", "weil", w.agent("rex")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := w.pa["mia"].CloseDecision(CloseDecisionInput{ID: d.ID, Outcome: idea.DecisionDecided, Variant: "A", Reason: "wie die anderen Tabellen", Actor: w.agent("mia")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k := knowledgeOf(t, w, got.KnowledgeID); k.Confidence != "staged" {
+		t.Fatalf("with an agent vote only: %q, want staged", k.Confidence)
+	}
+	d2 := w.openOn(t, "mia", idea.SubjectIdea, i.ID, "Wo liegen die Bilder", w.agent("mia"), withVariants(
+		idea.VariantInput{Title: "In der Datenbank"}, idea.VariantInput{Title: "Als Datei"}))
+	if _, err := w.pa["rex"].VoteDecision(d2.ID, "A", "", w.actor("rex")); err != nil {
+		t.Fatal(err)
+	}
+	got, err = w.pa["mia"].CloseDecision(CloseDecisionInput{ID: d2.ID, Outcome: idea.DecisionDecided, Variant: "A", Reason: "wie die anderen", Actor: w.agent("mia")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k := knowledgeOf(t, w, got.KnowledgeID); k.Confidence != "trusted" {
+		t.Fatalf("with a person's vote: %q, want trusted", k.Confidence)
 	}
 }

@@ -300,6 +300,7 @@ var messages = map[string]string{
 	"coord.err.action_invalid":         "That action does not exist here.",
 	"coord.err.recipient_required":     "A question needs someone to answer it. Pick a person under “To” or write their @name.",
 	"coord.err.closed":                 "This is already done.",
+	"coord.err.rate_limited":           "Too many messages in the last minutes. Try again in a moment.",
 	"coord.err.body_required":          "Write some text first.",
 	"coord.thread_need_text":           "Write a text or pick a different status.",
 	"room.who_filter":                  "Find a person or agent",

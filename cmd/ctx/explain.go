@@ -236,7 +236,7 @@ func countMissing(svc *explain.Service, st *store.Store) (int, error) {
 	n := 0
 	for _, c := range cands {
 		src, err := st.ExplainSource(c.Kind, c.ID)
-		if err != nil || src.Project == "" {
+		if err != nil || !src.Generable() {
 			continue
 		}
 		e, ok, err := st.Explanation(c.Kind, c.ID)

@@ -137,7 +137,11 @@ func ftsQuery(q string) string {
 	return strings.Join(terms, " OR ")
 }
 
-// searchTerms keeps the words of a query that carry intent.
+// maxSearchTerms is how many words of a query count. A query of hundreds of
+// words is an OR over the whole index; the first words carry the intent.
+const maxSearchTerms = 20
+
+// searchTerms keeps the words of a query that carry intent, at most maxSearchTerms.
 func searchTerms(q string) []string {
 	var terms []string
 	for f := range strings.FieldsSeq(strings.ToLower(q)) {
@@ -146,6 +150,9 @@ func searchTerms(q string) []string {
 			continue
 		}
 		terms = append(terms, f)
+		if len(terms) == maxSearchTerms {
+			break
+		}
 	}
 	return terms
 }

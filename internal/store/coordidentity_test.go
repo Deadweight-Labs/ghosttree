@@ -218,12 +218,10 @@ func TestBroadcastWithoutActiveAgentsIsReportedAndGuestsCannotUseIt(t *testing.T
 	}
 	makeGuest(t, e)
 	e.st.SetAccessMode(AccessMode{Enforce: true})
-	id, err := sendText(t, e.agent("a-dev"), e.room, "@agents hallo", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := storedMentions(t, e, id); len(got) != 0 {
-		t.Errorf("a guest's broadcast reached %v, want nobody", got)
+	// A guest writes nothing in the project room (room.post is member and up), so a
+	// broadcast from a guest's agent reaches nobody because it is not stored.
+	if _, err := sendText(t, e.agent("a-dev"), e.room, "@agents hallo", ""); !errors.Is(err, ErrCoordForbidden) {
+		t.Fatalf("a guest's broadcast = %v, want forbidden", err)
 	}
 }
 

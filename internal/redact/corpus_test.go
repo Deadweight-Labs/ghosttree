@@ -14,11 +14,13 @@ import (
 //   - 3515: postgres://user:pw@127.0.0.1 of a throw-away test database
 //   - PAIN-22: a pain that quotes false alarms of this very scan, with the
 //     backticks of the quotation nested in each other
+//   - 4516: the decision that introduced the check, which quotes the
+//     postgres://user:pw@127.0.0.1 of entry 3515
 //
 // Both of the first two are what the rule is for, seen from outside; the writer
 // rewords them. The list is here so that a change to the scan that adds one
 // more is noticed.
-var knownCorpusHits = []string{"3149-", "3515-", "PAIN-22-"}
+var knownCorpusHits = []string{"3149-", "3515-", "4516-", "PAIN-22-"}
 
 // TestMirrorTextsAreNotRefused measures what the write-time check (PAIN-17)
 // does to real texts: the local mirror .ghosttree/ holds the knowledge,

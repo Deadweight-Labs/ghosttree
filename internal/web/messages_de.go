@@ -301,6 +301,7 @@ var messagesDE = map[string]string{
 	"coord.err.action_invalid":         "Diese Aktion gibt es hier nicht.",
 	"coord.err.recipient_required":     "Eine Frage braucht jemanden, der sie beantwortet. Wähle bei „An“ eine Person oder schreibe ihren @Namen.",
 	"coord.err.closed":                 "Das ist schon erledigt.",
+	"coord.err.rate_limited":           "Zu viele Nachrichten in den letzten Minuten. Versuch es gleich wieder.",
 	"coord.err.body_required":          "Schreib zuerst einen Text.",
 	"coord.thread_need_text":           "Schreib einen Text oder wähle einen anderen Status.",
 	"room.who_filter":                  "Person oder Agent suchen",

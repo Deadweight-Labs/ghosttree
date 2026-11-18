@@ -64,6 +64,7 @@ type RepoRename func(installationID int64, from, to string) error
 // WebhookHandlerWithRenames ist WebhookHandlerWithPulls, dazu die Umbenennung an
 // rename. Ohne rename bleibt es bei add und remove, wie vor dieser Funktion.
 func (g *GitHubApp) WebhookHandlerWithRenames(sync RepoSync, pulls PullSync, rename RepoRename, onError func(error)) http.Handler {
+	guard := newReplayGuard()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -79,6 +80,12 @@ func (g *GitHubApp) WebhookHandlerWithRenames(sync RepoSync, pulls PullSync, ren
 			http.Error(w, "bad signature", http.StatusUnauthorized)
 			return
 		}
+		keys := replayKeys(body, r.Header.Get("X-GitHub-Delivery"))
+		if guard.seenBefore(keys) {
+			// Schon verarbeitet: beantwortet, aber nicht noch einmal ausgeführt.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if ev, ok := ParsePullEvent(r.Header.Get("X-GitHub-Event"), body); ok && pulls != nil {
 			if err := pulls(ev); err != nil {
 				if onError != nil {
@@ -87,6 +94,7 @@ func (g *GitHubApp) WebhookHandlerWithRenames(sync RepoSync, pulls PullSync, ren
 				http.Error(w, "could not apply", http.StatusInternalServerError)
 				return
 			}
+			guard.remember(keys)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -111,6 +119,7 @@ func (g *GitHubApp) WebhookHandlerWithRenames(sync RepoSync, pulls PullSync, ren
 				return
 			}
 		}
+		guard.remember(keys)
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

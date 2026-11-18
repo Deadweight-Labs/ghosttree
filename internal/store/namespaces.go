@@ -62,6 +62,12 @@ func ensureOwnerNamespaces(db *sql.DB) error {
 		{"orgs", "account_id", `INTEGER NOT NULL DEFAULT 0`},
 		{"orgs", "avatar_login", `TEXT NOT NULL DEFAULT ''`},
 		{"orgs", "display_source", `TEXT NOT NULL DEFAULT ''`},
+		// external_models: the operator's language model may read this
+		// organization's texts (explanations, session distillation, embeddings).
+		// Rows that exist when the column is added keep today's behavior (1); an
+		// organization made later starts with 0 unless the instance owner made it
+		// (setExternalModelsDefaultTx).
+		{"orgs", "external_models", `INTEGER NOT NULL DEFAULT 1`},
 		{"projects", "archived_at", `TEXT NOT NULL DEFAULT ''`},
 		{"projects", "archived_reason", `TEXT NOT NULL DEFAULT ''`},
 		{"machines", "archived_at", `TEXT NOT NULL DEFAULT ''`},
@@ -219,6 +225,9 @@ func ensureUserNamespaceTx(tx execQueryer, account int64) (Org, error) {
 		return Org{}, err
 	}
 	id, _ := res.LastInsertId()
+	if err := setExternalModelsDefaultTx(tx, id, account); err != nil {
+		return Org{}, err
+	}
 	if _, err := tx.Exec(`INSERT INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,'owner',?)`, id, account, now()); err != nil {
 		return Org{}, err
 	}

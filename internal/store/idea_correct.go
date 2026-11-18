@@ -90,6 +90,16 @@ func (a *ProjectAccess) CorrectIdea(id int64, title, body *string, reason string
 	if reason == "" {
 		return idea.Idea{}, requestdomain.NewRuleError("reason_required", "this change needs a reason", "say why in reason", nil)
 	}
+	pairs := []string{"reason", reason}
+	if title != nil {
+		pairs = append(pairs, "title", *title)
+	}
+	if body != nil {
+		pairs = append(pairs, "body", *body)
+	}
+	if err := refuseSecrets(pairs...); err != nil {
+		return idea.Idea{}, err
+	}
 	newTitle, newBody := i.Title, i.Body
 	var changed []string
 	if title != nil {

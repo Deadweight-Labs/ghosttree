@@ -72,6 +72,10 @@ CREATE TABLE IF NOT EXISTS machine_events(
   actor INTEGER NOT NULL DEFAULT 0, subject TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '',
   via TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS machine_events_host ON machine_events(hostname, id);
+CREATE TRIGGER IF NOT EXISTS machine_events_no_update BEFORE UPDATE ON machine_events
+  BEGIN SELECT RAISE(ABORT, 'machine_events is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS machine_events_no_delete BEFORE DELETE ON machine_events
+  BEGIN SELECT RAISE(ABORT, 'machine_events is append-only'); END;
 `
 
 // ensureMachineSharing legt die Tabellen für Maschinenfreigaben an und
