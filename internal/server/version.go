@@ -14,8 +14,17 @@ import (
 // client has to read it before it has a working token (to see that it is too
 // old to log in at all), and it names nothing that /install.sh and /dist/
 // do not already show.
+// versionInfo answers without a token (a client asks before it has one), but then
+// only with what it needs to see whether it fits this server: the protocol, the
+// oldest client it takes and its capabilities. Version, channel and commit tell
+// someone who knows nothing else how to pick an attack, so they need a token.
 func (a *api) versionInfo(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, a.version())
+	info := a.version()
+	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	if _, ok := a.st.AuthenticatePrincipal(token); !ok {
+		info.Version, info.Commit, info.Channel = "", "", ""
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (a *api) version() version.Info {

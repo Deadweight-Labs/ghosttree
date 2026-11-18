@@ -236,6 +236,20 @@ sender). Passwords are argon2id (64 MiB, three passes). An address is on the
 account only once confirmed (`persons.email`); an unconfirmed one waits in the
 mail itself. Nothing on a sign-in page tells whether an address has an account.
 
+### What the server shows without a sign-in
+
+- `/api/health` answers `{"ok":true}`.
+- `/api/version` tells a client without a token only what it needs to see whether
+  it fits this server (protocol, oldest client, capabilities). Version, channel
+  and commit come only with a token.
+- `/metrics` is for the machine itself: a request is served when the client
+  address, read through the trusted proxies, is loopback. Anyone else gets 404.
+  A scraper on another host sends a bearer token that you set in
+  `GHOSTTREE_METRICS_TOKEN` (at least 16 characters; a person's token is no use
+  there). A reverse proxy on the same host must set `X-Forwarded-For`; one that
+  does not makes every client look like loopback, so do not forward `/metrics`
+  through it at all.
+
 ## Privacy and security
 
 Ghosttree may hold source paths, prompts, command output, and operational

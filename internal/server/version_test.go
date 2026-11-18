@@ -27,8 +27,8 @@ func versionServer(t *testing.T, opts ...Option) (*httptest.Server, string) {
 }
 
 func TestAPIVersionIsPublicAndDescribesTheServer(t *testing.T) {
-	srv, _ := versionServer(t, WithBuildVersion("0.1.0-dev+b0cd1b9"), WithCapabilities("github_app"))
-	resp := req(t, "GET", srv.URL+"/api/version", "", nil)
+	srv, tok := versionServer(t, WithBuildVersion("0.1.0-dev+b0cd1b9"), WithCapabilities("github_app"))
+	resp := req(t, "GET", srv.URL+"/api/version", tok, nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("status %d, want 200 without a token", resp.StatusCode)
 	}
@@ -48,9 +48,9 @@ func TestAPIVersionIsPublicAndDescribesTheServer(t *testing.T) {
 }
 
 func TestAPIVersionNamesAReleaseAsStable(t *testing.T) {
-	srv, _ := versionServer(t, WithBuildVersion("0.2.0"))
+	srv, tok := versionServer(t, WithBuildVersion("0.2.0"))
 	var got version.Info
-	json.NewDecoder(req(t, "GET", srv.URL+"/api/version", "", nil).Body).Decode(&got)
+	json.NewDecoder(req(t, "GET", srv.URL+"/api/version", tok, nil).Body).Decode(&got)
 	if got.Channel != "stable" || got.Version != "0.2.0" {
 		t.Fatalf("info = %+v", got)
 	}

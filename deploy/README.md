@@ -193,9 +193,10 @@ includes request or response bodies, query parameters, bearer tokens, or
 authorization headers. `/api/health` and `/metrics` are excluded from audit
 events.
 
-Prometheus metrics are available at `/metrics` without authentication so that
-vmagent can scrape them. This endpoint has the same network exposure as the
-server itself and must therefore remain restricted to a trusted private network.
+Prometheus metrics are available at `/metrics` to the machine itself, and from
+another host to whoever sends the bearer token in `GHOSTTREE_METRICS_TOKEN`
+(set it in the service environment, at least 16 characters); everyone else gets
+404. Do not forward `/metrics` through a public reverse proxy.
 HTTP metric labels are deliberately bounded to method,
 matched route, status, and error class; actor, request ID, remote IP, concrete
 path, project, and slug are never labels.
@@ -214,6 +215,8 @@ needs network access to the server's TCP port 8474:
 ```yaml
   - job_name: ghosttree
     metrics_path: /metrics
+    authorization:
+      credentials_file: /etc/vmagent/ghosttree-metrics-token
     static_configs:
       - targets: ['<private-address>:8474']
         labels: {site: home, host: apps}

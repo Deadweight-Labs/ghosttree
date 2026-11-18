@@ -63,6 +63,12 @@ func WithPublicURL(raw string) Option {
 	return func(a *api) { a.publicURL = strings.TrimRight(raw, "/") }
 }
 
+// WithMetricsToken lets a scraper read /metrics from outside the machine with
+// this bearer token. Without it only the machine itself reads them.
+func WithMetricsToken(token string) Option {
+	return func(a *api) { a.metricsToken = strings.TrimSpace(token) }
+}
+
 func WithBuildVersion(version string) Option {
 	return func(a *api) { a.buildVersion = version }
 }
@@ -99,6 +105,7 @@ type api struct {
 	metrics              *metricsRegistry
 	registered           []string
 	uncheckedHook        func(route string)
+	metricsToken         string
 }
 
 type personKey struct{}
@@ -115,7 +122,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	a.routeFunc(mux, "GET /api/version", a.versionInfo)
-	a.route(mux, "GET /metrics", a.metrics)
+	a.route(mux, "GET /metrics", a.metricsGate(a.metrics))
 	a.routeFunc(mux, "GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.whoAmI(r))
 	})
