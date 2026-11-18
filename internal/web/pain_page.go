@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"fmt"
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
@@ -104,9 +103,7 @@ func (a *app) painComposer(l lang, v *painView, from string, canComment bool) *c
 // oldest first.
 func (a *app) painItems(l lang, pa *store.ProjectAccess, p pain.Pain, events []pain.Event, now func(string) string) []tlItem {
 	var items []tlItem
-	sentence := func(key string, args ...any) template.HTML {
-		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
-	}
+	sentence := func(key string, args ...any) template.HTML { return htmlSentence(l, key, args...) }
 	for _, e := range events {
 		it := tlItem{ID: "event-" + strconv.FormatInt(e.ID, 10), Act: "pain." + e.Kind, Who: e.Person, Icon: "pain", Age: now(e.CreatedAt), Git: anchorViewOf(pa, p.Project, e.GitAnchor, e.Via), at: parseTime(e.CreatedAt)}
 		switch e.Kind {
@@ -116,7 +113,7 @@ func (a *app) painItems(l lang, pa *store.ProjectAccess, p pain.Pain, events []p
 		case "state":
 			it.Icon = "pain"
 			pill := `<span class="lb ` + painStateTone[e.ToState] + `">` + html.EscapeString(label(l, painStateKeys, e.ToState)) + `</span>`
-			it.Head = sentence("pains.ev.state", pill)
+			it.Head = sentence("pains.ev.state", template.HTML(pill))
 			var body strings.Builder
 			if e.Remaining != "" {
 				body.WriteString(`<b class="xtl">` + html.EscapeString(l.msg("pains.stays_open")) + `</b>` + string(mdText(e.Remaining)))
@@ -135,9 +132,9 @@ func (a *app) painItems(l lang, pa *store.ProjectAccess, p pain.Pain, events []p
 		case "corrected":
 			it.Icon, it.Head, it.Body = "pencil", sentence("pains.ev.corrected"), mdText(e.Note)
 		case "link_added":
-			it.Icon, it.Head = "link", sentence("pains.ev.link_added", painLinkTarget(l, e.Data))
+			it.Icon, it.Head = "link", sentence("pains.ev.link_added", template.HTML(painLinkTarget(l, e.Data)))
 		case "link_removed":
-			it.Icon, it.Head = "x", sentence("pains.ev.link_removed", painLinkTarget(l, e.Data))
+			it.Icon, it.Head = "x", sentence("pains.ev.link_removed", template.HTML(painLinkTarget(l, e.Data)))
 		default:
 			it.Head = template.HTML(html.EscapeString(label(l, painEventKeys, e.Kind)))
 		}

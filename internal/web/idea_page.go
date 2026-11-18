@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
@@ -181,9 +180,7 @@ func peopleOf(ws store.IdeaWorkshop) []string {
 // ideaItems are the workshop's work as entries of the timeline, oldest first.
 func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, edits []store.IdeaEdit, age func(string) string) []tlItem {
 	all := a.workshopDated(l, ws, age)
-	sentence := func(key string, args ...any) template.HTML {
-		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
-	}
+	sentence := func(key string, args ...any) template.HTML { return htmlSentence(l, key, args...) }
 	// An agent that wrote a text is named as its owner's agent ("Pia’s Claude"), a person by name.
 	byWho := func(it tlItem, person string, agent bool) tlItem {
 		it.Who = person

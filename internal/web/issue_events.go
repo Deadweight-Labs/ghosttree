@@ -103,10 +103,8 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 	crit := func(n int) template.HTML {
 		return template.HTML(fmt.Sprintf(`<a href="#criterion-%d">%s</a>`, n, html.EscapeString(l.msg("issue.requirement_n", n))))
 	}
-	// sentence fills the catalog text, whose %s take already escaped HTML.
-	sentence := func(key string, args ...any) template.HTML {
-		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
-	}
+// sentence fills the catalog text: a string argument is escaped, a template.HTML one (a pill, a link) stands as it is.
+	sentence := func(key string, args ...any) template.HTML { return htmlSentence(l, key, args...) }
 	// quote is what a text of a person says under the line of an entry: plain words of the
 	// Markdown (REQ-705), the one function the inbox rows use too.
 	quote := func(s string) string {
@@ -205,9 +203,9 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			// the page names the pull request and says it in its own language.
 			ev.Icon, ev.Tone, ev.Sentence = "pr", "don", sentence("issue.ev.pr_merged_any")
 			if m := mergedData.FindStringSubmatch(act.Data); m != nil {
-				pr := html.EscapeString("#" + m[1])
+				pr := template.HTML(html.EscapeString("#" + m[1]))
 				if n, err := strconv.ParseInt(m[1], 10, 64); err == nil && base != "" {
-					pr = string(prPill(l, n, base+"/pulls/"+m[1], "merged", "", ""))
+					pr = prPill(l, n, base+"/pulls/"+m[1], "merged", "", "")
 				}
 				ev.Sentence = sentence("issue.ev.pr_merged", pr)
 			}
@@ -216,34 +214,34 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			named := map[string][2]string{"package.added": {"issue.ev.package_added", "issue.ev.package_added_any"}, "package.removed": {"issue.ev.package_removed", "issue.ev.package_removed_any"},
 				"package.role": {"issue.ev.package_role", "issue.ev.package_role_any"}}[act.Kind]
 			if pkg != "" && pkgData.MatchString(act.Data) {
-				ev.Sentence = sentence(named[0], html.EscapeString(pkg))
+				ev.Sentence = sentence(named[0], pkg)
 			} else {
 				ev.Sentence = sentence(named[1])
 			}
 		case "pain.linked", "pain.unlinked":
 			ev.Icon = "pain"
-			link := html.EscapeString("#")
+			link := template.HTML(html.EscapeString("#"))
 			if m := painData.FindStringSubmatch(act.Data); m != nil {
 				n, _ := strconv.ParseInt(m[1], 10, 64)
-				link = string(longPill(l, "pain", n, painURL(n)))
+				link = longPill(l, "pain", n, painURL(n))
 			}
 			ev.Sentence = sentence(map[string]string{"pain.linked": "issue.ev.pain_linked", "pain.unlinked": "issue.ev.pain_unlinked"}[act.Kind], link)
 		case "task.created", "task.done", "task.confirmed", "task.reopened", "task.dropped":
 			ev.Icon, ev.Tone = "pin", "acc"
 			m := taskData.FindStringSubmatch(strings.TrimSpace(act.Data))
 			var n int64
-			link := ""
+			var link template.HTML
 			if m != nil {
 				n, _ = strconv.ParseInt(m[1], 10, 64)
 				ev.TaskID = n
-				link = string(longPill(l, "task", n, "#task-"+m[1]))
+				link = longPill(l, "task", n, "#task-"+m[1])
 			}
 			switch act.Kind {
 			case "task.created":
 				// The long pill names the task with its title; the same words in a box
 				// under the line were said twice.
 				if who := assignees[n]; who != "" {
-					ev.Sentence = sentence("issue.ev.task_created_for", html.EscapeString(who), link)
+					ev.Sentence = sentence("issue.ev.task_created_for", who, link)
 				} else {
 					ev.Sentence = sentence("issue.ev.task_created", link)
 				}
@@ -329,25 +327,25 @@ func relationSentence(l lang, act requestdomain.Activity, reqLink func(int64) st
 		}
 		return sentence("issue.ev.rel_added_any")
 	}
-	kind, target := m[1], ""
+	kind, target := m[1], template.HTML("")
 	switch {
 	case m[2] != "":
 		n, _ := strconv.ParseInt(m[2], 10, 64)
-		target = reqLink(n)
+		target = template.HTML(reqLink(n))
 	case m[3] != "":
 		n, _ := strconv.ParseInt(m[3], 10, 64)
 		href := ""
 		if base != "" {
 			href = base + "/ideas/" + m[3]
 		}
-		target = string(longPill(l, "idea", n, href))
+		target = longPill(l, "idea", n, href)
 	case m[4] != "":
 		n, _ := strconv.ParseInt(m[4], 10, 64)
-		target = string(longPill(l, "knowledge", n, "/ui/knowledge/"+m[4]))
+		target = longPill(l, "knowledge", n, "/ui/knowledge/"+m[4])
 	default:
-		target = html.EscapeString(ellipsize(m[5], 120))
+		target = template.HTML(html.EscapeString(ellipsize(m[5], 120)))
 		if strings.HasPrefix(m[5], "https://") || strings.HasPrefix(m[5], "http://") {
-			target = string(urlPill(l, m[5]))
+			target = urlPill(l, m[5])
 		}
 	}
 	if removed {

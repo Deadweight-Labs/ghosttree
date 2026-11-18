@@ -85,9 +85,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 		it := tlItem{Who: who, Kind: kind, Owner: owner, Icon: icon, Tone: tone, Head: head, Body: body, Age: clock(at), Stamp: at, at: parseStamp(at)}
 		return it
 	}
-	sentence := func(key string, args ...any) template.HTML {
-		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
-	}
+	sentence := func(key string, args ...any) template.HTML { return htmlSentence(l, key, args...) }
 
 	res, err := a.store.SessionResults(sess)
 	if err != nil {
@@ -113,9 +111,9 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 		reqHref := requestURL(c.RequestID)
 		crit := template.HTML(fmt.Sprintf(`<a href="%s#criterion-%d">%s</a>`, html.EscapeString(reqHref), c.Number, html.EscapeString(l.msg("issue.requirement_n", c.Number))))
 		req := longPill(l, "request", c.RequestID, reqHref)
-		it := entry(c.At, "check", "ok", sentence("sessions.ev.criterion_met", string(crit), string(req)), "")
+		it := entry(c.At, "check", "ok", sentence("sessions.ev.criterion_met", crit, req), "")
 		if c.State == "waived" {
-			it = entry(c.At, "drop", "", sentence("sessions.ev.criterion_waived", string(crit), string(req)), "")
+			it = entry(c.At, "drop", "", sentence("sessions.ev.criterion_waived", crit, req), "")
 		}
 		it.Body = template.HTML(html.EscapeString(plainSnippet(l, c.Text, 200)))
 		if c.Commit != "" {
@@ -154,10 +152,10 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 			continue
 		}
 		tasks++
-		link := string(longPill(l, "task", t.ID, taskHref(task)))
+		link := longPill(l, "task", t.ID, taskHref(task))
 		var head template.HTML
 		if t.Assignee != "" {
-			head = sentence("issue.ev.task_created_for", html.EscapeString(t.Assignee), link)
+			head = sentence("issue.ev.task_created_for", t.Assignee, link)
 		} else {
 			head = sentence("issue.ev.task_created", link)
 		}
@@ -171,7 +169,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 			continue
 		}
 		questions++
-		room := `<a href="` + html.EscapeString(coordRoomURL(q.RoomKey, "", 0)) + `">#` + html.EscapeString(coordShortRoomName(store.RoomProject, remote)) + `</a>`
+		room := template.HTML(`<a href="` + html.EscapeString(coordRoomURL(q.RoomKey, "", 0)) + `">#` + html.EscapeString(coordShortRoomName(store.RoomProject, remote)) + `</a>`)
 		items = append(items, entry(q.At, "chat", "", sentence("sessions.ev.question", room), template.HTML(html.EscapeString(plainSnippet(l, q.Body, 240)))))
 	}
 
@@ -180,7 +178,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 			continue
 		}
 		issues[r.ID] = true
-		items = append(items, entry(r.At, "issue", "", sentence("sessions.ev.request", string(longPill(l, "request", r.ID, requestURL(r.ID)))), ""))
+		items = append(items, entry(r.At, "issue", "", sentence("sessions.ev.request", longPill(l, "request", r.ID, requestURL(r.ID))), ""))
 	}
 
 	var files []store.SessionFile
