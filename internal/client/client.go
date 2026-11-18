@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -241,14 +242,14 @@ func IsRouteMissing(err error) bool {
 }
 
 func New(cfg config.Config) *Client {
-	return &Client{cfg: cfg, http: &http.Client{Timeout: 30 * time.Second}, readRetries: defaultReadRetries}
+	return &Client{cfg: cfg, http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: noDowngrade}, readRetries: defaultReadRetries}
 }
 
 // NewWithTimeout is for callers that sit in front of a person waiting. The
 // relevance hook runs between pressing enter and the model seeing the prompt, so
 // a server that is merely slow has to look the same as one that is absent.
 func NewWithTimeout(cfg config.Config, d time.Duration) *Client {
-	return &Client{cfg: cfg, http: &http.Client{Timeout: d}}
+	return &Client{cfg: cfg, http: &http.Client{Timeout: d, CheckRedirect: noDowngrade}}
 }
 
 // Relevant returns knowledge the text gives a reason to deliver. An empty
@@ -361,6 +362,9 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 	if c.readOnly && method != http.MethodGet && method != http.MethodHead && path != "/api/context/relevant" {
 		return ErrReadOnly
 	}
+	if err := c.checkServerURL(); err != nil {
+		return err
+	}
 	u := strings.TrimSuffix(c.cfg.ServerURL, "/") + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -393,9 +397,12 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 		return err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(raw) > maxResponseBytes {
+		return fmt.Errorf("the answer of %s is over %d MB; the client stops reading it", path, maxResponseBytes>>20)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		if resp.StatusCode == http.StatusConflict {
@@ -1073,4 +1080,53 @@ func (c *Client) GhostReviews(project, prefix string) ([]store.GhostReview, erro
 	var out []store.GhostReview
 	err := c.do("GET", "/api/ghosts/reviews", q, nil, &out)
 	return out, err
+}
+
+// maxResponseBytes bounds what the client reads of one answer. The largest
+// honest answers are documents (5 MB) and snapshots; a server that sends more
+// would fill the memory of every hook and command.
+const maxResponseBytes = 64 << 20
+
+// AllowInsecureEnv, set to 1, lets the client send its token over plain http to
+// a host that is not this machine (a network that is encrypted otherwise).
+const AllowInsecureEnv = "GHOSTTREE_ALLOW_HTTP"
+
+// checkServerURL refuses a server address the token must not travel to: another
+// scheme than http(s), and http to a host that is not this machine, where the
+// token would cross the network in the clear. A client without a token (the
+// first contact of ctx login) sends nothing secret and passes.
+func (c *Client) checkServerURL() error {
+	u, err := url.Parse(c.cfg.ServerURL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("server_url %q is not an address", c.cfg.ServerURL)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if c.cfg.Token == "" || isLoopbackHost(u.Hostname()) || os.Getenv(AllowInsecureEnv) == "1" {
+			return nil
+		}
+		return fmt.Errorf("server_url %q uses plain http to another machine, so the token would travel unencrypted: use https (or set %s=1 if the network is encrypted otherwise)", c.cfg.ServerURL, AllowInsecureEnv)
+	}
+	return fmt.Errorf("server_url %q: only http and https addresses are used", c.cfg.ServerURL)
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// noDowngrade stops a redirect from https to http: the token would follow it.
+func noDowngrade(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+		return fmt.Errorf("refusing a redirect from https to %s", req.URL.Scheme)
+	}
+	return nil
 }
