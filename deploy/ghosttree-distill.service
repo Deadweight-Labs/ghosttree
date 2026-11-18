@@ -15,6 +15,28 @@ StateDirectory=ghosttree
 # directory; the distiller reads it from $CREDENTIALS_DIRECTORY.
 LoadCredential=llm-key:/etc/ghosttree/llm-key
 Environment=GHOSTTREE_LLM_CONFIG=/etc/ghosttree/llm.json
+# The job reads the database and calls the model provider; this takes away what it
+# never needs (DynamicUser already makes the rest of the file system read-only).
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
 # Collect completed batches before submitting more work. The limit applies to
 # one submission; tune it after measuring your provider's cost and results.
 ExecStart=/usr/local/bin/ctx distill-sessions --db /var/lib/ghosttree/ghosttree.db \

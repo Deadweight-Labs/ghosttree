@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitsafe"
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -217,7 +217,7 @@ func trackedInRepo(repoRoot, rel string) error {
 	if rel == "" {
 		return nil
 	}
-	err := exec.Command("git", "-C", repoRoot, "ls-files", "--error-unmatch", "--", rel).Run()
+	err := gitsafe.Command("-C", repoRoot, "ls-files", "--error-unmatch", "--", rel).Run()
 	if err == nil {
 		return nil
 	}

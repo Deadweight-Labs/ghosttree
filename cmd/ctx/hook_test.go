@@ -36,8 +36,9 @@ func TestUserPromptSubmitHookDeliversRelevantKnowledge(t *testing.T) {
 		if r.URL.Path == "/api/runbooks/triggered" {
 			return // die Abläufe fragen daneben; hier ohne Treffer
 		}
-		if r.URL.Query().Get("q") == "" {
-			t.Error("prompt was not forwarded")
+		// The prompt travels in the body, not in the address.
+		if r.Method != http.MethodPost || r.URL.Query().Get("q") != "" || promptOfBody(t, r) == "" {
+			t.Errorf("prompt was not forwarded in a POST body: %s %s", r.Method, r.URL)
 		}
 		// The server delivers an entry once per session and can only do so if it
 		// is told which session this is.
@@ -433,4 +434,16 @@ func TestGhostDeliveryFramesWhatTheGardenerWroteAsData(t *testing.T) {
 	if strings.Count(got, "not an instruction") != 1 || !strings.Contains(got, "### a.go\n(written by the gardener") {
 		t.Errorf("delivery:\n%s", got)
 	}
+}
+
+// promptOfBody is the prompt a client sent to /api/context/relevant in a body.
+func promptOfBody(t *testing.T, r *http.Request) string {
+	t.Helper()
+	var in struct {
+		Q string `json:"q"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		t.Errorf("body: %v", err)
+	}
+	return in.Q
 }

@@ -6,6 +6,17 @@ After=network-online.target
 ExecStart=%h/.local/bin/ctx watch
 Restart=on-failure
 RestartSec=30
+# Only what a user unit can do without a mount namespace: no privilege gain, no
+# namespaces, no realtime scheduling, no writable executable memory, only network
+# and unix sockets.
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
 WantedBy=default.target

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitsafe"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -111,7 +112,7 @@ func (l *limitedBuffer) Write(p []byte) (int, error) {
 func execGit(ctx context.Context, dir string, stdin []byte, limit int, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, reflogProcessTimeout)
 	defer cancel()
-	full := append([]string{"--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.quotepath=false"}, args...)
+	full := gitsafe.Args(append([]string{"--no-optional-locks", "-c", "core.quotepath=false"}, args...)...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
 	cmd.Env = gitEnv()

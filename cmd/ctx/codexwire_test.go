@@ -99,7 +99,7 @@ func TestUserPromptSubmitAnswersACodexPayload(t *testing.T) {
 		if r.URL.Path == "/api/runbooks/triggered" {
 			return // die Abläufe fragen daneben; hier ohne Treffer
 		}
-		if got := r.URL.Query().Get("q"); got != "welches modell in ollama" {
+		if got := promptOfBody(t, r); got != "welches modell in ollama" || r.URL.Query().Get("q") != "" {
 			t.Errorf("prompt forwarded as %q", got)
 		}
 		// Codex names its session in the same field as Claude Code.

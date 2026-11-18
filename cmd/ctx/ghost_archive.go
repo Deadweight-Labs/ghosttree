@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitsafe"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -150,7 +150,7 @@ func ghostArchive(args []string, stdout io.Writer) int {
 }
 
 func archiveRepoEntries(root string) ([]ghost.Entry, error) {
-	raw, err := exec.Command("git", "-C", root, "ls-files", "--stage", "-z").Output()
+	raw, err := gitsafe.Command("-C", root, "ls-files", "--stage", "-z").Output()
 	if err != nil {
 		return nil, err
 	}

@@ -164,6 +164,33 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- `ctx server install` sets up a server on a Linux machine with systemd in one
+  command (also `install.sh --server`): server key, settings, service, a nightly
+  database backup, the first administrator, the gardener's account, a final
+  check and a login link; every answer is also an option, and `--yes` needs no
+  terminal. TLS is a proxy in front by default, with Caddy and nginx
+  configuration written to copy, or `--tls builtin` for the server's own
+  certificate. `ctx server update` fetches a release, checks its signature,
+  copies the database, replaces `ctx`, restarts, and goes back to the old
+  version and database when the new one does not come up. `ctx server doctor`
+  checks the server of a machine. Tested with real systemd in fresh Debian,
+  Ubuntu and Fedora containers. Installing over a server that exists is
+  refused and points to the update (`--force` copies the database first, as an
+  update does), an update only goes up unless `--force` is given, `--domain`,
+  `--email` and `--listen` are checked against a plain list, the unit is
+  hardened, the service's user can open `llm.json`, a restore keeps the
+  database as it was when it cannot keep what it replaces, and the copies from
+  before updates are pruned like the nightly ones.
+
+- `ctx serve` can get its own certificate from Let's Encrypt
+  (`--tls-acme-host`, env `GHOSTTREE_TLS_ACME_HOST`): https on `--tls-listen`
+  (`:443`), plain http on `--tls-http-listen` (`:80`) for the challenge and a
+  redirect, certificates in `--tls-acme-dir`; the listener of `--listen` stays.
+
+- `ctx db backup` writes a verified copy of the database beside a running
+  server (`--keep N` prunes a directory of copies), and `ctx db restore` puts
+  one back, keeping what it replaces.
+
 - Releases carry a second signature, a minisign signature over `checksums.txt`
   (`checksums.txt.minisig`; the trusted comment names the tag), next to the
   Sigstore bundle. A public installer, `deploy/downloads/ghosttree/install.sh`
@@ -1473,6 +1500,48 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   (`ap2-<id>`) counts as a placeholder.
 - Dependency updates: MCP Go SDK 1.8.0, `modernc.org/sqlite` 1.60, `golang.org/x/sys`,
   GoReleaser action and CodeQL action.
+- `ctx update` checks the minisign signature of `checksums.txt` with the release
+  key built into ctx (and the tag in the signed comment), then the archive's
+  checksum, instead of asking a `cosign` program from the PATH; nothing is
+  replaced when a check fails. The dev channel installs the build of a server
+  only if the release key signed it; a build without that signature needs
+  `ctx update --trust-server`, and the output says that only the server vouches
+  for it. A server serves `checksums.txt.minisig` next to its checksums.
+- `install.sh` refuses a release older than the ctx that is installed unless
+  `--allow-downgrade` is given; the version compared is the signed one. The
+  install script a server serves says that it trusts that server alone and no
+  longer has the `GHOSTTREE_ALLOW_HTTP` switch: plain http is for this machine only,
+  also without a way past it through user information in the address.
+- The join command and the install script take the address from
+  `GHOSTTREE_PUBLIC_URL`, or else only a plain hostname with an optional port
+  from the request; any other `Host` gives no command.
+- The release workflow creates the release as a draft, checks the uploaded files
+  and publishes afterwards. The signing key has a password (`MINISIGN_PASSWORD`
+  in the environment `release`, which needs reviewers), and `SECURITY.md` carries
+  the release key as a second place to compare it with.
+- The client no longer follows a link in a repository when it writes `.ghosttree/`:
+  a checkout that brings `.ghosttree` or a level below it as a symbolic link
+  makes the mirror and the tree stop with a message, and nothing is written or
+  removed outside the checkout. Path parts a server sends (type, state) cannot
+  leave the mirror. The mirror is private to the user (directories `0700`, files
+  `0600`, older ones are tightened at the next write), also the document
+  worktrees `.ghosttree/edit` and `.ghosttree/workflows`.
+- Prompts and shell commands go to the server with secrets blacked out, as the
+  collector already did, and the prompt of the relevance hook travels in the body
+  of a `POST /api/context/relevant` instead of the address (older servers still
+  get the `GET` form). The client reads at most 64 MB of an answer, refuses a
+  token over plain `http` to another machine (`GHOSTTREE_ALLOW_HTTP=1` allows it
+  where the network is encrypted otherwise) and a redirect from https to http.
+- Server text printed by `ctx` commands passes a filter that removes control
+  characters except line breaks and tabs, so it cannot steer the terminal.
+- `ctx run --run` shows the argument lists and asks for `yes` at a terminal;
+  without a terminal it needs `--yes`. It applies the rules of a runbook again to
+  what the server sent.
+- `idea_attach`, `pain_attach` and `request_attach` read a file by path only
+  when it is an image (extension, content, not in a hidden folder of the home
+  directory); `ctx ... attach` sends a file only when its content is an image.
+- Git calls of the client run with `core.fsmonitor`, `core.hooksPath` and
+  `diff.external` switched off, whatever `.git/config` says.
 
 ## 0.1.0-rc.3 — 2026-08-29
 

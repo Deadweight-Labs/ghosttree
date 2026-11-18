@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
@@ -489,7 +487,7 @@ type IdeaAttachInput struct {
 	DecisionID int64  `json:"decision,omitempty" jsonschema:"with owner variant: the decision, DEC-n"`
 	Variant    string `json:"variant,omitempty" jsonschema:"with owner variant: the letter"`
 	ThreadID   int64  `json:"thread,omitempty" jsonschema:"with owner reply: the thread number"`
-	Path       string `json:"path,omitempty" jsonschema:"a PNG, JPEG or WebP file on this machine, up to 5 MB"`
+	Path       string `json:"path,omitempty" jsonschema:"a PNG, JPEG or WebP file on this machine, up to 5 MB; the name ends in .png, .jpg, .jpeg or .webp and the folder is not a hidden one (.ssh, .config) below the home directory"`
 	Data       string `json:"data_base64,omitempty" jsonschema:"the image as base64, instead of path"`
 	Alt        string `json:"alt,omitempty" jsonschema:"what the image shows, one line"`
 }
@@ -504,38 +502,10 @@ type IdeaAttachOutput struct {
 	URL    string `json:"url"`
 }
 
-// readImageFile liest eine Bilddatei bis zur Höchstgröße: erst über das geöffnete
-// Handle prüfen, dass es eine gewöhnliche Datei ist, dann höchstens Limit+1 Bytes.
-func readImageFile(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !st.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is not a regular file", path)
-	}
-	if st.Size() > idea.MaxAttachmentBytes {
-		return nil, fmt.Errorf("%s is larger than %d bytes", path, idea.MaxAttachmentBytes)
-	}
-	data, err := io.ReadAll(io.LimitReader(f, idea.MaxAttachmentBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > idea.MaxAttachmentBytes {
-		return nil, fmt.Errorf("%s is larger than %d bytes", path, idea.MaxAttachmentBytes)
-	}
-	return data, nil
-}
-
 // PainAttachInput is the image on a pain: the pain is named as id, like in the other pain actions.
 type PainAttachInput struct {
 	ID   int64  `json:"id" jsonschema:"the pain number, PAIN-n"`
-	Path string `json:"path,omitempty" jsonschema:"a PNG, JPEG or WebP file on this machine, up to 5 MB"`
+	Path string `json:"path,omitempty" jsonschema:"a PNG, JPEG or WebP file on this machine, up to 5 MB; the name ends in .png, .jpg, .jpeg or .webp and the folder is not a hidden one (.ssh, .config) below the home directory"`
 	Data string `json:"data_base64,omitempty" jsonschema:"the image as base64, instead of path"`
 	Alt  string `json:"alt,omitempty" jsonschema:"what the image shows, one line"`
 }
@@ -553,7 +523,7 @@ func (s *Server) handleIdeaAttach(_ context.Context, _ *mcp.CallToolRequest, in 
 	case in.Path != "" && in.Data != "":
 		return nil, IdeaAttachOutput{}, fmt.Errorf("give path or data_base64, not both")
 	case in.Path != "":
-		b, err := readImageFile(in.Path)
+		b, err := idea.ReadImageFileStrict(in.Path)
 		if err != nil {
 			return nil, IdeaAttachOutput{}, err
 		}
@@ -565,6 +535,9 @@ func (s *Server) handleIdeaAttach(_ context.Context, _ *mcp.CallToolRequest, in 
 		b, err := base64.StdEncoding.DecodeString(in.Data)
 		if err != nil {
 			return nil, IdeaAttachOutput{}, fmt.Errorf("data_base64 is not base64: %w", err)
+		}
+		if _, err := idea.CheckImage(b, ""); err != nil {
+			return nil, IdeaAttachOutput{}, fmt.Errorf("data_base64 is not a PNG, JPEG or WebP image: %w", err)
 		}
 		data = b
 	default:

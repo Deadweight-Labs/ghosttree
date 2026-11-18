@@ -11,6 +11,10 @@ written in this repository or comes in through the Go modules listed in
   package `mermaid@12.3.0`, unchanged
 - Source: <https://github.com/mermaid-js/mermaid>
 - SHA-256: `336df803d87a38b70a01e736e666c8f7601d2ce42f5e47c8fafe5d721074b9a3`
+  (the same file as `package/dist/mermaid.min.js` in the tarball that
+  `npm pack mermaid@12.3.0` fetches, compared on 2026-11-18). A test
+  (`internal/web/vendor_provenance_test.go`) fails when the file and this entry
+  differ, so a replaced script needs a new entry that says where it came from.
 - License: MIT, copyright (c) 2014 - 2022 Knut Sveidqvist. The license text is
   `internal/web/static/vendor/mermaid.LICENSE.txt` and is served next to the
   script.

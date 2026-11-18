@@ -15,6 +15,7 @@
 #   --server          run a ghosttree server on this machine with systemd
 #   --docker          run a ghosttree server with Docker
 #   --version TAG     a release other than the newest stable one (v0.1.0-rc.3)
+#   --allow-downgrade install a release older than the ctx that is installed
 #   --yes             take the defaults instead of asking
 #   --modify-path     add ctx's directory to your shell profile if it is missing
 #   --no-modify-path  never touch a shell profile and do not ask
@@ -23,6 +24,10 @@
 # --docker (for example --domain ghosttree.example.com --admin alex).
 # Without a mode a terminal gets a menu; without a terminal only ctx is
 # installed.
+#
+# On a machine that has a server already, --server updates it (ctx server update:
+# database copied first, back again if the new release does not come up) and
+# leaves the installed ctx alone; options for a first installation are refused.
 #
 # Environment: GHOSTTREE_VERSION (as --version), GHOSTTREE_RELEASE_BASE (where
 # <tag>/<file> is downloaded from) and GHOSTTREE_API_URL (where the newest tag is
@@ -47,13 +52,14 @@ main() {
       '  --server          run a ghosttree server on this machine with systemd' \
       '  --docker          run a ghosttree server with Docker' \
       '  --version TAG     a release other than the newest stable one (v0.1.0-rc.3)' \
+      '  --allow-downgrade install a release older than the ctx that is installed' \
       '  --yes             take the defaults instead of asking' \
       '  --modify-path     add ctx to your shell profile PATH if it is missing' \
       '  --no-modify-path  never touch a shell profile and do not ask' \
       'other options go to ctx join (--connect) or ctx server install (--server, --docker)'
   }
 
-  mode='' version=${GHOSTTREE_VERSION:-} connect='' yes=no modify=ask want=''
+  mode='' version=${GHOSTTREE_VERSION:-} connect='' yes=no modify=ask want='' allow_downgrade=no
   for a in "$@"; do
     shift
     if [ -n "$want" ]; then
@@ -72,6 +78,7 @@ main() {
       --client) mode=client ;;
       --version) want=version ;;
       --version=*) version=${a#--version=} ;;
+      --allow-downgrade) allow_downgrade=yes ;;
       --yes | -y) yes=yes; set -- "$@" "$a" ;;
       --modify-path) modify=yes ;;
       --no-modify-path) modify=no ;;
@@ -280,6 +287,9 @@ Release candidates are installed on request: run this again with --version v0.1.
   [ "$comment" = "ghosttree $version" ] ||
     die "the signed checksums.txt belongs to '$comment', not to ghosttree $version; nothing was installed"
   say "Signature OK ($comment)"
+  # The release the key holder signed is the one that counts, not the answer of
+  # the API that named it.
+  signed_version=${comment#ghosttree }
 
   # Same rules as the server's installer: CR dropped, "<64 hex>  [*]<name>" lines only.
   tr -d '\r' <"$tmp/checksums.raw" | awk '
@@ -347,17 +357,112 @@ Release candidates are installed on request: run this again with --version v0.1.
     [ -n "$connect" ] || die "--connect needs the address of the server"
   fi
 
+  # ---- downgrade -------------------------------------------------------------
+
+  # Prints nothing; exit status 0 when version $2 is older than $1, 1 when it is
+  # not, 2 when one of them is not a version. Semantic Versioning precedence
+  # (build metadata after "+" does not count; no pre-release beats a pre-release).
+  version_older() {
+    awk -v a="$1" -v b="$2" '
+      function parse(v, out,   i, pre, p) {
+        sub(/^v/, "", v)
+        sub(/\+.*/, "", v)
+        pre = ""
+        i = index(v, "-")
+        if (i) { pre = substr(v, i + 1); v = substr(v, 1, i - 1) }
+        if (v !~ /^[0-9]+\.[0-9]+\.[0-9]+$/) return 0
+        split(v, p, ".")
+        out[1] = p[1] + 0; out[2] = p[2] + 0; out[3] = p[3] + 0; out["pre"] = pre
+        return 1
+      }
+      function cmppre(x, y,   xs, ys, nx, ny, i, m, xn, yn) {
+        if (x == y) return 0
+        if (x == "") return 1
+        if (y == "") return -1
+        nx = split(x, xs, "."); ny = split(y, ys, ".")
+        m = (nx < ny) ? nx : ny
+        for (i = 1; i <= m; i++) {
+          if (xs[i] == ys[i]) continue
+          xn = (xs[i] ~ /^[0-9]+$/); yn = (ys[i] ~ /^[0-9]+$/)
+          if (xn && yn) return (xs[i] + 0 < ys[i] + 0) ? -1 : 1
+          if (xn) return -1
+          if (yn) return 1
+          return ((xs[i] "") < (ys[i] "")) ? -1 : 1
+        }
+        return (nx < ny) ? -1 : ((nx > ny) ? 1 : 0)
+      }
+      BEGIN {
+        if (!parse(a, A) || !parse(b, B)) exit 2
+        for (i = 1; i <= 3; i++) {
+          if (B[i] < A[i]) exit 0
+          if (B[i] > A[i]) exit 1
+        }
+        exit (cmppre(B["pre"], A["pre"]) < 0) ? 0 : 1
+      }'
+  }
+
+  # Going back to an older release can bring back what was fixed since, and an
+  # older ctx may not open what a newer one wrote. The newest-release answer is
+  # not signed, and a signed release carries no date, so an old one passes every
+  # signature check: refuse it unless it was asked for with --allow-downgrade.
+  if [ "$mode" = server ]; then
+    installed_ctx=${GHOSTTREE_PREFIX:-}/usr/local/bin/ctx
+  else
+    installed_ctx=${XDG_BIN_HOME:-$HOME/.local/bin}/ctx
+  fi
+  if [ "$allow_downgrade" = no ] && [ -f "$installed_ctx" ] && [ -x "$installed_ctx" ]; then
+    installed_version=$("$installed_ctx" version 2>/dev/null | sed -n '1s/^ctx[[:space:]]\{1,\}\([^[:space:]]\{1,\}\).*/\1/p') || installed_version=
+    older=0
+    version_older "$installed_version" "$signed_version" || older=$?
+    if [ "$older" -eq 0 ]; then
+      die "$signed_version is older than the ctx installed here ($installed_version, $installed_ctx). Going back is a downgrade: it can bring back vulnerabilities that were fixed since, and an older ctx may not open what a newer one wrote.
+If you mean it, run this again with --allow-downgrade. Nothing was changed."
+    fi
+  fi
+
   # ---- install ---------------------------------------------------------------
 
   if [ "$mode" = server ]; then
-    # A system service wants ctx where every user finds it.
-    bindir=/usr/local/bin
-    if [ "$(id -u)" -ne 0 ]; then
+    # A system service wants ctx where every user finds it. GHOSTTREE_PREFIX
+    # moves every system path under a directory (tests and image builds; no
+    # root needed there).
+    prefix=${GHOSTTREE_PREFIX:-}
+    bindir=$prefix/usr/local/bin
+    if [ -n "$prefix" ]; then
+      sudo_cmd=
+    elif [ "$(id -u)" -ne 0 ]; then
       command -v sudo >/dev/null 2>&1 || die "setting up a server needs root: run this as root, or install sudo"
       sudo_cmd=sudo
     else
       sudo_cmd=
     fi
+
+    # A server that is set up here is moved to a new release by ctx server
+    # update: it copies the database first, keeps the old ctx and goes back if
+    # the new release does not come up. Putting a new ctx over the old one under
+    # a running service does none of that, so the program is left where it is.
+    if [ -e "$prefix/etc/systemd/system/ghosttree.service" ] || [ -e "$prefix/var/lib/ghosttree" ] || [ -L "$prefix/var/lib/ghosttree" ]; then
+      extra=''
+      for a in "$@"; do
+        case "$a" in --yes | -y) ;; *) extra="$extra $a" ;; esac
+      done
+      if ! "$bindir/ctx" server update --help >/dev/null 2>&1; then
+        die "a ghosttree server is already set up on this machine, and its ctx ($bindir/ctx) does not know 'ctx server update'.
+It was set up by hand or by an older release: move it with the steps in deploy/README.md. Nothing was changed."
+      fi
+      if [ -n "$extra" ]; then
+        die "a ghosttree server is already set up on this machine, so these options do not apply:$extra
+They are for a first installation. To move the server to $version run: sudo ctx server update --version $version
+To set it up again from other answers: sudo ctx server install --force$extra
+Nothing was changed."
+      fi
+      say "A ghosttree server is already set up here: updating it with ctx server update (copy of the database first, back again if the new release does not come up)"
+      # (Not exec: the trap that removes the temporary directory has to run.)
+      # shellcheck disable=SC2086
+      $sudo_cmd "$bindir/ctx" server update --version "$version"
+      exit 0
+    fi
+
     # shellcheck disable=SC2086
     $sudo_cmd mkdir -p "$bindir" || die "cannot create $bindir"
     # shellcheck disable=SC2086

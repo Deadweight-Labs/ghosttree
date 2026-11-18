@@ -18,6 +18,8 @@ import (
 
 const dbUsage = `usage: ctx db vacuum --db <path> [--tmpdir <dir>] [--fts-optimize] [--yes]
        ctx db check --db <path> [--full]
+       ctx db backup --db <path> --out <file|directory> [--keep N]
+       ctx db restore --db <path> --from <backup>
        ctx db backfill-actors --db <path> [--dry-run] [--batch N] [--kind k,...] [--no-models] [--json]
        ctx db chunk-stats --db <path> [--sample N] [--json]
        ctx db slim-sessions --db <path> [--dry-run] [--batch N] [--pause D] [--json]
@@ -33,6 +35,8 @@ ghosttree_valid_utf8, which only ctx registers, so "sqlite3 <db> VACUUM" and
 
   vacuum  give the free pages back to the filesystem (server stopped)
   check   quick_check or integrity_check, writes nothing (may run beside the server)
+  backup  a verified copy of the database (may run beside the server)
+  restore put a backup in place of the database (server stopped)
   backfill-actors  who wrote existing entries (agent or person), only where proven
   chunk-stats  bytes of stored transcript lines per line type, from a sample
   slim-sessions  slim and pack the stored transcript lines (may run beside the server)
@@ -121,6 +125,10 @@ func cmdDB(args []string, stdout io.Writer) int {
 		return cmdDBVacuum(args[1:], stdout)
 	case "check":
 		return cmdDBCheck(args[1:], stdout)
+	case "backup":
+		return cmdDBBackup(args[1:], stdout)
+	case "restore":
+		return cmdDBRestore(args[1:], stdout)
 	case "backfill-actors":
 		return cmdDBBackfillActors(args[1:], stdout)
 	case "chunk-stats":

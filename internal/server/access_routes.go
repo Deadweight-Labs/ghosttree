@@ -134,6 +134,7 @@ var accessRoutes = map[string]routeClass{
 	"GET /api/context/bootstrap":                  classProject,
 	"GET /api/context/interrupted":                classProject,
 	"GET /api/context/relevant":                   classProject,
+	"POST /api/context/relevant":                  classProject,
 	"POST /api/ghosts":                            classProject,
 	"GET /api/ghosts":                             classProject,
 	"GET /api/ghosts/tree":                        classProject,
