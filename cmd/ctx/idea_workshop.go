@@ -363,13 +363,21 @@ func ideaResultCLI(stdout io.Writer, jsonMode bool, cfg config.Config, i idea.Id
 	return writeRequestCLIResultCard(stdout, jsonMode, i, &card, err)
 }
 
-// readImageArg liest eine Bilddatei bis zur Höchstgröße.
+// readImageArg liest eine Bilddatei bis zur Höchstgröße. Eine Datei muss ein
+// Bild sein, bevor sie den Rechner verlässt; "-" liest das Bild von stdin.
 func readImageArg(path string) ([]byte, error) {
+	if path != "-" {
+		return idea.ReadImageFile(path)
+	}
 	s, err := readTextArg(path, nil, idea.MaxAttachmentBytes)
 	if err != nil {
 		return nil, err
 	}
-	return []byte(s), nil
+	data := []byte(s)
+	if _, err := idea.CheckImage(data, ""); err != nil {
+		return nil, fmt.Errorf("stdin is not a PNG, JPEG or WebP image: %w", err)
+	}
+	return data, nil
 }
 
 func parseDecisionRef(s string) (int64, bool) {
