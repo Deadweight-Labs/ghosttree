@@ -28,12 +28,15 @@ server address in the script is `GHOSTTREE_PUBLIC_URL`, or else the address the
 request came in on. `GHOSTTREE_DOWNLOAD_BASE` on the client replaces the
 download location, for example with a GitHub release URL, since the archives
 use goreleaser's layout. The installer refuses a plain-http source (except
-loopback, or `GHOSTTREE_ALLOW_HTTP=1`), and the server serves `/install.sh`
+this machine: loopback, with no user information in the address), and the server serves `/install.sh`
 only for an https address: set `GHOSTTREE_PUBLIC_URL`, or let a trusted proxy
 send `X-Forwarded-Proto` and `X-Forwarded-Host`. `/dist/` has no rate limit of
 its own; limit it at the reverse proxy. Keep one ctx version per directory.
-Cautious readers can fetch the script, read it, and
-run it afterwards.
+The script checks only the checksum this same server
+serves and says so when it runs: it trusts the server with the program that
+runs on the machine. A release that the Ghosttree release key signed comes from
+the public installer (see "Installing from a release" below). Cautious readers
+can fetch the script, read it, and run it afterwards.
 
 ## Installing from a release, and how it is checked
 
