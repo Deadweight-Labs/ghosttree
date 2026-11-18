@@ -54,7 +54,7 @@ func (a *app) inboxDecisions(l lang, pa *store.ProjectAccess, project string, no
 				continue
 			}
 			created := parseTime(d.CreatedAt)
-			row := forYouRow{Mark: "decision", Tone: "ask", Title: d.Question, Brief: links.Clean(d.Detail, 220), Href: decisionHref(d),
+			row := forYouRow{Mark: "decision", Tone: "ask", Title: d.Question, Brief: links.Clean(plainSnippet(l, d.Detail, 220), 0), Href: decisionHref(d),
 				Rest: l.msg("inbox.dec.of", lastSegment(d.Project)), Action: l.msg("inbox.act.open"), rank: rankBlocks, at: created, decisionID: d.ID}
 			if !created.IsZero() {
 				row.Age = shortAgo(l, now, created)

@@ -5,6 +5,7 @@
 // here; the frame test gives it a stand-in and the page test plays the frame.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { loadPage } from "./dom.mjs";
 
 // What ui-pill.js gives the renderer: an icon element and a pill, named by what they show.
@@ -140,11 +141,35 @@ test("REQ-682 AC-3: a section on one line, <details><summary>x</summary>y</detai
   assert.equal(all(inner.querySelector("details"), "p").some((e) => e.textContent === "last"), false);
 });
 
-test("a one-line section that is not closed or has more after it stays text; tags in it are text", () => {
+test("REQ-705: a section in the middle of a line is a section, with the words before and after it as paragraphs", () => {
+  const p = open();
+  // the comment of the usability run: words, then the section on the same line
+  const host = render(p, "Beide Kriterien sind belegt. <details><summary>Testlauf</summary>go test ./... ok 0.4s</details>");
+  const d = host.querySelector("details");
+  assert.ok(d, "shown as text: " + host.textContent);
+  assert.equal(d.querySelector("summary").textContent, "Testlauf");
+  assert.equal(host.querySelector("p").textContent, "Beide Kriterien sind belegt.");
+  assert.equal(host.textContent.includes("<details>"), false);
+  const both = render(p, "vor <details><summary>x</summary>y</details> nach");
+  assert.deepEqual(all(both, "p").map((e) => e.textContent), ["vor", "y", "nach"]);
+  assert.equal(render(p, "<details><summary>x</summary>y</details> and more").querySelector("details").querySelector("summary").textContent, "x");
+  // in a list item and a quote
+  assert.equal(all(render(p, "- item <details><summary>s</summary>t</details>"), "li details").length, 1);
+  assert.equal(all(render(p, "> q <details><summary>s</summary>t</details>"), "blockquote details").length, 1);
+  // code is code: a fence, a piece of inline code
+  assert.equal(render(p, "```\na <details><summary>x</summary>y</details>\n```").querySelector("details"), null);
+  assert.equal(render(p, "write `<details>` and `</details>` like that").querySelector("details"), null);
+  assert.equal(render(p, "see `a <details><summary>x</summary>y</details>`").querySelector("details"), null);
+});
+
+test("REQ-705: a picture in the middle of a sentence is a block of its own", () => {
+  const css = readFileSync(new URL("../static/ui-refs.css", import.meta.url), "utf8");
+  assert.match(css, /\.prose \.md-img \{[^}]*display: block/);
+});
+
+test("a one-line section that is not closed stays text; tags in it are text", () => {
   const p = open();
   assert.equal(render(p, "<details><summary>x</summary>y").querySelector("details"), null, "not closed on its line: text, as before");
-  assert.equal(render(p, "<details><summary>x</summary>y</details> and more").querySelector("details"), null);
-  assert.equal(render(p, "a <details><summary>x</summary>y</details>").querySelector("details"), null);
   const host = render(p, "<details><summary><b>x</b></summary><script>alert(1)</script></details>");
   for (const tag of ["script", "b"]) assert.equal(host.querySelector(tag), null, tag);
   for (const t of tagsOf(host)) assert.ok(["div", "details", "summary", "p", "br"].includes(t), `unexpected <${t}>`);

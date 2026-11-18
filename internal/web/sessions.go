@@ -1155,7 +1155,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	}
 	allPrompts := qv.Get("prompts") == "all"
 	for i, p := range outline {
-		pv := promptView{N: i + 1, Text: ellipsize(p.Text, 140), Time: clock(p.Time), Tools: l.msg("sessions.tool_calls", p.ToolCalls)}
+		pv := promptView{N: i + 1, Text: plainSnippet(l, p.Text, 140), Time: clock(p.Time), Tools: l.msg("sessions.tool_calls", p.ToolCalls)}
 		if p.ToolCalls == 1 {
 			pv.Tools = l.msg("sessions.tool_call_one")
 		}

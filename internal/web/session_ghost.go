@@ -39,6 +39,9 @@ type sessionGhost struct {
 	Quiet bool
 }
 
+// answerRunes is how much of the closing message of an agent the ghosttree view shows; the rest is in the raw history.
+const answerRunes = 4000
+
 // toolsBody is the line under "made N tool calls": the calls by kind.
 func toolsBody(l lang, a store.SessionActivity) template.HTML {
 	if !a.Detailed {
@@ -114,7 +117,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 		if c.State == "waived" {
 			it = entry(c.At, "drop", "", sentence("sessions.ev.criterion_waived", string(crit), string(req)), "")
 		}
-		it.Body = template.HTML(html.EscapeString(ellipsize(c.Text, 200)))
+		it.Body = template.HTML(html.EscapeString(plainSnippet(l, c.Text, 200)))
 		if c.Commit != "" {
 			commits[c.Commit] = true
 			href := ""
@@ -169,7 +172,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 		}
 		questions++
 		room := `<a href="` + html.EscapeString(coordRoomURL(q.RoomKey, "", 0)) + `">#` + html.EscapeString(coordShortRoomName(store.RoomProject, remote)) + `</a>`
-		items = append(items, entry(q.At, "chat", "", sentence("sessions.ev.question", room), template.HTML(html.EscapeString(ellipsize(q.Body, 240)))))
+		items = append(items, entry(q.At, "chat", "", sentence("sessions.ev.question", room), template.HTML(html.EscapeString(plainSnippet(l, q.Body, 240)))))
 	}
 
 	for _, r := range res.Requests {
@@ -206,7 +209,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 			if at == "" {
 				at = sess.LastSeenAt
 			}
-			items = append(items, entry(at, "chat", "", template.HTML(html.EscapeString(l.msg("sessions.ev.answer"))), `<div class="answer">`+textParagraphs(answer, 900)+`</div>`))
+			items = append(items, entry(at, "chat", "", template.HTML(html.EscapeString(l.msg("sessions.ev.answer"))), `<div class="answer">`+mdBlocks(bodyBlocks(answer, answerRunes))+`</div>`))
 		}
 	}
 	g.Quiet = len(items) == 0

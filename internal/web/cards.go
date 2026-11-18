@@ -14,8 +14,8 @@ type cmdLine struct {
 // leadSentence ist der erste Satz eines Textes, einzeilig, höchstens limit
 // Zeichen. Er ist die Vorschau im Einklapper: Titel plus erster Satz fordern
 // zum Aufklappen auf, ein "mehr anzeigen" braucht es nicht.
-func leadSentence(s string, limit int) string {
-	s = oneLineText(s)
+func leadSentence(l lang, s string, limit int) string {
+	s = stripMarkdown(l, s, nil)
 	for i, r := range s {
 		if (r == '.' || r == '!' || r == '?') && (i+1 == len(s) || s[i+1] == ' ') {
 			s = s[:i+1]

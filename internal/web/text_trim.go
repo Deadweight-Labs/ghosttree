@@ -1,8 +1,6 @@
 package web
 
 import (
-	"html"
-	"html/template"
 	"strings"
 	"unicode"
 )
@@ -46,30 +44,4 @@ func withoutGhostLabel(s string) string {
 		}
 	}
 	return s
-}
-
-// textParagraphs writes plain text as escaped HTML with its line breaks kept,
-// shortened at a word to max characters in all.
-func textParagraphs(s string, max int) template.HTML {
-	s = strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n"))
-	if len([]rune(s)) > max {
-		// Cut before folding the lines, so that the paragraphs stay.
-		r := []rune(s)[:max]
-		cut := len(r)
-		for i := len(r) - 1; i > max/2; i-- {
-			if unicode.IsSpace(r[i]) {
-				cut = i
-				break
-			}
-		}
-		s = strings.TrimRightFunc(string(r[:cut]), unicode.IsSpace) + "…"
-	}
-	var b strings.Builder
-	for i, line := range strings.Split(s, "\n") {
-		if i > 0 {
-			b.WriteString("<br>")
-		}
-		b.WriteString(html.EscapeString(strings.TrimRight(line, " \t")))
-	}
-	return template.HTML(b.String())
 }

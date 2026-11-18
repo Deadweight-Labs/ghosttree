@@ -171,8 +171,8 @@
 
   // Composer: write/preview. The preview renders the Markdown (ui-md.js) into nodes. It is at
   // least as tall as the text field it replaces, so the box does not jump, and it grows with its
-  // content up to the height of the window (CSS: .cx-pv), then scrolls inside itself: a table or
-  // a diagram can be checked before sending. The toolbar stays where it is while the preview is
+  // content, whatever its length (CSS: .cx-pv; only the chat composers have a cap): a table or a
+  // diagram can be checked before sending. The toolbar stays where it is while the preview is
   // open and is greyed out, because it belongs to writing.
   for (const tab of $$(".cx [data-wtab]")) {
     tab.addEventListener("click", (event) => {

@@ -461,6 +461,34 @@
     return { open: !!m[1], summary: summary || "", body: lines.slice(k, j), end: Math.min(j + 1, lines.length) };
   }
 
+  // A section written in the middle of a line ("Look at this. <details><summary>x</summary>y</details>
+  // More.") is a section of its own: the words before it and after it are lines of their own, and the
+  // line in between is the one-line section detailsOneLine reads. Lines in a code fence stay as they are,
+  // and so does a tag after an odd number of backticks (it is in a piece of code). One pass, each line
+  // read with indexOf.
+  var RE_DETAILS_TAG = /<details(?: +open)?>/i;
+  function apartDetails(lines) {
+    var out = [], fence = "";
+    for (var k = 0; k < lines.length; k++) {
+      var line = lines[k], m = RE_FENCE.exec(line);
+      if (m) {
+        if (!fence) fence = m[1];
+        else if (m[1].length >= fence.length && !m[2]) fence = "";
+        out.push(line); continue;
+      }
+      var low = fence ? "" : line.toLowerCase(), end = low ? low.lastIndexOf("</details>") : -1, at = end > 0 ? RE_DETAILS_TAG.exec(line) : null;
+      if (!at || at.index === 0 && end + 10 >= line.trimEnd().length || at.index >= end || (line.slice(0, at.index).split("`").length - 1) % 2) { out.push(line); continue; }
+      // The lines after the first keep the quote marks and the indent of an item they stand in.
+      var q = /^ {0,3}(?:> ?)+/.exec(line), qp = q ? q[0] : "", im = RE_ITEM.exec(line.slice(qp.length)),
+          pre = qp + (im ? new Array(im[1].length + 3).join(" ") : ""),
+          before = line.slice(0, at.index).trimEnd(), after = line.slice(end + 10).trim();
+      if (before && before.trim() !== qp.trim()) out.push(before);
+      out.push(pre + line.slice(at.index, end + 10));
+      if (after) out.push(pre + after);
+    }
+    return out;
+  }
+
   function interrupts(l) {
     if (RE_FENCE.test(l) || RE_HEAD.test(l) || RE_QUOTE.test(l) || RE_RULE.test(l) || RE_DETAILS.test(l) || detailsOneLine(l)) return true;
     var m = RE_ITEM.exec(l);
@@ -502,7 +530,7 @@
       }
       if (!cur) break;
       if (ind >= base + 2) {
-        if (cur.sub.length || m) cur.sub.push(ln.slice(base + 2));
+        if (cur.sub.length || m || detailsOneLine(ln.slice(base + 2))) cur.sub.push(ln.slice(base + 2));
         else cur.text.push(ln.trim());
         i++; continue;
       }
@@ -640,7 +668,7 @@
     if (!src.trim()) { frag.appendChild(el("p", "muted", words.empty)); return frag; }
     // Too long to read as Markdown within a moment: shown as it is, nothing is interpreted.
     if (src.length > MAX_MD) { frag.appendChild(el("pre", "", src)); return frag; }
-    blocks(src.split("\n"), frag, 0, words);
+    blocks(apartDetails(src.split("\n")), frag, 0, words);
     // A fragment is put on the page by whoever asked for it (the preview of the composer): the
     // diagrams in it are drawn when the next frame has seen where it went.
     if (wantDiagrams) { wantDiagrams = false; requestAnimationFrame(function () { diagrams(document); }); }

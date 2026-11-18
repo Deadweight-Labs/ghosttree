@@ -139,7 +139,7 @@ func TestExcerptReadsMarkdownAsWords(t *testing.T) {
 		"Absatz mit ~~gestrichen~~ Wort.":   "Absatz mit gestrichen Wort.",
 		"| a | b |\n|---|---|\n| 1 | 2 |\n": "| a | b |",
 	} {
-		if got := excerpt(src); got != want {
+		if got := excerpt(langEN, src); got != want {
 			t.Errorf("excerpt(%q) = %q, want %q", src, got, want)
 		}
 	}

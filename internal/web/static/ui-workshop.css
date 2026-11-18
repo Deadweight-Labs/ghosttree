@@ -89,6 +89,8 @@
   & .ws .ws-act { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
   & .ws .ws-act .gbtn .i { margin-right: 4px; }
   & .ws .ws-out { margin: 12px 0 0; font-size: 14px; }
+  & .ws .ws-out .kn-body > :last-child { margin-bottom: 0; }
+  & .ws .ws-out .kn-body p { margin: 0 0 8px; }
   & .ws .ws-reopen { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   & .ws .ws-reopen .gfield { flex: 1 1 14rem; height: 28px; font-size: 13px; }
   & .ws .ws-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-default); background: var(--canvas-subtle); }

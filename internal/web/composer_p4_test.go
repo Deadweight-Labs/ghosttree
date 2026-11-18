@@ -136,12 +136,12 @@ func TestRequirementActionStandsInItsOwnCellOfTheRow(t *testing.T) {
 	e := ovEnv(t)
 	open := rqMake(t, e.St, rqSpec{Title: "Still open", Criteria: []string{"One"}})
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/issues/"+itoa(open.Request.ID))
-	body := strings.Index(page, `<div class="tx">One</div>`)
+	body := strings.Index(page, `<div class="tx"><div class="kn-body prose" data-md="One"><p>One</p></div></div>`)
 	resolve := strings.Index(page, `<details class="resolve"><summary class="gbtn sm quiet">Mark as met</summary>`)
 	if body < 0 || resolve < body {
 		t.Fatalf("the action is not after the text of the requirement (text %d, action %d)", body, resolve)
 	}
-	row := page[body+len(`<div class="tx">One</div>`) : resolve]
+	row := page[body+len(`<div class="tx"><div class="kn-body prose" data-md="One"><p>One</p></div></div>`) : resolve]
 	if !strings.HasSuffix(strings.TrimSpace(row), "</div>") {
 		t.Error("the action is inside the body of the requirement, not in a cell of the row")
 	}

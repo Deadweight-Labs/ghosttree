@@ -9,10 +9,12 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-// The preview of a message or a text in the inbox is plain text (REQ-684): what the reader
-// would see on the page, without the marks of Markdown. A picture reads "[Image: alt]", a
-// link its words, a code block its lines, a tag nothing, and an @name the name of whom it
-// means. The page of the room or issue shows the real thing; the row only says what it is about.
+// A text of a person that is shown as a line (a row of the inbox, a card, a list, a quote) is
+// plain text (REQ-684, REQ-705): what the reader would see on the page, without the marks of
+// Markdown. stripMarkdown is the one function for it; plainSnippet and previewText cut its
+// result. A picture reads "Image: alt", a link its words, a code block its lines, a tag
+// nothing, a table its cells, and an @name the name of whom it means. The page of the room or
+// issue shows the real thing through ui-md.js; the row only says what it is about.
 
 var (
 	previewImage = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
@@ -27,6 +29,14 @@ var (
 	previewTask    = regexp.MustCompile(`(^|\s)[-*+][ \t]+\[[ xX]\][ \t]+`)
 	previewItem    = regexp.MustCompile(`(?m)^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?`)
 	previewCode    = regexp.MustCompile("`([^`]*)`")
+	previewAuto    = regexp.MustCompile(`<(https?://[^>\s]+)>`)
+	previewRule    = regexp.MustCompile(`(?m)^[ \t]{0,3}(?:[-*_][ \t]*){3,}$`)
+	previewSep     = regexp.MustCompile(`(?m)^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$`)
+	previewRow     = regexp.MustCompile(`(?m)^[ \t]*\|(.*?)\|?[ \t]*$`)
+	previewEscape  = regexp.MustCompile("\\\\([\\\\`*_\\[\\]()#>@!~|<+.-])")
+	// previewEscaped are the characters a backslash makes plain; each stands in as a private-use character
+	// while the marks are taken out, so that "\*" is not read as the start of an emphasis.
+	previewEscaped = "\\`*_[]()#>@!~|<+.-"
 	previewMention = regexp.MustCompile(`@[\p{L}\p{N}][\p{L}\p{N}_-]*(?:[.:][\p{L}\p{N}][\p{L}\p{N}_-]*)*`)
 )
 
@@ -79,6 +89,9 @@ func mentionNamesOf(pa *store.ProjectAccess, project string, texts ...string) ma
 // stripMarkdown strips Markdown from s. names maps the handle of an @name to a full name.
 func stripMarkdown(l lang, s string, names map[string]string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = previewEscape.ReplaceAllStringFunc(s, func(m string) string {
+		return string(rune(0xE000 + strings.IndexByte(previewEscaped, m[1])))
+	})
 	s = previewFence.ReplaceAllString(s, "$1")
 	s = previewImage.ReplaceAllStringFunc(s, func(m string) string {
 		alt := strings.TrimSpace(previewImage.FindStringSubmatch(m)[1])
@@ -88,7 +101,17 @@ func stripMarkdown(l lang, s string, names map[string]string) string {
 		return l.msg("inbox.preview.image", alt)
 	})
 	s = previewLink.ReplaceAllString(s, "$1")
+	s = previewAuto.ReplaceAllString(s, "$1")
 	s = previewTag.ReplaceAllString(s, " ")
+	s = previewSep.ReplaceAllString(s, "")
+	s = previewRow.ReplaceAllStringFunc(s, func(row string) string {
+		cells := strings.Split(strings.Trim(strings.TrimSpace(row), "|"), "|")
+		for i, c := range cells {
+			cells[i] = strings.TrimSpace(c)
+		}
+		return strings.Join(cells, " · ")
+	})
+	s = previewRule.ReplaceAllString(s, "")
 	s = previewHead.ReplaceAllString(s, "")
 	s = previewQuote.ReplaceAllString(s, "")
 	s = previewCallout.ReplaceAllString(s, "")
@@ -101,7 +124,19 @@ func stripMarkdown(l lang, s string, names map[string]string) string {
 	if len(names) > 0 {
 		s = nameMentions(s, names)
 	}
+	s = strings.Map(func(r rune) rune {
+		if r >= 0xE000 && r < 0xE000+rune(len(previewEscaped)) {
+			return rune(previewEscaped[r-0xE000])
+		}
+		return r
+	}, s)
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// plainSnippet is a text of a person as one plain line of at most limit characters, cut at the end
+// of a word: the line a card, a list row or a quote shows. The same plain text as the inbox row.
+func plainSnippet(l lang, s string, limit int) string {
+	return shortWords(stripMarkdown(l, s, nil), limit)
 }
 
 // previewText is the line a row of the inbox shows for a text: plain, and cut at limit.

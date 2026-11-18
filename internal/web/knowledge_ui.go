@@ -93,7 +93,7 @@ func reviewRows(l lang, garden *gardenView, cards []knowledgeCard) []rvRow {
 		}
 		// A ready explanation leads the row: it speaks before the original text.
 		if c.Explain != nil && !c.Explain.Pending && c.Explain.Text != "" {
-			row.Why = leadSentence(c.Explain.Text, 160)
+			row.Why = leadSentence(l, c.Explain.Text, 160)
 		}
 		rows = append(rows, row)
 	}

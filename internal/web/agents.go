@@ -153,7 +153,7 @@ func (a *app) lastPosts(r *http.Request, rows []agentRow, now time.Time) map[str
 			if m.AuthorKind != store.AuthorAgent || m.SenderExternalID == "" || strings.TrimSpace(m.Body) == "" {
 				continue
 			}
-			out[m.SenderExternalID] = agentPost{shortWords(m.Body, agentPostLength), shortAge(l, now, parseTime(m.CreatedAt))}
+			out[m.SenderExternalID] = agentPost{plainSnippet(l, m.Body, agentPostLength), shortAge(l, now, parseTime(m.CreatedAt))}
 		}
 	}
 	return out

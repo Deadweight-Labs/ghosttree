@@ -228,7 +228,7 @@ func (a *app) featureRowOf(l lang, pa *store.ProjectAccess, view *repoView, f fe
 	row := uiRow{Icon: "feature", Tone: "feat", StateLabel: label(l, featureStateKeys, f.State), Num: "#" + strconv.FormatInt(f.ID, 10),
 		Title: f.Name, Href: view.Href + "/features/" + strconv.FormatInt(f.ID, 10), Kind: l.msg("features.rev", f.Revision),
 		Age: shortAge(l, now, parseTime(f.UpdatedAt)), AgeTitle: l.dateTime(parseTime(f.UpdatedAt).Local()), Person: f.Person,
-		Excerpt: ellipsize(f.Summary, 180)}
+		Excerpt: plainSnippet(l, f.Summary, 180)}
 	for _, ref := range f.Affects {
 		if ref.Kind != feature.KindIdea {
 			continue

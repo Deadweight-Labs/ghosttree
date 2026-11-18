@@ -197,7 +197,7 @@ func (a *app) myIssuesPage(w http.ResponseWriter, r *http.Request) {
 func taskRowOf(l lang, t humantask.Task, now time.Time, withRepo bool) uiRow {
 	row := uiRow{Icon: "tasks", Tone: taskRowTone[t.State], StateLabel: label(l, taskPageStates, t.State), Num: "#" + strconv.FormatInt(t.ID, 10),
 		Title: t.Title, Href: taskHrefOf(t), Kind: label(l, taskKindKeys, t.Kind), Person: firstNonEmpty(t.Assignee, t.CreatedBy),
-		Excerpt: ellipsize(oneLineText(firstNonEmpty(t.Location, t.Description)), 160)}
+		Excerpt: plainSnippet(l, firstNonEmpty(t.Location, t.Description), 160)}
 	if at := parseTime(t.CreatedAt); !at.IsZero() {
 		row.Age, row.AgeTitle = shortAge(l, now, at), l.dateTime(at.Local())
 	}

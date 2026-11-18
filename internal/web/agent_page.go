@@ -196,7 +196,7 @@ func controlTimeline(l lang, c store.AgentControl) []tlItem {
 	}
 	item := tlItem{Who: c.RequestedByLabel, Icon: "pause", Tone: "warn", Head: template.HTML(html.EscapeString(l.msg("agent.tl.requested", name))), Age: shortAge(l, overviewNow().UTC(), parseTime(c.RequestedAt))}
 	if c.Reason != "" {
-		item.Body = template.HTML(html.EscapeString("„" + c.Reason + "“"))
+		item.Body = mdText(c.Reason)
 	}
 	return append(out, item)
 }

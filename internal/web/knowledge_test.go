@@ -537,7 +537,7 @@ func TestBodyBlocksSplitParagraphsAndCode(t *testing.T) {
 	if p := bodyBlocks("run `ls` now", 0)[0].Parts; len(p) != 3 || !p[1].Code || p[1].Text != "ls" {
 		t.Errorf("inline code = %+v", p)
 	}
-	if excerpt("```\ncode only\n```") != "code only" {
+	if excerpt(langEN, "```\ncode only\n```") != "code only" {
 		t.Error("code-only excerpt")
 	}
 }

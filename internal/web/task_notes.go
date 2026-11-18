@@ -40,7 +40,7 @@ func (a *app) taskNoteFor(l lang, id int64, steps []humantask.Step) *taskNote {
 	n := &taskNote{}
 	if v := a.explainStoredFor(l, explain.KindTask, id); v != nil && v.Text != "" {
 		n.Title, n.Mark, n.MarkTitle, n.Text = v.Title, v.Mark, v.MarkTitle, v.Text
-		n.Lead = leadSentence(v.Text, 160)
+		n.Lead = leadSentence(l, v.Text, 160)
 	}
 	for _, s := range steps {
 		n.Steps = append(n.Steps, taskStep{Text: s.Text, URL: s.URL})

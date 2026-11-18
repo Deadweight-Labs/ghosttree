@@ -257,17 +257,17 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		w.Concept = wc
 		for _, f := range ws.Affects {
 			af := workshopAffect{Name: f.Name, Href: repoHref(i.Project) + "/features/" + strconv.FormatInt(f.ID, 10), Num: "#" + strconv.FormatInt(f.ID, 10),
-				Ist: ellipsize(f.Current.Summary, 280), Rev: l.msg("features.rev", f.Revision), Advanced: f.Advanced}
-			af.Soll = ellipsize(c.Concept.What, 280)
+				Ist: plainSnippet(l, f.Current.Summary, 280), Rev: l.msg("features.rev", f.Revision), Advanced: f.Advanced}
+			af.Soll = plainSnippet(l, c.Concept.What, 280)
 			if af.Soll == "" {
-				af.Soll = ellipsize(c.Concept.About, 280)
+				af.Soll = plainSnippet(l, c.Concept.About, 280)
 			}
 			w.Affects = append(w.Affects, af)
 		}
 	} else {
 		for _, f := range ws.Affects {
 			w.Affects = append(w.Affects, workshopAffect{Name: f.Name, Href: repoHref(i.Project) + "/features/" + strconv.FormatInt(f.ID, 10), Num: "#" + strconv.FormatInt(f.ID, 10),
-				Ist: ellipsize(f.Current.Summary, 280), Rev: l.msg("features.rev", f.Revision), Advanced: f.Advanced})
+				Ist: plainSnippet(l, f.Current.Summary, 280), Rev: l.msg("features.rev", f.Revision), Advanced: f.Advanced})
 		}
 	}
 	for _, d := range ws.Decisions {
