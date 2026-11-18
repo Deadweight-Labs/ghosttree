@@ -157,6 +157,12 @@ func (a CoordAccess) requestHeldTx(tx rowQuerier, reqID string) bool {
 	if strings.TrimSpace(project) == "" && a.Store.AccessEnforced() && !a.ownsGlobalRequestTx(tx, n) {
 		return true
 	}
+	// A request of a project is linked only by someone who may read it, in
+	// whatever room the thread lives: a group or machine room is no way to bind
+	// a request of a project the caller has no part in, or to probe its number.
+	if p := strings.TrimSpace(project); p != "" && !a.mayReadProjectRequestTx(tx, p) {
+		return true
+	}
 	if origin != "distilled" || person != "" {
 		return false
 	}
@@ -176,6 +182,25 @@ func (a CoordAccess) requestHeldTx(tx rowQuerier, reqID string) bool {
 	}
 	viewer, ok := accountNumericID(a.Principal.ID)
 	return !ok || effectiveOwner(account, instanceOwnerID(tx)) != viewer
+}
+
+// mayReadProjectRequestTx: the caller reads requests of the project: with the
+// right under enforcement, as a member of the project's organization without it.
+// A remote nobody has claimed has no organization; its requests stay with the
+// rule of the room.
+func (a CoordAccess) mayReadProjectRequestTx(q rowQuerier, project string) bool {
+	account, ok := accountNumericID(a.Principal.ID)
+	if !ok {
+		return false
+	}
+	var orgID int64
+	if q.QueryRow(`SELECT org_id FROM projects WHERE remote=?`, project).Scan(&orgID) != nil {
+		return true
+	}
+	if a.Store.AccessEnforced() {
+		return projectRoleTx(q, project, account).Has(RightRequestRead)
+	}
+	return orgRoleTx(q, orgID, account) != ""
 }
 
 // ownsGlobalRequestTx: the account of this access wrote the request, or the

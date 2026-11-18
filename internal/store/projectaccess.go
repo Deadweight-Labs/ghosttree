@@ -625,9 +625,9 @@ func (a *ProjectAccess) decide(project string, res Resource, act Action, obj Obj
 		case level > levelNone:
 			if !shareAllows(level, res, act, obj) {
 				if act == ActRead {
-					return Decision{Hidden: true, Strict: true, Reason: "machine-axis knowledge is not shared with you in this state"}
+					return Decision{Hidden: true, Reason: "machine-axis knowledge is not shared with you in this state"}
 				}
-				return Decision{Strict: true, Reason: "machine share does not allow " + string(act)}
+				return Decision{Reason: "machine share does not allow " + string(act)}
 			}
 		default:
 			// Der Autor liest und pflegt seine eigene Notiz auch ohne Zugang. Ist
@@ -635,7 +635,7 @@ func (a *ProjectAccess) decide(project string, res Resource, act Action, obj Obj
 			// ehemaliges Mitglied bearbeitet nichts, was andere noch lesen.
 			note = a.ownNoteOnUnclaimedMachine(obj, act) && !(act == ActEdit && len(obj.SharedOrgs) > 0)
 			if !note {
-				return Decision{Hidden: true, Strict: true, Reason: "machine-axis knowledge of another account"}
+				return Decision{Hidden: true, Reason: "machine-axis knowledge of another account"}
 			}
 		}
 		switch {
@@ -724,7 +724,7 @@ func (a *ProjectAccess) decideGlobal(res Resource, act Action, obj Object) Decis
 		if act == ActCreate || obj.Own {
 			return Decision{Allowed: true}
 		}
-		return Decision{Hidden: true, Strict: true, Reason: "global runbook of another author"}
+		return Decision{Hidden: true, Reason: "global runbook of another author"}
 	case ResKnowledge, ResRequest, ResDocument:
 		if act == ActCreate {
 			return Decision{Allowed: true}
@@ -732,7 +732,7 @@ func (a *ProjectAccess) decideGlobal(res Resource, act Action, obj Object) Decis
 		if a.ownsGlobal(obj) {
 			return Decision{Allowed: true}
 		}
-		return Decision{Hidden: true, Strict: true, Reason: "global entry of another author"}
+		return Decision{Hidden: true, Reason: "global entry of another author"}
 	case ResSessionMeta, ResTranscript:
 		if res == ResSessionMeta && act == ActCreate {
 			return Decision{Allowed: true}
@@ -1092,5 +1092,7 @@ func (a *ProjectAccess) GateList(project string, res Resource, perEntry bool) er
 // Konten selbst ausschließen.
 func (a *ProjectAccess) Viewer() SessionViewer {
 	a.loadMachines()
-	return SessionViewer{Enforced: true, Account: a.account, Owner: a.owner}
+	// Private Sessions und was aus ihnen abgeleitet ist, bleiben in jedem Modus bei
+	// ihrem Besitzer; globale Einträge anderer nur unter Durchsetzung.
+	return SessionViewer{Enforced: true, OpenGlobal: !a.st.AccessEnforced(), Account: a.account, Owner: a.owner}
 }

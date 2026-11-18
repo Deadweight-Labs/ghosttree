@@ -189,7 +189,7 @@ func (v SessionViewer) isInstanceOwner() bool { return v.Owner != 0 && v.Account
 // So verdrängt ein fremder globaler Treffer weder einen sichtbaren aus dem Limit
 // noch geht er in die Nutzungszähler ein.
 func withGlobalScope(where string, args []any, alias string, viewer []SessionViewer) (string, []any) {
-	if len(viewer) == 0 || !viewer[0].Enforced {
+	if len(viewer) == 0 || !viewer[0].Enforced || viewer[0].OpenGlobal {
 		return where, args
 	}
 	cond, cargs := globalKnowledgeSQL(alias, viewer[0].Account, viewer[0].isInstanceOwner())

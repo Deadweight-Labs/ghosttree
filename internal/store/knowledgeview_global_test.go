@@ -63,16 +63,14 @@ func TestAdminWithoutRoleGetsNoNumbersInGlobalKnowledge(t *testing.T) {
 	}
 }
 
-// bm25 hängt vom ganzen Index ab; unter Durchsetzung ordnet auch der Admin nur
-// aus der lesbaren Menge.
-func TestAdminDoesNotReadAllUnderEnforcement(t *testing.T) {
+// bm25 hängt vom ganzen Index ab; auch der Admin ordnet nur aus der lesbaren
+// Menge, und im Log-Modus ebenso: private Transkripte gehören ihrem Besitzer.
+func TestNobodyReadsAllTranscripts(t *testing.T) {
 	st := accessFixture(t)
-	st.SetAccessMode(AccessMode{Enforce: true})
-	if viewer(st, "person:1", "robin").ReadsAll() {
-		t.Error("admin reads all under enforcement")
-	}
-	st.SetAccessMode(AccessMode{})
-	if !viewer(st, "person:1", "robin").ReadsAll() {
-		t.Error("nobody is restricted without enforcement")
+	for _, enforce := range []bool{true, false} {
+		st.SetAccessMode(AccessMode{Enforce: enforce})
+		if viewer(st, "person:1", "robin").ReadsAll() {
+			t.Errorf("admin reads all transcripts (enforce=%v)", enforce)
+		}
 	}
 }

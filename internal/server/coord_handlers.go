@@ -293,6 +293,13 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 		if denyAccess(w, a.access(r).Check(strings.TrimSpace(project), store.ResRoom, store.ActCreate, store.Object{})) {
 			return
 		}
+		// Posten im Projektraum gibt die Matrix erst ab member (ResRoom Post), und
+		// die Weboberfläche zeigt dem Gast den Raum nicht: ein Gast meldet dort
+		// keinen Agenten an, in keinem Modus.
+		if a.access(r).Role(strings.TrimSpace(project)).GuestOnly() {
+			writeCoded(w, http.StatusForbidden, "guest_cannot_join_room", "a guest does not join the project room; the room starts at the member role")
+			return
+		}
 	}
 	if _, ok := accountOf(principalOf(r)); !ok {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")

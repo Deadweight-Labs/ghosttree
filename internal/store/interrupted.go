@@ -43,6 +43,7 @@ func (s *Store) InterruptedWork(ax scope.Axes, idleBefore, excludeSession string
 // Session ist privat wie ihr Transkript (REQ-438 D).
 type SessionViewer struct {
 	Enforced       bool
+	OpenGlobal     bool // globale Einträge anderer bleiben sichtbar (Log-Modus)
 	Account, Owner int64
 }
 
