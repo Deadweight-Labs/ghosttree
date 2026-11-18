@@ -109,7 +109,8 @@ func TestCLIBackendLoginWritesConfigAndNamesTheAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if start.Code == "" || !strings.Contains(start.CompleteURL, start.Code) || start.Expires.Before(time.Now()) {
+	// The link to open carries no code: the person types the one the terminal shows.
+	if start.Code == "" || strings.Contains(start.CompleteURL, start.Code) || start.CompleteURL == "" || start.Expires.Before(time.Now()) {
 		t.Fatalf("start %+v", start)
 	}
 	out.WriteString(start.Code) // the fixture approves the code it finds here

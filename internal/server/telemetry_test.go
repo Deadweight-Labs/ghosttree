@@ -203,7 +203,9 @@ func TestAuditExcludesHealthAndMetricsLogs(t *testing.T) {
 	h := a.telemetry(a.auth(a.captureRoute(mux)))
 	for _, path := range []string{"/api/health", "/metrics"} {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		probe := httptest.NewRequest("GET", path, nil)
+		probe.RemoteAddr = "127.0.0.1:4000"
+		h.ServeHTTP(w, probe)
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s status = %d", path, w.Code)
 		}

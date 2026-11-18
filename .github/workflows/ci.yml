@@ -192,11 +192,31 @@ jobs:
       - name: Install and update a server in ${{ matrix.image }}
         run: scripts/e2e/server-containers.sh "${{ matrix.image }}"
 
+  # The Docker installation (REQ-723): images built from the Dockerfile, the
+  # one-line installer in a fresh container that talks to this runner's Docker,
+  # login, update, and a rollback from an image that does not come up.
+  docker-install:
+    name: Docker install (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:12", "ubuntu:24.04", "fedora:42"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install and update a Docker server from ${{ matrix.image }}
+        run: scripts/e2e/docker-containers.sh "${{ matrix.image }}"
+
   # Required status check of dev and main; it only summarises the parallel Go jobs.
   quality:
     name: Go quality
     if: always()
-    needs: [go-checks, go-test-web, go-test-rest, go-test-store, installer, server-install]
+    needs: [go-checks, go-test-web, go-test-rest, go-test-store, installer, server-install, docker-install]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

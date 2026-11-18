@@ -30,7 +30,7 @@ func (a *app) languageSwitch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	signedIn := false
-	if c, err := r.Cookie(sessionCookie); err == nil {
+	if c, err := a.sessionCookieOf(r); err == nil {
 		if session, ok := a.sessions.get(c.Value); ok && a.store.PrincipalValid(session.principal) {
 			// A form without a token (the switcher of a sign-in or join page a
 			// signed-in browser happens to see) only sets the cookie; a wrong

@@ -1,7 +1,6 @@
 package web
 
 import (
-	"fmt"
 	"html"
 	"html/template"
 	"regexp"
@@ -101,16 +100,16 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 		byText[strings.TrimSpace(c.Text)] = c
 	}
 	crit := func(n int) template.HTML {
-		return template.HTML(fmt.Sprintf(`<a href="#criterion-%d">%s</a>`, n, html.EscapeString(l.msg("issue.requirement_n", n))))
+		return template.HTML(`<a href="#criterion-` + strconv.Itoa(n) + `">` + html.EscapeString(l.msg("issue.requirement_n", n)) + `</a>`)
 	}
-	// sentence fills the catalog text: a string argument is escaped, a template.HTML one (a pill, a link) stands as it is.
-	sentence := func(key string, args ...any) template.HTML { return htmlSentence(l, key, args...) }
+	// sentence fills the catalog text, whose %s take already escaped HTML.
+	sentence := func(key string, args ...template.HTML) template.HTML { return sentenceOf(l, key, args...) }
 	// quote is what a text of a person says under the line of an entry: plain words of the
 	// Markdown (REQ-705), the one function the inbox rows use too.
 	quote := func(s string) string {
 		return plainSnippet(l, sessionScrub.ReplaceAllString(s, l.msg("requests.session")), 200)
 	}
-	reqLink := func(n int64) string { return string(longPill(l, "request", n, requestURL(n))) }
+	reqLink := func(n int64) template.HTML { return longPill(l, "request", n, requestURL(n)) }
 	var out []issueEvent
 	for i := len(acts) - 1; i >= 0 && len(out) < activityShown; i-- {
 		act := acts[i]
@@ -203,7 +202,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			// the page names the pull request and says it in its own language.
 			ev.Icon, ev.Tone, ev.Sentence = "pr", "don", sentence("issue.ev.pr_merged_any")
 			if m := mergedData.FindStringSubmatch(act.Data); m != nil {
-				pr := template.HTML(html.EscapeString("#" + m[1]))
+				pr := escHTML("#" + m[1])
 				if n, err := strconv.ParseInt(m[1], 10, 64); err == nil && base != "" {
 					pr = prPill(l, n, base+"/pulls/"+m[1], "merged", "", "")
 				}
@@ -214,13 +213,13 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 			named := map[string][2]string{"package.added": {"issue.ev.package_added", "issue.ev.package_added_any"}, "package.removed": {"issue.ev.package_removed", "issue.ev.package_removed_any"},
 				"package.role": {"issue.ev.package_role", "issue.ev.package_role_any"}}[act.Kind]
 			if pkg != "" && pkgData.MatchString(act.Data) {
-				ev.Sentence = sentence(named[0], pkg)
+				ev.Sentence = sentence(named[0], escHTML(pkg))
 			} else {
 				ev.Sentence = sentence(named[1])
 			}
 		case "pain.linked", "pain.unlinked":
 			ev.Icon = "pain"
-			link := template.HTML(html.EscapeString("#"))
+			link := escHTML("#")
 			if m := painData.FindStringSubmatch(act.Data); m != nil {
 				n, _ := strconv.ParseInt(m[1], 10, 64)
 				link = longPill(l, "pain", n, painURL(n))
@@ -241,7 +240,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 				// The long pill names the task with its title; the same words in a box
 				// under the line were said twice.
 				if who := assignees[n]; who != "" {
-					ev.Sentence = sentence("issue.ev.task_created_for", who, link)
+					ev.Sentence = sentence("issue.ev.task_created_for", escHTML(who), link)
 				} else {
 					ev.Sentence = sentence("issue.ev.task_created", link)
 				}
@@ -318,7 +317,7 @@ func (v *commentView) wrote(note string) bool {
 }
 
 // relationSentence says what happened to a link, naming the other side.
-func relationSentence(l lang, act requestdomain.Activity, reqLink func(int64) string, sentence func(string, ...any) template.HTML, base string) template.HTML {
+func relationSentence(l lang, act requestdomain.Activity, reqLink func(int64) template.HTML, sentence func(string, ...template.HTML) template.HTML, base string) template.HTML {
 	removed := act.Kind == "relation.removed"
 	m := relationTarget.FindStringSubmatch(act.Data)
 	if m == nil {
@@ -331,7 +330,7 @@ func relationSentence(l lang, act requestdomain.Activity, reqLink func(int64) st
 	switch {
 	case m[2] != "":
 		n, _ := strconv.ParseInt(m[2], 10, 64)
-		target = template.HTML(reqLink(n))
+		target = reqLink(n)
 	case m[3] != "":
 		n, _ := strconv.ParseInt(m[3], 10, 64)
 		href := ""
@@ -343,7 +342,7 @@ func relationSentence(l lang, act requestdomain.Activity, reqLink func(int64) st
 		n, _ := strconv.ParseInt(m[4], 10, 64)
 		target = longPill(l, "knowledge", n, "/ui/knowledge/"+m[4])
 	default:
-		target = template.HTML(html.EscapeString(ellipsize(m[5], 120)))
+		target = escHTML(ellipsize(m[5], 120))
 		if strings.HasPrefix(m[5], "https://") || strings.HasPrefix(m[5], "http://") {
 			target = urlPill(l, m[5])
 		}

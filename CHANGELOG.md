@@ -164,6 +164,24 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- Docker: a `Dockerfile` (static `ctx` on a base without a shell, run as an
+  unprivileged user, read-only file system), an image per release on
+  `ghcr.io/deadweight-labs/ghosttree` (amd64 and arm64, signed), and a
+  `compose.yaml` with volumes for the data and the backups, the server key as a
+  secret and a container that copies the database every night.
+  `ctx server install --docker` (also `install.sh --docker`) sets it up and ends
+  with a check and a login link; `ctx server update --docker` and
+  `ctx server doctor --docker` update with a rollback and check it.
+  Installing over a Docker setup that exists is refused and points to the
+  update (`--force` copies the database and upgrades the schema first), an update
+  only goes up unless `--force` is given, and the image gets its tags
+  (`X.Y.Z`, `latest`) only after the release has been published.
+  `ctx server health` is the container's health check, and
+  `ctx db backup --every 24h` takes copies on a timer without systemd.
+
+- The README Quick start starts with the one line (`install.sh`), and
+  `deploy/README.md` keeps what the installer does not do for you.
+
 - `ctx server install` sets up a server on a Linux machine with systemd in one
   command (also `install.sh --server`): server key, settings, service, a nightly
   database backup, the first administrator, the gardener's account, a final
@@ -1472,6 +1490,24 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Security
 
+- A web session that started from a one-time link (an owner's link for a member,
+  `ctx web`) does everyday work only for twelve hours; roles, access, invitations,
+  tokens, devices, AI keys, workflows and the like need a sign-in with a proof. Every
+  changing web route is assigned, and a test fails for one that is not.
+- A device login needs the code typed from the terminal (no link fills it in), the
+  machine name is plain, and device and legacy tokens stop working after 90 days
+  without use (counted from the day this version first starts).
+- Lockouts of passwords, mail requests and device approval bind to address and
+  source or only slow down, so a stranger cannot lock an owner out; the sign-in mail
+  is made in the background; invitation mails are limited per account, organization
+  and address, and carry one plain line of the sender's text.
+- `/metrics` answers the machine itself and the holder of `GHOSTTREE_METRICS_TOKEN`
+  (a scraper on another host sets it, see deploy/README.md), everyone else gets 404.
+- Every web answer carries HSTS over https, a permissions policy and an opener
+  policy; the CSP names `form-action`; the session cookie is `__Host-gt_session`
+  where it is Secure; a Markdown link whose text names another site shows the real
+  host; markup with placeholders takes only safe parts; image attachments are
+  limited to 16 million pixels.
 - Go 1.26.11 (GO-2026-6859 in `net/http`, after GO-2026-6809 in `crypto/x509`
   fixed by 1.26.10); released binaries use the fixed standard library.
 - Pull request links only with a host boundary and a fixed path for coordination

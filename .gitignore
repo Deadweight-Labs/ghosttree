@@ -9,3 +9,4 @@
 # Browser-automation captures (screenshots, snapshots, console logs)
 /.playwright-mcp/
 .impeccable/
+/.release-image/

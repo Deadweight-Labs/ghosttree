@@ -397,8 +397,13 @@ func (a *app) secureCookies(r *http.Request) bool {
 // through it so a clearing cookie always carries the attributes of the one it
 // replaces (browsers match on name, path and attributes).
 func (a *app) sessionCookieFor(r *http.Request, value string, maxAge int) *http.Cookie {
-	return &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true,
-		Secure: a.secureCookies(r), SameSite: http.SameSiteLaxMode, MaxAge: maxAge}
+	secure := a.secureCookies(r)
+	name := sessionCookie
+	if secure {
+		name = hostSessionCookie
+	}
+	return &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true,
+		Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: maxAge}
 }
 
 func (a *app) flowCookie(r *http.Request, value string, maxAge int) *http.Cookie {
@@ -721,4 +726,29 @@ func (a *app) loginMessage(l lang, w http.ResponseWriter, status int, titleKey, 
 func (a *app) isJoinInvitation(code string) bool {
 	_, ok := a.joinPreview(code)
 	return ok
+}
+
+// formOrigins are the origins a sign-in form may lead to: the identity provider (the
+// issuer and, once discovered, the address of its authorization endpoint).
+func (c *oidcClient) formOrigins() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(raw string) {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+			return
+		}
+		origin := u.Scheme + "://" + u.Host
+		if !seen[origin] {
+			seen[origin] = true
+			out = append(out, origin)
+		}
+	}
+	add(c.cfg.Issuer)
+	c.mu.Lock()
+	if c.oauth != nil {
+		add(c.oauth.Endpoint.AuthURL)
+	}
+	c.mu.Unlock()
+	return out
 }

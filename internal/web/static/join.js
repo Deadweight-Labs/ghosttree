@@ -31,7 +31,22 @@
   // would block it) and pointed at the loopback once the server has approved. If
   // the window is blocked, or the loopback cannot be reached, the code on this page
   // is the way on. Without script the plain form post still works.
-  const loopback = /^http:\/\/127\.0\.0\.1:\d+\//;
+  // Only the installer's own callback is a target: http://127.0.0.1:<port>/callback
+  // with a port from 1024 up and nothing in the query but code, state or error. A
+  // session that someone else started must not send this browser anywhere else on
+  // the machine.
+  const loopbackTarget = (value) => {
+    let u;
+    try { u = new URL(String(value)); } catch (error) { return false; }
+    if (u.protocol !== "http:" || u.hostname !== "127.0.0.1" || u.username || u.password || u.hash) return false;
+    if (!/^[1-9]\d{3,4}$/.test(u.port) || Number(u.port) < 1024 || Number(u.port) > 65535) return false;
+    if (u.pathname !== "/callback") return false;
+    for (const key of u.searchParams.keys()) {
+      if (key !== "code" && key !== "state" && key !== "error") return false;
+    }
+    return true;
+  };
+  window.GTJoin = { loopbackTarget };
   for (const form of document.querySelectorAll("form[data-join-popup]")) {
     form.addEventListener("submit", async (event) => {
       if (!window.fetch || !window.URLSearchParams) return;
@@ -62,7 +77,7 @@
       }
       try {
         const out = await response.json();
-        if (popup && out.navigate && loopback.test(out.navigate)) popup.location.href = out.navigate;
+        if (popup && out.navigate && loopbackTarget(out.navigate)) popup.location.href = out.navigate;
         else closePopup();
       } catch (error) { closePopup(); }
       location.reload();

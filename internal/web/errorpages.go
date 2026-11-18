@@ -286,7 +286,7 @@ func (a *app) unknownAddress(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, target, http.StatusMovedPermanently)
 		return
 	}
-	if cookie, err := r.Cookie(sessionCookie); err == nil {
+	if cookie, err := a.sessionCookieOf(r); err == nil {
 		if _, ok := a.sessions.get(cookie.Value); ok {
 			a.requirePerson(http.HandlerFunc(http.NotFound)).ServeHTTP(w, r)
 			return

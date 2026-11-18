@@ -92,11 +92,22 @@ func (f *fakeReleases) publish(t *testing.T, k testKey, tag, ctxContent string) 
 	name := fmt.Sprintf("ghosttree_%s_linux_amd64.tar.gz", strings.TrimPrefix(tag, "v"))
 	sum := sha256.Sum256(archive)
 	sums := []byte(hex.EncodeToString(sum[:]) + "  " + name + "\n")
+	// The digest of the release's Docker image, listed in the signed checksums.
+	image := []byte(imageDigestOf(tag) + "\n")
+	imageSum := sha256.Sum256(image)
+	sums = append(sums, []byte(hex.EncodeToString(imageSum[:])+"  "+ImageFile+"\n")...)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.files[tag+"/"+name] = archive
+	f.files[tag+"/"+ImageFile] = image
 	f.files[tag+"/checksums.txt"] = sums
 	f.files[tag+"/checksums.txt.minisig"] = minisign.Sign(k.pub, k.priv, sums, "ghosttree "+tag)
+}
+
+// imageDigestOf is the digest the fake release of tag names.
+func imageDigestOf(tag string) string {
+	sum := sha256.Sum256([]byte("image of " + tag))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func (f *fakeReleases) set(path string, b []byte) {
@@ -283,5 +294,42 @@ func TestReleaseDownloadFollowsRedirectsOnThisMachineOnly(t *testing.T) {
 	}
 	if _, err := rel.get(context.Background(), self.URL+"/away", 100); err == nil {
 		t.Error("followed a redirect to another host over plain http")
+	}
+}
+
+func TestImageDigestComesFromTheSignedListAndNowhereElse(t *testing.T) {
+	k := newTestKey(t)
+	f := newFakeReleases(t)
+	f.publish(t, k, "v0.1.0", "x")
+	got, err := f.release(k).ImageDigest(context.Background(), "v0.1.0")
+	if err != nil || got != imageDigestOf("v0.1.0") {
+		t.Fatalf("%q %v", got, err)
+	}
+
+	cases := map[string]func(){
+		"file replaced, list kept": func() {
+			f.set("v0.1.0/"+ImageFile, []byte("sha256:"+strings.Repeat("a", 64)+"\n"))
+		},
+		"list without the file": func() {
+			sums := []byte(strings.Split(string(f.get("v0.1.0/checksums.txt")), "\n")[0] + "\n")
+			f.set("v0.1.0/checksums.txt", sums)
+			f.set("v0.1.0/checksums.txt.minisig", minisign.Sign(k.pub, k.priv, sums, "ghosttree v0.1.0"))
+		},
+		"not a digest": func() {
+			bad := []byte("latest\n")
+			sum := sha256.Sum256(bad)
+			sums := []byte(strings.Split(string(f.get("v0.1.0/checksums.txt")), "\n")[0] + "\n" + hex.EncodeToString(sum[:]) + "  " + ImageFile + "\n")
+			f.set(("v0.1.0/" + ImageFile), bad)
+			f.set("v0.1.0/checksums.txt", sums)
+			f.set("v0.1.0/checksums.txt.minisig", minisign.Sign(k.pub, k.priv, sums, "ghosttree v0.1.0"))
+		},
+		"list signed by another key": func() { f.publish(t, newTestKey(t), "v0.1.0", "x") },
+	}
+	for name, tamper := range cases {
+		f.publish(t, k, "v0.1.0", "x")
+		tamper()
+		if d, err := f.release(k).ImageDigest(context.Background(), "v0.1.0"); err == nil {
+			t.Errorf("%s: accepted %q", name, d)
+		}
 	}
 }

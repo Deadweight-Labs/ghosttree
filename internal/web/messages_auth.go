@@ -28,6 +28,7 @@ var messagesAuth = map[string]string{
 	"adm.device.warn_pre":    "Only approve if you just ran",
 	"adm.device.warn_post":   "yourself.",
 	"adm.device.cmd":         "ctx login",
+	"adm.device.full_access": "Approving gives this machine full access to your account until you revoke its token.",
 	"adm.login.readonly_sso": "Only your own sign-in may do this, not a token. Sign in to go on.",
 	"setup.login_to_approve": "Approving a device needs a login.",
 }
@@ -56,6 +57,7 @@ var messagesAuthDE = map[string]string{
 	"adm.device.warn_pre":    "Gib nur frei, wenn du gerade",
 	"adm.device.warn_post":   "ausgeführt hast.",
 	"adm.device.cmd":         "ctx login",
+	"adm.device.full_access": "Mit der Freigabe bekommt dieser Rechner vollen Zugriff auf dein Konto, bis du sein Token widerrufst.",
 	"adm.login.readonly_sso": "Das darf nur deine eigene Anmeldung, kein Token. Melde dich an, um weiterzumachen.",
 	"setup.login_to_approve": "Zum Freigeben von Geräten brauchst du einen Login.",
 }

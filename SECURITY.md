@@ -43,8 +43,9 @@ command is public.
 - **Put the server behind TLS.** Run it on loopback or a private network behind a
   reverse proxy that terminates TLS, set `GHOSTTREE_PUBLIC_URL` to its https
   address (it decides the address in invitations, mails and the join command) and
-  name the proxies you trust. Do not expose the plain HTTP port. `/metrics` has no
-  sign-in: do not forward it to the internet.
+  name the proxies you trust. Do not expose the plain HTTP port. `/metrics` is for the
+  machine itself or for a bearer token (`GHOSTTREE_METRICS_TOKEN`): do not
+  forward it to the internet.
 - **The operator is trusted completely.** Whoever runs the server can read
   everything in it, and a machine that connects to it takes in what the server
   says: briefings and knowledge go into the context of the agents on that machine,

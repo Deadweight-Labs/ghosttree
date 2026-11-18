@@ -1,7 +1,6 @@
 package web
 
 import (
-	"fmt"
 	"html"
 	"html/template"
 	"net/url"
@@ -85,7 +84,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 		it := tlItem{Who: who, Kind: kind, Owner: owner, Icon: icon, Tone: tone, Head: head, Body: body, Age: clock(at), Stamp: at, at: parseStamp(at)}
 		return it
 	}
-	sentence := func(key string, args ...any) template.HTML { return htmlSentence(l, key, args...) }
+	sentence := func(key string, args ...template.HTML) template.HTML { return sentenceOf(l, key, args...) }
 
 	res, err := a.store.SessionResults(sess)
 	if err != nil {
@@ -109,7 +108,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 		issues[c.RequestID] = true
 		criteria++
 		reqHref := requestURL(c.RequestID)
-		crit := template.HTML(fmt.Sprintf(`<a href="%s#criterion-%d">%s</a>`, html.EscapeString(reqHref), c.Number, html.EscapeString(l.msg("issue.requirement_n", c.Number))))
+		crit := template.HTML(`<a href="` + html.EscapeString(reqHref) + `#criterion-` + strconv.Itoa(c.Number) + `">` + html.EscapeString(l.msg("issue.requirement_n", c.Number)) + `</a>`)
 		req := longPill(l, "request", c.RequestID, reqHref)
 		it := entry(c.At, "check", "ok", sentence("sessions.ev.criterion_met", crit, req), "")
 		if c.State == "waived" {
@@ -155,7 +154,7 @@ func (a *app) ghostView(l lang, pa *store.ProjectAccess, sess, view store.Sessio
 		link := longPill(l, "task", t.ID, taskHref(task))
 		var head template.HTML
 		if t.Assignee != "" {
-			head = sentence("issue.ev.task_created_for", t.Assignee, link)
+			head = sentence("issue.ev.task_created_for", escHTML(t.Assignee), link)
 		} else {
 			head = sentence("issue.ev.task_created", link)
 		}
