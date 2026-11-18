@@ -65,19 +65,32 @@ func (l *rateWindow) allow(key string) bool {
 	c, ok := l.counts[key]
 	if !ok || at.Sub(c.start) >= l.window {
 		if !ok && len(l.counts) >= rateWindowMax {
-			var oldest string
-			var oldestAt time.Time
+			// A full table drops expired windows first, then the oldest key that has
+			// not reached its limit: a key that is over its limit stays, so that
+			// filling the table with other keys does not clear an attacked address.
+			var oldest, oldestOver string
+			var oldestAt, oldestOverAt time.Time
 			for k, v := range l.counts {
 				if at.Sub(v.start) >= l.window {
 					delete(l.counts, k)
+					continue
+				}
+				if v.n >= l.limit {
+					if oldestOver == "" || v.start.Before(oldestOverAt) {
+						oldestOver, oldestOverAt = k, v.start
+					}
 					continue
 				}
 				if oldest == "" || v.start.Before(oldestAt) {
 					oldest, oldestAt = k, v.start
 				}
 			}
-			if len(l.counts) >= rateWindowMax && oldest != "" {
-				delete(l.counts, oldest)
+			if len(l.counts) >= rateWindowMax {
+				if oldest != "" {
+					delete(l.counts, oldest)
+				} else if oldestOver != "" {
+					delete(l.counts, oldestOver)
+				}
 			}
 		}
 		c = joinCount{start: at}

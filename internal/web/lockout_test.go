@@ -202,3 +202,20 @@ func TestGuessingFromManySourcesSlowsDownButSparesTheKnownSource(t *testing.T) {
 		t.Fatalf("twelve parallel guesses ended in %v: want some answered in turn and some told to wait", codes)
 	}
 }
+
+// Filling the table with other keys does not clear an address that is over its limit.
+func TestRateWindowKeepsKeysOverTheirLimitWhenTheTableIsFull(t *testing.T) {
+	w := newRateWindow(3, time.Hour)
+	for i := 0; i < 4; i++ {
+		w.allow("victim")
+	}
+	if !w.over("victim") {
+		t.Fatal("setup: the victim is not over its limit")
+	}
+	for i := 0; i < rateWindowMax+50; i++ {
+		w.allow(fmt.Sprintf("noise-%d", i))
+	}
+	if !w.over("victim") {
+		t.Fatal("other keys pushed a key over its limit out of the table")
+	}
+}
