@@ -1,6 +1,7 @@
 package web
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -471,15 +472,28 @@ func (a *app) reviewCount(r *http.Request, project string) int {
 	return n
 }
 
-// publicHost ist der Host, den die Fußzeile zeigt: der der öffentlichen URL,
-// sonst der der Anfrage. Ein Proxy-Host aus Headern wird nie gezeigt.
+// publicHost ist der Host, den das Kontomenü zeigt: der der öffentlichen URL,
+// sonst der der Anfrage. Ein Proxy-Host aus Headern wird nie gezeigt. Eine
+// Adresse dieses Rechners (127.0.0.1, localhost, ::1) sagt nichts darüber, auf
+// welchem Server man ist, und bleibt weg (P49).
 func (a *app) publicHost(r *http.Request) string {
 	if a.publicOrigin != "" {
 		if u, err := url.Parse(a.publicOrigin); err == nil && u.Host != "" {
 			return u.Host
 		}
 	}
+	if hostOnly(r.Host) == "localhost" || net.ParseIP(hostOnly(r.Host)).IsLoopback() {
+		return ""
+	}
 	return r.Host
+}
+
+// hostOnly is the host of a "host:port" without the port and without the brackets of an IPv6 address.
+func hostOnly(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return strings.Trim(hostport, "[]")
 }
 
 // projectCookie hält die Projektauswahl für die Browsersitzung, damit sie beim

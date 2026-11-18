@@ -94,15 +94,10 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .rband .utabs-box { position: relative; flex: 1 1 auto; min-width: 0; }
 .rband .utabs-nav { position: relative; margin: 0 -12px -1px; padding: 0 12px 1px; }
 .rband .band-ext { position: relative; z-index: 2; align-self: center; margin-bottom: 4px; flex: none; }
-/* Who the open tasks wait for stands in the Tasks tab, behind its number: the tab says what the person is waited for
-   with, and nothing floats loose at the end of the row (on the phone the arrow of the row covered it). The names stay
-   in the title of the stack: the tabs need the room. */
+/* That open tasks wait for someone is a red dot behind the number of the Tasks tab; the names are in its title. No faces in the
+   row of tabs: they are other people's, and the tabs need the room. */
 .rband .band-wait { display: inline-flex; align-items: center; margin-left: 2px; }
-.rband .band-wait .waits { margin: 0; align-self: center; }
-.rband .band-wait .waits .wn { display: none; }
-.rband .band-wait .waits .ring::before { inset: -3px; }
-.rband .band-wait .waits .ring::after { inset: -2px; }
-.rband .band-wait .waits .ring .gav { width: 20px; height: 20px; font-size: 9px; }
+.rband .band-wait .wdot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger-fg); }
 .utabs-nav.scroll { overflow: auto hidden; scrollbar-width: none; overscroll-behavior-x: contain; scroll-padding-inline: 24px; scroll-snap-type: x mandatory; }
 .utabs-nav.scroll .utabs > li { scroll-snap-align: start; }
 .utabs-nav.scroll::-webkit-scrollbar { display: none; }
@@ -118,6 +113,12 @@ body.ui.gt .shell { display: flex; flex-direction: column; min-height: 100vh; pa
 .utabs { display: flex; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .utabs li { position: relative; padding: 8px 0; flex: none; }
 .utabs li > a, .utabs li button { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; color: var(--fg-default); font-size: 14px; font-weight: 400; line-height: 30px; background: transparent; border: 0; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+/* The "More" at the end of a row that did not fit: it looks like a tab, its menu opens under it. */
+.utabs li.tmore > details > summary { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 8px; color: var(--fg-muted); font-size: 14px; line-height: 30px; border-radius: 6px; cursor: pointer; list-style: none; white-space: nowrap; }
+.utabs li.tmore > details > summary::-webkit-details-marker { display: none; }
+.utabs li.tmore > details > summary:hover, .utabs li.tmore > details[open] > summary { background: var(--neutral-muted); color: var(--fg-default); }
+.utabs li.tmore .pop { top: calc(100% + 6px); min-width: 180px; }
+.utabs li.tmore .pop a.opt .i { color: var(--fg-muted); }
 .utabs li > a:hover, .utabs li button:hover { background: var(--neutral-muted); text-decoration: none; }
 .utabs li > a .i, .utabs li button .i { color: var(--fg-muted); }
 .utabs li.sel > a { font-weight: 600; }

@@ -234,12 +234,19 @@ func (d *Doc) Body() string {
 	return strings.TrimSpace(strings.Join(d.lines[d.end+1:], "\n"))
 }
 
-// BodyLine is the line of the closing "---" (0 without front matter).
+// BodyLine is the line (counted from 1) where the text below the front matter begins: the first line after the
+// closing "---" that is not empty. 0 without front matter or without a text below it. The node of the instruction
+// shows it, so it must not name the line of the "---" that closes the settings.
 func (d *Doc) BodyLine() int {
 	if !d.ok {
 		return 0
 	}
-	return d.end + 1
+	for i := d.end + 1; i < len(d.lines); i++ {
+		if strings.TrimSpace(d.lines[i]) != "" {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // Edit operations of the block view.

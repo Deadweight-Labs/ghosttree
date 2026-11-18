@@ -85,22 +85,12 @@ test("a stored choice is marked when the page opens", () => {
   assert.equal(p.document.documentElement.dataset.theme, "dark");
 });
 
-// REQ-690 AC-4 (N27): the toast floats under the header and the tab band, not over the tabs.
-test("the toast is placed under the header and the tab band of the page", () => {
+// REQ-711 (N27): where the toast stands is the stylesheet's business, one corner for every page. The script must not
+// place it under the header or the tab band again (that put it over the card the person was reading).
+test("the script does not place the toast: no inline position, whatever the header and the tab band measure", () => {
   const page = `<header class="gh-header">head</header><div class="rband">tabs</div><div class="flash fly" role="status">Saved.</div>`;
-  const bottoms = { "gh-header": 56, rband: 112 };
   const p = loadPage(page, { scripts: [] });
-  p.window.Element.prototype.getBoundingClientRect = function rect() {
-    for (const [cls, bottom] of Object.entries(bottoms)) if (this.classList.contains(cls)) return { bottom };
-    return { bottom: 0 };
-  };
+  p.window.Element.prototype.getBoundingClientRect = function rect() { return { bottom: this.classList.contains("rband") ? 112 : 56 }; };
   p.run("ui-toast.js");
-  assert.equal(p.document.querySelector(".flash.fly").style.top, "120px", "8 px under the band");
-});
-
-test("a page without a tab band puts the toast under the header", () => {
-  const p = loadPage(`<header class="gh-header">head</header><div class="flash fly">Saved.</div>`, { scripts: [] });
-  p.window.Element.prototype.getBoundingClientRect = function rect() { return { bottom: this.classList.contains("gh-header") ? 56 : 0 }; };
-  p.run("ui-toast.js");
-  assert.equal(p.document.querySelector(".flash.fly").style.top, "64px");
+  assert.ok(!p.document.querySelector(".flash.fly").style.top, "no top set by the script");
 });

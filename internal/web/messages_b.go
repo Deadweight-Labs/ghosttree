@@ -145,7 +145,7 @@ var messagesB = map[string]string{
 	"org.vis_shared":     "Shared with the org",
 	"org.vis_restricted": "Restricted",
 	"org.no_repos":       "No repositories yet.",
-	"org.no_agents":      "No agents at the repositories of this organisation.",
+	"org.no_agents":      "No agents at the repositories of this organization.",
 	"org.no_rooms":       "No rooms yet.",
 	// Anmelden und Registrieren
 	"register.title":            "Create an account",

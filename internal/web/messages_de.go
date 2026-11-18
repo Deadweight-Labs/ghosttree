@@ -846,7 +846,7 @@ var messagesDE = map[string]string{
 	"requests.edit":                   "Bearbeiten",
 	"requests.save":                   "Speichern",
 	"requests.field_title":            "Titel",
-	"requests.field_kind":             "Art",
+	"requests.field_kind":             "Typ",
 	"requests.field_priority":         "Priorität",
 	"requests.field_description":      "Beschreibung",
 	"requests.field_reason":           "Warum ändert sich das?",

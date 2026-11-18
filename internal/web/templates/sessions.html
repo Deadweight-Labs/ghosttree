@@ -38,9 +38,9 @@
 {{template "foot" .}}{{end}}
 
 {{define "session"}}{{template "head" .}}{{template "nav" .}}<main class="g2 sess sess-detail"><link rel="stylesheet" href="{{asset "ui-sessions.css"}}"><div class="wrap">
-{{with .SessionV}}{{if .Confirm}}
-<form class="callout sconfirm" method="post" action="{{.Confirm.Action}}">{{mi "tri"}}<div><p>{{.Confirm.Text}}</p><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="level" value="{{.Confirm.Level}}"><input type="hidden" name="confirm" value="1"><div class="gacts"><button class="gbtn pri">{{if .Confirm.Secrets}}{{t "sessions.share_anyway"}}{{else}}{{t "sessions.share_confirm"}}{{end}}</button><a class="gbtn" href="{{.Confirm.Back}}">{{t "sessions.cancel"}}</a></div></div></form>
-{{else}}
+{{with .SessionV}}{{with .Confirm}}
+<div class="sdlg"><form class="callout sconfirm" method="post" action="{{.Action}}" role="alertdialog" aria-modal="true" aria-label="{{t "sessions.sharing"}}">{{mi "tri"}}<div><p>{{.Text}}</p><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="level" value="{{.Level}}"><input type="hidden" name="confirm" value="1"><div class="gacts"><button class="gbtn pri">{{if .Secrets}}{{t "sessions.share_anyway"}}{{else}}{{t "sessions.share_confirm"}}{{end}}</button><a class="gbtn" href="{{.Back}}">{{t "sessions.cancel"}}</a></div></div></form></div>
+{{end}}
 <div class="dhead"><div class="dtitle"><h1>{{.Title}}{{if .Machine}}{{if .MachineHref}}<a class="n" href="{{.MachineHref}}">{{.Kind}}@{{.Machine}}</a>{{else}}<span class="n">{{.Kind}}@{{.Machine}}</span>{{end}}{{end}}</h1>
 <div class="gacts">{{with .Share}}<form class="share" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><span class="muted">{{t "sessions.sharing"}}</span><nav class="seg" aria-label="{{t "sessions.sharing"}}">{{range .Levels}}<button name="level" value="{{.Value}}" title="{{.Title}}"{{if .Current}} class="on" aria-pressed="true"{{end}}>{{.Label}}</button>{{end}}</nav></form>{{end}}
 {{template "uicopy" copyPage}}</div></div>
@@ -79,7 +79,7 @@
 {{if .Side.Made}}<div class="sblk"><h3>{{t "sessions.side.made"}}</h3><div class="v made">{{range .Side.Made}}<span>{{mi .Icon}}{{.Text}}</span>{{end}}</div></div>{{end}}
 {{if and .RawView .Prompts}}<div class="sblk prompts"><h3>{{t "sessions.prompts"}}</h3><ol>{{range .Prompts}}<li class="pr{{if .Current}} is-current{{end}}"><a href="{{.Href}}"><span class="pr-n">{{.N}}</span><span class="pr-t">{{.Text}}</span><span class="pr-m"><span>{{.Time}}</span><span>{{.Tools}}</span></span>{{if .Hits}}<span class="pr-hits">{{.Hits}}</span>{{end}}</a></li>{{end}}</ol>{{if .MorePrompts.Href}}<a class="pr-more" href="{{.MorePrompts.Href}}">{{.MorePrompts.Text}}</a>{{end}}</div>{{end}}
 </aside></div>
-{{end}}{{end}}
+{{end}}
 </div><script src="{{asset "sessions.js"}}"></script>
 {{template "foot" .}}{{end}}
 

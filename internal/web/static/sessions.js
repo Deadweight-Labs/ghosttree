@@ -1,6 +1,16 @@
 // Sessions: "/" focuses the page's own search field (it wins over the top bar),
 // times are shown in the reader's time zone, and "Copy link" copies the address.
 (() => {
+  // The question before sharing is a dialog over the session: Escape answers "no" (the link that cancels), and the
+  // focus rests on that link, so a stray Enter does not share.
+  const dialog = document.querySelector(".sdlg");
+  if (dialog) {
+    const cancel = dialog.querySelector("a.gbtn[href]");
+    addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && cancel) { event.preventDefault(); location.href = cancel.getAttribute("href"); }
+    });
+    if (cancel) cancel.focus();
+  }
   const own = document.querySelector("[data-sessions-search]");
   if (own) {
     addEventListener("keydown", (event) => {

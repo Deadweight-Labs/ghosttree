@@ -71,7 +71,7 @@ var messagesNeu = map[string]string{
 	"machine.sessions":           "Sessions",
 	"machine.all_sessions":       "All sessions",
 	"machine.shares":             "Shared with",
-	"machine.no_shares":          "Not shared with any organisation yet.",
+	"machine.no_shares":          "Not shared with any organization yet.",
 	"machine.share":              "Share with org",
 	"machine.unshare":            "Stop sharing",
 	"machine.org":                "Organization",

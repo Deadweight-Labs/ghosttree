@@ -33,9 +33,6 @@
   & .flash.err > .i { color: var(--danger-fg); }
   & .flash.info { border-color: var(--accent-muted); background: var(--accent-subtle); }
   & .flash.info > .i { color: var(--accent-fg); }
-  /* The outcome of an action floats over the page, so the page does not move; it leaves by itself. */
-  & .flash.fly { position: fixed; z-index: 60; left: 50%; top: 68px; width: max-content; max-width: min(560px, calc(100vw - 32px)); margin: 0; background: var(--canvas-default); border-color: var(--success-muted); box-shadow: var(--shadow-pop); transform: translateX(-50%); animation: toast-out .4s ease 10s forwards; }
-  & .flash.fly:hover, & .flash.fly:focus-within { animation-play-state: paused; }
   /* The row an action changed. */
   & .wrap > .box:has(+ .setlayout) { margin-bottom: 16px; }
   & .row.hit { background: var(--success-subtle); box-shadow: inset 3px 0 0 var(--success-fg); }
@@ -349,7 +346,6 @@
   }
 }
 
-@keyframes toast-out { to { opacity: 0; visibility: hidden; } }
 @media (prefers-reduced-motion: reduce) { :is(.g2.set) .flash.fly { animation-duration: .01s; } }
 
 /* AI connections (REQ-694): connections with their models and spend, the
@@ -419,11 +415,15 @@
 }
 @media (max-width: 767px) {
   :is(.g2.set) {
-    & .aiconn { grid-template-columns: minmax(0, 1fr) auto; }
+    /* One column: the edit form of a connection lives in the first one, and beside the buttons it was 170 px wide. */
+    & .aiconn { grid-template-columns: minmax(0, 1fr); }
+    & .aiconn .acts { justify-content: flex-start; }
     & .aiconn > .gav { display: none; }
     & .aigrid { grid-template-columns: minmax(0, 1fr); }
     & .wfcards { grid-template-columns: minmax(0, 1fr); }
     & .aimhead { display: none; }
+    /* Without the column heads the price fields name themselves, in the field, like "To:" in the composer. */
+    & .aimrow > .gfield[data-l]::before { content: attr(data-l); flex: none; margin-right: 6px; color: var(--fg-muted); font-size: 13px; }
     & .aimrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
     & .aimrow > .gfield:first-child { grid-column: 1 / -1; }
     & .aimrow > button { grid-column: 3; grid-row: 2; }

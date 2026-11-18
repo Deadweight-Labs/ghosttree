@@ -77,19 +77,7 @@
   }
 }
 
-/* An empty inbox says so and offers the next step; the answer toast floats under the header. */
+/* An empty inbox says so and offers the next step; the answer toast is the shared one (ui-parts.css). */
 :is(.g2) {
   & .ib-empty-acts { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 }
-.ibtoast {
-  position: fixed; z-index: 60; left: 50%; top: 68px; display: flex; align-items: center; gap: 12px;
-  width: max-content; max-width: min(560px, calc(100vw - 32px)); padding: 10px 16px; font-size: 14px;
-  color: var(--fg-default); background: var(--canvas-default); border: 1px solid var(--success-muted);
-  border-radius: 6px; box-shadow: var(--shadow-pop); transform: translateX(-50%);
-  animation: ibtoast-out .4s ease 8s forwards;
-}
-.ibtoast .tt { min-width: 0; overflow-wrap: anywhere; }
-.ibtoast a { flex: none; font-weight: 600; }
-.ibtoast:hover, .ibtoast:focus-within { animation-play-state: paused; }
-@keyframes ibtoast-out { to { opacity: 0; visibility: hidden; } }
-@media (prefers-reduced-motion: reduce) { .ibtoast { animation-duration: .01s; } }

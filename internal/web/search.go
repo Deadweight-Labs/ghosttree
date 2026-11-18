@@ -147,6 +147,18 @@ type searchView struct {
 	SessionsHref string
 }
 
+// requestStateMark is the icon of a request hit: the sign of its state, as in the issue list, so a finished issue
+// does not carry the sign of an open one (S22).
+func requestStateMark(state string) string {
+	switch state {
+	case "done":
+		return "done"
+	case "dropped":
+		return "drop"
+	}
+	return searchKindMark["requests"]
+}
+
 // searchKindMark is the icon of each kind of hit.
 var searchKindMark = map[string]string{"docs": "file", "requests": "issue", "ideas": "idea", "knowledge": "book", "sessions": "term", "tasks": "pin", "pains": "pain", "decisions": "decide"}
 
@@ -600,7 +612,7 @@ func (a *app) searchRequests(ctx context.Context, l lang, st *store.Store, pa *s
 		h := pa.RequestHitView(raw)
 		o := originOf(l, now, h.Request.CreatedAt, facts[raw.Request.ID])
 		g.Hits = append(g.Hits, searchHit{Title: h.Request.Title, Sub: requestStateLabel(l, h.Request.State), Project: lastSegment(h.Request.Scope.Project), RefKind: "request", RefN: h.Request.ID,
-			Href: requestURL(h.Request.ID), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
+			Href: requestURL(h.Request.ID), Date: o.Date, Stamp: o.Stamp, Area: o.Area, Mark: requestStateMark(h.Request.State)})
 	}
 	g.Full = a.issueListHref(pa, sl, line, "")
 	return g
@@ -897,7 +909,9 @@ func markHits(g *searchGroup, text string) {
 	}
 	for i := range g.Hits {
 		h := &g.Hits[i]
-		h.Mark = searchKindMark[g.Key]
+		if h.Mark == "" {
+			h.Mark = searchKindMark[g.Key]
+		}
 		h.Marked = markWords(h.Title, words)
 		if h.Snip != "" {
 			h.SnipHTML = markWords(h.Snip, words)

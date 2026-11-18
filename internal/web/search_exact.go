@@ -43,7 +43,7 @@ func (a *app) exactHits(l lang, pa *store.ProjectAccess, term links.NumberTerm, 
 			}
 			o := originOf(l, now, d.Request.CreatedAt, factsFor(a.store, "request", []int64{n})[n])
 			out = append(out, searchHit{Title: d.Request.Title, Sub: requestStateLabel(l, d.Request.State), Project: lastSegment(d.Request.Scope.Project), RefKind: "request", RefN: n,
-				Href: requestURL(n), Date: o.Date, Stamp: o.Stamp, Area: o.Area, Facet: "requests", Mark: searchKindMark["requests"]})
+				Href: requestURL(n), Date: o.Date, Stamp: o.Stamp, Area: o.Area, Facet: "requests", Mark: requestStateMark(d.Request.State)})
 		case links.KindIdea:
 			i, err := rd.GetIdea(n)
 			if err != nil || !inScope(i.Project) {
