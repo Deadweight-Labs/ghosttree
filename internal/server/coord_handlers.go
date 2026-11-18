@@ -321,6 +321,12 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 	if !a.gateMachine(w, r, machine, true) {
 		return
 	}
+	// An id that names a machine (claude:<machine>:<session>) is not free for
+	// anyone: the machine of another account cannot be named to take messages
+	// meant for an agent there. Nothing is claimed by it.
+	if idMachine := agentIDMachine(in.ExternalID); idMachine != "" && idMachine != machine && !a.gateMachineNote(w, r, idMachine) {
+		return
+	}
 	in.Person = personOf(r)
 	in.PrincipalID = principalOf(r).ID
 	id, err := a.st.RegisterCoordAgent(in)
@@ -337,6 +343,16 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]int64{"id": id})
+}
+
+// agentIDMachine is the machine an agent id names: harnesses build their ids as
+// <harness>:<machine>:<session>. Other ids name none.
+func agentIDMachine(id string) string {
+	parts := strings.Split(id, ":")
+	if len(parts) >= 3 && (parts[0] == "claude" || parts[0] == "codex") {
+		return parts[1]
+	}
+	return ""
 }
 
 // setCoordStatus setzt "woran ich arbeite" für eine Session des Aufrufers. Eine
