@@ -80,7 +80,7 @@ func renderLeanBootstrap(entries []store.Knowledge, versionNote string, standing
 		if wrote == leanPitfalls {
 			break
 		}
-		line := fmt.Sprintf("- [%s] %s — %s\n", scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), leanPitfallChars))
+		line := fmt.Sprintf("- [%s] %s — %s\n", oneLine(scopeLabel(k.Scope)), entryTitle(k.Title), truncate(oneLine(k.Body), leanPitfallChars))
 		if wrote == 0 {
 			line = "\n### pitfall\n" + line
 		}

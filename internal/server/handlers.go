@@ -24,6 +24,7 @@ import (
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"github.com/Deadweight-Labs/ghosttree/internal/termsafe"
 )
 
 func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
@@ -1206,7 +1207,7 @@ func writeHeldIndex(b *strings.Builder, held map[string]int) {
 func writePreviewGroup(b *strings.Builder, entries []store.Knowledge, limit int) bool {
 	b.WriteString("\n## Unconfirmed preview (not binding; approve before agent delivery)\n")
 	for _, k := range entries {
-		line := fmt.Sprintf("- [preview only | %s] %s — %s\n", scopeLabel(k.Scope), k.Title, oneLine(k.Body))
+		line := fmt.Sprintf("- [preview only | %s] %s — %s\n", oneLine(scopeLabel(k.Scope)), entryTitle(k.Title), oneLine(k.Body))
 		if b.Len()+len(line) > limit {
 			return true
 		}
@@ -1295,7 +1296,7 @@ func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, head
 			if provenance := entryProvenance(k, standing); provenance != "" {
 				label += " | " + provenance
 			}
-			line := fmt.Sprintf("- [%s] %s — %s\n", label, k.Title, truncate(oneLine(k.Body), 200))
+			line := fmt.Sprintf("- [%s] %s — %s\n", oneLine(label), entryTitle(k.Title), truncate(oneLine(k.Body), 200))
 			if !headings[t] {
 				line = "\n### " + t + "\n" + line
 			}
@@ -1357,7 +1358,7 @@ func writeInstructions(b *strings.Builder, instructions []store.Knowledge, stand
 		if limit > 0 {
 			body = truncate(body, limit)
 		}
-		line := fmt.Sprintf("- [%s] %s — %s", label, k.Title, body)
+		line := fmt.Sprintf("- [%s] %s — %s", oneLine(label), entryTitle(k.Title), body)
 		if standing != nil {
 			line += " (by " + standing(k).Who() + ")"
 		}
@@ -1385,8 +1386,15 @@ func writeInstructions(b *strings.Builder, instructions []store.Knowledge, stand
 }
 
 func oneLine(s string) string {
-	return strings.Join(strings.Fields(s), " ")
+	return strings.Join(strings.Fields(termsafe.Strip(s)), " ")
 }
+
+// entryTitle is a title as it stands in a briefing line: one line, capped. A
+// title is typed by a member; a line break in it would start a line of its own
+// and could pose as a heading of the briefing.
+func entryTitle(s string) string { return truncate(oneLine(s), maxEntryTitleRunes) }
+
+const maxEntryTitleRunes = 200
 
 func truncate(s string, n int) string {
 	r := []rune(s)
@@ -1422,8 +1430,17 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 	if !a.gateWorkflowRunRef(w, r, g.SessionRef) {
 		return
 	}
-	if store.ReservedForGardener(store.Knowledge{Harness: g.Harness, SessionRef: g.SessionRef}) && !a.gardenerDescribes(w, r, g) {
-		return
+	if store.ReservedForGardener(store.Knowledge{Harness: g.Harness, SessionRef: g.SessionRef}) {
+		if !a.gardenerDescribes(w, r, g) {
+			return
+		}
+		// What the gardener writes reaches other agents' hooks without a person
+		// reading it. The server holds it to the same limits as the gardener's own
+		// check, so a gardener that skipped it, or was steered, writes nothing.
+		if _, why := store.CleanGhostDescription(g.Description); why != "" {
+			writeCoded(w, http.StatusUnprocessableEntity, "description_refused", why)
+			return
+		}
 	}
 	g.Person = personOf(r)
 	a.dropForeignSessionRef(r, &g.SessionRef)
@@ -1461,7 +1478,12 @@ func (a *api) ghostsForPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pa := a.access(r)
-	writeJSON(w, 200, filterTo(entries, 0, func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }))
+	out := filterTo(entries, 0, func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) })
+	standings := pa.Standings()
+	for i := range out {
+		out[i].Author = standings.GhostStanding(out[i]).Who()
+	}
+	writeJSON(w, 200, out)
 }
 
 // ghostsMove hängt eine Beschreibung samt Historie auf einen neuen Pfad. Die

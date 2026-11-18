@@ -152,7 +152,7 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 	for _, h := range hits {
 		k := h.Knowledge
 		label := k.Type + "|" + scopeLabel(k.Scope) + "|by " + standing(k).Who()
-		line := fmt.Sprintf("- [%s] %s — %s (triggered by %q)\n", label, k.Title, truncate(oneLine(k.Body), 400), h.Term)
+		line := fmt.Sprintf("- [%s] %s — %s (triggered by %q)\n", oneLine(label), entryTitle(k.Title), truncate(oneLine(k.Body), 400), h.Term)
 		body.WriteString(line)
 		parts = append(parts, deliverylog.Part{Via: deliverylog.ViaRelevance, Kind: deliverylog.KindKnowledge, ID: h.ID, Chars: deliverylog.Runes(line)})
 	}
