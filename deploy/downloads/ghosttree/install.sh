@@ -406,7 +406,7 @@ Release candidates are installed on request: run this again with --version v0.1.
   # not signed, and a signed release carries no date, so an old one passes every
   # signature check: refuse it unless it was asked for with --allow-downgrade.
   if [ "$mode" = server ]; then
-    installed_ctx=/usr/local/bin/ctx
+    installed_ctx=${GHOSTTREE_PREFIX:-}/usr/local/bin/ctx
   else
     installed_ctx=${XDG_BIN_HOME:-$HOME/.local/bin}/ctx
   fi
