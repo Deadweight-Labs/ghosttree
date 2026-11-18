@@ -91,6 +91,8 @@ func okPNG(t *testing.T) func(r *http.Request) (*http.Response, error) {
 	return func(r *http.Request) (*http.Response, error) { return answer(200, "image/png", raw, r), nil }
 }
 
+var photoAsPopupHeader = regexp.MustCompile(`<img class="[^"]*\bph\b[^"]*" src="/ui/avatar/`)
+
 var foreignImage = regexp.MustCompile(`(?i)<img[^>]+src="(?:https?:)?//`)
 
 func TestProfilePictureComesFromOwnRouteAndNeverFromGitHub(t *testing.T) {
@@ -105,6 +107,11 @@ func TestProfilePictureComesFromOwnRouteAndNeverFromGitHub(t *testing.T) {
 		}
 		if foreignImage.MatchString(page) || strings.Contains(page, "githubusercontent.com") {
 			t.Errorf("%s names a foreign picture address", path)
+		}
+		// The account menu styles ".pop .ph" as a header with padding; a picture that
+		// carried that class showed as an empty ring there.
+		if photoAsPopupHeader.MatchString(page) {
+			t.Errorf("%s gives a profile picture the class of a popup header", path)
 		}
 		if strings.Contains(page, `data-av="`) && strings.Contains(page, `class="gav hc-`) && strings.Contains(page, ">AL<") {
 			t.Errorf("%s still shows the initials of a person who has a picture", path)
