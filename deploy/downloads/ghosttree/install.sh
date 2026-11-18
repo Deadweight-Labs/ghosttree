@@ -15,6 +15,7 @@
 #   --server          run a ghosttree server on this machine with systemd
 #   --docker          run a ghosttree server with Docker
 #   --version TAG     a release other than the newest stable one (v0.1.0-rc.3)
+#   --allow-downgrade install a release older than the ctx that is installed
 #   --yes             take the defaults instead of asking
 #   --modify-path     add ctx's directory to your shell profile if it is missing
 #   --no-modify-path  never touch a shell profile and do not ask
@@ -51,13 +52,14 @@ main() {
       '  --server          run a ghosttree server on this machine with systemd' \
       '  --docker          run a ghosttree server with Docker' \
       '  --version TAG     a release other than the newest stable one (v0.1.0-rc.3)' \
+      '  --allow-downgrade install a release older than the ctx that is installed' \
       '  --yes             take the defaults instead of asking' \
       '  --modify-path     add ctx to your shell profile PATH if it is missing' \
       '  --no-modify-path  never touch a shell profile and do not ask' \
       'other options go to ctx join (--connect) or ctx server install (--server, --docker)'
   }
 
-  mode='' version=${GHOSTTREE_VERSION:-} connect='' yes=no modify=ask want=''
+  mode='' version=${GHOSTTREE_VERSION:-} connect='' yes=no modify=ask want='' allow_downgrade=no
   for a in "$@"; do
     shift
     if [ -n "$want" ]; then
@@ -76,6 +78,7 @@ main() {
       --client) mode=client ;;
       --version) want=version ;;
       --version=*) version=${a#--version=} ;;
+      --allow-downgrade) allow_downgrade=yes ;;
       --yes | -y) yes=yes; set -- "$@" "$a" ;;
       --modify-path) modify=yes ;;
       --no-modify-path) modify=no ;;
@@ -284,6 +287,9 @@ Release candidates are installed on request: run this again with --version v0.1.
   [ "$comment" = "ghosttree $version" ] ||
     die "the signed checksums.txt belongs to '$comment', not to ghosttree $version; nothing was installed"
   say "Signature OK ($comment)"
+  # The release the key holder signed is the one that counts, not the answer of
+  # the API that named it.
+  signed_version=${comment#ghosttree }
 
   # Same rules as the server's installer: CR dropped, "<64 hex>  [*]<name>" lines only.
   tr -d '\r' <"$tmp/checksums.raw" | awk '
@@ -349,6 +355,69 @@ Release candidates are installed on request: run this again with --version v0.1.
       connect=$reply
     fi
     [ -n "$connect" ] || die "--connect needs the address of the server"
+  fi
+
+  # ---- downgrade -------------------------------------------------------------
+
+  # Prints nothing; exit status 0 when version $2 is older than $1, 1 when it is
+  # not, 2 when one of them is not a version. Semantic Versioning precedence
+  # (build metadata after "+" does not count; no pre-release beats a pre-release).
+  version_older() {
+    awk -v a="$1" -v b="$2" '
+      function parse(v, out,   i, pre, p) {
+        sub(/^v/, "", v)
+        sub(/\+.*/, "", v)
+        pre = ""
+        i = index(v, "-")
+        if (i) { pre = substr(v, i + 1); v = substr(v, 1, i - 1) }
+        if (v !~ /^[0-9]+\.[0-9]+\.[0-9]+$/) return 0
+        split(v, p, ".")
+        out[1] = p[1] + 0; out[2] = p[2] + 0; out[3] = p[3] + 0; out["pre"] = pre
+        return 1
+      }
+      function cmppre(x, y,   xs, ys, nx, ny, i, m, xn, yn) {
+        if (x == y) return 0
+        if (x == "") return 1
+        if (y == "") return -1
+        nx = split(x, xs, "."); ny = split(y, ys, ".")
+        m = (nx < ny) ? nx : ny
+        for (i = 1; i <= m; i++) {
+          if (xs[i] == ys[i]) continue
+          xn = (xs[i] ~ /^[0-9]+$/); yn = (ys[i] ~ /^[0-9]+$/)
+          if (xn && yn) return (xs[i] + 0 < ys[i] + 0) ? -1 : 1
+          if (xn) return -1
+          if (yn) return 1
+          return ((xs[i] "") < (ys[i] "")) ? -1 : 1
+        }
+        return (nx < ny) ? -1 : ((nx > ny) ? 1 : 0)
+      }
+      BEGIN {
+        if (!parse(a, A) || !parse(b, B)) exit 2
+        for (i = 1; i <= 3; i++) {
+          if (B[i] < A[i]) exit 0
+          if (B[i] > A[i]) exit 1
+        }
+        exit (cmppre(B["pre"], A["pre"]) < 0) ? 0 : 1
+      }'
+  }
+
+  # Going back to an older release can bring back what was fixed since, and an
+  # older ctx may not open what a newer one wrote. The newest-release answer is
+  # not signed, and a signed release carries no date, so an old one passes every
+  # signature check: refuse it unless it was asked for with --allow-downgrade.
+  if [ "$mode" = server ]; then
+    installed_ctx=/usr/local/bin/ctx
+  else
+    installed_ctx=${XDG_BIN_HOME:-$HOME/.local/bin}/ctx
+  fi
+  if [ "$allow_downgrade" = no ] && [ -f "$installed_ctx" ] && [ -x "$installed_ctx" ]; then
+    installed_version=$("$installed_ctx" version 2>/dev/null | sed -n '1s/^ctx[[:space:]]\{1,\}\([^[:space:]]\{1,\}\).*/\1/p') || installed_version=
+    older=0
+    version_older "$installed_version" "$signed_version" || older=$?
+    if [ "$older" -eq 0 ]; then
+      die "$signed_version is older than the ctx installed here ($installed_version, $installed_ctx). Going back is a downgrade: it can bring back vulnerabilities that were fixed since, and an older ctx may not open what a newer one wrote.
+If you mean it, run this again with --allow-downgrade. Nothing was changed."
+    fi
   fi
 
   # ---- install ---------------------------------------------------------------
