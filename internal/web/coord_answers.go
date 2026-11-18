@@ -14,7 +14,7 @@ import (
 // attention items, which are already limited to what they may read; a session
 // that may not change anything (a pasted token) gets none, as in the inbox.
 func (a *app) attachAnswerOptions(r *http.Request, views []coordAttentionView, items []store.AttentionItem) {
-	if len(views) == 0 || !interactive(r) {
+	if len(views) == 0 {
 		return
 	}
 	options, err := a.access(r).AttentionOptions(items)

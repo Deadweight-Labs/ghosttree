@@ -204,7 +204,7 @@ func (a *app) renderNewIssue(w http.ResponseWriter, r *http.Request, remote stri
 	pa := a.access(r)
 	view := a.repoViewFor(r, pa, a.shellBaseFor(r).who.kind, remote, "issues")
 	v.Composer = composerView{Name: "body", Placeholder: l.msg("newissue.body_placeholder"), Value: v.Body, NoButtons: true}
-	v.CanCreate = interactive(r)
+	v.CanCreate = true
 	ctx := r.Context()
 	r = r.WithContext(context.WithValue(ctx, repoCtxKey{}, view))
 	w.WriteHeader(status)

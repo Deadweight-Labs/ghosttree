@@ -174,11 +174,23 @@ func (a *api) createOrg(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, o)
 }
 
-// renameOrg ändert Name und optional Slug einer Organisation (nur Owner).
+// renameOrg ändert Name und optional Slug einer Organisation: wer org.manage
+// hat, oder ein Instanz-Admin, auch ohne Mitglied zu sein (wie im Web).
 func (a *api) renameOrg(w http.ResponseWriter, r *http.Request) {
-	o, _, ok := a.memberOrg(w, r)
-	if !ok {
-		return
+	pa := a.access(r)
+	admin := pa.CanInstance(store.RightInstanceAdmin)
+	var o store.Org
+	if admin {
+		var err error
+		if o, err = a.st.OrgByRef(r.PathValue("org")); err != nil {
+			writeOrgError(w, err)
+			return
+		}
+	} else {
+		var ok bool
+		if o, _, ok = a.memberOrg(w, r); !ok {
+			return
+		}
 	}
 	var body struct {
 		Name string `json:"name"`
@@ -187,7 +199,11 @@ func (a *api) renameOrg(w http.ResponseWriter, r *http.Request) {
 	if !readOrgJSON(w, r, &body) {
 		return
 	}
-	renamed, err := a.st.RenameOrg(principalOf(r).ID, o.ID, body.Name, body.Slug)
+	rename := a.st.RenameOrg
+	if admin && !pa.CanOrg(o.ID, store.RightOrgManage) {
+		rename = a.st.RenameOrgAsAdmin
+	}
+	renamed, err := rename(principalOf(r).ID, o.ID, body.Name, body.Slug)
 	if err != nil {
 		writeOrgError(w, err)
 		return
@@ -255,7 +271,13 @@ func (a *api) createOrgInvitation(w http.ResponseWriter, r *http.Request) {
 	webSessionOnly(w, "invitations")
 }
 
+// revokeOrgInvitation: invitations are member management, a human right
+// (DEC-49); like issuing one it needs a sign-in, never a token.
 func (a *api) revokeOrgInvitation(w http.ResponseWriter, r *http.Request) {
+	if !principalOf(r).May(store.RightOrgMembers) {
+		webSessionOnly(w, "invitations")
+		return
+	}
 	o, _, ok := a.memberOrg(w, r)
 	if !ok {
 		return
@@ -407,9 +429,31 @@ func (a *api) listHeldEntries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"project": project, "held": len(list), "kinds": kinds})
 }
 
-// decideHeldEntry: releasing or discarding is a reviewer's decision in the web.
+// decideHeldEntry releases or discards a held entry: whoever holds
+// knowledge.verify in its project, the same right as in the web (DEC-50).
+// Anything else, an unknown entry included, answers as unknown.
 func (a *api) decideHeldEntry(w http.ResponseWriter, r *http.Request) {
-	webSessionOnly(w, "releasing or discarding held entries")
+	var body struct {
+		Kind    string `json:"kind"`
+		ID      int64  `json:"id"`
+		Release *bool  `json:"release"`
+	}
+	if !readOrgJSON(w, r, &body) {
+		return
+	}
+	if body.ID <= 0 || body.Release == nil {
+		writeCoded(w, http.StatusBadRequest, "invalid_input", "name kind, id and release (true or false)")
+		return
+	}
+	a.access(r).Filtered()
+	switch err := a.st.DecideHeldEntry(principalOf(r).ID, body.Kind, body.ID, *body.Release); {
+	case errors.Is(err, store.ErrHeldNotFound), errors.Is(err, store.ErrNotReviewer):
+		denyAccess(w, store.ErrAccessNotFound)
+	case err != nil:
+		writeStoreError(w, http.StatusInternalServerError, err)
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"kind": body.Kind, "id": body.ID, "released": *body.Release})
+	}
 }
 
 // moveProject: ein Projekt in eine andere Organisation zu legen ändert, wer

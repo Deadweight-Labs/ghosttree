@@ -138,7 +138,7 @@ func featureActorOf(r *http.Request) feature.Actor {
 
 // featureCreate is POST /ui/features/create.
 func (a *app) featureCreate(w http.ResponseWriter, r *http.Request) {
-	project, pa, ok := a.leadProject(w, r, store.ResFeature)
+	project, pa, ok := a.leadProject(w, r, store.ResFeature, store.ActCreate)
 	if !ok {
 		return
 	}
@@ -153,7 +153,8 @@ func (a *app) featureCreate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, featureLink(project, f.ID)+"?done=created", http.StatusSeeOther)
 }
 
-// featureManage loads the feature a form talks about and checks the lead right on it.
+// featureManage loads the feature a form talks about and checks feature.write
+// on it, as the API does for a new version and for links.
 func (a *app) featureManage(w http.ResponseWriter, r *http.Request) (feature.Feature, *store.ProjectAccess, bool) {
 	pa := a.access(r)
 	id := formNumber(r.PathValue("id"))
@@ -162,7 +163,7 @@ func (a *app) featureManage(w http.ResponseWriter, r *http.Request) (feature.Fea
 		http.NotFound(w, r)
 		return feature.Feature{}, nil, false
 	}
-	if a.accessDenied(w, r, pa.Check(f.Project, store.ResFeature, store.ActEdit, store.Object{})) {
+	if a.accessDenied(w, r, pa.Check(f.Project, store.ResFeature, store.ActWork, store.Object{})) {
 		return feature.Feature{}, nil, false
 	}
 	return f, pa, true

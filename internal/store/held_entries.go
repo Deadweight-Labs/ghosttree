@@ -270,19 +270,17 @@ func (s *Store) DecideHeldEntry(actorPrincipal, kind string, id int64, release b
 // reviewerTx: the account may review in the project (owner, lead, or
 // can_review).
 func reviewerTx(q rowQuerier, project string, account int64) bool {
-	r := projectRoleTx(q, project, account)
-	return r.Role == RoleOwner || r.Role == RoleLead || r.CanReview
+	return canTx(q, project, account, RightKnowledgeVerify)
 }
 
 // HeldEntries lists a project's held entries for who may decide them: its
 // owners, leads and reviewers. Anybody else gets the answer of an unknown
 // project (members without the review right: forbidden).
 func (a *ProjectAccess) HeldEntries(project string, all bool) ([]HeldEntry, error) {
-	r := a.Role(project)
 	switch {
-	case r.Role == RoleOwner || r.Role == RoleLead || r.CanReview:
+	case a.Can(project, RightKnowledgeVerify):
 		return a.st.HeldEntries(project, all)
-	case RoleRank(r.Role) == 0:
+	case !a.Role(project).Any():
 		return nil, ErrAccessNotFound
 	}
 	return nil, ErrAccessForbidden
@@ -317,8 +315,7 @@ func (a *ProjectAccess) PreviewHeld(kind string, id int64) (HeldPreview, error) 
 	if !ok {
 		return HeldPreview{}, ErrAccessNotFound
 	}
-	r := a.Role(h.Project)
-	if !(r.Role == RoleOwner || r.Role == RoleLead || r.CanReview) {
+	if !a.Can(h.Project, RightKnowledgeVerify) {
 		return HeldPreview{}, ErrAccessNotFound
 	}
 	p := HeldPreview{HeldEntry: h}

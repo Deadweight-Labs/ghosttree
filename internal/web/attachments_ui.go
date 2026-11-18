@@ -19,7 +19,7 @@ import (
 // eigene Route, weil die Browsersitzung nicht über die Token-Schnittstelle liest:
 // sie prüft dieselben Rechte wie der Store (AttachmentData) und antwortet mit dem
 // Typ aus den ersten Bytes, nosniff und einer Richtlinie, die nichts außer dem
-// Bild zulässt. Hochgeladen wird mit einem Formular (CSRF, interaktive Sitzung);
+// Bild zulässt. Hochgeladen wird mit einem Formular (CSRF);
 // den Typ bestimmen die Bytes, nie die Angabe des Browsers, Größe und Maße
 // prüft internal/idea.
 
@@ -63,7 +63,7 @@ func (a *app) attachBoxFor(r *http.Request, l lang, pa *store.ProjectAccess, sub
 	if metas, err := pa.AttachmentsOf(subject, id); err == nil {
 		box.Images = attachImages(l, metas, func(m idea.AttachmentMeta) bool { return m.Owner == subject })
 	}
-	box.CanAttach = interactive(r) && pa.CanAttach(subject, id)
+	box.CanAttach = pa.CanAttach(subject, id)
 	return box
 }
 

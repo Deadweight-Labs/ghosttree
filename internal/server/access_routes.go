@@ -74,7 +74,7 @@ var accessRoutes = map[string]routeClass{
 	"POST /api/projects/claim":                    classAccount,
 	"POST /api/projects/reassign":                 classAdmin,
 	"GET /api/projects/held":                      classProject,
-	"POST /api/projects/held":                     classAdmin,
+	"POST /api/projects/held":                     classProject,
 	"POST /api/projects":                          classAccount,
 	"POST /api/projects/move":                     classAccount,
 	"POST /api/context-snapshots":                 classProject,

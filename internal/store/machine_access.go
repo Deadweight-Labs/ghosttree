@@ -172,7 +172,7 @@ func (a *ProjectAccess) machineLevel(machine string, shared []int64) int {
 		return levelNone
 	}
 	if rec.org > 0 {
-		if ix.member[rec.org] == OrgOwner {
+		if OrgRoleHas(ix.member[rec.org], RightOrgMachines) {
 			return levelManage
 		}
 	} else if rec.account == a.account {
@@ -222,7 +222,7 @@ func (a *ProjectAccess) authorEntitled(machine string, author int64, shared []in
 		return author != 0 && author == a.owner
 	}
 	if rec.org > 0 {
-		if a.orgRoleOf(author, rec.org) == OrgOwner {
+		if OrgRoleHas(a.orgRoleOf(author, rec.org), RightOrgMachines) {
 			return true
 		}
 	} else if rec.account == author {
@@ -450,7 +450,7 @@ func (s *Store) machinesFor(account int64, only string) ([]Machine, error) {
 		rec := ix.recs[name]
 		rel, level := "", levelNone
 		switch {
-		case rec.org > 0 && ix.member[rec.org] == OrgOwner:
+		case rec.org > 0 && OrgRoleHas(ix.member[rec.org], RightOrgMachines):
 			rel, level = RelMaintainer, levelManage
 		case rec.org == 0 && rec.account == account:
 			rel, level = RelOwner, levelManage

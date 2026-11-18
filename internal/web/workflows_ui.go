@@ -283,9 +283,9 @@ func (a *app) workflowsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	v := &workflowsView{Defs: a.workflowDefRows(l, pa, rv.Href, rv.Project), CanEdit: interactive(r) && pa.CanEditWorkflows(rv.Project),
+	v := &workflowsView{Defs: a.workflowDefRows(l, pa, rv.Href, rv.Project), CanEdit: pa.CanEditWorkflows(rv.Project),
 		NewHref: rv.Href + "/workflows/" + workflowNew, Token: csrfOf(r), Project: rv.Project}
-	if !v.CanEdit && interactive(r) {
+	if !v.CanEdit {
 		v.Need = roleNeededShort(l, roleNeededOf(pa.Check(rv.Project, store.ResWorkflow, store.ActEdit, store.Object{})))
 	}
 	if v.CanEdit {
@@ -301,7 +301,7 @@ func (a *app) workflowsPage(w http.ResponseWriter, r *http.Request) {
 	v.Empty = len(v.Rows) == 0 && len(v.Defs) == 0
 	if v.Waiting = a.store.WorkflowProposalsWaiting(rv.Project); v.Waiting > 0 && reviews(pa.Role(rv.Project)) {
 		v.ReviewHref = rv.Href + "/review"
-	} else if v.Waiting > 0 && interactive(r) {
+	} else if v.Waiting > 0 {
 		if v.ReviewNeed = reviewNeedLine(l, pa, rv.Project); v.ReviewNeed == "" {
 			v.Waiting = 0
 		}
@@ -339,7 +339,7 @@ func (a *app) workflowRunPage(w http.ResponseWriter, r *http.Request, remote, id
 	v.NoCall = run.CostUSD == 0 && run.Connection == ""
 	org, _ := a.orgOfProject(r, remote)
 	v.Why = wfExplain(l, run, org)
-	v.CanRerun = interactive(r) && run.Rerunnable() && pa.CanEditWorkflows(remote)
+	v.CanRerun = run.Rerunnable() && pa.CanEditWorkflows(remote)
 	if !strings.Contains(run.Workflow, "/") && run.WorkflowVersion != "" {
 		if _, err := pa.WorkflowDef(remote, run.Workflow); err == nil {
 			v.VersionHref = workflowHref(remote, run.Workflow) + "?v=" + url.QueryEscape(run.WorkflowVersion)

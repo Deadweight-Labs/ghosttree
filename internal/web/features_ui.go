@@ -194,7 +194,7 @@ func (a *app) featuresPage(w http.ResponseWriter, r *http.Request) {
 				Title: c.Title, Href: view.Href + "/issues/" + strconv.FormatInt(c.ID, 10), Age: shortAge(l, now, parseTime(c.UpdatedAt)), AgeTitle: l.dateTime(parseTime(c.UpdatedAt).Local())})
 		}
 	}
-	v.Bar = a.leadBar(r, l, pa, project, store.ResFeature)
+	v.Bar = a.leadBar(r, l, pa, project, store.ResFeature, store.ActCreate)
 	v.NewHref = base + "?panel=new#new"
 	if v.Bar.Can {
 		form := newFeatureForm(v.Bar.Token, project)
@@ -381,7 +381,7 @@ func (a *app) featureDetail(w http.ResponseWriter, r *http.Request, remote, id s
 	}
 	v.Base, v.RelAffects, v.RelOrigin = view.Href+"/features", feature.RelAffects, feature.RelOrigin
 	v.Result = featureResult(r, l)
-	if v.Bar = a.leadBar(r2, l, pa, remote, store.ResFeature); v.Bar.Can {
+	if v.Bar = a.leadBar(r2, l, pa, remote, store.ResFeature, store.ActWork); v.Bar.Can {
 		here := featureLink(remote, f.ID)
 		form := newFeatureForm(v.Bar.Token, remote)
 		form.ID, form.Revision, form.Action, form.Anchor, form.Title, form.Submit, form.Close = f.ID, f.Revision, "/ui/features/"+strconv.FormatInt(f.ID, 10)+"/edit", "edit", "features.edit", "features.save", here

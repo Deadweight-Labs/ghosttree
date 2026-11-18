@@ -266,7 +266,7 @@ func (s *Store) SetGardenSettings(actorPrincipal string, in GardenSettings) erro
 		return err
 	}
 	defer tx.Rollback()
-	if orgRoleTx(tx, in.OrgID, actor) != OrgOwner {
+	if !orgCanTx(tx, in.OrgID, actor, RightOrgAI) {
 		return ErrNotOrgOwner
 	}
 	if err := checkGardenSettingsTx(tx, &in); err != nil {

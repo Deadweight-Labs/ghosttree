@@ -450,7 +450,7 @@ func (s *Store) ListOrgMembersFor(orgID int64, viewerPrincipal string, enforced 
 	if err != nil {
 		return []OrgMemberInfo{}, nil
 	}
-	if orgRoleTx(s.db, orgID, viewer) == OrgOwner {
+	if orgCanTx(s.db, orgID, viewer, RightOrgMembers) {
 		return all, nil
 	}
 	rows, err := s.db.Query(`SELECT DISTINCT other.account_id FROM project_members mine
@@ -482,7 +482,7 @@ func (s *Store) ListOrgMembersFor(orgID int64, viewerPrincipal string, enforced 
 		if togetherInShared && !m.Guest {
 			shared[m.AccountID] = true
 		}
-		if m.AccountID != self && m.Role != OrgOwner && !shared[m.AccountID] {
+		if m.AccountID != self && !IsOrgOwnerRole(m.Role) && !shared[m.AccountID] {
 			continue
 		}
 		if m.AccountID != self {
@@ -507,7 +507,7 @@ func (s *Store) SetOrgRole(actorPrincipal string, orgID int64, targetPrincipal, 
 			return d.SetOrgRole(p[0].(string), p[1].(int64), p[2].(string), p[3].(string))
 		})
 	}
-	if role != OrgOwner && role != OrgMember {
+	if !ValidOrgRole(role) {
 		return fmt.Errorf("%w: role must be owner or member", ErrInvalidInput)
 	}
 	actor, err := parsePersonPrincipalID(actorPrincipal)
@@ -523,14 +523,14 @@ func (s *Store) SetOrgRole(actorPrincipal string, orgID int64, targetPrincipal, 
 		return err
 	}
 	defer tx.Rollback()
-	if orgRoleTx(tx, orgID, actor) != OrgOwner {
+	if !orgCanTx(tx, orgID, actor, RightOrgMembers) {
 		return ErrNotOrgOwner
 	}
 	old := orgRoleTx(tx, orgID, target)
 	if old == "" {
 		return ErrNotOrgMember
 	}
-	if old == OrgOwner && role != OrgOwner && ownerCountTx(tx, orgID) <= 1 {
+	if IsOrgOwnerRole(old) && !IsOrgOwnerRole(role) && ownerCountTx(tx, orgID) <= 1 {
 		return ErrLastOrgOwner
 	}
 	if old == role {
@@ -567,14 +567,14 @@ func (s *Store) RemoveOrgMember(actorPrincipal string, orgID int64, targetPrinci
 	}
 	defer tx.Rollback()
 	actorRole := orgRoleTx(tx, orgID, actor)
-	if actorRole != OrgOwner && !(actor == target && actorRole != "") {
+	if !OrgRoleHas(actorRole, RightOrgMembers) && !(actor == target && actorRole != "") {
 		return ErrNotOrgOwner
 	}
 	old := orgRoleTx(tx, orgID, target)
 	if old == "" {
 		return ErrNotOrgMember
 	}
-	if old == OrgOwner && ownerCountTx(tx, orgID) <= 1 {
+	if IsOrgOwnerRole(old) && ownerCountTx(tx, orgID) <= 1 {
 		return ErrLastOrgOwner
 	}
 	if _, err := tx.Exec(`DELETE FROM org_members WHERE org_id=? AND account_id=?`, orgID, target); err != nil {
@@ -694,7 +694,7 @@ func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64, e
 	// explicitly needs that verified login (a connected organization's prefix
 	// was decided above), or the instance admin. Other hosts keep the rule
 	// below: nobody else has entries under it.
-	if explicit && remoteGitHubOwner(remote) != "" && !(ghKnown && ghOwner == account) && !isAdminTx(tx, account) {
+	if explicit && remoteGitHubOwner(remote) != "" && !(ghKnown && ghOwner == account) && !instanceCanTx(tx, account, RightInstanceAdmin) {
 		return Project{}, ErrNotGitHubOwner
 	}
 	if !explicit && !(ghKnown && ghOwner == account && orgID == 0) {
@@ -956,7 +956,7 @@ func (s *Store) MoveProject(actorPrincipal, remote, toOrgRef string) (Project, e
 	if err != nil {
 		return Project{}, err
 	}
-	if orgRoleTx(tx, cur.OrgID, actor) != OrgOwner || orgRoleTx(tx, to.ID, actor) != OrgOwner {
+	if !orgCanTx(tx, cur.OrgID, actor, RightOrgProjects) || !orgCanTx(tx, to.ID, actor, RightOrgProjects) {
 		return Project{}, ErrNotOrgOwner
 	}
 	if cur.OrgID == to.ID {
@@ -998,7 +998,7 @@ func (s *Store) ListClaimableProjects(actorPrincipal string, orgID int64) ([]str
 	if err != nil {
 		return nil, err
 	}
-	if orgRoleTx(s.db, orgID, actor) != OrgOwner {
+	if !orgCanTx(s.db, orgID, actor, RightOrgProjects) {
 		return nil, ErrNotOrgOwner
 	}
 	owner := instanceOwnerID(s.db)
@@ -1099,7 +1099,7 @@ func (s *Store) CreateInvitation(actorPrincipal string, orgID int64, email, role
 	}
 	// A link is a bearer secret: it never carries ownership. Owners are made
 	// by an owner in the member list.
-	if role != OrgMember {
+	if !IsOrgPlainMemberRole(role) {
 		return "", Invitation{}, fmt.Errorf("%w: an invitation link grants the member role only", ErrInvalidInput)
 	}
 	if ttl <= 0 {
@@ -1113,7 +1113,7 @@ func (s *Store) CreateInvitation(actorPrincipal string, orgID int64, email, role
 		return "", Invitation{}, err
 	}
 	defer tx.Rollback()
-	if orgRoleTx(tx, orgID, actor) != OrgOwner {
+	if !orgCanTx(tx, orgID, actor, RightOrgMembers) {
 		return "", Invitation{}, ErrNotOrgOwner
 	}
 	if orgIsUserTx(tx, orgID) {
@@ -1187,7 +1187,7 @@ func (s *Store) ListInvitations(actorPrincipal string, orgID int64) ([]Invitatio
 	if err != nil {
 		return nil, err
 	}
-	if orgRoleTx(s.db, orgID, actor) != OrgOwner {
+	if !orgCanTx(s.db, orgID, actor, RightOrgMembers) {
 		return nil, ErrNotOrgOwner
 	}
 	rows, err := s.db.Query(invitationSelect+` WHERE i.org_id=? ORDER BY i.id DESC LIMIT 200`, orgID)
@@ -1218,7 +1218,7 @@ func (s *Store) RevokeInvitation(actorPrincipal string, orgID, id int64) error {
 	if err != nil {
 		return err
 	}
-	if orgRoleTx(s.db, orgID, actor) != OrgOwner {
+	if !orgCanTx(s.db, orgID, actor, RightOrgMembers) {
 		return ErrNotOrgOwner
 	}
 	res, err := s.db.Exec(`UPDATE invitations SET revoked_at=? WHERE id=? AND org_id=? AND accepted_at='' AND revoked_at=''`, now(), id, orgID)
@@ -1250,12 +1250,12 @@ func invitationCoverage(tx rowQuerier, orgID, projectID int64, projectRole strin
 	orgRole = orgRoleTx(tx, orgID, account)
 	// Ein Gast, der in die Organisation eingeladen wird, gewinnt etwas: er wird
 	// Mitglied.
-	if projectID == 0 && orgRole != "" && !orgGuestTx(tx, orgID, account) || orgRole == OrgOwner {
+	if projectID == 0 && orgRole != "" && !orgGuestTx(tx, orgID, account) || IsOrgOwnerRole(orgRole) {
 		return orgRole, "", true
 	}
 	if projectID != 0 {
 		_ = tx.QueryRow(`SELECT role FROM project_members WHERE project_id=? AND account_id=?`, projectID, account).Scan(&currentProject)
-		if RoleRank(currentProject) >= RoleRank(projectRole) {
+		if RoleAtLeast(currentProject, projectRole) {
 			return orgRole, currentProject, true
 		}
 	}
@@ -1310,23 +1310,23 @@ func acceptInvitationHashTx(tx execQueryer, codeHash string, account int64, veri
 	}
 	// Ein Link vergibt nie Ownership, auch nicht aus einer Zeit, in der das
 	// noch ging.
-	if role != OrgMember {
+	if !IsOrgPlainMemberRole(role) {
 		return Org{}, ErrCodeInvalid
 	}
 	// Wer eingeladen hat, muss noch Owner sein: ein entzogenes Recht entwertet
 	// offene Einladungen.
-	if orgRoleTx(tx, orgID, inviter) != OrgOwner {
+	if !orgCanTx(tx, orgID, inviter, RightOrgMembers) {
 		return Org{}, ErrCodeInvalid
 	}
 	// Eine Projekt-Einladung gilt nur, solange das Projekt in der Organisation
 	// liegt, die eingeladen hat, und trägt nur member oder guest.
 	var remote string
 	if projectID != 0 {
-		if projectRole != RoleMember && projectRole != RoleGuest {
+		if !linkProjectRole(projectRole) {
 			return Org{}, ErrCodeInvalid
 		}
 		// Ein Gast-Link gilt nur, solange die Sichtbarkeit durchgesetzt wird.
-		if projectRole == RoleGuest && !enforced {
+		if (RoleInfo{Role: projectRole}).GuestOnly() && !enforced {
 			return Org{}, ErrCodeInvalid
 		}
 		var projectOrg int64
@@ -1671,7 +1671,7 @@ func (s *Store) renameOrg(actorPrincipal string, orgID int64, name, slug string,
 		return Org{}, err
 	}
 	defer tx.Rollback()
-	if !admin && orgRoleTx(tx, orgID, actor) != OrgOwner {
+	if !admin && !orgCanTx(tx, orgID, actor, RightOrgManage) {
 		return Org{}, ErrNotOrgOwner
 	}
 	old, err := orgByIDTx(tx, orgID)

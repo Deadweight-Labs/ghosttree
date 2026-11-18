@@ -106,7 +106,7 @@ func blockedSummary(l lang, c store.AgentControl) string {
 }
 
 // coordAgentControl nimmt Pause, Unterbrechung und Fortsetzen entgegen. Die
-// Route läuft hinter requireInteractive; der Store prüft Rolle und Sitzungsart
+// Route läuft hinter requireSignIn(agents.control); der Store prüft Rolle und Sitzungsart
 // noch einmal.
 func (a *app) coordAgentControl(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {

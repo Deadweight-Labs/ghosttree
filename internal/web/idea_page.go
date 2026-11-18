@@ -123,7 +123,7 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 	a.attachWorkshop(l, r, pa, ws, v)
 	v.Attach = &attachBox{Images: attachImages(l, ws.Attachments, func(m idea.AttachmentMeta) bool { return m.Owner != idea.OwnerVariant }),
 		Action: "/ui/ideas/" + strconv.FormatInt(i.ID, 10) + "/attach", Owner: idea.OwnerIdea, Token: v.Token}
-	if ph := idea.EffectivePhase(i.State, i.Phase); interactive(r) && ph != idea.PhaseDismissed && ph != idea.PhaseDone && pa.CheckIdea(i, store.ActWork) == nil {
+	if ph := idea.EffectivePhase(i.State, i.Phase); ph != idea.PhaseDismissed && ph != idea.PhaseDone && pa.CheckIdea(i, store.ActWork) == nil {
 		v.Attach.CanAttach = true
 	}
 	for _, m := range ws.Attachments {
@@ -137,11 +137,11 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 			v.People = append(v.People, p)
 		}
 	}
-	if interactive(r) && pa.CheckIdea(i, store.ActEdit) == nil {
+	if pa.CheckIdea(i, store.ActEdit) == nil {
 		v.Edit = &editPanel{Open: r.URL.Query().Get("panel") == "edit", Close: view.Href + "/ideas/" + strconv.FormatInt(i.ID, 10),
 			Action: "/ui/ideas/" + strconv.FormatInt(i.ID, 10) + "/correct", Token: v.Token, Title: i.Title, Body: i.Body}
 	}
-	if interactive(r) {
+	{
 		v.Composer = a.ideaComposer(l, v, i.State, pa.CheckIdea(i, store.ActEdit) == nil, pa.Allow(remote, store.ResComment, store.ActCreate, store.Object{Own: true}))
 	}
 	switch {

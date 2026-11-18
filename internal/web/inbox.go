@@ -573,7 +573,7 @@ func inboxCats(f forYouRow) []string {
 
 func (a *app) inboxRows(r *http.Request, forYou []forYouRow) []inboxRow {
 	l := a.langFor(r)
-	token, forms := csrfOf(r), interactive(r)
+	token, forms := csrfOf(r), browserPrincipal(r).May(store.RightDecideHuman)
 	rows := make([]inboxRow, 0, len(forYou))
 	for _, f := range forYou {
 		row := inboxRow{Mark: f.Mark, Tone: f.Tone, Title: f.Title, Lead: f.Lead, Rest: f.Rest, Age: f.Age, AgeOld: f.AgeOld,
@@ -645,7 +645,7 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 	now := overviewNow().UTC()
 	said := slices.Clone(data.Said)
 	v := &inboxView{Waiting: a.inboxRows(r, waiting), Mentioned: said}
-	token, forms := csrfOf(r), interactive(r)
+	token, forms := csrfOf(r), browserPrincipal(r).May(store.RightDecideHuman)
 	if forms {
 		a.inboxProposals(r, a.access(r), project, v.Waiting)
 		a.inboxDecisionRows(l, token, v.Waiting)

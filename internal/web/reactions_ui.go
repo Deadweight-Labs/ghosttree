@@ -28,7 +28,7 @@ var reactionLabelKeys = map[string]string{"+1": "ui.react.l.up", "-1": "ui.react
 // is nil when there is nothing to show: no reaction yet and none to add (a guest,
 // a session from a pasted token). kind and id name the object the buttons act on.
 func (a *app) reactionsFor(r *http.Request, l lang, kind string, id int64, s store.ReactionSummary) *reactionsView {
-	can := s.CanReact && interactive(r)
+	can := s.CanReact
 	if len(s.Items) == 0 && !can {
 		return nil
 	}

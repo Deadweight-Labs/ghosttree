@@ -62,6 +62,9 @@ const (
 	// what ran, on which event, at what cost, with which full text. Members and
 	// up read them; guests never (costs and texts stay inside the team).
 	ResWorkflow Resource = "workflow"
+	// ResPackage is a work package (REQ-601): reading follows the issues of the
+	// project, creating and changing it is package.manage in every channel.
+	ResPackage Resource = "package"
 )
 
 // Action ist, was getan werden soll.
@@ -149,166 +152,168 @@ type Decision struct {
 	Strict bool
 }
 
-// matrixAllows ist die Matrix aus Spec 8.1 je Rolle, Ressource und Aktion für
-// ein Projekt. Eine reine Funktion, damit sie tabellarisch getestet wird.
+// matrixAllows ist die Matrix aus Spec 8.1 je Ressource und Aktion für ein
+// Projekt, ausgedrückt in benannten Rechten (rights.go). Welche Rolle welches
+// Recht hat, steht allein im Katalog; hier steht nur, welches Recht eine Aktion
+// verlangt und welche Objektmerkmale ein eingeschränktes Recht (_own,
+// read_trusted, read_assigned) erfüllen. Eine reine Funktion, damit sie
+// tabellarisch gegen die alte Matrix getestet wird.
 func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
-	rank := RoleRank(role.Role)
+	has := role.Has
 	switch res {
 	case ResKnowledge:
 		switch act {
 		case ActRead:
-			if rank >= 2 {
-				return true
-			}
-			return rank == 1 && (obj.Confidence == "trusted" || obj.Confidence == "verified")
+			return has(RightKnowledgeRead) || (has(RightKnowledgeReadTrusted) && (obj.Confidence == "trusted" || obj.Confidence == "verified"))
 		case ActCreate:
-			return rank >= 2
+			return has(RightKnowledgeCreate)
 		case ActEdit:
-			return rank >= 3 || (rank == 2 && (obj.Own || obj.OriginOwner))
+			return has(RightKnowledgeEdit) || (has(RightKnowledgeEditOwn) && (obj.Own || obj.OriginOwner))
 		case ActVerify:
-			return rank >= 3 || (rank >= 2 && role.CanReview)
+			return has(RightKnowledgeVerify)
 		case ActRelease:
-			return rank >= 2 && obj.OriginOwner
+			return has(RightKnowledgeReleaseOwn) && obj.OriginOwner
 		}
 	case ResRequest:
 		switch act {
 		case ActRead:
-			return rank >= 1
+			return has(RightRequestRead)
 		case ActCreate, ActWork:
-			return rank >= 2
+			return has(RightRequestCreate)
 		case ActEdit:
-			return rank >= 3 || (rank == 2 && (obj.Own || obj.OriginOwner))
+			return has(RightRequestEdit) || (has(RightRequestEditOwn) && (obj.Own || obj.OriginOwner))
 		}
 	case ResPain:
 		switch act {
 		case ActRead:
-			return rank >= 1
+			return has(RightPainRead)
 		case ActCreate, ActWork:
-			return rank >= 2
+			return has(RightPainCreate)
 		case ActEdit:
-			return rank >= 3 || (rank == 2 && obj.Own)
+			return has(RightPainEdit) || (has(RightPainEditOwn) && obj.Own)
 		}
 	case ResIdea:
-		// Wie ein Pain: lesen ab Gast, anlegen und bearbeiten wie dort.
 		switch act {
 		case ActRead:
-			return rank >= 1
+			return has(RightIdeaRead)
 		case ActCreate, ActWork:
-			return rank >= 2
+			return has(RightIdeaCreate)
 		case ActEdit:
-			return rank >= 3 || (rank == 2 && obj.Own)
+			return has(RightIdeaEdit) || (has(RightIdeaEditOwn) && obj.Own)
 		}
 	case ResFeature:
-		// Lesen ab Gast. Anlegen und eine neue Fassung schreiben (ActWork) ab
-		// member: die Beschreibung pflegt, wer den PR schreibt. Umbenennen,
-		// einstellen und wieder aufnehmen (ActEdit) ab lead. Die Zuordnung steht
-		// hier an einer Stelle: wer sie enger will, ändert nur diese Zeilen.
+		// Anlegen und eine neue Fassung schreiben (ActWork) ist feature.write;
+		// umbenennen, einstellen und wieder aufnehmen (ActEdit) feature.manage.
 		switch act {
 		case ActRead:
-			return rank >= 1
+			return has(RightFeatureRead)
 		case ActCreate, ActWork:
-			return rank >= 2
+			return has(RightFeatureWrite)
 		case ActEdit:
-			return rank >= 3
+			return has(RightFeatureManage)
 		}
 	case ResComment:
-		// Lesen ab Gast, schreiben ab member. Ändern darf nur der Autor, löschen
-		// der Autor und jeder Lead oder Owner (Moderation).
+		// Ändern darf nur der Autor, löschen der Autor und wer moderiert.
 		switch act {
 		case ActRead:
-			return rank >= 1
+			return has(RightCommentRead)
 		case ActCreate:
-			return rank >= 2
+			return has(RightCommentCreate)
 		case ActEdit:
-			return rank >= 2 && obj.Own
+			return has(RightCommentCreate) && obj.Own
 		case ActDelete:
-			return rank >= 3 || (rank >= 2 && obj.Own)
+			return has(RightCommentModerate) || (has(RightCommentCreate) && obj.Own)
 		}
 	case ResLabel:
-		// Lesen ab Gast, anlegen ab member, ändern und löschen ab lead. Ein Label
-		// zu setzen prüft das Objekt selbst (ActWork auf dem Objekt).
+		// Ein Label zu setzen prüft das Objekt selbst (ActWork auf dem Objekt).
 		switch act {
 		case ActRead:
-			return rank >= 1
+			return has(RightLabelRead)
 		case ActCreate:
-			return rank >= 2
+			return has(RightLabelCreate)
 		case ActEdit:
-			return rank >= 3
+			return has(RightLabelManage)
 		}
 	case ResTask:
 		switch act {
 		case ActRead:
-			return rank >= 2 || (rank == 1 && obj.Assigned)
+			return has(RightTaskRead) || (has(RightTaskReadAssigned) && obj.Assigned)
 		case ActCreate:
-			return rank >= 2
+			return has(RightTaskCreate)
 		case ActWork:
 			// Ein Gast liest nur, auch eine ihm zugewiesene Aufgabe meldet er
 			// nicht als erledigt (Robin, 2026-11-09).
-			return rank >= 3 || (rank == 2 && (obj.Assigned || obj.Unassigned))
+			return has(RightTaskWork) || (has(RightTaskWorkOpen) && (obj.Assigned || obj.Unassigned))
 		case ActEdit:
-			return rank >= 3 || (rank == 2 && obj.Own)
+			return has(RightTaskEdit) || (has(RightTaskEditOwn) && obj.Own)
 		}
 	case ResSessionMeta:
 		// Die eigene Session anlegen und fortschreiben darf jedes Konto; wem sie
 		// gehört, regelt der Upload (gateMachine, mayWriteSession).
-		return act == ActCreate || (act == ActRead && (rank >= 2 || (rank == 1 && obj.Guests)))
+		return act == ActCreate || (act == ActRead && (has(RightSessionRead) || (has(RightSessionReadGuests) && obj.Guests)))
 	case ResTranscript:
 		switch act {
 		case ActRead:
 			// Privat heißt privat: eine nicht freigegebene Session liest nur ihr
 			// Besitzer, auch kein Lead, kein Projekt-Owner (REQ-438 D).
-			return obj.Own || (rank >= 2 && obj.Shared) || (rank >= 1 && obj.Guests)
+			return obj.Own || (has(RightTranscriptReadShared) && obj.Shared) || (has(RightTranscriptReadGuests) && obj.Guests)
 		case ActShare:
-			// Der Besitzer der Session; der Projekt-Owner darf eine freigegebene
-			// Session zurücknehmen, eine private nie erreichen.
-			return obj.Own || (rank >= 4 && obj.Shared)
+			// Der Besitzer der Session; wer transcript.unshare hat, darf eine
+			// freigegebene Session zurücknehmen, eine private nie erreichen.
+			return obj.Own || (has(RightTranscriptUnshare) && obj.Shared)
 		}
 	case ResRunbook:
 		switch act {
-		case ActRead, ActCreate, ActWork:
-			// ActWork: einen Lauf melden.
-			return rank >= 2
-		case ActEdit:
-			// Wie bei Wissen (#1444): wer es besser weiß, schreibt eine neue
-			// Fassung. Ausführbar wird sie dadurch nicht, das tut erst die
-			// Freigabe.
-			return rank >= 2
+		case ActRead:
+			return has(RightRunbookRead)
+		case ActCreate, ActWork, ActEdit:
+			// ActWork: einen Lauf melden. ActEdit: wie bei Wissen (#1444) schreibt,
+			// wer es besser weiß, eine neue Fassung; ausführbar wird sie erst mit
+			// der Freigabe.
+			return has(RightRunbookWrite)
 		case ActApprove:
-			return rank >= 3
+			return has(RightRunbookApprove)
 		}
 	case ResWorkflow:
 		switch act {
 		case ActRead:
-			return rank >= 2
+			return has(RightWorkflowRead)
 		case ActEdit:
-			return rank >= 3
+			return has(RightWorkflowEdit)
+		}
+	case ResPackage:
+		switch act {
+		case ActRead:
+			return has(RightRequestRead)
+		case ActCreate, ActWork, ActEdit:
+			return has(RightPackageManage)
 		}
 	case ResSnapshot:
-		return (act == ActRead || act == ActCreate) && rank >= 2
+		return (act == ActRead || act == ActCreate) && has(RightSnapshotUse)
 	case ResRoom:
-		return ((act == ActRead || act == ActCreate) && rank >= 1) || (act == ActPost && rank >= 2)
+		return ((act == ActRead || act == ActCreate) && has(RightRoomRead)) || (act == ActPost && has(RightRoomPost))
 	case ResProject:
-		return act == ActRead && rank >= 1
+		return act == ActRead && has(RightProjectRead)
 	case ResAgents:
-		return act == ActRead && rank >= 2
+		return act == ActRead && has(RightAgentsRead)
 	case ResMembers:
 		// Der Gast sieht nur den eigenen Eintrag; das filtert der Aufrufer.
-		return act == ActRead && rank >= 1
+		return act == ActRead && has(RightMembersRead)
 	case ResDocument:
 		switch act {
 		case ActRead:
-			return rank >= 1
+			return has(RightDocumentRead)
 		case ActCreate:
-			return rank >= 2
+			return has(RightDocumentCreate)
 		case ActEdit:
-			return rank >= 3 || (rank == 2 && obj.Own)
+			return has(RightDocumentEdit) || (has(RightDocumentEditOwn) && obj.Own)
 		}
 	case ResGhost:
 		switch act {
 		case ActRead:
-			return rank >= 1
+			return has(RightGhostRead)
 		case ActCreate, ActEdit:
-			return rank >= 2
+			return has(RightGhostWrite)
 		}
 	}
 	return false
@@ -509,7 +514,7 @@ func (a *ProjectAccess) Projects() []string {
 	a.loadRoles()
 	out := make([]string, 0, len(a.roles))
 	for remote, r := range a.roles {
-		if RoleRank(r.Role) >= 1 {
+		if r.Any() {
 			out = append(out, remote)
 		}
 	}
@@ -624,7 +629,6 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	if matrixAllows(role, res, act, obj) {
 		return Decision{Allowed: true}
 	}
-	rank := RoleRank(role.Role)
 	if res == ResSnapshot {
 		// Eine Kopie des ganzen Projekts: nur der Instanz-Admin ohne Rolle, und
 		// jede Ablehnung ist 404, damit sie nichts über Projekt oder Snapshot
@@ -637,7 +641,7 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	// Eine Remote ohne Projektzeile ist unbeansprucht. Anlegen bleibt wie bisher
 	// möglich (gateProject); der Autor sieht und ändert seine eigenen Einträge
 	// dort immer, der Instanz-Admin sieht alles, andere nichts.
-	if rank == 0 && a.Unclaimed(project) {
+	if !role.Any() && a.Unclaimed(project) {
 		// Verified setzt nie der Autor selbst: das Recht gibt es nur in einem
 		// beanspruchten Projekt (can_review, lead, owner) oder dem Admin.
 		hiddenSession := res == ResTranscript && !obj.Own && !obj.Shared && !obj.Guests
@@ -652,8 +656,8 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	if obj.HeldAuthor && act == ActRead {
 		return Decision{Allowed: true, Reason: "own entry, held in the project"}
 	}
-	d := Decision{Hidden: rank == 0 || act == ActRead, Strict: strictDenial(rank, res, act)}
-	if rank == 0 {
+	d := Decision{Hidden: !role.Any() || act == ActRead, Strict: strictDenial(role, res, act)}
+	if !role.Any() {
 		d.Reason = "not a member"
 	} else {
 		d.Reason = "role " + role.Role + " may not " + string(act) + " " + string(res)
@@ -677,11 +681,11 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 //     lehnte ab.
 //
 // Lesen bleibt im Log-Modus offen, wie bisher.
-func strictDenial(rank int, res Resource, act Action) bool {
+func strictDenial(role RoleInfo, res Resource, act Action) bool {
 	if act == ActVerify || (res == ResWorkflow && act != ActRead) {
 		return true
 	}
-	return rank == 1 && act != ActRead
+	return role.GuestOnly() && act != ActRead
 }
 
 // decideGlobal: "global" heißt "überall für mich". Wissen, Aufträge und
