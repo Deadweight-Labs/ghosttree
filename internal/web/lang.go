@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"fmt"
-	"html"
 	"html/template"
 	"net/http"
 	"sort"
@@ -249,7 +248,7 @@ func parseTemplates(l lang) *template.Template {
 		"ago":   func(stamp string) template.HTML { return timeTag(l, stamp) },
 		// agot writes a sentence around a time: the text of key has %s where the time goes.
 		"agot": func(key, stamp string) template.HTML {
-			return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), timeTag(l, stamp)))
+			return sentenceOf(l, key, timeTag(l, stamp))
 		},
 		// dict builds a map for a partial that needs the page and one row.
 		"dict": func(kv ...any) map[string]any {

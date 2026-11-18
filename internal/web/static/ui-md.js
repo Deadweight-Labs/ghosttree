@@ -139,12 +139,13 @@
   // A link whose text reads like an address of one site and leads to another (the text stands
   // in for the address): the host it leads to is shown beside it. Dots that read as a dot
   // (the ideographic full stop and the like) count as one.
-  var RE_SHOWN_HOST = /(?:https?:\/\/)?((?:[\p{L}\d-]+\.)+\p{L}{2,})(?=[\/:?#\s]|$)/iu;
+  // The text and the labels are bounded, so a long run of letters costs no more than its length.
+  var RE_SHOWN_HOST = /(?:https?:\/\/)?((?:[\p{L}\d-]{1,63}\.){1,10}\p{L}{2,63})(?=[\/:?#\s]|$)/iu;
   function hostOf(u) {
     try { return new URL(u, window.location.href).hostname.toLowerCase().replace(/^www\./, ""); } catch (e) { return ""; }
   }
   function targetNote(a, url) {
-    var text = (a.textContent || "").normalize("NFKC").replace(/[\u3002\uff61\u2024\ufe52\u00b7]/g, ".");
+    var text = (a.textContent || "").slice(0, 256).normalize("NFKC").replace(/[\u3002\uff61\u2024\ufe52\u00b7]/g, ".");
     var m = RE_SHOWN_HOST.exec(text);
     if (!m) return null;
     var shown = m[1].toLowerCase().replace(/^www\./, ""), target = hostOf(url);

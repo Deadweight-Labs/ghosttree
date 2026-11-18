@@ -679,3 +679,10 @@ test("a look-alike in the link text is read as the address it looks like", () =>
   const host = render(p, "[ghosttree.example。com](https://evil.example/)");
   assert.equal(all(host, ".md-target").length, 1);
 });
+
+test("a very long link text costs no more than its length", () => {
+  const p = open();
+  const start = Date.now();
+  render(p, "[" + "a".repeat(30000) + "](https://evil.example/) [" + "a.".repeat(15000) + "](https://evil.example/)");
+  assert.ok(Date.now() - start < 2000, "the note for a link text is bounded");
+});
