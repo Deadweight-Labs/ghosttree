@@ -55,8 +55,15 @@ func TestIdeaWithoutWorkshopShowsNoWorkshop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, page := fetchPage(t, e.Owner, e.Base+ideaPath(i)); strings.Contains(page, `id="workshop"`) {
-		t.Error("an idea nobody worked out shows a workshop")
+	// The guest reads only: nothing to work with, so no workshop. Whoever may work gets one line and the way in (REQ-709).
+	if _, page := fetchPage(t, e.Guest, e.Base+ideaPath(i)); strings.Contains(page, `id="workshop"`) {
+		t.Error("an idea nobody worked out shows a workshop to a guest")
+	}
+	_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
+	for _, want := range []string{`id="workshop"`, "Nothing worked out yet.", "Write the concept", "Open a decision", "Add raw text", "Write a summary", "?panel=concept#ws-panel"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("a plain idea gives the owner no way in: lacks %q", want)
+		}
 	}
 }
 
@@ -71,9 +78,15 @@ func TestWorkshopShowsTheConceptAndTheVariantsSideBySideWithTheRightFormsPerRole
 		"A spoken answer shows up as text in the thread", "Summary", "Answer questions by speaking", "Raw version, 1 in all", "Meeting 2026-11-08",
 		"DEC-" + strconv.FormatInt(d.ID, 10), "Where does the speech turn into text?", "Privacy and cost differ.", "A person decides", "1 open", "On the device", "On the server", "Nothing leaves the machine.", "Quality depends on the browser.", "For", "Against",
 		`class="ws-vars"`, `type="radio" name="variant" value="A"`, `type="radio" name="variant" value="B"`, `action="/ui/decisions/` + strconv.FormatInt(d.ID, 10) + `/close"`,
-		`formaction="/ui/decisions/` + strconv.FormatInt(d.ID, 10) + `/vote"`, "Decide", "Vote", "Start the discussion", `action="/ui/ideas/` + strconv.FormatInt(i.ID, 10) + `/phase"`, "Approve version 1", "Raw idea", "In discussion"} {
+		`formaction="/ui/decisions/` + strconv.FormatInt(d.ID, 10) + `/vote"`, "Decide", "Vote", "Start the discussion", `action="/ui/ideas/` + strconv.FormatInt(i.ID, 10) + `/phase"`, "Raw idea", "In discussion"} {
 		if !strings.Contains(owner, want) {
 			t.Errorf("owner's workshop lacks %q", want)
+		}
+	}
+	// Only the step that fits the phase is offered (S11): in the concept phase the discussion starts, it is neither closed nor approved.
+	for _, not := range []string{`value="close"`, `value="approve"`, "Approve version"} {
+		if strings.Contains(owner, not) {
+			t.Errorf("the concept phase offers %q", not)
 		}
 	}
 	// A member may vote but not decide; nobody who may not work gets a form at all.
@@ -242,6 +255,16 @@ func TestOwnerStartsTheDiscussionApprovesTheConceptAndTakesItBack(t *testing.T) 
 	}
 	if _, failed := fetchPage(t, e.Owner, e.Base+ideaPath(i)+"?wfail=concept_changed"); !strings.Contains(failed, "The concept changed while you were reading.") {
 		t.Error("the stale approval is not told")
+	}
+	// Closing the discussion with a question open asks first; the answer closes it, and only then is approving offered.
+	if resp := post(e.Owner, url.Values{"mode": {"close"}}); !strings.Contains(resp.Header.Get("Location"), "wask=close") {
+		t.Fatalf("closing with an open question -> %q, want the question first", resp.Header.Get("Location"))
+	}
+	if got, _ := pa.IdeaView(i.ID); got.Phase != idea.PhaseDiscussion {
+		t.Fatalf("the question did not hold the close: %s", got.Phase)
+	}
+	if resp := post(e.Owner, url.Values{"mode": {"close"}, "confirm": {"1"}}); !strings.Contains(resp.Header.Get("Location"), "wdone=close") {
+		t.Fatalf("close -> %q", resp.Header.Get("Location"))
 	}
 	_, page := fetchPage(t, e.Owner, e.Base+ideaPath(i))
 	if !strings.Contains(page, `name="revision" value="2"`) || !strings.Contains(page, "Approve version 2") {

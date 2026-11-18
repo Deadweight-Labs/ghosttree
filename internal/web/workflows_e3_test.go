@@ -488,7 +488,7 @@ func TestClosingTheDiscussionRunsCriteriaAndNamesWhoClosedIt(t *testing.T) {
 	// Closed with a decision still open: the run names it and calls no model.
 	closeBtn := func(mode string) {
 		t.Helper()
-		if r := postForm(t, e.shellEnv, e.Owner, "/ui/ideas/"+itoa(i.ID)+"/phase", url.Values{"mode": {mode}}); r.StatusCode != http.StatusSeeOther {
+		if r := postForm(t, e.shellEnv, e.Owner, "/ui/ideas/"+itoa(i.ID)+"/phase", url.Values{"mode": {mode}, "confirm": {"1"}}); r.StatusCode != http.StatusSeeOther {
 			t.Fatalf("%s: %d", mode, r.StatusCode)
 		}
 	}
@@ -511,7 +511,7 @@ func TestClosingTheDiscussionRunsCriteriaAndNamesWhoClosedIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page = fetchPage(t, e.Owner, e.Base+ideaHref)
-	mustContain(t, "workshop proposes closing", page, "ws-next-form", `value="close"`, "All 1 decisions made")
+	mustContain(t, "workshop proposes closing", page, "ws-next-form", `value="close"`, "The decision is made")
 	e.provider.answer = func(system, user string) string {
 		if !strings.Contains(user, "In den Einstellungen der Org") || !strings.Contains(user, "Jeder Lauf zeigt seine Kosten in Dollar.") {
 			t.Errorf("concept or decision missing: %s", user)

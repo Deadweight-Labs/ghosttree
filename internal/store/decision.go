@@ -130,6 +130,11 @@ func splitLines(s string) []string {
 func (s *Store) attachDecisionParts(list []idea.Decision) error {
 	for i := range list {
 		d := &list[i]
+		var opened int
+		if err := s.db.QueryRow(`SELECT by_agent FROM decision_events WHERE decision_id=? AND kind='opened' ORDER BY id LIMIT 1`, d.ID).Scan(&opened); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		d.OpenedByAgent = opened != 0
 		chosenID, _ := strconv.ParseInt(d.ChosenVariant, 10, 64)
 		d.ChosenVariant = ""
 		rows, err := s.db.Query(`SELECT id,label,title,text,pro,contra FROM decision_variants WHERE decision_id=? ORDER BY label`, d.ID)
@@ -975,10 +980,17 @@ func (a *ProjectAccess) decisionKnowledge(d idea.Decision, v *idea.Variant, answ
 		GitAnchor: actor.GitAnchor, OriginContext: actor.Origin}
 	line := ""
 	if d.Subject == idea.SubjectIdea {
-		// A line of a list in the concept: no marks of the knowledge text, and no
-		// second full stop where the text of the variant already ends with one.
-		brief := strings.TrimRight(idea.Brief(strings.ReplaceAll(decision.String(), "**", ""), 400), ". ")
-		line = fmt.Sprintf("- %s %s: %s. Reason: %s", d.HumanID(), d.Question, brief, reason)
+		// A line of a list in the concept (usability run 5, P24): the question, the variant taken
+		// with its title and the reason. Text, for and against of the variant stay with the
+		// decision, which the line names, and are not pasted into the concept.
+		taken := strings.TrimRight(idea.Brief(strings.ReplaceAll(answer, "**", ""), 400), ". ")
+		if v != nil {
+			taken = v.Label + " · " + v.Title
+			if answer != "" {
+				taken += ". " + strings.TrimRight(idea.Brief(strings.ReplaceAll(answer, "**", ""), 400), ". ")
+			}
+		}
+		line = fmt.Sprintf("- %s %s: %s. Reason: %s", d.HumanID(), d.Question, strings.TrimRight(taken, ". "), reason)
 		if len(images) > 0 {
 			line += " Images: " + strings.Join(images, ", ")
 		}
@@ -1051,7 +1063,7 @@ func (s *Store) commitDecisionClose(c decisionClose) error {
 		}
 	}
 	if c.ConceptLine != "" && subject == idea.SubjectIdea {
-		if err := appendConceptNoteTx(tx, subjectID, c.ConceptLine, c.Actor, fmt.Sprintf("DEC-%d decided", c.ID)); err != nil {
+		if err := appendConceptNoteTx(tx, subjectID, c.ID, c.ConceptLine, c.Actor, fmt.Sprintf("DEC-%d decided", c.ID)); err != nil {
 			return err
 		}
 	}
@@ -1065,10 +1077,24 @@ func (s *Store) commitDecisionClose(c decisionClose) error {
 	return tx.Commit()
 }
 
+// markAnswered marks the line of the open questions of a concept that is the question of a decision, once the
+// decision is made: "question ✓ DEC-n". Only a line that is the question (without its list mark) counts.
+func markAnswered(questions, question, ref string) string {
+	norm := func(s string) string { return strings.ToLower(strings.TrimRight(strings.TrimSpace(s), "? ")) }
+	want := norm(question)
+	lines := strings.Split(questions, "\n")
+	for i, l := range lines {
+		if norm(strings.TrimLeft(strings.TrimSpace(l), "-*+ ")) == want {
+			lines[i] = strings.TrimRight(l, " ") + " ✓ " + ref
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // appendConceptNoteTx hängt eine Zeile an den Abschnitt „Wie“ des Konzepts, als
 // neue Fassung. Passt sie nicht mehr in den Abschnitt, bleibt das Konzept, wie es
 // ist: das Wissen trägt die Entscheidung ohnehin.
-func appendConceptNoteTx(tx *sql.Tx, ideaID int64, line string, actor idea.Actor, message string) error {
+func appendConceptNoteTx(tx *sql.Tx, ideaID, decisionID int64, line string, actor idea.Actor, message string) error {
 	var phase, state string
 	if err := tx.QueryRow(`SELECT phase, state FROM ideas WHERE id=?`, ideaID).Scan(&phase, &state); err != nil {
 		return err
@@ -1094,6 +1120,10 @@ func appendConceptNoteTx(tx *sql.Tx, ideaID int64, line string, actor idea.Actor
 		return nil
 	}
 	c.How = next
+	var question string
+	if err := tx.QueryRow(`SELECT question FROM open_decisions WHERE id=?`, decisionID).Scan(&question); err == nil {
+		c.Questions = markAnswered(c.Questions, question, fmt.Sprintf("DEC-%d", decisionID))
+	}
 	if c.Requirements == nil {
 		c.Requirements = []string{}
 	}

@@ -189,14 +189,17 @@ type Decision struct {
 	// KnowledgeID ist das Wissen (decision), das beim Entscheiden entstand.
 	KnowledgeID int64 `json:"knowledge_id,omitempty"`
 	// DecidedBy und ByAgent: wer geschlossen hat; ByAgent heißt „vom Agenten“.
-	DecidedBy string    `json:"decided_by,omitempty"`
-	ByAgent   bool      `json:"decided_by_agent,omitempty"`
-	DecidedAt string    `json:"decided_at,omitempty"`
-	Person    string    `json:"person,omitempty"`
-	CreatedAt string    `json:"created_at"`
-	UpdatedAt string    `json:"updated_at"`
-	Variants  []Variant `json:"variants,omitempty"`
-	Votes     []Vote    `json:"votes,omitempty"`
+	DecidedBy string `json:"decided_by,omitempty"`
+	ByAgent   bool   `json:"decided_by_agent,omitempty"`
+	DecidedAt string `json:"decided_at,omitempty"`
+	Person    string `json:"person,omitempty"`
+	// OpenedByAgent says that an agent asked the question for Person; the page then
+	// names the agent of that person, not the person (usability run 5, P25).
+	OpenedByAgent bool      `json:"opened_by_agent,omitempty"`
+	CreatedAt     string    `json:"created_at"`
+	UpdatedAt     string    `json:"updated_at"`
+	Variants      []Variant `json:"variants,omitempty"`
+	Votes         []Vote    `json:"votes,omitempty"`
 	// AuthorID ist das Konto des Fragenden, es verlässt den Server nie.
 	AuthorID int64 `json:"-"`
 }

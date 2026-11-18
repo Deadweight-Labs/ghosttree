@@ -205,7 +205,8 @@ func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, edits []store.IdeaEdit, a
 		all = append(all, datedItem{t.CreatedAt, byWho(tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Icon: "book", Head: sentence("ideas.ev.concept", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}, t.Person, t.ByAgent)})
 	}
 	for _, d := range ws.Decisions {
-		all = append(all, datedItem{d.CreatedAt, tlItem{ID: "asked-decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Who: d.Person, Icon: "chat", Head: sentence("ideas.ev.decision") + " " + longPill(l, "decision", d.ID, "#decision-"+strconv.FormatInt(d.ID, 10)), Age: age(d.CreatedAt)}})
+		asked := byWho(tlItem{ID: "asked-decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Icon: "chat", Head: sentence("ideas.ev.decision") + " " + longPill(l, "decision", d.ID, "#decision-"+strconv.FormatInt(d.ID, 10)), Age: age(d.CreatedAt)}, d.Person, d.OpenedByAgent)
+		all = append(all, datedItem{d.CreatedAt, asked})
 	}
 	for n, e := range edits {
 		all = append(all, datedItem{e.CreatedAt, ideaEditItem(l, e, nextTitle(edits, n, ws.Idea.Title), age(e.CreatedAt))})

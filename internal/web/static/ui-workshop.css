@@ -148,3 +148,33 @@
   & .ws-lb form { position: absolute; top: 8px; right: 8px; margin: 0; }
   & .ws-lb-x { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border-default); border-radius: 50%; background: var(--canvas-default); color: var(--fg-default); cursor: pointer; }
 }
+
+/* The ways in and the forms of the workshop (REQ-709): one row of buttons, the form that is open, the question before a step. */
+:is(.g2) {
+  & .ws .ws-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+  & .ws .ws-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+  & .ws .ws-tools .gbtn .i { margin-right: 4px; }
+  & .ws .ws-panel { background: var(--canvas-subtle); }
+  & .ws .ws-pform { max-width: 52rem; }
+  & .ws .ws-ph { margin: 0; font-size: 14px; font-weight: 600; }
+  & .ws .ws-pform .pfield textarea.gfield { min-height: 4.5rem; }
+  & .ws .ws-slot { display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 12px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); min-width: 0; }
+  & .ws .ws-slot legend { padding: 0 6px; font-size: 13px; font-weight: 600; }
+  & .ws .ws-pc2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  & .ws .ws-more { display: flex; flex-direction: column; gap: 12px; }
+  & .ws .ws-more > summary { cursor: pointer; font-size: 13px; color: var(--accent-fg); }
+  & .ws .ws-more[open] > summary { margin-bottom: 12px; }
+  & .ws .ws-addvar { margin-top: 8px; }
+  & .ws .ws-addvar > summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; font-size: 13px; color: var(--accent-fg); }
+  & .ws .ws-addvar .ws-pform { margin-top: 8px; }
+  & .ws .ws-ask { background: var(--attention-subtle); border-top: 1px solid var(--border-default); }
+  & .ws .ws-ask p { margin: 0 0 8px; font-size: 14px; }
+  & .ws .ws-ask .ws-act { align-items: center; }
+  & .ws .ws-ask form { margin: 0; }
+}
+
+@media (max-width: 767px) {
+  :is(.g2) .ws .ws-pc2 { grid-template-columns: minmax(0, 1fr); }
+  :is(.g2) .ws .ws-tools .gbtn, :is(.g2) .ws .ws-pform .gbtn, :is(.g2) .ws .ws-ask .gbtn { min-height: 44px; }
+  :is(.g2) .ws .ws-pform .wf { flex-wrap: wrap; }
+}
