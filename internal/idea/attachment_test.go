@@ -128,6 +128,18 @@ func TestCheckImageLimitsSizeAndDimensions(t *testing.T) {
 	if _, err := CheckImage(webpExtended(MaxSide, 100), ""); err != nil {
 		t.Fatalf("at the limit: %v", err)
 	}
+	// A browser decodes the picture to four bytes a pixel: the budget is what a screenshot of a
+	// large screen needs (5K), not what a single small file can promise (a flat image of 40 million
+	// pixels is a few kilobytes and 160 MB in a tab).
+	if _, err := CheckImage(webpExtended(5120, 2880), ""); err != nil {
+		t.Fatalf("a 5K screenshot: %v", err)
+	}
+	if _, err := CheckImage(webpExtended(6000, 4000), ""); code(err) != "attachment_dimensions" {
+		t.Fatalf("24 million pixels: %v", err)
+	}
+	if MaxPixels > 16_000_000 || MaxSide > 8192 {
+		t.Fatalf("limits are %d pixels, %d a side", MaxPixels, MaxSide)
+	}
 }
 
 func TestOneLineRefusesControlAndFormatCharacters(t *testing.T) {
