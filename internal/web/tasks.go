@@ -76,7 +76,7 @@ func (a *app) tasksDone(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	accountID, _ := store.AccountNumericID(browserPrincipal(r).ID)
-	actor := humantask.Actor{AccountID: accountID, Person: personOf(r), Web: interactive(r)}
+	actor := humantask.Actor{AccountID: accountID, Person: personOf(r), Web: fromSignIn(r)}
 	if _, err := pa.MarkTasksDone(ids, note, actor); err != nil {
 		a.taskFail(w, r, back, err)
 		return
@@ -141,13 +141,13 @@ func (a *app) taskFail(w http.ResponseWriter, r *http.Request, back string, err 
 // registerPainTaskPages registers the pages for human tasks and pains.
 func (a *app) registerPainTaskPages(mux *http.ServeMux) {
 	a.handle(mux, "GET /ui/tasks", a.requirePerson(http.HandlerFunc(a.tasksPage)))
-	a.handle(mux, "POST /ui/tasks/done", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.tasksDone))))))
+	a.handle(mux, "POST /ui/tasks/done", a.requirePerson(a.requireSignIn(store.RightDecideHuman, limitBody(a.requireCSRF(http.HandlerFunc(a.tasksDone))))))
 	a.registerInboxAnswer(mux)
 	a.handle(mux, "GET /ui/pains", a.requirePerson(http.HandlerFunc(a.painsPage)))
 	a.handle(mux, "GET /ui/pains/{id}", a.requirePerson(http.HandlerFunc(a.painPage)))
-	a.handle(mux, "POST /ui/pains/{id}/state", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painState))))))
-	a.handle(mux, "POST /ui/pains/{id}/idea", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painIdea))))))
-	a.handle(mux, "POST /ui/pains/{id}/correct", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painCorrect))))))
+	a.handle(mux, "POST /ui/pains/{id}/state", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.painState)))))
+	a.handle(mux, "POST /ui/pains/{id}/idea", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.painIdea)))))
+	a.handle(mux, "POST /ui/pains/{id}/correct", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.painCorrect)))))
 }
 
 // taskFailKey maps the fail= value of a redirect to its message; anything else

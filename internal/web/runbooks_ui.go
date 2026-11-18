@@ -116,7 +116,7 @@ func (a *app) runbooksPage(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.SliceStable(v.Rows, func(i, j int) bool { return v.Rows[i].Name < v.Rows[j].Name })
 	v.Empty = len(v.Rows) == 0
-	if interactive(r) && project != "" && pa.CheckRunbookCreate(project, "") == nil {
+	if project != "" && pa.CheckRunbookCreate(project, "") == nil {
 		v.NewHref = runbookHrefIn(project, runbookNew)
 	}
 	a.renderBrowser(w, r, "runbooks", pageData{Title: l.msg("repo.tab.runbooks"), Project: project, RunbooksV: v})
@@ -164,7 +164,7 @@ func (a *app) runbookPage(w http.ResponseWriter, r *http.Request, remote, name s
 	if pa.HidesMachines(remote) {
 		v.Machine = ""
 	}
-	if interactive(r) && pa.CheckRunbook(*ref, store.ActEdit) == nil {
+	if pa.CheckRunbook(*ref, store.ActEdit) == nil {
 		v.EditHref = runbookHrefIn(remote, view.Name) + "?edit=1"
 	}
 	switch r.URL.Query().Get("done") {

@@ -59,7 +59,7 @@ func (a *app) welcomeCards(r *http.Request, l lang) []welcomeView {
 		if shown[org.ID] {
 			continue
 		}
-		owner := a.store.OrgRole(org.ID, me.ID) == store.OrgOwner
+		owner := store.OrgRoleHas(a.store.OrgRole(org.ID, me.ID), store.RightOrgManage)
 		v := welcomeView{OrgID: c.OrgID, OrgName: org.Name}
 		open := 0 // Schritte, die noch zu tun sind und die Karte halten
 		if pending != "" {

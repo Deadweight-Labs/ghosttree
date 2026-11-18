@@ -428,7 +428,7 @@ func TestProjectWritersMatchProjectRole(t *testing.T) {
 	st := accessFixture(t)
 	writers := st.ProjectWriters(roleProject)
 	for id, name := range map[string]string{"person:1": "robin", "person:2": "lena", "person:3": "mia", "person:4": "rex", "person:5": "gus", "person:6": "nora"} {
-		want := RoleRank(st.ProjectRole(roleProject, id).Role) >= 2
+		want := st.ProjectRole(roleProject, id).Has(RightProjectInside)
 		if writers[name] != want {
 			t.Errorf("%s: writers=%v, role says %v", name, writers[name], want)
 		}

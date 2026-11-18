@@ -29,14 +29,11 @@ type manageBar struct {
 	Project string
 }
 
-// leadBar baut die manageBar für res in project. Ohne interaktive Sitzung (ein
-// Token) gibt es weder Knopf noch Sperre: Formulare sind Sache der Websitzung.
-func (a *app) leadBar(r *http.Request, l lang, pa *store.ProjectAccess, project string, res store.Resource) manageBar {
+// leadBar baut die manageBar für act auf res in project: dieselbe Prüfung wie
+// beim Absenden des Formulars und wie über die API.
+func (a *app) leadBar(r *http.Request, l lang, pa *store.ProjectAccess, project string, res store.Resource, act store.Action) manageBar {
 	b := manageBar{Token: csrfOf(r), Project: project}
-	if !interactive(r) {
-		return b
-	}
-	err := pa.Check(project, res, store.ActEdit, store.Object{})
+	err := pa.Check(project, res, act, store.Object{})
 	if err == nil {
 		b.Can = true
 		return b
@@ -46,8 +43,8 @@ func (a *app) leadBar(r *http.Request, l lang, pa *store.ProjectAccess, project 
 }
 
 // leadProject liest das Projekt eines Formulars und prüft, dass der Betrachter es
-// kennt und res dort ab Lead darf. Es antwortet selbst, wenn nicht (false).
-func (a *app) leadProject(w http.ResponseWriter, r *http.Request, res store.Resource) (string, *store.ProjectAccess, bool) {
+// kennt und act auf res dort darf. Es antwortet selbst, wenn nicht (false).
+func (a *app) leadProject(w http.ResponseWriter, r *http.Request, res store.Resource, act store.Action) (string, *store.ProjectAccess, bool) {
 	remote := scope.NormalizeRemote(strings.TrimSpace(r.FormValue("project")))
 	pa := a.access(r)
 	if remote == "" {
@@ -59,7 +56,7 @@ func (a *app) leadProject(w http.ResponseWriter, r *http.Request, res store.Reso
 		http.NotFound(w, r)
 		return "", nil, false
 	}
-	if a.accessDenied(w, r, pa.Check(remote, res, store.ActEdit, store.Object{})) {
+	if a.accessDenied(w, r, pa.Check(remote, res, act, store.Object{})) {
 		return "", nil, false
 	}
 	return remote, pa, true

@@ -209,7 +209,7 @@ func (a *app) orgProjectVisibility(w http.ResponseWriter, r *http.Request) {
 // seine Organisation bestätigt.
 func (a *app) orgSourceConnect(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
-	if err == nil && a.store.OrgRole(o.ID, browserPrincipal(r).ID) != store.OrgOwner {
+	if err == nil && !a.access(r).CanOrg(o.ID, store.RightOrgProjects) {
 		err = store.ErrNotOrgOwner
 	}
 	if err != nil {

@@ -632,7 +632,7 @@ func (a *app) codeFolderPage(r *http.Request, pa *store.ProjectAccess, view *rep
 // guestOf says whether the viewer is only a guest of the project: they read what
 // was shared and tell no agent anything, so empty states show them no command.
 func guestOf(pa *store.ProjectAccess, remote string) bool {
-	return store.RoleRank(pa.Role(remote).Role) == store.RoleRank(store.RoleGuest)
+	return pa.Role(remote).GuestOnly()
 }
 
 // codeDescription is the box with the description of a path. Without one it

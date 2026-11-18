@@ -321,7 +321,7 @@ func (a *app) issuesPage(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		v.CanSave = !v.Guest && interactive(r)
+		v.CanSave = !v.Guest
 		if v.CanSave {
 			v.Scopes = a.saveScopes(l, r, pa, project)
 		}

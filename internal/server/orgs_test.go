@@ -131,10 +131,16 @@ func TestOrgMembersInvitationsAndPrivacy(t *testing.T) {
 	f.mustCall(t, 204, "DELETE", "/api/orgs/alpha/members/robin", f.robin, nil)
 	f.mustCall(t, 404, "GET", "/api/orgs/alpha/members", f.robin, nil)
 
-	// Widerruf.
+	// Widerruf: Mitgliederverwaltung ist ein Menschen-Recht (DEC-49), mit
+	// einem Token geht er so wenig wie das Einladen; in der Weboberfläche ja.
 	inv = f.invite(t, "person:2", "alpha", "ben@example.test", "")
 	id := int(inv["invitation"].(map[string]any)["id"].(float64))
-	f.mustCall(t, 204, "DELETE", "/api/orgs/alpha/invitations/"+itoa(id), f.anna, nil)
+	if code, out := f.call(t, "DELETE", "/api/orgs/alpha/invitations/"+itoa(id), f.anna, nil); code != 403 || out["code"] != "web_session_required" {
+		t.Fatalf("revoke with a token: %d %v", code, out)
+	}
+	if err := f.st.RevokeInvitation("person:2", 1, int64(id)); err != nil {
+		t.Fatal(err)
+	}
 	f.mustCall(t, 400, "POST", "/api/invitations/accept", f.ben, map[string]any{"code": inv["code"]})
 }
 
@@ -404,8 +410,35 @@ func TestHeldEntriesOverTheAPI(t *testing.T) {
 	if code, _ := f.call(t, "GET", "/api/projects/held?project="+remote, f.carl, nil); code != 404 {
 		t.Fatalf("an outsider counts held entries: %d", code)
 	}
+	// Releasing is a person's decision in the web: no token releases, not the
+	// outsider who planted it and not the owner's agent.
 	id := int64(k["id"].(float64))
-	if code, out := f.call(t, "POST", "/api/projects/held", f.robin, map[string]any{"kind": "knowledge", "id": id, "action": "release"}); code != 403 || out["code"] != "web_session_required" {
-		t.Fatalf("released over the API: %d %v", code, out)
+	for name, tok := range map[string]string{"outsider": f.carl, "owner": f.robin} {
+		if code, out := f.call(t, "POST", "/api/projects/held", tok, map[string]any{"kind": "knowledge", "id": id, "release": true}); code != 403 || out["code"] != "web_session_required" {
+			t.Fatalf("the %s's token released: %d %v", name, code, out)
+		}
 	}
+	resp = req(t, "GET", f.srv.URL+"/api/projects/held?project="+remote, f.robin, nil)
+	raw, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(raw), `"held":1`) {
+		t.Fatalf("a token released the entry: %s", raw)
+	}
+}
+
+// An admin's token renames no organization of others: overriding the owners
+// is a human right (instance.org_rename), as in the web.
+func TestAdminTokenDoesNotRenameAnOrganizationOfOthers(t *testing.T) {
+	f := newOrgFixture(t)
+	if _, err := f.st.CreateOrg("person:2", "Beta", "beta"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := f.call(t, "PATCH", "/api/orgs/beta", f.robin, map[string]any{"name": "Taken", "slug": "taken"}); code < 400 {
+		t.Fatalf("an admin token renamed an organization of others: %d", code)
+	}
+	if o, err := f.st.OrgByRef("beta"); err != nil || o.Name != "Beta" {
+		t.Fatalf("organization after the refusal: %+v %v", o, err)
+	}
+	// The owner's own token still renames it.
+	f.mustCall(t, 200, "PATCH", "/api/orgs/beta", f.anna, map[string]any{"name": "Beta Team"})
 }

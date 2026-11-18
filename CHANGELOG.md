@@ -161,6 +161,22 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Added
 
+- Releases carry a second signature, a minisign signature over `checksums.txt`
+  (`checksums.txt.minisig`; the trusted comment names the tag), next to the
+  Sigstore bundle. A public installer, `deploy/downloads/ghosttree/install.sh`
+  (`curl -fsSL https://downloads.deadweightlabs.com/ghosttree/install.sh | sh`),
+  finds the newest stable release itself, checks the signature (the `minisign`
+  program, or OpenSSL 3 where that is not installed) and then the SHA-256 of the
+  archive, and installs `ctx` or goes on to `ctx join`. A release that fails
+  either check is not installed. `--version v0.1.0-rc.3` installs a release
+  candidate. It is tested in fresh Debian, Ubuntu and Fedora containers without
+  a terminal, with a tampered archive, tampered checksums, a foreign key, a
+  missing signature and a signed list of another release. A plain-http address
+  is only accepted for this machine (`http://localhost:1@example.org` is not
+  this machine), wget is followed redirect by redirect and never from https to
+  http (BusyBox wget and Wget2 are refused), and the release job reads the signing key from
+  the environment `release`, in the one step before goreleaser.
+
 - Every person chooses German or English: in the profile and with a DE | EN
   switcher in the account menu and on the sign-in and invitation pages. The
   choice is stored on the account and holds on every device. Without it, the
@@ -915,6 +931,19 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   lock for about 3 ms.
 
 ### Changed
+
+- Every permission check asks one named right from a catalog (REQ-722). The
+  browser, the CLI and MCP now ask the same right for the same action: a
+  session from a pasted token may in the browser what its token may over the
+  API, members create packages and features in the browser too, and the
+  rights only a person uses (roles and members, AI keys and budget and the
+  retention of workflow runs, account security, machine sharing, sharing a
+  project with the organization, founding an organization, controlling
+  agents, decisions a person has to take) need a sign-in everywhere. Revoking
+  an invitation therefore needs a sign-in, and so does an instance admin
+  renaming an organization of others (in the browser and over the API,
+  without changing its address). Entries held after a project moved are read
+  and released only by a person in the browser.
 
 - The inbox has two sections, what waits for you and what was said to you.
   A direct message stands in the second beside the mentions in rooms, and what

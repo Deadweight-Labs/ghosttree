@@ -35,6 +35,32 @@ its own; limit it at the reverse proxy. Keep one ctx version per directory.
 Cautious readers can fetch the script, read it, and
 run it afterwards.
 
+## Installing from a release, and how it is checked
+
+The public installer is for a machine that has no ghosttree server to ask:
+
+```sh
+curl -fsSL https://downloads.deadweightlabs.com/ghosttree/install.sh | sh
+```
+
+It finds the newest stable release on GitHub (`--version v0.1.0-rc.3` for
+another one), downloads `checksums.txt` and `checksums.txt.minisig`, and stops
+unless the signature is made by the Ghosttree release key and names exactly that
+release. Only then does it download the archive for the machine, compare its
+SHA-256 with `checksums.txt`, and install `ctx` to `~/.local/bin`. The signature
+is checked by the `minisign` program, or, when that is not installed, by OpenSSL
+3 (Debian 12, Ubuntu 22.04, Fedora 36 and newer ship it); with neither, the
+installer stops and names the package to install. There is no switch to skip the
+check. `--connect <url>` goes on to `ctx join`; the options, also for a run
+without a terminal, are listed by `... | sh -s -- --help`. The key, how it is
+kept and how it is rotated are described in [RELEASING.md](../RELEASING.md).
+
+What the check does not give you, also listed there: it cannot tell the newest
+release from an older genuine one (the lookup is unsigned; pin a release with
+`--version` when that matters), it refuses releases from before the signature,
+macOS needs `brew install minisign` (the system's LibreSSL cannot check the
+signature), and downloads need curl or GNU Wget 1.x (BusyBox wget and Wget2 are refused).
+
 ## Interface language
 
 Every person picks German or English in their profile, or with the switcher

@@ -816,7 +816,7 @@ func (a *app) setupFor(r *http.Request, who viewer, hasContent bool, now time.Ti
 	if !forced && (hasContent || who.kind != viewerOwner) {
 		return nil, nil
 	}
-	view := &setupView{State: "waiting", Title: l.msg("setup.title_first"), Command: a.loginCommand(r), Code: interactive(r)}
+	view := &setupView{State: "waiting", Title: l.msg("setup.title_first"), Command: a.loginCommand(r), Code: fromSignIn(r)}
 	if forced {
 		view.Title = l.msg("setup.title")
 	}

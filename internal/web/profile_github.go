@@ -32,7 +32,7 @@ type profileGitHub struct {
 // false when there is nothing to show (no link, and no way to make one).
 func (a *app) githubBlock(r *http.Request) (profileGitHub, bool) {
 	me := browserPrincipal(r).ID
-	may := interactive(r) && !a.store.NameLocked(me)
+	may := browserPrincipal(r).May(store.RightAccountSecurity) && !a.store.NameLocked(me)
 	if link, ok := a.store.AccountGitHub(me); ok {
 		return profileGitHub{Linked: true, Login: link.Login, Href: "https://github.com/" + url.PathEscape(link.Login), CanUnlink: may}, true
 	}

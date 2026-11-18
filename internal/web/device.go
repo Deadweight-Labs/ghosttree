@@ -266,7 +266,7 @@ func (a *app) tokensRevokeUnused(w http.ResponseWriter, r *http.Request) {
 		}
 		ids = append(ids, t.ID)
 	}
-	if foreign && !interactive(r) {
+	if foreign && !browserPrincipal(r).May(store.RightAccountSecurity) {
 		a.notInteractive(w, r)
 		return
 	}
@@ -301,7 +301,7 @@ func (a *app) tokenRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	// Fremde Tokens widerruft ein Administrator nur aus einer interaktiven
 	// Sitzung; eigene darf jede Sitzung widerrufen, das nimmt nur Macht.
-	if info.AccountID != principal.ID && !interactive(r) {
+	if info.AccountID != principal.ID && !principal.May(store.RightAccountSecurity) {
 		a.notInteractive(w, r)
 		return
 	}

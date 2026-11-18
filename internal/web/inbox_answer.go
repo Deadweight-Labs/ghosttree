@@ -12,7 +12,7 @@ import (
 )
 
 func (a *app) registerInboxAnswer(mux *http.ServeMux) {
-	a.handle(mux, "POST /ui/inbox/answer", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxAnswer))))))
+	a.handle(mux, "POST /ui/inbox/answer", a.requirePerson(a.requireSignIn(store.RightDecideHuman, limitBody(a.requireCSRF(http.HandlerFunc(a.inboxAnswer))))))
 }
 
 // inboxAnswer beantwortet einen Eintrag des Posteingangs mit einem der

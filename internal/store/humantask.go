@@ -152,7 +152,7 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 	var assignee int64
 	if name := strings.TrimSpace(in.Assignee); name != "" {
 		id, ok := st.personByName(name)
-		if !ok || RoleRank(st.ProjectRole(project, principalOfID(id)).Role) < 1 {
+		if !ok || !st.ProjectRole(project, principalOfID(id)).Any() {
 			return humantask.Task{}, requestdomain.NewRuleError("assignee_not_member", "the assignee has no role in this project",
 				"assign to a member of the project or leave it open", nil)
 		}
@@ -162,7 +162,7 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 	} else if mentioned := a.mentionedAssignee(project, in, actor); mentioned != 0 {
 		// No recipient named, but the text addresses a member with @name.
 		assignee = mentioned
-	} else if a.valid && a.account != 0 && RoleRank(st.ProjectRole(project, principalOfID(a.account)).Role) >= 1 {
+	} else if a.valid && a.account != 0 && st.ProjectRole(project, principalOfID(a.account)).Any() {
 		// No recipient named: it is for the human this session belongs to.
 		assignee = a.account
 	}

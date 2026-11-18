@@ -49,7 +49,7 @@ func (a *ProjectAccess) SeesAllBranches(project string) bool {
 	if !a.st.AccessEnforced() || a.IsAdmin() {
 		return true
 	}
-	return RoleRank(a.Role(project).Role) >= RoleRank(RoleMember)
+	return a.Can(project, RightProjectInside)
 }
 
 // DefaultBranch ist der Standard-Branch des Projekts nach PickDefaultBranch.
@@ -123,14 +123,14 @@ func (a *ProjectAccess) AnchorView(project string, g *gitanchor.Anchor) *gitanch
 // Sessions (guestView). Ohne Projekt gibt es keinen Gastrang; ohne Durchsetzung
 // sieht jeder alles.
 func (a *ProjectAccess) HidesMachines(project string) bool {
-	return project != "" && a.st.AccessEnforced() && RoleRank(a.Role(project).Role) < 2
+	return project != "" && a.st.AccessEnforced() && !a.Can(project, RightProjectInside)
 }
 
 // IsProjectGuest: der Betrachter ist Gast des Projekts, nicht Fremder ohne Rolle.
 // Für Filter, die ein Gast nicht bekommt; Fremde und Maschinenfreigaben ohne
 // Projektrolle bleiben davon unberührt.
 func (a *ProjectAccess) IsProjectGuest(project string) bool {
-	return project != "" && a.st.AccessEnforced() && RoleRank(a.Role(project).Role) == 1
+	return project != "" && a.st.AccessEnforced() && a.Role(project).GuestOnly()
 }
 
 // seesKnowledgeNumbers: globales Wissen hat kein Projekt, das über die Nummer

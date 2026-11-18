@@ -240,12 +240,12 @@ func (a *app) registerWorkshopPages(mux *http.ServeMux) {
 		"/ui/ideas/{id}/concept":     a.workshopConceptSave,
 		"/ui/ideas/{id}/decisions":   a.workshopDecisionOpen,
 	} {
-		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+		a.handle(mux, "POST "+path, a.requirePerson(limitBody(a.requireCSRF(h))))
 	}
 	// Images: the form carries a file, so its limit is that of an image.
-	a.handle(mux, "POST /ui/ideas/{id}/attach", a.requirePerson(a.requireInteractive(limitBodyN(maxUploadForm, a.requireCSRFMultipart(http.HandlerFunc(a.ideaAttach))))))
-	a.handle(mux, "POST /ui/requests/{id}/attach", a.requirePerson(a.requireInteractive(limitBodyN(maxUploadForm, a.requireCSRFMultipart(http.HandlerFunc(a.requestAttach))))))
-	a.handle(mux, "POST /ui/pains/{id}/attach", a.requirePerson(a.requireInteractive(limitBodyN(maxUploadForm, a.requireCSRFMultipart(http.HandlerFunc(a.painAttach))))))
+	a.handle(mux, "POST /ui/ideas/{id}/attach", a.requirePerson(limitBodyN(maxUploadForm, a.requireCSRFMultipart(http.HandlerFunc(a.ideaAttach)))))
+	a.handle(mux, "POST /ui/requests/{id}/attach", a.requirePerson(limitBodyN(maxUploadForm, a.requireCSRFMultipart(http.HandlerFunc(a.requestAttach)))))
+	a.handle(mux, "POST /ui/pains/{id}/attach", a.requirePerson(limitBodyN(maxUploadForm, a.requireCSRFMultipart(http.HandlerFunc(a.painAttach)))))
 	a.handle(mux, "GET /ui/attachments/{id}", a.requirePerson(http.HandlerFunc(a.attachmentImage)))
 }
 
@@ -261,9 +261,11 @@ type datedItem struct {
 func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, ws store.IdeaWorkshop, v *ideaPageView) {
 	i := ws.Idea
 	phase := idea.EffectivePhase(i.State, i.Phase)
-	human := interactive(r)
-	canWork := human && pa.CheckIdea(i, store.ActWork) == nil
-	canEdit := human && pa.CheckIdea(i, store.ActEdit) == nil
+	// Approving an idea is a human right (DEC-49): the store refuses it to a
+	// token, so the page offers it only to a sign-in.
+	human := browserPrincipal(r).May(store.RightIdeaApprove)
+	canWork := pa.CheckIdea(i, store.ActWork) == nil
+	canEdit := pa.CheckIdea(i, store.ActEdit) == nil
 	// Writing a text or opening a question needs the right to work on the idea; once the concept is approved, the right to edit it.
 	canWrite := canWork && phase != idea.PhaseDismissed && phase != idea.PhaseDone && (canEdit || (phase != idea.PhaseApproved && phase != idea.PhaseBuilding))
 	empty := phase == idea.PhaseRaw && ws.Summary == nil && ws.Concept == nil && len(ws.Decisions) == 0 && len(ws.Raw) == 0
@@ -335,7 +337,7 @@ func (a *app) attachWorkshop(l lang, r *http.Request, pa *store.ProjectAccess, w
 		}
 	}
 	for _, d := range ws.Decisions {
-		wd := decisionViewOf(l, r, d, now, canWork, canEdit)
+		wd := decisionViewOf(l, r, d, now, canWork, canEdit && (d.Way != idea.WayHuman || browserPrincipal(r).May(store.RightDecideHuman)))
 		if wd.Open {
 			w.OpenCount++
 		}
@@ -780,6 +782,9 @@ func (a *app) workshopClose(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !a.mayDecide(w, r, d) {
+		return
+	}
 	back := decisionBack(d)
 	reason, fits1 := formLine(r, "reason", maxFieldChars)
 	answer, fits2 := formLine(r, "answer", maxFieldChars)
@@ -806,6 +811,9 @@ func (a *app) workshopClose(w http.ResponseWriter, r *http.Request) {
 func (a *app) workshopReopen(w http.ResponseWriter, r *http.Request) {
 	d, ok := a.workshopDecisionOf(w, r)
 	if !ok {
+		return
+	}
+	if !a.mayDecide(w, r, d) {
 		return
 	}
 	back := decisionBack(d)

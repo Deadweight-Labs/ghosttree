@@ -247,7 +247,7 @@ func expiresIn(l lang, stamp string) string {
 }
 
 func roleLabel(l lang, role string) string {
-	if role == store.RoleGuest {
+	if (store.RoleInfo{Role: role}).GuestOnly() {
 		return l.msg("join.role_guest")
 	}
 	return l.msg("join.role_member")
@@ -270,7 +270,7 @@ func (a *app) joinSession(r *http.Request) (browserSession, bool) {
 func (a *app) joinViewFor(r *http.Request, l lang, code string, preview store.InvitePreview) joinView {
 	view := joinView{Inviter: preview.Inviter, Target: preview.Project, Org: preview.Org, RoleText: roleLabel(l, preview.Role),
 		ExpiresAt: preview.ExpiresAt, ExpiresIn: expiresIn(l, preview.ExpiresAt), Short: shortName(preview.Project),
-		Guest: preview.Role == store.RoleGuest, Project: firstNonEmpty(shortName(preview.Project), l.msg("join.shares.project")),
+		Guest: (store.RoleInfo{Role: preview.Role}).GuestOnly(), Project: firstNonEmpty(shortName(preview.Project), l.msg("join.shares.project")),
 		Code: code, OIDC: a.oidc != nil, Provider: a.oidcName, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context()),
 		Mail: a.oidc == nil && a.mailAvailable()}
 	view.OrgMark = initialOf(firstNonEmpty(preview.Org, view.Short))
@@ -349,7 +349,7 @@ func (a *app) joinAlreadyMember(l lang, w http.ResponseWriter, p store.InvitePre
 }
 
 // joinAccept löst die Einladung für das angemeldete Konto ein. Aufgerufen wird
-// es hinter requirePerson, requireInteractive und requireCSRF.
+// es hinter requirePerson, requireSignIn(account.security) und requireCSRF.
 func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	if !a.joinGate(w, r) {
@@ -412,7 +412,7 @@ func (a *app) joinSignOut(w http.ResponseWriter, r *http.Request) {
 // them. Empty for everyone else. It has to be read before the invitation is used
 // up, as a used one has no preview any more.
 func (a *app) joinLanding(code string) string {
-	if p, ok := a.joinPreview(code); ok && p.Role == store.RoleGuest && p.Remote != "" {
+	if p, ok := a.joinPreview(code); ok && (store.RoleInfo{Role: p.Role}).GuestOnly() && p.Remote != "" {
 		return repoHref(p.Remote)
 	}
 	return ""
@@ -438,7 +438,7 @@ func (a *app) guestLanding(account string) string {
 		for _, p := range ps {
 			switch role := a.store.ProjectRole(p.Remote, account).Role; {
 			case role == "":
-			case role != store.RoleGuest:
+			case !(store.RoleInfo{Role: role}).GuestOnly():
 				// Invited to one project as a member: a person who works there pairs a computer.
 				return ""
 			default:

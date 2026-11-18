@@ -157,7 +157,7 @@ func canManageTx(q rowQuerier, m machineRow, who machineActor) bool {
 		return true
 	}
 	if m.org > 0 {
-		return orgMemberRoleTx(q, m.org, who.id) == OrgOwner
+		return OrgRoleHas(orgMemberRoleTx(q, m.org, who.id), RightOrgMachines)
 	}
 	return m.account == who.id
 }
@@ -428,7 +428,7 @@ func (s *Store) setMachineOwnerOrg(who machineActor, via, machine, orgRef string
 	if err != nil {
 		return err
 	}
-	if !who.operator && orgMemberRoleTx(tx, o.ID, who.id) != OrgOwner {
+	if !who.operator && !OrgRoleHas(orgMemberRoleTx(tx, o.ID, who.id), RightOrgMachines) {
 		return ErrOrgNotFound
 	}
 	if _, err := tx.Exec(`UPDATE machines SET owner_org_id=? WHERE hostname=?`, o.ID, m.host); err != nil {
