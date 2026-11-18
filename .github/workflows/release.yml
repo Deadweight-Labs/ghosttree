@@ -43,6 +43,13 @@ jobs:
           else
             git branch -r --contains HEAD | sed 's/^[* ]*//' | grep -Fxq "origin/main"
           fi
+      # The key is also published in SECURITY.md, a second place next to install.sh
+      # to compare it with: a release whose key nobody can check there stops here.
+      - name: Check that SECURITY.md carries the release key
+        run: |
+          set -eu
+          pub=$(sed -n 2p deploy/downloads/ghosttree/minisign.pub)
+          grep -Fq "\`$pub\`" SECURITY.md || { echo "SECURITY.md does not carry the release key $pub" >&2; exit 1; }
       # The scripts of the web interface come first: a second, and a script that
       # loops is stopped by the limits.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -94,14 +101,16 @@ jobs:
       - name: Write the minisign key
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
           set -eu
           test -n "$MINISIGN_SECRET_KEY" || { echo "secret MINISIGN_SECRET_KEY is not set" >&2; exit 1; }
+          test -n "$MINISIGN_PASSWORD" || { echo "secret MINISIGN_PASSWORD is not set: the release key has a password" >&2; exit 1; }
           umask 077
           key="$RUNNER_TEMP/minisign.key"
           printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
           printf 'probe\n' > "$RUNNER_TEMP/probe"
-          minisign -S -s "$key" -m "$RUNNER_TEMP/probe" -x "$RUNNER_TEMP/probe.minisig" -t probe
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$key" -m "$RUNNER_TEMP/probe" -x "$RUNNER_TEMP/probe.minisig" -t probe
           minisign -V -p deploy/downloads/ghosttree/minisign.pub -m "$RUNNER_TEMP/probe" -x "$RUNNER_TEMP/probe.minisig"
           rm -f "$RUNNER_TEMP/probe" "$RUNNER_TEMP/probe.minisig"
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
@@ -112,6 +121,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MINISIGN_KEY_FILE: ${{ runner.temp }}/minisign.key
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
       - name: Remove the minisign key
         if: always()
         run: rm -f "$RUNNER_TEMP/minisign.key"
@@ -122,3 +132,34 @@ jobs:
           set -eu
           minisign -V -p deploy/downloads/ghosttree/minisign.pub -m dist/checksums.txt -x dist/checksums.txt.minisig
           grep -Fq "ghosttree $TAG" dist/checksums.txt.minisig
+      # goreleaser left the release as a draft (.goreleaser.yaml). The files that
+      # were really uploaded are fetched back and checked: signature against the
+      # committed key, the tag in the signed comment, every archive against the
+      # signed list. A failure leaves a draft to delete, not a release that people
+      # can install.
+      - name: Check the uploaded files of the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          up="$RUNNER_TEMP/uploaded"
+          mkdir "$up"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$up" \
+            --pattern checksums.txt --pattern checksums.txt.minisig --pattern 'ghosttree_*.tar.gz'
+          minisign -V -p deploy/downloads/ghosttree/minisign.pub -m "$up/checksums.txt" -x "$up/checksums.txt.minisig"
+          grep -Fq "ghosttree $TAG" "$up/checksums.txt.minisig"
+          cmp "$up/checksums.txt" dist/checksums.txt
+          archives=0
+          for f in "$up"/ghosttree_*.tar.gz; do
+            grep -Fq "  $(basename "$f")" "$up/checksums.txt"
+            archives=$((archives + 1))
+          done
+          test "$archives" -ge 4
+          (cd "$up" && sha256sum -c checksums.txt --ignore-missing)
+          test "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

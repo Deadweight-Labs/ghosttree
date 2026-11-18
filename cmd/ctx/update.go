@@ -14,15 +14,20 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/releasekey"
 	"github.com/Deadweight-Labs/ghosttree/internal/selfupdate"
 	ver "github.com/Deadweight-Labs/ghosttree/internal/version"
 )
 
-const updateUsage = `usage: ctx update [--channel stable|dev] [--source] [--check] [--force]
+const updateUsage = `usage: ctx update [--channel stable|dev] [--source] [--check] [--force] [--trust-server]
 
-  stable  newest signed release (Sigstore signature and sha256 checked; needs cosign)
-  dev     the build the connected server offers under /dist/ (sha256 from the server)
+  stable  newest signed release (the minisign signature of checksums.txt is checked
+          against the release key built into ctx, then the sha256 of the archive)
+  dev     the build the connected server offers under /dist/. It is installed only if
+          the release key signed it; a build without that signature is checked
+          against the server's own checksums.txt alone and needs --trust-server
   --source  build the newest origin/dev commit locally with go instead
+  --trust-server  dev channel: accept a build that only the server vouches for
   --pre     stable channel only: also install release candidates (v0.1.0-rc.3);
             signature and checksum are checked exactly as for a final release
   --check   only show what would happen
@@ -38,7 +43,7 @@ var (
 	updateGOOS      = runtime.GOOS
 	updateGOARCH    = runtime.GOARCH
 	updateVerifier  = func() selfupdate.Verifier {
-		return selfupdate.CosignVerifier(updateRepo, os.Getenv("GHOSTTREE_COSIGN"))
+		return selfupdate.MinisignVerifier(releasekey.Public)
 	}
 	updateTargetPath = func() (string, error) {
 		exe, err := os.Executable()
@@ -64,6 +69,7 @@ func cmdUpdate(args []string, stdout io.Writer) int {
 	pre := fs.Bool("pre", false, "stable channel: also install release candidates")
 	check := fs.Bool("check", false, "only show what would happen")
 	force := fs.Bool("force", false, "reinstall the same version or go back to an older one")
+	trustServer := fs.Bool("trust-server", false, "dev channel: install a server build that carries no release signature")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		fmt.Fprintln(stdout, updateUsage)
 		return 2
@@ -82,6 +88,10 @@ func cmdUpdate(args []string, stdout io.Writer) int {
 	}
 	if *source && ch != config.ChannelDev {
 		fmt.Fprintln(stdout, "--source builds origin/dev and cannot be combined with the stable channel")
+		return 2
+	}
+	if *trustServer && (*source || ch != config.ChannelDev) {
+		fmt.Fprintln(stdout, "--trust-server is for the dev channel, which fetches the build from your server")
 		return 2
 	}
 	if *pre && (*source || ch != config.ChannelStable) {
@@ -135,12 +145,17 @@ func cmdUpdate(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, "result      update available; --check changed nothing")
 		return 0
 	}
-	newPath, err := src.Fetch(ctx, cand, filepath.Dir(target), updateVerifier())
+	fetched, err := src.Fetch(ctx, cand, filepath.Dir(target), updateVerifier(), *trustServer)
 	if err != nil {
 		fmt.Fprintf(stdout, "update aborted, nothing changed: %v\n", err)
 		return 1
 	}
-	return finishUpdate(stdout, target, newPath, cand.Version)
+	if fetched.Signed {
+		fmt.Fprintf(stdout, "signature   ghosttree v%s, signed with the release key\n", fetched.Version)
+	} else {
+		fmt.Fprintf(stdout, "trust       no release signature: only the server %s vouches for this binary\n", cand.Where)
+	}
+	return finishUpdate(stdout, target, fetched.Path, fetched.Version)
 }
 
 // version0 is the version of the running binary.

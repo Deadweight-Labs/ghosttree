@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -17,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/minisign"
 )
 
 const goos, goarch = "linux", "amd64"
@@ -43,17 +46,36 @@ type fakeRelease struct {
 	srv        *httptest.Server
 	binary     string
 	listedSum  string // checksum to put in checksums.txt ("" = the real one)
-	withBundle bool
+	withSig    bool
+	comment    string // trusted comment of the signature ("" = ghosttree v1.2.0)
+	foreignKey bool   // sign with a key other than pk
 	prefix     string // archive name prefix ("" = ctx)
 	hits       map[string]int
+	pk         minisign.PublicKey
+}
+
+// verifier checks against the release key of this fake.
+func (f *fakeRelease) verifier() Verifier {
+	return MinisignVerifier(func() (minisign.PublicKey, error) { return f.pk, nil })
 }
 
 // newRelease serves a GitHub release API plus its assets for tag v1.2.0.
 func newRelease(t *testing.T, mod func(*fakeRelease)) *fakeRelease {
 	t.Helper()
-	f := &fakeRelease{binary: "#!/bin/sh\necho new\n", withBundle: true, hits: map[string]int{}}
+	f := &fakeRelease{binary: "#!/bin/sh\necho new\n", withSig: true, hits: map[string]int{}}
 	if mod != nil {
 		mod(f)
+	}
+	pk, priv, err := minisign.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.pk = pk
+	signer, signerPriv := pk, priv
+	if f.foreignKey {
+		if signer, signerPriv, err = minisign.GenerateKey(rand.Reader); err != nil {
+			t.Fatal(err)
+		}
 	}
 	prefix := f.prefix
 	if prefix == "" {
@@ -61,12 +83,22 @@ func newRelease(t *testing.T, mod func(*fakeRelease)) *fakeRelease {
 	}
 	archiveName := fmt.Sprintf("%s_1.2.0_%s_%s.tar.gz", prefix, goos, goarch)
 	archive := tarball(t, f.binary)
+	sum := f.listedSum
+	if sum == "" {
+		sum = sha(archive)
+	}
+	sums := []byte(fmt.Sprintf("%s  %s\n", sum, archiveName))
+	comment := f.comment
+	if comment == "" {
+		comment = "ghosttree v1.2.0"
+	}
+	sig := minisign.Sign(signer, signerPriv, sums, comment)
 	mux := http.NewServeMux()
 	var base string
 	mux.HandleFunc("/repos/Deadweight-Labs/ghosttree/releases", func(w http.ResponseWriter, r *http.Request) {
 		assets := fmt.Sprintf(`{"name":%q,"browser_download_url":"%s/a/%s"},{"name":"checksums.txt","browser_download_url":"%s/a/checksums.txt"}`, archiveName, base, archiveName, base)
-		if f.withBundle {
-			assets += fmt.Sprintf(`,{"name":"checksums.txt.sigstore.json","browser_download_url":"%s/a/checksums.txt.sigstore.json"}`, base)
+		if f.withSig {
+			assets += fmt.Sprintf(`,{"name":"checksums.txt.minisig","browser_download_url":"%s/a/checksums.txt.minisig"}`, base)
 		}
 		fmt.Fprintf(w, `[{"tag_name":"v1.3.0-rc.1","prerelease":true,"assets":[]},{"tag_name":"v1.1.0","assets":[]},{"tag_name":"v1.2.0","assets":[%s]},{"tag_name":"v9.9.9","draft":true,"assets":[]}]`, assets)
 	})
@@ -77,13 +109,9 @@ func newRelease(t *testing.T, mod func(*fakeRelease)) *fakeRelease {
 		case archiveName:
 			w.Write(archive)
 		case "checksums.txt":
-			sum := f.listedSum
-			if sum == "" {
-				sum = sha(archive)
-			}
-			fmt.Fprintf(w, "%s  %s\n", sum, archiveName)
-		case "checksums.txt.sigstore.json":
-			w.Write([]byte(`{"bundle":true}`))
+			w.Write(sums)
+		case "checksums.txt.minisig":
+			w.Write(sig)
 		default:
 			http.NotFound(w, r)
 		}
@@ -114,43 +142,37 @@ func entries(t *testing.T, dir string) string {
 	return strings.Join(names, ",")
 }
 
-func okVerifier(calls *[]string) Verifier {
-	return func(_ context.Context, sums, bundle, tag string) error {
-		b, err := os.ReadFile(bundle)
-		if err != nil || !strings.Contains(string(b), "bundle") {
-			return errors.New("bundle not handed over")
-		}
-		*calls = append(*calls, tag)
-		return nil
-	}
-}
-
-func TestStableInstallsAfterSignatureAndChecksum(t *testing.T) {
-	f := newRelease(t, nil)
-	dir, target := installedDir(t)
+func latest(t *testing.T, f *fakeRelease) (Source, Candidate) {
+	t.Helper()
 	src := Source{HTTP: f.srv.Client(), GOOS: goos, GOARCH: goarch}
 	cand, err := src.LatestStable(context.Background(), f.srv.URL, "Deadweight-Labs/ghosttree")
 	if err != nil {
 		t.Fatal(err)
 	}
+	return src, cand
+}
+
+func TestStableInstallsAfterSignatureAndChecksum(t *testing.T) {
+	f := newRelease(t, nil)
+	dir, target := installedDir(t)
+	src, cand := latest(t, f)
 	if cand.Version != "1.2.0" || cand.Tag != "v1.2.0" {
 		t.Fatalf("picked %+v: want the newest non-draft non-prerelease with assets", cand)
 	}
-	var calls []string
-	path, err := src.Fetch(context.Background(), cand, dir, okVerifier(&calls))
+	got, err := src.Fetch(context.Background(), cand, dir, f.verifier(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 1 || calls[0] != "v1.2.0" {
-		t.Fatalf("verifier calls %v", calls)
+	if !got.Signed || got.Version != "1.2.0" {
+		t.Fatalf("fetched %+v: the version has to come from the signed comment", got)
 	}
-	backup, err := Install(target, path, "0.1.0-dev+abc")
+	backup, err := Install(target, got.Path, "0.1.0-dev+abc")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _ := os.ReadFile(target)
-	if string(got) != f.binary {
-		t.Fatalf("target = %q", got)
+	b, _ := os.ReadFile(target)
+	if string(b) != f.binary {
+		t.Fatalf("target = %q", b)
 	}
 	if fi, _ := os.Stat(target); fi.Mode().Perm() != 0o755 {
 		t.Fatalf("mode %v", fi.Mode())
@@ -166,10 +188,8 @@ func TestStableInstallsAfterSignatureAndChecksum(t *testing.T) {
 func TestStableWrongChecksumChangesNothing(t *testing.T) {
 	f := newRelease(t, func(f *fakeRelease) { f.listedSum = strings.Repeat("a", 64) })
 	dir, target := installedDir(t)
-	src := Source{HTTP: f.srv.Client(), GOOS: goos, GOARCH: goarch}
-	cand, _ := src.LatestStable(context.Background(), f.srv.URL, "Deadweight-Labs/ghosttree")
-	var calls []string
-	_, err := src.Fetch(context.Background(), cand, dir, okVerifier(&calls))
+	src, cand := latest(t, f)
+	_, err := src.Fetch(context.Background(), cand, dir, f.verifier(), false)
 	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("err = %v", err)
 	}
@@ -182,7 +202,7 @@ func TestStableWrongChecksumChangesNothing(t *testing.T) {
 }
 
 func TestStableMissingSignatureIsRefused(t *testing.T) {
-	f := newRelease(t, func(f *fakeRelease) { f.withBundle = false })
+	f := newRelease(t, func(f *fakeRelease) { f.withSig = false })
 	src := Source{HTTP: f.srv.Client(), GOOS: goos, GOARCH: goarch}
 	_, err := src.LatestStable(context.Background(), f.srv.URL, "Deadweight-Labs/ghosttree")
 	if err == nil || !strings.Contains(err.Error(), "unsigned") {
@@ -193,86 +213,97 @@ func TestStableMissingSignatureIsRefused(t *testing.T) {
 	}
 }
 
-func TestStableFailedSignatureCheckStopsBeforeTheArchive(t *testing.T) {
-	f := newRelease(t, nil)
-	dir, _ := installedDir(t)
-	src := Source{HTTP: f.srv.Client(), GOOS: goos, GOARCH: goarch}
-	cand, _ := src.LatestStable(context.Background(), f.srv.URL, "Deadweight-Labs/ghosttree")
-	bad := func(context.Context, string, string, string) error { return errors.New("wrong identity") }
-	_, err := src.Fetch(context.Background(), cand, dir, bad)
-	if err == nil || !strings.Contains(err.Error(), "signature check failed") {
-		t.Fatalf("err = %v", err)
+// A signature that does not come from the release key, a signed list of another
+// release, a missing verifier and a build without the key all stop before the
+// archive is downloaded, and --trust-server (meant for servers) does not turn a
+// release into a trusted one.
+func TestStableSignatureProblemsStopBeforeTheArchive(t *testing.T) {
+	noKey := MinisignVerifier(func() (minisign.PublicKey, error) { return minisign.PublicKey{}, errors.New("no key yet") })
+	cases := map[string]struct {
+		mod    func(*fakeRelease)
+		verify func(*fakeRelease) Verifier
+		want   string
+	}{
+		"another key":           {func(f *fakeRelease) { f.foreignKey = true }, (*fakeRelease).verifier, "signature check failed"},
+		"list of other release": {func(f *fakeRelease) { f.comment = "ghosttree v1.1.0" }, (*fakeRelease).verifier, "belongs to"},
+		"no trusted label":      {func(f *fakeRelease) { f.comment = "v1.2.0" }, (*fakeRelease).verifier, "belongs to"},
+		"no verifier":           {nil, func(*fakeRelease) Verifier { return nil }, "no signature verifier"},
+		"build without a key":   {nil, func(*fakeRelease) Verifier { return noKey }, "cannot check"},
 	}
-	if f.hits[cand.Archive] != 0 || entries(t, dir) != "ctx" {
-		t.Fatalf("archive fetched (%d) or directory changed: %s", f.hits[cand.Archive], entries(t, dir))
-	}
-	if _, err := src.Fetch(context.Background(), cand, dir, nil); err == nil {
-		t.Fatal("no verifier must mean no install")
-	}
-}
-
-func TestCosignVerifierWithoutCosignRefuses(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	err := CosignVerifier("Deadweight-Labs/ghosttree", "")(context.Background(), "a", "b", "v1.2.0")
-	if err == nil || !strings.Contains(err.Error(), "cosign not found") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestCosignVerifierPinsIdentityAndTag(t *testing.T) {
-	dir := t.TempDir()
-	argsFile := filepath.Join(dir, "args")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\n"
-	cosign := filepath.Join(dir, "cosign")
-	os.WriteFile(cosign, []byte(script), 0o755)
-	if err := CosignVerifier("Deadweight-Labs/ghosttree", cosign)(context.Background(), "sums", "bundle", "v1.2.0"); err != nil {
-		t.Fatal(err)
-	}
-	b, _ := os.ReadFile(argsFile)
-	args := string(b)
-	for _, want := range []string{"verify-blob", "--bundle", "bundle", "--certificate-oidc-issuer", OIDCIssuer, "release\\.yml@refs/tags/v1\\.2\\.0$", "sums"} {
-		if !strings.Contains(args, want) {
-			t.Errorf("cosign args lack %q:\n%s", want, args)
+	for name, c := range cases {
+		for _, trust := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s trust=%v", name, trust), func(t *testing.T) {
+				f := newRelease(t, c.mod)
+				dir, _ := installedDir(t)
+				src, cand := latest(t, f)
+				_, err := src.Fetch(context.Background(), cand, dir, c.verify(f), trust)
+				if err == nil || !strings.Contains(err.Error(), c.want) {
+					t.Fatalf("err = %v, want %q", err, c.want)
+				}
+				if f.hits[cand.Archive] != 0 || entries(t, dir) != "ctx" {
+					t.Fatalf("archive fetched (%d) or directory changed: %s", f.hits[cand.Archive], entries(t, dir))
+				}
+			})
 		}
 	}
-	fail := filepath.Join(dir, "cosignfail")
-	os.WriteFile(fail, []byte("#!/bin/sh\necho bad >&2\nexit 1\n"), 0o755)
-	if err := CosignVerifier("x/y", fail)(context.Background(), "s", "b", "v1"); err == nil {
-		t.Fatal("failing cosign must fail the check")
+}
+
+// What the checksums say is only believed after the signature: a list whose
+// signature belongs to another version is not taken, and a changed list is not
+// signed any more.
+func TestStableChangedChecksumsFailTheSignature(t *testing.T) {
+	f := newRelease(t, nil)
+	dir, _ := installedDir(t)
+	src, cand := latest(t, f)
+	tampered := f.srv.Config.Handler
+	f.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/a/checksums.txt" {
+			fmt.Fprintf(w, "%s  %s\n", strings.Repeat("e", 64), cand.Archive)
+			return
+		}
+		tampered.ServeHTTP(w, r)
+	})
+	if _, err := src.Fetch(context.Background(), cand, dir, f.verifier(), false); err == nil || !strings.Contains(err.Error(), "signature check failed") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
-func devServer(t *testing.T, listing string) *httptest.Server {
+func devServer(t *testing.T, listing string, sig func(sums []byte) []byte) *httptest.Server {
 	t.Helper()
 	archive := tarball(t, "DEVBIN")
 	name := "ctx_0.1.0-dev+b0cd1b9_linux_amd64.tar.gz"
+	sums := []byte(listing)
+	if listing == "" {
+		sums = []byte(fmt.Sprintf("%s  %s\n", sha(archive), name))
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/dist/checksums.txt", func(w http.ResponseWriter, r *http.Request) {
-		if listing != "" {
-			fmt.Fprint(w, listing)
-			return
-		}
-		fmt.Fprintf(w, "%s  %s\n", sha(archive), name)
-	})
+	mux.HandleFunc("/dist/checksums.txt", func(w http.ResponseWriter, r *http.Request) { w.Write(sums) })
+	if sig != nil {
+		mux.HandleFunc("/dist/checksums.txt.minisig", func(w http.ResponseWriter, r *http.Request) { w.Write(sig(sums)) })
+	}
 	mux.HandleFunc("/dist/"+name, func(w http.ResponseWriter, r *http.Request) { w.Write(archive) })
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }
 
-func TestDevFromServerChecksAgainstTheServersChecksums(t *testing.T) {
-	srv := devServer(t, "")
+func TestDevFromServerWithoutSignatureNeedsTheUsersAgreement(t *testing.T) {
+	srv := devServer(t, "", nil)
 	dir, target := installedDir(t)
 	src := Source{HTTP: srv.Client(), GOOS: goos, GOARCH: goarch}
 	cand, err := src.DevFromServer(context.Background(), srv.URL)
 	if err != nil || cand.Version != "0.1.0-dev+b0cd1b9" {
 		t.Fatalf("cand %+v err %v", cand, err)
 	}
-	path, err := src.Fetch(context.Background(), cand, dir, nil) // dev needs no signature verifier
-	if err != nil {
-		t.Fatal(err)
+	_, err = src.Fetch(context.Background(), cand, dir, nil, false)
+	if !errors.Is(err, ErrServerUnsigned) || entries(t, dir) != "ctx" {
+		t.Fatalf("an unsigned server build was taken on the server's word alone: err %v, dir %s", err, entries(t, dir))
 	}
-	if _, err := Install(target, path, "0.1.0-dev+1c48c74"); err != nil {
+	got, err := src.Fetch(context.Background(), cand, dir, nil, true)
+	if err != nil || got.Signed {
+		t.Fatalf("err %v fetched %+v", err, got)
+	}
+	if _, err := Install(target, got.Path, "0.1.0-dev+1c48c74"); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(target); string(b) != "DEVBIN" {
@@ -280,18 +311,76 @@ func TestDevFromServerChecksAgainstTheServersChecksums(t *testing.T) {
 	}
 }
 
+func TestDevFromServerTakesAReleaseKeySignatureWithoutAgreement(t *testing.T) {
+	pk, priv, _ := minisign.GenerateKey(rand.Reader)
+	verify := MinisignVerifier(func() (minisign.PublicKey, error) { return pk, nil })
+	sign := func(comment string) func([]byte) []byte {
+		return func(sums []byte) []byte { return minisign.Sign(pk, priv, sums, comment) }
+	}
+	dir, _ := installedDir(t)
+
+	ok := devServer(t, "", sign("ghosttree v0.1.0-dev+b0cd1b9"))
+	src := Source{HTTP: ok.Client(), GOOS: goos, GOARCH: goarch}
+	cand, _ := src.DevFromServer(context.Background(), ok.URL)
+	got, err := src.Fetch(context.Background(), cand, dir, verify, false)
+	if err != nil || !got.Signed || got.Version != "0.1.0-dev+b0cd1b9" {
+		t.Fatalf("err %v fetched %+v", err, got)
+	}
+	os.Remove(got.Path)
+
+	// A signature that is there and does not hold is final, with or without
+	// the agreement: it is not a build "without" one.
+	for name, srv := range map[string]*httptest.Server{
+		"another release": devServer(t, "", sign("ghosttree v0.0.9")),
+		"foreign key": devServer(t, "", func(sums []byte) []byte {
+			opk, opriv, _ := minisign.GenerateKey(rand.Reader)
+			return minisign.Sign(opk, opriv, sums, "ghosttree v0.1.0-dev+b0cd1b9")
+		}),
+		"garbage": devServer(t, "", func([]byte) []byte { return []byte("nonsense") }),
+	} {
+		src := Source{HTTP: srv.Client(), GOOS: goos, GOARCH: goarch}
+		cand, _ := src.DevFromServer(context.Background(), srv.URL)
+		for _, trust := range []bool{false, true} {
+			if _, err := src.Fetch(context.Background(), cand, dir, verify, trust); err == nil {
+				t.Fatalf("%s (trust=%v) was installed", name, trust)
+			}
+		}
+	}
+	if entries(t, dir) != "ctx" {
+		t.Fatalf("directory changed: %s", entries(t, dir))
+	}
+}
+
+// A server build with a signature this ctx has no key for counts as unsigned:
+// it needs the user's agreement and never passes for checked.
+func TestDevFromServerSignatureWithoutAKeyNeedsTheAgreement(t *testing.T) {
+	pk, priv, _ := minisign.GenerateKey(rand.Reader)
+	srv := devServer(t, "", func(sums []byte) []byte { return minisign.Sign(pk, priv, sums, "ghosttree v0.1.0-dev+b0cd1b9") })
+	noKey := MinisignVerifier(func() (minisign.PublicKey, error) { return minisign.PublicKey{}, errors.New("placeholder") })
+	dir, _ := installedDir(t)
+	src := Source{HTTP: srv.Client(), GOOS: goos, GOARCH: goarch}
+	cand, _ := src.DevFromServer(context.Background(), srv.URL)
+	if _, err := src.Fetch(context.Background(), cand, dir, noKey, false); err == nil || !strings.Contains(err.Error(), "cannot check") {
+		t.Fatalf("err = %v", err)
+	}
+	got, err := src.Fetch(context.Background(), cand, dir, noKey, true)
+	if err != nil || got.Signed {
+		t.Fatalf("err %v fetched %+v", err, got)
+	}
+}
+
 func TestDevFromServerRejectsBadChecksumAndAmbiguousListing(t *testing.T) {
-	bad := devServer(t, strings.Repeat("b", 64)+"  ctx_0.1.0-dev+b0cd1b9_linux_amd64.tar.gz\n")
+	bad := devServer(t, strings.Repeat("b", 64)+"  ctx_0.1.0-dev+b0cd1b9_linux_amd64.tar.gz\n", nil)
 	dir, _ := installedDir(t)
 	src := Source{HTTP: bad.Client(), GOOS: goos, GOARCH: goarch}
 	cand, err := src.DevFromServer(context.Background(), bad.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := src.Fetch(context.Background(), cand, dir, nil); err == nil || entries(t, dir) != "ctx" {
+	if _, err := src.Fetch(context.Background(), cand, dir, nil, true); err == nil || entries(t, dir) != "ctx" {
 		t.Fatalf("err %v dir %s", err, entries(t, dir))
 	}
-	two := devServer(t, strings.Repeat("c", 64)+"  ctx_1_linux_amd64.tar.gz\n"+strings.Repeat("c", 64)+"  ctx_2_linux_amd64.tar.gz\n")
+	two := devServer(t, strings.Repeat("c", 64)+"  ctx_1_linux_amd64.tar.gz\n"+strings.Repeat("c", 64)+"  ctx_2_linux_amd64.tar.gz\n", nil)
 	if _, err := (Source{HTTP: two.Client(), GOOS: goos, GOARCH: goarch}).DevFromServer(context.Background(), two.URL); err == nil {
 		t.Fatal("two versions must be refused")
 	}
@@ -416,15 +505,14 @@ func TestStableFindsTheReleaseArchiveNamedAfterTheProject(t *testing.T) {
 	if want := fmt.Sprintf("ghosttree_1.2.0_%s_%s.tar.gz", goos, goarch); cand.Archive != want {
 		t.Fatalf("archive %q, want %q", cand.Archive, want)
 	}
-	var calls []string
-	path, err := src.Fetch(context.Background(), cand, dir, okVerifier(&calls))
+	got, err := src.Fetch(context.Background(), cand, dir, f.verifier(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Install(target, path, "0.1.0-dev+abc"); err != nil {
+	if _, err := Install(target, got.Path, "0.1.0-dev+abc"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(target); string(got) != f.binary {
-		t.Fatalf("installed %q", got)
+	if b, _ := os.ReadFile(target); string(b) != f.binary {
+		t.Fatalf("installed %q", b)
 	}
 }

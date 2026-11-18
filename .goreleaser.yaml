@@ -69,6 +69,8 @@ signs:
       - "${signature}"
       - -t
       - "ghosttree {{ .Tag }}"
+    # The key has a password (RELEASING.md); minisign reads it from stdin.
+    stdin: "{{ .Env.MINISIGN_PASSWORD }}"
     output: true
 
 changelog:
@@ -80,6 +82,9 @@ changelog:
       - "^test"
 
 release:
+  # A draft: the workflow publishes it only after the signature of the uploaded
+  # files has been checked (the last steps of release.yml).
+  draft: true
   prerelease: auto
   # The installer and the key it checks with, next to the archives, so a
   # release can be installed from its own files.

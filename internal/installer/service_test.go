@@ -315,6 +315,44 @@ func TestWatchServiceUpgradesTheOnFailureUnit(t *testing.T) {
 	}
 }
 
+// Die Unit des Sammlers bekommt die Einschränkungen, die eine Benutzer-Unit ohne
+// Mount-Namespace haben kann, und eine Unit der Fassung davor ist die eigene.
+func TestWatchServiceIsRestrictedAndTheUnrestrictedUnitIsUpgraded(t *testing.T) {
+	unit := watchUnitText("/usr/bin/ctx")
+	for _, want := range []string{"NoNewPrivileges=yes", "RestrictNamespaces=yes", "RestrictRealtime=yes", "LockPersonality=yes",
+		"MemoryDenyWriteExecute=yes", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "RestrictSUIDSGID=yes"} {
+		if !strings.Contains(unit, want+"\n") {
+			t.Errorf("unit lacks %s:\n%s", want, unit)
+		}
+	}
+	// Ohne Mount-Namespace: ProtectSystem, PrivateTmp und Verwandte lassen eine
+	// Benutzer-Unit dort scheitern, wo es keine unprivilegierten User-Namespaces gibt.
+	for _, bad := range []string{"ProtectSystem", "PrivateTmp", "ProtectHome", "PrivateDevices", "ReadWritePaths"} {
+		if strings.Contains(unit, bad) {
+			t.Errorf("a user unit must not need a mount namespace, but sets %s", bad)
+		}
+	}
+	home := t.TempDir()
+	ctx := fakeBinary(t, filepath.Join(home, ".local", "bin", "ctx"))
+	useCtx(t, ctx)
+	log := &ctlLog{}
+	defer SetServiceBackend("linux", log.run, 1000)()
+	path := filepath.Join(home, ".config", "systemd", "user", "ghosttree-watch.service")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(beforeHardeningWatchUnitText(ctx)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changes, err := InstallWatchService(home)
+	if err != nil || changes[0].Action != "updated" {
+		t.Fatalf("unit before the restrictions: err=%v changes=%+v", err, changes)
+	}
+	if raw, _ := os.ReadFile(path); !strings.Contains(string(raw), "NoNewPrivileges=yes\n") {
+		t.Fatalf("unit after the upgrade:\n%s", raw)
+	}
+}
+
 func TestRestartWatchServiceRestartsAfterInstall(t *testing.T) {
 	home := t.TempDir()
 	useCtx(t, fakeBinary(t, filepath.Join(home, "ctx")))

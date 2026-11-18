@@ -1497,6 +1497,25 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   (`ap2-<id>`) counts as a placeholder.
 - Dependency updates: MCP Go SDK 1.8.0, `modernc.org/sqlite` 1.60, `golang.org/x/sys`,
   GoReleaser action and CodeQL action.
+- `ctx update` checks the minisign signature of `checksums.txt` with the release
+  key built into ctx (and the tag in the signed comment), then the archive's
+  checksum, instead of asking a `cosign` program from the PATH; nothing is
+  replaced when a check fails. The dev channel installs the build of a server
+  only if the release key signed it; a build without that signature needs
+  `ctx update --trust-server`, and the output says that only the server vouches
+  for it. A server serves `checksums.txt.minisig` next to its checksums.
+- `install.sh` refuses a release older than the ctx that is installed unless
+  `--allow-downgrade` is given; the version compared is the signed one. The
+  install script a server serves says that it trusts that server alone and no
+  longer has the `GHOSTTREE_ALLOW_HTTP` switch: plain http is for this machine only,
+  also without a way past it through user information in the address.
+- The join command and the install script take the address from
+  `GHOSTTREE_PUBLIC_URL`, or else only a plain hostname with an optional port
+  from the request; any other `Host` gives no command.
+- The release workflow creates the release as a draft, checks the uploaded files
+  and publishes afterwards. The signing key has a password (`MINISIGN_PASSWORD`
+  in the environment `release`, which needs reviewers), and `SECURITY.md` carries
+  the release key as a second place to compare it with.
 - The client no longer follows a link in a repository when it writes `.ghosttree/`:
   a checkout that brings `.ghosttree` or a level below it as a symbolic link
   makes the mirror and the tree stop with a message, and nothing is written or

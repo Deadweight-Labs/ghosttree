@@ -3,4 +3,9 @@
 /.ghosttree/
 /cmd/ctx/ctx
 /seedshots
+# Runbooks name real hosts, fingerprints and paths; only the example is shared.
+/docs/runbooks/*.json
+!/docs/runbooks/example.json
+# Browser-automation captures (screenshots, snapshots, console logs)
+/.playwright-mcp/
 .impeccable/
