@@ -3,6 +3,7 @@ package hookstate
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,5 +98,19 @@ func TestRecordRateLimitsSameHarnessEvent(t *testing.T) {
 	}
 	if !receipt.SeenAt.Equal(first) {
 		t.Fatalf("rate-limited timestamp = %s, want %s", receipt.SeenAt, first)
+	}
+}
+
+func TestRecordCreatesPrivateStateDirectory(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if err := RecordAt("codex", "PreToolUse", time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Dir(DefaultPath()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("state directory mode = %04o, want 0700", got)
 	}
 }

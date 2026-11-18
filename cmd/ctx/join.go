@@ -112,7 +112,7 @@ func saveJoinResume(server, pair, token string) {
 		return
 	}
 	p := joinResumePath()
-	if os.MkdirAll(filepath.Dir(p), 0o755) == nil {
+	if os.MkdirAll(filepath.Dir(p), 0o700) == nil {
 		_ = privatefile.Write(p, b)
 	}
 }
@@ -467,7 +467,16 @@ func canOpenBrowser() bool {
 	return err == nil
 }
 
+// errNotWebAddress: openBrowser öffnet nur Webadressen.
+var errNotWebAddress = errors.New("not a web address")
+
+// openBrowser startet das Öffnungsprogramm des Systems. Das öffnet auch Dateien
+// und fremde Schemata (macOS open, Windows FileProtocolHandler), darum geht nur
+// http und https mit Host.
 func openBrowser(u string) error {
+	if pu, err := url.Parse(u); err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
+		return errNotWebAddress
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

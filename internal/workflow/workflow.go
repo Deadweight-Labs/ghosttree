@@ -345,7 +345,11 @@ func (e *Engine) execute(ctx context.Context, run store.WorkflowRun, ev store.Wo
 		// stopped and booked before the cost is read, so that the run shows
 		// all it spent.
 		defer func() {
-			_ = e.Store.RevokeAIRunTokens(run.ID)
+			// Das Token gilt ohnehin nur, solange der Lauf läuft; schlägt das
+			// Löschen fehl, soll es nicht stumm bleiben.
+			if err := e.Store.RevokeAIRunTokens(run.ID); err != nil && e.Log != nil {
+				e.Log.Error("workflows", "revoke_run_tokens", run.ID, "error", err.Error())
+			}
 			if e.AIEndRun != nil {
 				e.AIEndRun(run.ID)
 			}

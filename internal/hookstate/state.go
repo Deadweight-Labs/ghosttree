@@ -77,7 +77,7 @@ func Latest(harness, event string) (Receipt, bool, error) {
 }
 
 func lockState(path string) (func(), error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
@@ -117,7 +117,7 @@ func load(path string) (stateFile, error) {
 }
 
 func save(path string, state stateFile) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	raw, err := json.MarshalIndent(state, "", "  ")
