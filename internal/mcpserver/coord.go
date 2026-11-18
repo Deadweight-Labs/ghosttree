@@ -323,6 +323,7 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, nil, peersError(err)
 	}
+	peers = peerView(peers)
 	var b strings.Builder
 	// Gegenseitiges Warten steht ganz oben und zählt auch dann, wenn man selbst
 	// beteiligt ist: niemand soll zwei schlafende Agenten still verwalten.
@@ -799,6 +800,23 @@ func headerSafeText(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// peerView bringt die Selbstauskunft jedes Agenten in die geprüfte Form, bevor
+// sie in einem Text steht, den ein anderer Agent liest: der Server prüft sie
+// seit der Anmeldung, aber Altbestand oder ein älterer Server liefert sie roh.
+func peerView(peers []store.CoordAgent) []store.CoordAgent {
+	out := make([]store.CoordAgent, len(peers))
+	for i, p := range peers {
+		label, owner := p.Label, p.Owner
+		p = store.SafeForPeers(p)
+		p.ExternalID = headerSafe(p.ExternalID)
+		p.Label = store.SafeLabel(label)
+		p.Owner = store.PromptSafeName(owner)
+		p.LastSeenAt = store.SafeLine(p.LastSeenAt, 40)
+		out[i] = p
+	}
+	return out
 }
 
 // headerSafe ersetzt in einer Absender-ID alles außer Buchstaben, Ziffern und

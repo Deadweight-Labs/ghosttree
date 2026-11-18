@@ -283,9 +283,12 @@ func cmdCoord(args []string, stdout io.Writer) int {
 			return 0
 		}
 		for _, p := range peers {
+			label := p.Label
+			p = store.SafeForPeers(p)
+			p.ExternalID, p.LastSeenAt = store.SafeLine(p.ExternalID, 160), store.SafeLine(p.LastSeenAt, 40)
 			name := p.DisplayName
-			if p.Label != "" {
-				name = p.Label
+			if label != "" {
+				name = store.SafeLabel(label)
 			}
 			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\tlast observed %s\n",
 				p.ExternalID, name, p.Provider, p.Branch, p.LastSeenAt)
