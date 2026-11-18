@@ -222,7 +222,21 @@ curl -fsSL https://downloads.deadweightlabs.com/ghosttree/install.sh | sh -s -- 
 before it runs. Every release is signed (minisign, checked by the installer) and
 lists the SHA-256 of its archives; how that is checked, how to update a server
 (`ctx server update`) and what is left to you is in
-[docs/operations.md](docs/operations.md) and [`deploy/`](deploy/).
+[docs/operations.md](docs/operations.md) and [`deploy/`](deploy/). Run on a
+machine that has a server, the same line updates it instead of installing over it.
+
+What the signature does not give you, so you can judge it:
+
+- It cannot tell the newest release from an older genuine one: the lookup of
+  "newest" is not signed, so someone who controls your connection can keep you on
+  an older signed release. Name the release you want with `--version vX.Y.Z` when
+  that matters.
+- Releases made before signing began cannot be installed this way.
+- macOS needs `brew install minisign` first (the system's LibreSSL cannot check
+  the signature); Linux with OpenSSL 3 needs nothing extra.
+- Downloads need curl or GNU Wget 1.x; BusyBox wget and Wget2 are refused.
+
+Details are in [RELEASING.md](RELEASING.md#what-the-installers-checks-do-not-cover).
 
 On a machine that has `ctx`, in the repository you want to work on:
 

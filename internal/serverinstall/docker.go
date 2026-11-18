@@ -262,6 +262,19 @@ func installDocker(ctx context.Context, o Options, env Env) (*Result, error) {
 		return nil, fmt.Errorf("Docker with the compose plugin is needed (docker compose version: %v %s)", err, strings.TrimSpace(out))
 	}
 	dir := o.dockerDir()
+	// A Docker setup that exists is moved by ctx server update. Installing over
+	// it would start the new image on the old data without a copy of it and
+	// without the schema upgrade; --force does it the way an update does.
+	if _, oldImage := DockerOptionsFromDisk(o.Prefix, o.Dir); oldImage != "" {
+		if !o.Force {
+			return nil, fmt.Errorf("%w (%s/.env exists). Update it with: ctx server update --docker. To set it up again from these answers anyway, add --force: the database is copied first and its schema brought up to date", ErrInstalled, dir)
+		}
+		old, newVer := imageVersion(oldImage), imageVersion(image)
+		env.say("a Docker setup is here: copying its database and moving it from %s to %s", old, newVer)
+		if _, err := moveDocker(ctx2, env, DockerDiskOptions(o), oldImage, image, old, newVer, &UpdateResult{From: old, To: newVer}); err != nil {
+			return nil, err
+		}
+	}
 	if err := os.MkdirAll(o.dockerPath("secrets"), 0o700); err != nil {
 		return nil, err
 	}
@@ -336,9 +349,23 @@ func installDocker(ctx context.Context, o Options, env Env) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	res := &Result{LoginURL: link, PublicURL: o.PublicURL()}
+	res := &Result{LoginURL: link, PublicURL: o.PublicURL(), Admin: o.admin()}
 	res.Checks = dockerDoctor(ctx2, o, env)
 	return res, nil
+}
+
+// DockerInstalled reports whether a Docker setup is there: the .env of the
+// directory o names (or the default one) says which image it runs.
+func DockerInstalled(o Options) bool {
+	_, image := DockerOptionsFromDisk(o.Prefix, o.Dir)
+	return image != ""
+}
+
+// DockerDiskOptions is the configuration of the setup that is there, which is
+// what the old server runs with, under the prefix and directory of o.
+func DockerDiskOptions(o Options) Options {
+	disk, _ := DockerOptionsFromDisk(o.Prefix, o.Dir)
+	return disk
 }
 
 // DockerOptionsFromDisk recovers the answers of a Docker installation from its .env.
@@ -497,6 +524,9 @@ func updateDocker(ctx context.Context, uo UpdateOptions, rel Release, env Env) (
 		res.Unchanged = true
 		return res, nil
 	}
+	if IsDowngrade(old, newVer) && !uo.Force {
+		return nil, fmt.Errorf("%s is older than the %s that runs here: going back is a downgrade, and the database of the newer release may not open with the older one; nothing was changed. Add --force to do it anyway (the database is copied first)", tag, old)
+	}
 	// The signed release names the digest of its image; what is pulled and run
 	// is that digest, so a registry cannot hand out another image for the tag.
 	digest, err := rel.ImageDigest(ctx, tag)
@@ -517,6 +547,14 @@ func updateDocker(ctx context.Context, uo UpdateOptions, rel Release, env Env) (
 		}
 	}
 
+	return moveDocker(ctx, env, o, oldImage, newImage, old, newVer, res)
+}
+
+// moveDocker is the part of an update that touches the server: stop it, copy
+// the database into the backups volume with the old image, point .env at the new
+// image, bring the schema up to date and start it; if the server does not answer
+// with the new version, the old image and the copy are put back.
+func moveDocker(ctx context.Context, env Env, o Options, oldImage, newImage, old, newVer string, res *UpdateResult) (*UpdateResult, error) {
 	local := "http://" + localAddr(o.listen())
 	envFile := o.dockerPath(".env")
 	original, err := os.ReadFile(envFile)
@@ -548,7 +586,7 @@ func updateDocker(ctx context.Context, uo UpdateOptions, rel Release, env Env) (
 		}
 		return nil, err
 	}
-	res.Backup = fmt.Sprintf("%s/pre-update-%s-to-%s-%s.db", DockerBackups, old, newVer, time.Now().UTC().Format("20060102-150405"))
+	res.Backup = fmt.Sprintf("%s/pre-update-%s-to-%s-%s.db", DockerBackups, safeName(old), safeName(newVer), time.Now().UTC().Format("20060102-150405"))
 	if out, err := compose(ctx, env, o, "run", "--rm", "--no-deps", "backup", "db", "backup", "--db", DockerDB, "--out", res.Backup); err != nil {
 		return abort(fmt.Errorf("the database could not be copied, so nothing was changed: %v: %s", err, strings.TrimSpace(out)))
 	}

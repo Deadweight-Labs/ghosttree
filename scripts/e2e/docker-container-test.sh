@@ -83,6 +83,18 @@ case "$signed_in" in
   *) bad "the login link signs the administrator in ($signed_in)" ;;
 esac
 
+# ---- the same command again: refused; --force goes the way an update goes ----
+FLAGS="--docker --yes --admin alex --domain gt.example.test --language en --dir $DIR --listen 127.0.0.1:$PORT --image-repo $IMAGE_REPO"
+# shellcheck disable=SC2086
+if /root/.local/bin/ctx server install $FLAGS >/tmp/again.out 2>&1 </dev/null; then bad "ctx server install --docker on a setup that exists is refused"; else ok "ctx server install --docker on a setup that exists is refused"; fi
+check "the refusal points to the update" grep -q 'ctx server update --docker' /tmp/again.out
+check "the refusal left the server running" curl -fsS "http://127.0.0.1:$PORT/api/health"
+# shellcheck disable=SC2086
+if /root/.local/bin/ctx server install $FLAGS --force --wait 90s >/tmp/force.out 2>&1 </dev/null; then ok "ctx server install --docker --force finishes"; else bad "ctx server install --docker --force finishes"; sed 's/^/     /' /tmp/force.out | tail -n 30; fi
+check "--force copied the database first" sh -c "docker run --rm -v ${PROJECT}_backups:/b debian:12 sh -c 'ls /b | grep -q pre-update-0.1.0-to-0.1.0-'"
+check "the account survived --force" sh -c "docker compose --project-directory $DIR exec -T ghosttree /usr/local/bin/ctx account list --db /data/ghosttree.db | grep -q '	alex	'"
+check "the server answers after --force" curl -fsS "http://127.0.0.1:$PORT/api/health"
+
 # ---- update to a newer image ------------------------------------------------
 sed -i 's/"v0.1.0"/"v0.1.1"/' "$rel/api/repos/Deadweight-Labs/ghosttree/releases/latest"
 if /root/.local/bin/ctx server update --docker --dir "$DIR" --wait 90s >/tmp/update.out 2>&1; then ok "ctx server update succeeds"; else bad "ctx server update succeeds"; fi
@@ -92,6 +104,11 @@ check ".env pins the new image to the digest of the signed release" grep -Fq "GH
 check "a copy from before the update is in the backups volume" sh -c "docker run --rm -v ${PROJECT}_backups:/b debian:12 sh -c 'ls /b | grep -q pre-update-0.1.0-to-0.1.1-'"
 check "the account survived the update" sh -c "docker compose --project-directory $DIR exec -T ghosttree /usr/local/bin/ctx account list --db /data/ghosttree.db | grep -q '	alex	'"
 check "updating to the same version does nothing" sh -c "/root/.local/bin/ctx server update --docker --dir $DIR --version v0.1.1 | grep -q 'already runs'"
+
+# ---- going back to an older release needs --force ---------------------------
+if /root/.local/bin/ctx server update --docker --dir "$DIR" --version v0.1.0 >/tmp/down.out 2>&1; then bad "an update to an older release is refused"; else ok "an update to an older release is refused"; fi
+check "the refusal says downgrade and names --force" sh -c 'grep -q downgrade /tmp/down.out && grep -q -- --force /tmp/down.out'
+check "the downgrade changed nothing" sh -c "curl -fsS http://127.0.0.1:$PORT/api/version | grep -q '\"version\":\"0.1.1\"'"
 
 # ---- an image that does not come up: back to the old one ---------------------
 if /root/.local/bin/ctx server update --docker --dir "$DIR" --version v0.1.2 --wait 20s >/tmp/broken.out 2>&1; then bad "a broken image is reported as a failed update"; else ok "a broken image is reported as a failed update"; fi

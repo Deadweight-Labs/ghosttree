@@ -172,6 +172,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   `ctx server install --docker` (also `install.sh --docker`) sets it up and ends
   with a check and a login link; `ctx server update --docker` and
   `ctx server doctor --docker` update with a rollback and check it.
+  Installing over a Docker setup that exists is refused and points to the
+  update (`--force` copies the database and upgrades the schema first), an update
+  only goes up unless `--force` is given, and the image gets its tags
+  (`X.Y.Z`, `latest`) only after the release has been published.
   `ctx server health` is the container's health check, and
   `ctx db backup --every 24h` takes copies on a timer without systemd.
 

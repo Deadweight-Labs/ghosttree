@@ -161,11 +161,14 @@ for root and `~/ghosttree` otherwise), makes the server key in `secrets/`, start
 the containers, makes the first administrator and the gardener's account in the
 running container, and ends with the same check and login link as the systemd
 install. It needs Docker with the compose plugin, and a user who may run
-`docker`.
+`docker`. Where a setup exists already (its `.env` is there) it stops and points
+to `ctx server update --docker`; `--force` goes on the way an update does: the
+database is copied into the backups volume first, the schema is upgraded with
+the new image, and the old image and the copy are put back if it does not come up.
 
 - **Image.** One image per release on `ghcr.io/deadweight-labs/ghosttree`
-  (amd64 and arm64, tagged with the version, `latest` for a final release,
-  signed keyless like the archives): a static `ctx` on a base without a shell,
+  (amd64 and arm64, signed keyless like the archives; the tags `X.Y.Z` and, for
+  a final release, `latest` are set only after the release has been published): a static `ctx` on a base without a shell,
   run as user 65532, with a read-only root file system and no capabilities. The
   digest of the release's image is a file of the release, `ghosttree-image.txt`,
   listed in the minisign-signed `checksums.txt`; `ctx server install --docker`
@@ -178,7 +181,8 @@ install. It needs Docker with the compose plugin, and a user who may run
   directory `secrets/` (mode 700, the file itself readable by the container's
   user). Keep a copy of `secrets/secret-key` with your backups.
 - **Backup.** A second container, `backup`, runs `ctx db backup --every 24h` and
-  keeps the newest fourteen copies in the volume `backups`; read one out with
+  keeps the newest fourteen copies (and the newest fourteen from before updates)
+  in the volume `backups`; read one out with
   `docker run --rm -v ghosttree_backups:/b -v "$PWD:/out" debian:12 cp /b/<file> /out/`.
 - **Network and proxy.** The server is published on `127.0.0.1:8474` only, and
   no forwarding header is believed (`GHOSTTREE_TRUSTED_PROXIES=none`) unless you
@@ -189,7 +193,8 @@ install. It needs Docker with the compose plugin, and a user who may run
   systemd. `--tls builtin` adds `compose.override.yaml`, which publishes ports 80
   and 443 and lets the unprivileged user bind them; the certificate is kept in
   the data volume.
-- **Update.** `ctx server update --docker [--dir DIR] [--version TAG]` reads the
+- **Update.** `ctx server update --docker [--dir DIR] [--version TAG]` only goes
+  up: an older release is refused as a downgrade unless `--force` is given. It reads the
   image digest from the signed release (signature, trusted comment and checksum
   are checked as for a systemd update), pulls that digest unless it is here,
   stops the containers, copies the database into the volume `backups`

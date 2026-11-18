@@ -152,8 +152,13 @@ func cmdServerInstall(args []string, stdout io.Writer) int {
 	o.Version = version
 	// Before a question is asked: a server that is set up is updated, not
 	// installed over.
-	if !o.Force && serverinstall.Existing(o) {
+	// (A Docker setup checks its own directory.)
+	if !o.Force && !o.Docker && serverinstall.Existing(o) {
 		fmt.Fprintf(stdout, "server install: %v (%s or %s exists).\nUpdate it with: ctx server update. To set it up again from other answers, add --force: the database is copied first and its schema brought up to date.\n", serverinstall.ErrInstalled, serverinstall.ServiceID, serverinstall.StateDir)
+		return 1
+	}
+	if !o.Force && o.Docker && serverinstall.DockerInstalled(o) {
+		fmt.Fprintf(stdout, "server install: %v (a Docker setup is in %s).\nUpdate it with: ctx server update --docker. To set it up again from other answers, add --force: the database is copied first and its schema brought up to date.\n", serverinstall.ErrInstalled, dockerDirOf(o.Dir))
 		return 1
 	}
 
@@ -372,4 +377,12 @@ func cmdServerDoctor(args []string, stdout io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// dockerDirOf is the directory a Docker setup goes in without --dir.
+func dockerDirOf(dir string) string {
+	if dir != "" {
+		return dir
+	}
+	return serverinstall.DefaultDockerDir()
 }

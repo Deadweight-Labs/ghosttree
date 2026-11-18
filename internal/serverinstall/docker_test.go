@@ -3,9 +3,11 @@ package serverinstall
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -150,7 +152,9 @@ func TestDockerInstallNeedsAnImageAndDocker(t *testing.T) {
 	}
 }
 
-func TestDockerInstallAgainKeepsKeyAndSettings(t *testing.T) {
+// Installing over a Docker setup would start the new image on the old data with
+// no copy of it and no schema upgrade. It stops and points to the update.
+func TestDockerInstallOnASetupThatExistsPointsToUpdateAndTouchesNothing(t *testing.T) {
 	prefix := t.TempDir()
 	sys := newFakeSystem(t, prefix)
 	env, _, _, _ := signedEnv(t, sys)
@@ -163,16 +167,111 @@ func TestDockerInstallAgainKeepsKeyAndSettings(t *testing.T) {
 	env1, _ := os.ReadFile(filepath.Join(dir, ".env"))
 	sys.cmds = nil
 	o.Domain, o.Language = "other.example.com", "en"
-	if _, err := Install(context.Background(), o, env); err != nil {
-		t.Fatal(err)
+	_, err := Install(context.Background(), o, env)
+	if !errors.Is(err, ErrInstalled) || !strings.Contains(err.Error(), "ctx server update --docker") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("error = %v", err)
+	}
+	for _, c := range sys.commands() {
+		if strings.Contains(c, "compose") && !strings.Contains(c, "compose version") {
+			t.Errorf("it touched the containers: %s", c)
+		}
 	}
 	key2, _ := os.ReadFile(filepath.Join(dir, "secrets/secret-key"))
 	env2, _ := os.ReadFile(filepath.Join(dir, ".env"))
 	if string(key1) != string(key2) || string(env1) != string(env2) {
-		t.Error("key or settings were replaced without --force")
+		t.Error("key or settings were replaced")
 	}
-	if sys.saw("account add alex") || sys.saw("account add admin") {
-		t.Errorf("accounts were added twice:\n%s", strings.Join(sys.commands(), "\n"))
+}
+
+// --force goes on the way an update goes: stop, copy the database with the old
+// image, upgrade the schema with the new one, start; the key and accounts stay.
+func TestDockerInstallForceCopiesTheDatabaseAndUpgradesTheSchema(t *testing.T) {
+	prefix := t.TempDir()
+	sys := newFakeSystem(t, prefix)
+	env, _, f, k := signedEnv(t, sys)
+	o := Options{Prefix: prefix, Docker: true, Dir: "/opt/ghosttree", Version: "0.1.0", Domain: "gt.example.com", Admin: "alex"}
+	if _, err := Install(context.Background(), o, env); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(prefix, "opt/ghosttree")
+	key1, _ := os.ReadFile(filepath.Join(dir, "secrets/secret-key"))
+	f.publish(t, k, "v0.2.0", "x")
+	sys.cmds = nil
+	o.Version, o.Domain, o.Language, o.Force = "0.2.0", "other.example.com", "en", true
+	res, err := Install(context.Background(), o, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envText, _ := os.ReadFile(filepath.Join(dir, ".env"))
+	for _, want := range []string{"GHOSTTREE_IMAGE=" + pinned("0.2.0"), "other.example.com", "GHOSTTREE_LANGUAGE=en"} {
+		if !strings.Contains(string(envText), want) {
+			t.Errorf(".env lacks %q:\n%s", want, envText)
+		}
+	}
+	order := []string{"compose --project-directory /opt/ghosttree stop", "run --rm --no-deps backup db backup --db /data/ghosttree.db --out /backups/pre-update-0.1.0-to-0.2.0-",
+		"run --rm --no-deps ghosttree upgrade-schema", "up -d", "account login-link alex"}
+	last := -1
+	for _, c := range order {
+		i := sys.index(c)
+		if i <= last {
+			t.Fatalf("%q at %d after %d:\n%s", c, i, last, strings.Join(sys.commands(), "\n"))
+		}
+		last = i
+	}
+	if key2, _ := os.ReadFile(filepath.Join(dir, "secrets/secret-key")); string(key1) != string(key2) {
+		t.Error("the server key was replaced")
+	}
+	if sys.saw("account add alex") || res.Admin != "alex" {
+		t.Errorf("accounts were added twice or no link for alex: %+v", res)
+	}
+}
+
+// A forced install whose new image does not come up leaves the old one running.
+func TestDockerInstallForceGoesBackWhenTheNewImageDoesNotAnswer(t *testing.T) {
+	prefix := t.TempDir()
+	sys := newFakeSystem(t, prefix)
+	env, _, f, k := signedEnv(t, sys)
+	o := Options{Prefix: prefix, Docker: true, Dir: "/opt/ghosttree", Version: "0.1.0"}
+	if _, err := Install(context.Background(), o, env); err != nil {
+		t.Fatal(err)
+	}
+	f.publish(t, k, "v0.2.0", "x")
+	sys.brokenImages = map[string]bool{"0.2.0": true}
+	o.Version, o.Force = "0.2.0", true
+	if _, err := Install(context.Background(), o, env); err == nil || !strings.Contains(err.Error(), "runs again") {
+		t.Fatalf("error = %v", err)
+	}
+	b, _ := os.ReadFile(filepath.Join(prefix, "opt/ghosttree/.env"))
+	if !strings.Contains(string(b), "GHOSTTREE_IMAGE="+pinned("0.1.0")) || !sys.running || !sys.saw("db restore") {
+		t.Errorf("not back at 0.1.0 (running %v):\n%s\n%s", sys.running, b, strings.Join(sys.commands(), "\n"))
+	}
+}
+
+func TestDockerUpdateToAnOlderReleaseNeedsForce(t *testing.T) {
+	u := newDockerUpdateFixture(t)
+	u.fake.publish(t, u.key, "v0.2.0", "x")
+	if _, err := u.update("v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	u.sys.cmds = nil
+	_, err := u.update("v0.1.0")
+	if err == nil || !strings.Contains(err.Error(), "downgrade") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("error = %v", err)
+	}
+	for _, c := range u.sys.commands() {
+		if strings.Contains(c, "stop") || strings.Contains(c, "pull") {
+			t.Errorf("it touched the setup: %s", c)
+		}
+	}
+	if u.image() != pinned("0.2.0") {
+		t.Errorf("image %q", u.image())
+	}
+	res, err := Update(context.Background(), UpdateOptions{Prefix: u.prefix, Docker: true, Dir: "/opt/ghosttree", Version: "v0.1.0", Force: true}, u.rel, u.env)
+	if err != nil || res.To != "0.1.0" || u.image() != pinned("0.1.0") {
+		t.Fatalf("%+v %v image %q", res, err, u.image())
+	}
+	if !u.sys.saw("db backup --db /data/ghosttree.db") {
+		t.Error("a forced downgrade must copy the database first")
 	}
 }
 
@@ -465,5 +564,26 @@ func TestDockerInstallPullsTheSignedDigestFromAMirror(t *testing.T) {
 	want := "GHOSTTREE_IMAGE=registry.example.org/gt:0.1.0@" + imageDigestOf("v0.1.0") + "\n"
 	if !strings.Contains(string(b), want) {
 		t.Errorf(".env:\n%s", b)
+	}
+}
+
+// The copy's name is made from the tag in .env, which is text somebody may
+// have edited: it stays one plain file name in the backups volume.
+func TestDockerUpdateBackupNameIsAPlainFileName(t *testing.T) {
+	u := newDockerUpdateFixture(t)
+	path := filepath.Join(u.prefix, "opt/ghosttree/.env")
+	b, _ := os.ReadFile(path)
+	odd := strings.Replace(string(b), "ghosttree:0.1.0@", "ghosttree:0.1.0$(x);y@", 1)
+	if odd == string(b) {
+		t.Fatalf("the image line was not found:\n%s", b)
+	}
+	os.WriteFile(path, []byte(odd), 0o600)
+	u.fake.publish(t, u.key, "v0.2.0", "x")
+	res, err := u.update("v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^/backups/pre-update-[A-Za-z0-9._+-]+-to-0\.2\.0-\d{8}-\d{6}\.db$`).MatchString(res.Backup) {
+		t.Errorf("backup name %q", res.Backup)
 	}
 }
