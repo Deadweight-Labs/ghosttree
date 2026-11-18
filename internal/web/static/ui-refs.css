@@ -59,6 +59,7 @@
   & .prose .mmd:is([data-state="wait"], [data-state="ok"]) > pre { display: none; }
   & .prose .mmd-img { display: block; max-width: 100%; height: auto; }
   & .prose .mmd-err { margin: 6px 0 0; font-size: 12px; color: var(--danger-fg); }
+  & .prose .md-target { color: var(--fg-muted); font-size: 0.9em; }
   & .prose details.md-details { margin: 0 0 16px; }
   & .prose .md-details > summary { cursor: pointer; font-weight: 600; }
   & .prose .md-details[open] > summary { margin-bottom: 8px; }

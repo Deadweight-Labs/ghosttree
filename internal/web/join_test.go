@@ -683,9 +683,20 @@ func TestOrgAcceptSendsProjectInvitationsToTheJoinPage(t *testing.T) {
 	srv, st, _, org, _ := joinWeb(t)
 	annaTok, _ := st.AddPerson("anna")
 	code := projectInvite(t, st, org, store.RoleMember)
-	// Eine Sitzung aus eingefügtem Token kommt hier nicht an der Bestätigung vorbei.
+	plain := mustOrgInvite(t, st, org)
+	// A session from a pasted token takes no invitation at all, project or organization:
+	// that is for a person who signed in.
 	pasted := login(t, srv, annaTok)
-	resp := sameOriginPostForm(t, pasted, srv.URL+"/ui/orgs/accept", url.Values{"csrf_token": {renderedCSRFToken(t, pasted, srv.URL+"/ui/orgs")}, "code": {code}})
+	for _, c := range []string{code, plain} {
+		resp := sameOriginPostForm(t, pasted, srv.URL+"/ui/orgs/accept", url.Values{"csrf_token": {renderedCSRFToken(t, pasted, srv.URL+"/ui/orgs")}, "code": {c}})
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("a pasted token on /ui/orgs/accept: %d", resp.StatusCode)
+		}
+	}
+	// A project code goes to the join page, where the person confirms the account.
+	anna := loginInteractive(t, srv, st, "anna")
+	resp := sameOriginPostForm(t, anna, srv.URL+"/ui/orgs/accept", url.Values{"csrf_token": {renderedCSRFToken(t, anna, srv.URL+"/ui/orgs")}, "code": {code}})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/"+code {
 		t.Fatalf("project code on /ui/orgs/accept: %d %s", resp.StatusCode, resp.Header.Get("Location"))
@@ -696,9 +707,8 @@ func TestOrgAcceptSendsProjectInvitationsToTheJoinPage(t *testing.T) {
 	if st.ProjectRole(joinProject, "person:2").Role != "" {
 		t.Fatal("a role was granted without the join page")
 	}
-	// Ein Org-weiter Code geht weiter hier durch.
-	plain := mustOrgInvite(t, st, org)
-	resp = sameOriginPostForm(t, pasted, srv.URL+"/ui/orgs/accept", url.Values{"csrf_token": {renderedCSRFToken(t, pasted, srv.URL+"/ui/orgs")}, "code": {plain}})
+	// An organization-wide code goes through here.
+	resp = sameOriginPostForm(t, anna, srv.URL+"/ui/orgs/accept", url.Values{"csrf_token": {renderedCSRFToken(t, anna, srv.URL+"/ui/orgs")}, "code": {plain}})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther || strings.HasPrefix(resp.Header.Get("Location"), "/join/") {
 		t.Fatalf("org-wide code: %d %s", resp.StatusCode, resp.Header.Get("Location"))

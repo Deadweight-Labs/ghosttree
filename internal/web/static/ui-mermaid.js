@@ -18,6 +18,8 @@
 (function () {
   "use strict";
   var FRAME = "/ui/mermaid-frame", TIMEOUT = 30000, CACHE_MAX = 64;
+  // The most a source may be (the limit of the frame, maxTextSize) and an answer may be.
+  var MAX_SOURCE = 20000, MAX_SVG = 4 << 20;
   // The words are those of ui-md.js, which has loaded this file.
   function word(key) { return (window.GTMarkdown && window.GTMarkdown.word(key)) || ""; }
 
@@ -82,6 +84,14 @@
     document.body.appendChild(frame);
   }
 
+  // The frame goes, with whatever it still computes: a diagram that takes too long would
+  // otherwise hold it for every one after it. The next request makes a new one.
+  function dropFrame() {
+    if (frame) frame.remove();
+    frame = null;
+    ready = false;
+  }
+
   function settle(req, result) {
     delete byKey[req.key];
     if (result.url) remember(req.key, result);
@@ -100,7 +110,11 @@
       frame.contentWindow.postMessage({ t: "draw", id: req.id, src: req.src, dark: req.dark, vars: req.vars }, "*");
       clearTimeout(timer);
       timer = setTimeout(function () {
-        if (sent === req) { sent = null; settle(req, { err: "timeout" }); pump(); }
+        if (sent !== req) return;
+        sent = null;
+        settle(req, { err: "timeout" });
+        dropFrame();
+        if (queue.length) ensureFrame();
       }, TIMEOUT);
       return;
     }
@@ -115,7 +129,10 @@
     var req = sent;
     sent = null;
     clearTimeout(timer);
-    if (d.t === "svg" && typeof d.svg === "string" && /^\s*<svg[\s>]/.test(d.svg)) {
+    // An image is only taken as a drawing of a sane size without script or event handler; the
+    // page shows it as an image, where none of that would run, but it is not kept if it has it.
+    if (d.t === "svg" && typeof d.svg === "string" && d.svg.length <= MAX_SVG && /^\s*<svg[\s>]/.test(d.svg) &&
+        !/<script[\s>\/]|\son[a-z]+\s*=/i.test(d.svg)) {
       var m = /^\s*<svg\b[^>]*\swidth="(\d+)"[^>]*\sheight="(\d+)"/.exec(d.svg);
       settle(req, { url: "data:image/svg+xml;charset=utf-8," + encodeURIComponent(d.svg), w: m ? Number(m[1]) : 0, h: m ? Number(m[2]) : 0 });
     } else {
@@ -126,6 +143,7 @@
 
   function request(src, isDark, vars, box, done) {
     var key = (isDark ? "d" : "l") + "\n" + src;
+    if (src.length > MAX_SOURCE) { done({ err: "too large" }); return; }
     if (cache.has(key)) { var hit = cache.get(key); remember(key, hit); done(hit); return; }
     done.box = box;
     var req = byKey[key];

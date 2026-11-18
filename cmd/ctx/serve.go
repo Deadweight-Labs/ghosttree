@@ -96,6 +96,9 @@ const (
 	envPublicURL      = "GHOSTTREE_PUBLIC_URL"
 	envCheckPublicURL = "GHOSTTREE_CHECK_PUBLIC_URL"
 	envTrustedProxies = "GHOSTTREE_TRUSTED_PROXIES"
+	// envMetricsToken is the bearer token with which a scraper reads /metrics from
+	// outside the machine; without it only the machine itself reads them.
+	envMetricsToken = "GHOSTTREE_METRICS_TOKEN"
 	// envDistDir names a directory with the ctx release archives and
 	// checksums.txt; the server then serves /install.sh and /dist/.
 	envDistDir = "GHOSTTREE_DIST_DIR"
@@ -573,6 +576,9 @@ func accessEnforcedByEnv() bool { return strings.TrimSpace(os.Getenv(envEnforceA
 const accessLogModeWarning = "WARNING: GHOSTTREE_ENFORCE_ACCESS=0: roles inside an organization are only logged (\"access: would deny\"), " +
 	"not enforced. Only use this on a server with a single user. Organization borders, private transcripts and snapshots are enforced anyway."
 
+// minMetricsToken is the shortest token that counts: a short one is guessed.
+const minMetricsToken = 16
+
 func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http.Handler {
 	root := http.NewServeMux()
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
@@ -588,6 +594,13 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	}
 	if cfg.PublicURL != "" {
 		options = append(options, server.WithPublicURL(cfg.PublicURL))
+	}
+	if token := strings.TrimSpace(os.Getenv(envMetricsToken)); token != "" {
+		if len(token) < minMetricsToken {
+			logger.Warn("metrics_token", "note", envMetricsToken+" is shorter than 16 characters and is ignored; /metrics stays for this machine only")
+		} else {
+			options = append(options, server.WithMetricsToken(token))
+		}
 	}
 	if len(cfg.SnapshotRoots) > 0 {
 		options = append(options, server.WithSnapshotMirror(&rootedSnapshotMirror{source: st, roots: cfg.SnapshotRoots}))

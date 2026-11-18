@@ -1,8 +1,11 @@
 package server
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -279,4 +282,36 @@ func escapeLabel(value string) string {
 
 func formatFloat(value float64) string {
 	return strconv.FormatFloat(value, 'g', -1, 64)
+}
+
+// metricsGate lets /metrics through for the machine itself (the client address,
+// read through the trusted proxies, is loopback) and for the holder of the metrics
+// token. Anyone else gets what an unknown address gets: not found, so that the
+// route does not even show up.
+func (a *api) metricsGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.metricsAllowed(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	})
+}
+
+func (a *api) metricsAllowed(r *http.Request) bool {
+	if a.metricsToken != "" {
+		got := sha256.Sum256([]byte(strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))))
+		want := sha256.Sum256([]byte(a.metricsToken))
+		if subtle.ConstantTimeCompare(got[:], want[:]) == 1 {
+			return true
+		}
+	}
+	return a.fromThisMachine(r)
+}
+
+// fromThisMachine reports whether the client address, read through the trusted
+// proxies, is loopback.
+func (a *api) fromThisMachine(r *http.Request) bool {
+	ip, err := netip.ParseAddr(a.clientAddr(r))
+	return err == nil && ip.Unmap().IsLoopback()
 }

@@ -26,9 +26,9 @@ var Capabilities = []string{"anchor", "origin", "packages", "query", "labels", "
 
 // Info is the body of GET /api/version.
 type Info struct {
-	Version      string   `json:"version"`
+	Version      string   `json:"version,omitempty"`
 	Commit       string   `json:"commit,omitempty"`
-	Channel      string   `json:"channel"`
+	Channel      string   `json:"channel,omitempty"`
 	Protocol     int      `json:"protocol"`
 	MinClient    int      `json:"min_client"`
 	Capabilities []string `json:"capabilities"`

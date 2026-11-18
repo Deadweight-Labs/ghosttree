@@ -20,8 +20,8 @@ import (
 const (
 	MaxAttachmentBytes      = 5 << 20
 	MaxAttachmentPerSubject = 40
-	MaxPixels               = 40_000_000
-	MaxSide                 = 16384
+	MaxPixels               = 16_000_000
+	MaxSide                 = 8192
 	MaxAlt                  = 200
 )
 

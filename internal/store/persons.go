@@ -148,8 +148,8 @@ func (s *Store) AuthenticateScopedPrincipal(token string) (Principal, bool) {
 		FROM api_tokens t JOIN persons p ON p.id = t.account_id
 		LEFT JOIN api_token_scopes sc ON sc.token_id = t.id
 		WHERE t.token_hash = ? AND t.revoked_at = ''
-		  AND (t.expires_at = '' OR t.expires_at > ?) AND p.state = 'active'`,
-		hashToken(token), now()).Scan(&p.TokenID, &p.TokenKind, &p.Machine, &accountID, &p.Label, &p.ScopeProject, &readOnly)
+		  AND (t.expires_at = '' OR t.expires_at > ?) AND p.state = 'active'`+tokenIdleCond,
+		hashToken(token), now(), tokenIdleCutoff()).Scan(&p.TokenID, &p.TokenKind, &p.Machine, &accountID, &p.Label, &p.ScopeProject, &readOnly)
 	if err != nil {
 		return Principal{}, false
 	}

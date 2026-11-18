@@ -228,7 +228,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		}
 		// Only the person reading it marks a notice as seen, not an agent
 		// that opened the page with a token.
-		if fromSignIn(r) {
+		if fromSignIn(r) && pageView(r) {
 			_ = a.store.MarkNamespaceNoticesSeen(me)
 		}
 	}
@@ -739,7 +739,7 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	if link {
 		target, role = shortName(inv.ProjectRemote), roleLabel(l, inv.ProjectRole)
 	}
-	a.inviteLinks.setMail(inv.ID, a.sendInviteMail(r, l, email, target, role, code, link, until))
+	a.inviteLinks.setMail(inv.ID, a.sendInviteMail(r, l, o.ID, email, target, role, code, link, until))
 	// The slug is [a-z0-9-], so it needs no escaping, and the order stays fixed.
 	// The fragment opens the members: without it the page opens at "General".
 	http.Redirect(w, r, "/ui/orgs?org="+o.Slug+"&new="+strconv.FormatInt(inv.ID, 10)+"#members", http.StatusSeeOther)

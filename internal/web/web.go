@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
@@ -82,8 +83,12 @@ type pageData struct {
 	Notice string
 	// DeviceSession: the session belongs to a device (ctx web or a pasted token),
 	// not to a person who signed in; DeviceName is its machine, when it has one.
-	DeviceSession                              bool
-	DeviceName                                 string
+	DeviceSession bool
+	DeviceName    string
+	// LinkSession: the session came from a one-time link and ends at LinkUntil;
+	// ReloginHref leads to the sign-in a refused action needs.
+	LinkSession                                bool
+	LinkUntil, ReloginHref                     string
 	DeviceMachine, DeviceRemote, DeviceStarted string
 	Tokens                                     []tokenRow
 	UnusedTokens                               int
@@ -185,24 +190,56 @@ type appHandler struct {
 	app *app
 }
 
-// ServeHTTP setzt die Sicherheitsköpfe aller /ui/-Seiten, bevor ein Handler
-// antwortet; Handler dürfen sie überschreiben (join.go setzt eigene).
+// ServeHTTP setzt die Schutzköpfe jeder Antwort und die Richtlinie der /ui/-Seiten,
+// bevor ein Handler antwortet; Handler dürfen sie überschreiben (join.go setzt eigene).
 func (h *appHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.app.baseHeaders(w.Header(), r)
 	if r.URL.Path == "/ui" || strings.HasPrefix(r.URL.Path, "/ui/") {
-		uiHeaders(w.Header())
+		h.app.uiHeaders(w.Header())
 	}
 	h.Handler.ServeHTTP(w, r)
 }
 
-// uiHeaders: Skripte, Stile, Schriften und Bilder nur von dieser Herkunft,
-// keine fremden Ressourcen, nicht einbettbar. form-action bleibt offen, weil der
-// Weg zum Identitätsanbieter eine Weiterleitung ist. frame-src 'self' erlaubt
-// den einen unsichtbaren Rahmen, in dem Mermaid zeichnet (mermaid_frame.go);
-// sonst bliebe die Richtlinie wie sie war, ohne 'unsafe-inline' und ohne fremden Host.
-func uiHeaders(h http.Header) {
-	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+// baseHeaders gilt für jede Antwort der Oberfläche, auch Skripte, Installer und
+// Fehlerseiten: kein Erraten des Typs, keine Rechte des Browsers, die eine Seite hier
+// nicht braucht, kein Zugriff fremder Fenster auf dieses (Fenster, die diese Seite
+// selbst öffnet, bleiben erreichbar: der Loopback des Installers), und HSTS dort, wo
+// die Verbindung https ist (eine https-Adresse der Instanz, TLS, oder ein
+// vertrauter Proxy, der https meldet). Ohne includeSubDomains: andere Hosts der
+// Domain gehen diese Instanz nichts an.
+func (a *app) baseHeaders(h http.Header, r *http.Request) {
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "strict-origin")
+	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()")
+	h.Set("Cross-Origin-Opener-Policy", "same-origin-allow-popups")
+	if a.secureCookies(r) {
+		h.Set("Strict-Transport-Security", "max-age=31536000")
+	}
+}
+
+// formAction ist die Direktive form-action: Formulare der Oberfläche gehen an diese
+// Herkunft, und die Anmeldung per OIDC darf zum Identitätsanbieter weiterleiten
+// (Browser wenden form-action auch auf Weiterleitungen an). loopback fügt den
+// Loopback des Installers hinzu, auf den die Freigabe des Beitritts ohne Skript
+// weiterleitet (http://127.0.0.1:<port>/callback).
+func (a *app) formAction(loopback bool) string {
+	sources := []string{"'self'"}
+	if a.oidc != nil {
+		sources = append(sources, a.oidc.formOrigins()...)
+	}
+	if loopback {
+		sources = append(sources, "http://127.0.0.1:*")
+	}
+	return "form-action " + strings.Join(sources, " ")
+}
+
+// uiHeaders: Skripte, Stile, Schriften und Bilder nur von dieser Herkunft,
+// keine fremden Ressourcen, nicht einbettbar, Formulare nur an diese Herkunft
+// (und den Identitätsanbieter). frame-src 'self' erlaubt den einen unsichtbaren
+// Rahmen, in dem Mermaid zeichnet (mermaid_frame.go); sonst bliebe die Richtlinie
+// ohne 'unsafe-inline' und ohne fremden Host.
+func (a *app) uiHeaders(h http.Header) {
+	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'self'; base-uri 'none'; "+a.formAction(false)+"; frame-ancestors 'none'")
 	h.Set("Cache-Control", "no-store")
 }
 
@@ -398,7 +435,9 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	for path, h := range map[string]http.HandlerFunc{
 		"/ui/orgs/accept": a.orgAccept,
 	} {
-		a.handle(mux, "POST "+path, a.requirePerson(limitBody(a.requireCSRF(h))))
+		// An invitation is taken by a person who signed in, like the one of a project
+		// on the invitation page: not by a pasted or device token.
+		a.handle(mux, "POST "+path, a.requirePerson(a.requireSignIn(store.RightAccountSecurity, limitBody(a.requireCSRF(h)))))
 	}
 	a.handle(mux, "GET /ui/{$}", a.uiRoot)
 	a.registerRepoPages(mux)
@@ -418,7 +457,9 @@ func (a *app) renderPost(l lang, w http.ResponseWriter, name string, data pageDa
 	}
 	var output bytes.Buffer
 	if err := l.page().ExecuteTemplate(&output, name, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// The text of a template error names internals; it goes to the log, not to the page.
+		slog.Error("template_failed", "template", name, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -440,6 +481,9 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	data.Interactive = fromSignIn(r)
 	if !data.Interactive && principal.TokenID != 0 {
 		data.DeviceSession, data.DeviceName = true, principal.Machine
+	}
+	if until, ok := r.Context().Value(linkSessionKey{}).(time.Time); ok {
+		data.LinkSession, data.LinkUntil = true, until.Local().Format("15:04")
 	}
 	data.ServerVersion = version.Label(a.buildVersion)
 	data.Shell = a.shellFor(r, name)

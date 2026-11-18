@@ -110,7 +110,7 @@ func TestLongPillAsksTheScriptForItsTitle(t *testing.T) {
 			t.Errorf("sentences lack %q: %s", want, all)
 		}
 	}
-	got := painLinkTarget(langDE, "request:3") + painLinkTarget(langDE, "idea:5") + painLinkTarget(langDE, "knowledge:9") + painLinkTarget(langDE, "weird:x")
+	got := string(painLinkTarget(langDE, "request:3") + painLinkTarget(langDE, "idea:5") + painLinkTarget(langDE, "knowledge:9") + painLinkTarget(langDE, "weird:x"))
 	for _, want := range []string{`data-ref="REQ-3" data-long`, `data-ref="IDEA-5" data-long`, `data-ref="KN-9" data-long`, "weird:x"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("pain links lack %q: %s", want, got)

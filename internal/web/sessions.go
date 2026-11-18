@@ -943,7 +943,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	}
 	raw := rawWanted(qv)
 
-	if !a.store.IndexProgress().Done {
+	if !a.store.IndexProgress().Done && pageView(r) {
 		if err := a.store.IndexSessionContext(r.Context(), sess.ID); err != nil && r.Context().Err() == nil {
 			slog.Warn("session_index_on_demand", "error", err.Error())
 		}
