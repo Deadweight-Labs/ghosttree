@@ -103,7 +103,7 @@ func issueEvents(l lang, acts []requestdomain.Activity, criteria []criterionLine
 	crit := func(n int) template.HTML {
 		return template.HTML(fmt.Sprintf(`<a href="#criterion-%d">%s</a>`, n, html.EscapeString(l.msg("issue.requirement_n", n))))
 	}
-// sentence fills the catalog text: a string argument is escaped, a template.HTML one (a pill, a link) stands as it is.
+	// sentence fills the catalog text: a string argument is escaped, a template.HTML one (a pill, a link) stands as it is.
 	sentence := func(key string, args ...any) template.HTML { return htmlSentence(l, key, args...) }
 	// quote is what a text of a person says under the line of an entry: plain words of the
 	// Markdown (REQ-705), the one function the inbox rows use too.
