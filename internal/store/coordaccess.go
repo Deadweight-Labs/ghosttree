@@ -1117,6 +1117,9 @@ func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 	message.SenderExternalID = actor
 	message.AuthorPrincipalID = a.Principal.ID
 	message.AuthorKind = a.authorKind()
+	// Die Zeit einer Nachricht setzt der Server. Ein vom Client zurückdatierter
+	// Wert ließe die Nachricht aus dem Fenster der Quote fallen.
+	message.CreatedAt = ""
 	message.SenderRole, message.RecipientRole, message.Authority, message.SenderDisplayName = "", "", "", ""
 	message.SenderLabel, message.SenderWorkNote = "", ""
 	// Ein Wartekreis wird vor dem Senden abgeglichen, damit einer, der
