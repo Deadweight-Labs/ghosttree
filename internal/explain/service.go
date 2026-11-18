@@ -273,7 +273,7 @@ const (
 // start begins generation in the background and reports whether one is now
 // running for the object.
 func (s *Service) start(kind string, id int64, src Source) bool {
-	if !s.Enabled() || src.Project == "" {
+	if !s.Enabled() || !src.Generable() {
 		return false
 	}
 	// Only new objects are explained one by one, and not while a batch already
@@ -348,7 +348,7 @@ func (s *Service) Generate(ctx context.Context, kind string, id int64) error {
 	if err != nil {
 		return err
 	}
-	if src.Project == "" {
+	if !src.Generable() {
 		return ErrNotExplainable
 	}
 	// What the model gets leaves this server. Text that looks like a secret

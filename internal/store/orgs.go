@@ -275,6 +275,9 @@ func createOrgTx(tx execQueryer, name, slug string, owner int64) (Org, error) {
 		return Org{}, err
 	}
 	id, _ := res.LastInsertId()
+	if err := setExternalModelsDefaultTx(tx, id, owner); err != nil {
+		return Org{}, err
+	}
 	if _, err := tx.Exec(`INSERT INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,'owner',?)`, id, owner, now()); err != nil {
 		return Org{}, err
 	}

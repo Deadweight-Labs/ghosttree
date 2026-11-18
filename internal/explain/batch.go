@@ -158,7 +158,7 @@ func (s *Service) SubmitBatches(ctx context.Context, limit int) (SubmitReport, e
 		}
 		seen[id] = true
 		src, err := s.st.ExplainSource(c.Kind, c.ID)
-		if err != nil || src.Project == "" {
+		if err != nil || !src.Generable() {
 			continue
 		}
 		e, ok, err := s.st.Explanation(c.Kind, c.ID)
@@ -452,7 +452,7 @@ func (s *Service) finishItem(b OpenBatch, it BatchItem, results map[string]llm.B
 	if state == "saved" {
 		src, err := s.st.ExplainSource(it.Kind, it.ObjectID)
 		switch {
-		case errors.Is(err, ErrNotExplainable) || (err == nil && (src.Project == "" || src.Hash != it.Hash)):
+		case errors.Is(err, ErrNotExplainable) || (err == nil && (!src.Generable() || src.Hash != it.Hash)):
 			// Gone, or edited while the model worked: the text would describe the old one.
 			state = "stale"
 		case err != nil:
