@@ -966,6 +966,13 @@ func (a *ProjectAccess) decisionKnowledge(d idea.Decision, v *idea.Variant, answ
 		title = "vom Agenten: " + title
 		origin = "agent"
 		body.WriteString("\nDecided by an agent, not confirmed by a person. It blocks nothing; a person can overturn it with decision_reopen.\n")
+		// The aspects that kept the decision with the agent are what the agent said
+		// of its own question; nobody checked them.
+		declared := "none"
+		if len(d.Aspects) > 0 {
+			declared = strings.Join(d.Aspects, ", ")
+		}
+		fmt.Fprintf(&body, "Aspects as the agent declared them (not checked): %s.\n", declared)
 	}
 	if len(d.Votes) > 0 {
 		body.WriteString("\n**Votes:**")

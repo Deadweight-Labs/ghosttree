@@ -5,8 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 func painTaskRun(t *testing.T, args ...string) (int, string) {
@@ -82,8 +84,14 @@ func TestTaskCLI(t *testing.T) {
 	if code, _ := add("--kind", "action", "--title", "Handgriff"); code != 0 {
 		t.Fatal("second task")
 	}
-	if code, out := painTaskRun(t, "task", "done", "1", "2", "--note", "erledigt"); code != 0 || strings.Count(out, "done") < 2 {
-		t.Errorf("done: %d %s", code, out)
+	// Erledigt meldet ein Mensch im Browser; die CLI weist darauf hin.
+	if code, out := painTaskRun(t, "task", "done", "1", "2", "--note", "erledigt"); code == 0 || !strings.Contains(out, "web_session_required") {
+		t.Errorf("done over the token: %d %s", code, out)
+	}
+	for _, id := range []int64{1, 2} {
+		if _, err := st.Access(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}).MarkTasksDone([]int64{id}, "erledigt", humantask.Actor{AccountID: 1, Person: "alice", Web: true}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if code, out := painTaskRun(t, "task", "reopen", "2"); code == 0 || !strings.Contains(out, "reason") {
 		t.Errorf("reopen without reason: %d %s", code, out)

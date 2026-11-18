@@ -62,6 +62,25 @@ func (f orgFixture) mustCall(t *testing.T, want int, method, path, token string,
 	return out
 }
 
+// accept nimmt die Einladung für das Konto hinter dem Token über den Store an:
+// die API tut das nicht mehr, das ist Sache der Weboberfläche.
+func (f orgFixture) accept(t *testing.T, token string, code any) {
+	t.Helper()
+	if err := f.tryAccept(token, code); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+}
+
+func (f orgFixture) tryAccept(token string, code any) error {
+	p, ok := f.st.AuthenticatePrincipal(token)
+	if !ok {
+		return errors.New("unknown token")
+	}
+	c, _ := code.(string)
+	_, err := f.st.AcceptInvitation(p.ID, c)
+	return err
+}
+
 // invite stellt eine Einladung über den Store aus: die API tut das nicht mehr,
 // das ist Sache der Weboberfläche. Die Antwort hat die Form der früheren.
 func (f orgFixture) invite(t *testing.T, actor, org, email, role string) map[string]any {
@@ -110,9 +129,20 @@ func TestOrgMembersInvitationsAndPrivacy(t *testing.T) {
 		t.Fatal("the code must not appear in listings")
 	}
 	// Falscher Code, richtiger Code, zweite Verwendung.
-	f.mustCall(t, 400, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": "wrong"})
-	f.mustCall(t, 200, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": code})
-	f.mustCall(t, 400, "POST", "/api/invitations/accept", f.ben, map[string]any{"code": code})
+	if err := f.tryAccept(f.anna, "wrong"); !errors.Is(err, store.ErrCodeInvalid) {
+		t.Fatalf("wrong code: %v", err)
+	}
+	f.accept(t, f.anna, code)
+	if err := f.tryAccept(f.ben, code); !errors.Is(err, store.ErrCodeInvalid) {
+		t.Fatalf("second use: %v", err)
+	}
+	// Ein Token nimmt keine Einladung an, mit keinem Code (AC: Mitglied wird
+	// man im Browser); die Antwort verrät nichts über den Code.
+	for _, c := range []string{code, "wrong"} {
+		if status, out := f.call(t, "POST", "/api/invitations/accept", f.carl, map[string]any{"code": c}); status != 403 || out["code"] != "web_session_required" {
+			t.Fatalf("token accept: %d %v", status, out)
+		}
+	}
 
 	// Mitglied sieht Mitglieder, lädt aber nicht ein und ändert keine Rollen.
 	f.mustCall(t, 200, "GET", "/api/orgs/alpha/members", f.anna, nil)
@@ -141,41 +171,44 @@ func TestOrgMembersInvitationsAndPrivacy(t *testing.T) {
 	if err := f.st.RevokeInvitation("person:2", 1, int64(id)); err != nil {
 		t.Fatal(err)
 	}
-	f.mustCall(t, 400, "POST", "/api/invitations/accept", f.ben, map[string]any{"code": inv["code"]})
+	if err := f.tryAccept(f.ben, inv["code"]); !errors.Is(err, store.ErrCodeInvalid) {
+		t.Fatalf("accept after revoke: %v", err)
+	}
 }
 
 func itoa(i int) string { return strconv.Itoa(i) }
 
-// Eine an eine E-Mail gebundene Einladung geht über die API nur für ein Konto,
-// dessen E-Mail der Betreiber oder ein verifizierter Claim gesetzt hat.
-func TestAPIInvitationBoundToEmail(t *testing.T) {
+// Eine an eine E-Mail gebundene Einladung nimmt nur ein Konto an, dessen E-Mail
+// der Betreiber oder ein verifizierter Claim gesetzt hat.
+func TestInvitationBoundToEmail(t *testing.T) {
 	f := newOrgFixture(t)
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Alpha", "slug": "alpha"})
 	// Der Eingeladene muss die Adresse haben; carl hat keine.
 	inv := f.invite(t, "person:1", "alpha", "ben@example.test", "")
-	out := f.mustCall(t, 403, "POST", "/api/invitations/accept", f.carl, map[string]any{"code": inv["code"]})
-	if out["code"] != "invitation_email" {
-		t.Fatalf("account without a matching email: %v", out)
+	if err := f.tryAccept(f.carl, inv["code"]); !errors.Is(err, store.ErrInvitationEmail) {
+		t.Fatalf("account without a matching email: %v", err)
 	}
-	f.mustCall(t, 200, "POST", "/api/invitations/accept", f.ben, map[string]any{"code": inv["code"]})
+	f.accept(t, f.ben, inv["code"])
 }
 
-func TestAPIInvitationBruteForceAndLimits(t *testing.T) {
+// Falsche Codes sperren das Konto, ein anderes Konto nicht, und über die API
+// gibt es für Tokens nichts zu erraten.
+func TestInvitationBruteForceAndLimits(t *testing.T) {
 	f := newOrgFixture(t)
 	for i := 0; i < 5; i++ {
-		f.mustCall(t, 400, "POST", "/api/invitations/accept", f.carl, map[string]any{"code": "guess"})
+		if err := f.tryAccept(f.carl, "guess"); !errors.Is(err, store.ErrCodeInvalid) {
+			t.Fatalf("wrong code %d: %v", i, err)
+		}
 	}
-	if code, out := f.call(t, "POST", "/api/invitations/accept", f.carl, map[string]any{"code": "guess"}); code != 429 || out["code"] != "too_many_attempts" {
-		t.Fatalf("after five wrong codes: %d %v", code, out)
+	if err := f.tryAccept(f.carl, "guess"); !errors.Is(err, store.ErrTooManyAttempts) {
+		t.Fatalf("after five wrong codes: %v", err)
 	}
 	// Ein anderes Konto ist nicht betroffen.
-	f.mustCall(t, 400, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": "guess"})
-
+	if err := f.tryAccept(f.anna, "guess"); !errors.Is(err, store.ErrCodeInvalid) {
+		t.Fatalf("another account: %v", err)
+	}
 	// Körper über der Grenze: 413, kein Speicher für beliebig große Bodies.
 	big := strings.Repeat("a", maxOrgBody+10)
-	if code, _ := f.call(t, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": big}); code != 413 {
-		t.Fatalf("oversized body: %d", code)
-	}
 	if code, _ := f.call(t, "POST", "/api/orgs", f.robin, map[string]any{"name": big}); code != 413 {
 		t.Fatalf("oversized org body: %d", code)
 	}
@@ -187,7 +220,7 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Beta", "slug": "beta"})
 	for _, org := range []string{"alpha", "beta"} {
 		inv := f.invite(t, "person:1", org, "", "member")
-		f.mustCall(t, 200, "POST", "/api/invitations/accept", f.ben, map[string]any{"code": inv["code"]})
+		f.accept(t, f.ben, inv["code"])
 		o, err := f.st.OrgByRef(org)
 		if err != nil {
 			t.Fatal(err)
@@ -197,7 +230,7 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 		}
 	}
 	inv := f.invite(t, "person:1", "alpha", "", "")
-	f.mustCall(t, 200, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": inv["code"]})
+	f.accept(t, f.anna, inv["code"])
 
 	// REQ-623: ohne Präfix und ohne bestätigtes eigenes GitHub-Login bleibt eine
 	// neue Remote unbeansprucht; Sessions darin laufen ohne Projekt.
@@ -219,11 +252,16 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 	}
 	// Jedes Mitglied legt in seiner Org an und wird Owner des Projekts (17 A,
 	// #4376); wer nicht Mitglied ist, nicht.
-	if out := f.mustCall(t, 200, "POST", "/api/projects/claim", f.anna, map[string]any{"remote": "https://gitlab.com/x/annas.git", "org": "alpha"}); out["org"] != "alpha" {
-		t.Fatalf("claim by a plain member: %v", out)
+	// A repository address on a host other than GitHub is claimed by an owner of
+	// the organization: nothing proves that the one who asks owns it.
+	if code, out := f.call(t, "POST", "/api/projects/claim", f.anna, map[string]any{"remote": "https://gitlab.com/x/annas.git", "org": "alpha"}); code != 403 || out["code"] != "not_org_owner" {
+		t.Fatalf("claim of an address by a plain member: %d %v", code, out)
 	}
-	if role := f.st.ProjectRole("gitlab.com/x/annas", "person:2"); role.Role != "owner" {
-		t.Fatalf("the member who created it: %+v", role)
+	if _, ok := f.st.ProjectByRemote("gitlab.com/x/annas"); ok {
+		t.Fatal("a refused claim left a project")
+	}
+	if out := f.mustCall(t, 200, "POST", "/api/projects/claim", f.robin, map[string]any{"remote": "https://gitlab.com/x/annas.git", "org": "alpha"}); out["org"] != "alpha" {
+		t.Fatalf("claim by an owner: %v", out)
 	}
 	if code, out := f.call(t, "POST", "/api/projects/claim", f.carl, map[string]any{"remote": "https://gitlab.com/x/three.git", "org": "alpha"}); code != 403 || out["code"] != "not_org_member" {
 		t.Fatalf("claim by a non-member: %d %v", code, out)
@@ -303,7 +341,7 @@ func TestProjectInvitationsNeedAWebSessionAndGuestsSeeFewMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Ein unbekannter und ein verbrauchter Code bekommen dieselbe Antwort.
-	f.mustCall(t, 400, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": strings.Repeat("ab", 32)})
+	f.mustCall(t, 403, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": strings.Repeat("ab", 32)})
 	out := f.mustCall(t, 403, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": guest})
 	if out["code"] != "web_session_required" {
 		t.Fatalf("token accept of a project invitation: %v", out)

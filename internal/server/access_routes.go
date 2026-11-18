@@ -298,6 +298,13 @@ func (a *api) guardChecked(pattern string, next http.Handler) http.Handler {
 	})
 }
 
+// writeNotFound ist die eine Antwort auf "gibt es nicht" und "darfst du nicht
+// sehen": Byte für Byte dieselbe wie die von denyAccess für ein verborgenes
+// Objekt, damit eine Nummer nichts darüber verrät, ob es sie gibt.
+func writeNotFound(w http.ResponseWriter) {
+	writeCoded(w, http.StatusNotFound, "not_found", "not found")
+}
+
 // denyAccess übersetzt einen Zugriffsfehler in 404 oder 403. Gibt true zurück,
 // wenn geantwortet wurde.
 func denyAccess(w http.ResponseWriter, err error) bool {
@@ -325,10 +332,7 @@ func (a *api) overfetch(limit int) int {
 	if limit <= 0 {
 		limit = 20
 	}
-	if a.st.AccessEnforced() {
-		return limit * 4
-	}
-	return limit
+	return limit * 4
 }
 
 // filterTo behält die Einträge, die keep zulässt, höchstens limit viele.
@@ -442,7 +446,7 @@ func (a *api) checkKnowledgeRef(w http.ResponseWriter, r *http.Request, id int64
 	k, err := a.st.KnowledgeRef(id)
 	if errors.Is(err, sql.ErrNoRows) {
 		a.access(r).Filtered()
-		writeErr(w, http.StatusNotFound, "no such knowledge entry")
+		writeNotFound(w)
 		return false
 	}
 	if err != nil {
@@ -458,7 +462,7 @@ func (a *api) checkMigration(w http.ResponseWriter, r *http.Request, id int64) b
 	project, err := a.st.MigrationProject(id)
 	if errors.Is(err, sql.ErrNoRows) {
 		a.access(r).Filtered()
-		writeErr(w, http.StatusNotFound, "no such migration run")
+		writeNotFound(w)
 		return false
 	}
 	if err != nil {
@@ -518,9 +522,14 @@ func (a *api) noteRequestHits(r *http.Request, hits []requestdomain.SearchHit) {
 func (a *api) checkDocument(w http.ResponseWriter, r *http.Request, id int64, act store.Action) bool {
 	pa := a.access(r)
 	d, err := a.st.DocumentByID(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		pa.Filtered()
+		writeNotFound(w)
+		return false
+	}
 	if err != nil {
 		pa.Filtered()
-		writeStoreError(w, http.StatusNotFound, err)
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return false
 	}
 	return !denyAccess(w, pa.CheckDocument(d, act))

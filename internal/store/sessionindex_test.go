@@ -390,12 +390,19 @@ func TestGuestAlsoNeedsTheGuestLevelForHitsInsideASession(t *testing.T) {
 	}
 }
 
-func TestEnforcementOffKeepsEverythingVisible(t *testing.T) {
+// Der Log-Modus lässt die Rollenmatrix innerhalb der Org offen, aber nie ein
+// privates Transkript und nie eine fremde Org.
+func TestEnforcementOffKeepsRolesOpenButNotPrivateTranscripts(t *testing.T) {
 	st := accessFixture(t) // Log-Modus
-	addSession(t, st, "a", 1, roleProject, "m", "", transcriptWith("zebra"))
-	_, got := searchIDs(t, st, viewer(st, "person:5", "gus"), "zebra")
+	addSession(t, st, "a", 1, roleProject, "m", VisProject, transcriptWith("zebra"))
+	addSession(t, st, "b", 1, roleProject, "m", "", transcriptWith("zebra"))
+	_, got := searchIDs(t, st, viewer(st, "person:3", "mia"), "zebra")
 	if !sameKeys(got, "a") {
-		t.Errorf("log mode must not hide: %v", got)
+		t.Errorf("log mode must show the shared and hide the private session: %v", got)
+	}
+	_, got = searchIDs(t, st, viewer(st, "person:6", "nora"), "zebra")
+	if len(got) != 0 {
+		t.Errorf("log mode shows sessions to an account outside the organization: %v", got)
 	}
 }
 
@@ -756,7 +763,7 @@ func TestFacetsAndFiltersNarrowTheReadableSet(t *testing.T) {
 	st := orgStore(t, "robin", "mia")
 	addSession(t, st, "a", 1, "", "mainex", "", transcriptWith("zebra"))
 	addSession(t, st, "b", 1, "", "laptop", "", transcriptWith("zebra"))
-	if _, err := st.UpsertSession(Session{Harness: "codex", ExternalID: "c", AccountID: 2, Scope: scope.Axes{Machine: "mainex"}}); err != nil {
+	if _, err := st.UpsertSession(Session{Harness: "codex", ExternalID: "c", AccountID: 1, Scope: scope.Axes{Machine: "mainex"}}); err != nil {
 		t.Fatal(err)
 	}
 	pa := viewer(st, "person:1", "robin")
@@ -776,7 +783,7 @@ func TestFacetsAndFiltersNarrowTheReadableSet(t *testing.T) {
 		t.Errorf("machine facets = %v", counts)
 	}
 	mine, _ := st.BrowseSessions(pa, SessionFilter{Mine: true}, "", 50)
-	if len(mine.Rows) != 2 {
+	if len(mine.Rows) != 3 {
 		t.Errorf("mine rows = %d", len(mine.Rows))
 	}
 	codex, _ := st.BrowseSessions(pa, SessionFilter{Harness: "codex"}, "", 50)

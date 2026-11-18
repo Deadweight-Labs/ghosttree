@@ -9,7 +9,7 @@ func TestNamedProjectCreationOverTheAPI(t *testing.T) {
 	f := newOrgFixture(t)
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Alpha", "slug": "alpha"})
 	inv := f.invite(t, "person:1", "alpha", "", "member")
-	f.mustCall(t, 200, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": inv["code"]})
+	f.accept(t, f.anna, inv["code"])
 
 	// A plain member creates a project and owns it; the id carries the organization.
 	out := f.mustCall(t, 201, "POST", "/api/projects", f.anna, map[string]any{"name": "infra", "org": "alpha"})
@@ -55,7 +55,7 @@ func TestNamedProjectsOfOtherOrganizationsAreInvisible(t *testing.T) {
 	f.mustCall(t, 201, "POST", "/api/projects", f.robin, map[string]any{"name": "infra", "org": "alpha"})
 	f.mustCall(t, 201, "POST", "/api/projects", f.robin, map[string]any{"name": "infra", "org": "beta"})
 	inv := f.invite(t, "person:1", "beta", "", "member")
-	f.mustCall(t, 200, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": inv["code"]})
+	f.accept(t, f.anna, inv["code"])
 
 	write := func(token, project string) (int, map[string]any) {
 		return f.call(t, "POST", "/api/knowledge", token, map[string]any{"type": "note", "title": "t", "body": "b", "scope": map[string]any{"project": project}})
@@ -94,7 +94,7 @@ func TestHostlessTwoSegmentRemotesKeepWorkingOverTheAPI(t *testing.T) {
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Alpha", "slug": "alpha"})
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Beta", "slug": "beta"})
 	inv := f.invite(t, "person:1", "beta", "", "member")
-	f.mustCall(t, 200, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": inv["code"]})
+	f.accept(t, f.anna, inv["code"])
 	write := func(token, project string) (int, map[string]any) {
 		return f.call(t, "POST", "/api/knowledge", token, map[string]any{"type": "note", "title": "t", "body": "b", "scope": map[string]any{"project": project}})
 	}
@@ -129,7 +129,7 @@ func TestProjectCreationWorksForCLIAndLegacyTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	inv := f.invite(t, "person:1", "alpha", "", "member")
-	f.mustCall(t, 200, "POST", "/api/invitations/accept", legacy, map[string]any{"code": inv["code"]})
+	f.accept(t, legacy, inv["code"])
 	f.mustCall(t, 201, "POST", "/api/projects", f.robin, map[string]any{"name": "cli-made", "org": "alpha"})
 	f.mustCall(t, 201, "POST", "/api/projects", legacy, map[string]any{"name": "legacy-made", "org": "alpha"})
 }

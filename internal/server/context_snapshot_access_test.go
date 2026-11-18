@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"strings"
 	"testing"
@@ -157,14 +156,16 @@ func TestContextSnapshotExplicitRevocationStillBitesForMembers(t *testing.T) {
 	f.expect(t, "mia", 403, "GET", "/api/context-snapshots?project="+accProject, nil)
 }
 
-func TestContextSnapshotsLogModeKeepsBehaviourAndLogsWouldDeny(t *testing.T) {
+// Ein Snapshot ist die Kopie des ganzen Projekts: er gilt im Log-Modus wie unter
+// Durchsetzung, für Fremde einer anderen Org und für Gäste kommt die Antwort
+// eines unbekannten Snapshots.
+func TestContextSnapshotsStayClosedInLogMode(t *testing.T) {
 	f := accessAPI(t, false)
-	var buf bytes.Buffer
-	f.st.SetAccessMode(store.AccessMode{Logger: slog.New(slog.NewTextHandler(&buf, nil))})
-	f.expect(t, "nora", 201, "POST", "/api/context-snapshots", snapshotBody(accProject, "log"))
-	f.expect(t, "gus", 200, "GET", snapURL("log", accProject, ""), nil)
-	out := buf.String()
-	if !strings.Contains(out, "would deny") || !strings.Contains(out, "resource=snapshot") {
-		t.Fatalf("no would-deny line: %s", out)
+	f.expect(t, "lena", 201, "POST", "/api/context-snapshots", snapshotBody(accProject, "log"))
+	f.expect(t, "mia", 200, "GET", snapURL("log", accProject, ""), nil)
+	for _, who := range []string{"nora", "gus"} {
+		f.expect(t, who, 404, "POST", "/api/context-snapshots", snapshotBody(accProject, "log-"+who))
+		f.expect(t, who, 404, "GET", snapURL("log", accProject, ""), nil)
+		f.expect(t, who, 404, "GET", snapURL("log", accProject, "/entries"), nil)
 	}
 }

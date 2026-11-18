@@ -151,6 +151,11 @@ func (a CoordAccess) roomAccess(roomKey string, via Action) (CoordRoom, error) {
 			return CoordRoom{}, err
 		}
 		if a.publicOnly {
+			// public_only gibt es nur für Projekträume (und dort mit Projektrolle,
+			// siehe projectRoomGate); jeder andere Raum verlangt Mitgliedschaft.
+			if room.Kind != RoomProject {
+				return CoordRoom{}, noMembershipError(room.Kind)
+			}
 			return room, nil
 		}
 		if a.AgentExternalID != "" {
@@ -890,6 +895,9 @@ func (a CoordAccess) roomAccessTx(tx *sql.Tx, actor, roomKey string, via Action)
 			return err
 		}
 		if a.publicOnly {
+			if kind != RoomProject {
+				return noMembershipError(kind)
+			}
 			return nil
 		}
 		var member int
@@ -1869,7 +1877,7 @@ func (a CoordAccess) RoomThreads(roomKey string) ([]RoomThread, error) {
 	if err := a.roomAccessTx(tx, actor, roomKey, ActRead); err != nil {
 		return nil, err
 	}
-	viewer := SessionViewer{Enforced: a.Store.AccessEnforced(), Owner: instanceOwnerID(tx)}
+	viewer := SessionViewer{Enforced: true, Owner: instanceOwnerID(tx)}
 	viewer.Account, _ = accountNumericID(a.Principal.ID)
 	all, err := roomThreadsTx(tx, roomKey, viewer)
 	if err != nil {
@@ -3020,9 +3028,11 @@ func (a CoordAccess) validatePrivateRecipients(actor string, principals []string
 // projectRoomGate legt die Projektrolle über die Mitgliedschaft im Projektraum
 // (Spec 8.1, Koordination): ohne Rolle im Projekt gibt es den Raum nicht, der
 // Gast liest und schreibt (seine Beiträge gelten als Bitten), Agenten und Peers
-// zeigt der Raum erst ab member. DMs, Gruppen und Maschinenräume bleiben bei der
-// reinen Mitgliedschaft; ein Projekt-Owner liest keine fremden DMs. Mit tx wird
-// die Rolle in derselben Transaktion gelesen, sonst über den Store.
+// zeigt der Raum erst ab member. Ein Gast-Agent kommt aber nur noch über eine
+// frühere Anmeldung in den Raum (registerCoordAgent nimmt keine neuen auf). DMs,
+// Gruppen und Maschinenräume bleiben bei der reinen Mitgliedschaft; ein
+// Projekt-Owner liest keine fremden DMs. Mit tx wird die Rolle in derselben
+// Transaktion gelesen, sonst über den Store.
 //
 // Eine Remote ohne Projektzeile ist unbeansprucht. Ihr Raum öffnet sich nur
 // Konten, die unter der Remote selbst gearbeitet haben (eigene Sessions oder

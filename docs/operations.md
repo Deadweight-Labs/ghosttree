@@ -255,9 +255,11 @@ writes reject suspected secrets instead of rewriting them. Regex redaction is a
 last line of defense, not a guarantee. The current bearer token identifies who
 made a change. Snapshot reads, creates, and release bindings additionally
 require explicit per-project capabilities. Per-project roles (owner, lead,
-member, guest) decide what an account may read and write, but they are only
-enforced when the server runs with `GHOSTTREE_ENFORCE_ACCESS=1`; without it the
-server only logs what it would have refused.
+member, guest) decide what an account may read and write. They are enforced by
+default; only the explicit value `GHOSTTREE_ENFORCE_ACCESS=0` switches to a log
+mode for a server with a single user, where roles inside an organization are
+only logged. The border between organizations, private transcripts and project
+snapshots hold in both modes.
 
 Security reports belong at
 [security@deadweightlabs.com](mailto:security@deadweightlabs.com), not in a

@@ -86,10 +86,11 @@ func Doctor(ctx context.Context, o Options, env Env) []Check {
 		add(Check{Name: "server key", OK: true, Detail: SecretKey + " (keep a copy with your backups)"})
 	}
 
-	if envText, _ := os.ReadFile(o.path(ServerEnv)); strings.Contains(string(envText), "GHOSTTREE_ENFORCE_ACCESS=1") {
+	// Roles are enforced unless the environment file switches them off.
+	if envText, _ := os.ReadFile(o.path(ServerEnv)); !accessSwitchedOff(string(envText)) {
 		add(Check{Name: "access control", OK: true, Detail: "roles are enforced"})
 	} else {
-		add(Check{Name: "access control", Detail: "GHOSTTREE_ENFORCE_ACCESS=1 is not set in " + ServerEnv + ": roles are only logged, not enforced", Fix: "add GHOSTTREE_ENFORCE_ACCESS=1 and restart"})
+		add(Check{Name: "access control", Detail: "GHOSTTREE_ENFORCE_ACCESS=0 in " + ServerEnv + ": roles inside an organization are only logged, not enforced", Fix: "remove GHOSTTREE_ENFORCE_ACCESS=0 and restart"})
 	}
 
 	if out, err := env.Sys.Run(ctx, "systemctl", "is-active", BackupTime); err != nil || strings.TrimSpace(out) != "active" {
@@ -194,4 +195,17 @@ func shortErr(err error) string {
 		s = s[:120] + "…"
 	}
 	return s
+}
+
+// accessSwitchedOff reports whether an environment file sets
+// GHOSTTREE_ENFORCE_ACCESS to 0; the last assignment wins, as for systemd.
+func accessSwitchedOff(envText string) bool {
+	off := false
+	for _, line := range strings.Split(envText, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "export "))
+		if v, ok := strings.CutPrefix(line, "GHOSTTREE_ENFORCE_ACCESS="); ok {
+			off = strings.Trim(strings.TrimSpace(v), `"'`) == "0"
+		}
+	}
+	return off
 }

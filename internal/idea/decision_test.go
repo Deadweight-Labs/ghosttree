@@ -1,6 +1,7 @@
 package idea
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -61,6 +62,21 @@ func TestChooseWay(t *testing.T) {
 		if code(err) != tc.err || way != tc.want || (err == nil && len(why) == 0) {
 			t.Errorf("%s: %q %v %v", tc.name, way, why, err)
 		}
+	}
+}
+
+// What keeps a decision with the agent is the agent's own word about its
+// question; the reason says so, and the person's choice carries no such note.
+func TestAgentDecisionNamesItsAspectsAsSelfDeclared(t *testing.T) {
+	_, why, err := ChooseWay("", nil, PolicyRule, true)
+	if err != nil || !slices.Contains(why, AspectsDeclaredNote) {
+		t.Fatalf("agent decides by the rule: %v %v", why, err)
+	}
+	if _, why, _ := ChooseWay("", []string{AspectCost}, PolicyRule, true); slices.Contains(why, AspectsDeclaredNote) {
+		t.Errorf("a decision left to a person carries the note: %v", why)
+	}
+	if _, why, _ := ChooseWay("", nil, PolicyRule, false); slices.Contains(why, AspectsDeclaredNote) {
+		t.Errorf("a person asking carries the note: %v", why)
 	}
 }
 

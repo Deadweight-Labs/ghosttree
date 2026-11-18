@@ -13,24 +13,22 @@ import "strings"
 // It is a superset of what CanSeeKnowledge allows, never a replacement: the
 // exact rule (confidence by role, the machine axis, entries held back from a
 // private session) is still applied to each row that gets through. Without
-// enforcement there is nothing to filter.
+// enforcement the roles inside an organization are not filtered, but the
+// projects of other organizations are out of the query in every mode.
 func (a *ProjectAccess) KnowledgePrefilter() KnowledgePrefilter {
-	if !a.st.AccessEnforced() {
-		return KnowledgePrefilter{}
-	}
 	if !a.valid {
 		return KnowledgePrefilter{SQL: "0"}
 	}
 	clauses := []string{`k.project = ''`}
 	var args []any
-	if projects := a.Projects(); len(projects) > 0 {
+	if projects := a.prefilterProjects(); len(projects) > 0 {
 		clauses = append(clauses, `k.project IN (`+placeholders(len(projects))+`)`)
 		for _, p := range projects {
 			args = append(args, p)
 		}
 	}
 	unclaimed := `(k.project != '' AND k.project NOT IN (SELECT remote FROM projects)`
-	if a.IsAdmin() {
+	if a.IsAdmin() || !a.st.AccessEnforced() {
 		unclaimed += `)`
 	} else {
 		unclaimed += ` AND k.id IN (SELECT knowledge_id FROM knowledge_authors WHERE account_id = ?))`

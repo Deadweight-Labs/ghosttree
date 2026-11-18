@@ -1024,7 +1024,7 @@ var messages = map[string]string{
 	"adm.err.no_role":            "That account holds no role in this project.",
 	"adm.err.project":            "Project not found.",
 	"adm.err.input":              "Check the form and try again.",
-	"adm.err.guest_link":         "Guest links need project visibility to be enforced on this server (GHOSTTREE_ENFORCE_ACCESS=1).",
+	"adm.err.guest_link":         "Guest links need project visibility to be enforced on this server (it runs with GHOSTTREE_ENFORCE_ACCESS=0).",
 	"adm.err.too_many":           "Too many pending invitations; revoke some first.",
 	"adm.err.code":               "That code is invalid, expired or already used.",
 	"adm.err.email":              "That invitation is bound to another email address.",

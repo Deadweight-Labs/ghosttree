@@ -565,7 +565,7 @@ func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
 	k, err := a.st.KnowledgeByID(id)
 	if err == sql.ErrNoRows {
 		a.access(r).Filtered()
-		writeErr(w, http.StatusNotFound, "no such knowledge entry")
+		writeNotFound(w)
 		return
 	}
 	if err != nil {
@@ -596,7 +596,7 @@ func (a *api) knowledgeHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		a.access(r).Filtered()
-		writeErr(w, http.StatusNotFound, "no such knowledge entry")
+		writeNotFound(w)
 		return
 	}
 	if err != nil {
@@ -664,6 +664,22 @@ func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 	if err := readJSON(r, &patch); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
+	}
+	// Herkunft und Ersetzung sind keine Felder zum Patchen: wer ersetzt, geht über
+	// /supersede (mit den Prüfungen von Projekt und Lesbarkeit), die Herkunft setzt
+	// der Server. Der Status geht nur zusammen mit einer Beurteilung (Prüfseite)
+	// oder auf deprecated.
+	for _, field := range []string{"origin", "superseded_by"} {
+		if _, ok := patch[field]; ok {
+			writeCoded(w, http.StatusBadRequest, "field_not_patchable", "field "+field+" is not patchable here")
+			return
+		}
+	}
+	if status, ok := patch["status"]; ok && status != "deprecated" {
+		if _, judged := patch["confidence"]; !judged {
+			writeCoded(w, http.StatusBadRequest, "field_not_patchable", "status can only be set to deprecated, or together with a judgement (confidence)")
+			return
+		}
 	}
 	// Der Token ist die einzige vertrauenswürdige Quelle für den Bestätiger;
 	// ein mitgesendeter Name darf keine fremde Freigabe vortäuschen. Die
@@ -878,14 +894,13 @@ func (a *api) searchSessions(st *store.Store, pa *store.ProjectAccess, q string,
 	// läuft über den ganzen Index, die Laufzeit hängt also von den Treffern
 	// verborgener Sessions mit ab.
 	var readable func(store.Session) bool
-	var pre store.SessionPrefilter
+	pre := pa.TranscriptPrefilter()
 	if a.st.AccessEnforced() {
 		fetchSessions = limit
-		pre = pa.TranscriptPrefilter()
-		if !pre.Exact || viewFilter.Machine != "" || viewFilter.Branch != "" {
-			readable = func(sess store.Session) bool {
-				return pa.CanSeeTranscript(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
-			}
+	}
+	if !pre.Exact || viewFilter.Machine != "" || viewFilter.Branch != "" {
+		readable = func(sess store.Session) bool {
+			return pa.CanSeeTranscript(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
 		}
 	}
 	hits, err := st.SearchSessionsWith(q, store.SessionSearch{

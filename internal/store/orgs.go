@@ -333,6 +333,11 @@ func (s *Store) CreateOrg(ownerPrincipal, name, slug string) (Org, error) {
 	if isServiceTx(tx, owner) {
 		return Org{}, ErrServiceAccount
 	}
+	// A guest stays a guest: owning an organization would end every rule that is
+	// built for guests (see ensureUserNamespaceTx).
+	if guestOnlyTx(tx, owner) {
+		return Org{}, ErrGuestOnly
+	}
 	o, err := createOrgTx(tx, name, slug, owner)
 	if err != nil {
 		return Org{}, err
@@ -593,6 +598,12 @@ func (s *Store) RemoveOrgMember(actorPrincipal string, orgID int64, targetPrinci
 	if err := revokeAILoansTx(tx, `org_id=? AND lender=?`, orgID, target); err != nil {
 		return err
 	}
+	// So do the machines the member shared with it: the share was the member's
+	// to give, and the organization keeps no way to write to the machine of
+	// someone who is no longer in it.
+	if err := dropMachineSharesOfTx(tx, orgID, target); err != nil {
+		return err
+	}
 	// Ein Standard, auf den das Konto keinen Zugriff mehr hat, wird gelöscht
 	// statt zu wirken.
 	if _, err := tx.Exec(`UPDATE persons SET default_org_id=0 WHERE id=? AND default_org_id=?`, target, orgID); err != nil {
@@ -656,7 +667,8 @@ func (s *Store) ProjectByRemote(remote string) (Project, bool) {
 // Schreibende Mitglied ist, oder über sein eigenes, von GitHub bestätigtes
 // Login; sonst bleibt die Remote unbeansprucht (leeres Project, kein Fehler).
 // Ausdrücklich (orgID 0 = eigener Namensraum) nur, wenn kein anderes Konto
-// Einträge darunter hat. Gäste, Dienste und Wegwerf-Remotes bekommen nichts.
+// Einträge darunter hat, und bei einem anderen Host als github.com nur ein Owner
+// der Org (dort lässt sich der Besitz nicht beweisen). Gäste, Dienste und Wegwerf-Remotes bekommen nichts.
 func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64, explicit bool) (Project, error) {
 	if p, ok := projectTx(tx, remote); ok {
 		if orgRoleTx(tx, p.OrgID, account) == "" {
@@ -718,6 +730,13 @@ func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64, e
 	kind := orgViewerKindTx(tx, orgID, account)
 	if kind != OrgViewerOwner && kind != OrgViewerMember {
 		return Project{}, ErrNotOrgMember
+	}
+	// Only a GitHub login can be proven (above). For any other host, a repository
+	// address is claimed by whoever asks first, so only an owner of the
+	// organization does it on its behalf, not every member: the owners answer for
+	// which addresses the organization stands for.
+	if explicit && remoteGitHubOwner(remote) == "" && kind != OrgViewerOwner {
+		return Project{}, ErrNotOrgOwner
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, created_at) VALUES(?,?,?)`, remote, orgID, now()); err != nil {
 		return Project{}, err

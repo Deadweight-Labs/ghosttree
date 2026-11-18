@@ -12,12 +12,10 @@ import "strings"
 // those (documents).
 //
 // It is a superset of what the row rule allows, never a replacement: the exact
-// rule is still applied to each row that gets through. Without enforcement there
-// is nothing to filter.
+// rule is still applied to each row that gets through. Without enforcement the
+// roles inside an organization are not filtered, but the projects of other
+// organizations are out of the query in every mode.
 func (a *ProjectAccess) projectPrefilter(alias string, withoutProject bool) Prefilter {
-	if !a.st.AccessEnforced() {
-		return Prefilter{}
-	}
 	if !a.valid {
 		return Prefilter{SQL: "0"}
 	}
@@ -26,14 +24,14 @@ func (a *ProjectAccess) projectPrefilter(alias string, withoutProject bool) Pref
 	if withoutProject {
 		clauses = append(clauses, alias+`.project = ''`)
 	}
-	if projects := a.Projects(); len(projects) > 0 {
+	if projects := a.prefilterProjects(); len(projects) > 0 {
 		clauses = append(clauses, alias+`.project IN (`+placeholders(len(projects))+`)`)
 		for _, p := range projects {
 			args = append(args, p)
 		}
 	}
 	unclaimed := `(` + alias + `.project != '' AND ` + alias + `.project NOT IN (SELECT remote FROM projects)`
-	if a.IsAdmin() {
+	if a.IsAdmin() || !a.st.AccessEnforced() {
 		unclaimed += `)`
 	} else {
 		unclaimed += ` AND ` + alias + `.person != '' AND ` + alias + `.person = ?)`
