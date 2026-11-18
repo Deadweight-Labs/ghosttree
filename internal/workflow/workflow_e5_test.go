@@ -176,3 +176,45 @@ func TestToolboxOffersExactlyTheDeclaredTools(t *testing.T) {
 		t.Fatal("an undeclared tool was found")
 	}
 }
+
+// The words a search hit adds to what a later query may use are the ones the
+// model was shown: the title and the first 400 characters of the content, and no
+// more than maxHitWords in a run. A page that stuffs its meta description with
+// words does not hand the run a dictionary to spell data with.
+func TestSearchHitWordsAreOnlyWhatTheModelWasShownAndBounded(t *testing.T) {
+	filler := strings.Repeat("alpha ", 80) // 480 characters
+	var flood strings.Builder
+	for i := range 400 {
+		fmt.Fprintf(&flood, "flood%dword ", i)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"results":[{"url":"https://example.org/a","title":"Titelwort","content":%q}]}`, filler+"hiddenword")
+	}))
+	defer srv.Close()
+	web, err := NewWebResearch(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tb := &Toolbox{web: web, found: map[string]bool{}, searchable: map[string]bool{}}
+	tb.allowSearchWords("Doppelte Webhooks abfangen")
+	if _, err := toolWebSearch(context.Background(), tb, toolArgs{Query: "doppelte webhooks"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tb.checkQuery("titelwort alpha"); err != nil {
+		t.Errorf("a shown word is refused: %v", err)
+	}
+	if _, err := tb.checkQuery("hiddenword"); err == nil {
+		t.Error("a word after the 400 shown characters was allowed")
+	}
+
+	tb.allowHitWords("x " + flood.String())
+	allowed := 0
+	for i := range 400 {
+		if tb.searchable[fmt.Sprintf("flood%dword", i)] {
+			allowed++
+		}
+	}
+	if allowed == 0 || allowed > maxHitWords {
+		t.Errorf("%d words of one hit were allowed, the bound is %d", allowed, maxHitWords)
+	}
+}

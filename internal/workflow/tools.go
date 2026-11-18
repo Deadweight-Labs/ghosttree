@@ -137,6 +137,8 @@ type Toolbox struct {
 	// read tool returned, so that nothing read from the project leaves the
 	// server in a query.
 	searchable map[string]bool
+	// hitWords counts the words search hits added to searchable.
+	hitWords int
 }
 
 // newToolbox prepares the tools of a definition. The research tools come
@@ -245,6 +247,9 @@ const (
 	// signal to whoever runs those pages (a few bits per fetch), a channel
 	// that cannot be closed, only kept small.
 	maxFetchesPerRun = 5
+	// maxHitWords bounds the words that the hits of one run add to the
+	// searchable words: enough to refine a search, too few to spell out data.
+	maxHitWords = 150
 )
 
 // queryStopWords are the short words a query may use without a source: German
@@ -277,6 +282,21 @@ func queryWords(s string) []string { return strings.Fields(normalizeQuery(s)) }
 func (tb *Toolbox) allowSearchWords(text string) {
 	for _, w := range queryWords(text) {
 		tb.searchable[w] = true
+	}
+}
+
+// allowHitWords adds the words of a search hit, up to maxHitWords in all. The
+// text is what the model was shown, not what the page offered.
+func (tb *Toolbox) allowHitWords(text string) {
+	for _, w := range queryWords(text) {
+		if tb.searchable[w] {
+			continue
+		}
+		if tb.hitWords >= maxHitWords {
+			return
+		}
+		tb.searchable[w] = true
+		tb.hitWords++
 	}
 }
 
@@ -537,8 +557,9 @@ func toolWebSearch(ctx context.Context, tb *Toolbox, in toolArgs) (string, error
 	var b strings.Builder
 	for _, h := range hits {
 		tb.found[h.URL] = true
-		tb.allowSearchWords(h.Title + " " + h.Content)
-		fmt.Fprintf(&b, "%s\n%s\n%s\n\n", oneLine(h.Title), h.URL, cut(oneLine(h.Content), 400))
+		title, shown := cut(oneLine(h.Title), 200), cut(oneLine(h.Content), 400)
+		tb.allowHitWords(title + " " + shown)
+		fmt.Fprintf(&b, "%s\n%s\n%s\n\n", title, h.URL, shown)
 	}
 	return b.String(), nil
 }
