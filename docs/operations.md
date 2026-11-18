@@ -337,7 +337,7 @@ its project.
 
 ## Where the time of a hook call goes
 
-The hooks wait for two routes of the server: `GET /api/context/relevant` (every
+The hooks wait for two routes of the server: `POST /api/context/relevant` (the older `GET` form still answers) (every
 prompt) and `GET /api/context/bootstrap` (every session start). Their
 `http_request` log line carries the group `phases`, the milliseconds of each
 step, next to the total `duration_ms`:

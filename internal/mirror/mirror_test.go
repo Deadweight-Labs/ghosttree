@@ -364,3 +364,25 @@ func TestBacklinksReadKNAndTheOldHash(t *testing.T) {
 		t.Errorf("KN-430 and #4300 are not mentions of 43:\n%s", body)
 	}
 }
+
+func TestPathPartsFromTheServerCannotLeaveTheMirror(t *testing.T) {
+	in := sampleInput()
+	in.Knowledge = append(in.Knowledge, store.Knowledge{ID: 900, Type: "../../../.claude/commands", Title: "x", Confidence: "trusted", Status: "active"})
+	in.Pains = append(in.Pains, PainView{Pain: pain.Pain{ID: 901, State: "../../../../.claude/agents", Title: "y", Project: "github.com/x/y"}},
+		PainView{Pain: pain.Pain{ID: 902, State: "a/b", Title: "z"}}, PainView{Pain: pain.Pain{ID: 903, State: "", Title: "z"}})
+	for _, d := range Build(in) {
+		if strings.Contains(d.Path, "..") || strings.HasPrefix(d.Path, "/") || strings.Count(d.Path, "/") > 2 {
+			t.Fatalf("path leaves its place: %q", d.Path)
+		}
+	}
+	docs := docsByPath(Build(in))
+	for _, want := range []string{"knowledge/other/900-x.md", "pains/other/PAIN-901-y.md", "pains/other/PAIN-902-z.md", "pains/other/PAIN-903-z.md"} {
+		if _, ok := docs[want]; !ok {
+			t.Fatalf("missing %s in %v", want, docs)
+		}
+	}
+	// Ehrliche Werte bleiben, wie sie sind.
+	if _, ok := docs["knowledge/pitfall/42-null-treffer-sehen-aus-wie-gibt-es-nicht.md"]; !ok {
+		t.Fatalf("an honest type was changed: %v", docs)
+	}
+}

@@ -160,7 +160,7 @@ func TestRunbookCLIExecutionNeedsApprovalAndServerAllowance(t *testing.T) {
 	}
 	// --run ohne Freigabe auf dem Server: abgelehnt.
 	run := func(extra ...string) (int, string) {
-		return rb(t, append([]string{"run", "rollout", "sha=abc1234", "--target", "build", "--run", "--project", cliHere}, extra...)...)
+		return rb(t, append([]string{"run", "rollout", "sha=abc1234", "--target", "build", "--run", "--yes", "--project", cliHere}, extra...)...)
 	}
 	if code, out := run(); code != 3 || !strings.Contains(out, "refusing to run") || len(fr.calls) != 0 {
 		t.Fatalf("run without allowance: %d\n%s", code, out)
@@ -246,7 +246,7 @@ func TestRunbookCLIAttackerChangesTheRunbookAndTheAgentRunsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := func(extra ...string) (int, string) {
-		return rb(t, append([]string{"run", "rollout", "sha=abc1234", "--target", "build", "--run", "--project", cliHere}, extra...)...)
+		return rb(t, append([]string{"run", "rollout", "sha=abc1234", "--target", "build", "--run", "--yes", "--project", cliHere}, extra...)...)
 	}
 	// 1. Die Spitze ist nicht freigegeben, --run lehnt ab.
 	code, out := run()
@@ -475,5 +475,39 @@ func TestRunbookCLIWriteAndImportTakeProjectAndMachine(t *testing.T) {
 	// The usage tells the rule.
 	if _, usage := rb(t, "runbook"); !strings.Contains(usage, "BOTH") {
 		t.Errorf("the usage does not state the rule: %s", usage)
+	}
+}
+
+// ctx run --run shows the argument lists and starts nothing until a person at a
+// terminal types yes; without a terminal it needs --yes.
+func TestRunbookCLIRunAsksBeforeItStartsAnything(t *testing.T) {
+	st, fr, file := runbookEnvCLI(t)
+	rb(t, "runbook", "write", "rollout", "--file", file, "--project", cliHere)
+	id, _ := hashOf(t, st, "rollout", 1)
+	allowAsAPerson(t, st, id, 1)
+	run := func() (int, string) {
+		return rb(t, "run", "rollout", "sha=abc1234", "--target", "build", "--run", "--project", cliHere)
+	}
+
+	// No terminal and no --yes: nothing runs, but the lists are on screen.
+	runbookIsTTY = func() bool { return false }
+	code, out := run()
+	if code != 3 || len(fr.calls) != 0 || !strings.Contains(out, "1. make dist SHA=abc1234") || !strings.Contains(out, "needs --yes") {
+		t.Fatalf("no terminal: %d calls=%v\n%s", code, fr.calls, out)
+	}
+	// A terminal and an answer that is not yes.
+	runbookIsTTY = func() bool { return true }
+	runbookStdin = strings.NewReader("no\n")
+	if code, out := run(); code != 1 || len(fr.calls) != 0 || !strings.Contains(out, "not run") {
+		t.Fatalf("answer no: %d calls=%v\n%s", code, fr.calls, out)
+	}
+	runbookStdin = strings.NewReader("")
+	if code, _ := run(); code != 1 || len(fr.calls) != 0 {
+		t.Fatalf("no answer: %d calls=%v", code, fr.calls)
+	}
+	// Yes at a terminal runs it.
+	runbookStdin = strings.NewReader("yes\n")
+	if code, out := run(); code != 0 || len(fr.calls) != 2 || !strings.Contains(out, "About to run rollout:build") {
+		t.Fatalf("answer yes: %d calls=%v\n%s", code, fr.calls, out)
 	}
 }

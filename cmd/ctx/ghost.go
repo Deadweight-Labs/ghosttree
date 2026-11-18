@@ -53,7 +53,8 @@ func WriteTree(c *client.Client, project, repoRoot, home string) error {
 	if err := ghost.EnsureExcluded(repoRoot); err != nil {
 		return err
 	}
-	return ghost.Materialize(ghost.TreeRoot(repoRoot, project, home),
+	base, rel := ghost.TreeRoot(repoRoot, project, home)
+	return ghost.Materialize(base, rel,
 		ghost.BuildDocs(entries, described, treeFreshness(repoRoot, described),
 			reviewedEmpty(c, project, repoRoot)))
 }

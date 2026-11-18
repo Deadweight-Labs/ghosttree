@@ -2,11 +2,11 @@ package ghost
 
 import (
 	"fmt"
-	"os/exec"
 	"path"
 	"sort"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitsafe"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -24,7 +24,7 @@ const summaryChars = 110
 // Verzeichnis darüber. `git ls-files` statt eines eigenen Durchlaufs, weil git
 // die Ignoriermuster schon kennt und wir sie nicht nachbauen wollen.
 func RepoEntries(repoRoot string) ([]Entry, error) {
-	out, err := exec.Command("git", "-C", repoRoot, "ls-files").Output()
+	out, err := gitsafe.Command("-C", repoRoot, "ls-files").Output()
 	if err != nil {
 		return nil, err
 	}
