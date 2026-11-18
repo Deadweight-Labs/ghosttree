@@ -113,3 +113,28 @@ func TestTextMentionGivesGuestsNoOracle(t *testing.T) {
 		}
 	}
 }
+
+// Ein Agent, der als Agent eines Gastes in den Projektraum kam (vor der Regel,
+// dass Gäste dort keine Agenten mehr anmelden), liest den Raum und schreibt nicht:
+// die Mitgliedschaft bleibt, jede Nachricht und jede Vorgabe prüft room.post.
+func TestAGuestsAgentReadsTheProjectRoomButDoesNotWriteInIt(t *testing.T) {
+	for _, enforce := range []bool{true, false} {
+		e := guestEnv(t)
+		e.st.SetAccessMode(AccessMode{Enforce: enforce})
+		registerRoleAgent(t, e.st, "a-guest", "person:5", e.room, "guest")
+		agent := e.agent("a-guest")
+		if _, err := sendText(t, agent, e.room, "hallo", ""); !errors.Is(err, ErrCoordForbidden) {
+			t.Fatalf("enforce=%v: a guest's agent wrote in the project room: %v", enforce, err)
+		}
+		if _, err := agent.CreateStanding(StandingInput{RoomKey: e.room, ClientID: "g1", Body: "Vorgabe"}); !errors.Is(err, ErrCoordForbidden) {
+			t.Fatalf("enforce=%v: a guest's agent created a directive: %v", enforce, err)
+		}
+		if _, err := agent.Messages(DestinationRoom, e.room, 0, 10); err != nil {
+			t.Fatalf("enforce=%v: a guest's agent may read the room: %v", enforce, err)
+		}
+		// Ein Mitglied schreibt weiter.
+		if _, err := sendText(t, e.human("person:1"), e.room, "ok", ""); err != nil {
+			t.Fatalf("a member writes: %v", err)
+		}
+	}
+}
