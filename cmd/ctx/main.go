@@ -44,6 +44,8 @@ func run(args []string, stdout io.Writer) int {
 	switch cmd {
 	case "serve":
 		return cmdServe(rest, stdout)
+	case "server":
+		return cmdServer(rest, stdout)
 	case "watch":
 		return cmdWatch(rest, stdout)
 	case "mcp":
@@ -193,6 +195,7 @@ const usage = `usage: ctx <command>
   tui      the terminal interface: quick search, lists, settings, sign-in
 
   serve    run the ghosttree server
+  server   set up, update and check a server on this machine (install, update, doctor)
   watch    run the session collector daemon
   mcp      run the MCP server (stdio)
   channel  serve coordination messages as a Claude Code channel (stdio, opt-in at session start)

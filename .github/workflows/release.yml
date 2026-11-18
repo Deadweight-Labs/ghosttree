@@ -79,8 +79,8 @@ jobs:
       - name: Check the public key and install minisign
         run: |
           set -eu
-          if grep -q '__GHOSTTREE_MINISIGN_PUBKEY__' deploy/downloads/ghosttree/minisign.pub deploy/downloads/ghosttree/install.sh; then
-            echo "install.sh and minisign.pub still carry the key placeholder" >&2; exit 1
+          if grep -q '__GHOSTTREE_MINISIGN_PUBKEY__' deploy/downloads/ghosttree/minisign.pub deploy/downloads/ghosttree/install.sh internal/releasekey/minisign.pub; then
+            echo "install.sh, minisign.pub and internal/releasekey/minisign.pub still carry the key placeholder" >&2; exit 1
           fi
           pub=$(sed -n 2p deploy/downloads/ghosttree/minisign.pub)
           grep -Fq "pubkey='$pub'" deploy/downloads/ghosttree/install.sh
