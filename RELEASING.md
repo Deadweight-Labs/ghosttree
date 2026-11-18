@@ -62,7 +62,8 @@ back in time with the Git checkout.
 3. Create the annotated tag `vX.Y.Z` on the resulting `main` commit.
 4. If a release-named context mark is required, perform the clean-checkout and
    peeled-tag checks above, then create and verify it.
-5. Push the tag and verify archives, checksums, SBOMs, and signatures.
+5. Push the tag and verify archives, checksums, SBOMs, and signatures (the
+   workflow already checks `checksums.txt.minisig` against the committed key).
 6. Merge `main` back into `dev` and remove the release branch.
 
 Stable release artifacts are built only from final tags. A failed publication
@@ -74,3 +75,27 @@ GitHub branch protection is part of the release boundary and must be configured
 for both `dev` and `main`: pull requests, required reviews, required status
 checks, resolved conversations, no force pushes, and no branch deletion. Limit
 release-tag creation and release approval to maintainers.
+
+## Signing key
+
+Every release is signed twice: keyless with Sigstore (`checksums.txt.sigstore.json`,
+used by `ctx update`) and with a minisign key (`checksums.txt.minisig`, used by
+`install.sh`). The minisign signature covers `checksums.txt`, which lists the
+SHA-256 of every archive, and its trusted comment is `ghosttree <tag>`, so the
+signed list of one release cannot stand in for another.
+
+- The public key is `deploy/downloads/ghosttree/minisign.pub` and the
+  `pubkey='...'` line of `deploy/downloads/ghosttree/install.sh`. Until the key
+  exists both hold a placeholder: `install.sh` refuses to run and the release
+  workflow stops before it publishes.
+- The secret key has no password (`minisign -G -W`). It lives in Bitwarden (vault
+  dwl, "ghosttree release signing key (minisign)") and in the repository secret
+  `MINISIGN_SECRET_KEY`, whose value is the complete key file. The workflow
+  writes it to a temporary file for the job, signs a probe, and refuses to go on
+  if the probe does not verify against `minisign.pub`.
+- Set up or rotate: generate a pair, update Bitwarden and the secret, then run
+  `scripts/release-key.sh <new .pub file>` and merge the two changed files.
+  Installers fetched before a rotation refuse releases signed with the new key
+  and say so; people fetch the script again.
+- Verify by hand: `minisign -Vm checksums.txt -p minisign.pub`, then
+  `sha256sum -c checksums.txt --ignore-missing`.
