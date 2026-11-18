@@ -136,6 +136,7 @@ var linkRules = map[string]linkRule{
 	"POST /ui/orgs/garden":                  linkProof,
 	"POST /ui/orgs/workflows":               linkProof,
 	"POST /ui/orgs/workflow-policy":         linkProof,
+	"POST /ui/orgs/models":                  linkProof,
 	"POST /ui/orgs/ai/connection":           linkProof,
 	"POST /ui/orgs/ai/connection/delete":    linkProof,
 	"POST /ui/orgs/ai/connection/test":      linkProof,

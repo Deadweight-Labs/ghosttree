@@ -1490,6 +1490,38 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Security
 
+- Every API request body is limited to 1 MiB (413 `body_too_large`); only the
+  routes that carry transcripts, documents, attachments, snapshots and idea texts
+  take more, from one table (`internal/server/bodylimit.go`). List parameters
+  `limit` stop at 1000, a search counts at most 20 words, free text has a length
+  limit (titles 1,000 characters, notes 8,000, bodies 1 MiB), and a server error
+  answers with a fixed message and the request id instead of the database text.
+- One account cannot fill the writer queue for the others: writes per account are
+  limited (429 with `Retry-After`; far above what hooks, collector and gardener
+  write), coordination messages to 300 in five minutes, and a search place is not
+  held by one account while another waits. The time of a coordination message is
+  always the server's.
+- Ghost descriptions, runbooks, labels, workflow texts, idea corrections and
+  document messages go through the same secret check as every other text; the
+  checks know more token formats (Google, Stripe, GitLab, npm, PyPI, Hugging Face,
+  SendGrid, DigitalOcean, Telegram, Azure) and passwords with a slash in URLs. New
+  tokens start with `gtk_` so that they can be found; earlier tokens keep working.
+- Database backups are created 0600 (and `ctx db backup` makes its directory 0700),
+  `ctx migrate` no longer follows symbolic links into its backup, provider clients
+  do not follow redirects (the key header cannot leave), and a replayed GitHub
+  webhook is answered but not run again.
+- Token issue and revoke are recorded (`token_events`), and the organization and
+  machine histories are append-only.
+- Writing in a project room needs the role member (`room.post`), for the browser,
+  the API and every agent alike. A guest reads the room; agents that joined as a
+  guest's agent earlier stay members and can no longer write.
+- What an agent decides alone (no person voted) is stored as a draft (`staged`),
+  not as trusted knowledge, until a person confirms it.
+- Each organization decides whether the server's language model reads its texts
+  (short explanations, session analysis, search vectors): the organization
+  settings page has the switch, on for organizations that exist now and for those
+  of the instance owner, off for every organization someone else creates later.
+
 - A web session that started from a one-time link (an owner's link for a member,
   `ctx web`) does everyday work only for twelve hours; roles, access, invitations,
   tokens, devices, AI keys, workflows and the like need a sign-in with a proof. Every
