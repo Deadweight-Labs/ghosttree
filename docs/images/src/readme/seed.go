@@ -765,8 +765,9 @@ func (s *seeder) finish() {
 			_, err = db.Exec(`UPDATE human_tasks SET created_at=?, updated_at=? WHERE id=?`, ts, ts, b.id)
 			must(err)
 		case "pains":
-			_, err = db.Exec(`UPDATE pains SET created_at=?, updated_at=? WHERE id=?`, ts, ts, b.id)
-			must(err)
+			// Pains keep the time they were written: only the pain functions of
+			// the store may write that table (TestOnlyPainGoWritesThePainsTable),
+			// and no picture of the README shows a pain's age.
 		case "requests":
 			_, err = db.Exec(`UPDATE requests SET created_at=?, updated_at=? WHERE id=?`, ts, s.ago(b.age/3), b.id)
 			must(err)
