@@ -1009,6 +1009,16 @@ config (`$HOME/.config/ghosttree/config.json` of the unit) is still read by
 `ctx garden` itself, never by the session; the probe checks that it is readable
 (`CLIENT_CONFIG` for another place).
 
+`ctx garden` runs as the same user as its sessions. Before it starts one it clears
+the dumpable flag of its own process (Linux), so that the kernel keeps the
+session from reading `/proc/<pid>/environ` and `/proc/<pid>/mem` of `ctx`, where the
+gardener's key and token are. The rule `Read(//proc/**)` of the session stays as
+a second barrier. Give the key as a systemd credential (`api_key_file` or
+`credential` in the `garden` entry of `llm.json`) rather than as
+`GHOSTTREE_GARDEN_KEY` in the environment; a symbolic link in the checkout that
+leads out of it is refused by the permission rules of Claude Code, which
+`internal/garden/matcher_test.go` checks with the real binary.
+
 If the server does not give a token (an older server, the gardener switched off for
 that organization), the session runs without the ghosttree tools, as with
 `--no-mcp`: no ghosttree server, those two tools are not allowed and not
