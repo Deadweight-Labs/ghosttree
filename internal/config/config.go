@@ -60,7 +60,7 @@ func Load() (Config, error) {
 
 func Save(c Config) error {
 	p := Path()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")

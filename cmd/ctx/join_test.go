@@ -1932,3 +1932,30 @@ func TestClaimErrorNamesTheWaitWhenTheAccountIsLocked(t *testing.T) {
 		t.Error("taken message still announces a burned code")
 	}
 }
+
+func TestOpenBrowserRefusesWhatIsNoWebAddress(t *testing.T) {
+	for _, u := range []string{
+		"file:///etc/passwd", "/etc/passwd", "C:\\Windows\\System32\\calc.exe", "javascript:alert(1)",
+		"ms-msdt:/id", "ssh://host", "-oProxyCommand=x", "https:///nohost", "", "http://%zz",
+	} {
+		if err := openBrowser(u); !errors.Is(err, errNotWebAddress) {
+			t.Errorf("openBrowser(%q) = %v, want errNotWebAddress", u, err)
+		}
+	}
+}
+
+func TestJoinResumeCreatesPrivateConfigDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home+"/fresh")
+	saveJoinResume("https://gt.example", "abcd-efgh", "tok-1")
+	info, err := os.Stat(dirOf(joinResumePath()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("config directory mode = %04o, want 0700", got)
+	}
+}
+
+func dirOf(p string) string { return p[:strings.LastIndex(p, "/")] }
