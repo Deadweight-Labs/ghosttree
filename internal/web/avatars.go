@@ -392,7 +392,7 @@ func (c *avatarCache) withPhotos(page []byte) []byte {
 		}
 		class := strings.Join(keep, " ")
 		if class != "own" {
-			class += " ph"
+			class += " photo"
 		}
 		return []byte(`<img class="` + class + `" src="/ui/avatar/` + strconv.FormatInt(id, 10) + `" alt="" title="` + string(sub[3]) + `">`)
 	})
