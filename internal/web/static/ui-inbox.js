@@ -46,28 +46,53 @@
     const n = el ? parseInt(el.textContent, 10) : 0;
     if (n > 0) el.textContent = String(n - 1);
   };
-  const announce = (text) => {
-    let note = $("[data-answered-note]");
-    if (!note) {
-      note = document.createElement("div");
-      note.className = "callout ok";
-      note.setAttribute("role", "status");
-      note.setAttribute("data-answered-note", "");
-      const line = document.createElement("div");
-      line.className = "tt";
-      note.appendChild(line);
-      const anchor = $(".ntools") || $(".box");
-      if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(note, anchor);
+  // The bell in the header counts the same rows as the chip "All": it goes down with it, and without
+  // a reload; at zero the number leaves.
+  const bellDown = () => {
+    const bell = $('a[data-top="inbox"]');
+    const badge = bell && $(".top-count", bell);
+    if (!badge) return;
+    const n = Math.max(0, parseInt(badge.textContent, 10) - 1);
+    if (n === 0) {
+      badge.remove();
+      bell.removeAttribute("title");
+      return;
     }
-    const line = $(".tt", note);
-    if (line) line.textContent = text;
+    badge.textContent = String(n);
+    const text = n === 1 ? bell.dataset.tOne : (bell.dataset.tMany || "").replace(/\d+/, String(n));
+    if (text) bell.setAttribute("title", text);
+  };
+  // What the click did floats over the page for a moment, with the way to the place it went to; it
+  // does not move the list.
+  const announce = (text, href, view) => {
+    for (const old of $$("[data-answered-note]")) old.remove();
+    const note = document.createElement("div");
+    note.className = "ibtoast";
+    note.setAttribute("role", "status");
+    note.setAttribute("data-answered-note", "");
+    const line = document.createElement("span");
+    line.className = "tt";
+    line.textContent = text;
+    note.appendChild(line);
+    if (href && view) {
+      const link = document.createElement("a");
+      link.href = href;
+      link.textContent = view;
+      note.appendChild(link);
+    }
+    const header = $(".gh-header");
+    if (header) note.style.top = Math.round(header.getBoundingClientRect().bottom + 8) + "px";
+    document.body.appendChild(note);
+    setTimeout(() => note.remove(), 9000);
   };
   const settle = (row, opts, text) => {
     const box = row.closest(".box");
+    const link = $("a.lnk", row);
     if (box) countDown($(".box-h .counter", box));
     const cats = (row.dataset.cat || "").split(" ").filter(Boolean).concat("alle");
     for (const cat of cats) countDown($('.ifilter [data-f="' + cat + '"] .counter'));
-    announce((opts.dataset.answered || "") + " " + text);
+    bellDown();
+    announce((opts.dataset.answered || "") + " " + text, link && link.getAttribute("href"), opts.dataset.view);
     row.remove();
     if (box && !$(".nrow", box)) box.remove();
   };

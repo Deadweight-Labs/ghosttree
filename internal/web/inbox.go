@@ -173,22 +173,60 @@ type inboxView struct {
 	DoneDays   int
 }
 
-// waitingFor is the number of rows in "Waiting for you" for the shell, counted
-// once per request (shellMemo) with the same query as the page itself.
-func (a *app) waitingFor(r *http.Request, project string) []forYouRow {
+// inboxData is what the inbox lists for one repo filter: what waits for the person and what was said
+// to them. The page and the bell in the header both read it, so the number at the bell is the number
+// of rows the page shows under "All".
+type inboxData struct {
+	Waiting []forYouRow
+	Said    []inboxRow
+	// Err is the first error of the sources of Said; the page says so, the bell counts what there is.
+	Err error
+}
+
+// Count is the number of rows under "All".
+func (d *inboxData) Count() int { return len(d.Waiting) + len(d.Said) }
+
+// inboxFor reads the inbox for project ("" for all repos), once per request and filter (shellMemo).
+func (a *app) inboxFor(r *http.Request, project string) *inboxData {
 	memo, _ := r.Context().Value(shellMemoKey{}).(*shellMemo)
-	if memo != nil && memo.waitingSet {
-		return memo.waiting
+	if memo != nil {
+		if d, ok := memo.inbox[project]; ok {
+			return d
+		}
 	}
-	rows, err := a.inboxWaiting(r, a.access(r), a.shellBaseFor(r).who, project, overviewNow().UTC())
+	d := &inboxData{}
+	now := overviewNow().UTC()
+	rows, err := a.inboxWaiting(r, a.access(r), a.shellBaseFor(r).who, project, now)
 	if err != nil {
 		rows = nil
 	}
-	rows = a.notifyKeep(r, rows)
-	if memo != nil {
-		memo.waiting, memo.waitingSet = rows, true
+	d.Waiting = a.notifyKeep(r, rows)
+	// A question that waits for the person stands once, in "Waiting for you": its
+	// message is not said to them again in the second box.
+	asked := map[int64]bool{}
+	for _, f := range d.Waiting {
+		if f.attentionID != 0 && f.messageID != 0 {
+			asked[f.messageID] = true
+		}
 	}
-	return rows
+	mentioned, err := a.inboxMentions(r, project, asked)
+	if err != nil {
+		d.Err = err
+	}
+	direct, err := a.inboxDirect(r, asked)
+	if err != nil && d.Err == nil {
+		d.Err = err
+	}
+	// What was said to the person, in a room or directly: one list, and what fell
+	// out of the two weeks is gone before anything is counted or tested for empty.
+	d.Said = inboxRecent(append(append(slices.Clone(mentioned), direct...), a.inboxTextMentions(r, project)...), now)
+	if memo != nil {
+		if memo.inbox == nil {
+			memo.inbox = map[string]*inboxData{}
+		}
+		memo.inbox[project] = d
+	}
+	return d
 }
 
 // inboxWaiting collects what waits for the viewer: their own open tasks (and
@@ -539,7 +577,7 @@ func (a *app) inboxRows(r *http.Request, forYou []forYouRow) []inboxRow {
 	rows := make([]inboxRow, 0, len(forYou))
 	for _, f := range forYou {
 		row := inboxRow{Mark: f.Mark, Tone: f.Tone, Title: f.Title, Lead: f.Lead, Rest: f.Rest, Age: f.Age, AgeOld: f.AgeOld,
-			Token: token, Forms: forms, taskID: f.taskID, TaskN: f.taskID, Actor: f.Actor, Full: f.Full, RequestID: f.RequestID, Href: f.Href, Cats: inboxCats(f), AttentionID: f.attentionID, DecisionN: f.decisionID, Brief: f.Brief}
+			Token: token, Forms: forms, taskID: f.taskID, TaskN: f.taskID, Actor: f.Actor, ActorKind: f.actorKind, ActorOwner: f.actorOwner, Full: f.Full, RequestID: f.RequestID, Href: f.Href, Cats: inboxCats(f), AttentionID: f.attentionID, DecisionN: f.decisionID, Brief: f.Brief}
 		switch {
 		case f.taskID != 0:
 			row.Num, row.NumHref = f.num, f.Href
@@ -598,29 +636,14 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	project := selectedProject(a.shellFor(r, "inbox"))
-	waiting := a.waitingFor(r, project)
-	// A question that waits for the person stands once, in "Waiting for you": its
-	// message is not said to them again in the second box.
-	asked := map[int64]bool{}
-	for _, f := range waiting {
-		if f.attentionID != 0 && f.messageID != 0 {
-			asked[f.messageID] = true
-		}
-	}
-	mentioned, err := a.inboxMentions(r, project, asked)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	data := a.inboxFor(r, project)
+	if data.Err != nil {
+		http.Error(w, data.Err.Error(), http.StatusInternalServerError)
 		return
 	}
-	direct, err := a.inboxDirect(r, asked)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	waiting := data.Waiting
 	now := overviewNow().UTC()
-	// What was said to the person, in a room or directly: one list, and what fell
-	// out of the two weeks is gone before anything is counted or tested for empty.
-	said := inboxRecent(append(append(slices.Clone(mentioned), direct...), a.inboxTextMentions(r, project)...), now)
+	said := slices.Clone(data.Said)
 	v := &inboxView{Waiting: a.inboxRows(r, waiting), Mentioned: said}
 	token, forms := csrfOf(r), interactive(r)
 	if forms {
@@ -663,7 +686,7 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 	v.Empty = len(v.Waiting) == 0 && len(v.Mentioned) == 0
 	v.Filter = inboxFilter(r)
 	if !v.AllSelected && project != "" && v.CanAll {
-		v.Elsewhere = a.inboxElsewhere(r, project, len(waiting), len(mentioned), now)
+		v.Elsewhere = max(0, a.inboxFor(r, "").Count()-data.Count())
 		v.AllHref = "/ui/inbox?project="
 		if v.Filter != "alle" {
 			v.AllHref += "&f=" + v.Filter
@@ -728,27 +751,6 @@ func (a *app) inboxPage(w http.ResponseWriter, r *http.Request) {
 		v.DoneBox = inboxSection{ID: "done", Title: "inbox.done", None: "inbox.done_none", Rows: inboxKeep(a.inboxDoneRows(r, pa, project, now), v.Filter)}
 	}
 	a.renderBrowser(w, r, "inbox", pageData{Title: l.msg("inbox.title"), InboxV: v, Welcome: a.welcomeCards(r, l)})
-}
-
-// inboxElsewhere counts the waiting rows and the mentions that the repo filter hides:
-// what the same lists give without it, less what they gave with it.
-func (a *app) inboxElsewhere(r *http.Request, project string, waiting, mentioned int, now time.Time) int {
-	rows, err := a.inboxWaiting(r, a.access(r), a.shellBaseFor(r).who, "", now)
-	if err != nil {
-		return 0
-	}
-	rows = a.notifyKeep(r, rows)
-	asked := map[int64]bool{}
-	for _, f := range rows {
-		if f.attentionID != 0 && f.messageID != 0 {
-			asked[f.messageID] = true
-		}
-	}
-	all, err := a.inboxMentions(r, "", asked)
-	if err != nil {
-		return 0
-	}
-	return max(0, len(rows)-waiting) + max(0, len(all)-mentioned)
 }
 
 // backTo is where a form of the inbox returns to: only the inbox itself.

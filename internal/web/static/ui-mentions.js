@@ -19,8 +19,16 @@
       .catch(function () { return {}; });
   }
 
+  // The picker leaves a space after the handle, and a comma typed behind it stands apart from the
+  // pill ("@Jonas , kannst du"): the space before ",", ".", ";", ":", "!" and "?" goes.
+  function tidy(span) {
+    var next = span.nextSibling;
+    if (next && next.nodeType === 3 && /^[ \t]+[,.;:!?]/.test(next.nodeValue)) next.nodeValue = next.nodeValue.replace(/^[ \t]+/, "");
+  }
+
   function show(span) {
     var h = span.getAttribute("data-h"), hit = known[h];
+    tidy(span);
     if (!hit || !hit.name) return;
     span.textContent = "@" + hit.name;
     span.setAttribute("title", hit.name);
@@ -40,6 +48,7 @@
       text = text.slice(m[0].length);
     }
     if (text !== next.nodeValue) next.nodeValue = text;
+    tidy(span);
   }
 
   // resolve gives the pills in root the full name of whom they mention.

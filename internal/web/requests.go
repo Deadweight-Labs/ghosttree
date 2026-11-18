@@ -521,9 +521,15 @@ func (a *app) knownPriorities(pa *store.ProjectAccess, project, current string) 
 // if a caller ever passes an unfiltered detail.
 func (a *app) workLines(l lang, pa *store.ProjectAccess, work []requestdomain.Work, now time.Time) []workLine {
 	var out []workLine
+	ended := a.endedWorkSessions(work)
 	for _, wk := range work {
 		line := workLine{Role: label(l, roleKeys, wk.Role), State: wk.State, StateLabel: label(l, workKeys, wk.State),
 			Summary: wk.Summary, Active: wk.State == "active", Age: shortAge(l, now, parseTime(firstNonEmpty(wk.EndedAt, wk.StartedAt)))}
+		// The work stays "active" in the ledger until the agent finishes it; when its session is over
+		// nobody works on the issue any more, and the page must not say so (G1).
+		if line.Active && ended[wk.SessionPublicID] {
+			line.State, line.StateLabel, line.Active = "ended", l.msg("requests.work.ended"), false
+		}
 		line.Title = l.msg("requests.private_session")
 		if wk.SessionPublicID != "" {
 			line.Href = "/ui/sessions/" + wk.SessionPublicID
@@ -556,6 +562,34 @@ func (a *app) workLines(l lang, pa *store.ProjectAccess, work []requestdomain.Wo
 		}
 		return 0
 	})
+	return out
+}
+
+// endedWorkSessions are the public ids of the sessions behind the active work lines whose agents said
+// that the session is over (SessionEnd) and have not started it again.
+func (a *app) endedWorkSessions(work []requestdomain.Work) map[string]bool {
+	ids := map[int64]string{}
+	var sessions []int64
+	for _, wk := range work {
+		if wk.State != "active" || wk.SessionPublicID == "" {
+			continue
+		}
+		if raw, err := a.store.SessionByPublicID(wk.SessionPublicID); err == nil {
+			ids[raw.ID] = wk.SessionPublicID
+			sessions = append(sessions, raw.ID)
+		}
+	}
+	out := map[string]bool{}
+	if len(sessions) == 0 {
+		return out
+	}
+	if states, err := a.store.SessionRunStates(sessions); err == nil {
+		for id, st := range states {
+			if st.Ended {
+				out[ids[id]] = true
+			}
+		}
+	}
 	return out
 }
 

@@ -111,7 +111,19 @@
     }
   }, true);
 
+  // The name picker leaves a space behind the handle; a comma, full stop or the like typed straight
+  // after it takes that space back, so the pill is followed by the punctuation, not by a gap.
+  const tidyPunctuation = (event) => {
+    const area = event.target;
+    if (!(area instanceof HTMLTextAreaElement) || event.inputType !== "insertText" || !/^[,.;:!?]$/.test(event.data || "")) return;
+    const caret = area.selectionStart;
+    const before = area.value.slice(0, caret - 1);
+    if (!/(^|[^\p{L}\p{N}_.@:-])@[\p{L}\p{N}._:-]+ $/u.test(before)) return;
+    area.value = before.slice(0, -1) + area.value.slice(caret - 1);
+    area.setSelectionRange(caret - 1, caret - 1);
+  };
   document.addEventListener("input", (event) => {
+    tidyPunctuation(event);
     const area = areaOf(event.target);
     if (area) open(area); else close();
   });
