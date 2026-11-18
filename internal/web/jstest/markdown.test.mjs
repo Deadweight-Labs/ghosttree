@@ -692,3 +692,10 @@ test("zero-width characters and padding do not hide an address in a link text", 
   const host = render(p, "[ghost\u200btree.example](https://evil.example/) and [" + " ".repeat(10) + "x".repeat(300) + " ghosttree.example](https://evil.example/)");
   assert.equal(all(host, ".md-target").length, 2);
 });
+
+test("a link text with an address followed by punctuation or another address is checked as a whole", () => {
+  const p = open();
+  const host = render(p, "[ghosttree.example,](https://evil.example/) [see evil.example and ghosttree.example](https://evil.example/) [ghosttree.example](https://ghosttree.example/ok) [1.2.3](https://evil.example/v)");
+  const notes = all(host, ".md-target");
+  assert.equal(notes.length, 3, "the first, the second (it names another address as well) and the version (a dot between digits that no address was read from)");
+});
