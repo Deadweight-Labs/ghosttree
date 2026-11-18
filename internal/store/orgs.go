@@ -333,6 +333,11 @@ func (s *Store) CreateOrg(ownerPrincipal, name, slug string) (Org, error) {
 	if isServiceTx(tx, owner) {
 		return Org{}, ErrServiceAccount
 	}
+	// A guest stays a guest: owning an organization would end every rule that is
+	// built for guests (see ensureUserNamespaceTx).
+	if guestOnlyTx(tx, owner) {
+		return Org{}, ErrGuestOnly
+	}
 	o, err := createOrgTx(tx, name, slug, owner)
 	if err != nil {
 		return Org{}, err
@@ -591,6 +596,12 @@ func (s *Store) RemoveOrgMember(actorPrincipal string, orgID int64, targetPrinci
 	}
 	// What the member lent the organization goes with the member.
 	if err := revokeAILoansTx(tx, `org_id=? AND lender=?`, orgID, target); err != nil {
+		return err
+	}
+	// So do the machines the member shared with it: the share was the member's
+	// to give, and the organization keeps no way to write to the machine of
+	// someone who is no longer in it.
+	if err := dropMachineSharesOfTx(tx, orgID, target); err != nil {
 		return err
 	}
 	// Ein Standard, auf den das Konto keinen Zugriff mehr hat, wird gelöscht

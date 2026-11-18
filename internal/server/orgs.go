@@ -297,7 +297,16 @@ func (a *api) revokeOrgInvitation(w http.ResponseWriter, r *http.Request) {
 
 // acceptInvitation nimmt das Konto des Tokens in die Organisation auf. Wer noch
 // kein Konto hat, löst die Einladung beim Login in der Weboberfläche ein.
+//
+// Mitglied einer Org wird man als Mensch im Browser (/ui/orgs): ein Token liegt
+// in der Konfiguration jedes Agenten, und ein Einladungslink in einem fremden
+// Text darf ihm keine Mitgliedschaft verschaffen. Die Antwort ist für jeden Code
+// dieselbe, sie verrät nichts über die Einladung.
 func (a *api) acceptInvitation(w http.ResponseWriter, r *http.Request) {
+	if !principalOf(r).SignedIn() {
+		webSessionOnly(w, "invitations")
+		return
+	}
 	var body struct {
 		Code string `json:"code"`
 	}

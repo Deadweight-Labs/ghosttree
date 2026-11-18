@@ -605,6 +605,9 @@ func TestLogModeKeepsTheOrgBorderAndPrivateTranscripts(t *testing.T) {
 			t.Errorf("%s finds the private transcript of mia: %s", who, out)
 		}
 	}
+	// Wissen von einer Maschine und ohne Projekt gehört seinem Autor.
+	f.expect(t, "robin", 404, "GET", idPath("/api/knowledge/%d", f.id["k-machine"]), nil)
+	f.expect(t, "mia", 404, "GET", idPath("/api/knowledge/%d", f.id["k-global"]), nil)
 	// Maschinenliste: nur die eigenen und die der eigenen Orgs.
 	if _, out := f.call(t, "nora", "GET", "/api/machines", nil); strings.Contains(out, "mia-box") {
 		t.Errorf("nora lists the machine of another account: %s", out)

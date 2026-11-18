@@ -10,7 +10,7 @@ func TestAgentInACloneLandsInTheProjectMadeFromItsRemote(t *testing.T) {
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Alpha", "slug": "alpha"})
 	for _, tok := range []string{f.anna, f.ben} {
 		inv := f.invite(t, "person:1", "alpha", "", "member")
-		f.mustCall(t, 200, "POST", "/api/invitations/accept", tok, map[string]any{"code": inv["code"]})
+		f.accept(t, tok, inv["code"])
 	}
 	f.mustCall(t, 200, "POST", "/api/projects/claim", f.anna, map[string]any{"remote": "https://gitlab.com/werkstatt/deploy-hook.git", "org": "alpha"})
 	count := func() int {
