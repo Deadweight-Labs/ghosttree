@@ -868,6 +868,22 @@ run page; an automatic approval can be undone there. The owner's policy can
 forbid instructions (stage 2), own prompts (stage 3), research on the net and
 single kinds; a workflow against it does not run and is listed as skipped.
 
+The automatic approval of an issue, a criterion or a relation applies only when
+the quotes of the result stand in text that members wrote: inputs such as the open
+issues, the ideas or what people typed in the sessions of a pull request, and the
+results of read tools of the knowledge, issues, ideas, problems and sessions. A
+quote from the text of a pull request from GitHub (`pr.title`, `pr.text`,
+`pr.commits`, `pr.files`, `pr.diff`), the diff or a file description read by a
+tool, or from research on the net is no evidence for it: whoever wrote that text
+wrote the quote too. Such a result waits for a person like any other. Knowledge
+needs no such check: what a run applies of it starts untrusted and is not
+delivered before a person reviews it.
+
+Without a monthly cap of the owner, the runs of the workflows of an organization
+stop at 25 USD a month (the cap of the owner replaces that value); the gardener
+has its own budget. A model without a price, which no cap in dollars stops, stops
+at 40 calls per run and 2000 calls per month and connection.
+
 **The token of a run** names the account the run acts for (the author of the
 version it runs) and the run, at `GET /api/whoami`, and reaches nothing else
 of the API; what a run creates goes through the check of its results.
