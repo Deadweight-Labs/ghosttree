@@ -45,8 +45,8 @@
   var root = document.documentElement;
   var DE = /^de\b/i.test((root && root.getAttribute && root.getAttribute("lang")) || "");
   var WORDS = DE
-    ? { note: "Hinweis", tip: "Tipp", important: "Wichtig", warning: "Warnung", caution: "Achtung", details: "Details", diagram: "Diagramm", nodiagram: "Das Diagramm konnte nicht gezeichnet werden" }
-    : { note: "Note", tip: "Tip", important: "Important", warning: "Warning", caution: "Caution", details: "Details", diagram: "Diagram", nodiagram: "The diagram could not be drawn" };
+    ? { note: "Hinweis", tip: "Tipp", important: "Wichtig", warning: "Warnung", caution: "Achtung", details: "Details", diagram: "Diagramm", nodiagram: "Das Diagramm konnte nicht gezeichnet werden", taskdone: "Erledigt", taskopen: "Offen" }
+    : { note: "Note", tip: "Tip", important: "Important", warning: "Warning", caution: "Caution", details: "Details", diagram: "Diagram", nodiagram: "The diagram could not be drawn", taskdone: "Done", taskopen: "Open" };
   // [!KIND] of a note box: the title, the icon and the colour of the .callout it is drawn in.
   var ALERTS = {
     NOTE: { word: "note", icon: "info", cls: "note" },
@@ -663,7 +663,7 @@
   // preview), done and open (names of the task list boxes), all from the page.
   function render(text, words) {
     words = words || {};
-    words = { empty: words.empty || "", done: words.done || "Done", open: words.open || "Open" };
+    words = { empty: words.empty || "", done: words.done || WORDS.taskdone, open: words.open || WORDS.taskopen };
     var frag = document.createDocumentFragment(), src = String(text == null ? "" : text).replace(/\r\n?/g, "\n");
     if (!src.trim()) { frag.appendChild(el("p", "muted", words.empty)); return frag; }
     // Too long to read as Markdown within a moment: shown as it is, nothing is interpreted.

@@ -260,13 +260,13 @@ func (a *app) workflowVisual(w http.ResponseWriter, r *http.Request) {
 	}
 	text := strings.ReplaceAll(r.FormValue("text"), "\r\n", "\n")
 	if len(text) > workflow.MaxDefBytes {
-		writeJSONStatus(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "the file is too large"})
+		writeJSONStatus(w, http.StatusRequestEntityTooLarge, map[string]string{"error": a.langFor(r).msg("wf.err.too_large")})
 		return
 	}
 	if raw := strings.TrimSpace(r.FormValue("edit")); raw != "" {
 		var e workflow.Edit
 		if err := json.Unmarshal([]byte(raw), &e); err != nil {
-			writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "the edit is no JSON object"})
+			writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": a.langFor(r).msg("wf.err.edit_invalid")})
 			return
 		}
 		next, err := workflow.ApplyEdit(text, e)
@@ -304,7 +304,7 @@ func (a *app) workflowCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	text := strings.ReplaceAll(r.FormValue("text"), "\r\n", "\n")
 	if len(text) > workflow.MaxDefBytes {
-		writeJSONStatus(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "the file is too large"})
+		writeJSONStatus(w, http.StatusRequestEntityTooLarge, map[string]string{"error": a.langFor(r).msg("wf.err.too_large")})
 		return
 	}
 	_, rep := workflow.Check(text, workflow.EnvFor(a.store, project))

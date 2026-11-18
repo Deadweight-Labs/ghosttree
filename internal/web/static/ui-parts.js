@@ -47,8 +47,10 @@
     find.type = "search";
     find.className = "pf";
     find.autocomplete = "off";
-    find.placeholder = "Filter …";
-    find.setAttribute("aria-label", "Filter");
+    // The words come from the page (data-filter on the body), in its language.
+    const word = document.body.getAttribute("data-filter") || "";
+    find.placeholder = word;
+    find.setAttribute("aria-label", word);
     find.addEventListener("input", () => {
       const q = find.value.trim().toLowerCase();
       for (const opt of opts) opt.hidden = q !== "" && !opt.textContent.toLowerCase().includes(q);

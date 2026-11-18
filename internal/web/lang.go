@@ -1,15 +1,19 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"html/template"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/knref"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // lang ist die Sprache einer Antwort. Sie wird je Request aufgelöst (langFor)
@@ -36,9 +40,14 @@ func ParseLanguage(s string) (string, error) {
 	return "", fmt.Errorf("unknown language %q (use en or de)", s)
 }
 
-// WithLanguage stellt die Sprache der Oberfläche ein (en oder de).
+// WithLanguage stellt die Sprache der Oberfläche ein (en oder de). Leer heißt:
+// keine Servereinstellung, dann entscheiden die Person und der Browser.
 func WithLanguage(s string) Option {
 	return func(a *app) {
+		if strings.TrimSpace(s) == "" {
+			a.language = ""
+			return
+		}
 		v, err := ParseLanguage(s)
 		if err != nil {
 			panic("language: " + err.Error())
@@ -47,13 +56,105 @@ func WithLanguage(s string) Option {
 	}
 }
 
-// langFor löst die Sprache eines Requests auf. Heute ist es die Servereinstellung;
-// eine Einstellung pro Person ersetzt nur diese eine Stelle.
+// langCookie hält die Wahl des Umschalters für Seiten ohne Anmeldung (Login,
+// Beitritt). Wer angemeldet ist, hat die Wahl am Konto; das Cookie bleibt trotzdem
+// gesetzt, damit die Anmeldeseite danach dieselbe Sprache zeigt.
+const langCookie = "gt_lang"
+
+const langCookieTTL = 365 * 24 * 60 * 60
+
+// langKey trägt die einmal aufgelöste Sprache einer angemeldeten Anfrage im
+// Kontext: ein Handler fragt langFor oft, die Wahl der Person liegt aber im Store.
+type langKey struct{}
+
+// parseChoice macht aus "en" oder "de" eine Sprache, alles andere ist keine Wahl.
+func parseChoice(s string) (lang, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case store.LanguageEN:
+		return langEN, true
+	case store.LanguageDE:
+		return langDE, true
+	}
+	return "", false
+}
+
+// acceptLanguage liest Accept-Language und nimmt die bevorzugte der beiden
+// Sprachen der Oberfläche; andere Sprachen in der Liste werden übersprungen.
+func acceptLanguage(r *http.Request) (lang, bool) {
+	type cand struct {
+		l lang
+		q float64
+		i int
+	}
+	var found []cand
+	for i, part := range strings.Split(r.Header.Get("Accept-Language"), ",") {
+		tag, params, _ := strings.Cut(strings.TrimSpace(part), ";")
+		primary, _, _ := strings.Cut(strings.TrimSpace(tag), "-")
+		l, ok := parseChoice(primary)
+		if !ok {
+			continue
+		}
+		q := 1.0
+		if v, ok := strings.CutPrefix(strings.ReplaceAll(strings.TrimSpace(params), " ", ""), "q="); ok {
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				q = f
+			}
+		}
+		if q > 0 {
+			found = append(found, cand{l, q, i})
+		}
+	}
+	if len(found) == 0 {
+		return "", false
+	}
+	sort.SliceStable(found, func(i, j int) bool { return found[i].q > found[j].q })
+	return found[0].l, true
+}
+
+// langFor löst die Sprache eines Requests auf.
+//
+// Angemeldet: Wahl der Person, dann Servereinstellung (GHOSTTREE_LANGUAGE), dann
+// Accept-Language, dann Englisch. Ohne Anmeldung (Login, Beitritt): Cookie des
+// Umschalters, dann Accept-Language, dann Servereinstellung, dann Englisch.
 func (a *app) langFor(r *http.Request) lang {
-	if a.language == "" {
+	if l, ok := r.Context().Value(langKey{}).(lang); ok {
+		return l
+	}
+	return a.resolveLang(r, browserPrincipal(r).ID)
+}
+
+// resolveLang is langFor for a known account ("" = nobody signed in).
+func (a *app) resolveLang(r *http.Request, accountID string) lang {
+	if accountID != "" {
+		if l, ok := parseChoice(a.store.AccountLanguage(accountID)); ok {
+			return l
+		}
+		if a.language != "" {
+			return a.language
+		}
+		if l, ok := acceptLanguage(r); ok {
+			return l
+		}
 		return langEN
 	}
-	return a.language
+	if c, err := r.Cookie(langCookie); err == nil {
+		if l, ok := parseChoice(c.Value); ok {
+			return l
+		}
+	}
+	if l, ok := acceptLanguage(r); ok {
+		return l
+	}
+	if a.language != "" {
+		return a.language
+	}
+	return langEN
+}
+
+// withLang resolves the language of a signed-in request once and keeps it in the
+// context of the request.
+func (a *app) withLang(r *http.Request, accountID string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), langKey{}, a.resolveLang(r, accountID)))
 }
 
 // msg liefert den Text zu einem Schlüssel in dieser Sprache. Fehlt er im Katalog,

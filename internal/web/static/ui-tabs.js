@@ -76,7 +76,7 @@
       more.className = "tmore";
       more.innerHTML = '<details class="dd"><summary class="tmore-btn"><span class="tl"></span><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.2 6.2 3.8 3.8 3.8-3.8"/></svg></summary><div class="pop r"></div></details>';
       const label = more.querySelector(".tl");
-      label.textContent = document.body.getAttribute("data-more-menu") || "More";
+      label.textContent = document.body.getAttribute("data-more-menu") || "…";
       const menu = more.querySelector(".pop");
       ul.appendChild(more);
       const moved = [];

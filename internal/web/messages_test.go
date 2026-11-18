@@ -20,7 +20,7 @@ var (
 )
 
 func TestP1TemplatesCarryNoTextOutsideTheCatalog(t *testing.T) {
-	for _, name := range p1Templates {
+	for _, name := range allTemplateNames(t) {
 		raw, err := fs.ReadFile(files, name)
 		if err != nil {
 			t.Fatal(err)
@@ -44,7 +44,10 @@ func TestP1TemplatesCarryNoTextOutsideTheCatalog(t *testing.T) {
 // isSeparator erlaubt Zeichen, die in keiner Sprache übersetzt werden.
 func isSeparator(s string) bool {
 	switch s {
-	case "·", "···", "@", "1", "2", "3", "#":
+	case "·", "···", "@", "1", "2", "3", "#", "/", ",", ":", "t", "v", "→ \x00\x00 ·", "••••":
+		return true
+	// Names of products and formats, the same in every language.
+	case "anthropic", "openai":
 		return true
 	}
 	return false
@@ -54,6 +57,10 @@ func isSeparator(s string) bool {
 func isTechnicalValue(v string) bool {
 	switch v {
 	case "inbox", "resume", "pause", "interrupt", "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "all-agents", "withdraw", "met", "waived", "new", "pflicht", "optional", "share", "unshare", "discuss", "idea", "variant", "close", "reopen_discussion":
+		return true
+	}
+	switch v {
+	case "de", "en", "anthropic", "openai", "server", "claude-haiku-5-5", "0.10", "0.50", " / ", " ", "https://api.anthropic.com", "ghosttree/ask", "ABCD-EFGH", "#", "new\x00edit", "required", "0\x001", "task":
 		return true
 	}
 	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || strings.HasPrefix(v, "REQ-") || v == "on" || v == "shared" || v == "private" || v == "member" || v == "owner" || v == "guest" || v == "none" || v == "7" || v == "approve" || v == "reject" || v == "gardener" || v == "deny" || v == "member\x00owner" || regexp.MustCompile(`^[0-9]+$`).MatchString(v)
@@ -151,4 +158,21 @@ func goMessageKeys(t *testing.T) []string {
 		}
 	}
 	return keys
+}
+
+// allTemplateNames lists every template of the binary: a new one is checked
+// without anybody having to add it to a list.
+func allTemplateNames(t *testing.T) []string {
+	t.Helper()
+	entries, err := fs.ReadDir(files, "templates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".html") {
+			names = append(names, "templates/"+e.Name())
+		}
+	}
+	return names
 }

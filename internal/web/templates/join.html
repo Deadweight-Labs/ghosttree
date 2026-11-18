@@ -1,7 +1,7 @@
 {{define "joinhead"}}{{template "joinheadr" (dict "Refresh" 0 "Title" .)}}{{end}}
 {{define "joinheadr"}}<!doctype html><html lang="{{lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="strict-origin"><meta name="robots" content="noindex,nofollow">{{if .Refresh}}<noscript><meta http-equiv="refresh" content="{{.Refresh}};url=/join/pair?w=1"></noscript>{{end}}<title>{{t "shell.title" .Title}}</title><link rel="icon" href="{{asset "favicon.svg"}}" type="image/svg+xml"><link rel="icon" href="{{asset "favicon-32.png"}}" type="image/png" sizes="32x32"><link rel="apple-touch-icon" href="{{asset "apple-touch-icon.png"}}"><link rel="stylesheet" href="{{asset "ui-tokens.css"}}"><link rel="stylesheet" href="{{asset "ui-base.css"}}"><link rel="stylesheet" href="{{asset "ui-shell.css"}}"><link rel="stylesheet" href="{{asset "ui-parts.css"}}"><link rel="stylesheet" href="{{asset "ui-auth.css"}}"></head><body class="ui gt"><main class="g2 auth join"><div class="authbox wide">{{template "loginbrand"}}{{end}}
-{{define "joinfoot"}}{{template "authfoot"}}</div></main></body></html>{{end}}
-{{define "joinfootjs"}}{{template "authfoot"}}</div><script src="{{asset "ui-parts.js"}}" defer></script><script src="{{asset "join.js"}}" defer></script><script src="{{asset "ui-auth.js"}}" defer></script></main></body></html>{{end}}
+{{define "joinfoot"}}{{template "authfoot" .}}</div></main></body></html>{{end}}
+{{define "joinfootjs"}}{{template "authfoot" .}}</div><script src="{{asset "ui-parts.js"}}" defer></script><script src="{{asset "join.js"}}" defer></script><script src="{{asset "ui-auth.js"}}" defer></script></main></body></html>{{end}}
 
 {{define "joinconfirm"}}<div class="fl"><label class="chkrow"><input type="checkbox" name="confirm_account" value="{{.Person}}" required><span>{{t "join.confirm_pre"}} <b>{{.Person}}</b></span></label></div>{{end}}
 {{define "joinconfirmhint"}}<div class="fl"><label class="chkrow"><input type="checkbox" name="confirm_account" value="{{.Person}}" required><span>{{t "join.confirm_pre"}} <b>{{.Person}}</b></span></label><p class="chkhint" role="status" hidden>{{t "join.confirm_first"}}</p></div>{{end}}
@@ -22,7 +22,7 @@
 <p class="auth-alt boxed">{{t "register.have_account"}} <a href="/join/{{.Code}}/login">{{t "register.sign_in"}}</a></p>
 {{else}}<form class="login-form" method="post" action="/ui/login/code"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1">{{template "invname" .}}{{template "invemail" .}}<button class="gbtn pri blk">{{t "join.create_join"}}</button></form></section>
 <p class="auth-alt boxed">{{t "register.have_account"}} <a href="/join/{{.Code}}/login">{{t "register.sign_in"}}</a></p>
-{{end}}{{template "joinfoot"}}{{end}}
+{{end}}{{template "joinfoot" (printf "/join/%s" .Code)}}{{end}}
 
 {{define "joinpair"}}{{template "joinheadr" (dict "Refresh" .Refresh "Title" (t "pair.title"))}}<div data-join-state="{{.State}}" data-join-nonce="{{.Nonce}}" hidden></div>
 {{if and (eq .State "waiting") .NeedsHTTPS}}<div class="ico att">{{mi "lock"}}</div><h1>{{t "pair.needs_https"}}</h1><section class="auth-card center"><p class="lead">{{t "pair.needs_https_hint"}}</p></section>
@@ -49,7 +49,7 @@
 {{else if eq .State "compromised"}}<div class="ico bad">{{mi "lock"}}</div><h1>{{t "pair.compromised"}}</h1><section class="auth-card center"><p class="lead">{{t "pair.compromised_hint"}}</p>{{template "joinstop" .}}</section>{{template "joinnewcode" .}}
 {{else}}<div class="ico{{if .Interrupted}} att{{end}}">{{if .Interrupted}}{{mi "pause"}}{{else}}{{mi "term"}}{{end}}</div><h1>{{if .Interrupted}}{{t "pair.interrupted"}}{{else}}{{t "pair.title"}}{{end}}</h1><section class="auth-card">
 <form class="login-form" method="post" action="/join/pair"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">{{template "joinconfirmhint" .}}<button class="gbtn pri blk" data-needs="[name=confirm_account]">{{if .Interrupted}}{{t "pair.start_again"}}{{else}}{{t "pair.get_code"}}{{end}}</button></form></section>
-{{end}}{{template "joinfootjs"}}{{end}}
+{{end}}{{template "joinfootjs" "/join/pair"}}{{end}}
 
 {{define "joinmember"}}{{template "joinhead" .Tab}}<div class="ico ok">{{mi "check"}}</div><h1>{{.Title}}</h1><section class="auth-card center"><a class="gbtn pri blk" href="{{.URL}}">{{t "join.member_open"}}</a></section>{{template "joinfoot"}}{{end}}
 {{define "joinnotfound"}}{{template "joinhead" (t "join.na_title")}}<div class="ico">{{mi "ban"}}</div><h1>{{t "join.na_title"}}</h1><section class="auth-card center"><p class="lead">{{t "join.na_text"}}</p><a class="gbtn blk" href="/ui/login">{{t "login.back_to_sign_in"}}</a></section>{{template "joinfoot"}}{{end}}

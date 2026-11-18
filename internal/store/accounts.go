@@ -65,6 +65,9 @@ func migrateAccounts(db *sql.DB) error {
 		// (folgt dessen Änderungen), "user" von der Person selbst (bleibt),
 		// leer unbekannt oder vom Admin gewählt.
 		{"name_source", `TEXT NOT NULL DEFAULT ''`},
+		// language is the interface language the person chose (en, de), leer =
+		// not chosen (REQ-715).
+		{"language", `TEXT NOT NULL DEFAULT '' CHECK(language IN ('','en','de'))`},
 	} {
 		if err := ensurePersonsColumn(db, c.name, c.ddl); err != nil {
 			return err

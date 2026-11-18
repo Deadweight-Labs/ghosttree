@@ -139,6 +139,7 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				ctx = context.WithValue(ctx, csrfKey{}, session.csrf)
 				ctx = context.WithValue(ctx, shellMemoKey{}, &shellMemo{})
 				r = r.WithContext(ctx)
+				r = a.withLang(r, session.principal.ID)
 				a.rememberProject(w, r)
 				// A plain 404 or 403 of a page becomes a page in the shell.
 				r, keep := withFormKeep(r)
@@ -460,6 +461,7 @@ func (a *app) startSessionLink(w http.ResponseWriter, r *http.Request, principal
 		a.sessions.markLink(id)
 	}
 	http.SetCookie(w, a.sessionCookieFor(r, id, 30*24*60*60))
+	a.adoptLanguageCookie(r, principal)
 	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 

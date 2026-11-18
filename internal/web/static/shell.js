@@ -23,6 +23,18 @@
       toggle.setAttribute("aria-expanded", String(open));
     });
   }
+  // The language switcher returns to the page it was used on. The address is
+  // not in the markup: every page would differ by its query.
+  for (const form of document.querySelectorAll("form.lang-pick")) {
+    form.addEventListener("submit", () => {
+      if (form.querySelector('input[name="back"]')) return;
+      const back = document.createElement("input");
+      back.type = "hidden";
+      back.name = "back";
+      back.value = location.pathname + location.search;
+      form.appendChild(back);
+    });
+  }
   const search = document.getElementById("shell-search");
   if (search) {
     addEventListener("keydown", (event) => {
