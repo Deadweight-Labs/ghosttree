@@ -333,3 +333,34 @@ func TestAutomaticApprovalDoesNotCoverAQuoteFromForeignText(t *testing.T) {
 		t.Fatal("an issue was written from a quote of the pull request title")
 	}
 }
+
+// What a tool returned counts as text of members only when the tool reads what
+// members wrote: the diff of a pull request, a file description and anything
+// from the net do not, and a run that also researched on the net does not turn
+// its research into a trusted input.
+func TestTrustedTextLeavesOutForeignToolsAndInputs(t *testing.T) {
+	tb := &Toolbox{}
+	read := func(name string, foreign, research bool, text string) {
+		spec := ToolSpec{Name: name, Foreign: foreign, Research: research,
+			run: func(context.Context, *Toolbox, toolArgs) (string, error) { return text, nil }}
+		if _, err := tb.call(context.Background(), spec, []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read("issue.read", false, false, "REQ-3 Mitgliedertext")
+	read("pr.diff", true, false, "Diff mit Fremdtext")
+	read("web.fetch", false, true, "Seite aus dem Netz")
+	trusted := tb.TrustedEvidence()
+	if !strings.Contains(trusted, "Mitgliedertext") || strings.Contains(trusted, "Fremdtext") || strings.Contains(trusted, "Netz") {
+		t.Fatalf("trusted tool text: %q", trusted)
+	}
+	if all := tb.Evidence(); !strings.Contains(all, "Fremdtext") || !strings.Contains(all, "Netz") {
+		t.Fatalf("the gate still reads all of it as evidence: %q", all)
+	}
+
+	d := &Def{Inputs: []string{"pr.text", "requests.open", "research"}, Research: true}
+	got := trustedText(d, map[string]string{"pr.text": "PR von aussen", "requests.open": "REQ-1 Mitgliedertitel", "research": "Netzfund"}, trusted)
+	if strings.Contains(got, "PR von aussen") || strings.Contains(got, "Netzfund") || !strings.Contains(got, "Mitgliedertitel") || !strings.Contains(got, "Mitgliedertext") {
+		t.Fatalf("trusted text: %q", got)
+	}
+}

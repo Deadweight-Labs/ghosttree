@@ -138,7 +138,7 @@ func (r DefResolver) Resolve(ctx context.Context, run store.WorkflowRun) (Block,
 		// or the instruction around them.
 		// What the read tools returned counts as input as well: the model
 		// may quote it, and it was read with the run's rights.
-		g := Gate{Store: r.Store, Run: run, Def: &d, Policy: policy, Trusted: trustedText(&d, in.Values, in.Tools.Evidence()), Inputs: inputsText(&d, in.Values) + in.Tools.Evidence(), Sources: asm.sources()}
+		g := Gate{Store: r.Store, Run: run, Def: &d, Policy: policy, Trusted: trustedText(&d, in.Values, in.Tools.TrustedEvidence()), Inputs: inputsText(&d, in.Values) + in.Tools.Evidence(), Sources: asm.sources()}
 		grep, gerr := g.Apply(results)
 		if gerr != nil {
 			return out, gerr
@@ -226,9 +226,8 @@ func foreignInput(name string) bool {
 	return ok && spec.Foreign
 }
 
-// trustedText is the text of the inputs that members wrote, with what the read
-// tools returned unless the run also had the web tools (then it cannot be told
-// apart and does not count).
+// trustedText is the text of the declared inputs that members wrote, with what
+// the tools returned from text of members (Toolbox.TrustedEvidence).
 func trustedText(d *Def, values map[string]string, toolEvidence string) string {
 	var b strings.Builder
 	for _, n := range d.Inputs {
@@ -238,9 +237,7 @@ func trustedText(d *Def, values map[string]string, toolEvidence string) string {
 		b.WriteString(values[n])
 		b.WriteString("\n")
 	}
-	if !slices.Contains(d.Tools, ToolWebSearch) && !slices.Contains(d.Tools, ToolWebFetch) {
-		b.WriteString(toolEvidence)
-	}
+	b.WriteString(toolEvidence)
 	return b.String()
 }
 
