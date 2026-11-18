@@ -83,7 +83,10 @@ func cmdParts(command string) []cmdPart {
 
 // joinBase ist die Adresse, unter der der Server von außen erreichbar ist: die
 // öffentliche URL, sonst Schema und Host der Anfrage, mit X-Forwarded-* nur von
-// einem vertrauten Proxy (wie sameOrigin und der Server beim Geräte-Login).
+// einem vertrauten Proxy (wie sameOrigin und der Server beim Geräte-Login). Ein
+// Host aus der Anfrage muss ein Hostname[:Port] sein; alles andere ergibt "", weil
+// die Adresse in Befehle und Mails wandert und der Anfragende sie sonst
+// bestimmt.
 func (a *app) joinBase(r *http.Request) string {
 	if a.publicOrigin != "" {
 		return a.publicOrigin
@@ -98,7 +101,10 @@ func (a *app) joinBase(r *http.Request) string {
 		(proto == "http" || proto == "https") && validForwardedHost(fwdHost) {
 		scheme, host = proto, fwdHost
 	}
-	return scheme + "://" + host
+	if origin := scheme + "://" + host; shellSafeOrigin(origin) {
+		return origin
+	}
+	return ""
 }
 
 // joinCommand ist der Befehl für den Installer. Er steht nur für https oder
@@ -106,7 +112,7 @@ func (a *app) joinBase(r *http.Request) string {
 func (a *app) joinCommand(r *http.Request, pair string) string {
 	base := a.joinBase(r)
 	u, err := url.Parse(base)
-	if err != nil || pair == "" {
+	if err != nil || pair == "" || !shellSafeOrigin(base) {
 		return ""
 	}
 	loop := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
