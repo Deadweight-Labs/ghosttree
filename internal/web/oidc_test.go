@@ -363,7 +363,7 @@ func TestOIDCClaimFlowBindsPerson1ThenSignsInWithoutCode(t *testing.T) {
 	}
 	var session *http.Cookie
 	for _, c := range resp.Cookies() {
-		if c.Name == sessionCookie {
+		if isSessionCookie(c) {
 			session = c
 		}
 	}
@@ -711,7 +711,7 @@ func TestSessionAndFlowCookiesAreSecureOnlyOverHTTPS(t *testing.T) {
 		resp := sameOriginPostForm(t, client, srv.URL+"/ui/login", url.Values{"token": {token}})
 		resp.Body.Close()
 		for _, c := range resp.Cookies() {
-			if c.Name == sessionCookie {
+			if isSessionCookie(c) {
 				session = c
 			}
 		}

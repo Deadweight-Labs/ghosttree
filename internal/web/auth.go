@@ -19,6 +19,23 @@ import (
 
 const sessionCookie = "gt_session"
 
+// hostSessionCookie is the name of the session cookie where it is Secure: the
+// __Host- prefix makes a browser refuse a cookie of that name that was not set
+// with Secure, from this host, for the whole path, so a sibling subdomain cannot
+// plant one.
+const hostSessionCookie = "__Host-gt_session"
+
+// sessionCookieOf reads the session cookie under the name the request is served
+// with: where cookies are Secure only the __Host- one counts. A plain gt_session
+// that a sibling subdomain or a man in the middle planted over http is not read,
+// or the prefix would protect nothing.
+func (a *app) sessionCookieOf(r *http.Request) (*http.Cookie, error) {
+	if a.secureCookies(r) {
+		return r.Cookie(hostSessionCookie)
+	}
+	return r.Cookie(sessionCookie)
+}
+
 // multipartMemory is how much of a form with a file stays in memory; the rest
 // goes to a temporary file that net/http removes after the request.
 const multipartMemory = 1 << 20
@@ -72,7 +89,7 @@ func (s *sessions) markLink(id string) {
 
 // linkSession says whether the request's session started from a login link.
 func (a *app) linkSession(r *http.Request) bool {
-	c, err := r.Cookie(sessionCookie)
+	c, err := a.sessionCookieOf(r)
 	if err != nil {
 		return false
 	}
@@ -134,7 +151,7 @@ func csrfOf(r *http.Request) string {
 }
 func (a *app) requirePerson(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if cookie, err := r.Cookie(sessionCookie); err == nil {
+		if cookie, err := a.sessionCookieOf(r); err == nil {
 			if session, ok := a.sessions.get(cookie.Value); ok {
 				// Das Token wurde beim Login geprüft; hier prüfen wir, ob es und
 				// das Konto noch gelten, sonst überlebte ein Widerruf bis zum
@@ -467,7 +484,7 @@ func (a *app) startSessionAt(w http.ResponseWriter, r *http.Request, principal s
 }
 
 func (a *app) startSessionLink(w http.ResponseWriter, r *http.Request, principal store.Principal, next string, link bool) {
-	if old, err := r.Cookie(sessionCookie); err == nil {
+	if old, err := a.sessionCookieOf(r); err == nil {
 		a.sessions.remove(old.Value)
 	}
 	id, err := a.sessions.create(principal)
@@ -718,7 +735,7 @@ func (a *app) inviteNameRejected(l lang, w http.ResponseWriter, r *http.Request,
 }
 
 func (a *app) logout(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(sessionCookie); err == nil {
+	if cookie, err := a.sessionCookieOf(r); err == nil {
 		a.sessions.remove(cookie.Value)
 	}
 	http.SetCookie(w, a.sessionCookieFor(r, "", -1))

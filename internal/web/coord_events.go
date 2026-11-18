@@ -138,7 +138,7 @@ func (a *app) coordEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "stream unsupported", http.StatusInternalServerError)
 		return
 	}
-	cookie, err := r.Cookie(sessionCookie)
+	cookie, err := a.sessionCookieOf(r)
 	if err != nil {
 		http.Error(w, "browser session missing", http.StatusUnauthorized)
 		return

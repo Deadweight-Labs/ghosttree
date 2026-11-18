@@ -841,7 +841,7 @@ func (a *app) profilePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Andere Sitzungen enden; die jetzige bleibt.
-	if c, err := r.Cookie(sessionCookie); err == nil {
+	if c, err := a.sessionCookieOf(r); err == nil {
 		a.sessions.dropAccountExcept(me.ID, c.Value)
 	}
 	http.Redirect(w, r, "/ui/profile?notice=password_saved", http.StatusSeeOther)

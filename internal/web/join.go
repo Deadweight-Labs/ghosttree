@@ -257,7 +257,7 @@ func roleLabel(l lang, role string) string {
 // mit Nachweis da ist. Eine Sitzung aus einem Einmal-Link zählt nicht: wer damit
 // auf der Anmelde- oder Einladungsseite ist, kann sich dort mit Nachweis anmelden.
 func (a *app) joinSession(r *http.Request) (browserSession, bool) {
-	cookie, err := r.Cookie(sessionCookie)
+	cookie, err := a.sessionCookieOf(r)
 	if err != nil {
 		return browserSession{}, false
 	}
@@ -398,7 +398,7 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 
 // joinSignOut beendet die Sitzung und führt zurück zur Einladung ("Not you?").
 func (a *app) joinSignOut(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(sessionCookie); err == nil {
+	if cookie, err := a.sessionCookieOf(r); err == nil {
 		a.sessions.remove(cookie.Value)
 	}
 	http.SetCookie(w, a.sessionCookieFor(r, "", -1))

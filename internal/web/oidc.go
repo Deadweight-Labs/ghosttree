@@ -397,8 +397,13 @@ func (a *app) secureCookies(r *http.Request) bool {
 // through it so a clearing cookie always carries the attributes of the one it
 // replaces (browsers match on name, path and attributes).
 func (a *app) sessionCookieFor(r *http.Request, value string, maxAge int) *http.Cookie {
-	return &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true,
-		Secure: a.secureCookies(r), SameSite: http.SameSiteLaxMode, MaxAge: maxAge}
+	secure := a.secureCookies(r)
+	name := sessionCookie
+	if secure {
+		name = hostSessionCookie
+	}
+	return &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true,
+		Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: maxAge}
 }
 
 func (a *app) flowCookie(r *http.Request, value string, maxAge int) *http.Cookie {
