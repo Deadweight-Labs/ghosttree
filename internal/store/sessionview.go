@@ -108,7 +108,7 @@ func (s *Store) allSessions() ([]Session, error) {
 // nicht: sie zählt alle Sessions des Servers (#2447). Ohne Durchsetzung sieht
 // jeder alles (Log-Modus).
 func (a *ProjectAccess) guestView(sess Session) Session {
-	if !a.st.AccessEnforced() || RoleRank(a.Role(sess.Scope.Project).Role) >= 2 {
+	if !a.st.AccessEnforced() || a.Can(sess.Scope.Project, RightProjectInside) {
 		return sess
 	}
 	sess.ID = 0
@@ -126,7 +126,7 @@ func (a *ProjectAccess) guestView(sess Session) Session {
 // Frage, und die darf er nur über CanSeeTranscript lesen. Die Nummer der eigenen
 // frisch angelegten Session bekommt er über GetsOwnSessionNumber.
 func (a *ProjectAccess) SeesSessionNumbers(project string) bool {
-	return !a.st.AccessEnforced() || RoleRank(a.Role(project).Role) >= 2
+	return !a.st.AccessEnforced() || a.Can(project, RightProjectInside)
 }
 
 // GetsOwnSessionNumber: die Nummer der Session, die der Betrachter gerade selbst
@@ -139,12 +139,7 @@ func (a *ProjectAccess) GetsOwnSessionNumber(project string) bool {
 	if a.SeesSessionNumbers(project) || a.IsAdmin() {
 		return true
 	}
-	for _, p := range a.Projects() {
-		if RoleRank(a.Role(p).Role) >= 2 {
-			return true
-		}
-	}
-	return false
+	return a.CanAny(RightProjectInside)
 }
 
 // ReadsAll: der Betrachter liest ohnehin jedes Transkript, und das gilt nur
@@ -161,7 +156,7 @@ func (a *ProjectAccess) isGuestOnly() bool {
 	}
 	any := false
 	for _, p := range a.Projects() {
-		if RoleRank(a.Role(p).Role) >= 2 {
+		if a.Can(p, RightProjectInside) {
 			return false
 		}
 		any = true
@@ -1048,10 +1043,10 @@ func (a *ProjectAccess) TranscriptPrefilter() SessionPrefilter {
 	a.loadMachines()
 	var guests, members []string
 	for remote, r := range a.roles {
-		switch rank := RoleRank(r.Role); {
-		case rank >= 2:
+		switch {
+		case r.Has(RightTranscriptReadShared):
 			members = append(members, remote)
-		case rank == 1:
+		case r.Has(RightTranscriptReadGuests):
 			guests = append(guests, remote)
 		}
 	}

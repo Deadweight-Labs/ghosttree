@@ -82,7 +82,7 @@ func (a *ProjectAccess) mentionedAssignee(project string, in humantask.CreateInp
 		if account == a.account {
 			continue
 		}
-		if RoleRank(a.st.ProjectRole(project, principalOfID(account)).Role) >= 1 {
+		if a.st.ProjectRole(project, principalOfID(account)).Any() {
 			return account
 		}
 	}

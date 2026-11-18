@@ -8,21 +8,21 @@ import (
 
 func TestAuthorityForRule(t *testing.T) {
 	cases := []struct {
-		sender, recipient int
+		sender, recipient string
 		verified          bool
 		want              string
 	}{
-		{4, 2, true, AuthorityDirective},
-		{2, 4, true, AuthorityRequest},
-		{2, 2, true, AuthorityRequest},
-		{3, 2, true, AuthorityDirective},
-		{3, 2, false, AuthorityRequest}, // nicht verifiziert
-		{0, 0, true, AuthorityRequest},  // ohne Rolle
-		{1, 0, true, AuthorityDirective},
+		{RoleOwner, RoleMember, true, AuthorityDirective},
+		{RoleMember, RoleOwner, true, AuthorityRequest},
+		{RoleMember, RoleMember, true, AuthorityRequest},
+		{RoleLead, RoleMember, true, AuthorityDirective},
+		{RoleLead, RoleMember, false, AuthorityRequest}, // nicht verifiziert
+		{"", "", true, AuthorityRequest},                // ohne Rolle
+		{RoleGuest, "", true, AuthorityDirective},
 	}
 	for _, c := range cases {
 		if got := AuthorityFor(c.sender, c.recipient, c.verified); got != c.want {
-			t.Errorf("AuthorityFor(%d,%d,%v) = %q, want %q", c.sender, c.recipient, c.verified, got, c.want)
+			t.Errorf("AuthorityFor(%q,%q,%v) = %q, want %q", c.sender, c.recipient, c.verified, got, c.want)
 		}
 	}
 }

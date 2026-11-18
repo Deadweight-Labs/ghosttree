@@ -56,7 +56,7 @@ func (a *api) packageGate(w http.ResponseWriter, r *http.Request, id int64, act 
 		writePackageNotFound(w, id)
 		return "", false
 	}
-	err = pa.Check(project, store.ResRequest, act, store.Object{})
+	err = pa.Check(project, store.ResPackage, act, store.Object{})
 	if errors.Is(err, store.ErrAccessNotFound) {
 		writePackageNotFound(w, id)
 		return "", false
@@ -118,7 +118,7 @@ func (a *api) createPackage(w http.ResponseWriter, r *http.Request) {
 	if !a.gateProject(w, r, project) {
 		return
 	}
-	if denyAccess(w, a.access(r).Check(project, store.ResRequest, store.ActCreate, store.Object{Own: true})) {
+	if denyAccess(w, a.access(r).Check(project, store.ResPackage, store.ActCreate, store.Object{Own: true})) {
 		return
 	}
 	for _, m := range body.Requests {
@@ -319,7 +319,7 @@ func (a *api) importBranchRelations(w http.ResponseWriter, r *http.Request) {
 	if !a.gateProject(w, r, project) {
 		return
 	}
-	if denyAccess(w, a.access(r).Check(project, store.ResRequest, store.ActWork, store.Object{})) {
+	if denyAccess(w, a.access(r).Check(project, store.ResPackage, store.ActWork, store.Object{})) {
 		return
 	}
 	report, err := a.access(r).ImportBranchRelations(project, body.DryRun, personOf(r))

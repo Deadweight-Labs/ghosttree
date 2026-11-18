@@ -1268,7 +1268,7 @@ func applyMessageRoles(l lang, st *store.Store, roomKey, viewerID string, views 
 		if i < len(roles) {
 			// "Guest" next to the viewer's own agent says nothing they do not
 			// know; it stays for everyone else's.
-			if roles[i] == store.RoleGuest && raw[i].AuthorPrincipalID == viewerID {
+			if (store.RoleInfo{Role: roles[i]}).GuestOnly() && raw[i].AuthorPrincipalID == viewerID {
 				continue
 			}
 			views[i].SenderRole = roles[i]
@@ -1459,7 +1459,7 @@ func decorateCoordMessages(l lang, views []coordMessageView, pres []store.CoordM
 // coordCanDirect: only a rank above guest can direct anyone (AuthorityFor needs
 // the sender above the recipient, and recipients with a role start at guest).
 func coordCanDirect(role string) bool {
-	return store.RoleRank(role) > store.RoleRank(store.RoleGuest)
+	return store.RoleAbove(role, store.RoleGuest)
 }
 
 var coordClosedKeys = map[string]string{

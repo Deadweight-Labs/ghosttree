@@ -235,10 +235,10 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/mail/{purpose}/link", a.mailLinkPage)
 	a.handle(mux, "POST /ui/mail/{purpose}/link", a.requireSameOrigin(http.HandlerFunc(a.mailLinkSubmit)))
 	a.handle(mux, "GET /ui/email/confirm", a.requirePerson(http.HandlerFunc(a.confirmPending)))
-	a.handle(mux, "POST /ui/email/confirm", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.confirmResend))))))
-	a.handle(mux, "POST /ui/profile/email", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileEmail))))))
-	a.handle(mux, "POST /ui/profile/password", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profilePassword))))))
-	a.handle(mux, "POST /ui/welcome/dismiss", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.welcomeDismiss))))))
+	a.handle(mux, "POST /ui/email/confirm", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, limitBody(a.requireCSRF(http.HandlerFunc(a.confirmResend))))))
+	a.handle(mux, "POST /ui/profile/email", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, limitBody(a.requireCSRF(http.HandlerFunc(a.profileEmail))))))
+	a.handle(mux, "POST /ui/profile/password", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, limitBody(a.requireCSRF(http.HandlerFunc(a.profilePassword))))))
+	a.handle(mux, "POST /ui/welcome/dismiss", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.welcomeDismiss)))))
 	a.handle(mux, "GET /ui/login/code", a.codePage)
 	a.handle(mux, "POST /ui/login/code", a.requireSameOrigin(http.HandlerFunc(a.codeSubmit)))
 	a.handle(mux, "GET /install.sh", a.installSh)
@@ -250,33 +250,33 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 			a.joinNotFound(a.langFor(r), w)
 		}
 	})
-	a.handle(mux, "GET /join/pair", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairPage))))
-	a.handle(mux, "GET /join/pair/state", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairState))))
-	a.handle(mux, "POST /join/pair", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairCreate)))))))
-	a.handle(mux, "POST /join/pair/decide", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairDecide)))))))
-	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
+	a.handle(mux, "GET /join/pair", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, http.HandlerFunc(a.joinPairPage))))
+	a.handle(mux, "GET /join/pair/state", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, http.HandlerFunc(a.joinPairState))))
+	a.handle(mux, "POST /join/pair", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairCreate)))))))
+	a.handle(mux, "POST /join/pair/decide", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairDecide)))))))
+	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
 	a.handle(mux, "POST /join/{code}/signout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.joinSignOut)))))
 	a.handle(mux, "POST /ui/logout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.logout)))))
 	a.handle(mux, "GET /ui/inbox", a.requirePerson(http.HandlerFunc(a.inboxPage)))
-	a.handle(mux, "POST /ui/issues/create", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.issueCreate))))))
-	a.handle(mux, "POST /ui/ideas/{id}/state", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.ideaState))))))
-	a.handle(mux, "POST /ui/ideas/{id}/correct", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.ideaCorrect))))))
-	a.handle(mux, "POST /ui/comments/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.commentEdit))))))
-	a.handle(mux, "POST /ui/reactions", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reactionToggle))))))
-	a.handle(mux, "POST /ui/comments/{id}/delete", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.commentDelete))))))
+	a.handle(mux, "POST /ui/issues/create", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.issueCreate)))))
+	a.handle(mux, "POST /ui/ideas/{id}/state", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.ideaState)))))
+	a.handle(mux, "POST /ui/ideas/{id}/correct", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.ideaCorrect)))))
+	a.handle(mux, "POST /ui/comments/{id}/edit", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.commentEdit)))))
+	a.handle(mux, "POST /ui/reactions", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.reactionToggle)))))
+	a.handle(mux, "POST /ui/comments/{id}/delete", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.commentDelete)))))
 	a.handle(mux, "GET /ui/refs", a.requirePerson(http.HandlerFunc(a.refsLookup)))
 	a.handle(mux, "GET /ui/mentions", a.requirePerson(http.HandlerFunc(a.mentionsLookup)))
-	a.handle(mux, "POST /ui/inbox/mention-read", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxMentionRead))))))
-	a.handle(mux, "POST /ui/searches", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.searchSave))))))
-	a.handle(mux, "POST /ui/inbox/mention-reply", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxMentionReply))))))
-	a.handle(mux, "POST /ui/inbox/reply", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxReply))))))
-	a.handle(mux, "POST /ui/inbox/done", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxDone))))))
+	a.handle(mux, "POST /ui/inbox/mention-read", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxMentionRead)))))
+	a.handle(mux, "POST /ui/searches", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.searchSave)))))
+	a.handle(mux, "POST /ui/inbox/mention-reply", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxMentionReply)))))
+	a.handle(mux, "POST /ui/inbox/reply", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxReply)))))
+	a.handle(mux, "POST /ui/inbox/done", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.inboxDone)))))
 	a.handle(mux, "GET /ui/overview", a.requirePerson(http.HandlerFunc(a.overviewPage)))
 	a.handle(mux, "GET /ui/agents", a.requirePerson(http.HandlerFunc(a.agentsPage)))
 	a.handle(mux, "GET /ui/agents/{id}", a.requirePerson(http.HandlerFunc(a.agentPage)))
 	a.handle(mux, "GET /ui/agents/models", a.requirePerson(http.HandlerFunc(a.agentModelsPage)))
-	a.handle(mux, "POST /ui/agents/{id}/seen", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.agentSeen))))))
-	a.handle(mux, "POST /ui/agents/{id}/signal", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.agentSignal))))))
+	a.handle(mux, "POST /ui/agents/{id}/seen", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.agentSeen)))))
+	a.handle(mux, "POST /ui/agents/{id}/signal", a.requirePerson(a.requireSignIn(store.RightAgentControl, limitBody(a.requireCSRF(http.HandlerFunc(a.agentSignal))))))
 	a.handle(mux, "GET /ui/rooms", a.requirePerson(http.HandlerFunc(a.roomsAlias)))
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	a.handle(mux, "GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
@@ -284,55 +284,55 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		"criteria": a.requestAddCriterion, "criteria/{cid}": a.requestResolve,
 		"complete": a.requestComplete, "drop": a.requestDrop,
 	} {
-		a.handle(mux, "POST /ui/requests/{id}/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+		a.handle(mux, "POST /ui/requests/{id}/"+suffix, a.requirePerson(limitBody(a.requireCSRF(h))))
 	}
-	a.handle(mux, "POST /ui/requests/{id}/close", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestClose))))))
-	a.handle(mux, "POST /ui/requests/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestMove))))))
-	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestCorrect))))))
+	a.handle(mux, "POST /ui/requests/{id}/close", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.requestClose)))))
+	a.handle(mux, "POST /ui/requests/{id}/move", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.requestMove)))))
+	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.requestCorrect)))))
 	for suffix, h := range map[string]http.HandlerFunc{"create": a.labelCreate, "{id}/update": a.labelUpdate, "{id}/delete": a.labelDelete} {
-		a.handle(mux, "POST /ui/labels/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+		a.handle(mux, "POST /ui/labels/"+suffix, a.requirePerson(limitBody(a.requireCSRF(h))))
 	}
 	for suffix, h := range map[string]http.HandlerFunc{
 		"create": a.packageCreate, "{id}/update": a.packageUpdate, "{id}/state": a.packageState, "{id}/add": a.packageAdd, "{id}/remove": a.packageRemove,
 	} {
-		a.handle(mux, "POST /ui/packages/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+		a.handle(mux, "POST /ui/packages/"+suffix, a.requirePerson(limitBody(a.requireCSRF(h))))
 	}
 	for suffix, h := range map[string]http.HandlerFunc{
 		"create": a.featureCreate, "{id}/edit": a.featureEdit, "{id}/link": a.featureLinkAdd, "{id}/unlink": a.featureLinkRemove,
 	} {
-		a.handle(mux, "POST /ui/features/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+		a.handle(mux, "POST /ui/features/"+suffix, a.requirePerson(limitBody(a.requireCSRF(h))))
 	}
-	a.handle(mux, "POST /ui/labels/make", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.labelMake))))))
-	a.handle(mux, "POST /ui/runbooks/write", a.requirePerson(a.requireInteractive(limitBodyN(maxRunbookForm, a.requireCSRF(http.HandlerFunc(a.runbookWrite))))))
-	a.handle(mux, "POST /ui/workflows/visual", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowVisual))))))
-	a.handle(mux, "POST /ui/workflows/check", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowCheck))))))
-	a.handle(mux, "POST /ui/workflows/save", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowSave))))))
-	a.handle(mux, "POST /ui/workflows/template", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowFromTemplate))))))
-	a.handle(mux, "POST /ui/workflows/enabled", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowEnable))))))
-	a.handle(mux, "POST /ui/workflows/undo", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowUndo))))))
-	a.handle(mux, "POST /ui/workflows/rerun", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowRerun))))))
-	a.handle(mux, "POST /ui/labels/assign", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.labelAssign))))))
+	a.handle(mux, "POST /ui/labels/make", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.labelMake)))))
+	a.handle(mux, "POST /ui/runbooks/write", a.requirePerson(limitBodyN(maxRunbookForm, a.requireCSRF(http.HandlerFunc(a.runbookWrite)))))
+	a.handle(mux, "POST /ui/workflows/visual", a.requirePerson(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowVisual)))))
+	a.handle(mux, "POST /ui/workflows/check", a.requirePerson(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowCheck)))))
+	a.handle(mux, "POST /ui/workflows/save", a.requirePerson(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowSave)))))
+	a.handle(mux, "POST /ui/workflows/template", a.requirePerson(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowFromTemplate)))))
+	a.handle(mux, "POST /ui/workflows/enabled", a.requirePerson(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowEnable)))))
+	a.handle(mux, "POST /ui/workflows/undo", a.requirePerson(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowUndo)))))
+	a.handle(mux, "POST /ui/workflows/rerun", a.requirePerson(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowRerun)))))
+	a.handle(mux, "POST /ui/labels/assign", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.labelAssign)))))
 	a.registerPainTaskPages(mux)
 	a.handle(mux, "GET /ui/search", a.requirePerson(http.HandlerFunc(a.searchPage)))
 	a.handle(mux, "GET /ui/search/stream", a.requirePerson(http.HandlerFunc(a.searchStream)))
 	a.handle(mux, "GET /ui/search/suggest", a.requirePerson(http.HandlerFunc(a.searchSuggest)))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
 	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
-	a.handle(mux, "POST /ui/knowledge/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeMove))))))
-	a.handle(mux, "POST /ui/knowledge/{id}/comment", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeComment))))))
-	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
+	a.handle(mux, "POST /ui/knowledge/{id}/move", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeMove)))))
+	a.handle(mux, "POST /ui/knowledge/{id}/comment", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeComment)))))
+	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit)))))
 	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
-	a.handle(mux, "POST /ui/review/bulk", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewBulk))))))
-	a.handle(mux, "GET /ui/review/held/{kind}/{id}", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.reviewHeldPreview))))
-	a.handle(mux, "POST /ui/review/held", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewHeld))))))
-	a.handle(mux, "POST /ui/review/{id}/{verdict}", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDecide))))))
-	a.handle(mux, "POST /ui/review/{id}/merge", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewMerge))))))
-	a.handle(mux, "POST /ui/review/{id}/criterion", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewCriterion))))))
-	a.handle(mux, "POST /ui/review/{id}/describe", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDescribe))))))
-	a.handle(mux, "POST /ui/review/{id}/cover", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewCover))))))
+	a.handle(mux, "POST /ui/review/bulk", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewBulk)))))
+	a.handle(mux, "GET /ui/review/held/{kind}/{id}", a.requirePerson(a.requireSignedIn(http.HandlerFunc(a.reviewHeldPreview))))
+	a.handle(mux, "POST /ui/review/held", a.requirePerson(a.requireSignedIn(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewHeld))))))
+	a.handle(mux, "POST /ui/review/{id}/{verdict}", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDecide)))))
+	a.handle(mux, "POST /ui/review/{id}/merge", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewMerge)))))
+	a.handle(mux, "POST /ui/review/{id}/criterion", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewCriterion)))))
+	a.handle(mux, "POST /ui/review/{id}/describe", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDescribe)))))
+	a.handle(mux, "POST /ui/review/{id}/cover", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewCover)))))
 	a.handle(mux, "GET /ui/sessions", a.requirePerson(http.HandlerFunc(a.sessionsPage)))
 	a.handle(mux, "GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
-	a.handle(mux, "POST /ui/sessions/{id}/share", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.sessionShare))))))
+	a.handle(mux, "POST /ui/sessions/{id}/share", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.sessionShare)))))
 	a.handle(mux, "GET /ui/context", a.requirePerson(http.HandlerFunc(a.contextPage)))
 	a.handle(mux, "GET /ui/coord", a.requirePerson(http.HandlerFunc(a.coordRoomPage)))
 	a.handle(mux, "GET /ui/coord/events", a.requirePerson(http.HandlerFunc(a.coordEvents)))
@@ -353,22 +353,22 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/coord/group/create", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordCreateGroup)))))
 	a.handle(mux, "POST /ui/coord/group/update", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordUpdateGroup)))))
 	a.handle(mux, "POST /ui/coord/group/leave", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.coordLeaveGroup)))))
-	a.handle(mux, "POST /ui/coord/agent/control", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.coordAgentControl))))))
+	a.handle(mux, "POST /ui/coord/agent/control", a.requirePerson(a.requireSignIn(store.RightAgentControl, limitBody(a.requireCSRF(http.HandlerFunc(a.coordAgentControl))))))
 	a.handle(mux, "GET /ui/device", a.requirePerson(http.HandlerFunc(a.devicePage)))
-	a.handle(mux, "POST /ui/device", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceLookup)))))))
-	a.handle(mux, "POST /ui/device/decide", a.requirePerson(a.requireInteractive(a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceDecide)))))))
+	a.handle(mux, "POST /ui/device", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceLookup)))))))
+	a.handle(mux, "POST /ui/device/decide", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, a.requireCredentialSession(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceDecide)))))))
 	a.handle(mux, "GET /ui/account/tokens", a.requirePerson(http.HandlerFunc(a.tokensPage)))
 	a.handle(mux, "POST /ui/account/tokens/revoke", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokenRevoke)))))
 	a.handle(mux, "POST /ui/account/tokens/revoke-unused", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokensRevokeUnused)))))
 	a.handle(mux, "GET /ui/profile", a.requirePerson(http.HandlerFunc(a.profilePage)))
-	a.handle(mux, "POST /ui/profile", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileSave))))))
-	a.handle(mux, "POST /ui/profile/notifications", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileNotifySave))))))
-	a.handle(mux, "POST /ui/profile/github/link", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileGitHubLink))))))
-	a.handle(mux, "POST /ui/profile/github/unlink", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileGitHubUnlink))))))
+	a.handle(mux, "POST /ui/profile", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, limitBody(a.requireCSRF(http.HandlerFunc(a.profileSave))))))
+	a.handle(mux, "POST /ui/profile/notifications", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, limitBody(a.requireCSRF(http.HandlerFunc(a.profileNotifySave))))))
+	a.handle(mux, "POST /ui/profile/github/link", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, limitBody(a.requireCSRF(http.HandlerFunc(a.profileGitHubLink))))))
+	a.handle(mux, "POST /ui/profile/github/unlink", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, limitBody(a.requireCSRF(http.HandlerFunc(a.profileGitHubUnlink))))))
 	a.handle(mux, "GET /ui/orgs", a.requirePerson(http.HandlerFunc(a.orgsPage)))
-	a.handle(mux, "GET /ui/orgs/new", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.orgNewPage))))
-	a.handle(mux, "GET /ui/orgs/source/callback", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.orgSourceCallback))))
-	// Verwaltung nur aus einer interaktiven Sitzung, nicht aus eingefügtem Token.
+	a.handle(mux, "GET /ui/orgs/new", a.requirePerson(a.requireSignIn(store.RightAccountSecurity, http.HandlerFunc(a.orgNewPage))))
+	a.handle(mux, "GET /ui/orgs/source/callback", a.requirePerson(a.requireSignIn(store.RightOrgProjects, http.HandlerFunc(a.orgSourceCallback))))
+	// Each form names its right in orgFormRights; human rights need a sign-in.
 	for path, h := range map[string]http.HandlerFunc{
 		"/ui/orgs/invite": a.orgInvite, "/ui/orgs/invite/revoke": a.orgInviteRevoke,
 		"/ui/orgs/member/role": a.orgMemberRole, "/ui/orgs/member/remove": a.orgMemberRemove,
@@ -382,11 +382,15 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		"/ui/handover": a.handoverConsent, "/ui/orgs/takeover": a.handoverTakeOver,
 		"/ui/orgs/assign": a.orgAssign, "/ui/orgs/member/login-link": a.orgMemberLoginLink,
 	} {
-		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+		right, ok := orgFormRights[path]
+		if !ok {
+			panic("web: no right for " + path)
+		}
+		a.handle(mux, "POST "+path, a.requirePerson(a.requireSignIn(right, limitBody(a.requireCSRF(h)))))
 	}
-	// AI connections (REQ-694): only from an interactive session, like the rest of the settings.
+	// AI connections (REQ-694): AI keys and budget are a human right.
 	for path, h := range a.aiPOST() {
-		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+		a.handle(mux, "POST "+path, a.requirePerson(a.requireSignIn(store.RightOrgAI, limitBody(a.requireCSRF(h)))))
 		// A refused form is drawn at the address it was sent to; reloading that
 		// page (or opening the address) leads back to the section, not to an error.
 		a.handle(mux, "GET "+path, a.requirePerson(http.HandlerFunc(aiSectionRedirect)))
@@ -433,7 +437,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	data.Person = principal.Label
 	a.rememberRepoOrg(w, r)
 	data.CSRFToken = csrfOf(r)
-	data.Interactive = interactive(r)
+	data.Interactive = fromSignIn(r)
 	if !data.Interactive && principal.TokenID != 0 {
 		data.DeviceSession, data.DeviceName = true, principal.Machine
 	}

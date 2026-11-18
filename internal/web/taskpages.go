@@ -118,8 +118,8 @@ func (a *app) registerTaskPages(mux *http.ServeMux) {
 	a.handle(mux, "GET /ui/u/issues", a.requirePerson(http.HandlerFunc(a.myIssuesPage)))
 	a.handle(mux, "GET /ui/t/{n}", a.requirePerson(http.HandlerFunc(a.taskShort)))
 	a.handle(mux, "GET /ui/r/{n}", a.requirePerson(http.HandlerFunc(a.requestShort)))
-	a.handle(mux, "POST /ui/tasks/{id}/steps/{n}", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.taskStepSet))))))
-	a.handle(mux, "POST /ui/tasks/{id}/note", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.taskNoteAdd))))))
+	a.handle(mux, "POST /ui/tasks/{id}/steps/{n}", a.requirePerson(a.requireSignIn(store.RightDecideHuman, limitBody(a.requireCSRF(http.HandlerFunc(a.taskStepSet))))))
+	a.handle(mux, "POST /ui/tasks/{id}/note", a.requirePerson(a.requireSignIn(store.RightDecideHuman, limitBody(a.requireCSRF(http.HandlerFunc(a.taskNoteAdd))))))
 }
 
 // taskNoteAdd is POST /ui/tasks/{id}/note: a line to the agent on a task that stays
@@ -138,7 +138,7 @@ func (a *app) taskNoteAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	accountID, _ := store.AccountNumericID(browserPrincipal(r).ID)
-	actor := humantask.Actor{AccountID: accountID, Person: personOf(r), Web: interactive(r)}
+	actor := humantask.Actor{AccountID: accountID, Person: personOf(r), Web: fromSignIn(r)}
 	if err := a.access(r).AddTaskNote(id, note, actor); err != nil {
 		a.taskFail(w, r, back, err)
 		return
@@ -332,7 +332,7 @@ func (a *app) taskDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 	v.Note = a.taskNoteFor(l, t.ID, nil)
 	a.taskSteps(r2, l, pa, t, v)
 	v.First = firstOf(l, a.actorViewOf(l, pa, actor.Task, t.ID, t.CreatedBy, true), t.CreatedBy, l.msg("tasks.asked_ch"), v.Age, "", "")
-	if interactive(r) && t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil {
+	if browserPrincipal(r).May(store.RightDecideHuman) && t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil {
 		v.CanDone, v.DoneAction, v.Report = true, "/ui/tasks/done", true
 		v.Composer = &composerView{Action: "/ui/tasks/" + strconv.FormatInt(t.ID, 10) + "/note", Token: v.Token, Name: "note", Avatar: browserPrincipal(r).Label,
 			Placeholder: l.msg("tasks.note_placeholder"), Submit: l.msg("tasks.note_send"), Required: true, MaxLen: taskNoteChars, Hidden: []hiddenField{{"back", "task"}}}
@@ -361,7 +361,7 @@ func (a *app) taskDetail(w http.ResponseWriter, r *http.Request, remote, id stri
 // taskSteps füllt die Schritte der Aufgabe als Checkliste.
 func (a *app) taskSteps(r *http.Request, l lang, pa *store.ProjectAccess, t humantask.Task, v *taskPageView) {
 	marks, _ := a.store.TaskStepMarks(t.ID)
-	canTick := interactive(r) && t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil
+	canTick := browserPrincipal(r).May(store.RightDecideHuman) && t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil
 	now := overviewNow().UTC()
 	for i, s := range t.Steps {
 		step := taskStepView{N: i + 1, Text: s.Text, URL: s.URL}
@@ -391,7 +391,7 @@ func (a *app) taskStepSet(w http.ResponseWriter, r *http.Request) {
 	}
 	pa := a.access(r)
 	accountID, _ := store.AccountNumericID(browserPrincipal(r).ID)
-	actor := humantask.Actor{AccountID: accountID, Person: personOf(r), Web: interactive(r)}
+	actor := humantask.Actor{AccountID: accountID, Person: personOf(r), Web: fromSignIn(r)}
 	if err := pa.SetTaskStep(id, n, r.FormValue("done") == "1", actor); err != nil {
 		switch {
 		case errors.Is(err, store.ErrAccessForbidden):

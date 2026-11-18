@@ -16,7 +16,7 @@
 {{with .Composer}}{{template "uicomposer" .}}{{end}}
 </div>
 <aside class="side" aria-label="{{t "ideas.side.facts"}}">
-{{if and $.Interactive (eq .State "open")}}<a class="gbtn pri blk" href="{{.Base}}/issues/new?derived_from=IDEA-{{.ID}}">{{mi "issue"}}{{t "ideas.make_issue"}}</a>{{end}}
+{{if eq .State "open"}}<a class="gbtn pri blk" href="{{.Base}}/issues/new?derived_from=IDEA-{{.ID}}">{{mi "issue"}}{{t "ideas.make_issue"}}</a>{{end}}
 <div class="sblk"><h3>{{t "pains.side.status"}}</h3><div class="v"><span class="lb {{.Tone}}">{{.StateLabel}}</span></div></div>
 {{with .LabelBox}}{{template "uilabelbox" .}}{{end}}
 {{if .Pains}}<div class="sblk"><h3>{{t "ideas.side.pains"}}</h3><div class="v">{{range .Pains}}{{template "uihc" (hc .Num .Title .Brief .Href)}}{{end}}</div></div>{{end}}

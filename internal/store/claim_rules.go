@@ -205,7 +205,7 @@ func (s *Store) ClaimContested(actorPrincipal, remote, orgRef string) (Project, 
 	if err != nil {
 		return Project{}, err
 	}
-	if !isAdminTx(s.db, actor) {
+	if !instanceCanTx(s.db, actor, RightInstanceAdmin) {
 		return Project{}, ErrNotAdmin
 	}
 	return s.claimContested(principalOfID(actor), remote, orgRef)
@@ -260,13 +260,6 @@ func (s *Store) claimContested(by, remote, orgRef string) (Project, error) {
 	return p, tx.Commit()
 }
 
-// isAdminTx: the account is an instance admin.
-func isAdminTx(q rowQuerier, account int64) bool {
-	var admin int
-	_ = q.QueryRow(`SELECT is_admin FROM persons WHERE id=?`, account).Scan(&admin)
-	return admin == 1
-}
-
 // ReassignProject gives a known project to another organization or person's
 // namespace (toRef: its slug). Only the instance admin may, from an
 // interactive web session (the API refuses it): it is the way out when
@@ -285,7 +278,7 @@ func (s *Store) ReassignProject(actorPrincipal, remote, toRef string) (Project, 
 	if err != nil {
 		return Project{}, err
 	}
-	if !isAdminTx(s.db, actor) {
+	if !instanceCanTx(s.db, actor, RightInstanceAdmin) {
 		return Project{}, ErrNotAdmin
 	}
 	return s.reassignProject(principalOfID(actor), remote, toRef)
@@ -408,7 +401,7 @@ func (s *Store) PendingTakeovers(viewerPrincipal string, orgID int64) ([]Handove
 	if err != nil {
 		return nil, err
 	}
-	if orgRoleTx(s.db, orgID, viewer) != OrgOwner {
+	if !orgCanTx(s.db, orgID, viewer, RightOrgProjects) {
 		return nil, ErrNotOrgOwner
 	}
 	return pendingHandoversTx(s.db, `op.id=?`, orgID)
@@ -484,10 +477,9 @@ func (s *Store) TakeOverProject(actorPrincipal, remote string) (Project, error) 
 	if err != nil {
 		return Project{}, err
 	}
-	var admin int
-	_ = tx.QueryRow(`SELECT is_admin FROM persons WHERE id=?`, actor).Scan(&admin)
-	if admin != 1 {
-		if orgRoleTx(tx, org.ID, actor) != OrgOwner {
+	admin := instanceCanTx(tx, actor, RightInstanceAdmin)
+	if !admin {
+		if !orgCanTx(tx, org.ID, actor, RightOrgProjects) {
 			return Project{}, ErrNotOrgOwner
 		}
 		if !h.Consented {
@@ -524,7 +516,7 @@ func (s *Store) TakeOverProject(actorPrincipal, remote string) (Project, error) 
 		return Project{}, err
 	}
 	how := "with the owner's agreement"
-	if admin == 1 && !h.Consented {
+	if admin && !h.Consented {
 		how = "by the instance admin"
 	}
 	if err := holdForeignEntriesTx(tx, remote, org.ID, true); err != nil {

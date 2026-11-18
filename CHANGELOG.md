@@ -959,6 +959,19 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Changed
 
+- Every permission check asks one named right from a catalog (REQ-722). The
+  browser, the CLI and MCP now ask the same right for the same action: a
+  session from a pasted token may in the browser what its token may over the
+  API, members create packages and features in the browser too, and the
+  rights only a person uses (roles and members, AI keys and budget and the
+  retention of workflow runs, account security, machine sharing, sharing a
+  project with the organization, founding an organization, controlling
+  agents, decisions a person has to take) need a sign-in everywhere. Revoking
+  an invitation therefore needs a sign-in, and so does an instance admin
+  renaming an organization of others (in the browser and over the API,
+  without changing its address). Entries held after a project moved are read
+  and released only by a person in the browser.
+
 - The inbox has two sections, what waits for you and what was said to you.
   A direct message stands in the second beside the mentions in rooms, and what
   nobody read for two weeks leaves the inbox before anything is counted; it

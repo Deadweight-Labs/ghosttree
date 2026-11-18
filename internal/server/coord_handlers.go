@@ -650,7 +650,7 @@ func (a *api) shapePathActivity(r *http.Request, project, exclude string, in []s
 			skip[sid] = true
 		}
 	}
-	lead := store.RoleRank(a.st.ProjectRole(project, me.ID).Role) >= store.RoleRank(store.RoleLead)
+	lead := a.access(r).Can(project, store.RightSessionIDs)
 	enforced := a.st.AccessEnforced()
 	owner := a.st.OwnerAccountID()
 	out := make([]store.PathActivity, 0, len(in))

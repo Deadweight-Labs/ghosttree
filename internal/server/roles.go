@@ -42,7 +42,7 @@ func (a *api) listProjectMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Der Gast sieht nur den eigenen Eintrag.
-	if store.RoleRank(a.access(r).Role(p.Remote).Role) == 1 && a.st.AccessEnforced() {
+	if a.access(r).Role(p.Remote).GuestOnly() && a.st.AccessEnforced() {
 		me := principalOf(r).ID
 		members = filterTo(members, 0, func(m store.ProjectMember) bool { return m.AccountID == me })
 	}

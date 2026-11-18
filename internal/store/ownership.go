@@ -207,7 +207,7 @@ func claimMachineTx(tx txExec, name string, account int64) (created bool, err er
 // dürfen ihn nicht tragen (DEC-5): der Name beweist nichts (#2581).
 func machineUsableBy(q rowQuerier, stored, ownerOrg, account int64) bool {
 	if ownerOrg > 0 {
-		return orgMemberRoleTx(q, ownerOrg, account) == OrgOwner
+		return OrgRoleHas(orgMemberRoleTx(q, ownerOrg, account), RightOrgMachines)
 	}
 	return effectiveOwner(stored, instanceOwnerID(q)) == account
 }

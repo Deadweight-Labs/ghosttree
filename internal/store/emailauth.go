@@ -703,7 +703,7 @@ func (s *Store) LoginLinkAllowed(orgID int64, targetPrincipal string) bool {
 		return s.reader.LoginLinkAllowed(orgID, targetPrincipal)
 	}
 	target, err := parsePersonPrincipalID(targetPrincipal)
-	if err != nil || orgRoleTx(s.db, orgID, target) != OrgMember {
+	if err != nil || !IsOrgPlainMemberRole(orgRoleTx(s.db, orgID, target)) {
 		return false
 	}
 	a, err := scanAccount(s.db.QueryRow(accountSelect+` WHERE id=?`, target))
@@ -742,10 +742,10 @@ func (s *Store) IssueMemberLoginLink(actorPrincipal string, orgID int64, targetP
 		return "", 0, err
 	}
 	defer tx.Rollback()
-	if orgRoleTx(tx, orgID, actor) != OrgOwner {
+	if !orgCanTx(tx, orgID, actor, RightOrgMembers) {
 		return "", 0, ErrNotOrgOwner
 	}
-	if orgRoleTx(tx, orgID, target) != OrgMember {
+	if !IsOrgPlainMemberRole(orgRoleTx(tx, orgID, target)) {
 		return "", 0, ErrNotOrgMember
 	}
 	a, err := accountState(tx, target)

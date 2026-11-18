@@ -197,8 +197,8 @@ func (a *app) aiViewFor(r *http.Request, org store.Org, st *aiFormView) *aiView 
 		return nil
 	}
 	l := a.langFor(r)
-	owner := org.Role == store.OrgOwner
-	v := &aiView{Owner: owner && interactive(r), IsUser: org.Kind == store.OrgKindUser, CanSeal: a.aiBox != nil, CanTest: a.aiTester != nil}
+	owner := store.OrgRoleHas(org.Role, store.RightOrgAI)
+	v := &aiView{Owner: orgMay(r, org, store.RightOrgAI), IsUser: org.Kind == store.OrgKindUser, CanSeal: a.aiBox != nil, CanTest: a.aiTester != nil}
 	conns, _ := a.store.AIConnectionsFor(org.ID)
 	for _, c := range conns {
 		row := aiRow(l, c, false)
@@ -214,7 +214,7 @@ func (a *app) aiViewFor(r *http.Request, org store.Org, st *aiFormView) *aiView 
 				row.Loans = append(row.Loans, aiLoanRow{ID: ln.ID, Org: ln.OrgName, Spent: aiSpentLine(l, ln.SpentMonth, ln.CapUSD)})
 			}
 		}
-		if owner && c.Via == store.AIViaOwn && interactive(r) {
+		if v.Owner && c.Via == store.AIViaOwn {
 			row.Form = aiFormOf(row, false, st)
 			row.Test = a.aiTestOf(c.ID, l)
 		}
@@ -302,7 +302,7 @@ func (a *app) aiViewFor(r *http.Request, org store.Org, st *aiFormView) *aiView 
 
 // aiServerFor is the admin's section; nil for anyone else.
 func (a *app) aiServerFor(r *http.Request, st *aiFormView) *aiServerView {
-	if !interactive(r) || !a.isAdmin(browserPrincipal(r)) {
+	if !a.access(r).CanInstance(store.RightInstanceAI) {
 		return nil
 	}
 	l := a.langFor(r)
@@ -433,7 +433,7 @@ func (a *app) aiConnectionSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l := a.langFor(r)
-	if !server && a.store.OrgRole(o.ID, browserPrincipal(r).ID) != store.OrgOwner {
+	if !server && !a.access(r).CanOrg(o.ID, store.RightOrgAI) {
 		a.aiFailure(w, r, server, store.ErrNotOrgOwner)
 		return
 	}

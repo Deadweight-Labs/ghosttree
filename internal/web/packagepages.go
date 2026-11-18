@@ -145,7 +145,7 @@ func (a *app) repoPackagesPage(w http.ResponseWriter, r *http.Request) {
 	for _, p := range shown {
 		v.Rows = append(v.Rows, packageRowOf(l, pa, view, p))
 	}
-	v.Bar = a.leadBar(r, l, pa, project, store.ResRequest)
+	v.Bar = a.leadBar(r, l, pa, project, store.ResPackage, store.ActCreate)
 	v.NewHref = base + "?panel=new#new"
 	if v.Bar.Can {
 		v.Form = a.packageFormFor(r, pa, project)
@@ -294,7 +294,7 @@ func (a *app) packageDetail(w http.ResponseWriter, r *http.Request, remote, id s
 		v.StateOther = requestdomain.PackageOpen
 	}
 	v.Result = packageResult(r, l)
-	v.Bar = a.leadBar(r2, l, pa, remote, store.ResRequest)
+	v.Bar = a.leadBar(r2, l, pa, remote, store.ResPackage, store.ActWork)
 	if v.Bar.Can {
 		v.RawName, v.EditHref, v.AddHref = full.Name, v.Base+"/"+strconv.FormatInt(v.ID, 10)+"?panel=edit#edit", v.Base+"/"+strconv.FormatInt(v.ID, 10)+"#add"
 		v.Panel = r.URL.Query().Get("panel")

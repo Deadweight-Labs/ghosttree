@@ -91,7 +91,7 @@ func (a *ProjectAccess) MayApproveRunbook(project, machine string, ownRunbook bo
 	if project == "" {
 		return ownRunbook && a.valid
 	}
-	return RoleRank(a.Role(project).Role) >= 3
+	return a.Can(project, RightRunbookApprove)
 }
 
 // RunbookTitles löst die verlinkten Fallen eines Ablaufs zu Titeln auf, soweit
