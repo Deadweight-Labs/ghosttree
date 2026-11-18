@@ -37,6 +37,8 @@ link() { "${env[@]}" "$work/ctx" account login-link Mia --db "$work/gt.db" --url
 
 node "$here/shoot.mjs" "http://127.0.0.1:$port" "$(link)" "$work/shots" ui-context ui-code ui-idea ui-pr ui-room
 node "$here/shoot.mjs" "http://127.0.0.1:$port" "$(link)" "$work/gif" gif-1 gif-2 gif-3 gif-4 gif-5
+node "$here/tour.mjs" "http://127.0.0.1:$port" "$(link)" "$work/tour"
+ffmpeg -loglevel error -y -ss 0.4 -i "$work/tour/tour.webm" -c:v libx264 -crf 26 -preset slow -pix_fmt yuv420p -movflags +faststart -an "$out/tour.mp4"
 
 for f in "$work"/shots/*.png; do pngquant --quality 85-98 --speed 1 --force --output "$out/$(basename "$f")" "$f"; done
 : > "$work/gif/list.txt"
@@ -45,4 +47,4 @@ printf "file 'gif-5.png'\n" >> "$work/gif/list.txt"
 (cd "$work/gif" && ffmpeg -loglevel error -y -f concat -i list.txt \
   -vf "scale=880:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96:stats_mode=full[p];[b][p]paletteuse=dither=none" \
   -loop 0 "$out/demo-loop.gif")
-ls -la "$out"/ui-*.png "$out/demo-loop.gif"
+ls -la "$out"/ui-*.png "$out/demo-loop.gif" "$out/tour.mp4"

@@ -3,9 +3,9 @@
 Every picture in the README is taken from the real web interface with invented
 data. Nothing in them comes from a real person, project, or machine.
 
-## Interface pictures and the loop GIF
+## Interface pictures, the loop GIF, and the tour
 
-`ui-*.png` and `demo-loop.gif` come from [`readme/make.sh`](readme/make.sh):
+`ui-*.png`, `demo-loop.gif`, and `tour.mp4` come from [`readme/make.sh`](readme/make.sh):
 
 ```bash
 PLAYWRIGHT=/path/to/node_modules/playwright/index.mjs docs/images/src/readme/make.sh
@@ -18,7 +18,9 @@ workflow run, a runbook, and a work package on a pull request), starts a server
 on `127.0.0.1` under an empty `HOME`, signs in as Mia with a one-time link, and
 takes the pictures in light mode at 1280 pixels width with
 [`readme/shoot.mjs`](readme/shoot.mjs). The GIF is five of those pages at 2.6
-seconds each. The temporary directory is removed at the end.
+seconds each. `tour.mp4` is a recording of the same five pages with a drawn
+mouse pointer, made by [`readme/tour.mjs`](readme/tour.mjs). The temporary
+directory is removed at the end.
 
 The seed is built with the tag `readmeshots`, so `go build ./...` and
 `go vet ./...` leave it out. When the store changes, build it once with

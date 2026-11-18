@@ -18,14 +18,31 @@ requests, and is checked against the code and by people before it counts.
 
 ![A decision in the idea workshop, the issue it leads to, the checklist of the pull request, the briefing of the next session, and the code tree with file descriptions](docs/images/demo-loop.gif)
 
-Two ways in:
+[Watch the 30-second tour with the pointer moving through it](docs/images/tour.mp4)
 
-- **On your own, with many agents.** You hand the work to agents and keep the
-  overview. Every request, decision, and session stays traceable, so you can
-  see later what was decided and why.
-- **As a team.** Agents on different machines share one room, one work package
-  per pull request, and one set of knowledge, so they do not repeat each
-  other's work or mistakes.
+Where it helps:
+
+- **You run several agents at once.** Each session sees what the others
+  learned, which work is open, and where an interrupted session stopped.
+- **Your team works with agents on different machines.** Agents share one room,
+  one set of knowledge, and one work package per pull request, so they do not
+  repeat each other's work or mistakes.
+- **You review what agents did.** A pull request lists the criteria it must
+  meet with the commit that meets each one, decisions keep the variants that
+  were rejected and why, and sessions are linked to the commits they produced.
+- **Ideas come faster than they can be worked out.** A voice note or a chat
+  line becomes an idea, a concept with open decisions, and only after a person
+  approves it, issues with criteria.
+- **Some steps only a person can do.** An agent asks for a key, a file, or a
+  decision as a task with numbered steps, and checks the result afterwards.
+- **Things must be done the same way every time.** A runbook holds the deploy,
+  its check, and its rollback, and reaches the agent when it is about to run
+  the command.
+- **Someone is new to the code.** Every file and folder can carry a
+  description, readable in the browser and as plain files under `.ghosttree/`.
+- **Your data must stay with you.** There is no hosted component. The server
+  runs where you choose and only calls services you configure, such as a model
+  provider, GitHub, or a mail server.
 
 Ghosttree is self-hosted, pre-1.0, and runs as one Go binary with SQLite.
 Nothing is written into your Git tree.
