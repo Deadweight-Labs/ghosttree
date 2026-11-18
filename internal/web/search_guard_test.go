@@ -56,7 +56,7 @@ func TestSearchKindsLeaveAReadConnectionFree(t *testing.T) {
 	var l searchLimiter
 	var releases []func()
 	for range 2 {
-		release, ok := l.acquire(context.Background(), st)
+		release, ok := l.acquire(context.Background(), st, "")
 		if !ok {
 			t.Fatal("no place for the first two kinds")
 		}
@@ -64,11 +64,11 @@ func TestSearchKindsLeaveAReadConnectionFree(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if _, ok := l.acquire(ctx, st); ok {
+	if _, ok := l.acquire(ctx, st, ""); ok {
 		t.Fatal("a third kind got a place with three connections")
 	}
 	releases[0]()
-	if release, ok := l.acquire(context.Background(), st); !ok {
+	if release, ok := l.acquire(context.Background(), st, ""); !ok {
 		t.Fatal("a freed place is not given again")
 	} else {
 		release()
@@ -98,7 +98,7 @@ func TestSearchKindSurvivesAPanic(t *testing.T) {
 	// The place of the kind is free again.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if release, ok := a.searchSlots.acquire(ctx, st); !ok {
+	if release, ok := a.searchSlots.acquire(ctx, st, ""); !ok {
 		t.Error("the kind that panicked kept its place")
 	} else {
 		release()

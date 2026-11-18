@@ -386,7 +386,7 @@ func (a *app) searchKind(ctx context.Context, r *http.Request, p *searchPlan, ke
 			out = searchGroup{Key: key}
 		}
 	}()
-	release, ok := a.searchSlots.acquire(ctx, a.store)
+	release, ok := a.searchSlots.acquire(ctx, a.store, browserPrincipal(r).ID)
 	if !ok {
 		return searchGroup{Key: key}
 	}

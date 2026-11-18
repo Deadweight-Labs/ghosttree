@@ -747,7 +747,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	// connection (Store.AcquireSearchSlot), but only for a moment: a server that
 	// stays busy says so with Retry-After, and the client asks again. A caller who
 	// has hung up gets no answer.
-	release, ok := a.st.AcquireSearchSlot(r.Context(), searchSlotWait)
+	release, ok := a.st.AcquireSearchSlotFor(r.Context(), principalOf(r).ID, searchSlotWait)
 	if !ok {
 		if r.Context().Err() == nil {
 			w.Header().Set("Retry-After", strconv.Itoa(int(searchSlotWait.Round(time.Second)/time.Second)))
