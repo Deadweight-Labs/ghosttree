@@ -196,6 +196,21 @@ cannot change the address or the password of the account and cannot pair or
 approve a device (a link made by the host with `ctx account login-link` is the
 operator's own onboarding and is not limited this way).
 
+A session from such a link does everyday work only (issues, comments, rooms,
+reading). Everything that changes roles, access, invitations, organizations,
+tokens, devices, machine and runbook releases, workflows, AI keys, held entries or
+tasks for people needs a sign-in with a proof (password, mail code or single
+sign-on): the page says so and leads to the sign-in, and back. Every route that
+changes something is assigned in `internal/web/linkpolicy.go`; a test fails for a
+new one that is not. A link session lasts twelve hours without sliding and is
+marked on the account pages.
+
+A device login (`ctx login`) shows a code in the terminal, and the person types it
+on the approval page; a link never fills it in. Machine names are letters, digits,
+`.`, `_` and `-`, at most 64. A device or legacy token that nobody has used for 90
+days stops working (every use moves the end; an instance that gets this rule starts
+the 90 days that day, so no token is cut off at once).
+
 ### Mail sending
 
 | Flag | Environment | Meaning |
@@ -234,7 +249,14 @@ short life, five wrong tries per mail, and limits per address and per sender (fi
 minutes: five mails and ten tries per address, twenty mails and forty tries per
 sender). Passwords are argon2id (64 MiB, three passes). An address is on the
 account only once confirmed (`persons.email`); an unconfirmed one waits in the
-mail itself. Nothing on a sign-in page tells whether an address has an account.
+mail itself. Nothing on a sign-in page tells whether an address has an account, and
+the mail is made in the background for an address with an account as for one
+without. Limits bind to address and source: wrong passwords or mail requests of a
+stranger use up only their own share, a success clears the count, and many sources
+guessing at one address are let through one at a time with a pause instead of
+locking the owner out. Invitation mails are limited per day per account (20),
+organization (50) and address (3); the invitation itself stays, and the page says
+that no mail went out.
 
 ### What the server shows without a sign-in
 

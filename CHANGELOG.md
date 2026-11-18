@@ -1472,6 +1472,25 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Security
 
+- A web session that started from a one-time link (an owner's link for a member,
+  `ctx web`) does everyday work only for twelve hours; roles, access, invitations,
+  tokens, devices, AI keys, workflows and the like need a sign-in with a proof. Every
+  changing web route is assigned, and a test fails for one that is not.
+- A device login needs the code typed from the terminal (no link fills it in), the
+  machine name is plain, and device and legacy tokens stop working after 90 days
+  without use (counted from the day this version first starts).
+- Lockouts of passwords, mail requests and device approval bind to address and
+  source or only slow down, so a stranger cannot lock an owner out; the sign-in mail
+  is made in the background; invitation mails are limited per account, organization
+  and address, and carry one plain line of the sender's text.
+- `/metrics` answers the machine itself and the holder of `GHOSTTREE_METRICS_TOKEN`
+  (a scraper on another host sets it, see deploy/README.md), everyone else gets 404;
+  `/api/version` shows no version or commit without a token.
+- Every web answer carries HSTS over https, a permissions policy and an opener
+  policy; the CSP names `form-action`; the session cookie is `__Host-gt_session`
+  where it is Secure; a Markdown link whose text names another site shows the real
+  host; markup with placeholders takes only safe parts; image attachments are
+  limited to 16 million pixels.
 - Go 1.26.11 (GO-2026-6859 in `net/http`, after GO-2026-6809 in `crypto/x509`
   fixed by 1.26.10); released binaries use the fixed standard library.
 - Pull request links only with a host boundary and a fixed path for coordination
