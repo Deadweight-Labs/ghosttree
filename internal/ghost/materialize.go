@@ -2,9 +2,10 @@ package ghost
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/gitsafe"
 )
 
 // Doc ist ein Stück Text an einem Pfad. Der Materialisierer kennt bewusst keine
@@ -182,7 +183,7 @@ func EnsureExcluded(repoRoot string) error {
 }
 
 func excludePath(repoRoot string) string {
-	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--git-path", "info/exclude").Output()
+	out, err := gitsafe.Command("-C", repoRoot, "rev-parse", "--git-path", "info/exclude").Output()
 	if err != nil {
 		return filepath.Join(repoRoot, ".git", "info", "exclude")
 	}
