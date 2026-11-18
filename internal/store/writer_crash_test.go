@@ -2,6 +2,7 @@ package store
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -220,6 +222,30 @@ func writeCrashACKs(t *testing.T, s *Store) crashACKs {
 	return crashACKs{sid, doc.ID, req.Request.ID}
 }
 
+// crashBoundaryWait is how long the parent waits for the child to reach its
+// boundary. The child is a fresh test binary that opens and migrates a new
+// database; under the race detector on a busy CI runner that has taken more
+// than ten seconds (KN-4859). A real hang still fails, only later.
+const crashBoundaryWait = 60 * time.Second
+
+// lockedBuffer collects the child's stderr while the parent may read it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func crashWriterAt(t *testing.T, path, phase string) crashACKs {
 	t.Helper()
 	exe, err := os.Executable()
@@ -232,7 +258,8 @@ func crashWriterAt(t *testing.T, path, phase string) crashACKs {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd.Stderr = os.Stderr
+	var childErr lockedBuffer
+	cmd.Stderr = &childErr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -275,8 +302,8 @@ func crashWriterAt(t *testing.T, path, phase string) crashACKs {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("child did not reach crash boundary")
+	case <-time.After(crashBoundaryWait):
+		t.Fatalf("child did not reach crash boundary within %s; child stderr:\n%s", crashBoundaryWait, childErr.String())
 	}
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
