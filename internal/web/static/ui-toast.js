@@ -9,13 +9,8 @@
   const toasts = () => Array.from(document.querySelectorAll(".flash.fly"));
   const dismiss = () => toasts().forEach((el) => el.remove());
 
-  // The toast floats under whatever stands at the top of the page, the header and the tab
-  // band of a repository or organization, not over it: a toast over the tabs hides the very
-  // tab the person is about to use next (N27). Placed when the page opens, where the page
-  // is still at its top.
-  const bottomOf = (el) => (el && el.getBoundingClientRect ? el.getBoundingClientRect().bottom : 0);
-  const below = Math.max(bottomOf(document.querySelector(".gh-header")), bottomOf(document.querySelector(".rband")));
-  if (below > 0) toasts().forEach((el) => { el.style.top = Math.round(below + 8) + "px"; });
+  // Where the toast stands is the stylesheet's business (ui-parts.css): one corner of the window, the same on
+  // every page, so it never lands on the tabs or on the card the person is reading (N27). Nothing is placed here.
 
   if (toasts().length && window.history && history.replaceState) {
     const url = new URL(location.href);

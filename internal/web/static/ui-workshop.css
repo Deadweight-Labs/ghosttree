@@ -122,11 +122,14 @@
 
 /* Pictures: thumbnails above a variant or the idea, one dialog to enlarge them. */
 :is(.g2) {
-  & .ws-imgs { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+  /* Equal tiles, whatever the picture: a fixed frame with the picture contained in it. */
+  & .ws-imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; align-items: start; }
   & .ws-imgs-idea { padding: 12px 16px; }
+  /* The box of pictures is a card like the others: air to the field for a comment below it. */
+  & .ws-imgbox { margin-bottom: 16px; }
   /* A tile: the picture, below it its name and the button that puts it into the text. */
   & .ws-fig { margin: 0; display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
-  & .ws-fig .ws-zoom { align-self: flex-start; }
+  & .ws-fig .ws-zoom { align-self: stretch; }
   & .ws-cap { display: flex; align-items: center; gap: 8px; min-width: 0; }
   & .ws-att { font: 12px/1 var(--font-mono, ui-monospace, monospace); color: var(--fg-muted); padding: 3px 6px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-subtle); }
   /* The button needs a field for a text on the page (ui-parts.js says so with .has-cx) and a script. */
@@ -134,13 +137,16 @@
   html.js.has-cx & .ws-ins { display: inline-flex; }
   & .ws-zoom { display: block; max-width: 100%; border: 1px solid var(--border-default); border-radius: 6px; overflow: hidden; background: var(--canvas-subtle); cursor: zoom-in; line-height: 0; }
   & .ws-zoom:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
-  & .ws-zoom img { display: block; max-width: 100%; max-height: 180px; width: auto; height: auto; object-fit: contain; }
-  & .ws-up { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 16px; }
+  & .ws-zoom { aspect-ratio: 4 / 3; }
+  & .ws-zoom img { display: block; width: 100%; height: 100%; object-fit: contain; }
+  /* The drop zone: a picture can be dropped on the row that takes it (or pasted into the field for a text). */
+  & .ws-up { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 16px; padding: 12px; border: 1px dashed var(--border-default); border-radius: 8px; transition: background-color .12s, border-color .12s; }
   & .ws-up .gfield { flex: 1 1 160px; min-width: 0; font-size: 13px; }
   & .ws-up select.gfield { flex: 0 1 220px; }
   & .ws-up-note { margin: 12px 16px 0; }
   /* A file is dragged over the page: the box that takes the picture says where it goes. */
   body.ws-dropping & .ws-imgbox { outline: 2px dashed var(--accent-fg); outline-offset: 2px; }
+  body.ws-dropping & .ws-up { border-color: var(--accent-fg); background: var(--accent-subtle); }
   & .ws-lb { max-width: min(96vw, 1200px); max-height: 94vh; padding: 12px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--canvas-default); color: var(--fg-default); }
   & .ws-lb::backdrop { background: rgb(0 0 0 / .6); }
   & .ws-lb img { display: block; max-width: 100%; max-height: 78vh; margin: 0 auto; object-fit: contain; }

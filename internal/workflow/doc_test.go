@@ -278,3 +278,17 @@ func TestViewOfOwnersAndItems(t *testing.T) {
 		t.Fatalf("body %q stage %d", v.Body, v.Stage)
 	}
 }
+
+// The node of the instruction names the line where the text begins, not the "---" that closes the settings (REQ-711).
+func TestBodyLineIsWhereTheTextBeginsNotTheClosingDashes(t *testing.T) {
+	d := ParseDoc("---\non: idea.created\nmodel: mittel\n---\n\nCompare the idea with the open requests.\nSecond line.\n")
+	if got := d.BodyLine(); got != 6 {
+		t.Errorf("BodyLine = %d, want 6 (the first line of the text; the closing --- is line 4)", got)
+	}
+	if got := ParseDoc("---\non: idea.created\n---\n").BodyLine(); got != 0 {
+		t.Errorf("no text below the settings: BodyLine = %d, want 0", got)
+	}
+	if got := ParseDoc("just text").BodyLine(); got != 0 {
+		t.Errorf("no front matter: BodyLine = %d, want 0", got)
+	}
+}

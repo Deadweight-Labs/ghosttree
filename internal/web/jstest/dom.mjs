@@ -91,6 +91,11 @@ export class Element extends Node {
     this.listeners = new Map();
     this.content = tag.toLowerCase() === "template" ? new Fragment() : null;
     this.style = {};
+    // setProperty and removeProperty are how a script sets a custom property (--x); they stay out of the keys.
+    Object.defineProperties(this.style, {
+      setProperty: { value(k, v) { this[k] = String(v); } },
+      removeProperty: { value(k) { delete this[k]; } },
+    });
     const self = this;
     this.dataset = new Proxy({}, {
       get: (_, k) => (typeof k === "string" && self.attrs.has(dashed(k)) ? self.attrs.get(dashed(k)) : undefined),
@@ -102,6 +107,12 @@ export class Element extends Node {
     });
   }
   get localName() { return this.tagName.toLowerCase(); }
+  cloneNode(deep) {
+    const copy = new this.constructor(this.tagName, this.ownerDocument);
+    for (const [n, v] of this.attrs) copy.attrs.set(n, v);
+    if (deep) for (const child of this.childNodes) copy.appendChild(child.cloneNode ? child.cloneNode(true) : child);
+    return copy;
+  }
   getAttribute(n) { return this.attrs.has(n) ? this.attrs.get(n) : null; }
   setAttribute(n, v) { this.attrs.set(n, String(v)); }
   hasAttribute(n) { return this.attrs.has(n); }

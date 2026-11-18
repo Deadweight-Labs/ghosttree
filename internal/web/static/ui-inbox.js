@@ -80,8 +80,6 @@
       link.textContent = view;
       note.appendChild(link);
     }
-    const header = $(".gh-header");
-    if (header) note.style.top = Math.round(header.getBoundingClientRect().bottom + 8) + "px";
     document.body.appendChild(note);
     setTimeout(() => note.remove(), 9000);
   };

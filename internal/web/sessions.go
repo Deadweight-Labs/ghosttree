@@ -1038,10 +1038,9 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 		case n > 1:
 			text += " " + l.msg("sessions.secrets_many", n)
 		}
+		// The question stands over the session itself, as a dialog; the session is not replaced by it (S17).
 		back := "/ui/sessions/" + sess.PublicID
-		a.renderBrowser(w, r, "session", pageData{Title: l.msg("nav.sessions"), SessionV: &sessionView{
-			PID: sess.PublicID, Confirm: &shareConfirm{Action: back + "/share", Level: level, Text: text, Back: back, Secrets: n > 0}}})
-		return
+		v.Confirm = &shareConfirm{Action: back + "/share", Level: level, Text: text, Back: back, Secrets: n > 0}
 	}
 
 	// Verknüpfungen: nur Ziele, die der Betrachter sehen darf.

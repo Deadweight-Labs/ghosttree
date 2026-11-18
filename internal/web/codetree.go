@@ -600,20 +600,27 @@ func (a *app) codeFolderPage(r *http.Request, pa *store.ProjectAccess, view *rep
 	v.Folder = cp.Path
 	if newest != nil {
 		kind, who := actorOf(l, newest.Person, newest.Harness)
-		c := &codeCommit{AvKind: kind, Who: who, Text: newest.Path, SHA: shortSHA(newest.GitAnchor.Commit), Updated: newest.UpdatedAt}
-		if cp.Path != "" {
-			c.Text = strings.TrimPrefix(newest.Path, cp.Path+"/")
-		}
+		// The line says who changed the folder last and with which commit. What it adds is the title of that commit
+		// when the server knows it; the name of a file would pass for one (S13).
+		c := &codeCommit{AvKind: kind, Who: who, SHA: shortSHA(newest.GitAnchor.Commit), Updated: newest.UpdatedAt}
 		c.SHAHref = view.Href + "/commits/" + newest.GitAnchor.Commit
 		v.Last = c
 	}
 	// How many commits ghosttree knows for the project: the number beside the
 	// last commit, a link into the commit list.
-	if list, err := pa.Commits(view.Project, "", 1, 0); err == nil && list.Total > 0 {
+	if list, err := pa.Commits(view.Project, "", 100, 0); err == nil && list.Total > 0 {
 		if v.Last == nil {
 			v.Last = &codeCommit{}
 		}
 		v.Last.Commits, v.Last.CommitsHref = list.Total, view.Href+"/commits"
+		if newest != nil && newest.GitAnchor.Commit != "" {
+			for _, ci := range list.Items {
+				if ci.Title != "" && strings.HasPrefix(ci.SHA, newest.GitAnchor.Commit) {
+					v.Last.Text = ci.Title
+					break
+				}
+			}
+		}
 	}
 	v.Readme = a.codeDescription(l, ix, cp.Path, guestOf(pa, view.Project))
 	v.Readme.Page = true
@@ -648,9 +655,20 @@ func (a *app) codeDescription(l lang, ix *codeIndex, p string, guest bool) *code
 	d.AvKind, d.By = actorOf(l, g.Person, g.Harness)
 	d.Updated = g.UpdatedAt
 	if g.OriginContext != nil {
-		d.Area = g.OriginContext.Main()
+		d.Area = areaBelow(g.OriginContext.Main(), p)
 	}
 	return d
+}
+
+// areaBelow is the area of the work that wrote a description, when it adds something to the path the box is
+// about: a part of it. The root, the path itself and an area elsewhere ("Area: internal/config" under the
+// description of the whole repository) say nothing about this path and stay away (S13).
+func areaBelow(area, path string) string {
+	area = strings.Trim(area, "/")
+	if area == "" || area == "." || path == "" || area == path || !strings.HasPrefix(area, path+"/") {
+		return ""
+	}
+	return area
 }
 
 func (a *app) codeBlobPage(r *http.Request, pa *store.ProjectAccess, view *repoView, v *repoCodeView, ix *codeIndex, links codeLinks, cp *codePath) {

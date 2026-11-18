@@ -159,8 +159,12 @@ func TestSharingWithGuestsAsksAboutSecrets(t *testing.T) {
 	if got, _ := e.St.SessionByID(id); got.Visibility != store.VisProject {
 		t.Errorf("level changed before the confirmation: %q", got.Visibility)
 	}
-	if strings.Contains(page, tok) {
+	if strings.Contains(shareDialog(page), tok) {
 		t.Error("the confirmation shows the secret")
+	}
+	// The question stands over the session (S17): the session is still on the page behind it.
+	if !strings.Contains(page, `class="dhead"`) {
+		t.Error("the confirmation replaces the session instead of standing over it")
 	}
 	if resp, _ := post(url.Values{"level": {store.VisGuests}, "confirm": {"1"}}); resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("confirmed: %d", resp.StatusCode)
@@ -206,7 +210,7 @@ func TestSharingWithGuestsAsksAboutLabeledPasswordsInOlderSessions(t *testing.T)
 		t.Fatalf("older session: %d %q, want the confirmation", resp.StatusCode, loc)
 	}
 	_, page := e.get(t, e.Member, resp.Header.Get("Location"))
-	if !strings.Contains(page, "1 possible secret in this session") || strings.Contains(page, "Hx7!kQ2pz") {
+	if !strings.Contains(page, "1 possible secret in this session") || strings.Contains(shareDialog(page), "Hx7!kQ2pz") {
 		t.Fatalf("confirmation: %.300s", page)
 	}
 
@@ -265,4 +269,17 @@ func TestReviewAndRequestLinkToSessionsByPublicAddress(t *testing.T) {
 	if !strings.Contains(page, `href="/ui/sessions/`+e.pid["anna-project"]+`"`) || regexp.MustCompile(`/ui/sessions/\d+["#?]`).MatchString(page) {
 		t.Errorf("request page links sessions by number: %s", regexp.MustCompile(`Work sessions.{0,300}`).FindString(page))
 	}
+}
+
+// shareDialog is the question before sharing, the part of the page that must not repeat what it warns about.
+func shareDialog(page string) string {
+	i := strings.Index(page, `class="sdlg"`)
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(page[i:], "</form>")
+	if j < 0 {
+		return page[i:]
+	}
+	return page[i : i+j]
 }

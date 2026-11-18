@@ -357,7 +357,7 @@
   & .cx-f .dd > .gbtn { height: 32px; font-size: 14px; font-weight: 400; }
   & .cx-f .gbtn { flex: none; }
   & .ddl::after { content: ":"; }
-  & .cx-hint { display: inline-flex; align-items: center; margin-right: 4px; color: var(--fg-muted); }
+  & .cx-hint { display: inline-flex; align-items: center; gap: 6px; margin-right: 4px; color: var(--fg-muted); }
   & .cx-hint .i { width: 16px; height: 16px; color: inherit; }
   & .gbtn.dangerf { background: var(--danger-emphasis); border-color: #1f232826; color: #fff; }
   & .gbtn.dangerf:hover { background: var(--danger-emphasis); filter: brightness(.92); }
@@ -420,3 +420,39 @@ html:not(.js) .js-only { display: none; }
 /* A choice with a line that says what it does: the label above, the line under it. */
 .pop .opt .otx { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .pop .opt .otx small { margin-left: 0; white-space: normal; }
+
+/* ---- Toast: what an action did. One corner of the window for every page (the outcome after a post, the answer in
+   the inbox), above everything else, so it never covers the tabs or the card being read, and it leaves by itself.
+   On the phone it spans the bottom edge. ---- */
+body.gt .flash.fly, body.gt .ibtoast {
+  position: fixed; z-index: 100; right: 24px; bottom: 24px; left: auto; top: auto; transform: none;
+  display: flex; align-items: center; gap: 12px; width: max-content; max-width: min(420px, calc(100vw - 32px)); margin: 0; padding: 10px 16px;
+  font: 14px/1.5 var(--ui-font); color: var(--fg-default); background: var(--canvas-default);
+  border: 1px solid var(--success-muted); border-radius: 6px; box-shadow: var(--shadow-pop);
+  animation: gt-toast-in .18s ease-out, gt-toast-out .4s ease 10s forwards;
+}
+body.gt .flash.fly > .i { flex: none; color: var(--success-fg); }
+body.gt .flash.fly > div, body.gt .ibtoast .tt { min-width: 0; overflow-wrap: anywhere; }
+body.gt .ibtoast a { flex: none; font-weight: 600; }
+body.gt .flash.fly:hover, body.gt .flash.fly:focus-within, body.gt .ibtoast:hover, body.gt .ibtoast:focus-within { animation-play-state: paused; }
+@keyframes gt-toast-in { from { opacity: 0; transform: translateY(8px); } }
+@keyframes gt-toast-out { to { opacity: 0; visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { body.gt .flash.fly, body.gt .ibtoast { animation: gt-toast-out .01s linear 10s forwards; } }
+@media (max-width: 767px) {
+  body.gt .flash.fly, body.gt .ibtoast { left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); width: auto; max-width: none; }
+}
+
+/* ---- Popover anchored to its button: a caret points at the middle of the button (ui-parts.js sets --caret-x and
+   data-side when it places the box), and the row the question belongs to stays marked while it is open, so the
+   box does not read as a loose card over the neighbouring rows. ---- */
+:is(.g2) {
+  & details.cfm .cfp::before, & details.resolve > .resolve-form::before, & details.rvk > .rvp::before {
+    content: ""; position: absolute; top: -6px; left: calc(var(--caret-x, calc(100% - 24px)) - 5px); width: 10px; height: 10px;
+    background: var(--canvas-default); border-left: 1px solid var(--border-default); border-top: 1px solid var(--border-default); transform: rotate(45deg); pointer-events: none;
+  }
+  & :is(.cfp, .resolve-form, .rvp)[data-side="up"]::before { top: auto; bottom: -6px; transform: rotate(225deg); }
+  & :is(.row, .trow, .crit, .lrow, .mrow, .prow):has(details.cfm[open], details.resolve[open], details.rvk[open]) { background: var(--canvas-subtle); }
+}
+@media (max-width: 767px) {
+  :is(.g2.id) .resolve-form::before { display: none; }
+}

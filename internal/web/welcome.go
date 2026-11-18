@@ -76,7 +76,7 @@ func (a *app) welcomeCards(r *http.Request, l lang) []welcomeView {
 			}
 		}
 		if len(devices) == 0 {
-			v.Steps = append(v.Steps, welcomeStep{Label: l.msg("welcome.device"), Href: "/join/pair"})
+			v.Steps = append(v.Steps, welcomeStep{Label: l.msg("welcome.device"), Href: "/ui/overview?connect=1"})
 			open++
 		}
 		if open == 0 {

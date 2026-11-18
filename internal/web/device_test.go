@@ -89,8 +89,13 @@ func TestDeviceApprovalInBrowserIssuesBoundToken(t *testing.T) {
 		t.Fatalf("check page: %d %s", resp.StatusCode, page)
 	}
 	resp = sameOriginPostForm(t, client, srv.URL+"/ui/device/decide", url.Values{"user_code": {start.UserCode}, "decision": {"approve"}, "csrf_token": {csrf}})
-	if resp.StatusCode != 200 || !strings.Contains(body(t, resp), "Device approved") {
+	done := body(t, resp)
+	if resp.StatusCode != 200 || !strings.Contains(done, "Device approved") {
 		t.Fatalf("decide: %d", resp.StatusCode)
+	}
+	// The answer names the device it is about (S23).
+	if !strings.Contains(done, `<p class="mono m">laptop</p>`) {
+		t.Errorf("the approval does not name the device: %s", done)
 	}
 	clock.t = clock.t.Add(time.Minute)
 	approval, _, err := st.Device().Poll(start.DeviceCode)

@@ -42,7 +42,7 @@ func init() {
 		"sessions.made.tasks_one":        {"1 task", "1 Aufgabe"},
 		"sessions.made.questions":        {"%d room questions", "%d Raumfragen"},
 		"sessions.made.questions_one":    {"1 room question", "1 Raumfrage"},
-		"pains.action.issue":             {"Issue from this", "Issue daraus"},
+		"pains.action.issue":             {"Make an issue of it", "Daraus Issue machen"},
 		"pains.result.corrected":         {"Saved.", "Gespeichert."},
 		"pains.result.reason_required":   {"Say why this changes.", "Schreib, warum sich das ändert."},
 		"pains.result.title_required":    {"The pain needs a title.", "Der Pain braucht einen Titel."},

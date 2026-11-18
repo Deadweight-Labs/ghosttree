@@ -9,6 +9,8 @@
   // close with Escape (focus goes back to the button) and with a click outside,
   // and both are moved back into the window when they would stick out of it.
   // details.rvk (tokens page) and details.cfm (everywhere else) are the confirmation popovers; they close the same way.
+  // The proof form of a requirement (details.resolve) closes in its own handler below; it is placed here like the others.
+  const POPS = ":scope > .pop, :scope > .rvp, :scope > .cfp, :scope > .resolve-form";
   const OPEN = ".dd.open, details.dd[open], details.rvk[open], details.cfm[open]";
   const trigger = (dd) => $(":scope > [data-dd], :scope > summary", dd);
   const closeMenus = (except) => {
@@ -24,8 +26,10 @@
     }
   };
   const resetPop = (dd) => {
-    const pop = $(":scope > .pop, :scope > .rvp", dd);
+    const pop = $(POPS, dd);
     if (!pop) return null;
+    pop.removeAttribute("data-side");
+    pop.style.removeProperty("--caret-x");
     pop.style.transform = "";
     pop.style.top = "";
     pop.style.bottom = "";
@@ -73,9 +77,18 @@
         pop.style.top = "auto";
         pop.style.bottom = "calc(100% + 4px)";
         pop.style.maxHeight = Math.max(160, Math.min(above, 420)) + "px";
+        pop.setAttribute("data-side", "up");
       } else {
         pop.style.maxHeight = Math.max(160, Math.min(below, 420)) + "px";
       }
+    }
+    // The caret of an anchored popover points at the middle of its button, wherever the box ended up.
+    const t = trigger(dd);
+    if (t) {
+      const from = t.getBoundingClientRect();
+      const now = pop.getBoundingClientRect();
+      const x = from.left + from.width / 2 - now.left;
+      pop.style.setProperty("--caret-x", Math.round(Math.max(14, Math.min(now.width - 14, x))) + "px");
     }
   };
   document.addEventListener("click", (event) => {
@@ -104,7 +117,7 @@
   });
   document.addEventListener("toggle", (event) => {
     const d = event.target;
-    if (!d.matches || !d.matches("details.dd, details.rvk, details.cfm")) return;
+    if (!d.matches || !d.matches("details.dd, details.rvk, details.cfm, details.resolve")) return;
     if (d.open) {
       closeMenus(d);
       filterable(d);

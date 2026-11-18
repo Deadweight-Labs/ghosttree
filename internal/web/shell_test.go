@@ -316,8 +316,9 @@ func TestShellFooterShowsThePublicHostNotTheRequestHost(t *testing.T) {
 	}
 	srv2, _, tok := testWeb(t)
 	_, page = fetchPage(t, login(t, srv2, tok), srv2.URL+"/ui/knowledge")
-	if !strings.Contains(page, `<span class="shell-host">`+strings.TrimPrefix(srv2.URL, "http://")+`</span>`) {
-		t.Error("without a public URL the footer shows the request host")
+	// Without a public URL the menu shows no host at all on a loopback address: 127.0.0.1 says nothing about the server (P49).
+	if strings.Contains(page, `shell-host`) || strings.Contains(page, strings.TrimPrefix(srv2.URL, "http://")+`</span>`) {
+		t.Error("the account menu shows the loopback address of the request")
 	}
 }
 

@@ -135,7 +135,9 @@
   & .diff .add { background: var(--success-subtle); }
   & .diff .del { background: var(--danger-subtle); }
   & .anchor { position: absolute; }
-  & .sconfirm { max-width: 40rem; }
+  /* The question before sharing stands over the session, which stays where it is (S17). */
+  & .sdlg { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / .5); }
+  & .sconfirm { width: 100%; max-width: 40rem; margin: 0; background: linear-gradient(var(--attention-subtle), var(--attention-subtle)), var(--canvas-default); box-shadow: var(--shadow-pop); }
   & .serror .gbtn { margin-left: 8px; }
 }
 

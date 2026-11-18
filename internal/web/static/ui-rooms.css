@@ -393,6 +393,8 @@
     /* The footer of the composer in two rows: the two pickers side by side, the buttons beneath. */
     & .cx-f { gap: 6px; }
     & .cx-f > .dd { flex: 1 1 45%; min-width: 0; }
+    /* The recipient is the long one ("Everyone in the thread"): it gets a row of its own, so its name is not cut off. */
+    & .cx-f > .dd:first-of-type { flex-basis: 100%; }
     & .cx-f > .dd > .gbtn { width: 100%; justify-content: space-between; }
     & .cx-f > .sp { flex: 1 0 100%; height: 0; }
     & .cx-f > .rm-ask { margin-left: auto; }
