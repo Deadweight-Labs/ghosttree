@@ -568,7 +568,7 @@ func (s *Store) sessionEmbeddingStatus(k embedKind, m EmbedModel) (EmbedStatus, 
 	}
 	srows, err := s.db.Query(`SELECT id, harness, last_seen_at FROM sessions se
 		WHERE EXISTS (SELECT 1 FROM chunk_index ci WHERE ci.session_id = se.id AND ci.role != '')
-		  AND `+externalModelsOKSQL("se.project")+` ORDER BY id`)
+		  AND ` + externalModelsOKSQL("se.project") + ` ORDER BY id`)
 	if err != nil {
 		return st, err
 	}

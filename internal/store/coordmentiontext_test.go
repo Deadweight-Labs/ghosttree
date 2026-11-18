@@ -96,32 +96,20 @@ func TestTextMentionDoesNotMentionTheSender(t *testing.T) {
 	}
 }
 
-// Ein Gast bekommt für gefundene, unbekannte und mehrdeutige Namen dieselbe
-// Antwort und liest nur seine eigene Eingabe zurück (#2447).
+// Ein Gast schreibt im Projektraum nichts (room.post ist member und höher), und
+// die Antwort ist für gefundene, unbekannte und mehrdeutige Namen dieselbe: der
+// Raum verrät einem Gast nicht, wer in ihm ist (#2447).
 func TestTextMentionGivesGuestsNoOracle(t *testing.T) {
 	e := guestEnv(t)
 	guest := e.human("person:5")
-	var readback [][]string
 	for _, body := range []string{"@ben hello", "@nobody hello", "@claude hello"} {
-		id, err := sendText(t, guest, e.room, body, "")
-		if err != nil {
-			t.Fatalf("%q: guest must always succeed, got %v", body, err)
-		}
-		got, err := guest.MessageMentions(id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		readback = append(readback, got)
-	}
-	for i, r := range readback {
-		if len(r) != 1 || r[0][0] != '@' {
-			t.Fatalf("guest readback %d must be the typed token only: %v", i, r)
+		if _, err := sendText(t, guest, e.room, body, ""); !errors.Is(err, ErrCoordForbidden) {
+			t.Fatalf("%q: guest answer = %v, want forbidden for every name", body, err)
 		}
 	}
-	// An intent that needs a recipient is accepted for every typed name.
 	for _, body := range []string{"@ben q", "@nobody q"} {
-		if _, err := sendText(t, guest, e.room, body, IntentQuestion); err != nil {
-			t.Fatalf("%q with intent: %v", body, err)
+		if _, err := sendText(t, guest, e.room, body, IntentQuestion); !errors.Is(err, ErrCoordForbidden) {
+			t.Fatalf("%q with intent: %v, want forbidden", body, err)
 		}
 	}
 }
