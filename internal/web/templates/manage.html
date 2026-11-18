@@ -1,0 +1,29 @@
+{{/* A lead's button (REQ-712): the link for whoever may use it, for everyone else the same button disabled with the role it
+     needs. Fields: Can, Need, Href, Icon, Label (catalog key), ID (of the line naming the role), Primary. */}}
+{{define "mgbtn"}}{{if .Can}}<a class="gbtn{{if .Primary}} pri{{end}}" href="{{.Href}}">{{mi .Icon}}{{t .Label}}</a>{{else if .Need}}<span class="needrole" id="{{.ID}}">{{mi "lock"}}{{.Need}}</span><button type="button" class="gbtn{{if .Primary}} pri{{end}}" disabled aria-describedby="{{.ID}}">{{mi .Icon}}{{t .Label}}</button>{{end}}{{end}}
+
+{{/* The panel that makes a package. */}}
+{{define "packageform"}}<details class="panel box newbox" id="new"{{if .Open}} open{{end}}><summary class="box-h"><span class="t">{{t "packages.new"}}</span><span class="sp"></span><a class="gbtn sm icon quiet" href="{{.Close}}" aria-label="{{t "issue.close_panel"}}">{{mi "x"}}</a></summary><div class="cb write">
+{{with .Form}}<form method="post" action="/ui/packages/create" class="pform"><input type="hidden" name="csrf_token" value="{{$.Token}}"><input type="hidden" name="project" value="{{.Project}}">
+<label class="pfield"><span>{{t "packages.f.branch"}}</span><input class="gfield mono" name="branch" required maxlength="200" list="pk-branches" autocomplete="off" spellcheck="false"><datalist id="pk-branches">{{range .Branches}}<option value="{{.}}">{{end}}</datalist></label>
+<label class="pfield"><span>{{t "packages.f.name"}}</span><input class="gfield" name="name" maxlength="200" autocomplete="off"></label>
+<label class="pfield"><span>{{t "packages.f.pr"}}</span><input class="gfield mono" name="pr" inputmode="numeric" maxlength="9" autocomplete="off" placeholder="#"></label>
+{{if .Issues}}<fieldset class="pfield pkpick"><legend>{{t "packages.f.issues"}}</legend><div class="pkbox">{{range .Issues}}<label class="pkopt"><input type="checkbox" name="issue" value="{{.N}}"><span class="mono">#{{.N}}</span><span class="ell">{{.Title}}</span></label>{{end}}</div></fieldset>
+<label class="pfield"><span>{{t "packages.f.role"}}</span><select class="gfield" name="role"><option value="pflicht"{{if eq .Role "pflicht"}} selected{{end}}>{{t "newissue.role_pflicht"}}</option><option value="optional"{{if eq .Role "optional"}} selected{{end}}>{{t "newissue.role_optional"}}</option></select></label>{{end}}
+<div class="wf"><button class="gbtn pri">{{t "packages.create"}}</button></div></form>{{end}}</div></details>{{end}}
+
+{{/* The form of a feature, new or existing: the panel above the page. */}}
+{{define "featureform"}}<details class="panel box newbox" id="{{.Anchor}}"{{if .Open}} open{{end}}><summary class="box-h"><span class="t">{{t .Title}}</span><span class="sp"></span><a class="gbtn sm icon quiet" href="{{.Close}}" aria-label="{{t "issue.close_panel"}}">{{mi "x"}}</a></summary><div class="cb write">
+<form method="post" action="{{.Action}}" class="pform"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="project" value="{{.Project}}">{{if .ID}}<input type="hidden" name="base" value="{{.Revision}}">{{end}}
+<label class="pfield"><span>{{t "features.f.name"}}</span><input class="gfield" name="name" value="{{.Name}}" required maxlength="{{.MaxName}}" autocomplete="off"></label>
+<label class="pfield"><span>{{t "features.f.summary"}}</span><textarea name="summary" rows="3" maxlength="{{.MaxSummary}}">{{.Summary}}</textarea></label>
+<label class="pfield"><span>{{t "features.f.behavior"}}</span><textarea name="behavior" rows="8" maxlength="{{.MaxBehavior}}">{{.Behavior}}</textarea></label>
+<label class="pfield"><span>{{t "features.f.limits"}}</span><textarea name="limits" rows="4" maxlength="{{.MaxLimits}}">{{.Limits}}</textarea></label>
+<label class="pfield"><span>{{t "features.f.areas"}}</span><textarea class="mono" name="areas" rows="3" spellcheck="false">{{.Areas}}</textarea></label>
+<details class="ftfold"{{if .UsageOpen}} open{{end}}><summary>{{t "features.f.usage"}}</summary><div class="ftin">
+<label class="pfield"><span>{{t "features.f.cli"}}</span><textarea name="cli" rows="3" maxlength="{{.MaxUsage}}">{{.CLI}}</textarea></label>
+<label class="pfield"><span>{{t "features.f.mcp"}}</span><textarea name="mcp" rows="3" maxlength="{{.MaxUsage}}">{{.MCP}}</textarea></label>
+<label class="pfield"><span>{{t "features.f.api"}}</span><textarea name="api" rows="3" maxlength="{{.MaxUsage}}">{{.API}}</textarea></label>
+<label class="pfield"><span>{{t "features.f.ui"}}</span><textarea name="ui" rows="3" maxlength="{{.MaxUsage}}">{{.UI}}</textarea></label></div></details>
+{{if .ID}}<label class="pfield"><span>{{t "features.f.message"}}</span><input class="gfield" name="message" maxlength="{{.MaxNote}}" autocomplete="off"></label>{{end}}
+<div class="wf"><button class="gbtn pri">{{t .Submit}}</button></div></form></div></details>{{end}}

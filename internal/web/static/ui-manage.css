@@ -1,0 +1,58 @@
+/* Packages, features and labels made in the browser (REQ-712): the bar with the lead button, the picker of
+   issues, the rows to add and take out, the link form of a feature, the label made in place. */
+
+:is(.g2) {
+  & .mgbar { justify-content: flex-end; flex-wrap: wrap; }
+  & .mgbar .needrole { margin-right: 4px; }
+  & .dtitle .gacts { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+  & .dtitle .gacts form.inl { display: inline-flex; margin: 0; }
+
+  /* The open issues a package can take: one scrolling box of rows with a box to tick. */
+  & .pkpick { min-width: 0; margin: 0; padding: 0; border: 0; }
+  & .pkpick > legend { padding: 0; margin-bottom: 4px; font-weight: 600; font-size: 13px; }
+  & .pkbox { max-height: 232px; overflow-y: auto; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); }
+  & .pkopt { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 12px; font-size: 14px; font-weight: 400; cursor: pointer; }
+  & .pkopt + .pkopt { border-top: 1px solid var(--border-muted); }
+  & .pkopt:hover { background: var(--canvas-subtle); }
+  & .pkopt input { flex: none; margin: 0; }
+  & .pkopt .mono { flex: none; color: var(--fg-muted); font-size: 12px; }
+  & .pkopt .ell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Add an issue to the package, under its list; take one out inside its row. */
+  & .pkadd { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 0; }
+  & .pkadd select.gfield, & .pkadd .selx { flex: 1 1 16rem; min-width: 0; width: auto; }
+  & .pkadd select.gfield + select.gfield, & .pkadd .selx + .selx { flex: 0 0 160px; }
+  & .pkrm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px 12px; border-top: 1px solid var(--border-muted); }
+  & .pkrm .gfield { flex: 1 1 14rem; min-width: 0; height: 28px; padding: 0 8px; font: 13px/20px var(--ui-font); }
+
+  /* A feature: the usage lines in a fold, the link form in the side column. */
+  & .ftfold { border: 1px solid var(--border-default); border-radius: 6px; }
+  & .ftfold > summary { padding: 8px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  & .ftfold[open] > summary { border-bottom: 1px solid var(--border-muted); }
+  & .ftfold .ftin { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+  & .ftlink { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+  & .ftlink + .ftlink, & .ftlink + details { margin-top: 12px; }
+  & .ftlink .gfield { width: 100%; font-size: 14px; }
+  & .ftlink .gbtn { align-self: flex-start; }
+  & .ftlink .hint { font-size: 12px; color: var(--fg-muted); }
+
+  /* A label made where it is wanted: a fold with one field, in the label block of an issue and in the new issue form. */
+  & details.lbmake, & .side .sblk .v > details.lbmake { display: block; flex: 1 0 100%; width: 100%; min-width: 0; margin-top: 8px; }
+  & .lbmake > summary { display: inline-flex; white-space: nowrap; align-items: center; gap: 4px; font-size: 12px; color: var(--fg-muted); cursor: pointer; list-style: none; }
+  & .lbmake > summary::-webkit-details-marker { display: none; }
+  & .lbmake > summary:hover, & .lbmake > summary:focus-visible { color: var(--accent-fg); text-decoration: underline; }
+  & .lbmake > summary .i { width: 12px; height: 12px; }
+  & .lbmake form, & .lbmake .lbmk { display: flex; gap: 8px; margin-top: 8px; min-width: 0; }
+  & .lbmake .gbtn { flex: none; }
+  & .lbmake .gfield { flex: 1 1 auto; min-width: 0; height: 32px; font-size: 14px; }
+
+  /* The note beside a button the issue cannot use: there is nowhere to move it to. */
+  & .gacts .needrole { align-self: center; }
+}
+
+@media (max-width: 640px) {
+  :is(.g2) {
+    & .dtitle .gacts { margin-left: 0; width: 100%; }
+    & .pkadd select.gfield, & .pkadd .selx, & .pkadd .selx + .selx { flex-basis: 100%; }
+  }
+}

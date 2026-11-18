@@ -19,8 +19,8 @@ func init() {
 	}
 	refKinds["feature"] = refKind{"FEAT", "k-feat", "ref.kind.feature", mockIcons["feature"]}
 	repoTabIcons["features"] = "feature"
-	pageAssets["features"] = struct{ CSS, JS []string }{CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css", "ui-features.css"}}
-	pageAssets["feature"] = struct{ CSS, JS []string }{CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css", "ui-features.css"}}
+	pageAssets["features"] = struct{ CSS, JS []string }{CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css", "ui-features.css", "ui-manage.css"}}
+	pageAssets["feature"] = struct{ CSS, JS []string }{CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css", "ui-features.css", "ui-manage.css"}}
 	pageAssets["machine"] = struct{ CSS, JS []string }{CSS: []string{"ui-labels.css", "ui-issues.css", "ui-issue.css", "ui-sessions.css", "ui-agents.css", "ui-machines.css"}}
 	pageAssets["orgmachines"] = struct{ CSS, JS []string }{CSS: []string{"ui-labels.css", "ui-issues.css", "ui-machines.css"}}
 	// Die Werkstatt hängt an der Idee-Seite und lädt ihre Regeln dort mit.

@@ -291,6 +291,17 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	for suffix, h := range map[string]http.HandlerFunc{"create": a.labelCreate, "{id}/update": a.labelUpdate, "{id}/delete": a.labelDelete} {
 		a.handle(mux, "POST /ui/labels/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
+	for suffix, h := range map[string]http.HandlerFunc{
+		"create": a.packageCreate, "{id}/update": a.packageUpdate, "{id}/state": a.packageState, "{id}/add": a.packageAdd, "{id}/remove": a.packageRemove,
+	} {
+		a.handle(mux, "POST /ui/packages/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+	}
+	for suffix, h := range map[string]http.HandlerFunc{
+		"create": a.featureCreate, "{id}/edit": a.featureEdit, "{id}/link": a.featureLinkAdd, "{id}/unlink": a.featureLinkRemove,
+	} {
+		a.handle(mux, "POST /ui/features/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+	}
+	a.handle(mux, "POST /ui/labels/make", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.labelMake))))))
 	a.handle(mux, "POST /ui/runbooks/write", a.requirePerson(a.requireInteractive(limitBodyN(maxRunbookForm, a.requireCSRF(http.HandlerFunc(a.runbookWrite))))))
 	a.handle(mux, "POST /ui/workflows/visual", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowVisual))))))
 	a.handle(mux, "POST /ui/workflows/check", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowCheck))))))
@@ -786,18 +797,28 @@ var webRoutes = map[string]webClass{
 	"POST /ui/pains/{id}/correct": webAdmin,
 	"POST /ui/ideas/{id}/correct": webProject,
 
-	"POST /ui/labels/create":      webAdmin,
-	"POST /ui/labels/{id}/update": webAdmin,
-	"POST /ui/labels/{id}/delete": webAdmin,
-	"POST /ui/labels/assign":      webAdmin,
-	"POST /ui/runbooks/write":     webAdmin,
-	"POST /ui/workflows/save":     webAdmin,
-	"POST /ui/workflows/visual":   webAdmin,
-	"POST /ui/workflows/check":    webProject,
-	"POST /ui/workflows/enabled":  webAdmin,
-	"POST /ui/workflows/template": webAdmin,
-	"POST /ui/workflows/undo":     webAdmin,
-	"POST /ui/workflows/rerun":    webAdmin,
+	"POST /ui/labels/create":        webAdmin,
+	"POST /ui/labels/{id}/update":   webAdmin,
+	"POST /ui/labels/{id}/delete":   webAdmin,
+	"POST /ui/labels/assign":        webAdmin,
+	"POST /ui/packages/create":      webAdmin,
+	"POST /ui/labels/make":          webAdmin,
+	"POST /ui/features/create":      webAdmin,
+	"POST /ui/features/{id}/edit":   webAdmin,
+	"POST /ui/features/{id}/link":   webAdmin,
+	"POST /ui/features/{id}/unlink": webAdmin,
+	"POST /ui/packages/{id}/update": webAdmin,
+	"POST /ui/packages/{id}/state":  webAdmin,
+	"POST /ui/packages/{id}/add":    webAdmin,
+	"POST /ui/packages/{id}/remove": webAdmin,
+	"POST /ui/runbooks/write":       webAdmin,
+	"POST /ui/workflows/save":       webAdmin,
+	"POST /ui/workflows/visual":     webAdmin,
+	"POST /ui/workflows/check":      webProject,
+	"POST /ui/workflows/enabled":    webAdmin,
+	"POST /ui/workflows/template":   webAdmin,
+	"POST /ui/workflows/undo":       webAdmin,
+	"POST /ui/workflows/rerun":      webAdmin,
 }
 
 // handle registriert eine Route und bricht ab, wenn sie nicht klassifiziert ist.
