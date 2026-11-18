@@ -23,17 +23,13 @@ func limitBodyN(limit int64, next http.Handler) http.Handler {
 	})
 }
 
-// devicePage zeigt das Eingabefeld für den User-Code. Ein Aufruf mit
-// ?user_code= füllt es vor, bestätigt aber nichts: erst ein POST mit
-// CSRF-Token entscheidet.
+// devicePage zeigt das Eingabefeld für den User-Code. Der Code kommt nie aus der
+// Adresse: wer freigibt, tippt den Code ab, den sein eigenes Terminal zeigt. Ein
+// Link, den ein Fremder schickt, gibt so keinen Rechner frei.
 func (a *app) devicePage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
-	code := r.URL.Query().Get("user_code")
-	if len(code) > 32 {
-		code = ""
-	}
-	a.renderBrowser(w, r, "device", pageData{Title: l.msg("adm.device.title"), Code: code, OIDC: a.oidc != nil})
+	a.renderBrowser(w, r, "device", pageData{Title: l.msg("adm.device.title"), OIDC: a.oidc != nil})
 }
 
 // deviceLookup prüft den eingegebenen Code und zeigt, wer ihn angefordert hat.
@@ -199,8 +195,16 @@ func (a *app) tokensPage(w http.ResponseWriter, r *http.Request) {
 		if account == "" {
 			account = principal.Label
 		}
+		expires := t.ExpiresAt
+		if expires == "" {
+			// A device token has no date of its own; it ends when it is not used for long.
+			expires = a.store.TokenIdleEnd(t)
+			if status == "active" && expires != "" && expires <= nowText {
+				status = "expired"
+			}
+		}
 		rows = append(rows, tokenRow{ID: t.ID, Account: account, Label: t.Label, Kind: tokenKindLabel(t.Kind), Machine: t.Machine,
-			Status: status, Created: t.CreatedAt, LastUsed: t.LastUsedAt, Expires: t.ExpiresAt, Revoked: t.RevokedAt,
+			Status: status, Created: t.CreatedAt, LastUsed: t.LastUsedAt, Expires: expires, Revoked: t.RevokedAt,
 			Revocable: status == "active", Tracked: tokenTracked(t, now, since), Unused: tokenIsUnused(t, now, principal.TokenID, since)})
 	}
 	sortTokenRows(rows)

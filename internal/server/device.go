@@ -4,8 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -13,7 +11,7 @@ import (
 // Grenzen für die beiden unangemeldeten Endpunkte des Geräte-Logins.
 const (
 	maxDeviceBody    = 4 << 10
-	maxMachineLength = 128
+	maxMachineLength = 64
 )
 
 // deviceStartRequest und deviceTokenRequest sind die JSON-Körper.
@@ -44,18 +42,10 @@ func readDeviceBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// validMachine erlaubt druckbare Zeichen ohne Steuerzeichen, bis 128 Byte.
-func validMachine(name string) bool {
-	if name == "" || len(name) > maxMachineLength || !utf8.ValidString(name) {
-		return false
-	}
-	for _, c := range name {
-		if unicode.IsControl(c) || !unicode.IsPrint(c) {
-			return false
-		}
-	}
-	return true
-}
+// validMachine ist die Regel für den Maschinennamen des Geräte-Logins: dieselbe
+// wie beim Beitritt (validJoinMachine). Der Name steht auf der Freigabeseite, und
+// wer ihn frei wählt, kann dort einen Satz anzeigen lassen, der zum Freigeben auffordert.
+func validMachine(name string) bool { return validJoinMachine(name) }
 
 // clientAddr ist die Absenderadresse für die Begrenzung offener Abläufe. Nur
 // von einem vertrauenswürdigen Proxy zählt X-Forwarded-For: alle Zeilen werden
@@ -93,7 +83,7 @@ func (a *api) startDeviceLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	machine := strings.TrimSpace(req.Machine)
 	if !validMachine(machine) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "error_description": "machine is required (printable, at most 128 bytes)"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "error_description": "machine is required (A-Z a-z 0-9 . _ - , at most 64)"})
 		return
 	}
 	start, err := a.st.Device().Start(a.clientAddr(r), machine, a.clientAddr(r))
@@ -109,10 +99,12 @@ func (a *api) startDeviceLogin(w http.ResponseWriter, r *http.Request) {
 	uri := a.requestBaseURL(r) + "/ui/device"
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{
-		"device_code":               start.DeviceCode,
-		"user_code":                 store.FormatUserCode(start.UserCode),
-		"verification_uri":          uri,
-		"verification_uri_complete": uri + "?user_code=" + store.FormatUserCode(start.UserCode),
+		"device_code":      start.DeviceCode,
+		"user_code":        store.FormatUserCode(start.UserCode),
+		"verification_uri": uri,
+		// The link to open carries no code: the code is typed from the terminal, so that
+		// a link someone else sends cannot approve a machine.
+		"verification_uri_complete": uri,
 		"expires_in":                int(start.ExpiresIn.Seconds()),
 		"interval":                  int(start.Interval.Seconds()),
 	})

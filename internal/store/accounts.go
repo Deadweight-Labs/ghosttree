@@ -426,8 +426,8 @@ func (s *Store) PrincipalValid(p Principal) bool {
 	var one int
 	err = s.db.QueryRow(`SELECT 1 FROM api_tokens t JOIN persons p ON p.id = t.account_id
 		WHERE t.id = ? AND t.account_id = ? AND t.revoked_at = ''
-		  AND (t.expires_at = '' OR t.expires_at > ?) AND p.state = 'active'`,
-		p.TokenID, account, now()).Scan(&one)
+		  AND (t.expires_at = '' OR t.expires_at > ?) AND p.state = 'active'`+tokenIdleCond,
+		p.TokenID, account, now(), tokenIdleCutoff()).Scan(&one)
 	return err == nil
 }
 

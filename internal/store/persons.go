@@ -109,8 +109,8 @@ func (s *Store) AuthenticatePrincipal(token string) (Principal, bool) {
 	err := s.db.QueryRow(`SELECT t.id, t.kind, t.machine, p.id, p.name
 		FROM api_tokens t JOIN persons p ON p.id = t.account_id
 		WHERE t.token_hash = ? AND t.revoked_at = ''
-		  AND (t.expires_at = '' OR t.expires_at > ?) AND p.state = 'active'`,
-		hashToken(token), now()).Scan(&p.TokenID, &p.TokenKind, &p.Machine, &accountID, &p.Label)
+		  AND (t.expires_at = '' OR t.expires_at > ?) AND p.state = 'active'`+tokenIdleCond,
+		hashToken(token), now(), tokenIdleCutoff()).Scan(&p.TokenID, &p.TokenKind, &p.Machine, &accountID, &p.Label)
 	if err != nil {
 		return Principal{}, false
 	}

@@ -97,7 +97,13 @@ func loginConfig(serverURL, machine string) (config.Config, error) {
 		cfg.Machine = existing.Machine
 	}
 	if cfg.Machine == "" {
-		cfg.Machine, _ = os.Hostname()
+		host, _ := os.Hostname()
+		cfg.Machine = normalizeMachine(host)
+	}
+	// The server accepts the same names as the join (A-Z a-z 0-9 . _ - , 64): say so
+	// here instead of with its refusal.
+	if !machineNameRE.MatchString(cfg.Machine) {
+		return cfg, errors.New("the machine name may only contain A-Z a-z 0-9 . _ - (at most 64): pass --machine <name>")
 	}
 	return cfg, nil
 }
