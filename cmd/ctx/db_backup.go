@@ -103,6 +103,9 @@ func backupOnce(dbPathValue, outValue string, keepValue int, stdout io.Writer) i
 	} else if *keep > 0 {
 		fmt.Fprintln(stdout, "--keep needs --out to be a directory")
 		return 2
+	} else if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		fmt.Fprintf(stdout, "backup directory: %v\n", err)
+		return 1
 	}
 	if _, err := os.Lstat(target); err == nil {
 		fmt.Fprintf(stdout, "%s exists already; a backup never overwrites one\n", target)
