@@ -52,7 +52,10 @@ can also be given as an option, and --yes (or no terminal) takes the defaults:
                     without root), the image of this ctx's release from ghcr.io
                     (--image names another), volumes for the data and the backups
   --dir DIR         where the Docker setup lives
-  --image IMAGE     the image to run with --docker
+  --image-repo REPO where to pull the release's image from (a mirror of
+                    ghcr.io/deadweight-labs/ghosttree); the digest decides what runs
+  --image IMAGE     the image to run with --docker instead of the one the signed
+                    release of this ctx names (then nothing vouches for the image)
   --force           on a machine that has a server already: write settings and
                     units again from these answers, after copying the database,
                     replacing ctx and bringing the schema up to date (without
@@ -100,10 +103,16 @@ func cmdServer(args []string, stdout io.Writer) int {
 }
 
 func serverEnv(stdout io.Writer, wait time.Duration) serverinstall.Env {
-	return serverinstall.Env{
+	env := serverinstall.Env{
 		Sys: serverSystem, Out: stdout, RequireRoot: serverPrefix == "",
 		Systemd: serverinstall.SystemdRunning, HealthTimeout: wait,
 	}
+	// Without a release key (a development build) the Docker setup cannot pin
+	// its image to a signed digest and asks for --image.
+	if rel, err := serverRelease(); err == nil {
+		env.Release = &rel
+	}
+	return env
 }
 
 const waitUsage = "how long the server may take to answer after a start (default 90s)"
@@ -127,6 +136,7 @@ func cmdServerInstall(args []string, stdout io.Writer) int {
 	fs.BoolVar(&o.Docker, "docker", false, "")
 	fs.StringVar(&o.Dir, "dir", "", "")
 	fs.StringVar(&o.Image, "image", "", "")
+	fs.StringVar(&o.ImageRepo, "image-repo", "", "")
 	yes := fs.Bool("yes", false, "")
 	wait := fs.Duration("wait", 0, waitUsage)
 	if err := fs.Parse(args); err != nil {

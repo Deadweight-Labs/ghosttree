@@ -46,8 +46,10 @@ func (o Options) dockerDir() string { return orDefault(o.Dir, DefaultDockerDir()
 
 func (o Options) dockerPath(rel string) string { return o.path(filepath.Join(o.dockerDir(), rel)) }
 
-// dockerImage is the image to run.
-func (o Options) dockerImage() (string, error) {
+// dockerImage is the image to run: the one named with --image (the operator
+// chose it, nothing vouches for it), or the image of this ctx's release pinned
+// to the digest the signed release names (DockerRepo:version@sha256:...).
+func (o Options) dockerImage(ctx context.Context, env Env) (string, error) {
 	if o.Image != "" {
 		return o.Image, nil
 	}
@@ -55,7 +57,35 @@ func (o Options) dockerImage() (string, error) {
 	if v == "" || strings.Contains(v, "-dev") {
 		return "", fmt.Errorf("this ctx (%q) is a development build and has no image of its own: name one with --image, for example %s:0.1.0", o.Version, DockerRepo)
 	}
-	return DockerRepo + ":" + v, nil
+	if env.Release == nil {
+		return "", errors.New("no release key to check the image against: name an image with --image")
+	}
+	digest, err := env.Release.ImageDigest(ctx, "v"+v)
+	if err != nil {
+		return "", fmt.Errorf("%w (--image names an image without this check)", err)
+	}
+	return imageRef(orDefault(o.ImageRepo, DockerRepo), v, digest), nil
+}
+
+// imageRef is repo:tag@digest: the digest decides what runs, the tag says which
+// release it is.
+func imageRef(repo, tag, digest string) string {
+	if digest == "" {
+		return repo + ":" + tag
+	}
+	return repo + ":" + tag + "@" + digest
+}
+
+// splitImage takes repo:tag@digest apart; the tag and the digest may be missing.
+func splitImage(image string) (repo, tag, digest string) {
+	rest := image
+	if i := strings.Index(rest, "@"); i >= 0 {
+		rest, digest = rest[:i], rest[i+1:]
+	}
+	if i := strings.LastIndex(rest, ":"); i >= 0 && !strings.Contains(rest[i:], "/") {
+		return rest[:i], rest[i+1:], digest
+	}
+	return rest, "", digest
 }
 
 // DockerEnvText is the .env next to compose.yaml.
@@ -72,6 +102,18 @@ func (o Options) DockerEnvText(image string) string {
 	}
 	if o.Language != "" {
 		fmt.Fprintf(&b, "GHOSTTREE_LANGUAGE=%s\n", o.Language)
+	}
+	// Forwarding headers are believed from nobody, except the proxy of the
+	// generated configuration: it runs on this machine and shows up in the
+	// container as the gateway of the bridge.
+	if o.Domain != "" && o.tls() == "proxy" {
+		gw := o.Gateway
+		if gw == "" {
+			gw = "172.29.84.1"
+		}
+		fmt.Fprintf(&b, "# The proxy of proxy/ runs on this machine and reaches the container as the gateway.\nGHOSTTREE_TRUSTED_PROXIES=%s\n", gw)
+	} else if o.tls() != "builtin" {
+		b.WriteString("GHOSTTREE_TRUSTED_PROXIES=none\n")
 	}
 	if o.tls() == "builtin" {
 		fmt.Fprintf(&b, "GHOSTTREE_TLS_ACME_HOST=%s\n", o.Domain)
@@ -210,12 +252,12 @@ func installDocker(ctx context.Context, o Options, env Env) (*Result, error) {
 	if o.Prefix == "" && goos != "linux" && goos != "darwin" {
 		return nil, errors.New("ctx server install --docker runs on Linux and macOS")
 	}
-	image, err := o.dockerImage()
+	ctx2, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	image, err := o.dockerImage(ctx2, env)
 	if err != nil {
 		return nil, err
 	}
-	ctx2, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
 	if out, err := env.Sys.Run(ctx2, "docker", "compose", "version"); err != nil {
 		return nil, fmt.Errorf("Docker with the compose plugin is needed (docker compose version: %v %s)", err, strings.TrimSpace(out))
 	}
@@ -331,10 +373,8 @@ func DockerOptionsFromDisk(prefix, dir string) (Options, string) {
 }
 
 func imageVersion(image string) string {
-	if i := strings.LastIndex(image, ":"); i >= 0 && !strings.Contains(image[i:], "/") {
-		return image[i+1:]
-	}
-	return ""
+	_, tag, _ := splitImage(image)
+	return tag
 }
 
 // dockerDoctor is Doctor for containers.
@@ -457,17 +497,21 @@ func updateDocker(ctx context.Context, uo UpdateOptions, rel Release, env Env) (
 		res.Unchanged = true
 		return res, nil
 	}
-	if err := rel.VerifyTag(ctx, tag); err != nil {
+	// The signed release names the digest of its image; what is pulled and run
+	// is that digest, so a registry cannot hand out another image for the tag.
+	digest, err := rel.ImageDigest(ctx, tag)
+	if err != nil {
 		return nil, err
 	}
-	newImage := DockerRepo + ":" + newVer
-	if i := strings.LastIndex(oldImage, ":"); i > 0 && !strings.Contains(oldImage[i:], "/") {
-		newImage = oldImage[:i] + ":" + newVer
+	repo, _, _ := splitImage(oldImage)
+	if repo == "" {
+		repo = DockerRepo
 	}
+	newImage := imageRef(repo, newVer, digest)
 	if _, err := env.Sys.Run(ctx, "docker", "image", "inspect", newImage); err == nil {
-		env.say("release %s is signed; %s is here already", tag, newImage)
+		env.say("release %s is signed; its image %s is here already", tag, digest)
 	} else {
-		env.say("release %s is signed; pulling %s", tag, newImage)
+		env.say("release %s is signed; pulling its image %s", tag, digest)
 		if out, err := env.Sys.Run(ctx, "docker", "pull", newImage); err != nil {
 			return nil, fmt.Errorf("docker pull %s: %v: %s; nothing was changed", newImage, err, strings.TrimSpace(out))
 		}

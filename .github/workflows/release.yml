@@ -132,6 +132,18 @@ jobs:
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: cosign sign --yes "ghcr.io/deadweight-labs/ghosttree@$DIGEST"
+      # The digest goes into the release as ghosttree-image.txt, listed in the
+      # signed checksums.txt (see .goreleaser.yaml): the installer and ctx server
+      # update pull that digest, so the tag on the registry decides nothing.
+      - name: Record the image digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -eu
+          printf '%s\n' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          mkdir -p .release-image
+          printf '%s\n' "$DIGEST" > .release-image/ghosttree-image.txt
+          echo "IMAGE_DIGEST_FILE=.release-image/ghosttree-image.txt" >> "$GITHUB_ENV"
       - name: Check the image
         env:
           VERSION: ${{ steps.imagetags.outputs.version }}

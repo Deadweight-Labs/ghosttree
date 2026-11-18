@@ -15,10 +15,12 @@
 #   GHOSTTREE_PUBLIC_URL=https://ghosttree.example.com        the address people use
 #   GHOSTTREE_LANGUAGE=de                                      de or en, default: each browser
 #
-# The proxy on this machine reaches the server through the bridge below, so its
-# address there (the gateway) is the one trusted proxy; the installer picks a
-# subnet no other Docker network uses (GHOSTTREE_SUBNET, GHOSTTREE_GATEWAY in
-# .env; without it 172.29.84.0/24). Keep a copy of
+# No forwarding header is believed unless you name the proxy that sends it:
+# behind a proxy on this machine set GHOSTTREE_TRUSTED_PROXIES to the gateway of
+# the bridge below (the address the proxy shows up as in the container); the
+# installer does that when you give a domain. It also picks a subnet no other
+# Docker network uses (GHOSTTREE_SUBNET, GHOSTTREE_GATEWAY in .env; without it
+# 172.29.84.0/24). Never trust a network that other clients share. Keep a copy of
 # secrets/secret-key with your backups: without it the AI keys stored in the
 # database cannot be opened again.
 name: ghosttree
@@ -34,7 +36,7 @@ services:
       GHOSTTREE_SECRET_KEY_FILE: /run/secrets/ghosttree-secret-key
       GHOSTTREE_ENFORCE_ACCESS: "${GHOSTTREE_ENFORCE_ACCESS:-1}"
       GHOSTTREE_PUBLIC_URL: "${GHOSTTREE_PUBLIC_URL:-}"
-      GHOSTTREE_TRUSTED_PROXIES: "${GHOSTTREE_TRUSTED_PROXIES:-${GHOSTTREE_GATEWAY:-172.29.84.1}}"
+      GHOSTTREE_TRUSTED_PROXIES: "${GHOSTTREE_TRUSTED_PROXIES:-none}"
       GHOSTTREE_LANGUAGE: "${GHOSTTREE_LANGUAGE:-}"
       GHOSTTREE_TLS_ACME_HOST: "${GHOSTTREE_TLS_ACME_HOST:-}"
       GHOSTTREE_TLS_ACME_EMAIL: "${GHOSTTREE_TLS_ACME_EMAIL:-}"

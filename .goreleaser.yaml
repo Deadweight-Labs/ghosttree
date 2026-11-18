@@ -30,6 +30,11 @@ archives:
 
 checksum:
   name_template: checksums.txt
+  # The digest of the release's Docker image (the workflow pushes the image first
+  # and writes this file): listed here, it is covered by the signature, and
+  # ctx server install --docker and update pull exactly that digest.
+  extra_files:
+    - glob: "{{ .Env.IMAGE_DIGEST_FILE }}"
 
 source:
   enabled: true
@@ -92,3 +97,4 @@ release:
     - glob: deploy/downloads/ghosttree/install.sh
     - glob: deploy/downloads/ghosttree/minisign.pub
     - glob: deploy/downloads/ghosttree/compose.yaml
+    - glob: "{{ .Env.IMAGE_DIGEST_FILE }}"

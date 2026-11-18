@@ -68,6 +68,10 @@ type Env struct {
 	HealthTimeout time.Duration
 	// Poll is the pause between health checks (default one second).
 	Poll time.Duration
+	// Release is where the signed release information comes from, and the key
+	// it is checked with. The Docker setup needs it to pin the image to the
+	// digest the release names; nil when this ctx has no release key.
+	Release *Release
 	// Root requires root; tests set it false and use Options.Prefix.
 	RequireRoot bool
 	// Systemd says whether the machine runs systemd; the check is skipped when

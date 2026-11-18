@@ -70,8 +70,12 @@ type Options struct {
 	// Dir is where the Docker setup lives; default /opt/ghosttree for root,
 	// ~/ghosttree otherwise.
 	Dir string
-	// Image is the image to run; default ghcr.io/deadweight-labs/ghosttree:<version of ctx>.
+	// Image is the image to run instead of the one the signed release names.
 	Image string
+	// ImageRepo is where the release's image is pulled from, default
+	// ghcr.io/deadweight-labs/ghosttree; a mirror works, since the digest from the
+	// signed release decides what is run.
+	ImageRepo string
 	// Version is the version of the ctx that runs the installation, which names
 	// the default image.
 	Version string

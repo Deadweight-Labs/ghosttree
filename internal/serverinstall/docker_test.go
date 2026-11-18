@@ -1,6 +1,7 @@
 package serverinstall
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"os"
@@ -9,12 +10,27 @@ import (
 	"testing"
 )
 
+// signedEnv is an Env whose release key knows the fake releases, with v0.1.0 published.
+func signedEnv(t *testing.T, sys System) (Env, *bytes.Buffer, *fakeReleases, testKey) {
+	t.Helper()
+	k := newTestKey(t)
+	f := newFakeReleases(t)
+	f.publish(t, k, "v0.1.0", "x")
+	env, out := testEnv(sys)
+	rel := f.release(k)
+	env.Release = &rel
+	return env, out, f, k
+}
+
+// pinned is the image reference of version v as the installer writes it.
+func pinned(v string) string { return imageRef(DockerRepo, v, imageDigestOf("v"+v)) }
+
 func dockerInstall(t *testing.T, o Options) (*Result, *fakeSystem, string, string) {
 	t.Helper()
 	prefix := t.TempDir()
 	o.Prefix, o.Docker, o.Dir, o.Version = prefix, true, "/opt/ghosttree", "0.1.0"
 	sys := newFakeSystem(t, prefix)
-	env, out := testEnv(sys)
+	env, out, _, _ := signedEnv(t, sys)
 	res, err := Install(context.Background(), o, env)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
@@ -32,7 +48,7 @@ func TestDockerInstallWritesComposeAndSecretsAndEndsWithALoginLink(t *testing.T)
 		t.Error("compose.yaml is not the embedded one")
 	}
 	envText, _ := os.ReadFile(filepath.Join(dir, ".env"))
-	for _, want := range []string{"GHOSTTREE_IMAGE=ghcr.io/deadweight-labs/ghosttree:0.1.0", "GHOSTTREE_BIND=127.0.0.1:8474", "GHOSTTREE_PUBLIC_URL=https://gt.example.com", "GHOSTTREE_LANGUAGE=de"} {
+	for _, want := range []string{"GHOSTTREE_IMAGE=" + pinned("0.1.0"), "GHOSTTREE_BIND=127.0.0.1:8474", "GHOSTTREE_PUBLIC_URL=https://gt.example.com", "GHOSTTREE_LANGUAGE=de"} {
 		if !strings.Contains(string(envText), want) {
 			t.Errorf(".env lacks %q:\n%s", want, envText)
 		}
@@ -108,7 +124,7 @@ func TestDockerInstallConnectsAModelProviderThroughASecret(t *testing.T) {
 
 func TestDockerInstallNeedsAnImageAndDocker(t *testing.T) {
 	prefix := t.TempDir()
-	env, _ := testEnv(newFakeSystem(t, prefix))
+	env, _, _, _ := signedEnv(t, newFakeSystem(t, prefix))
 	// A development build has no image of its own.
 	_, err := Install(context.Background(), Options{Prefix: prefix, Docker: true, Dir: "/opt/g", Version: "0.1.0-dev"}, env)
 	if err == nil || !strings.Contains(err.Error(), "--image") {
@@ -121,12 +137,23 @@ func TestDockerInstallNeedsAnImageAndDocker(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(prefix, "opt/g/.env")); !strings.Contains(string(b), "GHOSTTREE_IMAGE=example.org/gt:x") {
 		t.Errorf(".env: %s", b)
 	}
+	// Without a release key the image cannot be checked, so it must be named.
+	bare, _ := testEnv(newFakeSystem(t, t.TempDir()))
+	if _, err := Install(context.Background(), Options{Prefix: t.TempDir(), Docker: true, Dir: "/opt/g", Version: "0.1.0"}, bare); err == nil || !strings.Contains(err.Error(), "--image") {
+		t.Errorf("no key: %v", err)
+	}
+	// A release that does not vouch for an image is not installed from.
+	e2, _, f, _ := signedEnv(t, newFakeSystem(t, t.TempDir()))
+	f.set("v0.1.0/checksums.txt", []byte("0000000000000000000000000000000000000000000000000000000000000000  other\n"))
+	if _, err := Install(context.Background(), Options{Prefix: t.TempDir(), Docker: true, Dir: "/opt/g", Version: "0.1.0"}, e2); err == nil {
+		t.Error("an unsigned list was accepted")
+	}
 }
 
 func TestDockerInstallAgainKeepsKeyAndSettings(t *testing.T) {
 	prefix := t.TempDir()
 	sys := newFakeSystem(t, prefix)
-	env, _ := testEnv(sys)
+	env, _, _, _ := signedEnv(t, sys)
 	o := Options{Prefix: prefix, Docker: true, Dir: "/opt/ghosttree", Version: "0.1.0", Domain: "gt.example.com"}
 	if _, err := Install(context.Background(), o, env); err != nil {
 		t.Fatal(err)
@@ -178,13 +205,11 @@ func newDockerUpdateFixture(t *testing.T) *dockerUpdateFixture {
 	t.Helper()
 	prefix := t.TempDir()
 	sys := newFakeSystem(t, prefix)
-	env, _ := testEnv(sys)
+	env, _, f, k := signedEnv(t, sys)
 	if _, err := Install(context.Background(), Options{Prefix: prefix, Docker: true, Dir: "/opt/ghosttree", Version: "0.1.0"}, env); err != nil {
 		t.Fatal(err)
 	}
 	sys.cmds = nil
-	k := newTestKey(t)
-	f := newFakeReleases(t)
 	return &dockerUpdateFixture{prefix, sys, env, f.release(k), f, k}
 }
 
@@ -209,10 +234,10 @@ func TestDockerUpdatePullsFirstThenSavesTheDatabaseAndChecksTheNewVersion(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.From != "0.1.0" || res.To != "0.2.0" || res.RolledBack || u.image() != DockerRepo+":0.2.0" {
+	if res.From != "0.1.0" || res.To != "0.2.0" || res.RolledBack || u.image() != pinned("0.2.0") {
 		t.Errorf("%+v, image %q", res, u.image())
 	}
-	order := []string{"docker pull " + DockerRepo + ":0.2.0", "compose --project-directory /opt/ghosttree stop", "run --rm --no-deps backup db backup --db /data/ghosttree.db --out /backups/pre-update-0.1.0-to-0.2.0-",
+	order := []string{"docker pull " + pinned("0.2.0"), "compose --project-directory /opt/ghosttree stop", "run --rm --no-deps backup db backup --db /data/ghosttree.db --out /backups/pre-update-0.1.0-to-0.2.0-",
 		"run --rm --no-deps ghosttree upgrade-schema", "up -d", "/api/version"}
 	last := -1
 	for _, c := range order {
@@ -238,7 +263,7 @@ func TestDockerUpdateGoesBackWhenTheNewImageDoesNotAnswer(t *testing.T) {
 	if err == nil || res == nil || !res.RolledBack || !strings.Contains(err.Error(), "runs again") {
 		t.Fatalf("%+v %v", res, err)
 	}
-	if u.image() != DockerRepo+":0.1.0" {
+	if u.image() != pinned("0.1.0") {
 		t.Errorf("image %q after the rollback", u.image())
 	}
 	i, j := u.sys.index("db restore --db /data/ghosttree.db --from "+res.Backup), lastIndex(u.sys.commands(), "up -d")
@@ -255,7 +280,7 @@ func TestDockerUpdateGoesBackWhenTheSchemaUpgradeFails(t *testing.T) {
 	u.fake.publish(t, u.key, "v0.2.0", "x")
 	u.sys.badSchema = map[string]bool{"0.2.0": true}
 	res, err := u.update("v0.2.0")
-	if err == nil || res == nil || !res.RolledBack || u.image() != DockerRepo+":0.1.0" {
+	if err == nil || res == nil || !res.RolledBack || u.image() != pinned("0.1.0") {
 		t.Fatalf("%+v %v image %q", res, err, u.image())
 	}
 }
@@ -270,11 +295,11 @@ func TestDockerUpdateTouchesNothingWhenTheReleaseOrTheImageIsWrong(t *testing.T)
 	}
 	// A signed release without an image.
 	u.fake.publish(t, u.key, "v0.3.0", "x")
-	u.sys.pullFails = map[string]bool{DockerRepo + ":0.3.0": true}
+	u.sys.pullFails = map[string]bool{pinned("0.3.0"): true}
 	if _, err := u.update("v0.3.0"); err == nil || !strings.Contains(err.Error(), "nothing was changed") {
 		t.Fatalf("missing image: %v", err)
 	}
-	if u.sys.saw(" stop") || u.image() != DockerRepo+":0.1.0" || !u.sys.running {
+	if u.sys.saw(" stop") || u.image() != pinned("0.1.0") || !u.sys.running {
 		t.Errorf("the server was touched:\n%s", strings.Join(u.sys.commands(), "\n"))
 	}
 	// Same version: nothing to do.
@@ -290,7 +315,7 @@ func TestDockerUpdateStopsBeforeChangingAnythingWhenTheDatabaseCannotBeCopied(t 
 	if _, err := u.update("v0.2.0"); err == nil || !strings.Contains(err.Error(), "nothing was changed") {
 		t.Fatalf("%v", err)
 	}
-	if u.image() != DockerRepo+":0.1.0" || !u.sys.running {
+	if u.image() != pinned("0.1.0") || !u.sys.running {
 		t.Errorf("image %q, running %v", u.image(), u.sys.running)
 	}
 }
@@ -309,7 +334,7 @@ func TestDockerInstallPicksASubnetNoOtherNetworkUses(t *testing.T) {
 	sys := newFakeSystem(t, prefix)
 	sys.networkIDs = "aaa\nbbb\n"
 	sys.networkSubnets = "172.17.0.0/16 172.29.84.0/24 172.29.85.0/25 \n"
-	env, _ := testEnv(sys)
+	env, _, _, _ := signedEnv(t, sys)
 	o := Options{Prefix: prefix, Docker: true, Dir: "/opt/ghosttree", Version: "0.1.0"}
 	if _, err := Install(context.Background(), o, env); err != nil {
 		t.Fatal(err)
@@ -349,7 +374,7 @@ func TestChooseSubnetSkipsWhatOverlapsInEitherDirection(t *testing.T) {
 func TestDockerUpdateDoesNotPullAnImageThatIsHereAlready(t *testing.T) {
 	u := newDockerUpdateFixture(t)
 	u.fake.publish(t, u.key, "v0.2.0", "x")
-	u.sys.images = map[string]bool{DockerRepo + ":0.2.0": true}
+	u.sys.images = map[string]bool{pinned("0.2.0"): true}
 	if _, err := u.update("v0.2.0"); err != nil {
 		t.Fatal(err)
 	}
@@ -369,5 +394,76 @@ func TestParseProcRoutesReadsLittleEndianNetworksAndSkipsTheDefaultRoute(t *test
 	}
 	if strings.Join(got, " ") != "10.42.0.0/24 10.253.0.0/16" {
 		t.Errorf("networks: %v", got)
+	}
+}
+
+// The image that runs is the one the signed release names, whatever the registry
+// says about the tag.
+func TestDockerUpdateRunsTheSignedDigestNotTheTag(t *testing.T) {
+	u := newDockerUpdateFixture(t)
+	u.fake.publish(t, u.key, "v0.2.0", "x")
+	if _, err := u.update("v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(u.image(), "@"+imageDigestOf("v0.2.0")) {
+		t.Errorf("the image is %q: not pinned to the digest of the release", u.image())
+	}
+	// A release without a vouched-for image is not updated to, whatever the tag says.
+	u.fake.publish(t, u.key, "v0.3.0", "x")
+	u.fake.set("v0.3.0/"+ImageFile, []byte("sha256:"+strings.Repeat("b", 64)+"\n"))
+	before := u.image()
+	if _, err := u.update("v0.3.0"); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("a swapped digest file: %v", err)
+	}
+	if u.image() != before || u.sys.saw("docker pull "+DockerRepo+":0.3.0") {
+		t.Errorf("image %q; the server was touched:\n%s", u.image(), strings.Join(u.sys.commands(), "\n"))
+	}
+}
+
+func TestSplitImageTakesRepoTagAndDigestApart(t *testing.T) {
+	d := "sha256:" + strings.Repeat("c", 64)
+	for in, want := range map[string][3]string{
+		"ghcr.io/x/y:1.2.3@" + d:     {"ghcr.io/x/y", "1.2.3", d},
+		"ghcr.io/x/y:1.2.3":          {"ghcr.io/x/y", "1.2.3", ""},
+		"localhost:5000/gt:0.1@" + d: {"localhost:5000/gt", "0.1", d},
+		"localhost:5000/gt":          {"localhost:5000/gt", "", ""},
+	} {
+		repo, tag, digest := splitImage(in)
+		if [3]string{repo, tag, digest} != want {
+			t.Errorf("%s: %q %q %q", in, repo, tag, digest)
+		}
+	}
+}
+
+func TestDockerEnvTrustsTheGatewayOnlyBehindTheProxyOfTheGeneratedConfiguration(t *testing.T) {
+	for name, c := range map[string]struct {
+		o    Options
+		want string
+	}{
+		"domain behind a proxy": {Options{Domain: "gt.example.com", Gateway: "10.89.0.1", Subnet: "10.89.0.0/24"}, "GHOSTTREE_TRUSTED_PROXIES=10.89.0.1"},
+		"no domain":             {Options{}, "GHOSTTREE_TRUSTED_PROXIES=none"},
+		"built-in TLS":          {Options{Domain: "gt.example.com", TLS: "builtin"}, "GHOSTTREE_TRUSTED_PROXIES=none"},
+	} {
+		text := c.o.DockerEnvText("img")
+		if !strings.Contains(text, c.want+"\n") || strings.Count(text, "GHOSTTREE_TRUSTED_PROXIES=") != 1 {
+			t.Errorf("%s:\n%s", name, text)
+		}
+	}
+	if !strings.Contains(ComposeText(), `GHOSTTREE_TRUSTED_PROXIES: "${GHOSTTREE_TRUSTED_PROXIES:-none}"`) {
+		t.Error("compose.yaml must trust nobody by default")
+	}
+}
+
+func TestDockerInstallPullsTheSignedDigestFromAMirror(t *testing.T) {
+	prefix := t.TempDir()
+	env, _, _, _ := signedEnv(t, newFakeSystem(t, prefix))
+	o := Options{Prefix: prefix, Docker: true, Dir: "/opt/g", Version: "0.1.0", ImageRepo: "registry.example.org/gt"}
+	if _, err := Install(context.Background(), o, env); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(prefix, "opt/g/.env"))
+	want := "GHOSTTREE_IMAGE=registry.example.org/gt:0.1.0@" + imageDigestOf("v0.1.0") + "\n"
+	if !strings.Contains(string(b), want) {
+		t.Errorf(".env:\n%s", b)
 	}
 }

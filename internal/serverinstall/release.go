@@ -218,12 +218,46 @@ func (r Release) verifiedChecksums(ctx context.Context, tag string) ([]byte, err
 	return sums, nil
 }
 
-// VerifyTag checks that tag is a release the release key signed, without
-// downloading anything else: what a Docker update needs, since the image comes
-// from the registry and only the tag is vouched for here.
-func (r Release) VerifyTag(ctx context.Context, tag string) error {
-	_, err := r.verifiedChecksums(ctx, tag)
-	return err
+// ImageFile is the file of a release that names its Docker image: one line,
+// sha256:<64 hex>, the digest of the image the release workflow pushed. It is
+// listed in the signed checksums.txt, so the digest is as trustworthy as the
+// archives are; a registry that serves another image for the tag cannot serve
+// another one for the digest.
+const ImageFile = "ghosttree-image.txt"
+
+var imageDigestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// ImageDigest returns the image digest of tag, read from the release's
+// ghosttree-image.txt after the signature of checksums.txt, its trusted comment
+// and the file's SHA-256 have been checked.
+func (r Release) ImageDigest(ctx context.Context, tag string) (string, error) {
+	sums, err := r.verifiedChecksums(ctx, tag)
+	if err != nil {
+		return "", err
+	}
+	want := ""
+	for _, line := range strings.Split(strings.ReplaceAll(string(sums), "\r", ""), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == ImageFile {
+			want = strings.ToLower(f[0])
+		}
+	}
+	if want == "" {
+		return "", fmt.Errorf("the signed checksums of %s do not list %s: that release has no Docker image the signature vouches for", tag, ImageFile)
+	}
+	b, err := r.get(ctx, r.dl()+"/"+tag+"/"+ImageFile, 4096)
+	if err != nil {
+		return "", fmt.Errorf("%s of %s: %w", ImageFile, tag, err)
+	}
+	got := sha256.Sum256(b)
+	if hex.EncodeToString(got[:]) != want {
+		return "", fmt.Errorf("checksum mismatch for %s of %s; nothing was changed", ImageFile, tag)
+	}
+	digest := strings.TrimSpace(string(b))
+	if !imageDigestRE.MatchString(digest) {
+		return "", fmt.Errorf("%s of %s holds %q, not a sha256 digest", ImageFile, tag, digest)
+	}
+	return digest, nil
 }
 
 // archiveEntry finds the single ghosttree_… or ctx_… archive for this platform

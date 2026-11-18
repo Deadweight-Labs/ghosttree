@@ -2,8 +2,9 @@
 # The Docker installation (REQ-723) from fresh distribution containers: the
 # one-line installer sets a server up with Docker, the login link signs in,
 # ctx server update moves it to a newer image and goes back from one that does
-# not come up. The images are built here from the Dockerfile (nothing is pulled
-# from ghcr.io); the fresh container talks to this machine's Docker through its
+# not come up. The images are built here from the Dockerfile and pushed to a
+# registry on this machine (nothing comes from ghcr.io): the installer pulls them
+# by the digest the signed release names, as it does from ghcr.io. The fresh container talks to this machine's Docker through its
 # socket, with a free port for the server and its own compose project, so a
 # server of yours is not touched.
 #
@@ -17,9 +18,10 @@ cd "$(dirname "$0")/../.."
 
 work=$(mktemp -d /tmp/gt-docker-e2e.XXXXXX)
 project=gte2e$$
-repo=ghcr.io/deadweight-labs/ghosttree
+regname=gte2e-registry-$$
 cleanup() {
   docker compose -p "$project" down -v >/dev/null 2>&1 || true
+  docker rm -f "$regname" >/dev/null 2>&1 || true
   for v in 0.1.0 0.1.1 0.1.2; do docker rmi "$repo:$v" >/dev/null 2>&1 || true; done
   # Files made by containers belong to root.
   docker run --rm -v "$work:/w" debian:12 sh -c 'rm -rf /w/* /w/.[!.]*' >/dev/null 2>&1 || true
@@ -30,6 +32,8 @@ trap cleanup EXIT
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
 port=$(free_port)
 relport=$(free_port)
+regport=$(free_port)
+repo=localhost:$regport/ghosttree
 
 # A throwaway key pair, made by the real minisign.
 docker run --rm -v "$work:/w" debian:12 sh -c '
@@ -42,11 +46,20 @@ CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) go build -trimpath \
   -ldflags "-s -w -X main.version=0.1.0 -X github.com/Deadweight-Labs/ghosttree/internal/releasekey.override=$publine" \
   -o "$work/ctx-0.1.0" ./cmd/ctx
 
-# The image of two releases, and one that cannot come up: the entry point is
-# `ctx version`, so it runs, upgrades nothing and never serves.
+# A registry on this machine, and the image of two releases and of one that
+# cannot come up (its entry point is `ctx version`: it runs, upgrades nothing and
+# never serves), pushed to it. Their digests are what the signed releases name.
+docker run -d --name "$regname" -p "127.0.0.1:$regport:5000" registry:2 >/dev/null
+mkdir -p "$work/digests"
+push() { # version -> writes the digest of the pushed image
+  docker push "$repo:$1" 2>&1 | sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' | head -n 1 >"$work/digests/$1"
+  [ -s "$work/digests/$1" ] || { echo "no digest for $1" >&2; exit 1; }
+  docker rmi "$repo:$1" >/dev/null   # the install must pull it
+}
 docker build -q --build-arg VERSION=0.1.0 -t "$repo:0.1.0" . >/dev/null
 docker build -q --build-arg VERSION=0.1.1 -t "$repo:0.1.1" . >/dev/null
 printf 'FROM %s:0.1.1\nENTRYPOINT ["/usr/local/bin/ctx", "version"]\n' "$repo" | docker build -q -t "$repo:0.1.2" - >/dev/null
+for v in 0.1.0 0.1.1 0.1.2; do push "$v"; done
 
 cp deploy/downloads/ghosttree/install.sh scripts/e2e/docker-container-test.sh "$work/"
 
@@ -67,7 +80,7 @@ for image in "$@"; do
     -v "$docker_bin:/usr/local/bin/docker:ro" \
     -v "$plugin:/usr/local/lib/docker/cli-plugins:ro" \
     -v "$work:/e2e:ro" -v "$work/setup:$work/setup" \
-    -e PORT="$port" -e RELPORT="$relport" -e PROJECT="$project" -e DIR="$work/setup/ghosttree" \
+    -e PORT="$port" -e RELPORT="$relport" -e PROJECT="$project" -e DIR="$work/setup/ghosttree" -e IMAGE_REPO="$repo" \
     "$image" sh -c '
       if command -v apt-get >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive

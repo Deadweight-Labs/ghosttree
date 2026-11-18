@@ -166,9 +166,13 @@ install. It needs Docker with the compose plugin, and a user who may run
 - **Image.** One image per release on `ghcr.io/deadweight-labs/ghosttree`
   (amd64 and arm64, tagged with the version, `latest` for a final release,
   signed keyless like the archives): a static `ctx` on a base without a shell,
-  run as user 65532, with a read-only root file system and no capabilities.
-  `ctx server install --docker` takes the tag of its own version; `--image`
-  names another.
+  run as user 65532, with a read-only root file system and no capabilities. The
+  digest of the release's image is a file of the release, `ghosttree-image.txt`,
+  listed in the minisign-signed `checksums.txt`; `ctx server install --docker`
+  pulls and runs exactly that digest (`.env` holds
+  `ghcr.io/deadweight-labs/ghosttree:<version>@sha256:...`), so what the registry
+  serves under a tag decides nothing. `--image-repo` pulls it from a mirror, and
+  `--image` runs an image of your own choice, which nothing vouches for.
 - **Volumes and secrets.** `data` holds the database (`/data/ghosttree.db`),
   `backups` the copies; the server key is a compose secret, a file in the
   directory `secrets/` (mode 700, the file itself readable by the container's
@@ -176,23 +180,24 @@ install. It needs Docker with the compose plugin, and a user who may run
 - **Backup.** A second container, `backup`, runs `ctx db backup --every 24h` and
   keeps the newest fourteen copies in the volume `backups`; read one out with
   `docker run --rm -v ghosttree_backups:/b -v "$PWD:/out" debian:12 cp /b/<file> /out/`.
-- **Network and proxy.** The server is published on `127.0.0.1:8474` only. The
-  installer picks a bridge subnet no other Docker network or route of this machine
-  uses (`GHOSTTREE_SUBNET`, `GHOSTTREE_GATEWAY` in `.env`); the gateway is the
-  address the proxy on this machine shows up as, so it is the one trusted proxy.
-  With a domain it writes `proxy/Caddyfile` and `proxy/nginx.conf` to copy, as for
+- **Network and proxy.** The server is published on `127.0.0.1:8474` only, and
+  no forwarding header is believed (`GHOSTTREE_TRUSTED_PROXIES=none`) unless you
+  give a domain and use the generated proxy configuration. Then the installer
+  picks a bridge subnet no other Docker network or route of this machine uses
+  (`GHOSTTREE_SUBNET`, `GHOSTTREE_GATEWAY` in `.env`) and trusts the gateway,
+  the address the proxy on this machine shows up as. With a domain it writes `proxy/Caddyfile` and `proxy/nginx.conf` to copy, as for
   systemd. `--tls builtin` adds `compose.override.yaml`, which publishes ports 80
   and 443 and lets the unprivileged user bind them; the certificate is kept in
   the data volume.
-- **Update.** `ctx server update --docker [--dir DIR] [--version TAG]` checks that
-  the release is signed, pulls the image of that tag unless it is here, stops the
-  containers, copies the database into the volume `backups`
+- **Update.** `ctx server update --docker [--dir DIR] [--version TAG]` reads the
+  image digest from the signed release (signature, trusted comment and checksum
+  are checked as for a systemd update), pulls that digest unless it is here,
+  stops the containers, copies the database into the volume `backups`
   (`pre-update-<old>-to-<new>-<time>.db`), runs the schema upgrade with the new
   image, starts it and waits for its version. If it does not answer, the old image
   and the copy are put back. Run by hand: `docker compose pull && docker compose up -d`
-  (no copy, no way back). The signature covers the release list; the image itself
-  is fetched by its tag over TLS and signed keyless, check it with
-  `cosign verify --certificate-identity-regexp '^https://github.com/Deadweight-Labs/ghosttree/' --certificate-oidc-issuer https://token.actions.githubusercontent.com ghcr.io/deadweight-labs/ghosttree:<version>`.
+  (no copy, no way back, nothing checked). The image is also signed keyless:
+  `cosign verify --certificate-identity-regexp '^https://github.com/Deadweight-Labs/ghosttree/' --certificate-oidc-issuer https://token.actions.githubusercontent.com ghcr.io/deadweight-labs/ghosttree@<digest>`.
 - **The gardener.** Its account is made and set as in the systemd install. The
   image has neither `git` nor Claude Code, so the sandboxed runs of the gardener
   (`ctx garden run-due`, see `deploy/README.md`) belong on a machine that has
