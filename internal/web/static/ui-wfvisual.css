@@ -26,11 +26,14 @@
 .wfv-chk.bad { color: var(--danger-fg); background: var(--danger-subtle); }
 .wfv-chk.ok { color: var(--success-fg); background: var(--success-subtle); }
 .wfv-stage { font: 12px/18px var(--ui-mono); color: var(--fg-muted); border: 1px solid var(--border-default); border-radius: 999px; padding: 0 8px; white-space: nowrap; }
-.wfv-plus { display: none; }
+.wfv-on .wfv-h .wfv-plus { display: inline-flex; align-items: center; gap: 4px; }
+.wfv-on .wfv-h .wfv-plus.on { background: var(--accent-subtle); border-color: var(--accent-fg); color: var(--accent-fg); }
+.wfv-note { margin: 0; padding: 6px 12px; font: 500 12.5px/18px var(--ui-font); color: var(--success-fg); background: var(--success-subtle); border-top: 1px solid var(--border-default); }
+.wfv-palh { display: none; }
 .wfv-fail { margin: 0; padding: 8px 12px; color: var(--danger-fg); background: var(--danger-subtle); border-top: 1px solid var(--border-default); font-size: 13px; }
 
 /* Palette: what can be added, grouped. */
-.wfv-pal { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 8px 12px; border-top: 1px solid var(--border-default); }
+.wfv-pal.open { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 8px 12px; border-top: 1px solid var(--border-default); }
 .wfv-pg { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .wfv-pgh { font: 600 12px var(--ui-font); color: var(--fg-muted); margin-right: 2px; }
 .wfv-on .wfv-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px 2px 6px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); color: var(--fg-default); font: 500 12px/20px var(--ui-font); cursor: pointer; }
@@ -44,8 +47,9 @@
 .wfv-canvas { position: relative; overflow: auto; padding: 24px; min-height: 240px; border-radius: 0 0 6px 6px;
   background-color: var(--canvas-subtle); background-image: radial-gradient(circle, var(--border-default) 1px, transparent 1.2px); background-size: 18px 18px; }
 .wfv-graph { position: relative; display: flex; flex-direction: column; gap: 24px; width: max-content; min-width: 100%; }
-.wfv-flow { display: flex; align-items: center; gap: 44px; }
-.wfv-col { display: flex; flex-direction: column; gap: 18px; width: 200px; }
+/* The columns spread over the width of the canvas, so that the graph does not crowd into its left half. */
+.wfv-flow { display: flex; align-items: center; justify-content: space-between; gap: 44px; max-width: 1280px; }
+.wfv-col { display: flex; flex-direction: column; gap: 18px; width: 210px; }
 .wfv-col.c-task { width: 290px; }
 /* The form gives the canvas the width of the page; the fields keep theirs. */
 .g2.wf .wfform:has(.wfv-on) { max-width: none; }
@@ -62,6 +66,8 @@
 .wfv-edges path.dash { stroke-dasharray: 4 4; }
 .wfv-edges path.note { stroke-width: 1.25; }
 .wfv-edges path.err { stroke: var(--danger-fg); }
+.wfv-edges .mk { fill: var(--fg-subtle); stroke: none; }
+.wfv-edges .mk.err { fill: var(--danger-fg); }
 .wfv-loose { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 6px; }
 .wfv-spacer { height: 0; }
 
@@ -137,18 +143,17 @@
 
 @media (max-width: 767px) {
   .wfv-h { flex-wrap: wrap; }
-  .wfv-plus { display: inline-flex; }
-  .wfv-stage { display: none; }
-  .wfv-pal { display: none; }
   .wfv-pal.open { display: flex; flex-direction: column; align-items: stretch; position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; max-height: 60vh; overflow: auto;
     background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 12px 12px 0 0; box-shadow: var(--shadow-pop); padding: 16px 16px 20px; gap: 14px; }
+  .wfv-pal.open .wfv-palh { display: flex; align-items: center; justify-content: space-between; font-size: 15px; }
   .wfv-pal.open .wfv-pg { gap: 8px; }
   .wfv-pal.open .wfv-pgh { flex-basis: 100%; }
   .wfv-on .wfv-pal.open .wfv-chip { padding: 6px 12px 6px 8px; font-size: 14px; }
   .wfv-stagebox, .wfv-stagebox:has(> .wfv-insp:not([hidden])) { grid-template-columns: minmax(0, 1fr); }
   .wfv-canvas { padding: 16px 12px; overflow: visible; }
   .wfv-graph { width: auto; }
-  .wfv-flow { flex-direction: column; align-items: stretch; gap: 28px; }
+  .wfv-flow { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 28px; max-width: none; }
+  .wfv-stage { flex-basis: 100%; white-space: normal; border-radius: 6px; }
   .wfv-col { width: auto; gap: 20px; }
   .wfv-subs { margin-top: 20px; }
   .wfv-head > .wfn, .wfv-rest > .wfn { max-width: none; flex: 1 1 100%; }
@@ -156,3 +161,16 @@
   .wfv-ih { position: sticky; top: 0; background: var(--canvas-default); padding-top: 16px; z-index: 1; }
   .wfv-ih::before { content: ""; position: absolute; left: 50%; top: 6px; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--border-default); }
 }
+
+/* The check of the text mode, under the text. */
+.wfv-on.wfv-edit > .wfv-tcheck { margin: 0 12px 12px; padding: 8px 12px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-subtle); font-size: 13px; }
+.wfv-tcheck.busy { opacity: .6; }
+.wfv-tsum { display: flex; align-items: center; gap: 6px; font-weight: 600; flex-wrap: wrap; }
+.wfv-tsum.bad { color: var(--danger-fg); } .wfv-tsum.ok { color: var(--success-fg); }
+.wfv-tsum .i { width: 14px; height: 14px; }
+.wfv-tst { margin-left: auto; font: 400 12px var(--ui-mono); color: var(--fg-muted); }
+.wfv-tlist { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.wfv-tlist:empty { display: none; }
+.wfv-on .wfv-tlist .wferr, .wfv-on .wfv-tlist .wfwarn { align-items: baseline; }
+.wfv-on .wfv-tl { border: 0; background: none; padding: 0; color: inherit; font: 600 12px var(--ui-mono); text-decoration: underline; cursor: pointer; flex: none; }
+.wfv-chk[role="button"] { cursor: pointer; }

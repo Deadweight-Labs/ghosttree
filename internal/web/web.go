@@ -291,6 +291,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	}
 	a.handle(mux, "POST /ui/runbooks/write", a.requirePerson(a.requireInteractive(limitBodyN(maxRunbookForm, a.requireCSRF(http.HandlerFunc(a.runbookWrite))))))
 	a.handle(mux, "POST /ui/workflows/visual", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowVisual))))))
+	a.handle(mux, "POST /ui/workflows/check", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowCheck))))))
 	a.handle(mux, "POST /ui/workflows/save", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowSave))))))
 	a.handle(mux, "POST /ui/workflows/template", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowFromTemplate))))))
 	a.handle(mux, "POST /ui/workflows/enabled", a.requirePerson(a.requireInteractive(limitBodyN(maxWorkflowForm, a.requireCSRF(http.HandlerFunc(a.workflowEnable))))))
@@ -789,6 +790,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/runbooks/write":     webAdmin,
 	"POST /ui/workflows/save":     webAdmin,
 	"POST /ui/workflows/visual":   webAdmin,
+	"POST /ui/workflows/check":    webProject,
 	"POST /ui/workflows/enabled":  webAdmin,
 	"POST /ui/workflows/template": webAdmin,
 	"POST /ui/workflows/undo":     webAdmin,

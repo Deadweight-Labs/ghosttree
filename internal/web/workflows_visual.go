@@ -118,7 +118,14 @@ var wfVisTexts = []string{
 	"wf.vis.errors_one",
 	"wf.vis.checked",
 	"wf.vis.stage",
+	"wf.vis.stage_1",
+	"wf.vis.stage_2",
+	"wf.vis.stage_3",
 	"wf.vis.add",
+	"wf.vis.added",
+	"wf.vis.checking",
+	"wf.vis.check_failed",
+	"wf.vis.first_error",
 	"wf.vis.remove",
 	"wf.vis.close",
 	"wf.vis.palette",
@@ -274,6 +281,41 @@ func (a *app) workflowVisual(w http.ResponseWriter, r *http.Request) {
 		text = next
 	}
 	writeJSONStatus(w, http.StatusOK, wfVisualModel{Text: text, View: workflow.ViewOf(text, workflow.EnvFor(a.store, project))})
+}
+
+// workflowCheckAnswer is what the live check of the text mode answers with.
+type workflowCheckAnswer struct {
+	OK       bool               `json:"ok"`
+	Stage    int                `json:"stage"`
+	Errors   []workflow.Problem `json:"errors"`
+	Warnings []workflow.Problem `json:"warnings"`
+}
+
+// workflowCheck is POST /ui/workflows/check: the check of a text, for the text
+// mode while a person types (REQ-708). It stores nothing and changes nothing,
+// so it takes the rights of reading workflows, not of editing them; the check
+// is the same as at saving.
+func (a *app) workflowCheck(w http.ResponseWriter, r *http.Request) {
+	pa := a.access(r)
+	project := strings.TrimSpace(r.FormValue("project"))
+	if project == "" || !a.projectVisible(r, pa, project) || !pa.CanSeeWorkflows(project) {
+		http.NotFound(w, r)
+		return
+	}
+	text := strings.ReplaceAll(r.FormValue("text"), "\r\n", "\n")
+	if len(text) > workflow.MaxDefBytes {
+		writeJSONStatus(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "the file is too large"})
+		return
+	}
+	_, rep := workflow.Check(text, workflow.EnvFor(a.store, project))
+	ans := workflowCheckAnswer{OK: rep.OK(), Stage: rep.Stage, Errors: rep.Errors, Warnings: rep.Warnings}
+	if ans.Errors == nil {
+		ans.Errors = []workflow.Problem{}
+	}
+	if ans.Warnings == nil {
+		ans.Warnings = []workflow.Problem{}
+	}
+	writeJSONStatus(w, http.StatusOK, ans)
 }
 
 func writeJSONStatus(w http.ResponseWriter, status int, v any) {

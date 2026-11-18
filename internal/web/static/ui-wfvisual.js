@@ -63,7 +63,8 @@
     if (has("every")) cols[0].push(keyNode("every", { kind: "trigger" }));
     if (has("chain")) cols[0].push(keyNode("chain", { kind: "trigger", sub: true }));
     if (has("inputs")) cols[2].push(keyNode("inputs", { kind: "input" }));
-    if ((view && view.body) || pending === "body") cols[3].push(node("body", { key: "body", kind: "task", value: { scalar: (view && view.body) || "" }, line: view && view.body_line, ghost: !(view && view.body) }));
+    if ((view && view.body) || pending === "body") cols[3].push(node("body", { key: "body", kind: "task", value: { scalar: (view && view.body) || "" }, line: view && view.body_line, ghost: !(view && view.body),
+      errors: problemsFor(errs, "body"), warnings: problemsFor(warns, "body") }));
     if (has("prompt")) cols[3].push(keyNode("prompt", { kind: "task" }));
     cols[3].push(has("uses") ? keyNode("uses", { kind: "task" }) : node("uses", { key: "uses", kind: "task", ghost: true }));
     for (const k of ["model", "budget", "research"]) if (has(k)) subs.push(keyNode(k, { kind: "limit", sub: true }));
@@ -137,7 +138,8 @@
     }
     const pairs = has("results") ? keys.results.pairs || [] : [];
     for (const k of catalog.kinds || []) {
-      if (block && block.results && !block.results.includes(k.name)) continue;
+      // The server leaves "results" out for a block that creates none (echo).
+      if (block && !(block.results || []).includes(k.name)) continue;
       if (pairs.some((p) => p.key === k.name)) continue;
       results.push({ key: "results", name: k.name, label: k.label, edit: { op: "set", key: "results", pairs: pairs.concat({ key: k.name, value: "1" }) }, open: "results:" + k.name });
     }
@@ -200,7 +202,9 @@
     const editable = root.hasAttribute("data-edit");
     const form = root.closest("form");
     const textarea = editable && form ? form.querySelector('textarea[name="text"]') : null;
-    const state = { text: model.text, view: model.view, selected: "", pending: "", mode: "visual", busy: Promise.resolve(), paletteOpen: false };
+    const wide = () => !!(window.matchMedia && window.matchMedia("(min-width: 768px)").matches);
+    // On a wide screen the palette stands open beside the graph; on a phone it is a sheet "Add" opens.
+    const state = { text: model.text, view: model.view, selected: "", pending: "", mode: "visual", busy: Promise.resolve(), paletteOpen: wide() };
     const label = (k) => L[k] || k;
     const optLabel = (list, name) => ((catalog[list] || []).find((o) => o.name === name) || {}).label || name;
 
@@ -229,16 +233,21 @@
     if (editable) {
       plusBtn = el("button", "gbtn sm wfv-plus");
       plusBtn.type = "button";
-      plusBtn.setAttribute("aria-label", label("add"));
       plusBtn.setAttribute("aria-expanded", "false");
       plusBtn.appendChild(svgIcon(ICONS.plus));
+      plusBtn.appendChild(el("span", "wfv-plus-l", label("add")));
       headEl.appendChild(plusBtn);
     }
+    // What the last click on a chip added, for a moment, so that the click shows its effect.
+    const note = el("div", "wfv-note");
+    note.setAttribute("role", "status");
+    note.hidden = true;
     const fail = el("div", "wfv-fail");
     fail.setAttribute("role", "alert");
     fail.hidden = true;
     const pal = el("div", "wfv-pal");
-    pal.setAttribute("aria-label", label("palette"));
+    pal.setAttribute("aria-label", label("add"));
+    pal.hidden = true;
     const stageEl = el("div", "wfv-stagebox");
     const canvas = el("div", "wfv-canvas");
     const graphEl = el("div", "wfv-graph");
@@ -254,6 +263,7 @@
     root.insertBefore(spacer, root.firstChild);
     root.insertBefore(stageEl, root.firstChild);
     if (editable) root.insertBefore(pal, root.firstChild);
+    root.insertBefore(note, root.firstChild);
     root.insertBefore(fail, root.firstChild);
     root.insertBefore(headEl, root.firstChild);
 
@@ -263,13 +273,26 @@
       tabT.classList.toggle("on", m === "text");
       tabV.setAttribute("aria-selected", String(m === "visual"));
       tabT.setAttribute("aria-selected", String(m === "text"));
-      for (const t of textEls) t.hidden = m !== "text";
+      for (const t of textEls) t.hidden = m !== "text" || (t === tcheck && !tcheck.firstChild);
       stageEl.hidden = m !== "visual";
-      pal.hidden = m !== "visual";
+      pal.hidden = m !== "visual" || !state.paletteOpen;
       chk.hidden = stage.hidden = m !== "visual";
       if (plusBtn) plusBtn.hidden = m !== "visual";
       if (m !== "visual") closeInspector();
+      if (m === "text") liveCheck(true);
     }
+    chk.addEventListener("click", () => {
+      if (!G || !(state.view.errors || []).length) return;
+      const order = [].concat(G.head, ...G.cols, G.subs, G.subNotes, G.rest);
+      const bad = order.find((n) => n.errors.length);
+      if (!bad) return;
+      select(bad.id);
+      const e = graphEl.querySelector('[data-node="' + bad.id + '"]');
+      if (e && e.scrollIntoView) e.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+    chk.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); chk.click(); }
+    });
     tabs.addEventListener("click", (ev) => {
       const b = ev.target.closest && ev.target.closest("button[data-mode]");
       if (!b || b.dataset.mode === state.mode) return;
@@ -280,6 +303,93 @@
       }
       setMode(b.dataset.mode);
     });
+
+    // ---- the check of the text mode ----
+    // While a person types in the text the file is checked as it would be on
+    // saving, after a short pause; nothing is stored.
+    const tcheck = el("div", "wfv-tcheck wfv-text");
+    tcheck.setAttribute("role", "status");
+    tcheck.setAttribute("aria-live", "polite");
+    tcheck.hidden = true;
+    let checkSeq = 0, checkTimer = 0, checkedText = null;
+    function jumpToLine(n) {
+      if (!textarea) return;
+      const lines = textarea.value.split("\n");
+      let from = 0;
+      for (let i = 0; i < Math.min(n - 1, lines.length); i++) from += lines[i].length + 1;
+      const to = from + ((lines[n - 1] || "").length);
+      textarea.focus();
+      if (textarea.setSelectionRange) textarea.setSelectionRange(from, to);
+      const lh = (window.getComputedStyle && parseFloat(window.getComputedStyle(textarea).lineHeight)) || 18;
+      textarea.scrollTop = Math.max(0, (n - 3) * lh);
+    }
+    function showCheck(data) {
+      const errs = data.errors || [], warns = data.warnings || [];
+      tcheck.textContent = "";
+      tcheck.classList.remove("busy");
+      const sum = el("div", "wfv-tsum " + (errs.length ? "bad" : "ok"));
+      sum.appendChild(svgIcon(errs.length ? ICONS.tri : ICONS.check));
+      sum.appendChild(el("span", "", errs.length ? (errs.length === 1 ? label("errors_one") : fmt(label("errors"), errs.length)) : label("checked")));
+      if (data.stage) sum.appendChild(el("span", "wfv-tst", fmt(L["stage_" + data.stage] || label("stage"), data.stage)));
+      tcheck.appendChild(sum);
+      const ul = el("ul", "wfv-tlist");
+      for (const [list, cls] of [[errs, "wferr"], [warns, "wfwarn"]]) {
+        for (const p of list.slice(0, 30)) {
+          const li = el("li", cls);
+          li.appendChild(svgIcon(ICONS.tri));
+          if (p.line) {
+            const b = el("button", "wfv-tl", fmt(label("line"), p.line));
+            b.type = "button";
+            b.addEventListener("click", () => jumpToLine(p.line));
+            li.appendChild(b);
+          }
+          li.appendChild(el("span", "", p.message));
+          ul.appendChild(li);
+        }
+      }
+      tcheck.appendChild(ul);
+    }
+    async function runCheck() {
+      if (!textarea) return;
+      const mine = ++checkSeq, text = textarea.value;
+      if (text === checkedText) return;
+      tcheck.classList.add("busy");
+      if (!tcheck.firstChild) tcheck.textContent = label("checking");
+      tcheck.hidden = state.mode !== "text";
+      const body = new URLSearchParams();
+      body.set("csrf_token", (form.querySelector('input[name="csrf_token"]') || {}).value || "");
+      body.set("project", (form.querySelector('input[name="project"]') || {}).value || "");
+      body.set("text", text);
+      let data = null, err = "";
+      try {
+        const res = await window.fetch("/ui/workflows/check", { method: "POST", body, credentials: "same-origin", cache: "no-store",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" } });
+        data = await res.json().catch(() => null);
+        if (!res.ok || !data) { err = (data && data.error) || String(res.status); data = null; }
+      } catch (e) {
+        err = String((e && e.message) || e);
+      }
+      if (mine !== checkSeq) return;
+      if (!data) {
+        tcheck.classList.remove("busy");
+        tcheck.textContent = fmt(label("check_failed"), err);
+        return;
+      }
+      checkedText = text;
+      showCheck(data);
+      tcheck.hidden = state.mode !== "text";
+    }
+    function liveCheck(now) {
+      if (!textarea || !window.setTimeout) return;
+      window.clearTimeout(checkTimer);
+      checkTimer = window.setTimeout(runCheck, now ? 0 : 600);
+    }
+    if (textarea) {
+      const holder = textarea.closest("label") || textarea;
+      if (holder.parentNode) holder.parentNode.insertBefore(tcheck, holder.nextSibling || null);
+      textEls.push(tcheck);
+      textarea.addEventListener("input", () => { tcheck.classList.add("busy"); liveCheck(false); });
+    }
 
     // ---- talking to the server ----
     function send(edit) {
@@ -375,7 +485,7 @@
       const h = el("div", "wfn-h");
       h.appendChild(svgIcon(iconFor(n)));
       h.appendChild(el("span", "", title(n)));
-      if (n.line && n.kind === "text") h.appendChild(el("span", "wfn-ln", fmt(label("line"), n.line)));
+      if (n.line && !n.ghost) h.appendChild(el("span", "wfn-ln", fmt(label("line"), n.line)));
       d.appendChild(h);
       d.appendChild(nodeBody(n));
       return d;
@@ -388,7 +498,9 @@
       const errs = (state.view.errors || []).length;
       chk.className = "wfv-chk " + (errs ? "bad" : "ok");
       chk.textContent = errs ? (errs === 1 ? label("errors_one") : fmt(label("errors"), errs)) : label("checked");
-      stage.textContent = fmt(label("stage"), state.view.stage);
+      if (errs) { chk.setAttribute("role", "button"); chk.tabIndex = 0; chk.title = label("first_error"); }
+      else { chk.removeAttribute("role"); chk.removeAttribute("tabindex"); chk.removeAttribute("title"); }
+      stage.textContent = fmt(L["stage_" + state.view.stage] || label("stage"), state.view.stage);
       loose.textContent = "";
       for (const p of G.loose) {
         const li = el("li", (state.view.errors || []).includes(p) ? "wferr" : "wfwarn");
@@ -437,6 +549,25 @@
       const svg = document.createElementNS(SVGNS, "svg");
       svg.setAttribute("class", "wfv-edges");
       svg.setAttribute("aria-hidden", "true");
+      // The arrow of an edge points into the node it leads to.
+      const defs = document.createElementNS(SVGNS, "defs");
+      for (const [id, cls] of [["wfv-ar", "mk"], ["wfv-ar-err", "mk err"]]) {
+        const m = document.createElementNS(SVGNS, "marker");
+        m.setAttribute("id", id);
+        m.setAttribute("viewBox", "0 0 10 10");
+        m.setAttribute("refX", "9");
+        m.setAttribute("refY", "5");
+        m.setAttribute("markerWidth", "9");
+        m.setAttribute("markerHeight", "9");
+        m.setAttribute("markerUnits", "userSpaceOnUse");
+        m.setAttribute("orient", "auto");
+        const tip = document.createElementNS(SVGNS, "path");
+        tip.setAttribute("d", "M1 1.5 9 5 1 8.5z");
+        tip.setAttribute("class", cls);
+        m.appendChild(tip);
+        defs.appendChild(m);
+      }
+      svg.appendChild(defs);
       const base = graphEl.getBoundingClientRect();
       const rect = (id) => {
         const e = graphEl.querySelector('[data-node="' + id + '"]');
@@ -476,6 +607,7 @@
         const p = document.createElementNS(SVGNS, "path");
         p.setAttribute("d", d);
         p.setAttribute("class", [ed.dash ? "dash" : "", ed.err ? "err" : "", ed.note ? "note" : ""].join(" ").trim());
+        if (!ed.note) p.setAttribute("marker-end", "url(#" + (ed.err ? "wfv-ar-err" : "wfv-ar") + ")");
         svg.appendChild(p);
       }
       graphEl.insertBefore(svg, graphEl.firstChild);
@@ -490,12 +622,21 @@
       b.appendChild(svgIcon(ICONS.plus));
       b.appendChild(el("span", "", text));
       if (sub) b.title = sub;
-      b.addEventListener("click", () => addItem(item));
+      b.addEventListener("click", () => addItem(item, text));
       return b;
     }
     function renderPalette() {
       const P = palette(state.view, catalog);
       pal.textContent = "";
+      const ph = el("div", "wfv-palh");
+      ph.appendChild(el("b", "", label("add")));
+      const px = el("button", "wfv-ix");
+      px.type = "button";
+      px.setAttribute("aria-label", label("close"));
+      px.appendChild(svgIcon(ICONS.x));
+      px.addEventListener("click", () => { state.paletteOpen = false; renderPalette(); });
+      ph.appendChild(px);
+      pal.appendChild(ph);
       const group = (name, items, text) => {
         if (!items.length) return;
         const g = el("div", "wfv-pg");
@@ -507,30 +648,57 @@
       group("inputs", P.inputs, (it) => it.label);
       group("results", P.results, (it) => it.label);
       pal.classList.toggle("open", state.paletteOpen);
-      if (plusBtn) plusBtn.setAttribute("aria-expanded", String(state.paletteOpen));
+      pal.hidden = state.mode !== "visual" || !state.paletteOpen;
+      if (plusBtn) {
+        plusBtn.setAttribute("aria-expanded", String(state.paletteOpen));
+        plusBtn.classList.toggle("on", state.paletteOpen);
+      }
     }
-    function addItem(item) {
-      state.paletteOpen = false;
+    // saidAdded shows what a click added, and the stage it makes of the file.
+    let noteTimer = 0;
+    function saidAdded(text) {
+      note.textContent = fmt(label("added"), text) + " · " + fmt(L["stage_" + state.view.stage] || label("stage"), state.view.stage);
+      note.hidden = false;
+      if (window.clearTimeout) window.clearTimeout(noteTimer);
+      noteTimer = window.setTimeout ? window.setTimeout(() => { note.hidden = true; }, 6000) : 0;
+    }
+    function addItem(item, text) {
+      // A phone closes its sheet; a wide screen keeps the palette for the next one.
+      if (!wide()) state.paletteOpen = false;
       if (item.pending) {
         state.pending = item.pending;
         state.selected = item.pending;
         render();
+        saidAdded(text);
         return;
       }
       send(item.edit).then((ok) => {
-        if (ok && item.open) select(item.open);
+        if (!ok) return;
+        saidAdded(text);
+        if (item.open) select(item.open);
       });
     }
     if (plusBtn) plusBtn.addEventListener("click", () => {
       state.paletteOpen = !state.paletteOpen;
-      if (state.paletteOpen) closeInspector();
+      if (state.paletteOpen && !wide()) closeInspector();
+      renderPalette();
+      if (state.paletteOpen) {
+        const first = pal.querySelector(".wfv-chip");
+        if (first && first.focus) first.focus();
+      }
+    });
+    // A tap beside the sheet of a phone closes it.
+    document.addEventListener("click", (ev) => {
+      if (!state.paletteOpen || wide() || !ev.target || !ev.target.closest) return;
+      if (ev.target.closest(".wfv-pal") || ev.target.closest(".wfv-plus")) return;
+      state.paletteOpen = false;
       renderPalette();
     });
 
     // ---- inspector ----
     function select(id) {
       state.selected = id;
-      state.paletteOpen = false;
+      if (!wide()) state.paletteOpen = false;
       render();
       const n = graphEl.querySelector('[data-node="' + id + '"]');
       // On a phone the sheet covers the lower part: the node moves above it.
@@ -801,8 +969,8 @@
       insp.appendChild(b);
     }
     document.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape" && (state.selected || state.paletteOpen)) {
-        state.paletteOpen = false;
+      if (ev.key === "Escape" && (state.selected || (state.paletteOpen && !wide()))) {
+        if (!wide()) state.paletteOpen = false;
         closeInspector();
         if (editable) renderPalette();
       }
