@@ -793,8 +793,10 @@ sudo systemctl restart ghosttree
 Outside systemd, `GHOSTTREE_SECRET_KEY_FILE=/path/to/secret-key` names the
 file (base64 or hex, 32 bytes). A key that is configured but cannot be read
 stops the server at start. Without any key the server runs, and the settings
-say that no key can be stored. Keep a copy of the key with the backups of the
-database: without it the stored keys are lost (owners enter them again).
+say that no key can be stored. Keep a copy of the key, but not where the backups
+of the database are (another place, another medium): a backup and the key next to
+it open every stored key for whoever gets the backup. Without the key the stored
+keys are lost (owners enter them again).
 
 **llm.json.** The provider in `llm.json` (the top-level entry, else the
 gardener's) becomes the server connection `standard` at every start, with the
@@ -1127,6 +1129,18 @@ updated by `ghosttree-garden-update.service`), `bin/` (the `claude` binary, pass
 `ghosttree-garden`). Settings of the run (key paths, `GHOSTTREE_GARDEN_CLAUDE_DIR`,
 `--state-file`) belong in `/etc/ghosttree/garden.env` and `run.sh`, not in
 `server.env`.
+
+`ghosttree-garden-update.service` runs as root because the checkout is root's,
+and pulls what a remote holds, so it is sandboxed: it may write the checkout and
+nothing else (`ReadWritePaths`), has no capabilities, no `/home` or `/root`, and
+no private devices or kernel settings. It needs the checkout to be owned by root
+(as above) and the remote to be reachable without a key in `/root` (https, with
+the settings in `garden/gitconfig`); after changing the unit run
+`sudo systemctl start ghosttree-garden-update` once and look at its journal. The
+explain and distill units, the server sample and the collector have the same
+kind of restrictions, within what each needs (the collector is a user unit and
+takes only the restrictions that need no mount namespace). Check a unit with
+`systemd-analyze security <unit>`.
 
 After installing or changing the unit, prove the sandbox on the machine:
 
