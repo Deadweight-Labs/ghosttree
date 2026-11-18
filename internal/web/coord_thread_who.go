@@ -130,7 +130,7 @@ func buildThreadWho(l lang, authors []store.ThreadAuthor, room []coordParticipan
 }
 
 // threadTip is where an agent ran and how many sessions wrote for it: the
-// machines, the branches, the sessions ("mainex · feat/x · 2 Sessions").
+// machines, the branches, the sessions ("laptop · feat/x · 2 Sessions").
 func threadTip(l lang, h coordHereView) string {
 	var bits []string
 	seen := map[string]bool{}

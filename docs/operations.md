@@ -97,7 +97,7 @@ needs `--public-url` and `ctx serve` refuses to start without it. The file mailb
 may fall back to the address of the request, because only the operator reads it.
 See also [Running behind TLS or a reverse proxy](#running-behind-tls-or-a-reverse-proxy).
 
-Operating at deadweight (orax): set `GHOSTTREE_SMTP_HOST`, `GHOSTTREE_SMTP_FROM`,
+To send mail, set `GHOSTTREE_SMTP_HOST`, `GHOSTTREE_SMTP_FROM`,
 `GHOSTTREE_SMTP_USER` and `GHOSTTREE_SMTP_PASSWORD_FILE` in the service
 environment file and keep the password file readable by the service user only.
 
