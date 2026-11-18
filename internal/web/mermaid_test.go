@@ -285,3 +285,25 @@ func TestSectionLinesAreBlocksOfTheirOwnForThePageWithoutScript(t *testing.T) {
 		}
 	}
 }
+
+// The sides of the frame keep the isolation: the page makes the frame with a sandbox that
+// has no allow-same-origin, and the frame draws with the library's strict security level
+// and no HTML labels.
+func TestMermaidScriptsKeepTheFrameIsolated(t *testing.T) {
+	page, err := os.ReadFile("static/ui-mermaid.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), `frame.setAttribute("sandbox", "allow-scripts")`) || strings.Contains(string(page), "allow-same-origin") {
+		t.Error("ui-mermaid.js must make the frame with sandbox=allow-scripts only")
+	}
+	frame, err := os.ReadFile("static/mermaid-frame.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`securityLevel: "strict"`, "htmlLabels: false", "ev.source !== parent"} {
+		if !strings.Contains(string(frame), want) {
+			t.Errorf("mermaid-frame.js lacks %q", want)
+		}
+	}
+}
