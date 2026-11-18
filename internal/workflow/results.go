@@ -174,7 +174,7 @@ func (g Gate) Apply(results []Result) (GateReport, error) {
 		// owner's automatic approval covers knowledge, issues, criteria and
 		// relations, including the link of an idea to a feature, which one
 		// click takes back.
-		if g.Policy.Auto(r.Kind) && g.trustedEvidence(r) && (r.IdeaID == 0 || r.Kind == ResultRelation) {
+		if g.Policy.Auto(r.Kind) && (r.Kind == ResultKnowledge || g.trustedEvidence(r)) && (r.IdeaID == 0 || r.Kind == ResultRelation) {
 			ref, err := w.apply(r, 0)
 			if err != nil {
 				rec.State, rec.Reason, rec.Payload = store.ResultRejected, store.ResultInvalid, ""
@@ -204,7 +204,9 @@ func (g Gate) Apply(results []Result) (GateReport, error) {
 
 // trustedEvidence says whether the quotes of a result stand in text that
 // members wrote: the trusted inputs, or what a person typed in the session the
-// result names.
+// result names. It decides the automatic approval of issues, criteria and
+// relations; knowledge needs no such check, since what a run applies of it
+// starts as an untrusted entry that nothing delivers before a person reviews it.
 func (g Gate) trustedEvidence(r Result) bool {
 	if r.Session != "" {
 		return hasEvidence(r.Evidence, g.Sources[r.Session])
