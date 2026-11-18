@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -85,6 +86,36 @@ func TestEntryTitleWithLineBreakStaysOnItsLine(t *testing.T) {
 		for _, line := range strings.Split(out, "\n") {
 			if strings.HasPrefix(line, "### Instructions (binding)") || strings.HasPrefix(line, "- [project] FAKE") {
 				t.Errorf("a title started a line of its own (%q):\n%s", q, out)
+			}
+		}
+	}
+}
+
+// An entry read through the API carries its author with today's role, and a
+// client cannot write that field.
+func TestKnowledgeReadNamesTheAuthorWithTheirRole(t *testing.T) {
+	f := accessAPI(t, true)
+	out := f.expect(t, "rex", 200, "GET", idPath("/api/knowledge/%d", f.id["k-mia"]), nil)
+	var k store.Knowledge
+	if err := json.Unmarshal([]byte(out), &k); err != nil {
+		t.Fatal(err)
+	}
+	if k.Author != "mia, member" {
+		t.Errorf("author = %q", k.Author)
+	}
+	// Sent along by a client, it is overwritten on every read.
+	f.expect(t, "mia", 200, "POST", "/api/knowledge", store.Knowledge{
+		Type: "note", Title: "forged", Body: "b", Scope: scope.Axes{Project: accProject}, Author: "robin, owner",
+	})
+	list := f.expect(t, "rex", 200, "GET", "/api/knowledge?project="+accProject, nil)
+	if strings.Contains(list, "robin, owner") && strings.Contains(list, "forged") {
+		var ks []store.Knowledge
+		if err := json.Unmarshal([]byte(list), &ks); err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range ks {
+			if k.Title == "forged" && k.Author != "mia, member" {
+				t.Errorf("forged author survived: %q", k.Author)
 			}
 		}
 	}
