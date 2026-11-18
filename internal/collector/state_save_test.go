@@ -76,3 +76,18 @@ func loadOffset(t *testing.T, path, file string) int64 {
 	}
 	return st.file(file).Offset
 }
+
+func TestSaveCreatesPrivateStateDirectory(t *testing.T) {
+	st := newTestState(filepath.Join(t.TempDir(), "state"))
+	st.file("a.jsonl").Offset = 1
+	if err := st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Dir(st.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("state directory mode = %04o, want 0700", got)
+	}
+}
