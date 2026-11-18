@@ -1516,7 +1516,6 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   and publishes afterwards. The signing key has a password (`MINISIGN_PASSWORD`
   in the environment `release`, which needs reviewers), and `SECURITY.md` carries
   the release key as a second place to compare it with.
-||||||| 99b57159
 - The client no longer follows a link in a repository when it writes `.ghosttree/`:
   a checkout that brings `.ghosttree` or a level below it as a symbolic link
   makes the mirror and the tree stop with a message, and nothing is written or
