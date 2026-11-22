@@ -16,9 +16,9 @@ tool. Ghosttree is for the project: it works across
 harnesses and machines, is shared by a team, is tied to Git commits and pull
 requests, and is checked against the code and by people before it counts.
 
-![A decision in the idea workshop, the issue it leads to, the checklist of the pull request, the briefing of the next session, and the code tree with file descriptions](docs/images/demo-loop.gif)
+![An agent's test shows that a payment retry sends two receipts. A person approves the lesson the agent wrote down, the next session's briefing contains it, and the agent working on refunds follows it.](docs/images/demo-loop.webp)
 
-[Watch the 30-second tour with the pointer moving through it](docs/images/tour.mp4)
+[Watch the 30-second film on the project page](https://deadweightlabs.com/projects/ghosttree)
 
 Where it helps:
 

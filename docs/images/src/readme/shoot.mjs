@@ -18,11 +18,6 @@ const screens = {
   'ui-context':   { path: '/ui/context?project=github.com%2Fnorthwind%2Fstorefront', height: 900 },
   'ui-knowledge': { path: P + '/knowledge', height: 820 },
   'ui-runbook':   { path: P + '/runbooks', height: 700 },
-  'gif-1': { path: P + '/ideas/1', height: 720, scrollTo: '#workshop' },
-  'gif-2': { path: P + '/issues/1', height: 720 },
-  'gif-3': { path: P + '/pulls/17?tab=checklist', height: 720 },
-  'gif-4': { path: '/ui/context?project=github.com%2Fnorthwind%2Fstorefront', height: 720 },
-  'gif-5': { path: P + '/tree/main/checkout', height: 720 },
 };
 const scheme = process.env.SCHEME || 'light';
 const browser = await chromium.launch();

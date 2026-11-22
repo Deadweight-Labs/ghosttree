@@ -8,6 +8,8 @@ package main
 // runbook, and a work package bound to a pull request. Invented data only.
 
 import (
+	"time"
+
 	"fmt"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
@@ -125,6 +127,17 @@ func (s *seeder) extras() {
 		Body:  "The provider calls the webhook again when it does not get an answer within 5 seconds. checkout/receipt.go sends only when the order changes to paid, never on the webhook itself.",
 		Scope: scope.Axes{Project: sf}, Person: "Theo", Confidence: "trusted", GitAnchor: anchor(7, "fix/double-receipt")})
 	must(err)
+
+	// ---- the lesson of the duplicate receipts: proposed by the agent that fixed
+	// them, waiting for a person, and later followed by the refunds session.
+	lesson, err := st.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "Refunds send their receipt through the same path as payments",
+		Body:  "A refund confirmation can arrive twice, like a payment callback. Send the refund receipt only when the refund changes to done, never on the callback itself. Same cause as the duplicate receipts fixed on fix/double-receipts.",
+		Scope: scope.Axes{Project: pay}, Person: "Mia", Confidence: "staged", Origin: "agent", Harness: "claude",
+		SessionRef: fmt.Sprintf("session:%d", s.sessID["a5"]), GitAnchor: anchor(9, "fix/double-receipts")})
+	must(err)
+	must(st.SaveAgentExplanation("knowledge", lesson, "The agent that fixed the duplicate receipts noticed that refunds use the same path. Once you approve it, every later session on payments is warned before it touches refunds."))
+	s.later("knowledge", lesson, 40*time.Minute)
+	s.say("a3", pay, fmt.Sprintf("Partial refunds work. The refund receipt goes out once, when the refund is marked done; a repeated callback sends nothing. I followed KN-%d.", lesson), "", nil, 0, 4*time.Minute, "")
 
 	// ---- a work package bound to a pull request
 	p, known := st.ProjectByRemote(sf)
