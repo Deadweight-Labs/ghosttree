@@ -72,6 +72,10 @@ CREATE TABLE IF NOT EXISTS machine_events(
   actor INTEGER NOT NULL DEFAULT 0, subject TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '',
   via TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS machine_events_host ON machine_events(hostname, id);
+CREATE TRIGGER IF NOT EXISTS machine_events_no_update BEFORE UPDATE ON machine_events
+  BEGIN SELECT RAISE(ABORT, 'machine_events is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS machine_events_no_delete BEFORE DELETE ON machine_events
+  BEGIN SELECT RAISE(ABORT, 'machine_events is append-only'); END;
 `
 
 // ensureMachineSharing legt die Tabellen für Maschinenfreigaben an und
@@ -215,6 +219,17 @@ func deleteMachineSharesTx(tx txExec, host string) error {
 		return err
 	}
 	_, err := tx.Exec(`DELETE FROM machine_shares WHERE hostname=?`, host)
+	return err
+}
+
+// dropMachineSharesOfTx nimmt die Freigaben zurück, die ein Konto mit seinen
+// eigenen Maschinen an eine Org gegeben hat (beim Austritt oder Entfernen).
+func dropMachineSharesOfTx(tx txExec, orgID, account int64) error {
+	own := `SELECT hostname FROM machines WHERE account_id=? AND owner_org_id=0`
+	if _, err := tx.Exec(`DELETE FROM machine_entry_shares WHERE org_id=? AND hostname IN (`+own+`)`, orgID, account); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`DELETE FROM machine_shares WHERE org_id=? AND hostname IN (`+own+`)`, orgID, account)
 	return err
 }
 

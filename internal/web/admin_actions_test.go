@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -129,7 +132,7 @@ func TestInviteAsksForTheRoleAndSaysWhatItAllows(t *testing.T) {
 	// Without enforced visibility the guest stays in the choice, switched off
 	// and with the reason (REQ-704, R12): a person sees that guests exist.
 	if roles := pageSpan(t, page, `<fieldset class="irole">`, "</fieldset>"); !strings.Contains(roles, "Works in the shared projects of the organization") ||
-		!strings.Contains(roles, `value="guest" data-role disabled`) || !strings.Contains(roles, "GHOSTTREE_ENFORCE_ACCESS=1") || strings.Contains(roles, `name="project"`) {
+		!strings.Contains(roles, `value="guest" data-role disabled`) || !strings.Contains(roles, "GHOSTTREE_ENFORCE_ACCESS=0") || strings.Contains(roles, `name="project"`) {
 		t.Errorf("without enforced visibility the guest is offered switched off, with the reason: %s", roles)
 	}
 
@@ -394,4 +397,64 @@ func withJar(t *testing.T, c *http.Client, base string) *http.Client {
 	}
 	jar.SetCookies(u, c.Jar.Cookies(u))
 	return &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+// "Mitglied (Standard der Org)" ändert nichts und sagt es nur dem, der Rollen
+// geben darf; wer es nicht darf, bekommt für jede Kontonummer dieselbe Antwort.
+func TestProjectRoleFormAnswersAMemberWithoutTheRightTheSameForEveryAccount(t *testing.T) {
+	base, st, alice, anna, _ := adminOrg(t)
+	// A project shared with the organization gives every member the default role
+	// without a row, which is what the form answers for.
+	if err := st.SetProjectVisibility("person:1", "github.com/x/one", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := postOrgLoc(t, alice, base, "/ui/orgs/project/role", url.Values{"org": {"alpha"}, "remote": {"github.com/x/one"}, "account": {"person:2"}, "role": {""}}); !strings.Contains(got, "/ui/orgs") {
+		t.Fatalf("the owner is told the choice changes nothing: %q", got)
+	}
+	answer := func(account string) string {
+		resp := postOrg(t, anna, base, "/ui/orgs/project/role", url.Values{"org": {"alpha"}, "remote": {"github.com/x/one"}, "account": {account}, "role": {""}})
+		defer resp.Body.Close()
+		return resp.Status + " " + resp.Header.Get("Location")
+	}
+	member, stranger, unknown := answer("person:1"), answer("person:2"), answer("person:99")
+	if member != stranger || stranger != unknown {
+		t.Errorf("the answer tells which account numbers are members of the organization: %q %q %q", member, stranger, unknown)
+	}
+}
+
+// Ein Konto einer fremden Org sieht und ändert in der Weboberfläche nichts,
+// auch im Log-Modus (der Store öffnet sich hier ohne Durchsetzung).
+func TestStrangerOfAnotherOrgReadsAndChangesNothingInLogMode(t *testing.T) {
+	base, st, alice, anna, _ := orgWeb(t)
+	if st.AccessEnforced() {
+		t.Fatal("the fixture is meant to run in log mode")
+	}
+	const remote = "github.com/x/one"
+	if _, err := st.ClaimProject("person:1", remote, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	id, err := st.InsertKnowledge(store.Knowledge{Type: "note", Title: "alpha secret note", Body: "alpha secret body", Person: "alice", AuthorID: 1, Scope: scope.Axes{Project: remote}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "alpha secret request", Scope: scope.Axes{Project: remote}, Person: "alice"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	knowledge := fmt.Sprintf("%s/ui/knowledge/%d", base, id)
+	request := fmt.Sprintf("%s/ui/requests/%d", base, d.Request.ID)
+	for _, target := range []string{knowledge, request} {
+		if status, body := fetchPage(t, alice, target); status != 200 || !strings.Contains(body, "alpha secret") {
+			t.Fatalf("the owner reads %s: %d", target, status)
+		}
+		status, body := fetchPage(t, anna, target)
+		if status == 200 || strings.Contains(body, "alpha secret") {
+			t.Errorf("a stranger reads %s: %d", target, status)
+		}
+	}
+	resp := postOrg(t, anna, base, fmt.Sprintf("/ui/knowledge/%d/edit", id), url.Values{"title": {"hijacked"}, "body": {"hijacked"}})
+	resp.Body.Close()
+	if k, _ := st.KnowledgeByID(id); k.Title != "alpha secret note" {
+		t.Errorf("a stranger edited the entry: %q", k.Title)
+	}
 }

@@ -66,10 +66,15 @@ const (
 	maxJoinNameConflicts   = 3 // verschiedene vergebene Wunschnamen je Konto und Fenster, dann sperrt das Konto
 	joinNameConflictWindow = JoinMaxLifetime
 	maxJoinFailures        = 8 // falsche Codes je /64 im Fenster
-	joinFailureWindow      = 10 * time.Minute
-	maxJoinFailureKeys     = 10000
-	joinConfirmLen         = 4
-	joinWiderFactor        = 4 // je /48 (IPv6) sind es so viele Mal mehr
+	// maxJoinFailuresGlobal: falsche Codes aller Netze im Fenster. Darüber warten nur
+	// noch Quellen, die selbst schon einen falschen Code hatten; wer keinen hatte, wird
+	// von dem, was andere tun, nie gesperrt, und viele Netze zusammen raten nicht frei.
+	maxJoinFailuresGlobal = 200
+	joinGlobalKey         = "*"
+	joinFailureWindow     = 10 * time.Minute
+	maxJoinFailureKeys    = 10000
+	joinConfirmLen        = 4
+	joinWiderFactor       = 4 // je /48 (IPv6) sind es so viele Mal mehr
 )
 
 // Zustände einer Sitzung, wie die Seite sie sieht.
@@ -402,6 +407,7 @@ func (j *JoinSessions) Create(account string) (string, error) {
 }
 
 func (j *JoinSessions) failedKeys(addr string) []string {
+	// The key of the whole instance comes last and is not an address.
 	keys := []string{NetworkKey(addr)}
 	if w := widerKey(addr); w != "" {
 		keys = append(keys, w)
@@ -425,10 +431,17 @@ func (j *JoinSessions) lockedOut(addr string, now time.Time) bool {
 			locked = true
 		}
 	}
+	// Under a wave of wrong codes from many networks only a source that has guessed
+	// itself waits; one without a failure is not locked by what others did.
+	j.failures[joinGlobalKey] = trimBefore(j.failures[joinGlobalKey], cutoff)
+	if len(j.failures[joinGlobalKey]) >= maxJoinFailuresGlobal && len(j.failures[NetworkKey(addr)]) > 0 {
+		locked = true
+	}
 	return locked
 }
 
 func (j *JoinSessions) fail(addr string, now time.Time) {
+	j.failures[joinGlobalKey] = append(j.failures[joinGlobalKey], now)
 	for i, k := range j.failedKeys(addr) {
 		if _, ok := j.failures[k]; !ok && len(j.failures) >= maxJoinFailureKeys {
 			for old, v := range j.failures {
@@ -438,8 +451,10 @@ func (j *JoinSessions) fail(addr string, now time.Time) {
 			}
 			if len(j.failures) >= maxJoinFailureKeys {
 				for old := range j.failures {
-					delete(j.failures, old)
-					break
+					if old != joinGlobalKey {
+						delete(j.failures, old)
+						break
+					}
 				}
 			}
 		}

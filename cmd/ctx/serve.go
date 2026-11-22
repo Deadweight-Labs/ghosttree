@@ -50,8 +50,11 @@ type serveConfig struct {
 	// LanguageSet says the operator chose a language (flag or environment). Language
 	// is then that one; without a choice it is en for the generated texts, and the
 	// web interface leaves the decision to the person and the browser (REQ-715).
-	LanguageSet    bool
-	DistDir        string
+	LanguageSet bool
+	DistDir     string
+	// TLS is the server's own certificate (Let's Encrypt), the alternative to a
+	// reverse proxy; off unless a host is named.
+	TLS            tlsConfig
 	TrustedProxies proxytrust.Set
 	Explain        ExplainConfig
 	// AIBox seals the keys of AI connections; nil when the server has no key.
@@ -76,17 +79,26 @@ const (
 	envOIDCIssuer       = "GHOSTTREE_OIDC_ISSUER"
 	envOIDCClientID     = "GHOSTTREE_OIDC_CLIENT_ID"
 	envOIDCClientSecret = "GHOSTTREE_OIDC_CLIENT_SECRET"
-	envOIDCRedirectURL  = "GHOSTTREE_OIDC_REDIRECT_URL"
-	envOIDCName         = "GHOSTTREE_OIDC_NAME"
-	envOIDCSignup       = "GHOSTTREE_OIDC_SIGNUP"
-	// envEnforceAccess schaltet die Sichtbarkeit nach Rolle scharf. Ohne "1"
-	// wird nur protokolliert, was verweigert würde ("access: would deny").
+	// envOIDCClientSecretFile names a file with the secret, so it can come from a
+	// systemd credential instead of the environment.
+	envOIDCClientSecretFile = "GHOSTTREE_OIDC_CLIENT_SECRET_FILE"
+	envOIDCRedirectURL      = "GHOSTTREE_OIDC_REDIRECT_URL"
+	envOIDCName             = "GHOSTTREE_OIDC_NAME"
+	envOIDCSignup           = "GHOSTTREE_OIDC_SIGNUP"
+	// envEnforceAccess: die Rollen werden durchgesetzt, solange nichts anderes
+	// dasteht. Nur der ausdrückliche Wert "0" schaltet in den Log-Modus, in dem
+	// innerhalb der Org nur protokolliert wird ("access: would deny"), für
+	// Instanzen mit einem einzigen Nutzer. Org-Rand, private Transkripte und
+	// Snapshots gelten in beiden Modi.
 	envEnforceAccess = "GHOSTTREE_ENFORCE_ACCESS"
 	// envPublicURL and envTrustedProxies describe the TLS/proxy boundary; see
 	// the section "Running behind TLS or a reverse proxy" in docs/operations.md.
 	envPublicURL      = "GHOSTTREE_PUBLIC_URL"
 	envCheckPublicURL = "GHOSTTREE_CHECK_PUBLIC_URL"
 	envTrustedProxies = "GHOSTTREE_TRUSTED_PROXIES"
+	// envMetricsToken is the bearer token with which a scraper reads /metrics from
+	// outside the machine; without it only the machine itself reads them.
+	envMetricsToken = "GHOSTTREE_METRICS_TOKEN"
 	// envDistDir names a directory with the ctx release archives and
 	// checksums.txt; the server then serves /install.sh and /dist/.
 	envDistDir = "GHOSTTREE_DIST_DIR"
@@ -209,6 +221,11 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.Explain.Model, "explain-model", os.Getenv(envExplainModel), "model for the notes, overriding the provider configuration (env "+envExplainModel+")")
 	explainLimits := addLimitFlags(fs, llmusage.JobExplain, "explain-")
 	embedFlagSet := addEmbedFlags(fs, true)
+	fs.StringVar(&cfg.TLS.Host, "tls-acme-host", os.Getenv(envTLSACMEHost), "DNS name of this server: it then gets its own certificate from Let's Encrypt and answers https on --tls-listen, besides --listen; ports 80 and 443 must be reachable from the internet (env "+envTLSACMEHost+")")
+	fs.StringVar(&cfg.TLS.Dir, "tls-acme-dir", os.Getenv(envTLSACMEDir), "directory that keeps the certificate and the account key, default <database directory>/acme (env "+envTLSACMEDir+")")
+	fs.StringVar(&cfg.TLS.Email, "tls-acme-email", os.Getenv(envTLSACMEEmail), "contact address for Let's Encrypt notices, optional (env "+envTLSACMEEmail+")")
+	fs.StringVar(&cfg.TLS.HTTPSAddr, "tls-listen", ":443", "address of the https listener of the built-in TLS")
+	fs.StringVar(&cfg.TLS.HTTPAddr, "tls-http-listen", ":80", "address of the http listener of the built-in TLS (certificate challenge and redirect to https)")
 	trusted := fs.String("trusted-proxies", os.Getenv(envTrustedProxies), "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-Proto/Host are believed; loopback is always trusted, nothing else by default (env "+envTrustedProxies+")")
 	// Das Secret gibt es bewusst nur über die Umgebung: ein Flag stünde in der Prozessliste.
 	cfg.OIDC.ClientSecret = os.Getenv(envOIDCClientSecret)
@@ -219,6 +236,11 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	if fs.NArg() != 0 {
 		return serveConfig{}, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
 	}
+	secret, err := oidcClientSecret(cfg.OIDC.ClientSecret, os.Getenv(envOIDCClientSecretFile))
+	if err != nil {
+		return serveConfig{}, err
+	}
+	cfg.OIDC.ClientSecret = secret
 	if err := cfg.OIDC.Validate(); err != nil {
 		return serveConfig{}, err
 	}
@@ -261,12 +283,24 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	if cfg.Explain.Mode != "auto" && cfg.Explain.Mode != "off" {
 		return serveConfig{}, fmt.Errorf("--explain must be auto or off, got %q", cfg.Explain.Mode)
 	}
+	if cfg.TLS.enabled() && cfg.TLS.Dir == "" {
+		cfg.TLS.Dir = filepath.Join(filepath.Dir(cfg.DB), "acme")
+	}
+	if err := cfg.TLS.validate(); err != nil {
+		return serveConfig{}, err
+	}
+	if cfg.TLS.enabled() && cfg.PublicURL == "" {
+		cfg.PublicURL = "https://" + cfg.TLS.Host
+	}
 	if cfg.PublicURL != "" {
 		u, err := normalizeBaseURL("--public-url", cfg.PublicURL)
 		if err != nil {
 			return serveConfig{}, err
 		}
 		cfg.PublicURL = u
+	}
+	if cfg.TLS.enabled() && cfg.PublicURL != "https://"+cfg.TLS.Host {
+		return serveConfig{}, fmt.Errorf("--public-url %s does not match --tls-acme-host %s: the certificate is for that name only", cfg.PublicURL, cfg.TLS.Host)
 	}
 	if cfg.CheckPublicURL != "" {
 		u, err := normalizeBaseURL("--check-public-url", cfg.CheckPublicURL)
@@ -400,8 +434,13 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	}
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
 	fmt.Fprintln(stdout, mailStartLine(cfg))
-	slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", accessEnforcedByEnv(), "env", envEnforceAccess,
-		"note", "without enforcement only 'access: would deny' is logged, nothing is refused")
+	if accessEnforcedByEnv() {
+		slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", true, "env", envEnforceAccess)
+	} else {
+		fmt.Fprintln(stderr, accessLogModeWarning)
+		slog.New(slog.NewJSONHandler(stderr, nil)).Warn("access_mode", "enforce", false, "env", envEnforceAccess,
+			"note", accessLogModeWarning)
+	}
 	if note := proxyConfigWarning(cfg); note != "" {
 		slog.New(slog.NewJSONHandler(stderr, nil)).Warn("proxy_config", "public_url", cfg.PublicURL, "note", note)
 	}
@@ -488,7 +527,16 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	waitJudge := startUsageJudge(judgeCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)))
 	workflowCtx, stopWorkflows := context.WithCancel(ctx)
 	waitWorkflows := startWorkflows(workflowCtx, st, slog.New(slog.NewJSONHandler(stderr, nil)), ai)
-	err = serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)))
+	handler := buildServerHandler(st, cfg, stderr)
+	var acme *acmeServers
+	if cfg.TLS.enabled() {
+		if acme, err = newACMEServers(cfg.TLS, handler); err == nil {
+			fmt.Fprintf(stdout, "built-in TLS for %s: https on %s, http on %s (certificate challenge, redirect), certificates in %s\n", cfg.TLS.Host, cfg.TLS.HTTPSAddr, cfg.TLS.HTTPAddr, cfg.TLS.Dir)
+		}
+	}
+	if err == nil {
+		err = serveAllUntilCanceled(ctx, newHTTPServer(cfg.Listen, handler), acme)
+	}
 	stopWorkflows()
 	waitWorkflows()
 	stopAI()
@@ -522,7 +570,14 @@ func mailStartLine(cfg serveConfig) string {
 	return line
 }
 
-func accessEnforcedByEnv() bool { return os.Getenv(envEnforceAccess) == "1" }
+// accessEnforcedByEnv: Durchsetzen ist der Standard; nur "0" nimmt es zurück.
+func accessEnforcedByEnv() bool { return strings.TrimSpace(os.Getenv(envEnforceAccess)) != "0" }
+
+const accessLogModeWarning = "WARNING: GHOSTTREE_ENFORCE_ACCESS=0: roles inside an organization are only logged (\"access: would deny\"), " +
+	"not enforced. Only use this on a server with a single user. Organization borders, private transcripts and snapshots are enforced anyway."
+
+// minMetricsToken is the shortest token that counts: a short one is guessed.
+const minMetricsToken = 16
 
 func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http.Handler {
 	root := http.NewServeMux()
@@ -539,6 +594,13 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	}
 	if cfg.PublicURL != "" {
 		options = append(options, server.WithPublicURL(cfg.PublicURL))
+	}
+	if token := strings.TrimSpace(os.Getenv(envMetricsToken)); token != "" {
+		if len(token) < minMetricsToken {
+			logger.Warn("metrics_token", "note", envMetricsToken+" is shorter than 16 characters and is ignored; /metrics stays for this machine only")
+		} else {
+			options = append(options, server.WithMetricsToken(token))
+		}
 	}
 	if len(cfg.SnapshotRoots) > 0 {
 		options = append(options, server.WithSnapshotMirror(&rootedSnapshotMirror{source: st, roots: cfg.SnapshotRoots}))

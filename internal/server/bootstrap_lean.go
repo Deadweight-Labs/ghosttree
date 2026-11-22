@@ -31,7 +31,7 @@ const leanPitfallChars = 160
 func (a *api) leanBootstrap(w http.ResponseWriter, r *http.Request, entries []store.Knowledge) {
 	ph := phases(r)
 	end := ph.start("render")
-	body, shown, sizes := renderLeanBootstrap(entries, a.clientVersionNote(r))
+	body, shown, sizes := renderLeanBootstrap(entries, a.clientVersionNote(r), a.access(r).Standings().KnowledgeStanding)
 	end()
 	end = ph.start("claim")
 	a.rememberDelivered(r, store.DeliveredByBootstrap, shown)
@@ -53,7 +53,7 @@ func (a *api) leanBootstrap(w http.ResponseWriter, r *http.Request, entries []st
 // session is the one that is started by a script on a machine nobody looks at,
 // so it needs the hint as much as a full one. It comes before the pitfalls and
 // is counted in the length; the instructions bind either way.
-func renderLeanBootstrap(entries []store.Knowledge, versionNote string) (string, []int64, []int) {
+func renderLeanBootstrap(entries []store.Knowledge, versionNote string, standing standingFunc) (string, []int64, []int) {
 	var instructions, pitfalls []store.Knowledge
 	for _, k := range entries {
 		switch {
@@ -69,19 +69,7 @@ func renderLeanBootstrap(entries []store.Knowledge, versionNote string) (string,
 	var sizes []int
 	b.WriteString("## Known context (ghosttree)\n")
 	b.WriteString(keepCurrentHint)
-	if len(instructions) > 0 {
-		b.WriteString("\n### Instructions (binding)\n")
-		for _, k := range instructions {
-			label := scopeLabel(k.Scope)
-			if gate := activationLabel(k.Activation); gate != "" {
-				label += " | " + gate
-			}
-			line := fmt.Sprintf("- [%s] %s — %s\n", label, k.Title, oneLine(k.Body))
-			b.WriteString(line)
-			shown = append(shown, k.ID)
-			sizes = append(sizes, deliverylog.Runes(line))
-		}
-	}
+	writeInstructions(&b, instructions, standing, &shown, &sizes)
 	if versionNote != "" {
 		fmt.Fprintf(&b, "\n> ghosttree: %s\n", versionNote)
 	}
@@ -92,7 +80,7 @@ func renderLeanBootstrap(entries []store.Knowledge, versionNote string) (string,
 		if wrote == leanPitfalls {
 			break
 		}
-		line := fmt.Sprintf("- [%s] %s — %s\n", scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), leanPitfallChars))
+		line := fmt.Sprintf("- [%s] %s — %s\n", oneLine(scopeLabel(k.Scope)), entryTitle(k.Title), truncate(oneLine(k.Body), leanPitfallChars))
 		if wrote == 0 {
 			line = "\n### pitfall\n" + line
 		}

@@ -122,7 +122,7 @@ func (st *State) Save() error {
 	if st.path == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(st.path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(st.path), 0o700); err != nil {
 		return err
 	}
 	b, err := json.Marshal(st)

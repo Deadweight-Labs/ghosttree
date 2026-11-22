@@ -28,3 +28,19 @@ func TestSaveTightensExistingConfigPermissions(t *testing.T) {
 		t.Fatalf("config mode = %04o, want 0600", got)
 	}
 }
+
+func TestSaveCreatesPrivateConfigDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	if err := Save(Config{ServerURL: "https://ghosttree.example.invalid", Token: "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Dir(Path()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("config directory mode = %04o, want 0700", got)
+	}
+}

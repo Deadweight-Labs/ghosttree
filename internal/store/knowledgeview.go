@@ -14,6 +14,11 @@ import (
 // und nur, wenn er ihr Transkript lesen darf; sonst fehlt der Verweis, denn auch
 // seine Anwesenheit verriete eine verborgene Session.
 func (a *ProjectAccess) KnowledgeView(k Knowledge) Knowledge {
+	return a.knowledgeView(k, a.Standings())
+}
+
+func (a *ProjectAccess) knowledgeView(k Knowledge, standings *StandingReader) Knowledge {
+	k.Author = standings.KnowledgeStanding(k).Who()
 	if a.HidesMachines(k.Scope.Project) {
 		k.Scope.Machine = ""
 	}
@@ -168,8 +173,10 @@ func (a *ProjectAccess) DropWrittenSessionNumber(k *Knowledge) {
 // KnowledgeViews wendet KnowledgeView auf eine Liste an.
 func (a *ProjectAccess) KnowledgeViews(ks []Knowledge) []Knowledge {
 	out := make([]Knowledge, len(ks))
+	a.WarmKnowledgeAuthors(ks)
+	standings := a.Standings()
 	for i, k := range ks {
-		out[i] = a.KnowledgeView(k)
+		out[i] = a.knowledgeView(k, standings)
 	}
 	return out
 }

@@ -1,24 +1,39 @@
 # Deployment
 
-These units are starting points for a small private Linux deployment. Read and
-adapt them before installation; Ghosttree does not know which interface,
-reverse proxy, backup target, or model provider your environment uses.
+`ctx server install` sets a server up with systemd, `ctx server install
+--docker` with Docker; both are described in
+[`docs/operations.md`](../docs/operations.md), and the one-line installer in the
+README starts them. This file is what they do not do for you: the settings
+that depend on your environment (GitHub, mail, model providers), the snapshot
+and writer limits, metrics, and the maintenance commands. The units in this
+directory are the samples the installer's units follow (a test keeps
+`ghosttree.service` and the generated unit in step); copy them by hand only
+if you do not use the installer.
+
+## What the installer takes over
+
+| Step | systemd | Docker |
+| --- | --- | --- |
+| Files | `/etc/ghosttree/server.env`, `/etc/ghosttree/secret-key`, units in `/etc/systemd/system` | `compose.yaml`, `.env` and `secrets/` in the directory you chose |
+| Service | `ghosttree.service`, `DynamicUser=yes`, state in `/var/lib/ghosttree` | container `ghosttree`, data in the volume `data` |
+| Backup | `ghosttree-backup.timer`, newest 14 copies in `/var/lib/ghosttree/backups` | container `backup`, newest 14 copies in the volume `backups` |
+| First accounts | administrator and `gardener`, login link | the same |
+| TLS | a proxy of yours (Caddy and nginx configuration in `/etc/ghosttree/proxy`) or `--tls builtin` | the same, in `proxy/` |
+| Update | `ctx server update` | `ctx server update --docker` |
+| Check | `ctx server doctor` | `ctx server doctor --docker` |
+
+Settings below go into `/etc/ghosttree/server.env` (systemd; restart with
+`systemctl restart ghosttree`) or `.env` next to `compose.yaml` (Docker; then
+add the variable under `environment:` of the `ghosttree` service, or in a
+`compose.override.yaml`, and run `docker compose up -d`). Commands that read
+the database run as the service's user: with systemd in a transient unit
+(see "Running maintenance commands"), with Docker as
+`docker compose exec ghosttree ctx <command> --db /data/ghosttree.db`.
 
 ## Server
 
-`ghosttree.service` uses `DynamicUser=yes` and
-`StateDirectory=ghosttree`. Systemd owns `/var/lib/ghosttree` and exposes the
-real state directory to the service with the correct identity.
-
-The unit binds to `127.0.0.1:8474` by default. To use another trusted interface,
-create `/etc/ghosttree/server.env` before starting it:
-
-```text
-GHOSTTREE_LISTEN=<private-address>:8474
-```
-
-Behind a TLS terminator add the proxy settings to the same file (the unit
-passes the environment to `ctx serve`); see "Running behind TLS or a reverse
+Behind a TLS terminator add the proxy settings to `server.env`; the installer
+does this for you when you give a domain. See "Running behind TLS or a reverse
 proxy" in [`docs/operations.md`](../docs/operations.md):
 
 ```text
@@ -193,9 +208,10 @@ includes request or response bodies, query parameters, bearer tokens, or
 authorization headers. `/api/health` and `/metrics` are excluded from audit
 events.
 
-Prometheus metrics are available at `/metrics` without authentication so that
-vmagent can scrape them. This endpoint has the same network exposure as the
-server itself and must therefore remain restricted to a trusted private network.
+Prometheus metrics are available at `/metrics` to the machine itself, and from
+another host to whoever sends the bearer token in `GHOSTTREE_METRICS_TOKEN`
+(set it in the service environment, at least 16 characters); everyone else gets
+404. Do not forward `/metrics` through a public reverse proxy.
 HTTP metric labels are deliberately bounded to method,
 matched route, status, and error class; actor, request ID, remote IP, concrete
 path, project, and slug are never labels.
@@ -214,6 +230,8 @@ needs network access to the server's TCP port 8474:
 ```yaml
   - job_name: ghosttree
     metrics_path: /metrics
+    authorization:
+      credentials_file: /etc/vmagent/ghosttree-metrics-token
     static_configs:
       - targets: ['<private-address>:8474']
         labels: {site: home, host: apps}
@@ -778,7 +796,9 @@ the run, puts the key in, passes the request on (also streaming), books tokens
 and cost on the run and stops a run at its cap.
 
 **The server key.** Keys in the database need a 32-byte server key, which never
-lives in the database. Make one and hand it to the unit as a systemd credential:
+lives in the database. `ctx server install` makes one (`/etc/ghosttree/secret-key`
+for systemd, `secrets/secret-key` for Docker) and hands it to the service. For a
+server set up by hand, make one and hand it to the unit as a systemd credential:
 
 ```sh
 sudo install -d -m 0700 /etc/ghosttree
@@ -793,8 +813,10 @@ sudo systemctl restart ghosttree
 Outside systemd, `GHOSTTREE_SECRET_KEY_FILE=/path/to/secret-key` names the
 file (base64 or hex, 32 bytes). A key that is configured but cannot be read
 stops the server at start. Without any key the server runs, and the settings
-say that no key can be stored. Keep a copy of the key with the backups of the
-database: without it the stored keys are lost (owners enter them again).
+say that no key can be stored. Keep a copy of the key, but not where the backups
+of the database are (another place, another medium): a backup and the key next to
+it open every stored key for whoever gets the backup. Without the key the stored
+keys are lost (owners enter them again).
 
 **llm.json.** The provider in `llm.json` (the top-level entry, else the
 gardener's) becomes the server connection `standard` at every start, with the
@@ -865,6 +887,22 @@ that kind (Settings, Workflows). Every result, refused or not, stands on the
 run page; an automatic approval can be undone there. The owner's policy can
 forbid instructions (stage 2), own prompts (stage 3), research on the net and
 single kinds; a workflow against it does not run and is listed as skipped.
+
+The automatic approval of an issue, a criterion or a relation applies only when
+the quotes of the result stand in text that members wrote: inputs such as the open
+issues, the ideas or what people typed in the sessions of a pull request, and the
+results of read tools of the knowledge, issues, ideas, problems and sessions. A
+quote from the text of a pull request from GitHub (`pr.title`, `pr.text`,
+`pr.commits`, `pr.files`, `pr.diff`), the diff or a file description read by a
+tool, or from research on the net is no evidence for it: whoever wrote that text
+wrote the quote too. Such a result waits for a person like any other. Knowledge
+needs no such check: what a run applies of it starts untrusted and is not
+delivered before a person reviews it.
+
+Without a monthly cap of the owner, the runs of the workflows of an organization
+stop at 25 USD a month (the cap of the owner replaces that value); the gardener
+has its own budget. A model without a price, which no cap in dollars stops, stops
+at 40 calls per run and 2000 calls per month and connection.
 
 **The token of a run** names the account the run acts for (the author of the
 version it runs) and the run, at `GET /api/whoami`, and reaches nothing else
@@ -981,18 +1019,30 @@ session is treated as untrusted:
   `garden/state/state.json` (`--state-file`) instead of `--db`.
 
 The ghosttree MCP server of a session (`ctx mcp`, for `context_search` and
-`context_get`) reads its client config from `$HOME/.config/ghosttree/config.json`
-with the `HOME` of the unit, so with the example unit from
-`/var/lib/ghosttree/garden/claude/.config/ghosttree/config.json` (`server_url`
-and the token of the gardener). The old `garden/home/.config/ghosttree` is not
-visible in the sandbox any more; move the file. The probe checks that it is
-readable (`CLIENT_CONFIG` for another place).
+`context_get`) does not read the gardener's own client config. For every run
+the gardener asks the server for a session token (`POST /api/garden/session-token`),
+writes it into the directory of that run and points the MCP server there. The
+server binds that token to the one project of the run and to reading: it sees no
+other project or organization, takes no write, and reaches only the read routes
+of what belongs to a project. It lives for four hours at most. The gardener's own
+config (`$HOME/.config/ghosttree/config.json` of the unit) is still read by
+`ctx garden` itself, never by the session; the probe checks that it is readable
+(`CLIENT_CONFIG` for another place).
 
-`context_search` and `context_get` cannot be limited to one project by an
-allowlist, so a gardener that must not read other projects' entries runs with
-`--no-mcp`: the session then gets no ghosttree server (and needs no client
-config), is not allowed those two tools and is not told about them. The fixed
-git tools `git_log` and `git_show` stay either way.
+`ctx garden` runs as the same user as its sessions. Before it starts one it clears
+the dumpable flag of its own process (Linux), so that the kernel keeps the
+session from reading `/proc/<pid>/environ` and `/proc/<pid>/mem` of `ctx`, where the
+gardener's key and token are. The rule `Read(//proc/**)` of the session stays as
+a second barrier. Give the key as a systemd credential (`api_key_file` or
+`credential` in the `garden` entry of `llm.json`) rather than as
+`GHOSTTREE_GARDEN_KEY` in the environment; a symbolic link in the checkout that
+leads out of it is refused by the permission rules of Claude Code, which
+`internal/garden/matcher_test.go` checks with the real binary.
+
+If the server does not give a token (an older server, the gardener switched off for
+that organization), the session runs without the ghosttree tools, as with
+`--no-mcp`: no ghosttree server, those two tools are not allowed and not
+mentioned. The fixed git tools `git_log` and `git_show` stay either way.
 
 ### What the gardener writes, and what only people do
 
@@ -1127,6 +1177,18 @@ updated by `ghosttree-garden-update.service`), `bin/` (the `claude` binary, pass
 `ghosttree-garden`). Settings of the run (key paths, `GHOSTTREE_GARDEN_CLAUDE_DIR`,
 `--state-file`) belong in `/etc/ghosttree/garden.env` and `run.sh`, not in
 `server.env`.
+
+`ghosttree-garden-update.service` runs as root because the checkout is root's,
+and pulls what a remote holds, so it is sandboxed: it may write the checkout and
+nothing else (`ReadWritePaths`), has no capabilities, no `/home` or `/root`, and
+no private devices or kernel settings. It needs the checkout to be owned by root
+(as above) and the remote to be reachable without a key in `/root` (https, with
+the settings in `garden/gitconfig`); after changing the unit run
+`sudo systemctl start ghosttree-garden-update` once and look at its journal. The
+explain and distill units, the server sample and the collector have the same
+kind of restrictions, within what each needs (the collector is a user unit and
+takes only the restrictions that need no mount namespace). Check a unit with
+`systemd-analyze security <unit>`.
 
 After installing or changing the unit, prove the sandbox on the machine:
 

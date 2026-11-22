@@ -184,33 +184,33 @@ func embedKindOf(name string) (embedKind, error) {
 var embedKinds = []embedKind{
 	{
 		name: KindKnowledge, emb: "knowledge_embeddings", fail: "knowledge_embedding_failures", idCol: "knowledge_id",
-		from: "knowledge k", id: "k.id", active: "k.status = 'active'", updated: "k.updated_at",
+		from: "knowledge k", id: "k.id", active: "k.status = 'active' AND " + externalModelsOKSQL("k.project"), updated: "k.updated_at",
 		texts: func(s *Store, ids []int64) (map[int64]string, error) {
 			return s.textsOf(`SELECT id, title, body FROM knowledge WHERE id IN (`, ids, embed.DocumentText)
 		},
 	},
 	{
 		name: KindRequest, emb: "embeddings", fail: "embedding_failures", idCol: "object_id", shared: true,
-		from: "requests r", id: "r.id", active: "1", updated: "r.updated_at",
+		from: "requests r", id: "r.id", active: externalModelsOKSQL("r.project"), updated: "r.updated_at",
 		// A criterion is added without the request being touched.
 		alsoChanged: "EXISTS (SELECT 1 FROM request_criteria c WHERE c.request_id = r.id AND c.updated_at >= e.read_at)",
 		texts:       requestTexts,
 	},
 	{
 		name: KindPain, emb: "embeddings", fail: "embedding_failures", idCol: "object_id", shared: true,
-		from: "pains p", id: "p.id", active: "1", updated: "p.updated_at",
+		from: "pains p", id: "p.id", active: externalModelsOKSQL("p.project"), updated: "p.updated_at",
 		texts: func(s *Store, ids []int64) (map[int64]string, error) {
 			return s.textsOf(`SELECT id, title, body FROM pains WHERE id IN (`, ids, embed.DocumentText)
 		},
 	},
 	{
 		name: KindDocument, emb: "embeddings", fail: "embedding_failures", idCol: "object_id", shared: true,
-		from: "documents d", id: "d.id", active: "d.status = 'active'", updated: "d.updated_at",
+		from: "documents d", id: "d.id", active: "d.status = 'active' AND " + externalModelsOKSQL("d.project"), updated: "d.updated_at",
 		texts: documentTexts,
 	},
 	{
 		name: KindGhost, emb: "embeddings", fail: "embedding_failures", idCol: "object_id", shared: true,
-		from: "ghost_files g", id: "g.id", active: "1", updated: "g.updated_at",
+		from: "ghost_files g", id: "g.id", active: externalModelsOKSQL("g.project"), updated: "g.updated_at",
 		texts: ghostTexts,
 	},
 	{

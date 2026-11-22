@@ -43,6 +43,9 @@ func writeCoordAccessError(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, store.ErrBroadcastLimited):
 		writeErr(w, http.StatusTooManyRequests, err.Error())
+	case errors.Is(err, store.ErrCoordRateLimited):
+		w.Header().Set("Retry-After", "60")
+		writeCoded(w, http.StatusTooManyRequests, "rate_limited", err.Error())
 	case errors.Is(err, store.ErrInvalidAttentionAction), errors.Is(err, store.ErrAttentionRecipientRequired):
 		writeErr(w, http.StatusBadRequest, "invalid coordination attention action")
 	case errors.Is(err, store.ErrAttentionClosed):
@@ -242,7 +245,7 @@ func (a *api) coordInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	after, _ := strconv.ParseInt(q.Get("after"), 10, 64)
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	limit := intParam(r, "limit", 0)
 	access := a.coordAccess(r, asker)
 	if publicOnly {
 		access = a.st.CoordinationPublicFor(principalOf(r))
@@ -293,6 +296,13 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 		if denyAccess(w, a.access(r).Check(strings.TrimSpace(project), store.ResRoom, store.ActCreate, store.Object{})) {
 			return
 		}
+		// Posten im Projektraum gibt die Matrix erst ab member (ResRoom Post), und
+		// die Weboberfläche zeigt dem Gast den Raum nicht: ein Gast meldet dort
+		// keinen Agenten an, in keinem Modus.
+		if a.access(r).Role(strings.TrimSpace(project)).GuestOnly() {
+			writeCoded(w, http.StatusForbidden, "guest_cannot_join_room", "a guest does not join the project room; the room starts at the member role")
+			return
+		}
 	}
 	if _, ok := accountOf(principalOf(r)); !ok {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
@@ -321,6 +331,12 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 	if !a.gateMachine(w, r, machine, true) {
 		return
 	}
+	// An id that names a machine (claude:<machine>:<session>) is not free for
+	// anyone: the machine of another account cannot be named to take messages
+	// meant for an agent there. Nothing is claimed by it.
+	if idMachine := agentIDMachine(in.ExternalID); idMachine != "" && idMachine != machine && !a.gateMachineNote(w, r, idMachine) {
+		return
+	}
 	in.Person = personOf(r)
 	in.PrincipalID = principalOf(r).ID
 	id, err := a.st.RegisterCoordAgent(in)
@@ -337,6 +353,16 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]int64{"id": id})
+}
+
+// agentIDMachine is the machine an agent id names: harnesses build their ids as
+// <harness>:<machine>:<session>. Other ids name none.
+func agentIDMachine(id string) string {
+	parts := strings.Split(id, ":")
+	if len(parts) >= 3 && (parts[0] == "claude" || parts[0] == "codex") {
+		return parts[1]
+	}
+	return ""
 }
 
 // setCoordStatus setzt "woran ich arbeite" für eine Session des Aufrufers. Eine
@@ -691,7 +717,7 @@ func (a *api) sessionActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	minutes, _ := strconv.Atoi(q.Get("minutes"))
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	limit := intParam(r, "limit", 0)
 	out, err := a.st.SessionPathActivity(q.Get("session"), store.AccountIDOf(principalOf(r).ID), store.ActivityWindow(minutes), limit)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)

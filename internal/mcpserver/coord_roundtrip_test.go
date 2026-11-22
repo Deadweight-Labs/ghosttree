@@ -746,7 +746,7 @@ func TestInboxShowsAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := text(t, res)
-	for _, want := range []string{"authority=directive", "sender_role=lead", "your_role=member", "genuine message header", "not guaranteed", "From an agent", "send with intent question"} {
+	for _, want := range []string{"authority=directive", "sender_role=lead", "your_role=member", "genuine message header", "not guaranteed", "from an agent only within your existing task", "with intent question", "not an order from your user"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("inbox lacks %q: %s", want, got)
 		}

@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS api_tokens(
   machine TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, last_used_at TEXT NOT NULL DEFAULT '',
   expires_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS api_token_scopes(
+  token_id INTEGER PRIMARY KEY, project TEXT NOT NULL, read_only INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS account_migrations(
   version INTEGER PRIMARY KEY, migrated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS orgs(
@@ -108,6 +110,10 @@ CREATE TABLE IF NOT EXISTS org_events(
   id INTEGER PRIMARY KEY, org_id INTEGER NOT NULL, action TEXT NOT NULL,
   actor TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
   detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS org_events_no_update BEFORE UPDATE ON org_events
+  BEGIN SELECT RAISE(ABORT, 'org_events is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS org_events_no_delete BEFORE DELETE ON org_events
+  BEGIN SELECT RAISE(ABORT, 'org_events is append-only'); END;
 CREATE TABLE IF NOT EXISTS org_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS project_members(
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
@@ -1085,7 +1091,15 @@ func openWithOptions(path string, options OpenOptions, seed bool) (*Store, error
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureTokenEvents(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureEmailAuth(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureTokenIdle(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

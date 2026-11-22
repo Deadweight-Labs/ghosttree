@@ -72,11 +72,12 @@ func TestForeignGlobalEntriesDoNotDisplaceVisibleOnes(t *testing.T) {
 	if err != nil || len(robin) < 31 {
 		t.Errorf("robin browses %d entries: %v", len(robin), err)
 	}
-	// Without enforcement nothing changes.
+	// The log mode keeps foreign global entries out as well: they belong to the
+	// account that wrote them.
 	st.SetAccessMode(AccessMode{})
-	all, _ := st.BrowseKnowledge("", "", "", 400, viewer(st, "person:3", "mia").Viewer())
-	if len(all) < 31 {
-		t.Errorf("log mode hides entries: %d", len(all))
+	visible, _ := st.BrowseKnowledge("", "", "", 400, viewer(st, "person:3", "mia").Viewer())
+	if len(visible) >= 31 {
+		t.Errorf("log mode shows foreign global entries: %d", len(visible))
 	}
 }
 

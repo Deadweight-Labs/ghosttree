@@ -216,26 +216,32 @@ func TestLogModeAllowsButLogsWouldDenyRateLimitedWithoutContent(t *testing.T) {
 	st := accessFixture(t)
 	var buf bytes.Buffer
 	st.SetAccessMode(AccessMode{Logger: slog.New(slog.NewTextHandler(&buf, nil)), LogEvery: time.Hour})
-	stranger := st.Access(Principal{ID: "person:6", Label: "nora"})
+	member := st.Access(Principal{ID: "person:3", Label: "mia"})
 	for i := 0; i < 5; i++ {
-		if err := stranger.Check(roleProject, ResKnowledge, ActEdit, Object{}); err != nil {
+		if err := member.Check(roleProject, ResKnowledge, ActEdit, Object{}); err != nil {
 			t.Fatalf("log mode must not refuse: %v", err)
 		}
 	}
-	if !stranger.Allow(roleProject, ResRequest, ActRead, Object{}) {
+	if !member.Allow(roleProject, ResDocument, ActEdit, Object{}) {
 		t.Fatal("log mode must allow")
+	}
+	// Ein Konto hinter dem Org-Rand wird auch im Log-Modus abgewiesen und nicht
+	// nur protokolliert.
+	stranger := st.Access(Principal{ID: "person:6", Label: "nora"})
+	if err := stranger.Check(roleProject, ResKnowledge, ActEdit, Object{}); !errors.Is(err, ErrAccessNotFound) {
+		t.Fatalf("log mode must refuse a stranger of another organization: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("want 2 lines (one per key, rate limited), got %d:\n%s", len(lines), buf.String())
 	}
-	for _, want := range []string{"access: would deny", "account=person:6", "project=github.com/dw/p", "resource=knowledge", "action=edit", `reason="not a member"`} {
+	for _, want := range []string{"access: would deny", "account=person:3", "project=github.com/dw/p", "resource=knowledge", "action=edit", `reason="role member may not edit knowledge"`} {
 		if !strings.Contains(lines[0], want) {
 			t.Errorf("log line lacks %q: %s", want, lines[0])
 		}
 	}
-	if would, denied := st.AccessCounters(); would != 6 || denied != 0 {
-		t.Errorf("counters would=%d denied=%d, want 6 and 0", would, denied)
+	if would, denied := st.AccessCounters(); would != 6 || denied != 1 {
+		t.Errorf("counters would=%d denied=%d, want 6 and 1", would, denied)
 	}
 }
 

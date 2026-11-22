@@ -261,11 +261,16 @@ func TestGuestsMembersAndOwnersOfAnOrganization(t *testing.T) {
 	}
 	for who, ok := range map[string]bool{"person:2": true, "person:3": false, "person:4": false, "person:5": false} {
 		// Another host than GitHub: the GitHub rule (only the login's owner)
-		// is tested on its own.
+		// is tested on its own. A repository address on such a host is claimed by
+		// an owner of the organization (nothing proves the claimer owns it); a
+		// member makes named projects.
 		remote := "gitlab.com/alpha/by-" + who[len("person:"):]
 		_, err := st.ClaimProject(who, remote, "alpha")
-		if (err == nil) != ok {
+		if want := who == "person:1"; (err == nil) != want {
 			t.Errorf("%s claims: %v", who, err)
+		}
+		if who == "person:2" && !errors.Is(err, ErrNotOrgOwner) {
+			t.Errorf("a member's claim of an address is refused as a matter of the owner: %v", err)
 		}
 		_, err = st.CreateNamedProject(who, "named-"+who[len("person:"):], "alpha")
 		if (err == nil) != ok {

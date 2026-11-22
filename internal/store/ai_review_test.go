@@ -226,3 +226,61 @@ func TestReleaseToAllNeedsADefaultCap(t *testing.T) {
 		t.Fatalf("selected: %v, default %v", err, st.AIReleaseDefaultCap())
 	}
 }
+
+// A model without a price costs nothing in dollars, so no cap in dollars stops
+// it: a limit on the calls of a run does, and it ends the run like a cap does.
+func TestAModelWithoutAPriceStopsAtACallLimit(t *testing.T) {
+	st, o, _ := aiFixture(t)
+	if _, err := st.SaveAIConnection("person:1", AIConnectionInput{OrgID: o.ID, Name: "free", Format: AIFormatOpenAI, BaseURL: "https://api.example.com", KeyLast4: "WXYZ",
+		Models: []AIModel{{Model: "gratis"}}}, sealedAs("sealed-free")); err != nil {
+		t.Fatal(err)
+	}
+	run := aiRun(t, st, aiProject, "wf/free")
+	route, err := st.AIRouteFor(run, "gratis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range aiUnpricedRunCalls {
+		id, err := st.ReserveAICall(route, 0)
+		if err != nil {
+			t.Fatalf("call %d: %v", i+1, err)
+		}
+		if _, err := st.SettleAICall(id, AICall{InputTokens: 10, OutputTokens: 5, Status: 200}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var be *AIBudgetError
+	if _, err := st.ReserveAICall(route, 0); !errors.As(err, &be) || be.Cap != AICapRun || !be.Final {
+		t.Fatalf("the call over the limit: %v", err)
+	}
+	if _, err := st.AIRouteFor(run, "gratis"); !errors.As(err, &be) {
+		t.Fatalf("the run is not marked: %v", err)
+	}
+}
+
+// An organization without a monthly cap does not run without one: the default
+// holds, and a cap the owner sets replaces it.
+func TestAnOrganizationWithoutAMonthlyCapGetsTheDefault(t *testing.T) {
+	st, o, _ := aiFixture(t)
+	aiConn(t, st, "person:1", o.ID, "openai-a", AIFormatOpenAI, "gpt-a")
+	run := aiRun(t, st, aiProject, "wf/a")
+	route, err := st.AIRouteFor(run, "gpt-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var be *AIBudgetError
+	if _, err := st.ReserveAICall(route, AIDefaultOwnerMonthUSD+1); !errors.As(err, &be) || be.Cap != AICapOwner {
+		t.Fatalf("over the default: %v", err)
+	}
+	if err := st.SetAICap("person:1", AICap{OrgID: o.ID, MonthUSD: 500}); err != nil {
+		t.Fatal(err)
+	}
+	b := aiRun(t, st, aiProject, "wf/b")
+	rb, err := st.AIRouteFor(b, "gpt-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReserveAICall(rb, AIDefaultOwnerMonthUSD+1); err != nil {
+		t.Fatalf("an owner's own cap replaces the default: %v", err)
+	}
+}

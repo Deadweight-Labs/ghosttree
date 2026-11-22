@@ -2,13 +2,10 @@ package store
 
 // SharesContextWith sagt, ob der Betrachter das Konto kennen darf: es ist sein
 // eigenes, oder beide sind Mitglied derselben Organisation oder haben dasselbe
-// Projekt. Ohne Durchsetzung und für den Instanz-Admin gilt jeder als bekannt.
-// Ein fremdes Konto soll nicht einmal an seinem Profilbild erkennbar sein: die
-// Konto-Nummern zählen fortlaufend.
+// Projekt. Für den Instanz-Admin gilt jeder als bekannt. Ein fremdes Konto soll
+// nicht einmal an seinem Profilbild erkennbar sein: die Konto-Nummern zählen
+// fortlaufend. Das gilt in jedem Modus, es ist der Org-Rand.
 func (a *ProjectAccess) SharesContextWith(account int64) bool {
-	if !a.st.AccessEnforced() {
-		return true
-	}
 	if !a.valid || account <= 0 {
 		return false
 	}

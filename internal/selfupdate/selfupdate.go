@@ -33,9 +33,19 @@ const (
 	keepBackups     = 3
 )
 
-// Verifier checks that checksumsFile was signed by the release workflow of tag.
-// It returns nil only when the signature is valid; "cannot check" is an error.
-type Verifier func(ctx context.Context, checksumsFile, bundleFile, tag string) error
+// Verifier checks that sig, the contents of a checksums.txt.minisig, is a valid
+// signature of sums by the release key, and returns the trusted comment the key
+// holder signed with it ("ghosttree v1.2.0"). A signature that cannot be
+// checked at all (no key in this build) is an error wrapping ErrCannotCheck.
+type Verifier func(sums, sig []byte) (trusted string, err error)
+
+// ErrCannotCheck says a signature is there but this build has no key to check
+// it with.
+var ErrCannotCheck = errors.New("cannot check the signature")
+
+// ErrServerUnsigned says the build a server offers carries no release
+// signature, so its only anchor is the server itself.
+var ErrServerUnsigned = errors.New("the build is not signed with the ghosttree release key: it is checked only against a checksums.txt the server provides itself, so the server alone is trusted (--trust-server installs it anyway)")
 
 // Source is one place to fetch from. HTTP is the client to use (tests pass
 // httptest's).
@@ -51,10 +61,10 @@ type Candidate struct {
 	Archive  string // file name, ctx_<version>_<os>_<arch>.tar.gz
 	archURL  string
 	sumsURL  string
-	bundle   string // stable only: URL of checksums.txt.sigstore.json
+	sigURL   string // URL of checksums.txt.minisig
 	Channel  string
 	Where    string // human description of the origin
-	signed   bool
+	signed   bool   // a signature is required (stable); a server build may come without
 	repoSlug string
 }
 
@@ -77,6 +87,13 @@ func (s Source) releaseArchiveName(v string) string {
 	return fmt.Sprintf("ghosttree_%s_%s_%s.tar.gz", v, s.GOOS, s.GOARCH)
 }
 
+type statusError struct {
+	URL  string
+	Code int
+}
+
+func (e *statusError) Error() string { return fmt.Sprintf("GET %s: HTTP %d", e.URL, e.Code) }
+
 func (s Source) get(ctx context.Context, u string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -89,7 +106,7 @@ func (s Source) get(ctx context.Context, u string, limit int64) ([]byte, error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: HTTP %d", u, resp.StatusCode)
+		return nil, &statusError{URL: u, Code: resp.StatusCode}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
@@ -122,7 +139,9 @@ func (s Source) LatestStable(ctx context.Context, apiBase, repo string) (Candida
 // candidates as well, and the newest version wins, so v0.1.0 beats
 // v0.1.0-rc.3. Other pre-release tags (-dev, -beta) stay out either way. The
 // checks in Fetch do not depend on the choice: a candidate is signed and its
-// checksum is compared exactly as for a final release.
+// checksum is compared exactly as for a final release. The release list is not
+// signed: which tag is the newest is only a claim until Fetch has checked the
+// signed comment, and the caller decides about a downgrade on that result.
 func (s Source) LatestRelease(ctx context.Context, apiBase, repo string, pre bool) (Candidate, error) {
 	b, err := s.get(ctx, strings.TrimSuffix(apiBase, "/")+"/repos/"+repo+"/releases?per_page=50", maxTextBytes)
 	if err != nil {
@@ -167,8 +186,8 @@ func (s Source) LatestRelease(ctx context.Context, apiBase, repo string, pre boo
 			}
 		case "checksums.txt":
 			c.sumsURL = a.URL
-		case "checksums.txt.sigstore.json":
-			c.bundle = a.URL
+		case "checksums.txt.minisig":
+			c.sigURL = a.URL
 		}
 	}
 	switch {
@@ -176,17 +195,19 @@ func (s Source) LatestRelease(ctx context.Context, apiBase, repo string, pre boo
 		return c, fmt.Errorf("release %s has no asset %s", best.TagName, c.Archive)
 	case c.sumsURL == "":
 		return c, fmt.Errorf("release %s has no checksums.txt", best.TagName)
-	case c.bundle == "":
-		return c, fmt.Errorf("release %s has no checksums.txt.sigstore.json: unsigned, refusing", best.TagName)
+	case c.sigURL == "":
+		return c, fmt.Errorf("release %s has no checksums.txt.minisig: unsigned, refusing", best.TagName)
 	}
 	return c, nil
 }
 
 var distVersionRE = regexp.MustCompile(`^ctx_(.+)_(linux|darwin)_(amd64|arm64)\.tar\.gz$`)
 
-// DevFromServer reads the dev build the server offers under /dist/. The trust
-// here is the connection (https, or loopback) plus the checksum from the same
-// server; there is no signature for it.
+// DevFromServer reads the build the server offers under /dist/. A server that
+// distributes a genuine release may offer its checksums.txt.minisig as well;
+// then Fetch checks it against the release key. Without it the trust here is the
+// connection (https, or loopback) plus the checksum from the same server, and
+// Fetch installs only when the caller has said so.
 func (s Source) DevFromServer(ctx context.Context, serverURL string) (Candidate, error) {
 	u, err := url.Parse(strings.TrimSuffix(serverURL, "/"))
 	if err != nil || u.Host == "" {
@@ -221,7 +242,7 @@ func (s Source) DevFromServer(ctx context.Context, serverURL string) (Candidate,
 		return Candidate{}, fmt.Errorf("the server offers no build for %s/%s", s.GOOS, s.GOARCH)
 	}
 	return Candidate{Version: v, Archive: arch, Channel: version.ChannelDev, Where: u.Host + "/dist/",
-		archURL: base + arch, sumsURL: base + "checksums.txt"}, nil
+		archURL: base + arch, sumsURL: base + "checksums.txt", sigURL: base + "checksums.txt.minisig"}, nil
 }
 
 func loopback(host string) bool {
@@ -253,53 +274,74 @@ func ParseChecksums(b []byte) map[string]string {
 	return out
 }
 
+// Fetched is a downloaded build whose checks have passed.
+type Fetched struct {
+	Path    string // the extracted binary, a temporary file next to the target
+	Version string // from the signed comment when Signed, else what the server claims
+	Signed  bool   // the release key signed the checksums
+}
+
 // Fetch downloads, verifies and extracts the candidate's binary into a new
-// temporary file inside dir (mode 0755) and returns its path. Verification
-// order: signature over checksums.txt (stable only), then the archive's
-// sha256 against that checksums.txt. On any failure the temporary file is
-// removed and nothing else was touched.
-func (s Source) Fetch(ctx context.Context, c Candidate, dir string, verify Verifier) (string, error) {
+// temporary file inside dir (mode 0755). Verification order: the minisign
+// signature over checksums.txt with its trusted comment, then the archive's
+// sha256 against that checksums.txt. A release is always signed. The build of a
+// server may come without a signature; it is installed then only when
+// trustServer says the user accepts the server as the only anchor. A signature
+// that is there and does not hold is never overridden. On any failure the
+// temporary file is removed and nothing else was touched.
+func (s Source) Fetch(ctx context.Context, c Candidate, dir string, verify Verifier, trustServer bool) (Fetched, error) {
 	sums, err := s.get(ctx, c.sumsURL, maxTextBytes)
 	if err != nil {
-		return "", fmt.Errorf("checksums: %w", err)
+		return Fetched{}, fmt.Errorf("checksums: %w", err)
 	}
-	if c.signed {
+	version, signed := c.Version, false
+	sig, err := s.get(ctx, c.sigURL, maxTextBytes)
+	var se *statusError
+	switch {
+	case err == nil:
 		if verify == nil {
-			return "", errors.New("no signature verifier available; refusing to install an unchecked release")
+			return Fetched{}, errors.New("no signature verifier available; refusing to install an unchecked build")
 		}
-		bundle, err := s.get(ctx, c.bundle, maxTextBytes)
-		if err != nil {
-			return "", fmt.Errorf("signature bundle: %w", err)
+		trusted, verr := verify(sums, sig)
+		switch {
+		case verr == nil:
+			// What the key holder signed names the version: a genuine list of
+			// another release does not pass for this one, and the version the
+			// caller compares is the signed one, not what a listing claimed.
+			if trusted != "ghosttree v"+c.Version {
+				return Fetched{}, fmt.Errorf("the signed checksums.txt belongs to %q, not to ghosttree v%s", trusted, c.Version)
+			}
+			version, signed = c.Version, true
+		case !c.signed && trustServer && errors.Is(verr, ErrCannotCheck):
+			// A server build with a signature this ctx has no key for: the same
+			// as one without, the user has accepted the server.
+		default:
+			return Fetched{}, fmt.Errorf("signature check failed: %w", verr)
 		}
-		scratch, err := os.MkdirTemp("", "ctx-update-verify-")
-		if err != nil {
-			return "", err
-		}
-		defer os.RemoveAll(scratch)
-		sf, bf := filepath.Join(scratch, "checksums.txt"), filepath.Join(scratch, "checksums.txt.sigstore.json")
-		if err := os.WriteFile(sf, sums, 0o600); err != nil {
-			return "", err
-		}
-		if err := os.WriteFile(bf, bundle, 0o600); err != nil {
-			return "", err
-		}
-		if err := verify(ctx, sf, bf, c.Tag); err != nil {
-			return "", fmt.Errorf("signature check failed: %w", err)
-		}
+	case !c.signed && errors.As(err, &se) && se.Code == http.StatusNotFound:
+	default:
+		return Fetched{}, fmt.Errorf("signature: %w", err)
+	}
+	if !signed && !trustServer {
+		return Fetched{}, ErrServerUnsigned
 	}
 	want, ok := ParseChecksums(sums)[c.Archive]
 	if !ok {
-		return "", fmt.Errorf("checksums.txt does not list %s", c.Archive)
+		return Fetched{}, fmt.Errorf("checksums.txt does not list %s", c.Archive)
 	}
 	archive, err := s.get(ctx, c.archURL, maxArchiveBytes)
 	if err != nil {
-		return "", fmt.Errorf("archive: %w", err)
+		return Fetched{}, fmt.Errorf("archive: %w", err)
 	}
 	got := sha256.Sum256(archive)
 	if hex.EncodeToString(got[:]) != want {
-		return "", fmt.Errorf("checksum mismatch for %s: checksums.txt says %s, download is %s", c.Archive, want, hex.EncodeToString(got[:]))
+		return Fetched{}, fmt.Errorf("checksum mismatch for %s: checksums.txt says %s, download is %s", c.Archive, want, hex.EncodeToString(got[:]))
 	}
-	return extractBinary(archive, dir)
+	path, err := extractBinary(archive, dir)
+	if err != nil {
+		return Fetched{}, err
+	}
+	return Fetched{Path: path, Version: version, Signed: signed}, nil
 }
 
 // extractBinary writes the "ctx" entry of a tar.gz into a temp file in dir.

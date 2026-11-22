@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"strconv"
 	"testing"
 )
@@ -427,10 +428,10 @@ func TestEndStandingNeedsTheAuthorOrAtLeastTheirRank(t *testing.T) {
 		t.Fatalf("author lead ends own directive: %v", err)
 	}
 
-	// A guest ends their own.
-	id = standing(guest, "guest rule")
-	if err := guest.EndStanding(e.room, id); err != nil {
-		t.Fatalf("guest ends own directive: %v", err)
+	// A guest writes nothing in the project room (room.post is member and up), so
+	// there is no directive of their own to end.
+	if _, err := guest.CreateStanding(StandingInput{RoomKey: e.room, ClientID: "sb-guest", Body: "guest rule"}); !errors.Is(err, ErrCoordForbidden) {
+		t.Fatalf("guest creates a directive = %v, want forbidden", err)
 	}
 }
 
@@ -485,7 +486,10 @@ func TestGuestViewEndStandingIsNoRankOracle(t *testing.T) {
 		e.st.SetAccessMode(AccessMode{Enforce: enforce})
 		e.addGuest(t)
 		guest := e.human("person:5")
-		own := e.standingBy(t, guest, e.room, "guest own")
+		// A guest writes nothing in the project room: no directive of their own.
+		if _, err := guest.CreateStanding(StandingInput{RoomKey: e.room, ClientID: "sb-guest-own", Body: "guest own"}); !errors.Is(err, ErrCoordForbidden) {
+			t.Fatalf("enforce=%v: guest creates a directive = %v, want forbidden", enforce, err)
+		}
 		byAgent := e.standingBy(t, e.agent("a-anna"), e.room, "anna agent rule")
 		byOwner := e.standingBy(t, e.human("person:1"), e.room, "owner rule")
 
@@ -524,9 +528,6 @@ func TestGuestViewEndStandingIsNoRankOracle(t *testing.T) {
 		if enforce {
 			// Ohne Durchsetzung gibt es keine Gastsicht, dort gilt der Rang.
 			check("after demoting anna")
-		}
-		if !guest.CanEndStanding(e.room, own) {
-			t.Fatal("a guest may end their own directive")
 		}
 	}
 }

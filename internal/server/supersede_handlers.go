@@ -62,7 +62,7 @@ func (a *api) checkEditable(w http.ResponseWriter, r *http.Request, id int64) bo
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		a.access(r).Filtered()
-		writeErr(w, http.StatusNotFound, "no such knowledge entry")
+		writeNotFound(w)
 		return false
 	}
 	if err != nil {

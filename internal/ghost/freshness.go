@@ -10,10 +10,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/gitsafe"
 )
 
 // driftThreshold trennt "leicht verändert" von "veraltet". Der Wert ist
@@ -97,10 +98,10 @@ func ChangedLines(repoRoot, oldBlob, newBlob string) (int, bool) {
 	if oldBlob == "" || newBlob == "" {
 		return 0, false
 	}
-	if err := exec.Command("git", "-C", repoRoot, "cat-file", "-e", oldBlob).Run(); err != nil {
+	if err := gitsafe.Command("-C", repoRoot, "cat-file", "-e", oldBlob).Run(); err != nil {
 		return 0, false
 	}
-	out, err := exec.Command("git", "-C", repoRoot, "diff", "--numstat", oldBlob, newBlob).Output()
+	out, err := gitsafe.Command("-C", repoRoot, "diff", "--numstat", oldBlob, newBlob).Output()
 	if err != nil {
 		return 0, false
 	}

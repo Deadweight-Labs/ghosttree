@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -183,6 +184,17 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 // gehört dem, der sie zuerst gesendet hat.
 func appendCoordMessageNewTx(tx *sql.Tx, m CoordMessage) (id int64, created bool, err error) {
 	m = m.withDefaults()
+	if m.AuthorKind != AuthorSystem {
+		if err := m.checkFields(); err != nil {
+			return 0, false, err
+		}
+		// The time of a message is when the server stored it. A client may not
+		// date it ahead: a time in the future blocks the sender's own broadcast
+		// window and sorts the message above everything that follows.
+		if at, err := time.Parse(time.RFC3339, m.CreatedAt); err != nil || at.After(time.Now().Add(coordClockSkew)) {
+			m.CreatedAt = now()
+		}
+	}
 	if m.ExpiresAt != "" {
 		if _, err := time.Parse(time.RFC3339, m.ExpiresAt); err != nil {
 			return 0, false, ErrCoordInvalidExpiry
@@ -264,6 +276,50 @@ func appendCoordMessageNewTx(tx *sql.Tx, m CoordMessage) (id int64, created bool
 		}
 	}
 	return id, true, nil
+}
+
+// coordClockSkew is how far ahead of the server's clock a client's time for a
+// message may be before it is replaced by the server's.
+const coordClockSkew = 5 * time.Minute
+
+// Bounds of the free fields of a message. Each is an identifier or a short word:
+// none of them is text for people to read, and none may run over a line.
+const (
+	maxCoordKindLen    = 32
+	maxCoordIDLen      = 200
+	maxCoordRefs       = 20
+	maxCoordRefIDLen   = 200
+	maxCoordMentionsIn = 500
+)
+
+// checkFields refuses a message whose identifier fields are too long, run over a
+// line or carry too many refs and mentions. It is answered like a payload the
+// store cannot admit.
+func (m CoordMessage) checkFields() error {
+	bad := func(what string) error {
+		return fmt.Errorf("%w: message field %s is not valid", ErrWriterInvalidPayload, what)
+	}
+	for name, v := range map[string]struct {
+		s   string
+		max int
+	}{
+		"kind": {m.Kind, maxCoordKindLen}, "priority": {m.Priority, maxCoordKindLen}, "client_id": {m.ClientID, maxCoordIDLen},
+		"origin_event_id": {m.OriginEventID, maxCoordIDLen}, "causation_id": {m.CausationID, maxCoordIDLen},
+		"parent_external_id": {m.ParentExternalID, maxExternalIDLen}, "observed_at_client": {m.ObservedAtClient, 64},
+	} {
+		if !validOneLine(v.s, v.max) {
+			return bad(name)
+		}
+	}
+	if len(m.Refs) > maxCoordRefs || len(m.Mentions) > maxCoordMentionsIn {
+		return bad("refs or mentions")
+	}
+	for _, r := range m.Refs {
+		if !validOneLine(r.Kind, maxCoordKindLen) || !validOneLine(r.ID, maxCoordRefIDLen) || !validOneLine(r.Revision, maxCoordRefIDLen) {
+			return bad("refs")
+		}
+	}
+	return nil
 }
 
 // withDefaults füllt, was der Store selbst verantwortet. AuthorKind fällt
@@ -514,4 +570,36 @@ func insertAttentionTx(tx *sql.Tx, recipient string, messageID int64, reason, st
 		}
 	}
 	return errors.New("coordination attention id: no free id after 16 attempts")
+}
+
+// Quote der Nachrichten je Konto: höchstens CoordMessageLimit in
+// CoordMessageWindow. Normale Arbeit (ein Agent, der Fragen stellt und
+// antwortet) schreibt ein paar Nachrichten je Minute; wer mehr schreibt,
+// füllt Räume und Speicher aller anderen.
+const (
+	CoordMessageWindow = 5 * time.Minute
+	CoordMessageLimit  = 300
+)
+
+// ErrCoordRateLimited: das Konto hat sein Kontingent an Nachrichten für das
+// laufende Fenster verbraucht. Nichts wird gespeichert.
+var ErrCoordRateLimited = errors.New("too many coordination messages from this account; wait a few minutes")
+
+// checkMessageRateTx zählt die Nachrichten des Kontos im Fenster. Der
+// Prinzipal ist das Konto: alle Agenten einer Person teilen sich das Kontingent.
+// Ohne Prinzipal (Altbestand) zählt die Absenderkennung.
+func checkMessageRateTx(tx *sql.Tx, principal, sender string) error {
+	col, key := "sender_external_id", sender
+	if principal != "" {
+		col, key = "author_principal_id", principal
+	}
+	cutoff := time.Now().UTC().Add(-CoordMessageWindow).Format(time.RFC3339)
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_messages WHERE `+col+`=? AND created_at>=?`, key, cutoff).Scan(&n); err != nil {
+		return err
+	}
+	if n >= CoordMessageLimit {
+		return ErrCoordRateLimited
+	}
+	return nil
 }

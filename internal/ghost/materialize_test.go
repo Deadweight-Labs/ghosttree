@@ -57,8 +57,9 @@ func commandOutput(t *testing.T, name string, args ...string) string {
 }
 
 func TestMaterializeWritesTheTreeAndRemovesWhatIsGone(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "tree")
-	if err := Materialize(root, []Doc{
+	base := t.TempDir()
+	root := filepath.Join(base, "tree")
+	if err := Materialize(base, "tree", []Doc{
 		{Path: "__dir.md", Body: "das Repo"},
 		{Path: "internal/__dir.md", Body: "internes"},
 		{Path: "internal/store/knowledge.go.md", Body: "Wissenspfade"},
@@ -73,7 +74,7 @@ func TestMaterializeWritesTheTreeAndRemovesWhatIsGone(t *testing.T) {
 		t.Fatalf("body missing: %q", b)
 	}
 
-	if err := Materialize(root, []Doc{{Path: "__dir.md", Body: "das Repo"}}); err != nil {
+	if err := Materialize(base, "tree", []Doc{{Path: "__dir.md", Body: "das Repo"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "internal")); !os.IsNotExist(err) {

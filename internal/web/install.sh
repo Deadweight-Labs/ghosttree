@@ -13,7 +13,12 @@
 # terminal only gets the instructions.
 #
 # GHOSTTREE_DOWNLOAD_BASE replaces the download location (default: the
-# /dist/ path of the server this script came from), e.g. a release URL.
+# /dist/ path of the server this script came from), e.g. a release URL. Plain
+# http is accepted for this machine only.
+#
+# The only check is the checksum from that same location: this script cannot
+# tell a genuine ghosttree build from one the server made up. A release that the
+# ghosttree release key signed is installed by the public installer.
 #
 # Everything lives in main(), which runs on the last line: a download cut off
 # half way executes nothing.
@@ -95,17 +100,22 @@ main() {
     *) die "unsupported CPU architecture: $(uname -m) (supported: amd64, arm64)" ;;
   esac
 
-  # Plain http would let anyone on the path swap archive and checksums alike.
+  # Plain http would let anyone on the path swap archive and checksums alike, so
+  # it is for this machine only, and only when the host part is exactly that:
+  # "http://127.0.0.1:1@evil.example" has the user name "127.0.0.1:1" and goes
+  # to evil.example, so an "@" (or a backslash, which some clients read as a
+  # slash) in the host part ends the discussion. There is no switch that allows
+  # plain http to another host.
   case "$base" in
     https://*) protos='=https' ;;
-    http://localhost | http://localhost:* | http://127.0.0.1 | http://127.0.0.1:* | http://\[::1\] | http://\[::1\]:* | http://\[::1]*)
-      protos='=http,https' ;;
     http://*)
-      if [ "${GHOSTTREE_ALLOW_HTTP:-}" = 1 ]; then
-        protos='=http,https'
-      else
-        die "refusing to download over plain http from $base (use https, or set GHOSTTREE_ALLOW_HTTP=1 if you trust the network)"
-      fi ;;
+      auth=${base#http://}
+      auth=${auth%%[/?#]*}
+      case "$auth" in
+        *[@\\]*) die "refusing to download over plain http from $base: user information in an address hides the real host" ;;
+        localhost | localhost:* | 127.0.0.1 | 127.0.0.1:* | \[::1\] | \[::1\]:*) protos='=http,https' ;;
+        *) die "refusing to download over plain http from $base (use https)" ;;
+      esac ;;
     *) die "unsupported download location: $base" ;;
   esac
 
@@ -135,6 +145,11 @@ main() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
+  # Nothing here is signed by the ghosttree release key: the archive is only as
+  # good as the checksums.txt this server (or $GHOSTTREE_DOWNLOAD_BASE) hands out
+  # with it. Say so before anything is installed.
+  say "Trust: $base is the only thing this download is checked against. It carries no ghosttree release signature, so you trust that server with the ctx that runs on this machine."
+  say "To install a release that is checked against the ghosttree release key instead: curl -fsSL https://downloads.deadweightlabs.com/ghosttree/install.sh | sh"
   say "Downloading checksums from $base"
   fetch "$base/checksums.txt" "$tmp/checksums.raw" || die "cannot download $base/checksums.txt"
   # Same rules as the server: CR dropped, "<64 hex>  [*]<name>" lines only.

@@ -713,6 +713,12 @@ func (s *Store) WriteRunbook(in RunbookWrite) (RunbookWriteResult, error) {
 	if in.Note, err = runbook.CheckNote(in.Note); err != nil {
 		return RunbookWriteResult{}, err
 	}
+	// Ein Ablauf enthält Befehle, und in Befehlen stehen gern Zugangsdaten
+	// (curl -H "Authorization: …"). Sie werden an jeden Agenten des Projekts
+	// ausgeliefert, also wie jeder andere Freitext geprüft.
+	if err := refuseSecrets(append(runbookSpecTexts(in.Spec), "note", in.Note)...); err != nil {
+		return RunbookWriteResult{}, err
+	}
 	if s.writer != nil {
 		return queueValue(s, []any{in}, func(d *Store, p []any) (RunbookWriteResult, error) {
 			return d.WriteRunbook(p[0].(RunbookWrite))
@@ -856,6 +862,15 @@ func (s *Store) RecordRunbookRun(in RunbookRunInput) (RunbookRunResult, error) {
 		return RunbookRunResult{}, err
 	}
 	if in.Deviations, err = runbook.NormalizeDeviations(in.Deviations); err != nil {
+		return RunbookRunResult{}, err
+	}
+	// Die Notiz und die Abweichungen eines Laufs werden zum Vorschlag für die
+	// nächste Fassung und gelten wie jeder Freitext.
+	pairs := []string{"note", in.Note}
+	for i, d := range in.Deviations {
+		pairs = append(pairs, indexed("deviations.title", i), d.Title, indexed("deviations.command", i), d.Command, indexed("deviations.note", i), d.Note)
+	}
+	if err := refuseSecrets(pairs...); err != nil {
 		return RunbookRunResult{}, err
 	}
 	if in.Target != "" {
@@ -1021,4 +1036,35 @@ func (s *Store) DecideRunbookProposal(proposalID int64, accept bool, approverID 
 		return runbook.Proposal{}, err
 	}
 	return s.RunbookProposalByID(proposalID)
+}
+
+// runbookSpecTexts nennt die Freitextfelder einer Fassung als Paare für refuseSecrets.
+func runbookSpecTexts(spec runbook.Spec) []string {
+	pairs := []string{"purpose", spec.Purpose}
+	for i, p := range spec.Params {
+		pairs = append(pairs, indexed("params.description", i), p.Description, indexed("params.default", i), p.Default)
+	}
+	for i, c := range spec.Preconditions {
+		pairs = append(pairs, indexed("preconditions", i), c)
+	}
+	steps := func(field string, list []runbook.Step) {
+		for i, st := range list {
+			pairs = append(pairs, indexed(field+".title", i), st.Title, indexed(field+".command", i), st.Command, indexed(field+".check", i), st.Check)
+		}
+	}
+	steps("steps", spec.Steps)
+	steps("rollback", spec.Rollback)
+	for i, t := range spec.Targets {
+		pairs = append(pairs, indexed("targets.comment", i), t.Comment)
+		for j, st := range t.Steps {
+			pairs = append(pairs, indexed(indexed("targets", i)+".argv", j), strings.Join(st.Argv, " "))
+		}
+	}
+	for i, k := range spec.Triggers.Keywords {
+		pairs = append(pairs, indexed("triggers.keywords", i), k)
+	}
+	for i, c := range spec.Triggers.Commands {
+		pairs = append(pairs, indexed("triggers.commands", i), c)
+	}
+	return pairs
 }

@@ -183,7 +183,14 @@ func TestProjectFormTakesARepositoryAddressAndTheAgentLandsInThatProject(t *test
 		{"ssh://git@gitlab.com/werkstatt/hook-three", "gitlab.com/werkstatt/hook-three"},
 		{"GitLab.com/Werkstatt/Hook-Four/", "gitlab.com/werkstatt/hook-four"},
 	} {
-		resp := postOrg(t, anna, base, "/ui/orgs/project/create", url.Values{"org": {"alpha"}, "name": {c.input}})
+		// A plain member does not claim an address on another host than GitHub:
+		// nothing proves it is theirs. An owner of the organization does.
+		refused := postOrg(t, anna, base, "/ui/orgs/project/create", url.Values{"org": {"alpha"}, "name": {c.input}})
+		refused.Body.Close()
+		if _, ok := st.ProjectByRemote(c.remote); ok || refused.StatusCode == http.StatusSeeOther {
+			t.Fatalf("%s: a member claimed the address (%d)", c.input, refused.StatusCode)
+		}
+		resp := postOrg(t, alice, base, "/ui/orgs/project/create", url.Values{"org": {"alpha"}, "name": {c.input}})
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusSeeOther {
 			t.Fatalf("%s: %d", c.input, resp.StatusCode)
@@ -192,8 +199,8 @@ func TestProjectFormTakesARepositoryAddressAndTheAgentLandsInThatProject(t *test
 		if !ok || p.Org != "alpha" || p.Named {
 			t.Fatalf("%s: project %q = %+v, %v", c.input, c.remote, p, ok)
 		}
-		if role := st.ProjectRole(c.remote, "person:2").Role; role != store.RoleOwner {
-			t.Errorf("%s: the member who made it has the role %q", c.input, role)
+		if role := st.ProjectRole(c.remote, "person:1").Role; role != store.RoleOwner {
+			t.Errorf("%s: the owner who made it has the role %q", c.input, role)
 		}
 		// The agent of another member starts in a clone with this remote (the
 		// ssh form and the https form of the same repository): the same project.

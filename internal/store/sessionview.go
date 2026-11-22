@@ -106,7 +106,7 @@ func (s *Store) allSessions() ([]Session, error) {
 // besitzt, sieht weder Maschine, Branch, Pfad noch Besitzer, nur Plattform und
 // Projekt. Die laufende Nummer sieht ein Gast nie, auch bei der eigenen Session
 // nicht: sie zählt alle Sessions des Servers (#2447). Ohne Durchsetzung sieht
-// jeder alles (Log-Modus).
+// jeder in seiner Org alles (Log-Modus).
 func (a *ProjectAccess) guestView(sess Session) Session {
 	if !a.st.AccessEnforced() || a.Can(sess.Scope.Project, RightProjectInside) {
 		return sess
@@ -124,9 +124,13 @@ func (a *ProjectAccess) guestView(sess Session) Session {
 // Projekts kennen (Mitglied ab member, oder ohne Durchsetzung). Ein Admin ohne
 // Rolle zählt hier nicht: Zitate und Arbeit aus Transkripten hängen an dieser
 // Frage, und die darf er nur über CanSeeTranscript lesen. Die Nummer der eigenen
-// frisch angelegten Session bekommt er über GetsOwnSessionNumber.
+// frisch angelegten Session bekommt er über GetsOwnSessionNumber. Im Log-Modus
+// kennt sie jedes Mitglied der Org, ein Konto dahinter nie.
 func (a *ProjectAccess) SeesSessionNumbers(project string) bool {
-	return !a.st.AccessEnforced() || a.Can(project, RightProjectInside)
+	if a.Can(project, RightProjectInside) {
+		return true
+	}
+	return !a.st.AccessEnforced() && !a.foreignOrg(strings.TrimSpace(project))
 }
 
 // GetsOwnSessionNumber: die Nummer der Session, die der Betrachter gerade selbst
@@ -142,12 +146,12 @@ func (a *ProjectAccess) GetsOwnSessionNumber(project string) bool {
 	return a.CanAny(RightProjectInside)
 }
 
-// ReadsAll: der Betrachter liest ohnehin jedes Transkript, und das gilt nur
-// ohne Durchsetzung. Auch ein Admin liest unter Durchsetzung nicht alles; bm25
-// hängt vom ganzen Index ab und wäre für ihn ein Orakel über Sessions, die er
-// nicht lesen darf. Nur ohne Durchsetzung darf eine Suche danach ordnen.
+// ReadsAll: der Betrachter liest ohnehin jedes Transkript. Das trifft in keinem
+// Modus zu: private Transkripte gehören ihrem Besitzer, auch im Log-Modus, und
+// auch ein Admin liest nicht alles; bm25 hängt vom ganzen Index ab und wäre für
+// ihn ein Orakel über Sessions, die er nicht lesen darf.
 func (a *ProjectAccess) ReadsAll() bool {
-	return !a.st.AccessEnforced()
+	return false
 }
 
 func (a *ProjectAccess) isGuestOnly() bool {
@@ -1031,11 +1035,8 @@ func (p SessionPrefilter) apply(where string, args []any) (string, []any) {
 // decideGlobal, unbeanspruchte Projekte) als SQL: Besitzer, Gast-Stufe ab Gast,
 // Freigabe ab member, alles ab lead, der Instanz-Admin zusätzlich in
 // unbeanspruchten Projekten. Die Abfrage hängt damit nicht davon ab, wie viele
-// verborgene Sessions es gibt (#2447). Ohne Durchsetzung gilt alles.
+// verborgene Sessions es gibt (#2447). Sie gilt in jedem Modus.
 func (a *ProjectAccess) TranscriptPrefilter() SessionPrefilter {
-	if !a.st.AccessEnforced() {
-		return SessionPrefilter{Exact: true, Unrestricted: true}
-	}
 	if !a.valid {
 		return SessionPrefilter{Where: `0`, Exact: true}
 	}

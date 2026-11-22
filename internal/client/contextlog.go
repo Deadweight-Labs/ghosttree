@@ -18,6 +18,7 @@ type Delivered struct {
 
 // TriggeredRunbooksDelivered is TriggeredRunbooks that also returns the parts.
 func (c *Client) TriggeredRunbooksDelivered(t RunbookTrigger) (Delivered, error) {
+	t.Prompt, t.Command = ForServer(t.Prompt), ForServer(t.Command)
 	var d Delivered
 	err := c.do("POST", "/api/runbooks/triggered", nil, t, &d)
 	return d, err

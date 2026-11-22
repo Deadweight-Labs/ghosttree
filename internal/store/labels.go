@@ -229,6 +229,9 @@ func (s *Store) CreateLabel(in LabelInput) (Label, error) {
 		return Label{}, err
 	}
 	in.Name, in.Color, in.Description = name, color, desc
+	if err := refuseSecrets("name", name, "description", desc); err != nil {
+		return Label{}, err
+	}
 	in.Project = scope.NormalizeRemote(in.Project)
 	if (in.Project == "") == (in.OrgID == 0) {
 		return Label{}, labelRule("label_scope_invalid", "a label belongs to a project or to an org, not both and not neither", "name the project or the org")
@@ -267,6 +270,14 @@ func (s *Store) LabelByID(id int64) (Label, error) {
 
 // UpdateLabel ändert Name, Farbe oder Beschreibung.
 func (s *Store) UpdateLabel(id int64, p LabelPatch) (Label, error) {
+	for field, v := range map[string]*string{"name": p.Name, "description": p.Description} {
+		if v == nil {
+			continue
+		}
+		if err := refuseSecrets(field, *v); err != nil {
+			return Label{}, err
+		}
+	}
 	if p.Name != nil {
 		n, err := CleanLabelName(*p.Name)
 		if err != nil {

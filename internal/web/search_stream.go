@@ -44,8 +44,8 @@ var (
 // The wait of a page that has no budget of its own is wait.
 type searchLimiter struct{}
 
-func (l *searchLimiter) acquire(ctx context.Context, st *store.Store) (release func(), ok bool) {
-	return st.AcquireSearchSlot(ctx, 0)
+func (l *searchLimiter) acquire(ctx context.Context, st *store.Store, account string) (release func(), ok bool) {
+	return st.AcquireSearchSlotFor(ctx, account, 0)
 }
 
 // sessionsSearchWait is how long the search of the sessions page waits for a place

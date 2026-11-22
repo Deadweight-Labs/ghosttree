@@ -48,7 +48,8 @@ The complete list of what Ghosttree does in the current development version. The
   and replace a placeholder inside one argument, never a shell string. `ctx run
   NAME --target T` is a dry run that shows each argument list; only `--run`
   executes, in the foreground of the calling process, so the harness's normal
-  Bash approval applies. It runs only a version that an owner or lead wrote or
+  Bash approval applies. `--run` shows the argument lists again and asks for
+  `yes` at a terminal; where no terminal is attached it needs `--yes`. It runs only a version that an owner or lead wrote or
   approved (a proposal or a member's version never runs) and that a person has
   allowed for this machine and this exact content hash. A changed version needs a
   new allowance. Every run is logged with version, machine, person and Git state.

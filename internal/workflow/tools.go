@@ -40,7 +40,12 @@ type ToolSpec struct {
 	// Research: the tool reaches the net; it comes with research: true, never
 	// from the tools list.
 	Research bool
-	run      func(ctx context.Context, tb *Toolbox, in toolArgs) (string, error)
+	// Foreign: what the tool returns may have been written by someone who is
+	// no member of the project (code of a pull request, a page on the net, a
+	// description the gardener made from code). Its text never counts as a
+	// source for the automatic approval.
+	Foreign bool
+	run     func(ctx context.Context, tb *Toolbox, in toolArgs) (string, error)
 }
 
 // toolArgs are the inputs of every tool; each reads the fields it needs.
@@ -75,8 +80,8 @@ var Tools = []ToolSpec{
 	{Name: "issue.read", Summary: "read one issue of the project with its criteria (REQ-n)", Schema: schemaID, run: toolIssueRead},
 	{Name: "idea.read", Summary: "read one idea of the project with its concept and decisions (IDEA-n)", Schema: schemaID, run: toolIdeaRead},
 	{Name: "pain.read", Summary: "read one problem of the project (PAIN-n)", Schema: schemaID, run: toolPainRead},
-	{Name: "file.describe", Summary: "read the description of a file or directory of the repository", Schema: schemaPath, run: toolFileDescribe},
-	{Name: "pr.diff", Summary: "read the diff of a pull request of the project, or its changed files", Schema: schemaNumber, run: toolPRDiff},
+	{Name: "file.describe", Summary: "read the description of a file or directory of the repository", Schema: schemaPath, Foreign: true, run: toolFileDescribe},
+	{Name: "pr.diff", Summary: "read the diff of a pull request of the project, or its changed files", Schema: schemaNumber, Foreign: true, run: toolPRDiff},
 	{Name: "session.messages", Summary: "read what a person typed in a session shared with the project", Schema: schemaSession, run: toolSessionMessages},
 	{Name: ToolWebSearch, Summary: "search the web; the query leaves the server", Schema: schemaQuery, Research: true, run: toolWebSearch},
 	{Name: ToolWebFetch, Summary: "read a page a web.search of this run found, as text", Schema: schemaURL, Research: true, run: toolWebFetch},
@@ -130,13 +135,16 @@ type Toolbox struct {
 	// per run (maxSearchesPerRun, maxFetchesPerRun).
 	searches, fetches int
 	// texts are the tool results as the model got them; quotes may come from them.
-	texts []string
-	total int
+	// trusted are those of the tools whose text members wrote.
+	texts, trusted []string
+	total          int
 	// searchable are the words a web.search may use: those of the declared
 	// inputs, of the team's prompt and of earlier search hits, never those a
 	// read tool returned, so that nothing read from the project leaves the
 	// server in a query.
 	searchable map[string]bool
+	// hitWords counts the words search hits added to searchable.
+	hitWords int
 }
 
 // newToolbox prepares the tools of a definition. The research tools come
@@ -194,6 +202,16 @@ func (tb *Toolbox) Evidence() string {
 	return strings.Join(tb.texts, "\n")
 }
 
+// TrustedEvidence is the part of Evidence that the tools returned from text of
+// members (not the diff of a pull request, a description of a file or anything
+// from the net).
+func (tb *Toolbox) TrustedEvidence() string {
+	if tb == nil {
+		return ""
+	}
+	return strings.Join(tb.trusted, "\n")
+}
+
 // errNotReadable is the answer for what does not exist and what the run may
 // not read alike, so that a tool does not tell one from the other.
 var errNotReadable = errors.New("not found, or not readable for this run")
@@ -220,6 +238,9 @@ func (tb *Toolbox) call(ctx context.Context, t ToolSpec, raw json.RawMessage) (s
 	}
 	tb.total += len(out)
 	tb.texts = append(tb.texts, out)
+	if !t.Foreign && !t.Research {
+		tb.trusted = append(tb.trusted, out)
+	}
 	return out, nil
 }
 
@@ -245,6 +266,9 @@ const (
 	// signal to whoever runs those pages (a few bits per fetch), a channel
 	// that cannot be closed, only kept small.
 	maxFetchesPerRun = 5
+	// maxHitWords bounds the words that the hits of one run add to the
+	// searchable words: enough to refine a search, too few to spell out data.
+	maxHitWords = 150
 )
 
 // queryStopWords are the short words a query may use without a source: German
@@ -277,6 +301,21 @@ func queryWords(s string) []string { return strings.Fields(normalizeQuery(s)) }
 func (tb *Toolbox) allowSearchWords(text string) {
 	for _, w := range queryWords(text) {
 		tb.searchable[w] = true
+	}
+}
+
+// allowHitWords adds the words of a search hit, up to maxHitWords in all. The
+// text is what the model was shown, not what the page offered.
+func (tb *Toolbox) allowHitWords(text string) {
+	for _, w := range queryWords(text) {
+		if tb.searchable[w] {
+			continue
+		}
+		if tb.hitWords >= maxHitWords {
+			return
+		}
+		tb.searchable[w] = true
+		tb.hitWords++
 	}
 }
 
@@ -537,8 +576,9 @@ func toolWebSearch(ctx context.Context, tb *Toolbox, in toolArgs) (string, error
 	var b strings.Builder
 	for _, h := range hits {
 		tb.found[h.URL] = true
-		tb.allowSearchWords(h.Title + " " + h.Content)
-		fmt.Fprintf(&b, "%s\n%s\n%s\n\n", oneLine(h.Title), h.URL, cut(oneLine(h.Content), 400))
+		title, shown := cut(oneLine(h.Title), 200), cut(oneLine(h.Content), 400)
+		tb.allowHitWords(title + " " + shown)
+		fmt.Fprintf(&b, "%s\n%s\n%s\n\n", title, h.URL, shown)
 	}
 	return b.String(), nil
 }

@@ -87,6 +87,10 @@ type projectRolesView struct {
 
 // orgsView sammelt, was die Org-Seite zeigt.
 type orgsView struct {
+	// ModelsOwner: the viewer may decide whether the operator's language model
+	// reads the texts of the organization; ExternalModels is the setting.
+	ModelsOwner    bool
+	ExternalModels bool
 	// Retention is how many days the full text of workflow runs stays; set
 	// only for an owner, who alone may change it (REQ-693).
 	Retention int
@@ -224,7 +228,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		}
 		// Only the person reading it marks a notice as seen, not an agent
 		// that opened the page with a token.
-		if fromSignIn(r) {
+		if fromSignIn(r) && pageView(r) {
 			_ = a.store.MarkNamespaceNoticesSeen(me)
 		}
 	}
@@ -268,6 +272,9 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		v.GardenSet = a.gardenSettingsFor(r, v.Selected)
 		v.AI = a.aiViewFor(r, v.Selected, v.AIForm)
 		v.Owner = store.OrgRoleHas(v.Selected.Role, store.RightOrgManage)
+		if v.ModelsOwner = store.OrgRoleHas(v.Selected.Role, store.RightOrgAI); v.ModelsOwner {
+			v.ExternalModels = a.store.ExternalModelsFor(v.Selected.ID)
+		}
 		if v.Owner {
 			v.Retention = a.store.WorkflowSettingsFor(v.Selected.ID).RetentionDays
 			v.Policy = a.wfPolicyViewOf(r, v.Selected, a.store.WorkflowPolicyFor(v.Selected.ID))
@@ -524,7 +531,7 @@ func orgNotice(l lang, key string) string {
 		return l.msg("wf.retention.saved")
 	case "workflow_policy":
 		return l.msg("wf.policy.saved")
-	case "ai", "ai_server":
+	case "ai", "ai_server", "models":
 		return l.msg("ai.saved")
 	case "moved":
 		return l.msg("adm.notice.moved")
@@ -608,7 +615,7 @@ func noticeAnchor(notice string) string { return noticeSection[notice] }
 var noticeSection = map[string]string{
 	"source_added": "#sources", "source_failed": "#sources", "source_proved": "#sources", "source_removed": "#sources", "imported": "#sources", "follow": "#sources", "assigned": "#projects",
 	"visibility": "#projects", "project": "#projects", "moved": "#projects", "project_created": "#projects",
-	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener", "workflows": "#workflows", "workflow_policy": "#workflows", "ai": "#ai", "ai_server": "#ai-server",
+	"role": "#members", "removed": "#members", "revoked": "#invitations", "garden": "#gardener", "workflows": "#workflows", "workflow_policy": "#workflows", "ai": "#ai", "ai_server": "#ai-server", "models": "#models",
 }
 
 // fillInvites lists the organization's invitations with the links their
@@ -732,7 +739,7 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	if link {
 		target, role = shortName(inv.ProjectRemote), roleLabel(l, inv.ProjectRole)
 	}
-	a.inviteLinks.setMail(inv.ID, a.sendInviteMail(r, l, email, target, role, code, link, until))
+	a.inviteLinks.setMail(inv.ID, a.sendInviteMail(r, l, o.ID, email, target, role, code, link, until))
 	// The slug is [a-z0-9-], so it needs no escaping, and the order stays fixed.
 	// The fragment opens the members: without it the page opens at "General".
 	http.Redirect(w, r, "/ui/orgs?org="+o.Slug+"&new="+strconv.FormatInt(inv.ID, 10)+"#members", http.StatusSeeOther)
@@ -858,9 +865,11 @@ func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case !known || p.OrgID != o.ID:
 			err = store.ErrProjectNotFound
-		case r.FormValue("role") == "" && a.store.ProjectRole(p.Remote, r.FormValue("account")).Inherited:
+		case r.FormValue("role") == "" && a.mayGrantRoleOf(r, p.Remote, r.FormValue("account")) && a.store.ProjectRole(p.Remote, r.FormValue("account")).Inherited:
 			// The choice "Member (organization default)" is the role the person has without any row:
-			// setting it changes nothing.
+			// setting it changes nothing. Only somebody who may give roles in the project
+			// is told so; for anybody else the answer is that of every other refusal, so
+			// the form is no way to ask which account numbers are members.
 			orgRedirect(w, r, o.Slug, "")
 			return
 		case r.FormValue("role") == "none":
@@ -884,6 +893,12 @@ func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
 		text = l.msg("adm.done.prole_review", name, adminLabel(l, "prole", role), remote)
 	}
 	a.orgDone(w, r, o.Slug, "role", doneNote{Text: text, Row: rowAnchor("pr", remote+"-"+account)})
+}
+
+// mayGrantRoleOf: der Betrachter darf dem Konto in dem Projekt irgendeine Rolle
+// geben (und hat das Menschen-Recht dazu).
+func (a *app) mayGrantRoleOf(r *http.Request, remote, account string) bool {
+	return len(a.grantable(r, browserPrincipal(r).ID, remote, account)) > 0
 }
 
 // grantable nennt die wählbaren Rollen. Rollen zu vergeben ist ein
@@ -952,11 +967,13 @@ func (a *app) orgAssign(w http.ResponseWriter, r *http.Request) {
 	orgRedirect(w, r, p.Org, "assigned")
 }
 
-// orgProjectCreate legt ein Projekt der Organisation an. Das darf jedes Mitglied;
-// wer es anlegt, wird sein Owner. Das Feld nimmt einen Namen (ein Projekt ohne
-// Git) oder die Adresse eines Repos (https, ssh, github.com/owner/repo): dann
-// ist die Remote die ID des Projekts, und jeder Agent in einem Klon mit dieser
-// Remote arbeitet in genau diesem Projekt, ohne dass ein zweites entsteht.
+// orgProjectCreate legt ein Projekt der Organisation an. Einen Namen (ein
+// Projekt ohne Git) darf jedes Mitglied anlegen und wird sein Owner; die Adresse
+// eines Repos (https, ssh, github.com/owner/repo) nimmt der Store bei einem
+// anderen Host als GitHub nur von einem Owner der Org an, bei GitHub nur mit dem
+// bestätigten Login. Dann ist die Remote die ID des Projekts, und jeder Agent in
+// einem Klon mit dieser Remote arbeitet in genau diesem Projekt, ohne dass ein
+// zweites entsteht.
 func (a *app) orgProjectCreate(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
 	if err != nil {

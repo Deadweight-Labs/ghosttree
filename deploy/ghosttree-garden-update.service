@@ -10,4 +10,28 @@ Type=oneshot
 # with a readable umask so that user can read what it writes. It lives in its own unit
 # because the gardener unit may reach nothing but loopback.
 Environment=GIT_CONFIG_GLOBAL=/var/lib/ghosttree/garden/gitconfig
+# What git writes is the content of a remote, so the unit may change nothing but the
+# checkout, and has no privilege beyond owning it. The files it reads (git, bash,
+# the gitconfig) stay readable; the network is needed for the pull.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ghosttree/garden/repo
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
 ExecStart=/bin/bash -c 'umask 022; exec /usr/bin/git -C /var/lib/ghosttree/garden/repo pull --ff-only --quiet'

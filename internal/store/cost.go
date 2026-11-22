@@ -91,7 +91,7 @@ func (s *Store) PendingDistillationSize(filter scope.Axes, idleBefore string) (s
 	err = s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(size),0) FROM (
 		SELECT (SELECT COALESCE(SUM(CASE WHEN c.text != '' THEN length(c.text) ELSE c.text_chars END),0) FROM session_chunks c WHERE c.session_id = sessions.id) AS size
 		FROM sessions
-		WHERE `+where+` AND last_seen_at < ? AND project != ''
+		WHERE `+where+` AND last_seen_at < ? AND project != '' AND `+externalModelsOKSQL("sessions.project")+`
 		  AND NOT EXISTS (SELECT 1 FROM session_distillations d WHERE d.session_id = sessions.id)
 		  AND NOT EXISTS (SELECT 1 FROM distill_batch_items i
 		                  JOIN distill_batches b ON b.id = i.batch_id

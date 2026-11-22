@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"fmt"
 	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"html"
 	"html/template"
@@ -104,9 +103,7 @@ func (a *app) painComposer(l lang, v *painView, from string, canComment bool) *c
 // oldest first.
 func (a *app) painItems(l lang, pa *store.ProjectAccess, p pain.Pain, events []pain.Event, now func(string) string) []tlItem {
 	var items []tlItem
-	sentence := func(key string, args ...any) template.HTML {
-		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
-	}
+	sentence := func(key string, args ...template.HTML) template.HTML { return sentenceOf(l, key, args...) }
 	for _, e := range events {
 		it := tlItem{ID: "event-" + strconv.FormatInt(e.ID, 10), Act: "pain." + e.Kind, Who: e.Person, Icon: "pain", Age: now(e.CreatedAt), Git: anchorViewOf(pa, p.Project, e.GitAnchor, e.Via), at: parseTime(e.CreatedAt)}
 		switch e.Kind {
@@ -115,7 +112,7 @@ func (a *app) painItems(l lang, pa *store.ProjectAccess, p pain.Pain, events []p
 			it.withActor(a.stampedActors(l, actor.Pain, map[int64]string{p.ID: e.Person})[p.ID])
 		case "state":
 			it.Icon = "pain"
-			pill := `<span class="lb ` + painStateTone[e.ToState] + `">` + html.EscapeString(label(l, painStateKeys, e.ToState)) + `</span>`
+			pill := template.HTML(`<span class="lb ` + painStateTone[e.ToState] + `">` + html.EscapeString(label(l, painStateKeys, e.ToState)) + `</span>`)
 			it.Head = sentence("pains.ev.state", pill)
 			var body strings.Builder
 			if e.Remaining != "" {

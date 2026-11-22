@@ -2,11 +2,11 @@ package collector
 
 import (
 	"context"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitsafe"
 )
 
 // AnchorTimeout begrenzt die gesamte Ermittlung eines Ankers. Ein Schreibzugriff
@@ -92,8 +92,7 @@ func IsDefaultBranch(ctx context.Context, cwd, branch string) bool {
 // den Index des Arbeitsverzeichnisses neu schreibt und einem laufenden
 // git-Befehl des Agenten in die Quere kommt.
 func anchorGit(ctx context.Context, cwd string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
-	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	cmd := gitsafe.CommandContext(ctx, append([]string{"-C", cwd}, args...)...)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err

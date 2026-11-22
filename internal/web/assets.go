@@ -213,6 +213,11 @@ func (a *app) staticFiles() http.Handler {
 		name, ok := strings.CutPrefix(r.URL.Path, "/static/")
 		f := set[name]
 		if !ok || f == nil || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+			// A directory is no page: the list of what is embedded is not for anyone.
+			if info, err := fs.Stat(files, path.Join("static", name)); ok && (err != nil || info.IsDir() || strings.HasSuffix(r.URL.Path, "/")) {
+				http.NotFound(w, r)
+				return
+			}
 			fallback.ServeHTTP(w, r)
 			return
 		}

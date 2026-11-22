@@ -16,21 +16,26 @@ import (
 )
 
 type Knowledge struct {
-	ID             int64           `json:"id"`
-	Type           string          `json:"type"` // pitfall|decision|note|plan
-	Title          string          `json:"title"`
-	Body           string          `json:"body"`
-	Scope          scope.Axes      `json:"scope"`
-	Activation     activation.Rule `json:"activation,omitempty"`
-	Confidence     string          `json:"confidence"`              // quarantined|staged|trusted|verified
-	Status         string          `json:"status"`                  // active|stale|deprecated|superseded
-	Origin         string          `json:"origin"`                  // agent|distilled|human
-	SupersededBy   int64           `json:"superseded_by,omitempty"` // 0 = not superseded
-	Person         string          `json:"person"`
-	ConfirmedBy    string          `json:"confirmed_by,omitempty"`
-	LastModifiedBy string          `json:"last_modified_by,omitempty"`
-	Harness        string          `json:"harness,omitempty"`
-	SessionRef     string          `json:"session_ref,omitempty"`
+	ID           int64           `json:"id"`
+	Type         string          `json:"type"` // pitfall|decision|note|plan
+	Title        string          `json:"title"`
+	Body         string          `json:"body"`
+	Scope        scope.Axes      `json:"scope"`
+	Activation   activation.Rule `json:"activation,omitempty"`
+	Confidence   string          `json:"confidence"`              // quarantined|staged|trusted|verified
+	Status       string          `json:"status"`                  // active|stale|deprecated|superseded
+	Origin       string          `json:"origin"`                  // agent|distilled|human
+	SupersededBy int64           `json:"superseded_by,omitempty"` // 0 = not superseded
+	Person       string          `json:"person"`
+	// Author is the writer with the role they hold in the project today
+	// ("mia, member"). It is derived when an entry is read through the access
+	// view and never stored; a client shows it next to the text so that a reader
+	// can tell who wrote it and with what standing.
+	Author         string `json:"author,omitempty"`
+	ConfirmedBy    string `json:"confirmed_by,omitempty"`
+	LastModifiedBy string `json:"last_modified_by,omitempty"`
+	Harness        string `json:"harness,omitempty"`
+	SessionRef     string `json:"session_ref,omitempty"`
 	// AuthorID is the writing account, set by the server from the token and never
 	// read from a request. It is stored in knowledge_authors; zero means legacy
 	// or distilled.
@@ -132,7 +137,11 @@ func ftsQuery(q string) string {
 	return strings.Join(terms, " OR ")
 }
 
-// searchTerms keeps the words of a query that carry intent.
+// maxSearchTerms is how many words of a query count. A query of hundreds of
+// words is an OR over the whole index; the first words carry the intent.
+const maxSearchTerms = 20
+
+// searchTerms keeps the words of a query that carry intent, at most maxSearchTerms.
 func searchTerms(q string) []string {
 	var terms []string
 	for f := range strings.FieldsSeq(strings.ToLower(q)) {
@@ -141,6 +150,9 @@ func searchTerms(q string) []string {
 			continue
 		}
 		terms = append(terms, f)
+		if len(terms) == maxSearchTerms {
+			break
+		}
 	}
 	return terms
 }
@@ -472,6 +484,21 @@ func (s *Store) updateKnowledge(id int64, patch map[string]string, editor string
 	_, newBody := patch["body"]
 	_, newType := patch["type"]
 	if newTitle || newBody || newType {
+		// A text nobody has reviewed does not carry the review of the one it
+		// replaces: verified goes back to staged, unless the editor is the one who
+		// confirmed it or the patch sets the judgement itself.
+		if _, judges := patch["confidence"]; !judges {
+			var cur struct{ title, body, typ, confidence, confirmedBy string }
+			if err := tx.QueryRow(`SELECT title, body, type, confidence, confirmed_by FROM knowledge WHERE id=?`, id).
+				Scan(&cur.title, &cur.body, &cur.typ, &cur.confidence, &cur.confirmedBy); err != nil {
+				return err
+			}
+			changed := (newTitle && patch["title"] != cur.title) || (newBody && patch["body"] != cur.body) || (newType && patch["type"] != cur.typ)
+			if changed && cur.confidence == "verified" && (editor == "" || editor != cur.confirmedBy) {
+				sets = append(sets, "confidence = ?", "confirmed_by = ''")
+				args = append(args, "staged")
+			}
+		}
 		if web {
 			originID, err := insertOriginTx(tx, &originctx.Context{Via: originctx.ViaWeb})
 			if err != nil {

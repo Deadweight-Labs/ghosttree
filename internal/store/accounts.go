@@ -326,7 +326,7 @@ func (s *Store) CreateToken(account string, spec TokenSpec) (string, TokenInfo, 
 	if spec.ExpiresIn < 0 {
 		return "", TokenInfo{}, fmt.Errorf("token lifetime must be positive")
 	}
-	token, hash, err := newToken()
+	token, hash, err := newAPIToken()
 	if err != nil {
 		return "", TokenInfo{}, err
 	}
@@ -426,8 +426,8 @@ func (s *Store) PrincipalValid(p Principal) bool {
 	var one int
 	err = s.db.QueryRow(`SELECT 1 FROM api_tokens t JOIN persons p ON p.id = t.account_id
 		WHERE t.id = ? AND t.account_id = ? AND t.revoked_at = ''
-		  AND (t.expires_at = '' OR t.expires_at > ?) AND p.state = 'active'`,
-		p.TokenID, account, now()).Scan(&one)
+		  AND (t.expires_at = '' OR t.expires_at > ?) AND p.state = 'active'`+tokenIdleCond,
+		p.TokenID, account, now(), tokenIdleCutoff()).Scan(&one)
 	return err == nil
 }
 
@@ -981,7 +981,7 @@ func (s *Store) CreateDeviceToken(accountID, machine string) (string, TokenInfo,
 	if machine == "" {
 		return "", TokenInfo{}, fmt.Errorf("device token needs a machine")
 	}
-	token, hash, err := newToken()
+	token, hash, err := newAPIToken()
 	if err != nil {
 		return "", TokenInfo{}, err
 	}

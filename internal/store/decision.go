@@ -962,10 +962,25 @@ func (a *ProjectAccess) decisionKnowledge(d idea.Decision, v *idea.Variant, answ
 		body.WriteString("\n**Images:** " + strings.Join(images, "; ") + "\n")
 	}
 	origin := "human"
+	// What an agent decides alone is a draft: it reaches other agents as trusted
+	// knowledge only after a person confirmed it (or took part in the decision).
+	confidence := "trusted"
 	if actor.Agent {
 		title = "vom Agenten: " + title
 		origin = "agent"
-		body.WriteString("\nDecided by an agent, not confirmed by a person. It blocks nothing; a person can overturn it with decision_reopen.\n")
+		if !decisionHasPersonVote(d) {
+			confidence = "staged"
+			body.WriteString("\nDecided by an agent, with no person involved: this entry waits as a draft until a person confirms it. It blocks nothing; a person can overturn the decision with decision_reopen.\n")
+		} else {
+			body.WriteString("\nDecided by an agent, not confirmed by a person. It blocks nothing; a person can overturn it with decision_reopen.\n")
+		}
+		// The aspects that kept the decision with the agent are what the agent said
+		// of its own question; nobody checked them.
+		declared := "none"
+		if len(d.Aspects) > 0 {
+			declared = strings.Join(d.Aspects, ", ")
+		}
+		fmt.Fprintf(&body, "Aspects as the agent declared them (not checked): %s.\n", declared)
 	}
 	if len(d.Votes) > 0 {
 		body.WriteString("\n**Votes:**")
@@ -979,7 +994,7 @@ func (a *ProjectAccess) decisionKnowledge(d idea.Decision, v *idea.Variant, answ
 		body.WriteString("\n")
 	}
 	k := &Knowledge{Type: "decision", Title: title, Body: strings.TrimSpace(body.String()), Scope: scope.Axes{Project: d.Project},
-		Origin: origin, Confidence: "trusted", Person: actor.Person, AuthorID: actor.AccountID, SessionRef: actor.SessionRef,
+		Origin: origin, Confidence: confidence, Person: actor.Person, AuthorID: actor.AccountID, SessionRef: actor.SessionRef,
 		GitAnchor: actor.GitAnchor, OriginContext: actor.Origin}
 	line := ""
 	if d.Subject == idea.SubjectIdea {
@@ -1161,4 +1176,16 @@ func (a *ProjectAccess) DueDecisions(project string, context ...string) ([]idea.
 		}
 	}
 	return out, nil
+}
+
+// decisionHasPersonVote says whether a person (not an agent) voted on the
+// decision: then a person took part, and what an agent closes after that is not
+// the agent's word alone.
+func decisionHasPersonVote(d idea.Decision) bool {
+	for _, v := range d.Votes {
+		if !v.ByAgent {
+			return true
+		}
+	}
+	return false
 }

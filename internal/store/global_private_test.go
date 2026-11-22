@@ -102,10 +102,15 @@ func TestGlobalKnowledgeIsOnlyForItsAuthor(t *testing.T) {
 	}
 }
 
-func TestGlobalKnowledgeStaysOpenWithoutEnforcement(t *testing.T) {
+// Der Eintrag ohne Projekt gehört seinem Autor, im Log-Modus ebenso.
+func TestGlobalKnowledgeStaysPrivateWithoutEnforcement(t *testing.T) {
 	f := newGlobalFixture(t)
-	if !viewer(f.st, "person:6", "nora").CanSeeKnowledge(f.robinK) {
-		t.Error("log mode must not hide")
+	f.st.SetAccessMode(AccessMode{})
+	if viewer(f.st, "person:6", "nora").CanSeeKnowledge(f.robinK) {
+		t.Error("log mode shows the global entry of another account")
+	}
+	if !viewer(f.st, "person:1", "robin").CanSeeKnowledge(f.robinK) {
+		t.Error("the author loses his entry in log mode")
 	}
 }
 

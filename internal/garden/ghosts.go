@@ -3,6 +3,7 @@ package garden
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -11,9 +12,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -797,14 +800,21 @@ func GhostWrite(project string, g GhostProposalData, head string) (store.GhostFi
 // stops the rest, so a defect does not repeat itself across the run.
 func WriteGhosts(w GhostWriter, project, head, branch string, gs []GhostProposalData) (int, error) {
 	written := 0
+	var refused []error
 	for _, g := range gs {
 		f, commit := GhostWrite(project, g, head)
 		if _, err := w.PutGhostAnchored(f, gitanchor.Anchor{Commit: commit, Branch: branch}); err != nil {
+			// Ein Text, den der Store wegen eines Geheimnisses oder seiner Länge
+			// ablehnt, hält die übrigen Beschreibungen nicht auf.
+			if code := refusalCode(err); code == "secret_detected" || code == "text_too_long" {
+				refused = append(refused, fmt.Errorf("description of %s refused: %w", g.Path, err))
+				continue
+			}
 			return written, fmt.Errorf("write description of %s: %w", g.Path, err)
 		}
 		written++
 	}
-	return written, nil
+	return written, errors.Join(refused...)
 }
 
 // GhostEstimate is what a dry run expects of the description sessions: how many
@@ -860,4 +870,14 @@ func (r *Repo) EstimateGhosts(tasks []sessionTask, p Pricing) GhostEstimate {
 		e.USD += p.CostUsage(u)
 	}
 	return e
+}
+
+// refusalCode ist der Code, mit dem der Store einen Text abgelehnt hat, ob der
+// Fehler direkt aus dem Store oder als Antwort des Servers kommt.
+func refusalCode(err error) string {
+	var api *client.APIError
+	if errors.As(err, &api) {
+		return api.Code
+	}
+	return requestdomain.Code(err)
 }

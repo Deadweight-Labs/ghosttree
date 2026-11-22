@@ -68,6 +68,17 @@ var patterns = []pattern{
 	{"aws", regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`), []string{"AKIA", "ASIA"}},
 	{"slack", regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9-]{10,}\b`), []string{"xox"}},
 	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b`), []string{"eyJ"}},
+	{"ghosttree", regexp.MustCompile(`\bgt[kr]_[0-9A-Za-z]{32,}\b`), []string{"gtk_", "gtr_"}},
+	{"google", regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b|\bya29\.[0-9A-Za-z_-]{20,}|\bGOCSPX-[0-9A-Za-z_-]{20,}`), []string{"AIza", "ya29.", "GOCSPX-"}},
+	{"stripe", regexp.MustCompile(`\b(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}\b|\bwhsec_[0-9A-Za-z]{20,}\b`), []string{"sk_", "rk_", "whsec_"}},
+	{"gitlab", regexp.MustCompile(`\bglpat-[0-9A-Za-z_-]{20,}`), []string{"glpat-"}},
+	{"npm", regexp.MustCompile(`\bnpm_[0-9A-Za-z]{36}\b`), []string{"npm_"}},
+	{"pypi", regexp.MustCompile(`\bpypi-[A-Za-z0-9_-]{50,}`), []string{"pypi-"}},
+	{"huggingface", regexp.MustCompile(`\bhf_[A-Za-z0-9]{30,}\b`), []string{"hf_"}},
+	{"sendgrid", regexp.MustCompile(`\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b`), []string{"SG."}},
+	{"digitalocean", regexp.MustCompile(`\bdo[opr]_v1_[a-f0-9]{64}\b`), []string{"_v1_"}},
+	{"telegram", regexp.MustCompile(`\b[0-9]{8,10}:AA[A-Za-z0-9_-]{33}\b`), []string{":AA"}},
+	{"azure", regexp.MustCompile(`\bAccountKey=[A-Za-z0-9+/]{40,}={0,2}|\bSharedAccessSignature=[^;\s"']{20,}`), []string{"AccountKey=", "SharedAccessSignature="}},
 }
 
 func (p *pattern) possible(s string) bool {

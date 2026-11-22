@@ -176,6 +176,35 @@ func (a *ProjectAccess) ResolveRequestLinks(project, parent string, derivedFrom 
 }
 
 // requestInProject: der Auftrag liegt im Projekt und der Betrachter darf ihn lesen.
+// CheckRequestRelation prüft das Ziel einer Relation an einem bestehenden
+// Auftrag wie ResolveRequestLinks das eines neuen: ein Auftrag desselben
+// Projekts oder Wissen desselben Projekts (oder eigenes ohne Projekt), das der
+// Betrachter lesen darf. Was es nicht gibt, was woanders liegt und was er nicht
+// lesen darf, antwortet gleich. Externe Verweise haben kein Ziel zu prüfen.
+func (a *ProjectAccess) CheckRequestRelation(requestID int64, relation requestdomain.Relation) error {
+	if relation.OtherRequestID == 0 && relation.KnowledgeID == 0 {
+		return nil
+	}
+	ref, err := a.st.RequestRef(RefRequest, requestID)
+	if err != nil {
+		return err
+	}
+	project := scope.NormalizeRemote(ref.Project)
+	if relation.OtherRequestID != 0 && !a.requestInProject(project, relation.OtherRequestID) {
+		a.Filtered()
+		return linkTargetNotFound(fmt.Sprintf("REQ-%d", relation.OtherRequestID))
+	}
+	if relation.KnowledgeID != 0 {
+		k, err := a.st.KnowledgeByID(relation.KnowledgeID)
+		kp := scope.NormalizeRemote(k.Scope.Project)
+		if err != nil || (kp != project && kp != "") || !a.CanSeeKnowledge(k) {
+			a.Filtered()
+			return linkTargetNotFound(fmt.Sprintf("KN-%d", relation.KnowledgeID))
+		}
+	}
+	return nil
+}
+
 func (a *ProjectAccess) requestInProject(project string, id int64) bool {
 	ref, err := a.st.RequestRef(RefRequest, id)
 	return err == nil && scope.NormalizeRemote(ref.Project) == project && requestReadable(a, ref)

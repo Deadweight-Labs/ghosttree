@@ -268,7 +268,8 @@ func TestDevicePagesUseTheCatalogAndTheCodeField(t *testing.T) {
 	base, _, alice, _ := adminSeed(t)
 	resp, _ := alice.Get(base + "/ui/device?user_code=ABCD-EFGH")
 	page := body(t, resp)
-	if !strings.Contains(page, `class="gfield big"`) || !strings.Contains(page, `value="ABCD-EFGH"`) || strings.Contains(page, "Only approve") {
+	// A link never fills the code in: the person types the one their terminal shows.
+	if !strings.Contains(page, `class="gfield big"`) || strings.Contains(page, "ABCD-EFGH") || strings.Contains(page, "Only approve") {
 		t.Fatalf("device page: %s", page)
 	}
 	resp = sameOriginPostForm(t, alice, base+"/ui/device", url.Values{"csrf_token": {renderedCSRFToken(t, alice, base+"/ui/device")}, "user_code": {"ZZZZ-ZZZZ"}})

@@ -239,7 +239,7 @@ func TestLocalInvitationLinkCreatesAccountAndSession(t *testing.T) {
 	}
 	var session bool
 	for _, c := range resp.Cookies() {
-		session = session || c.Name == sessionCookie
+		session = session || isSessionCookie(c)
 	}
 	if !session {
 		t.Fatal("no session after redeeming")

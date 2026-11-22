@@ -87,6 +87,7 @@ func init() {
 		{"wf.policy.prompt", "Free prompts with tools", "Freie Prompts mit Werkzeugen"},
 		{"wf.policy.research", "Research on the web", "Recherche im Netz"},
 		{"wf.policy.affects", "affects: %s", "betrifft: %s"},
+		{"wf.policy.auto_members", "This applies only when the quotes come from text written by members; text from pull requests or web pages always waits for a person.", "Das gilt nur, wenn die Belege aus Text von Mitgliedern stammen; Text aus Pull Requests oder dem Netz wartet immer auf eine Person."},
 		{"wf.policy.auto_warn", "Results of these kinds count at once and can only be undone afterwards.", "Ergebnisse dieser Arten gelten sofort und lassen sich nur nachträglich zurücknehmen."},
 	} {
 		messages[m[0]] = m[1]

@@ -63,6 +63,12 @@ func WithPublicURL(raw string) Option {
 	return func(a *api) { a.publicURL = strings.TrimRight(raw, "/") }
 }
 
+// WithMetricsToken lets a scraper read /metrics from outside the machine with
+// this bearer token. Without it only the machine itself reads them.
+func WithMetricsToken(token string) Option {
+	return func(a *api) { a.metricsToken = strings.TrimSpace(token) }
+}
+
 func WithBuildVersion(version string) Option {
 	return func(a *api) { a.buildVersion = version }
 }
@@ -99,6 +105,8 @@ type api struct {
 	metrics              *metricsRegistry
 	registered           []string
 	uncheckedHook        func(route string)
+	writeLimit           *writeLimiter
+	metricsToken         string
 }
 
 type personKey struct{}
@@ -115,7 +123,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	a.routeFunc(mux, "GET /api/version", a.versionInfo)
-	a.route(mux, "GET /metrics", a.metrics)
+	a.route(mux, "GET /metrics", a.metricsGate(a.metrics))
 	a.routeFunc(mux, "GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.whoAmI(r))
 	})
@@ -138,6 +146,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "POST /api/invitations/accept", a.acceptInvitation)
 	a.routeFunc(mux, "PUT /api/account/default-org", a.setDefaultOrg)
 	a.routeFunc(mux, "GET /api/garden/due", a.gardenDue)
+	a.routeFunc(mux, "POST /api/garden/session-token", a.gardenSessionToken)
 	a.routeFunc(mux, "POST /api/garden/runs", a.gardenRunStart)
 	a.routeFunc(mux, "POST /api/garden/runs/{id}/finish", a.gardenRunFinish)
 	a.routeFunc(mux, "GET /api/projects", a.listProjects)
@@ -221,6 +230,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "GET /api/context/bootstrap", a.bootstrap)
 	a.routeFunc(mux, "GET /api/context/interrupted", a.interrupted)
 	a.routeFunc(mux, "GET /api/context/relevant", a.relevant)
+	a.routeFunc(mux, "POST /api/context/relevant", a.relevant)
 	a.routeFunc(mux, "POST /api/ghosts", a.putGhost)
 	a.routeFunc(mux, "GET /api/ghosts", a.ghostsForPath)
 	a.routeFunc(mux, "GET /api/ghosts/tree", a.ghostTree)
@@ -299,6 +309,7 @@ func newAPI(st *store.Store, options ...Option) *api {
 	if a.operationIDGenerator == nil {
 		a.operationIDGenerator = randomOperationID
 	}
+	a.writeLimit = newWriteLimiter()
 	if a.snapshotErrorLogger == nil {
 		a.snapshotErrorLogger = func(operationID string, err, generatorErr error) {
 			log.Printf("snapshot_internal_error operation_id=%q error=%q operation_id_error=%q", operationID, err, generatorErr)
@@ -369,12 +380,21 @@ func (a *api) auth(next http.Handler) http.Handler {
 				return
 			}
 		} else {
-			principal, ok = a.st.AuthenticatePrincipal(token)
+			principal, ok = a.st.AuthenticateScopedPrincipal(token)
 		}
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
+		if principal.ReadOnly && !scopedTokenMayRead(r) {
+			writeCoded(w, http.StatusForbidden, "forbidden", "this token is bound to one project and to reading")
+			return
+		}
+		release, allowed := a.limitWrites(w, r, principal.ID)
+		if !allowed {
+			return
+		}
+		defer release()
 		a.st.TouchToken(principal.TokenID)
 		if principal.Machine != "" && a.machineSeenDue(principal) {
 			// A device that talks is a machine that was just seen: without it the
@@ -389,6 +409,28 @@ func (a *api) auth(next http.Handler) http.Handler {
 		movedProjects(r)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// scopedPrefixes are the routes a read-only project token reaches: the reads of
+// what belongs to a project. Organization, account, machine and coordination
+// routes are not among them, whatever the account behind the token may do.
+var scopedPrefixes = []string{
+	"/api/search", "/api/knowledge", "/api/ghosts", "/api/requests", "/api/pains", "/api/ideas", "/api/documents",
+	"/api/features", "/api/decisions", "/api/pulls", "/api/packages", "/api/commits", "/api/comments", "/api/labels",
+	"/api/topics", "/api/sessions", "/api/criteria", "/api/whoami", "/api/version", "/api/health",
+}
+
+// scopedTokenMayRead says whether a request is a read on one of scopedPrefixes.
+func scopedTokenMayRead(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	for _, p := range scopedPrefixes {
+		if r.URL.Path == p || strings.HasPrefix(r.URL.Path, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // whoAmIResponse ist der Principal plus die Kontodaten. Die Principal-Felder
@@ -449,9 +491,16 @@ func (a *api) guestAxes(r *http.Request) scope.Axes {
 	return ax
 }
 
+// maxListLimit ist die größte Seite, die eine Liste auf Anfrage liefert. Ohne
+// sie holt limit=100000000 den ganzen Bestand in den Speicher.
+const maxListLimit = 1000
+
 func intParam(r *http.Request, name string, def int) int {
 	if v := r.URL.Query().Get(name); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
+			if name == "limit" && n > maxListLimit {
+				return maxListLimit
+			}
 			return n
 		}
 	}

@@ -58,6 +58,15 @@ const (
 	AICapServer     = "cap.server"
 	AICapLoan       = "cap.loan"
 
+	// AIDefaultOwnerMonthUSD is the monthly cap of an organization that set none
+	// (the cap of the owner is the setting "0 = none", which is how an unset cap
+	// and a cap of nothing look alike in the settings). Set one to change it.
+	AIDefaultOwnerMonthUSD = 25.0
+	// A model without a price costs nothing in dollars, so no cap in dollars
+	// stops it. A call limit does: per run and, on the connection, per month.
+	aiUnpricedRunCalls   = 40
+	aiUnpricedMonthCalls = 2000
+
 	// aiKeyPurposeV1 is the purpose keys were sealed with before they were
 	// bound to their row; ResealAIKeys moves such keys to AIKeyPurposeFor.
 	aiKeyPurposeV1 = "ghosttree/ai-connection-key"
@@ -1630,9 +1639,17 @@ func aiCapsFor(q rowQuerier, r AIRoute) []aiCapLine {
 	// gardener's settings, not by the owner's cap per run: its budget is what
 	// its owner chose for it, and the owner's month still holds below.
 	var trigger int64
-	if q.QueryRow(`SELECT trigger_id FROM workflow_runs WHERE id=?`, r.RunID).Scan(&trigger) == nil && trigger < 0 {
+	gardener := q.QueryRow(`SELECT trigger_id FROM workflow_runs WHERE id=?`, r.RunID).Scan(&trigger) == nil && trigger < 0
+	if gardener {
 		g, _ := gardenSettingsTx(q, r.OrgID)
 		runCap = g.BudgetRun
+	}
+	// An owner who set no cap for the month is not left without one: the runs of
+	// the workflows of the organization stop at a default, so that a workflow
+	// written in a hurry cannot empty a connection. The gardener has its own
+	// budget in its settings.
+	if owner.MonthUSD <= 0 && !gardener {
+		owner.MonthUSD = AIDefaultOwnerMonthUSD
 	}
 	// The budget in the file of a workflow (REQ-695) only tightens: the lower
 	// of it and the caps set in the settings applies.
@@ -1731,6 +1748,17 @@ func (s *Store) ReserveAICall(r AIRoute, estimateUSD float64) (int64, error) {
 			return 0, &AIBudgetError{Cap: cl.name, Final: final}
 		}
 	}
+	if r.Model.InUSD <= 0 && r.Model.OutUSD <= 0 {
+		if name := unpricedLimitTx(tx, r); name != "" {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO ai_run_caps(run_id, cap, created_at) SELECT id, ?, ? FROM workflow_runs WHERE id=?`, name, ts, r.RunID); err != nil {
+				return 0, err
+			}
+			if err := tx.Commit(); err != nil {
+				return 0, err
+			}
+			return 0, &AIBudgetError{Cap: name, Final: true}
+		}
+	}
 	res, err := tx.Exec(`INSERT INTO ai_calls(run_id, org_id, project, workflow, connection_id, connection, via, loan_id, requested, model, cost_usd, status, created_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.RunID, r.OrgID, r.Project, r.Workflow, r.Connection.ID, r.Connection.Name, r.Via, r.LoanID,
 		cutRunes(r.Requested, 200), r.Model.Model, estimateUSD, aiCallPending, ts)
@@ -1739,6 +1767,20 @@ func (s *Store) ReserveAICall(r AIRoute, estimateUSD float64) (int64, error) {
 	}
 	id, _ := res.LastInsertId()
 	return id, tx.Commit()
+}
+
+// unpricedLimitTx names the call limit a call on a model without a price has
+// reached: the run's own (reported as the cap of the run) or the connection's
+// of the month ("" when none).
+func unpricedLimitTx(q rowQuerier, r AIRoute) string {
+	var n int
+	if q.QueryRow(`SELECT COUNT(*) FROM ai_calls WHERE run_id=?`, r.RunID).Scan(&n) == nil && n >= aiUnpricedRunCalls {
+		return AICapRun
+	}
+	if q.QueryRow(`SELECT COUNT(*) FROM ai_calls WHERE connection_id=? AND created_at>=?`, r.Connection.ID, aiMonthStart()).Scan(&n) == nil && n >= aiUnpricedMonthCalls {
+		return AICapConnection
+	}
+	return ""
 }
 
 // SettleOpenAICalls books every reservation that is still open at the
@@ -1932,10 +1974,30 @@ func (s *Store) AICostReportOf(orgID int64, since string) (AICostReport, error) 
 	if s.reader != nil {
 		return s.reader.AICostReportOf(orgID, since)
 	}
+	return s.AICostReportFor(orgID, since, nil)
+}
+
+// AICostReportFor is AICostReportOf for a viewer who reads only some projects of
+// the organization: the tables that name a workflow, a run or a project (by
+// workflow, by run) keep what is not tied to a project (tests of a connection)
+// and the calls of the projects in visible. What the organization spent as a whole,
+// by connection and by model, stays complete: those amounts name no project.
+// visible nil means everything (an owner).
+func (s *Store) AICostReportFor(orgID int64, since string, visible []string) (AICostReport, error) {
+	if s.reader != nil {
+		return s.reader.AICostReportFor(orgID, since, visible)
+	}
 	var rep AICostReport
-	group := func(cols string, limit int) ([]AICostRow, error) {
+	group := func(cols string, limit int, byProject bool) ([]AICostRow, error) {
+		where, args := `org_id=? AND created_at>=?`, []any{orgID, since}
+		if byProject && visible != nil {
+			where += ` AND (project='' OR project IN (` + placeholders(len(visible)) + `))`
+			for _, p := range visible {
+				args = append(args, p)
+			}
+		}
 		rows, err := s.db.Query(`SELECT `+cols+`, COUNT(*), SUM(input_tokens+output_tokens+cache_read_tokens+cache_write_tokens), SUM(cost_usd)
-			FROM ai_calls WHERE org_id=? AND created_at>=? GROUP BY `+cols+` ORDER BY SUM(cost_usd) DESC LIMIT ?`, orgID, since, limit)
+			FROM ai_calls WHERE `+where+` GROUP BY `+cols+` ORDER BY SUM(cost_usd) DESC LIMIT ?`, append(args, limit)...)
 		if err != nil {
 			return nil, err
 		}
@@ -1958,19 +2020,21 @@ func (s *Store) AICostReportOf(orgID int64, since string) (AICostReport, error) 
 		return out, rows.Err()
 	}
 	var err error
-	if rep.ByWorkflow, err = group("workflow", 100); err != nil {
+	if rep.ByWorkflow, err = group("workflow", 100, true); err != nil {
 		return rep, err
 	}
-	if rep.ByRun, err = group("run_id, project, workflow", 50); err != nil {
+	if rep.ByRun, err = group("run_id, project, workflow", 50, true); err != nil {
 		return rep, err
 	}
-	if rep.ByConnection, err = group("connection", 100); err != nil {
+	if rep.ByConnection, err = group("connection", 100, false); err != nil {
 		return rep, err
 	}
-	if rep.ByModel, err = group("model", 100); err != nil {
+	if rep.ByModel, err = group("model", 100, false); err != nil {
 		return rep, err
 	}
-	for _, r := range rep.ByWorkflow {
+	// Every call has a connection, so the whole is the sum over them, whatever
+	// the other tables were cut to.
+	for _, r := range rep.ByConnection {
 		rep.TotalUSD += r.CostUSD
 		rep.Calls += r.Calls
 	}

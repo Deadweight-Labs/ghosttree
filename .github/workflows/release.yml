@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  packages: write
 
 jobs:
   release:
@@ -43,6 +44,13 @@ jobs:
           else
             git branch -r --contains HEAD | sed 's/^[* ]*//' | grep -Fxq "origin/main"
           fi
+      # The key is also published in SECURITY.md, a second place next to install.sh
+      # to compare it with: a release whose key nobody can check there stops here.
+      - name: Check that SECURITY.md carries the release key
+        run: |
+          set -eu
+          pub=$(sed -n 2p deploy/downloads/ghosttree/minisign.pub)
+          grep -Fq "\`$pub\`" SECURITY.md || { echo "SECURITY.md does not carry the release key $pub" >&2; exit 1; }
       # The scripts of the web interface come first: a second, and a script that
       # loops is stopped by the limits.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -79,8 +87,8 @@ jobs:
       - name: Check the public key and install minisign
         run: |
           set -eu
-          if grep -q '__GHOSTTREE_MINISIGN_PUBKEY__' deploy/downloads/ghosttree/minisign.pub deploy/downloads/ghosttree/install.sh; then
-            echo "install.sh and minisign.pub still carry the key placeholder" >&2; exit 1
+          if grep -q '__GHOSTTREE_MINISIGN_PUBKEY__' deploy/downloads/ghosttree/minisign.pub deploy/downloads/ghosttree/install.sh internal/releasekey/minisign.pub; then
+            echo "install.sh, minisign.pub and internal/releasekey/minisign.pub still carry the key placeholder" >&2; exit 1
           fi
           pub=$(sed -n 2p deploy/downloads/ghosttree/minisign.pub)
           grep -Fq "pubkey='$pub'" deploy/downloads/ghosttree/install.sh
@@ -88,20 +96,77 @@ jobs:
           sudo apt-get install -y -qq minisign
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      # The Docker image of the release (DEC-54): both platforms, signed with the
+      # same keyless identity as the archives. It is pushed by digest and WITHOUT a
+      # tag before the release is built, so its digest can go into the signed
+      # checksums.txt; the tags (X.Y.Z, and latest for a final release) are only set
+      # after goreleaser has published the release (the last steps below). A run
+      # that fails half way therefore leaves an image nobody can pull by name, and
+      # never moves `latest` to a release that does not exist. These actions run
+      # before the signing key is written.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image version
+        id: imagetags
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        id: image
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          outputs: type=image,name=ghcr.io/deadweight-labs/ghosttree,push-by-digest=true,name-canonical=true,push=true
+          build-args: VERSION=${{ steps.imagetags.outputs.version }}
+          provenance: true
+          sbom: true
+      - name: Sign the image
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/deadweight-labs/ghosttree@$DIGEST"
+      # The digest goes into the release as ghosttree-image.txt, listed in the
+      # signed checksums.txt (see .goreleaser.yaml): the installer and ctx server
+      # update pull that digest, so the tag on the registry decides nothing.
+      - name: Record the image digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -eu
+          printf '%s\n' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          mkdir -p .release-image
+          printf '%s\n' "$DIGEST" > .release-image/ghosttree-image.txt
+          echo "IMAGE_DIGEST_FILE=.release-image/ghosttree-image.txt" >> "$GITHUB_ENV"
+      - name: Check the image
+        env:
+          VERSION: ${{ steps.imagetags.outputs.version }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -eu
+          docker buildx imagetools inspect "ghcr.io/deadweight-labs/ghosttree@$DIGEST" | grep -E 'linux/(amd64|arm64)'
+          docker run --rm "ghcr.io/deadweight-labs/ghosttree@$DIGEST" version | grep -Fx "ctx $VERSION"
       # Only this step sees the secret. The key goes to a file for the signing
       # run of goreleaser and is deleted by the step after it. A key that does not
       # match minisign.pub stops the release before anything is published.
       - name: Write the minisign key
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
           set -eu
           test -n "$MINISIGN_SECRET_KEY" || { echo "secret MINISIGN_SECRET_KEY is not set" >&2; exit 1; }
+          test -n "$MINISIGN_PASSWORD" || { echo "secret MINISIGN_PASSWORD is not set: the release key has a password" >&2; exit 1; }
           umask 077
           key="$RUNNER_TEMP/minisign.key"
           printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
           printf 'probe\n' > "$RUNNER_TEMP/probe"
-          minisign -S -s "$key" -m "$RUNNER_TEMP/probe" -x "$RUNNER_TEMP/probe.minisig" -t probe
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$key" -m "$RUNNER_TEMP/probe" -x "$RUNNER_TEMP/probe.minisig" -t probe
           minisign -V -p deploy/downloads/ghosttree/minisign.pub -m "$RUNNER_TEMP/probe" -x "$RUNNER_TEMP/probe.minisig"
           rm -f "$RUNNER_TEMP/probe" "$RUNNER_TEMP/probe.minisig"
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
@@ -112,6 +177,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MINISIGN_KEY_FILE: ${{ runner.temp }}/minisign.key
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
       - name: Remove the minisign key
         if: always()
         run: rm -f "$RUNNER_TEMP/minisign.key"
@@ -122,3 +188,53 @@ jobs:
           set -eu
           minisign -V -p deploy/downloads/ghosttree/minisign.pub -m dist/checksums.txt -x dist/checksums.txt.minisig
           grep -Fq "ghosttree $TAG" dist/checksums.txt.minisig
+      # goreleaser left the release as a draft (.goreleaser.yaml). The files that
+      # were really uploaded are fetched back and checked: signature against the
+      # committed key, the tag in the signed comment, every archive against the
+      # signed list. A failure leaves a draft to delete, not a release that people
+      # can install.
+      - name: Check the uploaded files of the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          up="$RUNNER_TEMP/uploaded"
+          mkdir "$up"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$up" \
+            --pattern checksums.txt --pattern checksums.txt.minisig --pattern ghosttree-image.txt --pattern 'ghosttree_*.tar.gz'
+          minisign -V -p deploy/downloads/ghosttree/minisign.pub -m "$up/checksums.txt" -x "$up/checksums.txt.minisig"
+          grep -Fq "ghosttree $TAG" "$up/checksums.txt.minisig"
+          cmp "$up/checksums.txt" dist/checksums.txt
+          archives=0
+          for f in "$up"/ghosttree_*.tar.gz; do
+            grep -Fq "  $(basename "$f")" "$up/checksums.txt"
+            archives=$((archives + 1))
+          done
+          test "$archives" -ge 4
+          # The digest of the image is part of the signed list, so what was
+          # uploaded must be the file that list names.
+          grep -Fq "  ghosttree-image.txt" "$up/checksums.txt"
+          cmp "$up/ghosttree-image.txt" "$IMAGE_DIGEST_FILE"
+          (cd "$up" && sha256sum -c checksums.txt --ignore-missing)
+          test "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+      # The release is published first, and in the same last step the image gets
+      # its names: a run that fails before this leaves a draft and an image nobody
+      # can pull by name, and `latest` never moves to a release that does not
+      # exist. A release candidate never gets `latest`. (The step that publishes
+      # is the last one of the job: the release is final only when everything
+      # before it passed.)
+      - name: Publish the release and name the image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.imagetags.outputs.version }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -eu
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          tags="-t ghcr.io/deadweight-labs/ghosttree:$VERSION"
+          case "$VERSION" in *-rc.*) ;; *) tags="$tags -t ghcr.io/deadweight-labs/ghosttree:latest" ;; esac
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $tags "ghcr.io/deadweight-labs/ghosttree@$DIGEST"
+          docker run --rm "ghcr.io/deadweight-labs/ghosttree:$VERSION" version | grep -Fx "ctx $VERSION"

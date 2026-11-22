@@ -499,6 +499,7 @@ func (s *Store) SessionsPendingDistillation(filter scope.Axes, idleBefore, promp
 	// candidates skipped 98 and submitted 2.
 	rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions
 		WHERE `+where+` AND last_seen_at < ? AND project != ''
+		  AND `+externalModelsOKSQL("sessions.project")+`
 		  AND NOT EXISTS (SELECT 1 FROM session_distillations d
 		                  WHERE d.session_id = sessions.id AND d.prompt_version = ?)
 		  AND NOT EXISTS (SELECT 1 FROM distill_batch_items i

@@ -30,9 +30,19 @@ func TestServerRootExposesMetricsOutsideAPIAndIncludesVersion(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	root := buildServerHandler(st, serveConfig{SnapshotLimits: snapshot.DefaultLimits()}, io.Discard)
 	rr := httptest.NewRecorder()
-	root.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	// /metrics is for the machine itself (or the holder of the metrics token).
+	probe := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	probe.RemoteAddr = "127.0.0.1:4000"
+	root.ServeHTTP(rr, probe)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
+	}
+	outside := httptest.NewRecorder()
+	far := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	far.RemoteAddr = "203.0.113.9:4000"
+	root.ServeHTTP(outside, far)
+	if outside.Code != http.StatusNotFound {
+		t.Fatalf("metrics for a client outside the machine: status = %d, want 404", outside.Code)
 	}
 	if !strings.Contains(rr.Body.String(), `ghosttree_build_info{version="`+version+`"} 1`) {
 		t.Fatalf("body = %s", rr.Body.String())
@@ -344,7 +354,7 @@ func TestServeRejectsStaleSnapshotSchemaWithoutChangingCounts(t *testing.T) {
 }
 
 func TestServeAccessEnforcementFollowsTheEnvironment(t *testing.T) {
-	for value, want := range map[string]bool{"": false, "0": false, "true": false, "1": true} {
+	for value, want := range map[string]bool{"": true, "0": false, "true": true, "1": true} {
 		t.Setenv(envEnforceAccess, value)
 		st, err := store.Open(":memory:")
 		if err != nil {

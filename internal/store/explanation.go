@@ -191,6 +191,9 @@ func (s *Store) ExplainSource(kind string, id int64) (explain.Source, error) {
 		return explain.Source{}, explain.ErrNotExplainable
 	}
 	src.Kind, src.ID = kind, id
+	if err == nil && src.Project != "" && !s.ProjectAllowsExternalModels(src.Project) {
+		src.Withheld = true
+	}
 	return src, err
 }
 
@@ -401,13 +404,13 @@ func (s *Store) ExplainCandidates(scan int) ([]explain.Candidate, error) {
 	heldKnowledge := func(origin, confidence, ref string) bool { return s.knowledgeHeld(origin, confidence, ref) }
 	heldRequest := func(origin, person, ref string) bool { return s.requestHeld(origin, person, ref) }
 	parts := []part{
-		{explain.KindKnowledge, `SELECT id, origin, confidence, session_ref FROM knowledge WHERE project != '' AND ((status = 'active' AND confidence IN ('quarantined','staged')) OR status = 'stale') ORDER BY created_at DESC, id DESC`, heldKnowledge},
-		{explain.KindRequest, `SELECT id, origin, person, session_ref FROM requests WHERE project != '' AND machine = '' AND state = 'open' ORDER BY created_at DESC, id DESC`, heldRequest},
-		{explain.KindPain, `SELECT id, '', '', '' FROM pains WHERE project != '' AND state IN ('active','mitigated') ORDER BY created_at DESC, id DESC`, nil},
+		{explain.KindKnowledge, `SELECT id, origin, confidence, session_ref FROM knowledge WHERE project != '' AND ` + externalModelsOKSQL("project") + ` AND ((status = 'active' AND confidence IN ('quarantined','staged')) OR status = 'stale') ORDER BY created_at DESC, id DESC`, heldKnowledge},
+		{explain.KindRequest, `SELECT id, origin, person, session_ref FROM requests WHERE project != '' AND ` + externalModelsOKSQL("project") + ` AND machine = '' AND state = 'open' ORDER BY created_at DESC, id DESC`, heldRequest},
+		{explain.KindPain, `SELECT id, '', '', '' FROM pains WHERE project != '' AND ` + externalModelsOKSQL("project") + ` AND state IN ('active','mitigated') ORDER BY created_at DESC, id DESC`, nil},
 		{explain.KindTask, `SELECT id, '', '', '' FROM human_tasks WHERE state IN ('open','done') ORDER BY created_at DESC, id DESC`, nil},
 		{explain.KindQuestion, `SELECT DISTINCT m.id, '', '', '' FROM coord_attention a JOIN coord_messages m ON m.id = a.message_id
 			WHERE a.reason = 'question' AND a.state = 'open' ORDER BY m.id DESC`, nil},
-		{explain.KindKnowledge, `SELECT id, origin, confidence, session_ref FROM knowledge WHERE project != '' AND status = 'active' AND confidence IN ('trusted','verified') ORDER BY created_at DESC, id DESC`, heldKnowledge},
+		{explain.KindKnowledge, `SELECT id, origin, confidence, session_ref FROM knowledge WHERE project != '' AND ` + externalModelsOKSQL("project") + ` AND status = 'active' AND confidence IN ('trusted','verified') ORDER BY created_at DESC, id DESC`, heldKnowledge},
 	}
 	var out []explain.Candidate
 	for _, p := range parts {

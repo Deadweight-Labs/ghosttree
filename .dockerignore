@@ -1,0 +1,10 @@
+.git
+.ghosttree
+.uxshots
+.impeccable
+dist
+bench
+docs
+*.db
+*.db-wal
+*.db-shm

@@ -87,7 +87,14 @@ type Source struct {
 	// Hash identifies the text that is explained. An explanation with another
 	// hash was written for an earlier text.
 	Hash string
+	// Withheld is set when the organization of the project keeps its texts from
+	// the operator's models: nothing is generated for the object, but an
+	// explanation an agent wrote for it still counts.
+	Withheld bool
 }
+
+// Generable says whether a model may write the explanation of the object.
+func (s Source) Generable() bool { return s.Project != "" && !s.Withheld }
 
 // HashOf hashes the parts of an object that its explanation depends on.
 func HashOf(kind string, parts ...string) string {

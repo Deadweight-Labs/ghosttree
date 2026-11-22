@@ -32,6 +32,10 @@ func WithDistDir(dir string) Option { return func(a *app) { a.distDir = dir } }
 // show it as .ServerVersion.
 func WithBuildVersion(v string) Option { return func(a *app) { a.buildVersion = v } }
 
+// distSignatureName is the minisign signature of checksums.txt that a server
+// built from a release can offer; ctx update checks it against the release key.
+const distSignatureName = "checksums.txt.minisig"
+
 var distNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
 
 var (
@@ -45,7 +49,8 @@ var (
 // anything outside a plain file name is dropped, so the list can never point
 // out of the directory.
 func parseChecksums(r *bufio.Scanner) map[string]bool {
-	names := map[string]bool{"checksums.txt": true}
+	// The signature of the checksums stands next to them and cannot list itself.
+	names := map[string]bool{"checksums.txt": true, distSignatureName: true}
 	for r.Scan() {
 		fields := strings.Fields(strings.TrimRight(r.Text(), "\r"))
 		if len(fields) != 2 || !distHashRE.MatchString(fields[0]) {
@@ -167,7 +172,7 @@ func (a *app) distFile(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", distContentType(name))
 	h.Set("X-Content-Type-Options", "nosniff")
-	if name == "checksums.txt" {
+	if name == "checksums.txt" || name == distSignatureName {
 		h.Set("Cache-Control", "no-cache")
 	} else {
 		h.Set("Cache-Control", "public, max-age=300")
@@ -180,7 +185,7 @@ func (a *app) distFile(w http.ResponseWriter, r *http.Request) {
 // a trusted proxy.
 func (a *app) requestOrigin(r *http.Request) (string, error) {
 	if a.publicOrigin != "" {
-		if !distHostRE.MatchString(strings.SplitN(a.publicOrigin, "://", 2)[1]) {
+		if !shellSafeOrigin(a.publicOrigin) {
 			return "", errors.New("bad public url")
 		}
 		if !strings.HasPrefix(a.publicOrigin, "https://") && !loopbackHost(strings.TrimPrefix(a.publicOrigin, "http://")) {
@@ -228,6 +233,14 @@ func loopbackHost(host string) bool {
 // distHostRE keeps the host to characters that are inert inside a
 // single-quoted shell string.
 var distHostRE = regexp.MustCompile(`^[A-Za-z0-9.:\[\]-]+$`)
+
+// shellSafeOrigin reports whether origin is http(s)://hostname[:port] and
+// nothing else (no user information, path or query), with a host of inert
+// characters only: the one rule for an address that is put into shell text.
+func shellSafeOrigin(origin string) bool {
+	scheme, host, ok := strings.Cut(origin, "://")
+	return ok && (scheme == "https" || scheme == "http") && distHostRE.MatchString(host) && validForwardedHost(host)
+}
 
 func (a *app) installSh(w http.ResponseWriter, r *http.Request) {
 	if a.distDir == "" {

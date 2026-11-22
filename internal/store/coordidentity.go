@@ -111,7 +111,9 @@ func ensureCoordMessageBroadcast(db *sql.DB) error {
 	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS coord_messages_broadcast_principal
 			ON coord_messages(author_principal_id,created_at) WHERE is_broadcast=1;
 		CREATE INDEX IF NOT EXISTS coord_messages_broadcast_sender
-			ON coord_messages(sender_external_id,created_at) WHERE is_broadcast=1`)
+			ON coord_messages(sender_external_id,created_at) WHERE is_broadcast=1;
+		CREATE INDEX IF NOT EXISTS coord_messages_author_time
+			ON coord_messages(author_principal_id,created_at)`)
 	return err
 }
 

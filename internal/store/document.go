@@ -51,6 +51,11 @@ func Digest(body string) string {
 }
 
 func (s *Store) CreateDocument(d Document, body, message string) (Document, error) {
+	// Der Text wird an den Schnittstellen geprüft (er kann Megabytes haben);
+	// Titel und Meldung sind kurz und laufen hier mit.
+	if err := refuseSecrets("title", d.Title, "message", message); err != nil {
+		return Document{}, err
+	}
 	if s.writer != nil {
 		return queueValue(s, []any{d, body, message}, func(direct *Store, p []any) (Document, error) {
 			return direct.CreateDocument(p[0].(Document), p[1].(string), p[2].(string))
@@ -89,6 +94,9 @@ func (s *Store) CreateDocument(d Document, body, message string) (Document, erro
 // scheitert, und der Kopf zeigt fortan auf eine Revision, die niemand lesen
 // kann.
 func (s *Store) PushRevision(id int64, base int, body, message, person string) (Document, error) {
+	if err := refuseSecrets("message", message); err != nil {
+		return Document{}, err
+	}
 	if s.writer != nil {
 		return queueValue(s, []any{id, base, body, message, person}, func(d *Store, p []any) (Document, error) {
 			return d.PushRevision(p[0].(int64), p[1].(int), p[2].(string), p[3].(string), p[4].(string))

@@ -15,6 +15,7 @@ import (
 // link back. A comment of the same run still waits for a person.
 func TestAutomaticRelationOfAnIdeaToAFeatureAppliesAndCanBeUndone(t *testing.T) {
 	st := engineStore(t)
+	seedMemberText(t, st)
 	pa := st.Access(store.Principal{ID: "person:1", Label: "robin"})
 	i, err := pa.CreateIdea(store.CreateIdeaInput{Project: project, Title: "Klartext-Status", Actor: idea.Actor{AccountID: 1, Person: "robin"}})
 	if err != nil {
@@ -32,7 +33,7 @@ func TestAutomaticRelationOfAnIdeaToAFeatureAppliesAndCanBeUndone(t *testing.T) 
 		in.Propose(Result{Kind: ResultRelation, IdeaID: i.ID, FeatureID: f.ID, Relation: "affects", Evidence: []string{"Anmeldung per Link"}})
 		in.Propose(Result{Kind: ResultComment, IdeaID: i.ID, Body: "Passt zu Status", Evidence: []string{"Anmeldung per Link"}})
 	})
-	saveDefAs(t, st, "melden", "---\non: pr.merged\ninputs: [pr.title]\nuses: ghosttree/echo\nresults:\n  relation: 1\n  comment: 1\n---\n", 0)
+	saveDefAs(t, st, "melden", "---\non: pr.merged\ninputs: [pr.title, requests.open]\nuses: ghosttree/echo\nresults:\n  relation: 1\n  comment: 1\n---\n", 0)
 	mergedTitled(t, st, "9", "feat: Anmeldung per Link")
 	if _, err := e.Tick(context.Background()); err != nil {
 		t.Fatal(err)

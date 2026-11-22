@@ -380,6 +380,12 @@ func (a *api) addRequestRelation(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActWork) {
 		return
 	}
+	// The target has to be one the caller reads in the same project; a missing
+	// one, a foreign one and a hidden one answer alike.
+	if err := a.access(r).CheckRequestRelation(requestID, relation); err != nil {
+		writeRequestError(w, err)
+		return
+	}
 	saved, err := a.st.AddRequestRelation(requestID, relation, personOf(r), anchorFromRequest(r))
 	if err != nil {
 		writeRequestError(w, err)

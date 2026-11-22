@@ -84,6 +84,13 @@ type Gate struct {
 	Policy store.WorkflowPolicy
 	// Inputs is the full input of the run, against which evidence is checked.
 	Inputs string
+	// Trusted is the part of Inputs that members of the project wrote (what the
+	// declared inputs not marked Foreign hold, and what the read tools of a
+	// prompt without web tools returned). The owner's automatic approval covers a
+	// result only if its quotes are found there: a quote in the text of a pull
+	// request from GitHub or on a web page was written by whoever wanted it
+	// found, so such a result waits for a person.
+	Trusted string
 	// Sources are the texts a result may name as its source (Result.Session),
 	// by name: what a person typed in one session.
 	Sources map[string]string
@@ -167,7 +174,7 @@ func (g Gate) Apply(results []Result) (GateReport, error) {
 		// owner's automatic approval covers knowledge, issues, criteria and
 		// relations, including the link of an idea to a feature, which one
 		// click takes back.
-		if g.Policy.Auto(r.Kind) && (r.IdeaID == 0 || r.Kind == ResultRelation) {
+		if g.Policy.Auto(r.Kind) && (r.Kind == ResultKnowledge || g.trustedEvidence(r)) && (r.IdeaID == 0 || r.Kind == ResultRelation) {
 			ref, err := w.apply(r, 0)
 			if err != nil {
 				rec.State, rec.Reason, rec.Payload = store.ResultRejected, store.ResultInvalid, ""
@@ -193,6 +200,18 @@ func (g Gate) Apply(results []Result) (GateReport, error) {
 		rep.Proposed++
 	}
 	return rep, nil
+}
+
+// trustedEvidence says whether the quotes of a result stand in text that
+// members wrote: the trusted inputs, or what a person typed in the session the
+// result names. It decides the automatic approval of issues, criteria and
+// relations; knowledge needs no such check, since what a run applies of it
+// starts as an untrusted entry that nothing delivers before a person reviews it.
+func (g Gate) trustedEvidence(r Result) bool {
+	if r.Session != "" {
+		return hasEvidence(r.Evidence, g.Sources[r.Session])
+	}
+	return hasEvidence(r.Evidence, g.Trusted)
 }
 
 // validResult checks what a result is about: a title, a kind of knowledge, an
@@ -396,6 +415,11 @@ func (w writer) apply(r Result, noteID int64) (string, error) {
 // ErrNotProposal: the entry is no proposal of a workflow that waits.
 var ErrNotProposal = errors.New("not a waiting proposal of a workflow")
 
+// ErrProposalAuthorGone: the account the run acts for no longer holds the right
+// to (it is disabled, or no longer lead or owner in the project); the proposal
+// is not written in its name. Whoever wants the issue opens it themselves.
+var ErrProposalAuthorGone = errors.New("the account the run acts for no longer holds the right to act for the project")
+
 // ErrProposalChanged: the entry of the proposal was edited after the run
 // proposed it, or its target is gone; nothing is applied.
 var ErrProposalChanged = errors.New("the proposal changed since the run made it")
@@ -418,7 +442,13 @@ func AcceptProposal(st *store.Store, noteID, by int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	w := writer{st: st, run: run, account: st.WorkflowRunAccount(run)}
+	// The same rule as when the run proposed it: only an account that still
+	// holds the right lets a result be written in its name.
+	account := st.WorkflowRunActor(run)
+	if account <= 0 {
+		return "", ErrProposalAuthorGone
+	}
+	w := writer{st: st, run: run, account: account}
 	if acc, err := st.AccountByPrincipalID(fmt.Sprintf("person:%d", w.account)); err == nil {
 		w.person = acc.Name
 	}

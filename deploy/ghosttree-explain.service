@@ -13,6 +13,28 @@ StateDirectory=ghosttree
 LoadCredential=explain-key:/etc/ghosttree/explain-key
 Environment=GHOSTTREE_LLM_CONFIG=/etc/ghosttree/llm.json
 EnvironmentFile=-/etc/ghosttree/server.env
+# The job reads the database and calls the model provider; this takes away what it
+# never needs (DynamicUser already makes the rest of the file system read-only).
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
 # Collecting comes first, then one batch for what is missing. Safe to run every
 # hour: an object in an open batch is not sent again. The default daily caps
 # (200 calls, 400000 tokens) apply here too; set GHOSTTREE_EXPLAIN_DAILY_CALLS=0

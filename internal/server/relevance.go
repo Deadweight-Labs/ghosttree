@@ -17,6 +17,9 @@ import (
 // answer a sentence and few enough that a wrong guess stays cheap.
 const maxRelevantEntries = 3
 
+// maxRelevantBody bounds the prompt a POST carries.
+const maxRelevantBody = 64 << 10
+
 // maxHintTitle keeps the title of a request or session in a hint to what lets
 // the reader recognise it. A hint is delivered unasked, so it carries the least
 // text that still says where to look.
@@ -61,6 +64,19 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 	account := principalOf(r).ID
 	session := store.CleanSessionKey(r.URL.Query().Get("session"))
 	text := r.URL.Query().Get("q")
+	if r.Method == http.MethodPost {
+		// The prompt travels in the body: an address ends up in the logs of every
+		// proxy on the way. The GET form stays for clients that do not know this.
+		var in struct {
+			Q string `json:"q"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxRelevantBody)
+		if err := readJSON(r, &in); err != nil {
+			writeCoded(w, http.StatusBadRequest, "invalid_body", "the body is not the JSON {\"q\": text}")
+			return
+		}
+		text = in.Q
+	}
 	// The hint searches the sessions, so it looks there only for a prompt that asks
 	// about earlier work (PAIN-70, PAIN-76). The pointer to a request is cheap
 	// (requests are few and small) and stays for every prompt.
@@ -132,9 +148,11 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 	var body strings.Builder
 	parts := make([]deliverylog.Part, 0, len(hits)+1)
 	body.WriteString("## Possibly relevant to what you just said (ghosttree)\n\n")
+	standing := pa.Standings().KnowledgeStanding
 	for _, h := range hits {
 		k := h.Knowledge
-		line := fmt.Sprintf("- [%s|%s] %s — %s (triggered by %q)\n", k.Type, scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), 400), h.Term)
+		label := k.Type + "|" + scopeLabel(k.Scope) + "|by " + standing(k).Who()
+		line := fmt.Sprintf("- [%s] %s — %s (triggered by %q)\n", oneLine(label), entryTitle(k.Title), truncate(oneLine(k.Body), 400), h.Term)
 		body.WriteString(line)
 		parts = append(parts, deliverylog.Part{Via: deliverylog.ViaRelevance, Kind: deliverylog.KindKnowledge, ID: h.ID, Chars: deliverylog.Runes(line)})
 	}

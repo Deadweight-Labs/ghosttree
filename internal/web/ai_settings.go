@@ -252,7 +252,16 @@ func (a *app) aiViewFor(r *http.Request, org store.Org, st *aiFormView) *aiView 
 		}
 		v.WorkflowCaps = append(v.WorkflowCaps, aiCapRow{Workflow: c.Workflow, Month: aiCapText(c.MonthUSD), Run: aiCapText(c.RunUSD)})
 	}
-	if rep, err := a.store.AICostReportOf(org.ID, store.AIMonthStart()); err == nil && rep.Calls > 0 {
+	// Owners of the organization read the whole report; anybody else reads the
+	// workflows and runs of the projects they may read, nothing that names the rest.
+	var visible []string
+	if !owner {
+		visible = []string{}
+		for _, p := range a.orgProjects(r, org) {
+			visible = append(visible, p.Remote)
+		}
+	}
+	if rep, err := a.store.AICostReportFor(org.ID, store.AIMonthStart(), visible); err == nil && rep.Calls > 0 {
 		v.CostTotal = l.msg("ai.costs.total", wfCost(l, rep.TotalUSD), rep.Calls)
 		if rep.Calls == 1 {
 			v.CostTotal = l.msg("ai.costs.total_one", wfCost(l, rep.TotalUSD))

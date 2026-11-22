@@ -828,3 +828,52 @@ func TestServicesGetNothingThroughMachineSharesOrSharedProjects(t *testing.T) {
 		}
 	}
 }
+
+// Die Freigabe einer Maschine gehört ihrem Besitzer: geht er aus der Org (oder
+// wird er entfernt), nimmt der Austritt die Freigaben mit, und eine, die im
+// Altbestand übrig blieb, wirkt nicht weiter. Die Org schreibt nicht mehr auf
+// seine Maschine.
+func TestMachineShareEndsWhenTheOwnerLeavesTheOrg(t *testing.T) {
+	f := newShareFixture(t)
+	st := f.st
+	if _, _, err := st.CreateDeviceToken("person:2", "lena-box"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ShareMachine(webLena, "lena-box", "dw", ShareWrite, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Lena gibt einen Eintrag ihrer Maschine an die Org frei; Mia darf über die
+	// Schreib-Freigabe selbst Einträge auf der Maschine verantworten.
+	id := f.entry(t, "plan for lena-box", 2, "lena", "lena-box")
+	if err := st.ShareEntry(webLena, EntryKnowledge, id, "dw"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.delivers(t, webLena, id) || !f.sees(t, webMia, id) {
+		t.Fatal("setup: the shared entry must reach Lena and Mia while Lena is in the org")
+	}
+	if !st.Access(webMia).authorEntitled("lena-box", 3, []int64{f.org.ID}) {
+		t.Fatal("setup: Mia writes through the share while Lena is in the org")
+	}
+	if err := st.RemoveOrgMember("person:2", f.org.ID, "person:2"); err != nil {
+		t.Fatal(err)
+	}
+	var shares, entryShares int
+	_ = st.db.QueryRow(`SELECT COUNT(*) FROM machine_shares WHERE hostname='lena-box'`).Scan(&shares)
+	_ = st.db.QueryRow(`SELECT COUNT(*) FROM machine_entry_shares WHERE hostname='lena-box'`).Scan(&entryShares)
+	if shares != 0 || entryShares != 0 {
+		t.Fatalf("shares of the machine survive the owner's leaving: %d, %d", shares, entryShares)
+	}
+	// Eine Freigabe, die der Altbestand noch trägt, wirkt trotzdem nicht.
+	if _, err := st.db.Exec(`INSERT INTO machine_shares(hostname, org_id, role, os_user, path_prefix, granted_by, created_at) VALUES('lena-box',?,?,'','',2,'2026-01-01T00:00:00Z')`, f.org.ID, ShareWrite); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO machine_entry_shares(kind, entry_id, org_id, hostname, shared_by, created_at) VALUES(?,?,?,'lena-box',2,'2026-01-01T00:00:00Z')`, EntryKnowledge, id, f.org.ID); err != nil {
+		t.Fatal(err)
+	}
+	if f.sees(t, webMia, id) {
+		t.Error("the org still reads the machine of a former member")
+	}
+	if st.Access(webMia).authorEntitled("lena-box", 3, []int64{f.org.ID}) {
+		t.Error("the org still writes on the machine of a former member")
+	}
+}

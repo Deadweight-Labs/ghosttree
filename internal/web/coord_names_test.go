@@ -61,11 +61,9 @@ func namesRoom(t *testing.T) (srv *httptest.Server, st *store.Store, room string
 		DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: namesAgentID, ClientID: "a1", Body: "on it", ReplyTo: first}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CoordinationFor(store.Principal{ID: "person:3", Label: "Gus", TokenKind: store.WebSessionKind}, "").Send(store.CoordMessage{
+	legacyGuestSend(t, st, "person:3", "person:3", store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "g1", Body: "thanks both", ReplyTo: first,
-		Intent: store.IntentQuestion, Mentions: []string{namesAgentID}}); err != nil {
-		t.Fatal(err)
-	}
+		Intent: store.IntentQuestion, Mentions: []string{namesAgentID}, AuthorKind: store.AuthorHuman}, namesAgentID)
 	srv = httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 	return srv, st, room

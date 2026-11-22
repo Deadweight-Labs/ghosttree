@@ -28,12 +28,22 @@ server address in the script is `GHOSTTREE_PUBLIC_URL`, or else the address the
 request came in on. `GHOSTTREE_DOWNLOAD_BASE` on the client replaces the
 download location, for example with a GitHub release URL, since the archives
 use goreleaser's layout. The installer refuses a plain-http source (except
-loopback, or `GHOSTTREE_ALLOW_HTTP=1`), and the server serves `/install.sh`
+this machine: loopback, with no user information in the address), and the server serves `/install.sh`
 only for an https address: set `GHOSTTREE_PUBLIC_URL`, or let a trusted proxy
 send `X-Forwarded-Proto` and `X-Forwarded-Host`. `/dist/` has no rate limit of
 its own; limit it at the reverse proxy. Keep one ctx version per directory.
-Cautious readers can fetch the script, read it, and
-run it afterwards.
+The script checks only the checksum this same server
+serves and says so when it runs: it trusts the server with the program that
+runs on the machine. A release that the Ghosttree release key signed comes from
+the public installer (see "Installing from a release" below). Cautious readers
+can fetch the script, read it, and run it afterwards.
+
+`ctx update --channel dev` on a client takes the build of this server. If the
+`dist` directory also holds `checksums.txt.minisig` (the signature file of a
+release, served next to `checksums.txt`), the client checks it against the
+release key built into ctx and installs without a question; a build the server
+made itself has no such signature, and the client installs it only with
+`--trust-server` and says that only the server vouches for it.
 
 ## Installing from a release, and how it is checked
 
@@ -60,6 +70,143 @@ release from an older genuine one (the lookup is unsigned; pin a release with
 `--version` when that matters), it refuses releases from before the signature,
 macOS needs `brew install minisign` (the system's LibreSSL cannot check the
 signature), and downloads need curl or GNU Wget 1.x (BusyBox wget and Wget2 are refused).
+
+## Setting up a server: `ctx server install`
+
+One command sets a server up on a Linux machine with systemd, from the
+installer above or from a `ctx` you already have:
+
+```sh
+curl -fsSL https://downloads.deadweightlabs.com/ghosttree/install.sh | sh -s -- --server
+# or, with ctx at hand: sudo ctx server install
+```
+
+It asks for what it needs when it has a terminal (the public name, how TLS is
+done, the name of the first administrator, the language, an optional model
+provider) and takes every answer as an option as well: `--domain`, `--tls`,
+`--email`, `--listen`, `--admin`, `--language`, `--ai` with `--ai-key-file`.
+With `--yes`, or without a terminal, it asks nothing and uses the options and
+the defaults; the defaults keep the server on this machine, on
+`http://127.0.0.1:8474`, with `admin` as the first administrator. The list of
+options is in `ctx server --help`. Names and addresses are checked against a
+plain list before anything is written (`--domain` a lower-case DNS name,
+`--email` an ordinary address, `--listen` an address or host name and a port),
+because they end up in the settings and the proxy configuration.
+
+**Once is enough.** On a machine that has a server (its unit or
+`/var/lib/ghosttree` exists) `ctx server install` stops and points to
+`ctx server update`, and `install.sh --server` updates that server instead of
+replacing its `ctx`. `ctx server install --force` goes on anyway, the way an
+update does: the database is copied first, `ctx` is replaced with the old one
+kept, the schema is brought up to date, and everything goes back if the server
+does not come up; the server key and the accounts stay and the settings are
+written again from the answers.
+
+What it leaves behind:
+
+- `ctx` in `/usr/local/bin`, the settings in `/etc/ghosttree/server.env`
+  (access control switched on), and a 32-byte server key in
+  `/etc/ghosttree/secret-key` that the service reads as a systemd credential.
+  Keep a copy of that key with your backups: without it the AI keys stored in
+  the database cannot be opened again. `/etc/ghosttree` can be entered but not
+  listed (mode 711); the key and the model provider's key are 0600 and root's,
+  `llm.json` (no secret in it) is readable, so the service's dynamic user can
+  open it.
+- `ghosttree.service` (the unit of `deploy/ghosttree.service` plus the key and
+  a hardening block: no capabilities behind a proxy, only
+  `CAP_NET_BIND_SERVICE` with the built-in certificate, no devices, kernel
+  settings, modules or logs, no namespaces, sockets only, system calls of an
+  ordinary service, no writable executable memory), and `ghosttree-backup.timer`,
+  which copies the database every night into `/var/lib/ghosttree/backups` and
+  keeps the newest fourteen of the nightly copies and of the copies from before
+  updates (`ctx db backup`; `ctx db restore` puts a copy back and keeps what it
+  replaced, changing nothing if it cannot). The gardener's units call git and
+  claude and are not given this block.
+- The first administrator, and an account named `gardener` that is set as the
+  gardener (the sandboxed runs of the gardener are set up as in
+  `deploy/README.md`; the installer does not start them).
+- A last check, the same one `ctx server doctor` runs, and a login link for the
+  administrator that works once for fifteen minutes.
+
+**TLS.** The default is a proxy in front, which is what most machines have: the
+server listens on `127.0.0.1:8474`, `GHOSTTREE_PUBLIC_URL` and
+`GHOSTTREE_TRUSTED_PROXIES=127.0.0.1` are set, and ready configuration for
+Caddy and nginx is written to `/etc/ghosttree/proxy/Caddyfile` and
+`/etc/ghosttree/proxy/nginx.conf` to copy (the nginx one needs a certificate,
+for example from certbot; Caddy fetches its own). With `--tls builtin` the server
+gets its own certificate from Let's Encrypt instead (`GHOSTTREE_TLS_ACME_HOST`,
+optionally `GHOSTTREE_TLS_ACME_EMAIL` and `GHOSTTREE_TLS_ACME_DIR`): it answers
+https on `:443` and plain http on `:80` (the certificate challenge, and a
+redirect to https) besides its loopback listener, the unit may bind those ports,
+and the name has to point at this machine with both ports open to the internet.
+Certificates are fetched at the first visit and renewed by the server.
+
+**Updating.** `sudo ctx server update` (or `--version v0.2.0`) only goes up:
+an older release is refused as a downgrade, because the database of the newer
+one may not open with it, unless you add `--force`. It fetches the
+release, checks signature and checksum as the installer does, stops the service,
+copies the database to `/var/lib/ghosttree/backups/pre-update-<old>-to-<new>-<time>.db`,
+replaces `ctx` (the old one stays as `/usr/local/bin/ctx.prev-<old>`), upgrades
+the schema and starts the service. If the new release does not answer with its
+own version within `--wait` (90 seconds), the old `ctx` and the copied database
+are put back and the old server runs again; what the failed run wrote is kept
+as `ghosttree.db.failed-<time>` next to the database, and the command ends with
+an error. Nothing is changed before the release is fetched and checked.
+
+## Running the server with Docker
+
+`ctx server install --docker` (also `install.sh --docker`) writes a
+`compose.yaml` and a `.env` into a directory (`--dir`, by default `/opt/ghosttree`
+for root and `~/ghosttree` otherwise), makes the server key in `secrets/`, starts
+the containers, makes the first administrator and the gardener's account in the
+running container, and ends with the same check and login link as the systemd
+install. It needs Docker with the compose plugin, and a user who may run
+`docker`. Where a setup exists already (its `.env` is there) it stops and points
+to `ctx server update --docker`; `--force` goes on the way an update does: the
+database is copied into the backups volume first, the schema is upgraded with
+the new image, and the old image and the copy are put back if it does not come up.
+
+- **Image.** One image per release on `ghcr.io/deadweight-labs/ghosttree`
+  (amd64 and arm64, signed keyless like the archives; the tags `X.Y.Z` and, for
+  a final release, `latest` are set only after the release has been published): a static `ctx` on a base without a shell,
+  run as user 65532, with a read-only root file system and no capabilities. The
+  digest of the release's image is a file of the release, `ghosttree-image.txt`,
+  listed in the minisign-signed `checksums.txt`; `ctx server install --docker`
+  pulls and runs exactly that digest (`.env` holds
+  `ghcr.io/deadweight-labs/ghosttree:<version>@sha256:...`), so what the registry
+  serves under a tag decides nothing. `--image-repo` pulls it from a mirror, and
+  `--image` runs an image of your own choice, which nothing vouches for.
+- **Volumes and secrets.** `data` holds the database (`/data/ghosttree.db`),
+  `backups` the copies; the server key is a compose secret, a file in the
+  directory `secrets/` (mode 700, the file itself readable by the container's
+  user). Keep a copy of `secrets/secret-key` with your backups.
+- **Backup.** A second container, `backup`, runs `ctx db backup --every 24h` and
+  keeps the newest fourteen copies (and the newest fourteen from before updates)
+  in the volume `backups`; read one out with
+  `docker run --rm -v ghosttree_backups:/b -v "$PWD:/out" debian:12 cp /b/<file> /out/`.
+- **Network and proxy.** The server is published on `127.0.0.1:8474` only, and
+  no forwarding header is believed (`GHOSTTREE_TRUSTED_PROXIES=none`) unless you
+  give a domain and use the generated proxy configuration. Then the installer
+  picks a bridge subnet no other Docker network or route of this machine uses
+  (`GHOSTTREE_SUBNET`, `GHOSTTREE_GATEWAY` in `.env`) and trusts the gateway,
+  the address the proxy on this machine shows up as. With a domain it writes `proxy/Caddyfile` and `proxy/nginx.conf` to copy, as for
+  systemd. `--tls builtin` adds `compose.override.yaml`, which publishes ports 80
+  and 443 and lets the unprivileged user bind them; the certificate is kept in
+  the data volume.
+- **Update.** `ctx server update --docker [--dir DIR] [--version TAG]` only goes
+  up: an older release is refused as a downgrade unless `--force` is given. It reads the
+  image digest from the signed release (signature, trusted comment and checksum
+  are checked as for a systemd update), pulls that digest unless it is here,
+  stops the containers, copies the database into the volume `backups`
+  (`pre-update-<old>-to-<new>-<time>.db`), runs the schema upgrade with the new
+  image, starts it and waits for its version. If it does not answer, the old image
+  and the copy are put back. Run by hand: `docker compose pull && docker compose up -d`
+  (no copy, no way back, nothing checked). The image is also signed keyless:
+  `cosign verify --certificate-identity-regexp '^https://github.com/Deadweight-Labs/ghosttree/' --certificate-oidc-issuer https://token.actions.githubusercontent.com ghcr.io/deadweight-labs/ghosttree@<digest>`.
+- **The gardener.** Its account is made and set as in the systemd install. The
+  image has neither `git` nor Claude Code, so the sandboxed runs of the gardener
+  (`ctx garden run-due`, see `deploy/README.md`) belong on a machine that has
+  them, as a client of this server.
 
 ## Interface language
 
@@ -104,6 +251,21 @@ cannot change the address or the password of the account and cannot pair or
 approve a device (a link made by the host with `ctx account login-link` is the
 operator's own onboarding and is not limited this way).
 
+A session from such a link does everyday work only (issues, comments, rooms,
+reading). Everything that changes roles, access, invitations, organizations,
+tokens, devices, machine and runbook releases, workflows, AI keys, held entries or
+tasks for people needs a sign-in with a proof (password, mail code or single
+sign-on): the page says so and leads to the sign-in, and back. Every route that
+changes something is assigned in `internal/web/linkpolicy.go`; a test fails for a
+new one that is not. A link session lasts twelve hours without sliding and is
+marked on the account pages.
+
+A device login (`ctx login`) shows a code in the terminal, and the person types it
+on the approval page; a link never fills it in. Machine names are letters, digits,
+`.`, `_` and `-`, at most 64. A device or legacy token that nobody has used for 90
+days stops working (every use moves the end; an instance that gets this rule starts
+the 90 days that day, so no token is cut off at once).
+
 ### Mail sending
 
 | Flag | Environment | Meaning |
@@ -142,7 +304,28 @@ short life, five wrong tries per mail, and limits per address and per sender (fi
 minutes: five mails and ten tries per address, twenty mails and forty tries per
 sender). Passwords are argon2id (64 MiB, three passes). An address is on the
 account only once confirmed (`persons.email`); an unconfirmed one waits in the
-mail itself. Nothing on a sign-in page tells whether an address has an account.
+mail itself. Nothing on a sign-in page tells whether an address has an account, and
+the mail is made in the background for an address with an account as for one
+without. Limits bind to address and source: wrong passwords or mail requests of a
+stranger use up only their own share, a success clears the count, and many sources
+guessing at one address are let through one at a time with a pause instead of
+locking the owner out. Invitation mails are limited per day per account (20),
+organization (50) and address (3); the invitation itself stays, and the page says
+that no mail went out.
+
+### What the server shows without a sign-in
+
+- `/api/health` answers `{"ok":true}`.
+- `/api/version` answers without a token: a client reads it before it can sign
+  in, and `ctx server update` waits for the new version there. It names what
+  `/dist/` shows in its file names anyway.
+- `/metrics` is for the machine itself: a request is served when the client
+  address, read through the trusted proxies, is loopback. Anyone else gets 404.
+  A scraper on another host sends a bearer token that you set in
+  `GHOSTTREE_METRICS_TOKEN` (at least 16 characters; a person's token is no use
+  there). A reverse proxy on the same host must set `X-Forwarded-For`; one that
+  does not makes every client look like loopback, so do not forward `/metrics`
+  through it at all.
 
 ## Privacy and security
 
@@ -163,9 +346,11 @@ writes reject suspected secrets instead of rewriting them. Regex redaction is a
 last line of defense, not a guarantee. The current bearer token identifies who
 made a change. Snapshot reads, creates, and release bindings additionally
 require explicit per-project capabilities. Per-project roles (owner, lead,
-member, guest) decide what an account may read and write, but they are only
-enforced when the server runs with `GHOSTTREE_ENFORCE_ACCESS=1`; without it the
-server only logs what it would have refused.
+member, guest) decide what an account may read and write. They are enforced by
+default; only the explicit value `GHOSTTREE_ENFORCE_ACCESS=0` switches to a log
+mode for a server with a single user, where roles inside an organization are
+only logged. The border between organizations, private transcripts and project
+snapshots hold in both modes.
 
 Security reports belong at
 [security@deadweightlabs.com](mailto:security@deadweightlabs.com), not in a
@@ -255,7 +440,7 @@ its project.
 
 ## Where the time of a hook call goes
 
-The hooks wait for two routes of the server: `GET /api/context/relevant` (every
+The hooks wait for two routes of the server: `POST /api/context/relevant` (the older `GET` form still answers) (every
 prompt) and `GET /api/context/bootstrap` (every session start). Their
 `http_request` log line carries the group `phases`, the milliseconds of each
 step, next to the total `duration_ms`:

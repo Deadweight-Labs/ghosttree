@@ -47,6 +47,31 @@ func (a *api) gardenDue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, jobs)
 }
 
+// gardenSessionToken answers POST /api/garden/session-token {project}: the
+// token a gardener session reads ghosttree with. It is bound to that project
+// and to reading (store.CreateGardenSessionToken); the server holds it to
+// that, whatever the session is told.
+func (a *api) gardenSessionToken(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Project string `json:"project"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	p := principalOf(r)
+	if p.ScopeProject != "" {
+		writeGardenError(w, store.ErrNotGardener)
+		return
+	}
+	token, err := a.st.CreateGardenSessionToken(p.ID, body.Project)
+	if err != nil {
+		writeGardenError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"token": token})
+}
+
 // gardenRunStart answers POST /api/garden/runs {org_id, project}.
 func (a *api) gardenRunStart(w http.ResponseWriter, r *http.Request) {
 	var body struct {
