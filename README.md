@@ -18,7 +18,7 @@ requests, and is checked against the code and by people before it counts.
 
 ![An agent's test shows that a payment retry sends two receipts. A person approves the lesson the agent wrote down, the next session's briefing contains it, and the agent working on refunds follows it.](docs/images/demo-loop.webp)
 
-[Watch the one-minute film on the project page](https://deadweightlabs.com/projects/ghosttree)
+[Watch the 30-second film on the project page](https://deadweightlabs.com/projects/ghosttree)
 
 Where it helps:
 
